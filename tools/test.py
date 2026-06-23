@@ -32,6 +32,48 @@ import sys
 import threading
 import time
 import functools
+import multiprocessing
+import psutil
+
+class OOMWatchdog(multiprocessing.Process):
+    def __init__(self, target_pid, rss_limit_gb=3.0):
+        super().__init__(daemon=True)
+        self.target_pid = target_pid
+        self.rss_limit_gb = rss_limit_gb
+
+    def run(self):
+        try:
+            with open("/proc/self/oom_score_adj", "w") as f:
+                f.write("-1000\n")
+        except Exception:
+            pass
+        try:
+            os.nice(-20)
+        except Exception:
+            pass
+        try:
+            libc = ctypes.CDLL("libc.so.6", use_errno=True)
+            libc.mlockall(3)
+        except Exception:
+            pass
+        while True:
+            try:
+                parent = psutil.Process(self.target_pid)
+                for p in parent.children(recursive=True):
+                    try:
+                        mem = p.memory_info()
+                        rss_gb = mem.rss / (1024**3)
+                        vm_gb = mem.vms / (1024**3)
+                        if rss_gb > self.rss_limit_gb:
+                            print(f"\n[🚨 OOM WATCHDOG] Process {p.pid} ({p.name()}) exceeded memory limits! (RSS: {rss_gb:.2f}GB > {self.rss_limit_gb}GB, VM was {vm_gb:.2f}GB). Terminating it!\n", flush=True)
+                            p.kill()
+                    except psutil.NoSuchProcess:
+                        pass
+            except psutil.NoSuchProcess:
+                break
+            except Exception:
+                pass
+            time.sleep(2.0)
 
 # Force all print statements to flush immediately to prevent
 # inter-process pipe buffering from chronologically reordering log lines
@@ -162,11 +204,43 @@ class FailureExtractor:
         if not disable_atexit:
             atexit.register(self.finish_and_write)
 
+        if os.environ.get("HAMS_ISOLATED_NS") == "1":
+            self.progress_path = "/mnt/real_tmp/test_progress.txt"
+        else:
+            self.progress_path = os.path.join(base_dir, "test_progress.txt")
+        self.passed_tests = 0
+        self.failed_tests = 0
+        self.current_test = "Initializing..."
+        self.update_progress()
+
+    def update_progress(self):
+        try:
+            with open(self.progress_path, "w") as f:
+                f.write(f"Currently Running: {self.current_test}\n")
+                f.write(f"Passed: {self.passed_tests}\n")
+                f.write(f"Failed: {self.failed_tests}\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception:
+            pass
+
     def set_context(self, context_name):
         if self.capturing and self.current_block:
             self.captured_blocks.append((self.current_context, self.current_block))
             self.capturing = False
             self.current_block = []
+            
+        if "Starting " in context_name:
+            test_name = context_name.split("Starting ")[-1].strip()
+            if hasattr(self, 'current_test') and self.current_test and self.current_test != test_name:
+                failed = any(self.current_test in ctx for ctx, _ in self.captured_blocks)
+                if failed:
+                    self.failed_tests += 1
+                else:
+                    self.passed_tests += 1
+            self.current_test = test_name
+            self.update_progress()
+
         self.current_context = context_name
 
     def process_line(self, line):
@@ -406,6 +480,9 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
 
     print(f"\n[*] [DEBUG-RUNNER] Subprocess spawned: PID {process.pid}, PGID {os.getpgid(process.pid)}")
     print(f"[*] [DEBUG-RUNNER] Executing command: {' '.join(cmd)}")
+
+    watchdog = OOMWatchdog(process.pid)
+    watchdog.start()
 
     force_killed = False
     q = queue.Queue()
