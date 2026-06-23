@@ -111,7 +111,7 @@ It must guarantee that EVERY single rule, bullet point, table, and constraint fr
 ### Trap: Ephemeral Session Amnesia & Repository Disconnect
 * **The Trap:** The AI operates in strictly isolated, ephemeral context windows. Even if a repository was "imported" or analyzed early in a conversation, the AI will inevitably lose its internal map of the workspace as the context window fills or the session is restarted.
 * **The Solution:** If the AI detects this, write any relevant experience to pass
-on to the next session in docs/LLM_EXPERIENCE.md, and ask the user to start a new
+on to the next session in hams_shared/docs/LLM_EXPERIENCE.md, and ask the user to start a new
 session.
 
 ### The Dirty Form Test Corruption Trap
@@ -174,8 +174,8 @@ session.
 **Trap**: Calling `env.ref('user_websites.user_websites_service_account')` during a portal interaction raises an `AccessError` because `res.users` lookup is restricted for portal/external users. The security mechanisms in `zero_sudo` run universally, leading to crashes when portal users hit `_get_service_uid`.
 **Solution**: Bypass ORM lookup for internal Service Account checking by executing raw PostgreSQL queries: `SELECT res_id FROM ir_model_data WHERE module=%s AND name=%s`. This circumvents the ORM access rules, honoring the Zero-Sudo architecture mandate while keeping the system secure from portal users.
 
-### Odoo `tools/test.py` Silent Background Crashes (Port 8069)
-**Trap**: When running `tools/test.py` in isolated `unshare` namespaces, if the test is forcefully killed or times out, it abandons orphaned Chromium instances and leaves `odoo-bin` running in the background, locking `8069`. Future test runs fail with "Another instance of test.py is already running" or port binding errors.
+### Odoo `hams_shared/tools/test.py` Silent Background Crashes (Port 8069)
+**Trap**: When running `hams_shared/tools/test.py` in isolated `unshare` namespaces, if the test is forcefully killed or times out, it abandons orphaned Chromium instances and leaves `odoo-bin` running in the background, locking `8069`. Future test runs fail with "Another instance of test.py is already running" or port binding errors.
 **Solution**: Manually clear the `odoo_test_runner.lock` file in `/var/tmp/` and execute `pkill -f chrome` and `pkill -f odoo` to release the locked processes before re-running the test framework.
 
 ### Odoo Headless Chrome OOM & Process Leak Trap (NoSuchProcess)

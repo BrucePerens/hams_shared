@@ -12,10 +12,10 @@ The Hams.com repository includes an MCP (Model Context Protocol) server designed
 If the server is not already running, you can start it by passing the `--mcp` flag to the test runner:
 
 ```bash
-python3 tools/test.py --mcp
+python3 hams_shared/tools/test.py --mcp
 ```
 
-This will launch Odoo, load the registry, and then start the FastMCP server on `stdio`. Note that `tools/test.py` usually manages infrastructure; running with `--mcp` will do exactly the same but leave the environment running and expose the MCP tools.
+This will launch Odoo, load the registry, and then start the FastMCP server on `stdio`. Note that `hams_shared/tools/test.py` usually manages infrastructure; running with `--mcp` will do exactly the same but leave the environment running and expose the MCP tools.
 
 ## Available MCP Tools
 
@@ -42,6 +42,6 @@ Hot-reload Python test files.
 2. Modify a Test File only: Use `reload_test_files("my_module")`, then `run_tests("my_module")`.
 
 ## Debugging UI Tours
-If you are iterating on a Javascript Tour, you can pass the `--pause-on-fail` flag when starting `tools/test.py` (it works alongside `--mcp`). If a UI tour fails, the runner will freeze the headless Chrome browser and expose port `9222`. You can then activate your `chrome-devtools` MCP server to inspect the active DOM and execute scripts within the failed tour environment.
+If you are iterating on a Javascript Tour, you can pass the `--pause-on-fail` flag when starting `hams_shared/tools/test.py` (it works alongside `--mcp`). If a UI tour fails, the runner will freeze the headless Chrome browser and expose port `9222`. You can then activate your `chrome-devtools` MCP server to inspect the active DOM and execute scripts within the failed tour environment.
 
-**Important**: This skill should be used whenever you are iteratively debugging tests and do not want to wait for the standard `tools/test.py` slow boot sequence.
+**Important**: This skill should be used whenever you are iteratively debugging tests and do not want to wait for the standard `hams_shared/tools/test.py` slow boot sequence.

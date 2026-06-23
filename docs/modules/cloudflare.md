@@ -55,15 +55,15 @@ Strictly adheres to Zero-Sudo architecture using dedicated service accounts:
 <stories_and_journeys>
 ## 5. Architectural Stories & Journeys
 
-* [Asynchronous Cache Purging](docs/stories/cache_purging.md) `[@ANCHOR: story_cache_purging]`
-* [Geo-Aware Request Context](docs/stories/request_context.md) `[@ANCHOR: story_request_context]`
-* [Secure Edge Bridging via Tunnels](docs/stories/tunnels.md) `[@ANCHOR: story_tunnels]`
-* [CAPTCHA Verification with Turnstile](docs/stories/turnstile_verification.md) `[@ANCHOR: story_turnstile]`
-* [Automated WAF IP Banning](docs/stories/waf_banning.md) `[@ANCHOR: story_waf_banning]`
+* [Asynchronous Cache Purging](hams_shared/docs/stories/cache_purging.md) `[@ANCHOR: story_cache_purging]`
+* [Geo-Aware Request Context](hams_shared/docs/stories/request_context.md) `[@ANCHOR: story_request_context]`
+* [Secure Edge Bridging via Tunnels](hams_shared/docs/stories/tunnels.md) `[@ANCHOR: story_tunnels]`
+* [CAPTCHA Verification with Turnstile](hams_shared/docs/stories/turnstile_verification.md) `[@ANCHOR: story_turnstile]`
+* [Automated WAF IP Banning](hams_shared/docs/stories/waf_banning.md) `[@ANCHOR: story_waf_banning]`
 
 ### Journeys
-* [High-Performance Content Invalidation](docs/journeys/content_invalidation.md) `[@ANCHOR: journey_content_invalidation]`
-* [Managing Edge Security](docs/journeys/edge_security.md) `[@ANCHOR: journey_edge_security]`
-* [Infrastructure Provisioning](docs/journeys/infrastructure.md) `[@ANCHOR: journey_infrastructure]`
-* [Intelligent Traffic Handling](docs/journeys/traffic_handling.md) `[@ANCHOR: journey_traffic_handling]`
+* [High-Performance Content Invalidation](hams_shared/docs/journeys/content_invalidation.md) `[@ANCHOR: journey_content_invalidation]`
+* [Managing Edge Security](hams_shared/docs/journeys/edge_security.md) `[@ANCHOR: journey_edge_security]`
+* [Infrastructure Provisioning](hams_shared/docs/journeys/infrastructure.md) `[@ANCHOR: journey_infrastructure]`
+* [Intelligent Traffic Handling](hams_shared/docs/journeys/traffic_handling.md) `[@ANCHOR: journey_traffic_handling]`
 </stories_and_journeys>

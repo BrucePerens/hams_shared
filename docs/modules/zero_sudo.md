@@ -115,18 +115,18 @@ When a daemon or unprivileged user strictly requires native ERP framework intera
 For detailed narratives and end-to-end workflows, refer to the following:
 
 ### Stories
-* **Secure Privilege Escalation** `[@ANCHOR: story_secure_escalation]`: Narrative on how developers securely escalate privileges using service accounts instead of `.sudo()`. [Read Story](zero_sudo/docs/stories/secure_escalation.md)
-* **Blocking Service Account Login** `[@ANCHOR: story_login_blocking]`: How the system prevents service accounts from accessing the interactive web interface. [Read Story](zero_sudo/docs/stories/login_blocking.md)
-* **Parameter Whitelisting** `[@ANCHOR: story_parameter_whitelisting]`: Protection of sensitive system parameters from unauthorized access. [Read Story](zero_sudo/docs/stories/parameter_whitelisting.md)
-* **Multi-Website Awareness** `[@ANCHOR: story_multi_website]`: How the security core behaves in multi-website environments. [Read Story](zero_sudo/docs/stories/multi_website.md)
-* **Coherent Cache Signaling** `[@ANCHOR: story_cache_signaling]`: Ensuring cache consistency across multiple Odoo workers using Postgres NOTIFY. [Read Story](zero_sudo/docs/stories/cache_signaling.md)
-* **Deterministic Hashing** `[@ANCHOR: story_deterministic_hash]`: Generation of stable integer hashes for PostgreSQL advisory locks. [Read Story](zero_sudo/docs/stories/deterministic_hashing.md)
-* **Centralized Documentation Bootstrap** `[@ANCHOR: story_zero_sudo_doc_installer]`: How documentation is centrally installed across the platform. [Read Story](zero_sudo/docs/stories/documentation_bootstrap.md)
+* **Secure Privilege Escalation** `[@ANCHOR: story_secure_escalation]`: Narrative on how developers securely escalate privileges using service accounts instead of `.sudo()`. [Read Story](zero_sudo/hams_shared/docs/stories/secure_escalation.md)
+* **Blocking Service Account Login** `[@ANCHOR: story_login_blocking]`: How the system prevents service accounts from accessing the interactive web interface. [Read Story](zero_sudo/hams_shared/docs/stories/login_blocking.md)
+* **Parameter Whitelisting** `[@ANCHOR: story_parameter_whitelisting]`: Protection of sensitive system parameters from unauthorized access. [Read Story](zero_sudo/hams_shared/docs/stories/parameter_whitelisting.md)
+* **Multi-Website Awareness** `[@ANCHOR: story_multi_website]`: How the security core behaves in multi-website environments. [Read Story](zero_sudo/hams_shared/docs/stories/multi_website.md)
+* **Coherent Cache Signaling** `[@ANCHOR: story_cache_signaling]`: Ensuring cache consistency across multiple Odoo workers using Postgres NOTIFY. [Read Story](zero_sudo/hams_shared/docs/stories/cache_signaling.md)
+* **Deterministic Hashing** `[@ANCHOR: story_deterministic_hash]`: Generation of stable integer hashes for PostgreSQL advisory locks. [Read Story](zero_sudo/hams_shared/docs/stories/deterministic_hashing.md)
+* **Centralized Documentation Bootstrap** `[@ANCHOR: story_zero_sudo_doc_installer]`: How documentation is centrally installed across the platform. [Read Story](zero_sudo/hams_shared/docs/stories/documentation_bootstrap.md)
 
 ### Journeys
-* **Service Account Lifecycle** `[@ANCHOR: journey_service_account_lifecycle]`: The end-to-end flow of a service account from provisioning to secure execution. [Read Journey](zero_sudo/docs/journeys/service_account_lifecycle.md)
-* **Securing Configuration Parameters** `[@ANCHOR: journey_securing_configuration]`: The workflow for safely integrating and accessing new configuration parameters. [Read Journey](zero_sudo/docs/journeys/securing_configuration.md)
-* **Developer Integration** `[@ANCHOR: journey_developer_integration]`: End-to-end workflow for developers to integrate with the Zero-Sudo ecosystem. [Read Journey](zero_sudo/docs/journeys/developer_integration.md)
+* **Service Account Lifecycle** `[@ANCHOR: journey_service_account_lifecycle]`: The end-to-end flow of a service account from provisioning to secure execution. [Read Journey](zero_sudo/hams_shared/docs/journeys/service_account_lifecycle.md)
+* **Securing Configuration Parameters** `[@ANCHOR: journey_securing_configuration]`: The workflow for safely integrating and accessing new configuration parameters. [Read Journey](zero_sudo/hams_shared/docs/journeys/securing_configuration.md)
+* **Developer Integration** `[@ANCHOR: journey_developer_integration]`: End-to-end workflow for developers to integrate with the Zero-Sudo ecosystem. [Read Journey](zero_sudo/hams_shared/docs/journeys/developer_integration.md)
 </stories_and_journeys>
 
 ---

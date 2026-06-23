@@ -85,15 +85,15 @@ Configurable via environment variables or `.env` file at `/var/lib/odoo/daemon_k
 ## 6. Architectural Stories & Journeys
 
 ### Stories
-* [Distributed Cache Decoration](distributed_redis_cache/docs/stories/cache_decoration.md)
-* [Cross-Worker Cache Invalidation](distributed_redis_cache/docs/stories/cache_invalidation.md)
-* [Manual Cache Management](distributed_redis_cache/docs/stories/manual_management.md)
-* [System Resilience](distributed_redis_cache/docs/stories/resilience.md)
+* [Distributed Cache Decoration](distributed_redis_cache/hams_shared/docs/stories/cache_decoration.md)
+* [Cross-Worker Cache Invalidation](distributed_redis_cache/hams_shared/docs/stories/cache_invalidation.md)
+* [Manual Cache Management](distributed_redis_cache/hams_shared/docs/stories/manual_management.md)
+* [System Resilience](distributed_redis_cache/hams_shared/docs/stories/resilience.md)
 
 ### Journeys
-* [Daemon Operations](distributed_redis_cache/docs/journeys/daemon_operations.md)
-* [Invalidation Pipeline](distributed_redis_cache/docs/journeys/invalidation_pipeline.md)
-* [Request Caching Lifecycle](distributed_redis_cache/docs/journeys/request_caching_lifecycle.md)
+* [Daemon Operations](distributed_redis_cache/hams_shared/docs/journeys/daemon_operations.md)
+* [Invalidation Pipeline](distributed_redis_cache/hams_shared/docs/journeys/invalidation_pipeline.md)
+* [Request Caching Lifecycle](distributed_redis_cache/hams_shared/docs/journeys/request_caching_lifecycle.md)
 
 ### Installation
 * **Documentation Injection:** Provisions documentation into `knowledge.article` upon installation. [@ANCHOR: doc_inject_distributed_redis_cache]

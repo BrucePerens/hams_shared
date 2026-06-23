@@ -9,7 +9,7 @@ Unlike Jules (which operates autonomously and often in a CI/batch context), Anti
 When a tour is flaky or failing, run the test runner with the `--pause-on-fail` flag:
 
 ```bash
-python3 tools/test.py -u <your_module> --pause-on-fail
+python3 hams_shared/tools/test.py -u <your_module> --pause-on-fail
 ```
 
 **What this does:**

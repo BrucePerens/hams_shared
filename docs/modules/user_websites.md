@@ -149,17 +149,17 @@ If your dependent module (e.g., `cloudflare`, `custom_dns`) needs to programmati
 For detailed narratives and end-to-end workflows, refer to the following:
 
 ### Stories
-* [Group Websites](user_websites/docs/stories/group_sites.md)
-* [Content Moderation](user_websites/docs/stories/moderation.md)
-* [Personal Site Management](user_websites/docs/stories/personal_site.md)
-* [Privacy and GDPR Compliance](user_websites/docs/stories/privacy.md)
-* [Technical Foundation and Utilities](user_websites/docs/stories/technical_foundation.md)
+* [Group Websites](user_websites/hams_shared/docs/stories/group_sites.md)
+* [Content Moderation](user_websites/hams_shared/docs/stories/moderation.md)
+* [Personal Site Management](user_websites/hams_shared/docs/stories/personal_site.md)
+* [Privacy and GDPR Compliance](user_websites/hams_shared/docs/stories/privacy.md)
+* [Technical Foundation and Utilities](user_websites/hams_shared/docs/stories/technical_foundation.md)
 
 ### Journeys
-* [Extension and Customization](user_websites/docs/journeys/customization.md)
-* [User Data Management (GDPR)](user_websites/docs/journeys/gdpr_compliance.md)
-* [Content Reporting and Resolution](user_websites/docs/journeys/moderation_workflow.md)
-* [First Time Site Setup](user_websites/docs/journeys/onboarding.md)
+* [Extension and Customization](user_websites/hams_shared/docs/journeys/customization.md)
+* [User Data Management (GDPR)](user_websites/hams_shared/docs/journeys/gdpr_compliance.md)
+* [Content Reporting and Resolution](user_websites/hams_shared/docs/journeys/moderation_workflow.md)
+* [First Time Site Setup](user_websites/hams_shared/docs/journeys/onboarding.md)
 </stories_and_journeys>
 
 ---

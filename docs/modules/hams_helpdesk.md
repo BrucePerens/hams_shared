@@ -72,6 +72,6 @@ This module operates within strict DevSecOps parameters, ensuring all actions ar
 
 This repository uses a specialized test environment with the following characteristics:
 - **PostgreSQL Socket**: The database cluster listens on a Unix socket located at `/opt/hams/pgsock`.
-- **Test Runner Flags**: You must use the `--already-provisioned` flag with `tools/test.py` if the environment is already bootstrapped.
+- **Test Runner Flags**: You must use the `--already-provisioned` flag with `hams_shared/tools/test.py` if the environment is already bootstrapped.
 - **Python Execution**: Use `/usr/bin/python3` to ensure access to system-installed Odoo dependencies.
 - **Linter Overrides**: Use a custom ignore file (`-c <file>`) to bypass fragile tours in other modules if they block testing of this module.

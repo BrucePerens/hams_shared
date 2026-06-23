@@ -31,12 +31,12 @@ This module is a lightweight domain extension for `user_websites`. It connects o
 For detailed narratives and end-to-end workflows, refer to the following:
 
 ### Stories
-* [Individual SEO Control](user_websites_seo/docs/stories/individual_seo_control.md)
-* [Group SEO Collaboration](user_websites_seo/docs/stories/group_seo_collaboration.md)
-* [Seamless Documentation](user_websites_seo/docs/stories/seamless_documentation.md)
+* [Individual SEO Control](user_websites_seo/hams_shared/docs/stories/individual_seo_control.md)
+* [Group SEO Collaboration](user_websites_seo/hams_shared/docs/stories/group_seo_collaboration.md)
+* [Seamless Documentation](user_websites_seo/hams_shared/docs/stories/seamless_documentation.md)
 
 ### Journeys
-* [User Optimizes Blog SEO](user_websites_seo/docs/journeys/user_optimizes_blog_seo.md)
+* [User Optimizes Blog SEO](user_websites_seo/hams_shared/docs/journeys/user_optimizes_blog_seo.md)
 </stories_and_journeys>
 
 ## 4. 🔗 Semantic Anchors & Traceability

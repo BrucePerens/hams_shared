@@ -77,12 +77,12 @@ subprocess.run([bin_path, "--version"], check=True)
 For detailed narratives and end-to-end workflows, refer to the following:
 
 ### Stories
-* [Binary Resolution](docs/stories/binary_resolution.md)
-* [UI Installation](docs/stories/ui_installation.md)
-* [Installation Status Check](docs/stories/is_installed_check.md)
+* [Binary Resolution](hams_shared/docs/stories/binary_resolution.md)
+* [UI Installation](hams_shared/docs/stories/ui_installation.md)
+* [Installation Status Check](hams_shared/docs/stories/is_installed_check.md)
 
 ### Journeys
-* [Automated Provisioning Flow](docs/journeys/auto_provisioning_flow.md)
+* [Automated Provisioning Flow](hams_shared/docs/journeys/auto_provisioning_flow.md)
 </stories_and_journeys>
 
 <semantic_anchors>

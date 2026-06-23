@@ -16,7 +16,7 @@ All global operational mandates apply here.
 <critical_guardrails>
 ## 1. ANTI-BIAS & THE BURN LIST (CRITICAL)
 Your pre-training data is heavily biased toward older versions of Odoo and sloppy open-source security practices.
-You MUST consciously filter your instincts and consult the `docs/LLM_LINTER_GUIDE.md`.
+You MUST consciously filter your instincts and consult the `hams_shared/docs/LLM_LINTER_GUIDE.md`.
 * **The Discovery Mandate:** Whenever a new trap is discovered, update `check_burn_list.py` to programmatically enforce it.
 * **Parameterized Queries:** Use parameterized psycopg2 queries directly for data values.
 * **Dynamic SQL Mandate:** If you dynamically alter query structure or inject schema identifiers, you are strictly FORBIDDEN from using f-strings.
@@ -66,7 +66,7 @@ Execute logic using `.with_user(svc_uid)`.
 ## 5. XML, VIEWS & QWEB STANDARDS
 * **QWeb Logic:** Python built-ins (`getattr`, `hasattr`) are FORBIDDEN in QWeb.
 * **Settings Views:** Must inherit `base.res_config_settings_view_form`. Target the form directly using `xpath`.
-* **Cross-Module XPath (Dropzones):** To maintain strict Open Source isolation, do not hardcode downstream dependencies in base module views. You MUST use `<xpath>` to inject custom elements into designated "Dropzones" of our own base modules (e.g., injecting domain-specific widgets into `user_websites`). When doing this, you MUST utilize the explicit structural targets and reference the specific Semantic Anchors defined in the target module's `docs/modules/*.md` (or `README.md`) API contract.
+* **Cross-Module XPath (Dropzones):** To maintain strict Open Source isolation, do not hardcode downstream dependencies in base module views. You MUST use `<xpath>` to inject custom elements into designated "Dropzones" of our own base modules (e.g., injecting domain-specific widgets into `user_websites`). When doing this, you MUST utilize the explicit structural targets and reference the specific Semantic Anchors defined in the target module's `hams_shared/docs/modules/*.md` (or `README.md`) API contract.
 * **Translations:** Include an `i18n/` directory containing a `.pot` file and `.po` files for the 7 most popular languages. Use `_()` in Python.
 * **Regulatory Compliance:** Integrate with Odoo's native cookie consent mechanism. NO custom cookie banners.
 * **GDPR:** Override `_get_gdpr_export_data(self)` and `_execute_gdpr_erasure(self)` on `res.users`.

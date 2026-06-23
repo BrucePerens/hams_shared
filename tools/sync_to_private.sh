@@ -2,7 +2,7 @@
 # ==============================================================================
 # Synchronizes architectural files, tools, and documentation from hams_community
 # to hams_private. Community module code is intentionally ignored, but their 
-# architectural documents located in docs/modules/ are synchronized.
+# architectural documents located in hams_shared/docs/modules/ are synchronized.
 # ==============================================================================
 
 set -e
@@ -36,10 +36,10 @@ echo "[*] Syncing tools/ ..."
 # We use rsync without --delete to ensure we don't destroy private-specific tools
 rsync -av --exclude='__pycache__' "$COMMUNITY_DIR/tools/" "$PRIVATE_DIR/tools/"
 
-echo "[*] Syncing docs/ ..."
+echo "[*] Syncing hams_shared/docs/ ..."
 # We use rsync without --delete to ensure we don't destroy private-specific docs
-# This automatically includes docs/modules/<module-name>.md
-rsync -av "$COMMUNITY_DIR/docs/" "$PRIVATE_DIR/docs/"
+# This automatically includes hams_shared/docs/modules/<module-name>.md
+rsync -av "$COMMUNITY_DIR/hams_shared/docs/" "$PRIVATE_DIR/hams_shared/docs/"
 
 echo "[*] Syncing root architectural & configuration files ..."
 for file in AGENTS.md requirements.txt .gitignore; do
@@ -52,4 +52,4 @@ done
 echo "============================================================"
 echo "[+] Sync Complete!"
 echo "Note: Community module directories were intentionally ignored."
-echo "Only their architectural documentation in docs/modules/ was synced."
+echo "Only their architectural documentation in hams_shared/docs/modules/ was synced."

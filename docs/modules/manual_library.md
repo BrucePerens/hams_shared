@@ -95,17 +95,17 @@ Uses a standard parent-child relationship for hierarchy. Inherits from `mail.thr
 For detailed narratives and end-to-end workflows, refer to the following:
 
 ### Stories
-* [Article Feedback](docs/stories/feedback.md) `[@ANCHOR: story_manual_feedback]`
-* [Article Hierarchy Integrity](docs/stories/hierarchy.md) `[@ANCHOR: story_manual_hierarchy]`
-* [Automated Documentation Installation](docs/stories/doc_installation.md) `[@ANCHOR: story_manual_doc_installation]`
-* [Backend Management Views](docs/stories/backend_views.md) `[@ANCHOR: story_manual_backend_views]`
-* [Dynamic Table of Contents](docs/stories/toc.md) `[@ANCHOR: story_manual_toc]`
-* [Dynamic URL Generation](docs/stories/url_generation.md) `[@ANCHOR: story_manual_url_generation]`
-* [Searching the Manual](docs/stories/search.md) `[@ANCHOR: story_manual_search]`
-* [Viewing Manual Articles](docs/stories/article_view.md) `[@ANCHOR: story_article_view]`
+* [Article Feedback](hams_shared/docs/stories/feedback.md) `[@ANCHOR: story_manual_feedback]`
+* [Article Hierarchy Integrity](hams_shared/docs/stories/hierarchy.md) `[@ANCHOR: story_manual_hierarchy]`
+* [Automated Documentation Installation](hams_shared/docs/stories/doc_installation.md) `[@ANCHOR: story_manual_doc_installation]`
+* [Backend Management Views](hams_shared/docs/stories/backend_views.md) `[@ANCHOR: story_manual_backend_views]`
+* [Dynamic Table of Contents](hams_shared/docs/stories/toc.md) `[@ANCHOR: story_manual_toc]`
+* [Dynamic URL Generation](hams_shared/docs/stories/url_generation.md) `[@ANCHOR: story_manual_url_generation]`
+* [Searching the Manual](hams_shared/docs/stories/search.md) `[@ANCHOR: story_manual_search]`
+* [Viewing Manual Articles](hams_shared/docs/stories/article_view.md) `[@ANCHOR: story_article_view]`
 
 ### Journeys
-* [Administrator Managing Articles](docs/journeys/admin_managing_articles.md) `[@ANCHOR: journey_admin_managing]`
-* [Developer Integrating Documentation](docs/journeys/developer_doc_integration.md) `[@ANCHOR: journey_developer_integration]`
-* [User Browsing the Manual](docs/journeys/user_browsing_journey.md) `[@ANCHOR: journey_user_browsing]`
+* [Administrator Managing Articles](hams_shared/docs/journeys/admin_managing_articles.md) `[@ANCHOR: journey_admin_managing]`
+* [Developer Integrating Documentation](hams_shared/docs/journeys/developer_doc_integration.md) `[@ANCHOR: journey_developer_integration]`
+* [User Browsing the Manual](hams_shared/docs/journeys/user_browsing_journey.md) `[@ANCHOR: journey_user_browsing]`
 </stories_and_journeys>

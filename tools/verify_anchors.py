@@ -10,7 +10,7 @@ RULES OF TRACEABILITY:
 1. BASE ANCHOR: Define a feature in source code using: `# [@ANCHOR: feature_name]`
 2. TEST LINK: The test file testing that feature MUST contain: `# Tests [@ANCHOR: feature_name]`
 3. VERIFICATION LINK: The source code MUST point back to the test using: `# Verified by [@ANCHOR: test_method_name]`
-4. DOC LINK: The base anchor MUST exist in a Markdown file in `docs/stories/` or `docs/journeys/`.
+4. DOC LINK: The base anchor MUST exist in a Markdown file in `hams_shared/docs/stories/` or `hams_shared/docs/journeys/`.
 5. UX LINK: If the anchor starts with `UX_`, it MUST exist in the module's `data/documentation.html`.
 6. CROSS-REF: If code triggers another module's anchor, use: `# Triggers [@ANCHOR: target_module:feature_name]`
 """
@@ -30,7 +30,7 @@ def get_module(path):
             return os.path.basename(current_dir)
         current_dir = os.path.dirname(current_dir)
 
-    # 2. Fallback for global docs/modules/...
+    # 2. Fallback for global hams_shared/docs/modules/...
     parts = abs_path.split(os.sep)
     if len(parts) >= 3 and parts[-3] == "docs" and parts[-2] == "modules" and parts[-1].endswith(".md"):
         return parts[-1][:-3]
@@ -421,7 +421,7 @@ def _report_documentation_gaps(source_anchors, docs_anchors, code_anchors, contr
             for loc in primary_locs:
                 print(f"        -> {loc}")
             print("      [!] DIAGNOSTIC FOR AI: Every core feature must be documented.")
-            print(f"          ACTION: Add `[@ANCHOR: {anchor.split(':')[1]}]` to the relevant Markdown file in `docs/stories/` or `docs/journeys/`.")
+            print(f"          ACTION: Add `[@ANCHOR: {anchor.split(':')[1]}]` to the relevant Markdown file in `hams_shared/docs/stories/` or `hams_shared/docs/journeys/`.")
         if reported:
             has_errors = True
 

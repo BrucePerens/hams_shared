@@ -25,8 +25,8 @@ Maintaining architectural cohesion across a large platform relies on strict docu
 * "Oblique" AI tones, passive voice, and dense corporate jargon are strictly forbidden. All documentation MUST be written conversationally, directly, and plainly.
 
 ### 4. Documentation Boundaries
-* `docs/runbooks/` holds strategic Standard Operating Procedures. It MUST NOT contain step-by-step CLI commands.
-* `docs/deploy/` holds tactical deployment steps and CLI commands.
+* `hams_shared/docs/runbooks/` holds strategic Standard Operating Procedures. It MUST NOT contain step-by-step CLI commands.
+* `hams_shared/docs/deploy/` holds tactical deployment steps and CLI commands.
 * **API Contracts & Versioning (ADR 0077):** Any technical documentation intended for LLMs MUST explicitly state the exact Python import paths. Public APIs MUST utilize URI versioning (e.g., `/api/v1/`) and implement the Sunset Header protocol for deprecation.
 
 ### 5. Solo-Maintainer Automation & SRE

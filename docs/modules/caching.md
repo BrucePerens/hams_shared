@@ -60,17 +60,17 @@ This module is built with security as a primary concern, adhering strictly to th
 - **No Sudo Escalation**: All background operations run within the context of their assigned service accounts without ever requesting global administrative (`sudo`) privileges.
 
 ## 4. Stories & Journeys
-Detailed architectural narratives and process flows are documented in the `docs/` directory:
+Detailed architectural narratives and process flows are documented in the `hams_shared/docs/` directory:
 
 ### Stories
-* [Cache Quota Management](docs/stories/cache_quota_management.md) ([@ANCHOR: caching_quota_calculation])
-* [Cache Invalidation Strategy](docs/stories/cache_invalidation_strategy.md) ([@ANCHOR: caching_fs_scan_logic])
-* [Documentation Bootstrap](docs/stories/documentation_bootstrap.md) ([@ANCHOR: caching_docs_bootstrap])
+* [Cache Quota Management](hams_shared/docs/stories/cache_quota_management.md) ([@ANCHOR: caching_quota_calculation])
+* [Cache Invalidation Strategy](hams_shared/docs/stories/cache_invalidation_strategy.md) ([@ANCHOR: caching_fs_scan_logic])
+* [Documentation Bootstrap](hams_shared/docs/stories/documentation_bootstrap.md) ([@ANCHOR: caching_docs_bootstrap])
 
 ### Journeys
-* [Asset Request Flow](docs/journeys/asset_request_flow.md) ([@ANCHOR: caching_sw_fetch_interceptor])
-* [Server Startup Scan](docs/journeys/server_startup_scan.md) ([@ANCHOR: caching_sw_serve_route])
-* [Manual Invalidation](docs/journeys/manual_invalidation.md) ([@ANCHOR: test_caching_sudo_params])
+* [Asset Request Flow](hams_shared/docs/journeys/asset_request_flow.md) ([@ANCHOR: caching_sw_fetch_interceptor])
+* [Server Startup Scan](hams_shared/docs/journeys/server_startup_scan.md) ([@ANCHOR: caching_sw_serve_route])
+* [Manual Invalidation](hams_shared/docs/journeys/manual_invalidation.md) ([@ANCHOR: test_caching_sudo_params])
 
 ## 5. Testing
 Tests are located in the `tests/` directory and cover:

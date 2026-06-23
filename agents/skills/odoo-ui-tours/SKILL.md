@@ -19,7 +19,7 @@ When a tour fails, there are two ways to investigate the failure:
 
 1. **Active Debugging (Recommended):** You can use the `--pause-on-fail` flag when running tests:
    ```bash
-   python3 tools/test.py -u <module_name> --pause-on-fail
+   python3 hams_shared/tools/test.py -u <module_name> --pause-on-fail
    ```
    If a tour step fails, this flag prevents Odoo from tearing down the headless browser. The test execution will freeze, printing `🛑 TOUR FAILED! Pausing indefinitely`. At this point, Chrome's remote debugging port is exposed on `9222`. **You MUST activate your `chrome-devtools` MCP server, connect to port 9222, and actively inspect the DOM state or execute JS in the frozen browser.**
 

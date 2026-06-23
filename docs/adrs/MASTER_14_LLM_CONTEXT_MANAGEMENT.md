@@ -16,7 +16,7 @@ LLMs natively possess generic base instructions (e.g., "always bundle all code,"
 
 ### ### 2. API Contracts Over Implementations
 ### When instructing the LLM to interact with core frameworks, do not feed it the raw Python implementation files.
-### * Use the Markdown API contracts located in `docs/modules/`.
+### * Use the Markdown API contracts located in `hams_shared/docs/modules/`.
 ### * **Explicit Import Paths:** API contracts and `README.md` files MUST explicitly provide the exact, literal Python import path. LLMs are strictly forbidden from guessing internal filenames.
 ### * **Dependency Visibility (ADR 0075):** API contracts MUST explicitly list all external Python dependencies (e.g., `redis`, `ephem`) to ensure AI agents correctly mock and utilize them across the repository.
 

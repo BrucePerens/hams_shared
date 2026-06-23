@@ -5,7 +5,7 @@ Combines test execution, integration modes, and real-time failure extraction.
 Strictly prohibits Bash wrapper scripts and CPU polling loops.
 
 AI DIRECTIVE: If UI Tours are failing with [watchdog alarm] or timeouts,
-you MUST read `docs/LLM_WRITING_TOURS.md`. The environment is heavily constrained
+you MUST read `hams_shared/docs/LLM_WRITING_TOURS.md`. The environment is heavily constrained
 and prone to race conditions if native macros are ignored.
 """
 
@@ -232,7 +232,7 @@ class FailureExtractor:
                         "    1. Did you click a 'save' button manually? You MUST use `.concat(TourUtils.safeSave())` instead.\n"
                         "    2. Did you use `text` instead of `edit` for an input? `text` is banned.\n"
                         "    3. Did you fail to insert a neutral `trigger: '.o_form_sheet', run: 'click'` step before clicking save to allow the DOM to blur?\n"
-                        "    4. Read `docs/LLM_WRITING_TOURS.md` for exact syntax.\n\n"
+                        "    4. Read `hams_shared/docs/LLM_WRITING_TOURS.md` for exact syntax.\n\n"
                     )
                     self.current_block.append(ai_diagnostic)
 
@@ -547,14 +547,14 @@ def get_addons_path(base_dir):
 
 def check_linters(python_exec, base_dir, ignore_filepath, extractor=None, target_modules=None):
     print("[*] Running Manifest Dependency Graph Linter...")
-    res_manifest = subprocess.run([python_exec, os.path.join(base_dir, "tools", "check_manifest_dependencies.py"), base_dir])
+    res_manifest = subprocess.run([python_exec, os.path.join(shared_dir, "tools", "check_manifest_dependencies.py"), base_dir])
     if res_manifest.returncode != 0:
         print("🛑 Halting due to manifest load-order violations.")
         if extractor: extractor.aborted = True
         sys.exit(1)
 
     print("[*] Running AST Burn List Linter...")
-    burn_script = os.path.join(base_dir, "tools", "check_burn_list.py")
+    burn_script = os.path.join(shared_dir, "tools", "check_burn_list.py")
     cmd_burn = [python_exec, burn_script, os.path.join(base_dir, target_modules[0]), "--ignore-file", ignore_filepath] if target_modules and len(target_modules) == 1 else [python_exec, burn_script, base_dir, "--ignore-file", ignore_filepath]
 
     res_burn = subprocess.run(cmd_burn, capture_output=True, text=True)
@@ -568,7 +568,7 @@ def check_linters(python_exec, base_dir, ignore_filepath, extractor=None, target
         print(res_burn.stdout)
 
     print("[*] Scanning for Semantic Anchors...")
-    res_anchor = subprocess.run([python_exec, os.path.join(base_dir, "tools", "verify_anchors.py"), base_dir], capture_output=True, text=True)
+    res_anchor = subprocess.run([python_exec, os.path.join(shared_dir, "tools", "verify_anchors.py"), base_dir], capture_output=True, text=True)
     if res_anchor.returncode != 0:
         print(res_anchor.stdout)
         print(res_anchor.stderr)
@@ -579,7 +579,7 @@ def check_linters(python_exec, base_dir, ignore_filepath, extractor=None, target
         print(res_anchor.stdout)
 
     print("[*] Running JavaScript Syntax Linter...")
-    js_linter = os.path.join(base_dir, "tools", "check_js_syntax.py")
+    js_linter = os.path.join(shared_dir, "tools", "check_js_syntax.py")
     target_dirs = [os.path.join(base_dir, m) for m in target_modules]
     cmd_js = [python_exec, js_linter, "--ignore-file", ignore_filepath] + target_dirs
     res_js = subprocess.run(cmd_js, capture_output=True, text=True)
@@ -693,7 +693,8 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         os.makedirs(d, exist_ok=True)
     subprocess.run(["mount", "--bind", "/opt/hams/test", "/mnt/host_test_dir"], check=True)
 
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    shared_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    base_dir = os.getcwd()
 
     def _safe_run(cmd, **kw): return subprocess.run(cmd, check=True, **kw)
 
@@ -996,7 +997,7 @@ def start_jules_daemons(base_dir):
 
     print("[*] Provisioning Jules environment via infrastructure.py...")
     script = f"""import sys, os, subprocess
-sys.path.insert(0, '{os.path.join(base_dir, "tools")}')
+sys.path.insert(0, '{os.path.join(base_dir, "hams_shared", "tools")}')
 import infrastructure
 def _safe_run(cmd, **kw):
     return subprocess.run(cmd, check=True, **kw)
@@ -1059,12 +1060,12 @@ def main():
         sys.exit(1)
 
     cwd = os.getcwd()
-    if not os.path.isdir(os.path.join(cwd, ".git")) or not os.path.isfile(os.path.join(cwd, "tools", "test.py")):
+    if not os.path.isdir(os.path.join(cwd, ".git")) or not os.path.isfile(os.path.join(cwd, "hams_shared", "tools", "test.py")):
         print("================================================================================")
         print("🚨 CRITICAL EXECUTION ENVIRONMENT ERROR 🚨")
         print(f"Current Working Directory: {cwd}")
-        print("You MUST execute tools/test.py from the root of the Git repository.")
-        print("The current directory is either not a git repository or lacks tools/test.py.")
+        print("You MUST execute hams_shared/tools/test.py from the root of the Git repository.")
+        print("The current directory is either not a git repository or lacks hams_shared/tools/test.py.")
         print("[!] DIAGNOSTIC FOR AI: `cd` into the proper repository root before invoking this script.")
         print("================================================================================")
         sys.exit(1)
@@ -1129,7 +1130,8 @@ def main():
     os.environ.setdefault("ODOO_TEST_CHROME_ARGS", "--headless --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading")
     os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", "autolaunch:")
 
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    shared_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    base_dir = os.getcwd()
     env_path = os.path.join(base_dir, "deploy", "env")
     if os.path.exists(env_path):
         with open(env_path, "r", encoding="utf-8") as f:
@@ -1202,7 +1204,7 @@ def main():
         os.environ["ODOO_USER"] = "admin"
         os.environ["ODOO_PASSWORD"] = "admin"
 
-        mcp_server_script = os.path.join(base_dir, "tools", "test_mcp_server.py")
+        mcp_server_script = os.path.join(shared_dir, "tools", "test_mcp_server.py")
         cmd = get_odoo_test_cmd() + [
             mcp_server_script, "--load=base,web,zero_sudo", "--addons-path", addons_path,
             "--dev=all", "-d", args.db, "-i", mod_string, "--workers=0",

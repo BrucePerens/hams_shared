@@ -111,14 +111,14 @@ To add a new monitoring plugin:
 <stories_and_journeys>
 ## 4. Architectural Stories & Journeys
 
-*   [Story: Scaling the Watchtower](docs/stories/automated_monitoring_setup.md)
-*   [Story: Finding the Needle in the Haystack](docs/stories/log_anomaly_detection.md)
-*   [Story: The Midnight Guardian](docs/stories/on_call_alerting.md)
-*   [Story: The Data-Driven Post-Mortem](docs/stories/performance_analytics.md)
-*   [Journey: Daemon Execution Loop](docs/journeys/daemon_execution_loop.md)
-*   [Journey: Escalation Pathway](docs/journeys/escalation_pathway.md)
-*   [Journey: Incident Lifecycle](docs/journeys/incident_lifecycle.md)
-*   [Journey: Synthetic Monitoring Flow](docs/journeys/synthetic_monitoring_flow.md)
+*   [Story: Scaling the Watchtower](hams_shared/docs/stories/automated_monitoring_setup.md)
+*   [Story: Finding the Needle in the Haystack](hams_shared/docs/stories/log_anomaly_detection.md)
+*   [Story: The Midnight Guardian](hams_shared/docs/stories/on_call_alerting.md)
+*   [Story: The Data-Driven Post-Mortem](hams_shared/docs/stories/performance_analytics.md)
+*   [Journey: Daemon Execution Loop](hams_shared/docs/journeys/daemon_execution_loop.md)
+*   [Journey: Escalation Pathway](hams_shared/docs/journeys/escalation_pathway.md)
+*   [Journey: Incident Lifecycle](hams_shared/docs/journeys/incident_lifecycle.md)
+*   [Journey: Synthetic Monitoring Flow](hams_shared/docs/journeys/synthetic_monitoring_flow.md)
 </stories_and_journeys>
 
 ---
@@ -126,6 +126,6 @@ To add a new monitoring plugin:
 ## 5. Testing & Maintenance
 Run module tests using the unified test runner:
 ```bash
-python3 tools/test.py -u pager_duty --already-provisioned
+python3 hams_shared/tools/test.py -u pager_duty --already-provisioned
 ```
 Daemon tests are located in `pager_duty/daemon/` and run via pure `unittest`. **Do not import Odoo packages in daemon tests.**

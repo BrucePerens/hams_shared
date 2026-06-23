@@ -180,7 +180,7 @@ Ensure all dynamic data injected into the DOM is sanitized.
 * **OWL `rpc` Service Deprecation:** The raw `useService('rpc')` method is banned in Odoo 19 frontend components. You MUST use `useService('orm')` which securely handles batching, caching, and model security, unless explicitly burning this rule for a custom controller.
 * **The /web/ Asset & Login Mandate:** While general routing has moved to `/odoo`, core static assets (`/web/assets/`), images (`/web/image`), and the authentication endpoint (`/web/login`) MUST remain under the `/web` path. You are strictly FORBIDDEN from refactoring these specific paths to `/odoo`. The Cloudflare and Caching modules rely on `/web/assets/` for edge caching. If necessary, use `# burn-ignore-route` to bypass linters for these valid exceptions.
 
-> **NOTICE (UI TOURS):** All strict architectural mandates, workarounds, and syntax rules required to write stable UI Tours have been relocated to the dedicated **`docs/LLM_WRITING_TOURS.md`** manual. You MUST consult that document for all tour-related directives.
+> **NOTICE (UI TOURS):** All strict architectural mandates, workarounds, and syntax rules required to write stable UI Tours have been relocated to the dedicated **`hams_shared/docs/LLM_WRITING_TOURS.md`** manual. You MUST consult that document for all tour-related directives.
 </javascript_standards>
 
 ---
@@ -233,7 +233,7 @@ To survive the UI parser, you MUST ensure your entire Parcel payload is wrapped 
 The `verify_anchors.py` script enforces strict documentation traceability:
 
 1. **Bidirectional Verification:** Any execution logic marked with `# Verified by [@ANCHOR: example_name]` MUST possess a corresponding test file containing `# Tests [@ANCHOR: example_name]`.
-2. **Documentation Mandate:** Any anchor embedded in source code MUST be referenced somewhere within the `docs/` folder (Runbooks, Stories, Journeys, or Modules).
+2. **Documentation Mandate:** Any anchor embedded in source code MUST be referenced somewhere within the `hams_shared/docs/` folder (Runbooks, Stories, Journeys, or Modules).
 These documentation references MUST be placed inline, immediately adjacent to the relevant descriptive text.
 3. **The View-Tour Mandate:** Every `<template>` or `<record model="ir.ui.view">` MUST contain a UI Tour link.
 4. **Tour Validation:** The corresponding JavaScript tour file MUST contain the matching anchor and explicitly utilize the `trigger:` keyword to prove it evaluates the DOM.

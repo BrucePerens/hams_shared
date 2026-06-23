@@ -13,7 +13,7 @@ echo "Copying tools and documents updated in the past week to $TARGET_REPO..."
 # Find files modified in the past week
 git log --since="1 week ago" --name-only --format="" | sort | uniq | while read -r file; do
     # Filter for tools and documents
-    if [[ "$file" == tools/* ]] || [[ "$file" == docs/* ]] || [[ "$file" == *.md ]] || [[ "$file" == *.txt ]] || [[ "$file" == *.html ]]; then
+    if [[ "$file" == tools/* ]] || [[ "$file" == hams_shared/docs/* ]] || [[ "$file" == *.md ]] || [[ "$file" == *.txt ]] || [[ "$file" == *.html ]]; then
         if [ -f "$file" ]; then
             echo "Copying $file..."
 
