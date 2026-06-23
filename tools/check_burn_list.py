@@ -19,7 +19,7 @@ import argparse
 import xml.parsers.expat
 import html.parser
 import glob
-"""markdown
+"""!
 ---
 name: linter-compliance
 description: Activated when the AI is writing code to ensure strict adherence to the AST linter rules and zero-sudo mandates.
@@ -64,7 +64,7 @@ The `daemon_key_manager` must be the only facility used, and is the only module 
 """
 
 
-"""markdown
+"""!
 <frontend_standards>
 ## 4. 🎨 XML, QWeb, and UI Elements
 
@@ -611,7 +611,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
         errors.append((e.lineno or 1, f"CRITICAL SYNTAX/INDENTATION ERROR: {e.msg}"))
         return errors, warnings
 
-    """markdown
+    """!
     <database_rules>
     ## 2. 🗄️ Database & ORM Integrity
 
@@ -1041,7 +1041,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             )
             self.generic_visit(node)
 
-        """markdown
+        """!
         <python_standards>
         ## 3.5 📜 Imports
 
@@ -1776,7 +1776,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 # FILE INGESTION & XML SCANNING
 # -------------------------------------------------------------------------
 
-"""markdown
+"""!
 <ci_cd_bypasses>
 ## 6. 🚦 CI/CD Bypasses & Automated Test Audits (The `ignore` Protocol)
 

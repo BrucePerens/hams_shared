@@ -31,9 +31,9 @@ def main():
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
             if isinstance(node.value.value, str):
                 text = node.value.value
-                if text.startswith("markdown\n"):
+                if text.startswith("!"):
                     # Remove the "markdown\n" prefix
-                    extracted_text = textwrap.dedent(text[len("markdown\n"):])
+                    extracted_text = textwrap.dedent(text[1:])
                     extracted_blocks.append((node.lineno, extracted_text))
 
     # Ensure blocks are appended in the order they appear in the source file
