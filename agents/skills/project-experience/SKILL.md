@@ -181,3 +181,32 @@ session.
 ### Odoo Headless Chrome OOM & Process Leak Trap (NoSuchProcess)
 **Trap**: Repeatedly instantiating `ChromeBrowser(self)` inside helpers like `navigate_and_screenshot` creates a new Chrome instance per call without cleaning up previous instances, because `self.browser` only tracks the most recent one for teardown. This causes massive memory exhaustion, random `psutil.NoSuchProcess` test runner crashes, and `Fetch API Error` watchdog alarms as the Odoo Werkzeug backend fails under OOM pressure.
 **Solution**: NEVER instantiate raw `ChromeBrowser(self)` manually inside test helpers. Always use the built-in `self.start_hams_browser()` which correctly checks for an existing browser instance on `self.browser` and reuses it, preventing headless instance leakage.
+
+## Trap: Parcel Transport Formatting Failure
+* **Date:** 2026-06-10
+* **Trap:** Improper usage of boundary strings across multiple files and failure to strictly place the `--` terminator inside the 6-backtick block. This led to extraction errors in the previous session.
+* **Solution:** 1. Define ONE unique boundary string (e.g., `@@BOUNDARY_PARCEL_001@@`) and use it for every file in the parcel.
+    2. Ensure the final boundary in the sequence strictly includes `--` (e.g., `@@BOUNDARY_PARCEL_001@@--`).
+    3. Verify the terminator is inside the 6-backtick wrapper, immediately before the closing backticks.
+
+## The Custom AST File Extractor (`parcel_extract.py`) Constraints
+* **The Bug:** The pipeline's file modification tool uses Python's native `tokenize` and AST parsing. If a `SEARCH` block contains syntactically incomplete Python (e.g., an open `try:` without an `except:`, an unclosed list `[`, or a trailing `if` without a body), the tokenizer fails. This causes the script to fall back to a fuzzy string matcher, which previously contained a bug that corrupted indentation.
+* **The Fix:** We patched `parcel_extract.py` to be more fault-tolerant and fixed the fuzzy-matcher's indentation logic.
+* **The Golden Rule:** Always ensure `SEARCH` and `REPLACE` blocks are **syntactically complete and valid Python**. If modifying a massive nested structure where a clean snippet isn't possible, bypass the AST entirely by using the `overwrite` operation for the whole file.
+
+## Odoo JSON-2 RPC & Batching
+* **The Bug:** Odoo's JSON-2 API strictly maps JSON dictionary payloads to Python keyword arguments (`**kwargs`). Sending an array directly or using a generic `batch` keyword resulted in `missing a required argument` errors.
+* **The Fix:** The target method explicitly required `batch_data`. We refactored `push_batches_to_odoo` in `hams_config.py` to pop a `batch_arg_name` parameter (defaulting to `batch_data`) to perfectly map the generator's array to the Odoo backend. (Note: Ensure the Brazil daemon and others pass this correctly if their backend method uses a different kwarg).
+
+## Web Application Firewalls (WAF) & Government CDNs
+* **The Bug:** Endpoints like `data.fcc.gov`, UK Ofcom, and AU ACMA actively block default Python `requests` User-Agents, resulting in `Read timed out` or `403 Forbidden` errors.
+* **The Fix:** Hardcode a modern Chrome User-Agent string in `hams_config.py` / daemon scripts to masquerade as a legitimate browser:
+    `"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"`
+* **Fail-Fast:** Updated `smart_download` to catch header request failures (timeouts, SSL errors) and immediately abort (`return False`) rather than hanging or attempting to download a 404/403 page as a payload.
+
+## FCC Data Ingestion Specifics
+* **CPU Pegging (I/O Bottleneck):** Using Python's `line.decode("utf-8").split("|")` inside a massive loop maxed out the CPU.
+    * *Fix:* Push parsing to the C-layer by wrapping the zip stream in `io.TextIOWrapper` and using `csv.reader(..., delimiter="|")`.
+* **Blank Callsigns:** The FCC `.dat` files contain empty callsigns (`''`), triggering Odoo's SQL constraint `ham_callbook_callsign_not_empty`, causing the entire batch to fail.
+    * *Fix:* Explicitly filter `if not callsign: continue` inside the daemon's generator.
+* **The "X" Callsign Backend Bug:** The FCC issues 2x3 callsigns starting with "X" (e.g., `KB2XYL`) to Amateurs. The Odoo backend model validation regex is currently too strict and violently rejects them as "Experimental or Government". This requires a patch to the Odoo Python model (`ham_callbook.py`).

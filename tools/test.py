@@ -1061,7 +1061,7 @@ def main():
         sys.exit(1)
 
     cwd = os.getcwd()
-    if not os.path.isdir(os.path.join(cwd, ".git")) or not os.path.isfile(os.path.join(cwd, "hams_shared", "tools", "test.py")):
+    if not os.path.isdir(os.path.join(cwd, ".git")) or not (os.path.isfile(os.path.join(cwd, "hams_shared", "tools", "test.py")) or os.path.isfile(os.path.join(cwd, "tools", "test.py"))):
         print("================================================================================")
         print("🚨 CRITICAL EXECUTION ENVIRONMENT ERROR 🚨")
         print(f"Current Working Directory: {cwd}")
