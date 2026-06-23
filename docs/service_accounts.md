@@ -1,6 +1,6 @@
 # Service Account Catalog
 
-This document details the Service User IDs (`is_service_account=True`) defined across the `hams_community` repository modules, their intended use cases, and their privilege levels.
+This document details the Service User IDs (`is_service_account=True`) defined across the `hams_open` repository modules, their intended use cases, and their privilege levels.
 
 Under the Zero-Sudo architecture, no Python code is allowed to use `sudo()`. Instead, operations that require elevated privileges must execute within the context of a dedicated service account using `with_user()`.
 

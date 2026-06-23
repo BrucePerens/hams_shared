@@ -11,7 +11,7 @@ Maintaining architectural cohesion across a large platform relies on strict docu
 ### 1. Semantic Anchor Traceability & Multi-Repo Governance
 * Source code and Agile documentation (Stories, Runbooks) MUST be mathematically linked using Semantic Anchors (`[@ANCHOR: example_feature_name%]`).
 * **Multi-Repository Prefixing:** To prevent collisions across the platform's multi-repository architecture, all new anchors MUST utilize the following prefixing convention:
-    * **`COMM_`**: Reserved for `hams_community`.
+    * **`COMM_`**: Reserved for `hams_open`.
     * **`PRI_`**: Reserved for `hams_private_primary`.
     * **`UX_`**: Reserved for user-facing interaction anchors (See ADR 0074).
 * **Inline Documentation Placement:** Within documentation files, anchors MUST be placed directly inline/adjacent to the specific text describing the functionality. A dedicated `ANCHOR_MANIFEST.md` file is strictly forbidden.

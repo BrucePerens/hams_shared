@@ -2371,7 +2371,7 @@ def main():
                 "tools",
                 "daemons",
                 "hams_local_relay",
-                "hams_community",
+                "hams_open",
                 "hams_com",
             )
             and not is_ignored(os.path.relpath(os.path.join(root, d), target_dir))

@@ -502,7 +502,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
 def get_local_modules(base_dir, ignore_patterns):
     mods = []
     for item in os.listdir(base_dir):
-        if item in ("hams_community", "hams_com"):
+        if item in ("hams_open", "hams_com"):
             continue
         mod_path = os.path.join(base_dir, item)
         if is_ignored(mod_path, ignore_patterns):
@@ -522,7 +522,7 @@ def get_addons_path(base_dir):
         for item in os.listdir(parent_dir):
             item_path = os.path.join(parent_dir, item)
             if os.path.isdir(item_path):
-                if item.startswith("hams_community") or item.startswith("hams_com"):
+                if item.startswith("hams_open") or item.startswith("hams_com"):
                     if item_path not in paths and not found_community:
                         paths.append(item_path)
                         found_community = True
@@ -530,12 +530,12 @@ def get_addons_path(base_dir):
         _logger.debug("Ignored OSError: %s", e)
 
     if not found_community:
-        community_dir = os.path.abspath(os.path.join(base_dir, "..", "hams_community"))
+        community_dir = os.path.abspath(os.path.join(base_dir, "..", "hams_open"))
         primary_dir = os.path.abspath(os.path.join(base_dir, "..", "hams_com"))
-        nested_community = os.path.abspath(os.path.join(base_dir, "hams_community"))
-        root_community = "/hams_community"
+        nested_community = os.path.abspath(os.path.join(base_dir, "hams_open"))
+        root_community = "/hams_open"
 
-        app_community = "/app/hams_community"
+        app_community = "/app/hams_open"
         for d in [community_dir, primary_dir, nested_community, root_community, app_community]:
             if os.path.isdir(d) and d not in paths:
                 paths.append(d)
@@ -786,11 +786,11 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     parent_dir = os.path.abspath(os.path.join(base_dir, ".."))
     try:
         for item in os.listdir(parent_dir):
-            if item.startswith("hams_community") or item.startswith("hams_com"):
+            if item.startswith("hams_open") or item.startswith("hams_com"):
                 extra_mounts.append(os.path.join(parent_dir, item))
     except OSError as e:
         _logger.debug("Ignored OSError: %s", e)
-    extra_mounts.extend([os.path.join(base_dir, "..", "hams_community"), "/hams_community", "/app/hams_community", os.path.join(base_dir, "hams_community")])
+    extra_mounts.extend([os.path.join(base_dir, "..", "hams_open"), "/hams_open", "/app/hams_open", os.path.join(base_dir, "hams_open")])
 
     mounted_dirs = set()
     for extra_dir in extra_mounts:

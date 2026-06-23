@@ -6,7 +6,7 @@ Accepted
 ## Context
 In a multi-environment architecture, we support deployment via both Docker Compose and Bare-Metal platforms. Hardcoding loopback IP addresses such as `127.0.0.1` inherently causes routing failures when services are spread across Docker containers (which possess distinct network namespaces). Conversely, relying solely on Docker-specific static hostnames (e.g., `postgres` or `redis`) breaks the application on bare-metal systems unless `/etc/hosts` is precisely manually synchronized.
 
-To facilitate seamless execution for Open Source community members downloading `hams_community` modules, we require a standardized approach to host resolution that naturally supports both orchestrated and un-orchestrated environments without requiring manual system alterations.
+To facilitate seamless execution for Open Source community members downloading `hams_open` modules, we require a standardized approach to host resolution that naturally supports both orchestrated and un-orchestrated environments without requiring manual system alterations.
 
 ## Decision
 We mandate the **Environment Fallback Pattern** for all hostname configuration.

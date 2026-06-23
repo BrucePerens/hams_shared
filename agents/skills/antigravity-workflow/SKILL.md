@@ -1,6 +1,6 @@
 ---
 name: antigravity-workflow
-description: Workflow and git commit mandates for the Antigravity agent working on the hams_community project.
+description: Workflow and git commit mandates for the Antigravity agent working on the hams_open project.
 ---
 
 # Antigravity Workflow Mandates

@@ -73,7 +73,7 @@ def find_anchors_in_docs(root_dir, repo_root):
     doc_anchors = {}
     contract_anchors = {}
     pattern = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
-    exclude_dirs = {"tools", "scripts", "hams_community", "hams_com", ".git", "__pycache__"}
+    exclude_dirs = {"tools", "scripts", "hams_open", "hams_com", ".git", "__pycache__"}
 
     for root, dirs, files in os.walk(root_dir):
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
@@ -195,7 +195,7 @@ def find_anchors_in_code(root_dir, repo_root):
     verified_by_links, cross_references = {}, {}
     duplicates = []
     pattern = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
-    exclude_dirs = {"docs", ".git", "__pycache__", "tools", "scripts", "hams_community", "hams_com"}
+    exclude_dirs = {"docs", ".git", "__pycache__", "tools", "scripts", "hams_open", "hams_com"}
 
     for root, dirs, files in os.walk(root_dir):
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
@@ -477,12 +477,12 @@ def main():
     primary_dirs = [os.path.abspath(d) for d in args]
     target_dirs = list(primary_dirs)
 
-    has_community = any("hams_community" in d or "hams_com" in d for d in target_dirs)
+    has_community = any("hams_open" in d or "hams_com" in d for d in target_dirs)
     if not has_community:
         for possible_path in [
-            os.path.abspath(os.path.join(repo_root, "..", "hams_community")),
+            os.path.abspath(os.path.join(repo_root, "..", "hams_open")),
             os.path.abspath(os.path.join(repo_root, "..", "hams_com")),
-            os.path.abspath(os.path.join(repo_root, "hams_community")),
+            os.path.abspath(os.path.join(repo_root, "hams_open")),
             os.path.abspath(os.path.join(repo_root, "hams_com")),
         ]:
             if os.path.isdir(possible_path):
@@ -535,7 +535,7 @@ def main():
         duplicates.extend(dups)
 
         for root, dirs, files in os.walk(target_dir):
-            dirs[:] = [d for d in dirs if d not in {"tools", "scripts", "hams_community", "hams_com", ".git", "__pycache__"}]
+            dirs[:] = [d for d in dirs if d not in {"tools", "scripts", "hams_open", "hams_com", ".git", "__pycache__"}]
             if "documentation.html" in files:
                 full_doc_path = os.path.join(root, "documentation.html")
                 try:
