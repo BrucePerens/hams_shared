@@ -1,0 +1,19 @@
+{
+  "kopia": {
+    "url": "https://github.com/kopia/kopia/releases/download/v0.18.2/kopia-0.18.2-linux-x64.tar.gz",
+    "checksum": "6eb5cc175ccf2b38038bf34710184b251ce7c77f013bd33816650db8182742dd",
+    "type": "tar.gz",
+    "extract_member": "kopia"
+  },
+  "etcd": {
+    "url": "https://github.com/etcd-io/etcd/releases/download/v3.5.12/etcd-v3.5.12-linux-amd64.tar.gz",
+    "checksum": "84f1837ff7a107ba6e1b6f0dd51bb8db6e5bc24dbd2a8ec862ffbe4db1d996b5",
+    "type": "tar.gz",
+    "extract_member": "etcd"
+  },
+  "cloudflared": {
+    "url": "https://github.com/cloudflare/cloudflared/releases/download/2025.9.0/cloudflared-linux-amd64",
+    "checksum": "4f48c9fc205ed7d200a35f24170e795171189b77a696e3f8b5704d07a6801957",
+    "type": "binary"
+  }
+}
