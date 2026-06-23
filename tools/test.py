@@ -546,6 +546,7 @@ def get_addons_path(base_dir):
 
 
 def check_linters(python_exec, base_dir, ignore_filepath, extractor=None, target_modules=None):
+    shared_dir = os.path.abspath(os.path.join(base_dir, "hams_shared"))
     print("[*] Running Manifest Dependency Graph Linter...")
     res_manifest = subprocess.run([python_exec, os.path.join(shared_dir, "tools", "check_manifest_dependencies.py"), base_dir])
     if res_manifest.returncode != 0:
