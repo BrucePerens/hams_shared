@@ -5,7 +5,7 @@ description: Workflow and git commit mandates for the Antigravity agent working 
 
 # Antigravity Workflow Mandates
 
-1. **Automatic Git Commits:** When you complete a task or a logical chunk of work that represents a stable, working state (e.g., after fixing bugs or refactoring), you MUST automatically stage and commit the changes using `git add .` and `git commit -m "..."`. Do not wait for the user to explicitly ask you to commit.
+1. **Automatic Git Commits & Pushing:** When you complete a task or a logical chunk of work that represents a stable, working state (e.g., after fixing bugs or refactoring), you MUST automatically stage and commit the changes using `git add .` and `git commit -m "..."`. After committing, you MUST automatically push the changes to the remote repository using `git push`. Do not wait for the user to explicitly ask you to commit or push.
 2. **Clear Commit Messages:** Write clear, descriptive commit messages summarizing the technical changes and the rationale behind them.
 3. **Test Execution & Debugging:**
 - Execute the test suite using `run_command` with `python3 hams_shared/tools/test.py`.
