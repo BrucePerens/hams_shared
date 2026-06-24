@@ -546,9 +546,9 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                         )
                         extractor.capturing = False
 
-                    robust_reap(process.pid)
-                    force_killed = True
-                    break
+                    print("[*] [DEBUG-RUNNER] Killing headless chrome to un-hang the test framework...")
+                    subprocess.run(["pkill", "-u", str(os.getuid()), "-TERM", "-f", "chrome"], check=False)
+                    last_output_time = time.time()
     except KeyboardInterrupt:
         print("\n[!] CTRL-C detected! Forcefully terminating the test process...")
         robust_reap(process.pid)
@@ -1249,7 +1249,10 @@ def main():
     ignore_filepath = os.path.join(base_dir, args.config)
     ignore_patterns = load_ignore_file(ignore_filepath)
 
-    target_modules = [m.strip() for m in args.module.split(",")] if args.module else get_local_modules(base_dir, ignore_patterns)
+    target_modules = [m.strip() for m in args.module.split(",")] if args.module else []
+    install_modules = [m.split(":")[0] for m in target_modules] if args.module else get_local_modules(base_dir, ignore_patterns)
+    if not target_modules:
+        target_modules = list(install_modules)
 
     if not args.module and "caching" in target_modules:
         target_modules.remove("caching")
@@ -1258,7 +1261,7 @@ def main():
         print("❌ ERROR: No modules found.")
         sys.exit(1)
 
-    mod_string = "base," + ",".join(target_modules)
+    mod_string = "base," + ",".join(install_modules)
     test_tags = ",".join([f"/{m}" for m in target_modules])
 
     def get_odoo_test_cmd(suffix=""):

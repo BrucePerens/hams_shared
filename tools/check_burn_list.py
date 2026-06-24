@@ -1275,23 +1275,28 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
         def visit_Attribute(self, node):
             if self.is_odoo_module:
                 if node.attr == "sudo":
-                    line_content = (
-                        self.lines[node.lineno - 1]
-                        if node.lineno <= len(self.lines)
-                        else ""
-                    )
-                    if not (
-                        "# burn-ignore-sudo" in line_content  # fmt: skip
-                        and (
-                            "sudo()._generate(" in line_content
-                            or
-                            ".sudo().unlink()" in line_content
+                    """! Ban sudo() from production code so that the AI will use the micro-privilege architecture. Allow it in tools and tests."""
+                    filepath_forward = getattr(self, "filepath", self.filename).replace("\\", "/")
+                    if "tests/" in filepath_forward or "tools/" in filepath_forward:
+                        pass
+                    else:
+                        line_content = (
+                            self.lines[node.lineno - 1]
+                            if node.lineno <= len(self.lines)
+                            else ""
                         )
-                    ):
-                        self.add_error(
-                            node.lineno,
-                            "[!] DIAGNOSTIC FOR AI: `.sudo()` is completely forbidden on this platform to prevent privilege escalation. Use the service account architecture (`with_user()`) instead.",
-                        )
+                        if not (
+                            "# burn-ignore-sudo" in line_content  # fmt: skip
+                            and (
+                                "sudo()._generate(" in line_content
+                                or
+                                ".sudo().unlink()" in line_content
+                            )
+                        ):
+                            self.add_error(
+                                node.lineno,
+                                "[!] DIAGNOSTIC FOR AI: `.sudo()` is completely forbidden on this platform to prevent privilege escalation. Use the service account architecture (`with_user()`) instead.",
+                            )
                 if node.attr == "testing":
                     if isinstance(node.value, ast.Call) and getattr(node.value.func, "attr", "") == "current_thread":
                         self.add_error(
