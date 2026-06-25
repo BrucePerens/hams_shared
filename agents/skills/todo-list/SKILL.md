@@ -10,7 +10,7 @@ When adding a new to-do, use `write_to_file` (with Overwrite=True) to rewrite th
 
 ## Current To-Dos
 
-- [ ] Moderate and suspend user websites. (Priority: High)
+- [ ] Moderate and suspend group websites. (Priority: High)
   - Details: Make it possible for group websites to have violation reports, moderation, and suspension, and anything else we do to manage user websites.
   - Wait Condition: DO NOT start this until all test failures are resolved.
   - Linked Proposal: hams_shared/docs/proposals/website_moderation.md (Example)

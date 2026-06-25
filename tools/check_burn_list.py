@@ -1812,8 +1812,7 @@ The AST parser physically reads your test files to verify the assertions exist.
 Auto-formatters and long attributes (like `model` or `inherit_id`) will wrap the line and break the AST parser's line-number correlation.
 * **Required Structure:**
 ```xml
-<record id="my_view" model="ir.ui.view">
-    <!-- [@ANCHOR: example_source_anchor] (Only if a base anchor is needed) -->
+<record id="my_view" model="ir.ui.view">(Only if a base anchor is needed) -->
     <!-- audit-ignore-view: Tested by [@ANCHOR: test_my_view] -->
     <field name="name">...</field>
 </record>

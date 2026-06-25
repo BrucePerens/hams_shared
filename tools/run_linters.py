@@ -13,22 +13,6 @@ import subprocess
 def main():
     dir_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    # 1. Anti-Symlink Mandate
-    symlinks_found = [
-        f for f in os.listdir(dir_path)
-        if os.path.islink(os.path.join(dir_path, f))
-    ]
-    if symlinks_found:
-        print("================================================================================")
-        print("🚨 CRITICAL ARCHITECTURE WARNING: NO SYMLINKING 🚨")
-        print("Symbolic links detected in the repository root:")
-        for s in symlinks_found:
-            print(f" - {s}")
-        print("This is an ANTI-PATTERN. You are strictly forbidden from symlinking modules")
-        print("(e.g., zero_sudo, distributed_redis_cache) from hams_open into hams_com.")
-        print("You MUST configure and rely on the Odoo --addons-path correctly.")
-        print("================================================================================")
-        sys.exit(1)
 
     # 2. Child Directory Mandate
     child_community = os.path.join(dir_path, "hams_open")

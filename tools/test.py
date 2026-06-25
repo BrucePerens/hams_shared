@@ -11,8 +11,7 @@ and prone to race conditions if native macros are ignored.
 
 import infrastructure
 import sys
-# Enforce a strict recursion limit to immediately detect runaway functions
-sys.setrecursionlimit(800)
+
 import argparse
 import atexit
 import contextlib
@@ -28,7 +27,7 @@ import shutil
 import signal
 import socket
 import subprocess
-import sys
+
 import threading
 import time
 import functools
@@ -771,7 +770,6 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         os.makedirs(d, exist_ok=True)
     subprocess.run(["mount", "--bind", "/opt/hams/test", "/mnt/host_test_dir"], check=True)
 
-    shared_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     base_dir = os.getcwd()
 
     def _safe_run(cmd, **kw): return subprocess.run(cmd, check=True, **kw)

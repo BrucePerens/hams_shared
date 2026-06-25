@@ -7,7 +7,7 @@ and user-facing documentation. Future AI sessions MUST read this docstring to un
 how to resolve anchor-related CI/CD failures.
 
 RULES OF TRACEABILITY:
-1. BASE ANCHOR: Define a feature in source code using: `# [@ANCHOR: feature_name]`
+1. BASE ANCHOR: Define a feature in source code using: ``
 2. TEST LINK: The test file testing that feature MUST contain: `# Tests [@ANCHOR: feature_name]`
 3. VERIFICATION LINK: The source code MUST point back to the test using: `# Verified by [@ANCHOR: test_method_name]`
 4. DOC LINK: The base anchor MUST exist in a Markdown file in `hams_shared/docs/stories/` or `hams_shared/docs/journeys/`.
@@ -176,7 +176,7 @@ def _process_file_for_anchors(
                 pass # Conversational/Inline references, ignored in logic tracing.
 
             else:
-                # LLM NOTE: Matches a BASE declaration, e.g., `# [@ANCHOR: my_feature]`
+                # LLM NOTE: Matches a BASE declaration, e.g., ``
                 base_name = anchor.split(":")[1]
                 if (
                     anchor in anchor_locations
@@ -329,7 +329,7 @@ def _report_missing_tests(tests_links, code_anchors, contract_anchors, repo_root
                 print(f"    - Broken '# Tests' Binding: Target '{anchor}' does not exist in any codebase directory.")
                 print(f"      Location: ./{rel_path}:{line}")
                 print("      [!] DIAGNOSTIC FOR AI: Your test file claims to test an anchor that is not defined in the source code.")
-                print("          Verify the base anchor exists in the production file: `# [@ANCHOR: feature_name]`")
+                print("          Verify the base anchor exists in the production file: ``")
     return has_errors
 
 
