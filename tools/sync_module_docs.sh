@@ -1,15 +1,15 @@
 #!/bin/bash
-# Automatically syncs module README.md files to the hams_shared/docs/modules/ directory.
+# Automatically syncs module README.md files to the docs/modules/ directory.
 # Discovers module names dynamically from their directory structures.
 
 set -e
 
-DOCS_DIR="hams_shared/docs/modules"
+DOCS_DIR="docs/modules"
 mkdir -p "$DOCS_DIR"
 
 echo "Syncing README.md files..."
 
-find . -type f -name "README.md" -not -path "./hams_shared/docs/*" -not -path "./README.md" | while read -r doc_file; do
+find . -type f -name "README.md" -not -path "./docs/*" -not -path "./README.md" | while read -r doc_file; do
     mod_dir=$(dirname "$doc_file")
     mod_name=$(basename "$mod_dir")
 

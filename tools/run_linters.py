@@ -13,22 +13,38 @@ import subprocess
 def main():
     dir_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+    # 1. Anti-Symlink Mandate
+    symlinks_found = [
+        f for f in os.listdir(dir_path)
+        if os.path.islink(os.path.join(dir_path, f))
+    ]
+    if symlinks_found:
+        print("================================================================================")
+        print("🚨 CRITICAL ARCHITECTURE WARNING: NO SYMLINKING 🚨")
+        print("Symbolic links detected in the repository root:")
+        for s in symlinks_found:
+            print(f" - {s}")
+        print("This is an ANTI-PATTERN. You are strictly forbidden from symlinking modules")
+        print("(e.g., zero_sudo, distributed_redis_cache) from hams_community into hams_com.")
+        print("You MUST configure and rely on the Odoo --addons-path correctly.")
+        print("================================================================================")
+        sys.exit(1)
 
     # 2. Child Directory Mandate
-    child_community = os.path.join(dir_path, "hams_open")
+    child_community = os.path.join(dir_path, "hams_community")
     if os.path.isdir(child_community):
         print("================================================================================")
         print("🚨 CRITICAL REPOSITORY STRUCTURE WARNING 🚨")
-        print(f"hams_open was found as a CHILD of the current repository: {child_community}")
-        print("This is an ANTI-PATTERN. hams_open MUST be a SIBLING directory instead.")
-        print(f"Please move it to: {os.path.abspath(os.path.join(dir_path, '..', 'hams_open'))}")
+        print(f"hams_community was found as a CHILD of the current repository: {child_community}")
+        print("This is an ANTI-PATTERN. hams_community MUST be a SIBLING directory instead.")
+        print(f"Please move it to: {os.path.abspath(os.path.join(dir_path, '..', 'hams_community'))}")
         print("================================================================================")
         sys.exit(1)
 
     # 3. Resolve Sibling Dependency
     community_dir = None
     if not os.path.exists(os.path.join(dir_path, "zero_sudo", "__manifest__.py")):
-        sibling_community = os.path.abspath(os.path.join(dir_path, "..", "hams_open"))
+        sibling_community = os.path.abspath(os.path.join(dir_path, "..", "hams_community"))
         if os.path.isdir(sibling_community):
             community_dir = sibling_community
 

@@ -7,10 +7,10 @@ and user-facing documentation. Future AI sessions MUST read this docstring to un
 how to resolve anchor-related CI/CD failures.
 
 RULES OF TRACEABILITY:
-1. BASE ANCHOR: Define a feature in source code using: ``
+1. BASE ANCHOR: Define a feature in source code using: `# [@ANCHOR: feature_name]`
 2. TEST LINK: The test file testing that feature MUST contain: `# Tests [@ANCHOR: feature_name]`
 3. VERIFICATION LINK: The source code MUST point back to the test using: `# Verified by [@ANCHOR: test_method_name]`
-4. DOC LINK: The base anchor MUST exist in a Markdown file in `hams_shared/docs/stories/` or `hams_shared/docs/journeys/`.
+4. DOC LINK: The base anchor MUST exist in a Markdown file in `docs/stories/` or `docs/journeys/`.
 5. UX LINK: If the anchor starts with `UX_`, it MUST exist in the module's `data/documentation.html`.
 6. CROSS-REF: If code triggers another module's anchor, use: `# Triggers [@ANCHOR: target_module:feature_name]`
 """
@@ -30,7 +30,7 @@ def get_module(path):
             return os.path.basename(current_dir)
         current_dir = os.path.dirname(current_dir)
 
-    # 2. Fallback for global hams_shared/docs/modules/...
+    # 2. Fallback for global docs/modules/...
     parts = abs_path.split(os.sep)
     if len(parts) >= 3 and parts[-3] == "docs" and parts[-2] == "modules" and parts[-1].endswith(".md"):
         return parts[-1][:-3]
@@ -73,7 +73,7 @@ def find_anchors_in_docs(root_dir, repo_root):
     doc_anchors = {}
     contract_anchors = {}
     pattern = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
-    exclude_dirs = {"tools", "scripts", "hams_open", "hams_com", ".git", "__pycache__"}
+    exclude_dirs = {"tools", "scripts", "hams_community", "hams_com", ".git", "__pycache__"}
 
     for root, dirs, files in os.walk(root_dir):
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
@@ -176,7 +176,7 @@ def _process_file_for_anchors(
                 pass # Conversational/Inline references, ignored in logic tracing.
 
             else:
-                # LLM NOTE: Matches a BASE declaration, e.g., ``
+                # LLM NOTE: Matches a BASE declaration, e.g., `# [@ANCHOR: my_feature]`
                 base_name = anchor.split(":")[1]
                 if (
                     anchor in anchor_locations
@@ -195,7 +195,7 @@ def find_anchors_in_code(root_dir, repo_root):
     verified_by_links, cross_references = {}, {}
     duplicates = []
     pattern = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
-    exclude_dirs = {"docs", ".git", "__pycache__", "tools", "scripts", "hams_open", "hams_com"}
+    exclude_dirs = {"docs", ".git", "__pycache__", "tools", "scripts", "hams_community", "hams_com"}
 
     for root, dirs, files in os.walk(root_dir):
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
@@ -329,7 +329,7 @@ def _report_missing_tests(tests_links, code_anchors, contract_anchors, repo_root
                 print(f"    - Broken '# Tests' Binding: Target '{anchor}' does not exist in any codebase directory.")
                 print(f"      Location: ./{rel_path}:{line}")
                 print("      [!] DIAGNOSTIC FOR AI: Your test file claims to test an anchor that is not defined in the source code.")
-                print("          Verify the base anchor exists in the production file: ``")
+                print("          Verify the base anchor exists in the production file: `# [@ANCHOR: feature_name]`")
     return has_errors
 
 
@@ -421,7 +421,7 @@ def _report_documentation_gaps(source_anchors, docs_anchors, code_anchors, contr
             for loc in primary_locs:
                 print(f"        -> {loc}")
             print("      [!] DIAGNOSTIC FOR AI: Every core feature must be documented.")
-            print(f"          ACTION: Add `[@ANCHOR: {anchor.split(':')[1]}]` to the relevant Markdown file in `hams_shared/docs/stories/` or `hams_shared/docs/journeys/`.")
+            print(f"          ACTION: Add `[@ANCHOR: {anchor.split(':')[1]}]` to the relevant Markdown file in `docs/stories/` or `docs/journeys/`.")
         if reported:
             has_errors = True
 
@@ -477,12 +477,12 @@ def main():
     primary_dirs = [os.path.abspath(d) for d in args]
     target_dirs = list(primary_dirs)
 
-    has_community = any("hams_open" in d or "hams_com" in d for d in target_dirs)
+    has_community = any("hams_community" in d or "hams_com" in d for d in target_dirs)
     if not has_community:
         for possible_path in [
-            os.path.abspath(os.path.join(repo_root, "..", "hams_open")),
+            os.path.abspath(os.path.join(repo_root, "..", "hams_community")),
             os.path.abspath(os.path.join(repo_root, "..", "hams_com")),
-            os.path.abspath(os.path.join(repo_root, "hams_open")),
+            os.path.abspath(os.path.join(repo_root, "hams_community")),
             os.path.abspath(os.path.join(repo_root, "hams_com")),
         ]:
             if os.path.isdir(possible_path):
@@ -535,7 +535,7 @@ def main():
         duplicates.extend(dups)
 
         for root, dirs, files in os.walk(target_dir):
-            dirs[:] = [d for d in dirs if d not in {"tools", "scripts", "hams_open", "hams_com", ".git", "__pycache__"}]
+            dirs[:] = [d for d in dirs if d not in {"tools", "scripts", "hams_community", "hams_com", ".git", "__pycache__"}]
             if "documentation.html" in files:
                 full_doc_path = os.path.join(root, "documentation.html")
                 try:

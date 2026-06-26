@@ -135,6 +135,54 @@ class VirtualClockThread(threading.Thread):
 global_vclock = VirtualClockThread()
 global_vclock.start()
 
+class ResourceMonitorThread(threading.Thread):
+    def __init__(self):
+        super().__init__(daemon=True)
+
+    def get_available_memory_mb(self):
+        try:
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) // 1024
+        except Exception:
+            pass
+        return None
+
+    def get_chrome_count(self):
+        try:
+            res = subprocess.run(["pgrep", "-c", "-f", "chrom"], capture_output=True, text=True)
+            if res.returncode == 0:
+                return int(res.stdout.strip())
+        except Exception:
+            pass
+        return 0
+
+    def run(self):
+        while True:
+            time.sleep(10)
+            mem_mb = self.get_available_memory_mb()
+            chrome_count = self.get_chrome_count()
+            
+            alerts = []
+            if mem_mb is not None and mem_mb < 512:
+                alerts.append(f"CRITICAL MEMORY: Only {mem_mb} MB available!")
+            elif mem_mb is not None and mem_mb < 2048:
+                alerts.append(f"LOW MEMORY: {mem_mb} MB available.")
+            
+            if chrome_count > 40:
+                alerts.append(f"POSSIBLE BROWSER LEAK: {chrome_count} active Chromium processes detected!")
+                
+            if alerts:
+                msg = f"\n\x1b[91m{'!' * 60}\n[!] RESOURCE MONITOR ALERT:\n"
+                for a in alerts:
+                    msg += f"  - {a}\n"
+                msg += f"{'!' * 60}\x1b[0m\n"
+                print(msg, flush=True)
+
+global_resource_monitor = ResourceMonitorThread()
+global_resource_monitor.start()
+
 def load_ignore_file(filepath):
     patterns = []
     if os.path.exists(filepath):
@@ -226,6 +274,8 @@ class FailureExtractor:
     def set_context(self, context_name):
         if self.capturing and self.current_block:
             self.captured_blocks.append((self.current_context, self.current_block))
+            if len(self.captured_blocks) > 50:
+                self.captured_blocks = self.captured_blocks[-50:]
             self.capturing = False
             self.current_block = []
             
@@ -284,12 +334,17 @@ class FailureExtractor:
             if is_safe:
                 if self.capturing:
                     self.captured_blocks.append((self.current_context, self.current_block))
+                    if len(self.captured_blocks) > 50:
+                        self.captured_blocks = self.captured_blocks[-50:]
                     self.current_block = []
                     self.capturing = False
             else:
                 if not self.capturing:
                     self.capturing = True
-                self.current_block.append(line)
+                if len(self.current_block) < 5000:
+                    self.current_block.append(line)
+                elif len(self.current_block) == 5000:
+                    self.current_block.append("[!] TRUNCATED: Block exceeded 5000 lines (possible log spam).")
         else:
             if is_test_failure_content:
                 if not self.capturing:
@@ -310,7 +365,10 @@ class FailureExtractor:
                     self.current_block.append(ai_diagnostic)
 
             if self.capturing:
-                self.current_block.append(line)
+                if len(self.current_block) < 5000:
+                    self.current_block.append(line)
+                elif len(self.current_block) == 5000:
+                    self.current_block.append("[!] TRUNCATED: Block exceeded 5000 lines (possible log spam).")
 
     def _extract_failed_modules(self):
         modules = set()
@@ -414,6 +472,7 @@ def robust_reap(pid):
     print(f"\n[*] [REAPER] Initiating robust reaper for PID {pid}...")
     try:
         subprocess.run(["pkill", "-u", str(os.getuid()), "-TERM", "-f", "chrome"], check=False)
+        subprocess.run(["pkill", "-u", str(os.getuid()), "-TERM", "-f", "chromium"], check=False)
 
         pgid = os.getpgid(pid)
         print(f"[*] [REAPER] Sending SIGTERM to Process Group {pgid}")
@@ -431,6 +490,7 @@ def robust_reap(pid):
         print(f"[*] [REAPER] Process {pid} did not exit after SIGTERM. Sending SIGKILL to Process Group {pgid}")
         os.killpg(pgid, signal.SIGKILL)
         subprocess.run(["pkill", "-u", str(os.getuid()), "-KILL", "-f", "chrome"], check=False)
+        subprocess.run(["pkill", "-u", str(os.getuid()), "-KILL", "-f", "chromium"], check=False)
     except OSError as e:
         print(f"[*] [REAPER] Error during reap: {e}")
 
@@ -452,7 +512,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
             os.chmod(host_tmp_dir, 0o777)
         except OSError as e:
             _logger.debug("Ignored OSError: %s", e)
-    env.setdefault("ODOO_TEST_CHROME_ARGS", "--headless --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading")
+    env.setdefault("ODOO_TEST_CHROME_ARGS", "--headless --ignore-certificate-errors --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading")
     env.setdefault("DBUS_SESSION_BUS_ADDRESS", "autolaunch:")
 
     def preexec_child():
@@ -558,6 +618,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         print(f"[*] [DEBUG-RUNNER] Ensuring all child processes are reaped for PID {process.pid}...")
         try:
             subprocess.run(["pkill", "-u", str(os.getuid()), "-TERM", "-f", "chrome"], check=False)
+            subprocess.run(["pkill", "-u", str(os.getuid()), "-TERM", "-f", "chromium"], check=False)
             pgid = os.getpgid(process.pid)
             os.killpg(pgid, signal.SIGTERM)
         except OSError:

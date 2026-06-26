@@ -1382,7 +1382,7 @@ def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_ap
     env_vars.setdefault("HAMS_CRYPTO_KEY", "0000000000000000000000000000000000000000000=")
 
     hams_com_dir = None
-    hams_open_dir = None
+    hams_community_dir = None
 
     if os.path.exists(os.path.join(repo_root, "daemons")):
         hams_com_dir = repo_root
@@ -1392,36 +1392,36 @@ def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_ap
         hams_com_dir = "/hams_com"
 
     if os.path.exists(os.path.join(repo_root, "zero_sudo")):
-        hams_open_dir = repo_root
-    elif os.path.exists(os.path.join(repo_root, "..", "hams_open", "zero_sudo")):
-        hams_open_dir = os.path.abspath(os.path.join(repo_root, "..", "hams_open"))
-    elif os.path.exists("/hams_open/zero_sudo"):
-        hams_open_dir = "/hams_open"
+        hams_community_dir = repo_root
+    elif os.path.exists(os.path.join(repo_root, "..", "hams_community", "zero_sudo")):
+        hams_community_dir = os.path.abspath(os.path.join(repo_root, "..", "hams_community"))
+    elif os.path.exists("/hams_community/zero_sudo"):
+        hams_community_dir = "/hams_community"
 
     if not hams_com_dir:
         hams_com_dir = "/hams_com"
         _logger.warning("[!] Primary repository hams_com not found. Cloning disabled due to headless auth constraints.")
 
-    if not hams_open_dir:
-        hams_open_dir = "/hams_open"
-        _logger.info("[*] Sibling repository not found. Cloning hams_open to %s...", hams_open_dir)
+    if not hams_community_dir:
+        hams_community_dir = "/hams_community"
+        _logger.info("[*] Sibling repository not found. Cloning hams_community to %s...", hams_community_dir)
         try:
             clone_env = dict(env_vars)
             clone_env["GIT_TERMINAL_PROMPT"] = "0"
-            run_cmd_func(["git", "clone", "https://github.com/BrucePerens/hams_open", hams_open_dir], env=clone_env)
+            run_cmd_func(["git", "clone", "https://github.com/BrucePerens/hams_community", hams_community_dir], env=clone_env)
             if orig_user:
                 try:
                     u_info = pwd.getpwnam(orig_user)
-                    run_cmd_func(["chown", "-R", f"{u_info.pw_uid}:{u_info.pw_gid}", hams_open_dir])
+                    run_cmd_func(["chown", "-R", f"{u_info.pw_uid}:{u_info.pw_gid}", hams_community_dir])
                 except KeyError as e:
                     _logger.debug("Original user %s not found: %s", orig_user, e)
         except subprocess.CalledProcessError as e:
-            _logger.warning("[*] Failed to clone hams_open: %s", e)
+            _logger.warning("[*] Failed to clone hams_community: %s", e)
             _logger.error("[!] DIAGNOSTIC FOR AI: The sibling repository could not be cloned due to GitHub authentication restrictions in this headless VM.")
             _logger.error("    If required modules are not present, tests will crash. Document this in JULES_ISSUES.md.")
 
     env_vars["HAMS_COM_DIR"] = hams_com_dir
-    env_vars["HAMS_COMMUNITY_DIR"] = hams_open_dir
+    env_vars["HAMS_COMMUNITY_DIR"] = hams_community_dir
 
     try:
         with open("/etc/hosts", "r") as f:
@@ -1441,7 +1441,7 @@ def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_ap
 
         if not skip_apt:
             _logger.info("[*] Provisioning APT Sources and Packages...")
-            apt_opts = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", "-o", "Dpkg::Lock::Timeout=120"]
+            apt_opts = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", "-o", "Dpkg::Lock::Timeout=120", "-o", "Acquire::Check-Valid-Until=false"]
 
             run_cmd_func(["apt-get", "update"] + apt_opts)
             run_cmd_func(["apt-get", "install", "-y"] + apt_opts + ["gnupg"])

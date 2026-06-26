@@ -37,7 +37,7 @@ def check_file(file_path):
             "inside an Interaction class. This causes an Owl Registry Collision with\n"
             "the NotificationContainer. Let Odoo handle mounting natively via\n"
             "`static components` and data props.\n"
-            "See hams_shared/docs/LLM_EXPERIENCE.md (Item 38) for details."
+            "See docs/LLM_EXPERIENCE.md (Item 38) for details."
         )
         return file_path, err_msg
 
