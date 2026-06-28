@@ -5,7 +5,7 @@ description: Workflow and git commit mandates for the Antigravity agent working 
 
 # Antigravity Workflow Mandates
 
-1. **Automatic Git Commits:** When you complete a task or a logical chunk of work that represents a stable, working state (e.g., after fixing bugs or refactoring), you MUST automatically stage and commit the changes using `git add .` and `git commit -m "..."`. Do not run `git push`, as it requires the user's cryptographic token. The user will handle pushing the changes. Do not wait for the user to explicitly ask you to commit.
+1. **Automatic Git Commits & Pushes:** When you complete a task or a logical chunk of work that represents a stable, working state (e.g., after fixing bugs or refactoring), you MUST automatically stage and commit the changes using `git add .` and `git commit -m "..."`. To push changes, do not run a standard `git push`, as it requires the user's cryptographic hardware token. Instead, use the GitHub token from the `github-mcp-server` configuration (e.g., `~/.gemini/config/mcp_config.json`) to push over HTTPS. Do not wait for the user to explicitly ask you to commit and push.
 2. **Clear Commit Messages:** Write clear, descriptive commit messages summarizing the technical changes and the rationale behind them.
 3. **Test Execution & Debugging:**
 - Execute the test suite using `run_command` with `python3 hams_shared/tools/test.py`.
