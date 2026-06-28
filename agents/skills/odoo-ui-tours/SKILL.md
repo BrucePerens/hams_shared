@@ -55,10 +55,16 @@ When a tour fails, there are two ways to investigate the failure:
 * **Modal Targeting (Strict Rules):** Structural wrappers like `.modal-content` or `.modal-dialog` MUST ONLY be used for passive DOM polling (`run: function() {}`) to wait for a modal to mount and render. Attempting to click them directly will trip linter fragility checks.
 * **Modal Click-Away:** When forcing a DOM blur inside a modal to commit text input, you MUST click a neutral safe zone inside the modal, such as `.modal-body`.
 
-## 6. Page Unloads
+## 6. Page Unloads & View Reloading
 * **Form Submissions:** When a tour clicks a `type="submit"` button or triggers a hard browser navigation (bypassing the SPA router), you MUST explicitly declare `expectUnloadPage: true` on that step. Failing to do so causes the tour runner to crash on the browser's `beforeUnload` event.
 * You MUST use Odoo's native helper `run: 'click'` on unload steps. Custom closures (`run: () => {...}`) break the unload event binding.
 * **Post-Unload Waiting:** Immediately after an `expectUnloadPage` step, provide a neutral wait step (e.g., `trigger: 'body', run: function() {}`) to allow the new page DOM to hydrate before asserting success.
+* **The "Soft Reload" Trap:** Client actions like `ir.actions.client reload` or `ir.actions.act_window_close` trigger soft routes in OWL. These do NOT unload the page. If you set `expectUnloadPage: true` on a soft route, the tour will fatally timeout waiting for a reload that never happens.
+* **Forcing Hard Reloads (Headless Caching & Chatter):** Headless test environments often lack websocket/longpolling support. If a background wizard or RPC call modifies data (e.g., posting a message to the chatter), soft reloads may fail to fetch the updated data due to aggressive OWL client caching. To reliably force a chatter or form view refresh, the backend action MUST return an `ir.actions.act_url` with `target="self"` pointing to the specific record. This triggers a hard browser navigation, bypassing the cache. You MUST then use `expectUnloadPage: true` in the JS tour.
+
+## 6.5 Shadow DOM & Text Verification
+* **The `textContent` Trap:** Odoo 19 components (like Chatter `.o-mail-Message`) frequently utilize Shadow DOM. Standard `document.body.textContent` or native Odoo text matching WILL NOT find text inside a Shadow DOM.
+* **Recursive Shadow Search:** When verifying text that might be wrapped in a Shadow DOM, do NOT rely on undocumented structural classes or `:contains()`. Instead, use a custom `Promise` inside a neutral `trigger: 'body'` step that recursively searches `node.shadowRoot` alongside `node.children`.
 
 ## 7. Standard Tour Utilities (`TourUtils`)
 Because raw DOM polling and saving can introduce race conditions and UI deadlocks, the platform provides a centralized `TourUtils` class (imported from `@zero_sudo/js/tour_utils` or extended via `@ham_propagation/js/tour_utils_ext`). You MUST utilize these macros rather than hardcoding fragile polling logic:

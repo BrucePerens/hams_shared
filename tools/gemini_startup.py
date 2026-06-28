@@ -129,16 +129,30 @@ def generate_payload(modules=None):
         out.write(f"Author Email: {github_email}\n\n")
 
         out.write("--- CONTEXT INSTRUCTIONS ---\n")
-        out.write("1. You have read-only access to my GitHub repository via your extensions.\n")
-        out.write("2. The files explicitly dumped below represent my CURRENT UNPUSHED WORK-IN-PROGRESS.\n")
-        out.write("   You MUST prioritize the contents of this payload over the historical state on GitHub.\n")
-        out.write("3. MANDATORY READING: You MUST use your file fetcher or GitHub integration to READ `AGENTS.md`\n")
-        out.write("   and `docs/LLM_GENERAL_REQUIREMENTS.md` BEFORE taking any other action. These contain your strict architectural mandates.\n")
-        out.write("4. Code Generation: You MUST continue using the MIME-like Parcel transport schema defined in\n")
+        out.write(
+            "1. You have read-only access to my GitHub repository via your extensions.\n"
+        )
+        out.write(
+            "2. The files explicitly dumped below represent my CURRENT UNPUSHED WORK-IN-PROGRESS.\n"
+        )
+        out.write(
+            "   You MUST prioritize the contents of this payload over the historical state on GitHub.\n"
+        )
+        out.write(
+            "3. MANDATORY READING: You MUST use your file fetcher or GitHub integration to READ `AGENTS.md`\n"
+        )
+        out.write(
+            "   and `docs/LLM_GENERAL_REQUIREMENTS.md` BEFORE taking any other action. These contain your strict architectural mandates.\n"
+        )
+        out.write(
+            "4. Code Generation: You MUST continue using the MIME-like Parcel transport schema defined in\n"
+        )
         out.write("   `docs/LLM_PARCEL_FORMAT.md` to modify my local files.\n")
 
         if modules:
-            out.write("5. MODULE LOADING MANDATE: Use your @GitHub integration to explicitly fetch and load the following modules/paths before proceeding:\n")
+            out.write(
+                "5. MODULE LOADING MANDATE: Use your @GitHub integration to explicitly fetch and load the following modules/paths before proceeding:\n"
+            )
             for mod in modules:
                 out.write(f"   - {mod}\n")
 
@@ -168,8 +182,12 @@ def generate_payload(modules=None):
             out.write("[No uncommitted text files found. Rely on GitHub state.]\n\n")
 
         out.write("--- IMMEDIATE DIRECTIVE ---\n")
-        out.write("Acknowledge receipt of these instructions. Confirm you have read the mandatory files ")
-        out.write("(`AGENTS.md`, `docs/LLM_GENERAL_REQUIREMENTS.md`), and ask me what specific task, feature, or bug I would like to work on first.\n")
+        out.write(
+            "Acknowledge receipt of these instructions. Confirm you have read the mandatory files "
+        )
+        out.write(
+            "(`AGENTS.md`, `docs/LLM_GENERAL_REQUIREMENTS.md`), and ask me what specific task, feature, or bug I would like to work on first.\n"
+        )
 
     print(f"\n[+] Successfully generated {output_filename}")
     print(f"    Included: {len(target_files)} uncommitted files.")

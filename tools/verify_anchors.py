@@ -19,6 +19,7 @@ import os
 import re
 import sys
 
+
 def get_module(path):
     """Resolves the Odoo module boundary for a given file path to enforce cross-module strictness."""
     abs_path = os.path.abspath(path)
@@ -32,14 +33,21 @@ def get_module(path):
 
     # 2. Fallback for global docs/modules/...
     parts = abs_path.split(os.sep)
-    if len(parts) >= 3 and parts[-3] == "docs" and parts[-2] == "modules" and parts[-1].endswith(".md"):
+    if (
+        len(parts) >= 3
+        and parts[-3] == "docs"
+        and parts[-2] == "modules"
+        and parts[-1].endswith(".md")
+    ):
         return parts[-1][:-3]
 
     # 3. Fallback: Repo top-level directory mapping
     cdir = os.path.dirname(abs_path)
     repo_root = None
     while cdir and cdir != os.path.dirname(cdir):
-        if os.path.exists(os.path.join(cdir, "tools", "verify_anchors.py")) or os.path.exists(os.path.join(cdir, ".git")):
+        if os.path.exists(
+            os.path.join(cdir, "tools", "verify_anchors.py")
+        ) or os.path.exists(os.path.join(cdir, ".git")):
             repo_root = cdir
             break
         cdir = os.path.dirname(cdir)
@@ -47,7 +55,14 @@ def get_module(path):
     if repo_root:
         rel_path = os.path.relpath(abs_path, repo_root)
         parts = rel_path.split(os.sep)
-        if len(parts) > 1 and parts[0] not in ("docs", "tools", "scripts", ".git", "venv", "__pycache__"):
+        if len(parts) > 1 and parts[0] not in (
+            "docs",
+            "tools",
+            "scripts",
+            ".git",
+            "venv",
+            "__pycache__",
+        ):
             if parts[0] == "daemons" and len(parts) > 2:
                 return parts[1]
             return parts[0]
@@ -59,7 +74,16 @@ def get_module(path):
         if idx + 1 < len(parts):
             return parts[idx + 1]
 
-    for common_dir in ["models", "controllers", "views", "static", "tests", "data", "security", "reduced"]:
+    for common_dir in [
+        "models",
+        "controllers",
+        "views",
+        "static",
+        "tests",
+        "data",
+        "security",
+        "reduced",
+    ]:
         if common_dir in parts:
             idx = parts.index(common_dir)
             if idx > 0:
@@ -73,7 +97,14 @@ def find_anchors_in_docs(root_dir, repo_root):
     doc_anchors = {}
     contract_anchors = {}
     pattern = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
-    exclude_dirs = {"tools", "scripts", "hams_community", "hams_com", ".git", "__pycache__"}
+    exclude_dirs = {
+        "tools",
+        "scripts",
+        "hams_community",
+        "hams_com",
+        ".git",
+        "__pycache__",
+    }
 
     for root, dirs, files in os.walk(root_dir):
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
@@ -90,7 +121,9 @@ def find_anchors_in_docs(root_dir, repo_root):
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, repo_root)
                 mod = get_module(full_path)
-                is_contract = is_readme or ("modules" in root.split(os.sep) and file.endswith((".md", ".py")))
+                is_contract = is_readme or (
+                    "modules" in root.split(os.sep) and file.endswith((".md", ".py"))
+                )
 
                 try:
                     with open(full_path, "r", encoding="utf-8") as f:
@@ -99,13 +132,17 @@ def find_anchors_in_docs(root_dir, repo_root):
                                 anchor_name = match.group(1)
                                 explicit_mod = mod
                                 if ":" in anchor_name:
-                                    explicit_mod, anchor_name = anchor_name.split(":", 1)
+                                    explicit_mod, anchor_name = anchor_name.split(
+                                        ":", 1
+                                    )
 
                                 anchor = f"{explicit_mod}:{anchor_name}"
                                 loc_str = f"./{rel_path}:{line_num}"
 
                                 if is_contract:
-                                    contract_anchors.setdefault(anchor, []).append(loc_str)
+                                    contract_anchors.setdefault(anchor, []).append(
+                                        loc_str
+                                    )
                                 else:
                                     doc_anchors.setdefault(anchor, []).append(loc_str)
                 except UnicodeDecodeError:
@@ -159,21 +196,25 @@ def _process_file_for_anchors(
                 tests_links_set.setdefault(anchor, []).append(loc_str)
                 code_anchors.setdefault(anchor, []).append(loc_str)
 
-            elif first_prefix.endswith("Verified by") or first_prefix.endswith("Tested by"):
+            elif first_prefix.endswith("Verified by") or first_prefix.endswith(
+                "Tested by"
+            ):
                 # LLM NOTE: Matches `# Verified by [@ANCHOR: test_method_name]`
                 # Used in source files to point to the test that verifies it.
                 verified_by_links.setdefault(anchor, []).append(loc_str)
 
-            elif first_prefix.endswith("Triggers") or first_prefix.endswith("Triggered by"):
+            elif first_prefix.endswith("Triggers") or first_prefix.endswith(
+                "Triggered by"
+            ):
                 # LLM NOTE: Matches `# Triggers [@ANCHOR: target_feature]`
                 # Documents architectural handoffs between modules or daemons.
                 cross_references.setdefault(anchor, []).append(loc_str)
 
             elif anchor_name.startswith(("story_", "journey_", "doc_")):
-                pass # Documentation-only anchors, ignored in code logic tracing.
+                pass  # Documentation-only anchors, ignored in code logic tracing.
 
-            elif re.search(r'\b(See|and|also|or|to)\b$', first_prefix, re.IGNORECASE):
-                pass # Conversational/Inline references, ignored in logic tracing.
+            elif re.search(r"\b(See|and|also|or|to)\b$", first_prefix, re.IGNORECASE):
+                pass  # Conversational/Inline references, ignored in logic tracing.
 
             else:
                 # LLM NOTE: Matches a BASE declaration, e.g., `# [@ANCHOR: my_feature]`
@@ -195,7 +236,15 @@ def find_anchors_in_code(root_dir, repo_root):
     verified_by_links, cross_references = {}, {}
     duplicates = []
     pattern = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
-    exclude_dirs = {"docs", ".git", "__pycache__", "tools", "scripts", "hams_community", "hams_com"}
+    exclude_dirs = {
+        "docs",
+        ".git",
+        "__pycache__",
+        "tools",
+        "scripts",
+        "hams_community",
+        "hams_com",
+    }
 
     for root, dirs, files in os.walk(root_dir):
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
@@ -234,6 +283,7 @@ def find_anchors_in_code(root_dir, repo_root):
         duplicates,
     )
 
+
 def is_primary(path_or_loc, primary_dirs, repo_root, explicit_non_primary=None):
     """Determines if the tested anchor is located in the target directory being scanned."""
     if not primary_dirs:
@@ -255,11 +305,17 @@ def is_primary(path_or_loc, primary_dirs, repo_root, explicit_non_primary=None):
             return True
     return False
 
+
 def _report_duplicates(duplicates, primary_dirs, repo_root, explicit_non_primary=None):
     actual_duplicates = []
     for dup in duplicates:
         anchor, current_loc, prior_locs = dup
-        if is_primary(current_loc, primary_dirs, repo_root, explicit_non_primary) or any(is_primary(p, primary_dirs, repo_root, explicit_non_primary) for p in prior_locs):
+        if is_primary(
+            current_loc, primary_dirs, repo_root, explicit_non_primary
+        ) or any(
+            is_primary(p, primary_dirs, repo_root, explicit_non_primary)
+            for p in prior_locs
+        ):
             actual_duplicates.append(dup)
 
     if actual_duplicates:
@@ -273,43 +329,79 @@ def _report_duplicates(duplicates, primary_dirs, repo_root, explicit_non_primary
 
             base_name = anchor.split(":")[1]
             if base_name.startswith("test_"):
-                print("      [!] DIAGNOSTIC FOR AI: Do not use a 'test_' prefix for a base code anchor definition.")
-                print("          If you are writing a test, ensure it starts with `# Tests [@ANCHOR: target]` instead of a base declaration.")
+                print(
+                    "      [!] DIAGNOSTIC FOR AI: Do not use a 'test_' prefix for a base code anchor definition."
+                )
+                print(
+                    "          If you are writing a test, ensure it starts with `# Tests [@ANCHOR: target]` instead of a base declaration."
+                )
             else:
                 msg_formatting = {"prefix": "[@ANCHOR", "label": "feature"}
-                print(f"      [!] DIAGNOSTIC FOR AI: Did you accidentally wrap a base macro '{msg_formatting['prefix']}: {msg_formatting['label']}]' inside python multiline docstrings?")
-                print("          Base anchors must only be defined exactly ONCE across the entire repository.")
+                print(
+                    f"      [!] DIAGNOSTIC FOR AI: Did you accidentally wrap a base macro '{msg_formatting['prefix']}: {msg_formatting['label']}]' inside python multiline docstrings?"
+                )
+                print(
+                    "          Base anchors must only be defined exactly ONCE across the entire repository."
+                )
         return True
     return False
 
 
-def _report_missing_cross_refs(cross_references, code_anchors, contract_anchors, primary_dirs, repo_root, explicit_non_primary=None):
+def _report_missing_cross_refs(
+    cross_references,
+    code_anchors,
+    contract_anchors,
+    primary_dirs,
+    repo_root,
+    explicit_non_primary=None,
+):
     has_errors = False
     all_known_anchors = set(code_anchors.keys()) | set(contract_anchors.keys())
 
     for anchor, source_locs in cross_references.items():
-        primary_source_locs = [loc for loc in source_locs if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)]
+        primary_source_locs = [
+            loc
+            for loc in source_locs
+            if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)
+        ]
         if not primary_source_locs:
             continue
         if anchor not in all_known_anchors:
             base_name = anchor.split(":")[1]
-            if base_name.startswith("example_") or base_name in ("unique_name", "name", "feature_name"):
+            if base_name.startswith("example_") or base_name in (
+                "unique_name",
+                "name",
+                "feature_name",
+            ):
                 continue
 
             if not has_errors:
-                print("\n[!] CI/CD FAILURE: ADR-0055 Strict Module-Bound Cross-Reference Violation:")
+                print(
+                    "\n[!] CI/CD FAILURE: ADR-0055 Strict Module-Bound Cross-Reference Violation:"
+                )
                 has_errors = True
 
             print(f"    - Missing Cross-Reference Target: '{anchor}'")
             print("      Triggered from locations:")
             for loc in primary_source_locs:
                 print(f"        -> {loc}")
-            print("      [!] DIAGNOSTIC FOR AI: A `# Triggers` tag points to an anchor that does not exist.")
-            print("          Ensure you spelled the target anchor correctly. If targeting another module, use 'module_name:anchor_name' syntax.")
+            print(
+                "      [!] DIAGNOSTIC FOR AI: A `# Triggers` tag points to an anchor that does not exist."
+            )
+            print(
+                "          Ensure you spelled the target anchor correctly. If targeting another module, use 'module_name:anchor_name' syntax."
+            )
     return has_errors
 
 
-def _report_missing_tests(tests_links, code_anchors, contract_anchors, repo_root, primary_dirs, explicit_non_primary=None):
+def _report_missing_tests(
+    tests_links,
+    code_anchors,
+    contract_anchors,
+    repo_root,
+    primary_dirs,
+    explicit_non_primary=None,
+):
     has_errors = False
     all_known_anchors = set(code_anchors.keys()) | set(contract_anchors.keys())
 
@@ -320,29 +412,54 @@ def _report_missing_tests(tests_links, code_anchors, contract_anchors, repo_root
         for anchor, line in links:
             if anchor not in all_known_anchors:
                 base_name = anchor.split(":")[1]
-                if base_name.startswith("example_") or base_name in ("unique_name", "name", "feature_name"):
+                if base_name.startswith("example_") or base_name in (
+                    "unique_name",
+                    "name",
+                    "feature_name",
+                ):
                     continue
 
                 if not has_errors:
-                    print("\n[!] CI/CD FAILURE: ADR-0054 Strict Module-Bound Linkage Violation:")
+                    print(
+                        "\n[!] CI/CD FAILURE: ADR-0054 Strict Module-Bound Linkage Violation:"
+                    )
                     has_errors = True
-                print(f"    - Broken '# Tests' Binding: Target '{anchor}' does not exist in any codebase directory.")
+                print(
+                    f"    - Broken '# Tests' Binding: Target '{anchor}' does not exist in any codebase directory."
+                )
                 print(f"      Location: ./{rel_path}:{line}")
-                print("      [!] DIAGNOSTIC FOR AI: Your test file claims to test an anchor that is not defined in the source code.")
-                print("          Verify the base anchor exists in the production file: `# [@ANCHOR: feature_name]`")
+                print(
+                    "      [!] DIAGNOSTIC FOR AI: Your test file claims to test an anchor that is not defined in the source code."
+                )
+                print(
+                    "          Verify the base anchor exists in the production file: `# [@ANCHOR: feature_name]`"
+                )
     return has_errors
 
 
-def _report_bidirectional_orphans(code_anchors, tests_links_set, verified_by_links, contract_anchors, primary_dirs, repo_root, explicit_non_primary=None):
+def _report_bidirectional_orphans(
+    code_anchors,
+    tests_links_set,
+    verified_by_links,
+    contract_anchors,
+    primary_dirs,
+    repo_root,
+    explicit_non_primary=None,
+):
     has_errors = False
     all_contracts = set(contract_anchors.keys())
 
     # Anchors explicitly named starting with "test_"
-    test_anchors = {a: locs for a, locs in code_anchors.items() if a.split(":")[1].startswith("test_")}
+    test_anchors = {
+        a: locs
+        for a, locs in code_anchors.items()
+        if a.split(":")[1].startswith("test_")
+    }
 
     # All other base source code anchors
     source_anchors = {
-        a: locs for a, locs in code_anchors.items()
+        a: locs
+        for a, locs in code_anchors.items()
         if not a.split(":")[1].startswith("test_")
         and not a.split(":")[1].startswith("example_")
         and not a.split(":")[1].startswith("UX_")
@@ -350,59 +467,107 @@ def _report_bidirectional_orphans(code_anchors, tests_links_set, verified_by_lin
     }
 
     # An orphan source is one that lacks a matching '# Tests [@ANCHOR: name]' in the test suite
-    orphaned_source = {a: locs for a, locs in source_anchors.items() if a not in tests_links_set and a not in all_contracts}
+    orphaned_source = {
+        a: locs
+        for a, locs in source_anchors.items()
+        if a not in tests_links_set and a not in all_contracts
+    }
 
     # An orphan test is one that lacks a matching '# Verified by [@ANCHOR: name]' in the source code
-    orphaned_tests = {a: locs for a, locs in test_anchors.items() if a not in verified_by_links and a not in all_contracts}
-    orphaned_tests = {a: locs for a, locs in orphaned_tests.items() if "test_tour_signup" not in a.split(":")[1]}
+    orphaned_tests = {
+        a: locs
+        for a, locs in test_anchors.items()
+        if a not in verified_by_links and a not in all_contracts
+    }
+    orphaned_tests = {
+        a: locs
+        for a, locs in orphaned_tests.items()
+        if "test_tour_signup" not in a.split(":")[1]
+    }
 
     if orphaned_source:
         reported = False
         for anchor, locs in orphaned_source.items():
-            primary_locs = [loc for loc in locs if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)]
+            primary_locs = [
+                loc
+                for loc in locs
+                if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)
+            ]
             if not primary_locs:
                 continue
             if not reported:
-                print("\n[!] CI/CD FAILURE: ADR-0054 Bidirectional Disconnect (Source Missing Test Link):")
+                print(
+                    "\n[!] CI/CD FAILURE: ADR-0054 Bidirectional Disconnect (Source Missing Test Link):"
+                )
                 reported = True
             print(f"    - Code Feature '{anchor}' has no active test linkage coverage.")
             print("      Feature Definition Locations:")
             for loc in primary_locs:
                 print(f"        -> {loc}")
-            print("      [!] DIAGNOSTIC FOR AI: The source code defines a feature, but no test claims to test it.")
-            print(f"          ACTION: Open the appropriate test file and insert: `# Tests [@ANCHOR: {anchor.split(':')[1]}]` above the test logic.")
+            print(
+                "      [!] DIAGNOSTIC FOR AI: The source code defines a feature, but no test claims to test it."
+            )
+            print(
+                f"          ACTION: Open the appropriate test file and insert: `# Tests [@ANCHOR: {anchor.split(':')[1]}]` above the test logic."
+            )
         if reported:
             has_errors = True
 
     if orphaned_tests:
         reported = False
         for anchor, locs in orphaned_tests.items():
-            primary_locs = [loc for loc in locs if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)]
+            primary_locs = [
+                loc
+                for loc in locs
+                if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)
+            ]
             if not primary_locs:
                 continue
             if not reported:
-                print("\n[!] CI/CD FAILURE: ADR-0054 Bidirectional Disconnect (Test Missing Feature Reference):")
+                print(
+                    "\n[!] CI/CD FAILURE: ADR-0054 Bidirectional Disconnect (Test Missing Feature Reference):"
+                )
                 reported = True
-            print(f"    - Test Logic Target '{anchor}' has no inverse implementation link in the source code.")
+            print(
+                f"    - Test Logic Target '{anchor}' has no inverse implementation link in the source code."
+            )
             print("      Test Definition Locations:")
             for loc in primary_locs:
                 print(f"        -> {loc}")
-            print("      [!] DIAGNOSTIC FOR AI: The test file defines a test anchor, but the production code does not acknowledge it.")
-            print(f"          ACTION: Open the production code file being tested and insert: `# Verified by [@ANCHOR: {anchor.split(':')[1]}]` near the logic.")
+            print(
+                "      [!] DIAGNOSTIC FOR AI: The test file defines a test anchor, but the production code does not acknowledge it."
+            )
+            print(
+                f"          ACTION: Open the production code file being tested and insert: `# Verified by [@ANCHOR: {anchor.split(':')[1]}]` near the logic."
+            )
         if reported:
             has_errors = True
 
     return has_errors, source_anchors
 
 
-def _report_documentation_gaps(source_anchors, docs_anchors, code_anchors, contract_anchors, primary_dirs, repo_root, explicit_non_primary=None):
+def _report_documentation_gaps(
+    source_anchors,
+    docs_anchors,
+    code_anchors,
+    contract_anchors,
+    primary_dirs,
+    repo_root,
+    explicit_non_primary=None,
+):
     has_errors = False
     all_contracts = set(contract_anchors.keys())
 
-    undocumented = {a: locs for a, locs in source_anchors.items() if a not in docs_anchors and a not in all_contracts}
+    undocumented = {
+        a: locs
+        for a, locs in source_anchors.items()
+        if a not in docs_anchors and a not in all_contracts
+    }
     missing_in_code = {
-        a: locs for a, locs in docs_anchors.items()
-        if a not in code_anchors and a not in all_contracts
+        a: locs
+        for a, locs in docs_anchors.items()
+        if a not in code_anchors
+        and a not in all_contracts
         and not a.split(":")[1].startswith(("example_", "story_", "journey_", "doc_"))
         and a.split(":")[1] not in ("unique_name", "name", "feature_name")
     }
@@ -410,59 +575,97 @@ def _report_documentation_gaps(source_anchors, docs_anchors, code_anchors, contr
     if undocumented:
         reported = False
         for anchor, locs in undocumented.items():
-            primary_locs = [loc for loc in locs if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)]
+            primary_locs = [
+                loc
+                for loc in locs
+                if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)
+            ]
             if not primary_locs:
                 continue
             if not reported:
-                print("\n[!] CI/CD FAILURE: ADR-0055 Documentation Coverage Gap Detected:")
+                print(
+                    "\n[!] CI/CD FAILURE: ADR-0055 Documentation Coverage Gap Detected:"
+                )
                 reported = True
-            print(f"    - Code Feature '{anchor}' is completely missing from documentation manuals.")
+            print(
+                f"    - Code Feature '{anchor}' is completely missing from documentation manuals."
+            )
             print("      Feature Definition Locations:")
             for loc in primary_locs:
                 print(f"        -> {loc}")
             print("      [!] DIAGNOSTIC FOR AI: Every core feature must be documented.")
-            print(f"          ACTION: Add `[@ANCHOR: {anchor.split(':')[1]}]` to the relevant Markdown file in `docs/stories/` or `docs/journeys/`.")
+            print(
+                f"          ACTION: Add `[@ANCHOR: {anchor.split(':')[1]}]` to the relevant Markdown file in `docs/stories/` or `docs/journeys/`."
+            )
         if reported:
             has_errors = True
 
     if missing_in_code:
         reported = False
         for anchor, locs in missing_in_code.items():
-            primary_locs = [loc for loc in locs if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)]
+            primary_locs = [
+                loc
+                for loc in locs
+                if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)
+            ]
             if not primary_locs:
                 continue
             if not reported:
-                print("\n[!] CI/CD WARNING: Documentation references anchors missing from codebase modules:")
+                print(
+                    "\n[!] CI/CD WARNING: Documentation references anchors missing from codebase modules:"
+                )
                 reported = True
-            print(f"    - Reference Target '{anchor}' is missing from operational source code.")
+            print(
+                f"    - Reference Target '{anchor}' is missing from operational source code."
+            )
             print("      Referenced inside Manual Files:")
             for loc in primary_locs:
                 print(f"        -> {loc}")
             h = {"t": "[@ANCHOR"}
-            print(f"      [!] DIAGNOSTIC FOR AI: If this targets an external domain context, explicitly structure it as '{h['t']}: module_name:{anchor.split(':')[1]}]'")
+            print(
+                f"      [!] DIAGNOSTIC FOR AI: If this targets an external domain context, explicitly structure it as '{h['t']}: module_name:{anchor.split(':')[1]}]'"
+            )
         if reported:
             has_errors = True
     return has_errors
 
 
-def _report_missing_ux_docs(code_anchors, user_manual_anchors, primary_dirs, repo_root, explicit_non_primary=None):
-    ux_code_anchors = {a: locs for a, locs in code_anchors.items() if a.split(":")[1].startswith("UX_")}
+def _report_missing_ux_docs(
+    code_anchors,
+    user_manual_anchors,
+    primary_dirs,
+    repo_root,
+    explicit_non_primary=None,
+):
+    ux_code_anchors = {
+        a: locs for a, locs in code_anchors.items() if a.split(":")[1].startswith("UX_")
+    }
     has_errors = False
 
     for anchor, locs in ux_code_anchors.items():
         if anchor not in user_manual_anchors:
-            primary_locs = [loc for loc in locs if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)]
+            primary_locs = [
+                loc
+                for loc in locs
+                if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)
+            ]
             if not primary_locs:
                 continue
             if not has_errors:
-                print("\n[!] CI/CD FAILURE: User-Facing Portal Features missing from module documentation.html index:")
+                print(
+                    "\n[!] CI/CD FAILURE: User-Facing Portal Features missing from module documentation.html index:"
+                )
                 has_errors = True
             print(f"    - Missing User Manual Item: '{anchor}'")
             print("      Declared in layout code files:")
             for loc in primary_locs:
                 print(f"        -> {loc}")
-            print("      [!] DIAGNOSTIC FOR AI: UI features starting with 'UX_' must be documented for the end-user.")
-            print(f"          ACTION: Append a container item '<span style=\"display:none;\">[@ANCHOR: {anchor.split(':')[1]}]</span>' to your module's data/documentation.html file.")
+            print(
+                "      [!] DIAGNOSTIC FOR AI: UI features starting with 'UX_' must be documented for the end-user."
+            )
+            print(
+                f"          ACTION: Append a container item '<span style=\"display:none;\">[@ANCHOR: {anchor.split(':')[1]}]</span>' to your module's data/documentation.html file."
+            )
     return has_errors
 
 
@@ -488,12 +691,22 @@ def main():
             if os.path.isdir(possible_path):
                 target_dirs.append(possible_path)
                 if os.path.dirname(possible_path) == repo_root:
-                    print("\n================================================================================")
+                    print(
+                        "\n================================================================================"
+                    )
                     print("🚨 CRITICAL REPOSITORY STRUCTURE WARNING 🚨")
-                    print(f"'{os.path.basename(possible_path)}' was found as a CHILD of the current repository.")
-                    print("This is an ANTI-PATTERN. It MUST be a SIBLING directory instead.")
-                    print(f"Please move it to: {os.path.dirname(repo_root)}{os.sep}{os.path.basename(possible_path)}")
-                    print("================================================================================\n")
+                    print(
+                        f"'{os.path.basename(possible_path)}' was found as a CHILD of the current repository."
+                    )
+                    print(
+                        "This is an ANTI-PATTERN. It MUST be a SIBLING directory instead."
+                    )
+                    print(
+                        f"Please move it to: {os.path.dirname(repo_root)}{os.sep}{os.path.basename(possible_path)}"
+                    )
+                    print(
+                        "================================================================================\n"
+                    )
                 break
 
     scanned_realpaths = set()
@@ -513,34 +726,50 @@ def main():
 
     for target_dir in final_targets:
         da, ca = find_anchors_in_docs(target_dir, repo_root)
-        for k, v in da.items(): docs_anchors.setdefault(k, []).extend(v)
-        for k, v in ca.items(): contract_anchors.setdefault(k, []).extend(v)
+        for k, v in da.items():
+            docs_anchors.setdefault(k, []).extend(v)
+        for k, v in ca.items():
+            contract_anchors.setdefault(k, []).extend(v)
 
-        (
-            c_anchors,
-            a_locs,
-            t_links,
-            t_links_set,
-            v_by_links,
-            c_refs,
-            dups
-        ) = find_anchors_in_code(target_dir, repo_root)
+        (c_anchors, a_locs, t_links, t_links_set, v_by_links, c_refs, dups) = (
+            find_anchors_in_code(target_dir, repo_root)
+        )
 
-        for k, v in c_anchors.items(): code_anchors.setdefault(k, []).extend(v)
-        for k, v in a_locs.items(): anchor_locations.setdefault(k, []).extend(v)
-        for k, v in t_links.items(): tests_links.setdefault(k, []).extend(v)
-        for k, v in t_links_set.items(): tests_links_set.setdefault(k, []).extend(v)
-        for k, v in v_by_links.items(): verified_by_links.setdefault(k, []).extend(v)
-        for k, v in c_refs.items(): cross_references.setdefault(k, []).extend(v)
+        for k, v in c_anchors.items():
+            code_anchors.setdefault(k, []).extend(v)
+        for k, v in a_locs.items():
+            anchor_locations.setdefault(k, []).extend(v)
+        for k, v in t_links.items():
+            tests_links.setdefault(k, []).extend(v)
+        for k, v in t_links_set.items():
+            tests_links_set.setdefault(k, []).extend(v)
+        for k, v in v_by_links.items():
+            verified_by_links.setdefault(k, []).extend(v)
+        for k, v in c_refs.items():
+            cross_references.setdefault(k, []).extend(v)
         duplicates.extend(dups)
 
         for root, dirs, files in os.walk(target_dir):
-            dirs[:] = [d for d in dirs if d not in {"tools", "scripts", "hams_community", "hams_com", ".git", "__pycache__"}]
+            dirs[:] = [
+                d
+                for d in dirs
+                if d
+                not in {
+                    "tools",
+                    "scripts",
+                    "hams_community",
+                    "hams_com",
+                    ".git",
+                    "__pycache__",
+                }
+            ]
             if "documentation.html" in files:
                 full_doc_path = os.path.join(root, "documentation.html")
                 try:
                     with open(full_doc_path, "r", encoding="utf-8") as f:
-                        for match in re.finditer(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]", f.read()):
+                        for match in re.finditer(
+                            r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]", f.read()
+                        ):
                             mod = get_module(full_doc_path)
                             anchor_name = match.group(1)
                             if ":" in anchor_name:
@@ -550,21 +779,55 @@ def main():
                 except (OSError, UnicodeDecodeError):
                     continue
 
-    explicit_non_primary = [os.path.abspath(d) for d in final_targets if d not in primary_dirs]
+    explicit_non_primary = [
+        os.path.abspath(d) for d in final_targets if d not in primary_dirs
+    ]
     errs = [
         _report_duplicates(duplicates, primary_dirs, repo_root, explicit_non_primary),
-        _report_missing_cross_refs(cross_references, code_anchors, contract_anchors, primary_dirs, repo_root, explicit_non_primary),
-        _report_missing_tests(tests_links, code_anchors, contract_anchors, repo_root, primary_dirs, explicit_non_primary),
-        _report_missing_ux_docs(code_anchors, user_manual_anchors, primary_dirs, repo_root, explicit_non_primary),
+        _report_missing_cross_refs(
+            cross_references,
+            code_anchors,
+            contract_anchors,
+            primary_dirs,
+            repo_root,
+            explicit_non_primary,
+        ),
+        _report_missing_tests(
+            tests_links,
+            code_anchors,
+            contract_anchors,
+            repo_root,
+            primary_dirs,
+            explicit_non_primary,
+        ),
+        _report_missing_ux_docs(
+            code_anchors,
+            user_manual_anchors,
+            primary_dirs,
+            repo_root,
+            explicit_non_primary,
+        ),
     ]
 
     bidi_err, source_anchors = _report_bidirectional_orphans(
-        code_anchors, tests_links_set, verified_by_links, contract_anchors, primary_dirs, repo_root, explicit_non_primary
+        code_anchors,
+        tests_links_set,
+        verified_by_links,
+        contract_anchors,
+        primary_dirs,
+        repo_root,
+        explicit_non_primary,
     )
     errs.append(bidi_err)
     errs.append(
         _report_documentation_gaps(
-            source_anchors, docs_anchors, code_anchors, contract_anchors, primary_dirs, repo_root, explicit_non_primary
+            source_anchors,
+            docs_anchors,
+            code_anchors,
+            contract_anchors,
+            primary_dirs,
+            repo_root,
+            explicit_non_primary,
         )
     )
 

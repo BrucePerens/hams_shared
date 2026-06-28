@@ -11,11 +11,14 @@ import os
 import sys
 import textwrap
 
-def main():
-    source_file = os.path.join(os.path.dirname(__file__), 'check_burn_list.py')
-    target_file = os.path.join(os.path.dirname(__file__), '../agents/skills/linter-compliance/SKILL.md')
 
-    with open(source_file, 'r', encoding='utf-8') as f:
+def main():
+    source_file = os.path.join(os.path.dirname(__file__), "check_burn_list.py")
+    target_file = os.path.join(
+        os.path.dirname(__file__), "../agents/skills/linter-compliance/SKILL.md"
+    )
+
+    with open(source_file, "r", encoding="utf-8") as f:
         source_code = f.read()
 
     try:
@@ -52,10 +55,13 @@ def main():
     if output_content.endswith("\n\n---\n\n"):
         output_content = output_content[:-7] + "\n"
 
-    with open(target_file, 'w', encoding='utf-8') as f:
+    with open(target_file, "w", encoding="utf-8") as f:
         f.write(output_content)
-    
-    print(f"Successfully extracted {len(extracted_blocks)} literate documentation blocks to {target_file}")
+
+    print(
+        f"Successfully extracted {len(extracted_blocks)} literate documentation blocks to {target_file}"
+    )
+
 
 if __name__ == "__main__":
     main()

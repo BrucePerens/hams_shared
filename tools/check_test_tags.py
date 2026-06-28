@@ -13,6 +13,7 @@ import os
 import sys
 from pathlib import Path
 
+
 def check_test_file(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
@@ -36,7 +37,10 @@ def check_test_file(filepath):
 
             has_tagged = False
             for decorator in node.decorator_list:
-                if isinstance(decorator, ast.Call) and getattr(decorator.func, "id", "") == "tagged":
+                if (
+                    isinstance(decorator, ast.Call)
+                    and getattr(decorator.func, "id", "") == "tagged"
+                ):
                     args = []
                     for arg in decorator.args:
                         # Python 3.8+ uses ast.Constant
@@ -51,12 +55,15 @@ def check_test_file(filepath):
                         break
 
             if not has_tagged:
-                issues.append(f"{filepath}:{node.lineno} Class '{node.name}' is missing @tagged('post_install', '-at_install')")
+                issues.append(
+                    f"{filepath}:{node.lineno} Class '{node.name}' is missing @tagged('post_install', '-at_install')"
+                )
 
     for issue in issues:
         print(f"🚨 TEST TAGGING VIOLATION: {issue}")
 
     return len(issues) == 0
+
 
 def main():
     if len(sys.argv) < 2:
@@ -79,6 +86,7 @@ def main():
 
     if not all_passed:
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

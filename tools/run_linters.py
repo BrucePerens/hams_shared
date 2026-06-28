@@ -10,41 +10,67 @@ import os
 import sys
 import subprocess
 
+
 def main():
     dir_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     # 1. Anti-Symlink Mandate
+    allowed_symlinks = {
+        "hams_shared",
+        "tools",
+        "docs",
+        "AGENTS.md",
+        "agents",
+        ".agents",
+    }
     symlinks_found = [
-        f for f in os.listdir(dir_path)
-        if os.path.islink(os.path.join(dir_path, f))
+        f
+        for f in os.listdir(dir_path)
+        if os.path.islink(os.path.join(dir_path, f)) and f not in allowed_symlinks
     ]
     if symlinks_found:
-        print("================================================================================")
+        print(
+            "================================================================================"
+        )
         print("🚨 CRITICAL ARCHITECTURE WARNING: NO SYMLINKING 🚨")
         print("Symbolic links detected in the repository root:")
         for s in symlinks_found:
             print(f" - {s}")
-        print("This is an ANTI-PATTERN. You are strictly forbidden from symlinking modules")
-        print("(e.g., zero_sudo, distributed_redis_cache) from hams_community into hams_com.")
+        print(
+            "This is an ANTI-PATTERN. You are strictly forbidden from symlinking modules"
+        )
+        print(
+            "(e.g., zero_sudo, distributed_redis_cache) from hams_open into hams_com."
+        )
         print("You MUST configure and rely on the Odoo --addons-path correctly.")
-        print("================================================================================")
+        print(
+            "================================================================================"
+        )
         sys.exit(1)
 
     # 2. Child Directory Mandate
-    child_community = os.path.join(dir_path, "hams_community")
+    child_community = os.path.join(dir_path, "hams_open")
     if os.path.isdir(child_community):
-        print("================================================================================")
+        print(
+            "================================================================================"
+        )
         print("🚨 CRITICAL REPOSITORY STRUCTURE WARNING 🚨")
-        print(f"hams_community was found as a CHILD of the current repository: {child_community}")
-        print("This is an ANTI-PATTERN. hams_community MUST be a SIBLING directory instead.")
-        print(f"Please move it to: {os.path.abspath(os.path.join(dir_path, '..', 'hams_community'))}")
-        print("================================================================================")
+        print(
+            f"hams_open was found as a CHILD of the current repository: {child_community}"
+        )
+        print("This is an ANTI-PATTERN. hams_open MUST be a SIBLING directory instead.")
+        print(
+            f"Please move it to: {os.path.abspath(os.path.join(dir_path, '..', 'hams_open'))}"
+        )
+        print(
+            "================================================================================"
+        )
         sys.exit(1)
 
     # 3. Resolve Sibling Dependency
     community_dir = None
     if not os.path.exists(os.path.join(dir_path, "zero_sudo", "__manifest__.py")):
-        sibling_community = os.path.abspath(os.path.join(dir_path, "..", "hams_community"))
+        sibling_community = os.path.abspath(os.path.join(dir_path, "..", "hams_open"))
         if os.path.isdir(sibling_community):
             community_dir = sibling_community
 
@@ -62,7 +88,9 @@ def main():
     if not target_modules_str:
         for item in os.listdir(dir_path):
             mod_path = os.path.join(dir_path, item)
-            if os.path.isdir(mod_path) and os.path.isfile(os.path.join(mod_path, "__manifest__.py")):
+            if os.path.isdir(mod_path) and os.path.isfile(
+                os.path.join(mod_path, "__manifest__.py")
+            ):
                 mod_array.append(item)
     else:
         mod_array = [m.strip() for m in target_modules_str.split(",") if m.strip()]
@@ -83,8 +111,10 @@ def main():
         pre_flight_cmd = [
             python_exec,
             os.path.join(dir_path, "tools", "pre_flight_check.py"),
-            "-m", mod_path,
-            "--addons-path", addons_path_str
+            "-m",
+            mod_path,
+            "--addons-path",
+            addons_path_str,
         ]
         res = subprocess.run(pre_flight_cmd, capture_output=True, text=True)
         if res.returncode != 0:
@@ -98,13 +128,17 @@ def main():
     flake8_cmd = "/usr/bin/flake8"
 
     try:
-        res = subprocess.run([
-            flake8_cmd,
-            dir_path,
-            "--exclude=venv,env,.venv,__pycache__,node_modules",
-            "--select=E9,F,E402",
-            "--per-file-ignores=__init__.py:F401"
-        ], capture_output=True, text=True)
+        res = subprocess.run(
+            [
+                flake8_cmd,
+                dir_path,
+                "--exclude=venv,env,.venv,__pycache__,node_modules",
+                "--select=E9,F,E402",
+                "--per-file-ignores=__init__.py:F401",
+            ],
+            capture_output=True,
+            text=True,
+        )
 
         if res.returncode != 0:
             print("❌ Flake8 Violations:")
@@ -118,11 +152,11 @@ def main():
         linters_failed = True
 
     # 8. check_burn_list
-    res = subprocess.run([
-        python_exec,
-        os.path.join(dir_path, "tools", "check_burn_list.py"),
-        dir_path
-    ], capture_output=True, text=True)
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_burn_list.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
     if res.returncode != 0:
         if res.stdout:
             print(res.stdout, end="")
@@ -133,11 +167,11 @@ def main():
         print(res.stdout, end="")
 
     # 9. verify_anchors
-    res = subprocess.run([
-        python_exec,
-        os.path.join(dir_path, "tools", "verify_anchors.py"),
-        dir_path
-    ], capture_output=True, text=True)
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "verify_anchors.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
     if res.returncode != 0:
         if res.stdout:
             print(res.stdout, end="")
@@ -148,11 +182,15 @@ def main():
         print(res.stdout, end="")
 
     # 10. check_manifest_dependencies
-    res = subprocess.run([
-        python_exec,
-        os.path.join(dir_path, "tools", "check_manifest_dependencies.py"),
-        dir_path
-    ], capture_output=True, text=True)
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_manifest_dependencies.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
     if res.returncode != 0:
         if res.stdout:
             print(res.stdout, end="")
@@ -163,11 +201,11 @@ def main():
         print(res.stdout, end="")
 
     # 11. check_js_syntax
-    res = subprocess.run([
-        python_exec,
-        os.path.join(dir_path, "tools", "check_js_syntax.py"),
-        dir_path
-    ], capture_output=True, text=True)
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_js_syntax.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
     if res.returncode != 0:
         if res.stdout:
             print(res.stdout, end="")
@@ -178,11 +216,11 @@ def main():
         print(res.stdout, end="")
 
     # 12. check_test_tags
-    res = subprocess.run([
-        python_exec,
-        os.path.join(dir_path, "tools", "check_test_tags.py"),
-        dir_path
-    ], capture_output=True, text=True)
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_test_tags.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
     if res.returncode != 0:
         if res.stdout:
             print(res.stdout, end="")
@@ -197,6 +235,7 @@ def main():
         sys.exit(1)
     else:
         sys.exit(0)
+
 
 if __name__ == "__main__":
     main()

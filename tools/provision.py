@@ -15,12 +15,15 @@ import infrastructure  # noqa: E402
 logging.basicConfig(level=logging.INFO)
 _logger = logging.getLogger(__name__)
 
+
 def provision():
     os.chdir(repo_root)
 
     if os.geteuid() != 0:
         _logger.info("[*] Elevating privileges (sudo) to provision environment...")
-        os.execvp("sudo", ["sudo", "-H", "-E", sys.executable, os.path.abspath(__file__)])
+        os.execvp(
+            "sudo", ["sudo", "-H", "-E", sys.executable, os.path.abspath(__file__)]
+        )
 
     orig_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
     env_vars = dict(os.environ)
@@ -31,7 +34,9 @@ def provision():
     _logger.info(f"[*] Discovered OS: {os_id}")
 
     if os_id not in ("ubuntu", "debian"):
-        _logger.error(f"[!] Unsupported OS: {os_id}. Only Debian and Ubuntu are currently supported.")
+        _logger.error(
+            f"[!] Unsupported OS: {os_id}. Only Debian and Ubuntu are currently supported."
+        )
         sys.exit(1)
 
     def run_sys(cmd, **kw):
@@ -41,6 +46,7 @@ def provision():
         return subprocess.run(cmd, check=True, **kw)
 
     infrastructure.provision_environment(run_sys, env_vars, orig_user, os_id)
+
 
 if __name__ == "__main__":
     provision()

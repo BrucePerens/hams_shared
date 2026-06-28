@@ -1,6 +1,8 @@
 import os
+
 os.environ["ODOO_RC"] = ""
 import odoo  # noqa: E402
+
 odoo.tools.config.parse_config(["-c", "tools/odoo.conf", "-d", "hams_test"])
 odoo.cli.server.report_configuration()
 registry = odoo.modules.registry.Registry("hams_test")

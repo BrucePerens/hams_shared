@@ -50,7 +50,21 @@ class OdooHTMLParser(html.parser.HTMLParser):
         super().__init__()
         self.root = XMLNode("root_wrapper", {}, 1)
         self.stack = [self.root]
-        self.void_elements = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'}
+        self.void_elements = {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "source",
+            "track",
+            "wbr",
+        }
 
     def handle_starttag(self, tag, attrs):
         node = XMLNode(tag, dict(attrs), self.getpos()[0])
@@ -62,7 +76,7 @@ class OdooHTMLParser(html.parser.HTMLParser):
     def handle_endtag(self, tag):
         if tag in self.void_elements:
             return
-        for i in range(len(self.stack)-1, 0, -1):
+        for i in range(len(self.stack) - 1, 0, -1):
             if self.stack[i].tag == tag:
                 self.stack[i].end_lineno = self.getpos()[0]
                 self.stack = self.stack[:i]
@@ -77,13 +91,16 @@ class OdooHTMLParser(html.parser.HTMLParser):
         node.parent = self.stack[-1]
         self.stack[-1].children.append(node)
 
+
 def parse_odoo_html(content):
     parser = OdooHTMLParser()
     parser.feed(content)
     return parser.root
 
+
 def parse_odoo_xml(content):
     """Safely parses Odoo XML handling edge cases like bare ampersands and inline logic."""
+
     def preserve_lines(match):
         return re.sub(r"[^\n]", " ", match.group(0))
 
@@ -157,7 +174,9 @@ GENERAL_ERROR_RULES = [
     ),
     (
         r"\.py$",
-        re.compile(r"sys\.path\.append\(os\.path\.abspath\(os\.path\.join\(os\.path\.dirname\(__file__\),\s*['\"]\.\.['\"]"),
+        re.compile(
+            r"sys\.path\.append\(os\.path\.abspath\(os\.path\.join\(os\.path\.dirname\(__file__\),\s*['\"]\.\.['\"]"
+        ),
         "CRITICAL HALLUCINATION: Unnecessary sys.path.append with '..'. Local modules and daemons should resolve sibling imports natively.",
     ),
     (
@@ -182,7 +201,9 @@ GENERAL_ERROR_RULES = [
     ),
     (
         r"test_.*\.py$",
-        re.compile(r"(?<![\'\"])(?:urllib\.request\.urlretrieve|requests\.(?:get|post|put|delete))\s*\("),
+        re.compile(
+            r"(?<![\'\"])(?:urllib\.request\.urlretrieve|requests\.(?:get|post|put|delete))\s*\("
+        ),
         "CRITICAL TEST ISOLATION: Tests must not make real external HTTP requests. Mock the network call (e.g., via unittest.mock.patch).",
     ),
     (
@@ -212,12 +233,16 @@ GENERAL_ERROR_RULES = [
     ),
     (
         r".*tour\.js$",
-        re.compile(r"trigger:\s*['\"]\.(modal|o_technical_modal)['\"],\s*run:\s*function"),
+        re.compile(
+            r"trigger:\s*['\"]\.(modal|o_technical_modal)['\"],\s*run:\s*function"
+        ),
         "CRITICAL TOUR RACE CONDITION: Do not poll the DOM natively for modals. You MUST use TourUtils.waitForAbsence or TourUtils.waitForElement to ensure they are mounted properly.",
     ),
     (
         r"test_.*\.py$",
-        re.compile(r"class\s+[A-Za-z0-9_]+\s*\(\s*(?:TransactionCase|HttpCase)\s*\)\s*:"),
+        re.compile(
+            r"class\s+[A-Za-z0-9_]+\s*\(\s*(?:TransactionCase|HttpCase)\s*\)\s*:"
+        ),
         "CRITICAL ARCHITECTURE: Tests must inherit from HamsTransactionCase or HamsHttpCase. Direct Odoo base class inheritance is forbidden.",
     ),
     (
@@ -227,7 +252,10 @@ GENERAL_ERROR_RULES = [
     ),
     (
         r"\.py$",
-        re.compile(r"os\.(?:environ\.get|getenv)\s*\(\s*['\"][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASS|API|CRED)[A-Za-z0-9_]*['\"]", re.IGNORECASE),
+        re.compile(
+            r"os\.(?:environ\.get|getenv)\s*\(\s*['\"][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASS|API|CRED)[A-Za-z0-9_]*['\"]",
+            re.IGNORECASE,
+        ),
         "CRITICAL TENANT LEAK: Do not use environment variables as fallbacks for credentials in multi-tenant systems. This breaks isolation. Use configuration models or secure daemon key registries instead.",
     ),
     (
@@ -237,7 +265,9 @@ GENERAL_ERROR_RULES = [
     ),
     (
         r"test_.*\.py$",
-        re.compile(r"(?:@unittest\.skip\b|@skip\b|@skipIf\b|@skipUnless\b|\bskipTest\s*\()"),
+        re.compile(
+            r"(?:@unittest\.skip\b|@skip\b|@skipIf\b|@skipUnless\b|\bskipTest\s*\()"
+        ),
         "CRITICAL AI LAZINESS: The use of skipTest or @skip decorators is strictly forbidden. You must repair the test instead of skipping it.",
     ),
     (
@@ -275,7 +305,9 @@ ODOO_ERROR_RULES = [
     ),
     (
         r"\.py$",
-        re.compile(r"\bEnvironment\s*\(\s*[^,]+,\s*(?:uid\s*=\s*)?(?:1|odoo\.SUPERUSER_ID|SUPERUSER_ID)\b"),
+        re.compile(
+            r"\bEnvironment\s*\(\s*[^,]+,\s*(?:uid\s*=\s*)?(?:1|odoo\.SUPERUSER_ID|SUPERUSER_ID)\b"
+        ),
         "CRITICAL ZERO-SUDO VIOLATION: Instantiating Environment with SUPERUSER_ID or 1 is a sudo bypass cheat. Query for a service account ID instead.",
     ),
     (
@@ -330,7 +362,9 @@ ODOO_ERROR_RULES = [
     ),
     (
         r"\.js$",
-        re.compile(r"publicWidget\.registry|['\"]web\.public\.widget['\"]|@web/legacy/js/public/public_widget"),
+        re.compile(
+            r"publicWidget\.registry|['\"]web\.public\.widget['\"]|@web/legacy/js/public/public_widget"
+        ),
         "CRITICAL OWL ARCHITECTURE: Legacy publicWidget is deprecated in Odoo 19. You MUST use the modern Interaction pattern (@web/public/interaction) and mountComponent.",
     ),
     (
@@ -351,22 +385,25 @@ ODOO_ERROR_RULES = [
     (
         r"\.js$",
         re.compile(r"[^\s/]\s*;\s*(?:import|export)\b"),
-        "CRITICAL JS ASSET PARSER: 'import' and 'export' keywords MUST be at the start of a new line or preceded only by spaces. Inline imports after a semicolon (e.g., `let a=1; import X`) crash the Odoo 19 regex transpiler."
+        "CRITICAL JS ASSET PARSER: 'import' and 'export' keywords MUST be at the start of a new line or preceded only by spaces. Inline imports after a semicolon (e.g., `let a=1; import X`) crash the Odoo 19 regex transpiler.",
     ),
     (
         r"\.js$",
         re.compile(r"export\s*\{[^\}]*(?://|/\*)[^\}]*\}", re.DOTALL),
-        "CRITICAL JS ASSET PARSER: Inline comments inside an export object block (e.g., `export { a, // comment \\n b }`) break Odoo's module loader. Place comments outside the export block."
+        "CRITICAL JS ASSET PARSER: Inline comments inside an export object block (e.g., `export { a, // comment \\n b }`) break Odoo's module loader. Place comments outside the export block.",
     ),
     (
         r"\.js$",
         re.compile(r"import\s+.*?\s+from\s+['\"](?!\.|@)[^'\"]+/[^'\"]+['\"]"),
-        "CRITICAL JS PATH AMBIGUITY: Imports containing a '/' that do not start with '.' (relative) or '@' (Odoo alias) confuse the asset parser. Odoo will attempt to resolve it as a physical file path and throw an 'Unmet Dependencies' error."
+        "CRITICAL JS PATH AMBIGUITY: Imports containing a '/' that do not start with '.' (relative) or '@' (Odoo alias) confuse the asset parser. Odoo will attempt to resolve it as a physical file path and throw an 'Unmet Dependencies' error.",
     ),
     (
         r"\.js$",
-        re.compile(r"^(?!\s*//|\s*/\*\*|\s*\*|\s*(?:import|export)\b)[^\n]*?(?:import|export)\s+.*?from\s+['\"][^'\"]+['\"]", re.MULTILINE),
-        "CRITICAL JS ASSET PARSER: Do not embed `import ... from ...` strings inside inline multi-line variable strings. Odoo's regex heuristic will falsely trigger on it and corrupt the transpilation."
+        re.compile(
+            r"^(?!\s*//|\s*/\*\*|\s*\*|\s*(?:import|export)\b)[^\n]*?(?:import|export)\s+.*?from\s+['\"][^'\"]+['\"]",
+            re.MULTILINE,
+        ),
+        "CRITICAL JS ASSET PARSER: Do not embed `import ... from ...` strings inside inline multi-line variable strings. Odoo's regex heuristic will falsely trigger on it and corrupt the transpilation.",
     ),
     (
         r"\.js$",
@@ -421,12 +458,16 @@ ODOO_ERROR_RULES = [
     ),
     (
         r"tour.*\.js$|.*_tour\.js$",
-        re.compile(r"trigger:\s*['\"`].*?(?:\.o_app|\.nav-link|\.o_menu_brand|h[1-6]:contains).*?['\"`]"),
+        re.compile(
+            r"trigger:\s*['\"`].*?(?:\.o_app|\.nav-link|\.o_menu_brand|h[1-6]:contains).*?['\"`]"
+        ),
         "FRAGILE TOUR TRIGGER: Odoo 19 UI shifted. Do not use '.o_app', '.nav-link', '.o_menu_brand', or 'h1:contains' in tour triggers. Use structure-agnostic selectors like '[data-menu-xmlid=...]' or '*:contains'.",
     ),
     (
         r"tour.*\.js$|.*_tour\.js$",
-        re.compile(r"trigger:\s*['\"`](?:.*[\s,>])?(?:select|option)(?:[\[:#.\s].*?)?['\"`]"),
+        re.compile(
+            r"trigger:\s*['\"`](?:.*[\s,>])?(?:select|option)(?:[\[:#.\s].*?)?['\"`]"
+        ),
         "CRITICAL JS TOUR DEPRECATION: Native \x3cselect\x3e and \x3coption\x3e tags are removed from backend form views in Odoo 19. Target '.o_select_menu' and '.o_select_menu_item' instead.",
     ),
     (
@@ -510,6 +551,7 @@ FOUND_MANIFESTS = {}
 # AST VULNERABILITY VISITOR (PYTHON)
 # -------------------------------------------------------------------------
 
+
 def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
     errors = []
     warnings = []
@@ -548,7 +590,9 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 if os.path.isfile(current):
                     current = os.path.dirname(current)
                 while current and current != os.path.dirname(current):
-                    if os.path.exists(os.path.join(current, "ham_base", "__manifest__.py")):
+                    if os.path.exists(
+                        os.path.join(current, "ham_base", "__manifest__.py")
+                    ):
                         self.has_ham_base = True
                         break
                     current = os.path.dirname(current)
@@ -636,12 +680,19 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 if len(node.ops) == 1 and isinstance(node.ops[0], ast.In):
                     comp = node.comparators[0]
                     if isinstance(comp, ast.Attribute) and comp.attr == "env":
-                        if getattr(comp.value, "id", "") == "self" or getattr(comp.value, "id", "") == "request":
+                        if (
+                            getattr(comp.value, "id", "") == "self"
+                            or getattr(comp.value, "id", "") == "request"
+                        ):
                             self.add_error(
                                 node.lineno,
                                 "CRITICAL ARCHITECTURE: Soft-dependency checking (`'model' in self.env`) is forbidden. You MUST explicitly declare dependencies in __manifest__.py.",
                             )
-                    if isinstance(comp, ast.Attribute) and comp.attr == "modules" and getattr(comp.value, "id", "") == "sys":
+                    if (
+                        isinstance(comp, ast.Attribute)
+                        and comp.attr == "modules"
+                        and getattr(comp.value, "id", "") == "sys"
+                    ):
                         self.add_error(
                             node.lineno,
                             "CRITICAL ARCHITECTURE: Probing `sys.modules` for Odoo addons is forbidden (test evasion). Declare dependencies in __manifest__.py.",
@@ -650,6 +701,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
         def visit_BinOp(self, node):
             if isinstance(node.op, ast.Add):
+
                 def is_string_node(n):
                     if isinstance(n, ast.Constant) and isinstance(n.value, str):
                         return True
@@ -668,9 +720,16 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             if self.is_odoo_module:
                 for item in node.items:
                     if isinstance(item.context_expr, ast.Call):
-                        func_name = getattr(item.context_expr.func, "id", getattr(item.context_expr.func, "attr", ""))
+                        func_name = getattr(
+                            item.context_expr.func,
+                            "id",
+                            getattr(item.context_expr.func, "attr", ""),
+                        )
                         if func_name == "suppress":
-                            self.add_error(node.lineno, "CRITICAL AI LAZINESS: contextlib.suppress() is strictly forbidden as it acts as a silent black hole for errors. Explicitly catch and log exceptions.")
+                            self.add_error(
+                                node.lineno,
+                                "CRITICAL AI LAZINESS: contextlib.suppress() is strictly forbidden as it acts as a silent black hole for errors. Explicitly catch and log exceptions.",
+                            )
                 is_cursor = any(
                     isinstance(item.context_expr, ast.Call)
                     and isinstance(item.context_expr.func, ast.Attribute)
@@ -690,11 +749,15 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             )
 
                 for item in node.items:
-                    if isinstance(item.context_expr, ast.Call) and getattr(item.context_expr.func, "attr", "") in ("assertRaises", "assertRaisesRegex"):
+                    if isinstance(item.context_expr, ast.Call) and getattr(
+                        item.context_expr.func, "attr", ""
+                    ) in ("assertRaises", "assertRaisesRegex"):
                         has_create_write = False
                         has_flush = False
                         for child in ast.walk(node):
-                            if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute):
+                            if isinstance(child, ast.Call) and isinstance(
+                                child.func, ast.Attribute
+                            ):
                                 if child.func.attr in ("create", "write"):
                                     has_create_write = True
                                 elif child.func.attr == "flush_all":
@@ -702,7 +765,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         if has_create_write and not has_flush:
                             self.add_error(
                                 node.lineno,
-                                "[!] DIAGNOSTIC FOR AI: ORM create/write inside assertRaises requires self.env.flush_all() before the context manager exits to trigger @api.constrains."
+                                "[!] DIAGNOSTIC FOR AI: ORM create/write inside assertRaises requires self.env.flush_all() before the context manager exits to trigger @api.constrains.",
                             )
 
             self.generic_visit(node)
@@ -726,21 +789,35 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                                 )
                         if k.value == "groups_id":
                             self.add_error(
-                                node.lineno, "[!] DIAGNOSTIC FOR AI: Odoo 18+ normalized the res.users groups relation to 'group_ids'."
+                                node.lineno,
+                                "[!] DIAGNOSTIC FOR AI: Odoo 18+ normalized the res.users groups relation to 'group_ids'.",
                             )
-                        if k.value == "group_ids" and not self.filename.startswith("test_"):
+                        if k.value == "group_ids" and not self.filename.startswith(
+                            "test_"
+                        ):
                             self.add_error(
                                 node.lineno,
-                                "[!] DIAGNOSTIC FOR AI: Mutating 'group_ids' in Python is forbidden. Define privileges statically in XML/CSV."
+                                "[!] DIAGNOSTIC FOR AI: Mutating 'group_ids' in Python is forbidden. Define privileges statically in XML/CSV.",
                             )
                     if self.filename == "__manifest__.py" and k.value == "assets":
                         if isinstance(v, ast.Dict):
                             for b_val in v.values:
                                 if isinstance(b_val, ast.List):
                                     for elt in b_val.elts:
-                                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str) and "*" in elt.value:
-                                            self.add_error(elt.lineno, "CRITICAL ASSET COMPILER CRASH: Glob patterns (*) are strictly forbidden in __manifest__.py asset lists. Odoo's asset compiler fails silently when matching directories. You MUST enumerate every file explicitly.")
-            if self.is_odoo_module and "owner_user_id" in keys_found and "user_websites_group_id" in keys_found:
+                                        if (
+                                            isinstance(elt, ast.Constant)
+                                            and isinstance(elt.value, str)
+                                            and "*" in elt.value
+                                        ):
+                                            self.add_error(
+                                                elt.lineno,
+                                                "CRITICAL ASSET COMPILER CRASH: Glob patterns (*) are strictly forbidden in __manifest__.py asset lists. Odoo's asset compiler fails silently when matching directories. You MUST enumerate every file explicitly.",
+                                            )
+            if (
+                self.is_odoo_module
+                and "owner_user_id" in keys_found
+                and "user_websites_group_id" in keys_found
+            ):
                 self.add_error(
                     node.lineno,
                     "MUTUAL EXCLUSIVITY TRAP: Cannot assign both 'owner_user_id' and 'user_websites_group_id'.",
@@ -811,12 +888,15 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 if not node.args.vararg or not node.args.kwarg:
                     self.add_error(
                         node.lineno,
-                        "[!] DIAGNOSTIC FOR AI: Monkey-patch wrapper functions MUST include *args and **kwargs to absorb unexpected framework arguments."
+                        "[!] DIAGNOSTIC FOR AI: Monkey-patch wrapper functions MUST include *args and **kwargs to absorb unexpected framework arguments.",
                     )
 
             if len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
                 if not self.filename.startswith("test_"):
-                    self.add_error(node.lineno, "[!] DIAGNOSTIC FOR AI: Empty functions using 'pass' are forbidden. Implement the logic or remove the method.")
+                    self.add_error(
+                        node.lineno,
+                        "[!] DIAGNOSTIC FOR AI: Empty functions using 'pass' are forbidden. Implement the logic or remove the method.",
+                    )
 
             is_controller = any(
                 (
@@ -895,24 +975,39 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             node.lineno,
                             "Never modify `self.env.context` directly. Use `self.with_context()`.",
                         )
-                    elif isinstance(target, ast.Name) and target.id == "_sql_constraints":
+                    elif (
+                        isinstance(target, ast.Name) and target.id == "_sql_constraints"
+                    ):
                         self.add_error(
                             node.lineno,
                             "[!] DIAGNOSTIC FOR AI: Use 'models.Constraint' instead of '_sql_constraints'.",
                         )
-                    elif isinstance(target, ast.Attribute) and target.attr == "group_ids" and not self.filename.startswith("test_"):
+                    elif (
+                        isinstance(target, ast.Attribute)
+                        and target.attr == "group_ids"
+                        and not self.filename.startswith("test_")
+                    ):
                         self.add_error(
                             node.lineno,
                             "[!] DIAGNOSTIC FOR AI: Mutating 'group_ids' in Python is forbidden. Define privileges statically in XML/CSV.",
                         )
-                    elif isinstance(target, ast.Subscript) and getattr(target, "slice", None):
+                    elif isinstance(target, ast.Subscript) and getattr(
+                        target, "slice", None
+                    ):
                         slice_val = getattr(target.slice, "value", None)
-                        if slice_val == "group_ids" and not self.filename.startswith("test_"):
+                        if slice_val == "group_ids" and not self.filename.startswith(
+                            "test_"
+                        ):
                             self.add_error(
                                 node.lineno,
                                 "[!] DIAGNOSTIC FOR AI: Mutating 'group_ids' in Python is forbidden. Define privileges statically in XML/CSV.",
                             )
-                        elif slice_val in ("error", "success", "warning", "message") and self.is_untranslated_string(node.value):
+                        elif slice_val in (
+                            "error",
+                            "success",
+                            "warning",
+                            "message",
+                        ) and self.is_untranslated_string(node.value):
                             self.add_warning(
                                 node.lineno,
                                 "[%AUDIT] I18N: Untranslated string assigned to dict key.",
@@ -921,10 +1016,10 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
         def visit_Import(self, node):
 
-            if getattr(self, 'current_method', None):
+            if getattr(self, "current_method", None):
                 self.add_error(
                     node.lineno,
-                    "LOCAL IMPORT: Imports inside functions/methods are strictly forbidden."
+                    "LOCAL IMPORT: Imports inside functions/methods are strictly forbidden.",
                 )
 
             for alias in node.names:
@@ -938,35 +1033,59 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
         def visit_Expr(self, node):
             if isinstance(node.value, ast.Constant) and node.value.value is Ellipsis:
-                self.add_error(node.lineno, "CRITICAL AI LAZINESS: Elision (...) is strictly forbidden. Write complete code.")
+                self.add_error(
+                    node.lineno,
+                    "CRITICAL AI LAZINESS: Elision (...) is strictly forbidden. Write complete code.",
+                )
             self.generic_visit(node)
 
         def visit_Tuple(self, node):
             if len(node.elts) == 3:
-                if isinstance(node.elts[0], ast.Constant) and node.elts[0].value == "id":
-                    if isinstance(node.elts[1], ast.Constant) and node.elts[1].value in ("=", "in"):
-                        if isinstance(node.elts[2], ast.Constant) and type(node.elts[2].value) is int:
-                            self.add_error(node.lineno, "CRITICAL AI LAZINESS: Hardcoded ID lookup ('id', '=', int). Use self.env.ref() or immutable string keys.")
+                if (
+                    isinstance(node.elts[0], ast.Constant)
+                    and node.elts[0].value == "id"
+                ):
+                    if isinstance(node.elts[1], ast.Constant) and node.elts[
+                        1
+                    ].value in ("=", "in"):
+                        if (
+                            isinstance(node.elts[2], ast.Constant)
+                            and type(node.elts[2].value) is int
+                        ):
+                            self.add_error(
+                                node.lineno,
+                                "CRITICAL AI LAZINESS: Hardcoded ID lookup ('id', '=', int). Use self.env.ref() or immutable string keys.",
+                            )
                         elif isinstance(node.elts[2], ast.List):
-                            if all(isinstance(elt, ast.Constant) and type(elt.value) is int for elt in node.elts[2].elts):
-                                self.add_error(node.lineno, "CRITICAL AI LAZINESS: Hardcoded ID lookup ('id', 'in', [int, ...]). Use self.env.ref() or immutable string keys.")
+                            if all(
+                                isinstance(elt, ast.Constant) and type(elt.value) is int
+                                for elt in node.elts[2].elts
+                            ):
+                                self.add_error(
+                                    node.lineno,
+                                    "CRITICAL AI LAZINESS: Hardcoded ID lookup ('id', 'in', [int, ...]). Use self.env.ref() or immutable string keys.",
+                                )
             self.generic_visit(node)
 
         def visit_ExceptHandler(self, node):
             if len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
                 self.add_error(
-                    getattr(node, 'lineno', 1),
-                    "[!] DIAGNOSTIC FOR AI: Empty exception handlers using 'pass' are forbidden. Log the error or handle it."
+                    getattr(node, "lineno", 1),
+                    "[!] DIAGNOSTIC FOR AI: Empty exception handlers using 'pass' are forbidden. Log the error or handle it.",
                 )
             self.generic_visit(node)
 
         def visit_Try(self, node):
             if getattr(self, "has_ham_base", False):
                 for child in ast.walk(node):
-                    if isinstance(child, ast.Call) and isinstance(getattr(child, "func", None), ast.Attribute) and child.func.attr == "_get_service_uid":
+                    if (
+                        isinstance(child, ast.Call)
+                        and isinstance(getattr(child, "func", None), ast.Attribute)
+                        and child.func.attr == "_get_service_uid"
+                    ):
                         self.add_error(
                             getattr(child, "lineno", node.lineno),
-                            "CRITICAL FAST FAIL: _get_service_uid MUST NOT be wrapped in a try/except block. It must fail fast if the service account is missing."
+                            "CRITICAL FAST FAIL: _get_service_uid MUST NOT be wrapped in a try/except block. It must fail fast if the service account is missing.",
                         )
             for handler in node.handlers:
                 if (
@@ -977,10 +1096,17 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         node.lineno,
                         "CRITICAL AI FAILURE: Wrapping imports in try/except ImportError is forbidden. Use manifest external_dependencies.",
                     )
-                is_catch_all = handler.type is None or (isinstance(handler.type, ast.Name) and handler.type.id == "Exception")
+                is_catch_all = handler.type is None or (
+                    isinstance(handler.type, ast.Name)
+                    and handler.type.id == "Exception"
+                )
                 if is_catch_all:
                     handler_line = getattr(handler, "lineno", node.lineno)
-                    line_content = self.lines[handler_line - 1] if handler_line <= len(self.lines) else ""
+                    line_content = (
+                        self.lines[handler_line - 1]
+                        if handler_line <= len(self.lines)
+                        else ""
+                    )
                     if "audit-ignore-catch-all" not in line_content:
                         self.add_error(
                             handler_line,
@@ -988,7 +1114,9 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         )
                     else:
                         has_logging = any(
-                            isinstance(child, ast.Call) and getattr(child.func, "attr", "") in ("warning", "error", "critical", "exception", "info")
+                            isinstance(child, ast.Call)
+                            and getattr(child.func, "attr", "")
+                            in ("warning", "error", "critical", "exception", "info")
                             for child in ast.walk(handler)
                         )
                         if not has_logging:
@@ -1000,10 +1128,10 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
         def visit_ImportFrom(self, node):
 
-            if getattr(self, 'current_method', None):
+            if getattr(self, "current_method", None):
                 self.add_error(
                     node.lineno,
-                    "LOCAL IMPORT: Imports inside functions/methods are strictly forbidden."
+                    "LOCAL IMPORT: Imports inside functions/methods are strictly forbidden.",
                 )
 
             if node.module == "pickle":
@@ -1012,20 +1140,22 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 )
             elif node.module == "random":
                 self.add_error(node.lineno, "WEAK CRYPTO: Do not use 'random'.")
-            elif self.is_odoo_module and getattr(node, "module", "") == "odoo.modules" and any(
-                alias.name == "get_module_resource" for alias in node.names
+            elif (
+                self.is_odoo_module
+                and getattr(node, "module", "") == "odoo.modules"
+                and any(alias.name == "get_module_resource" for alias in node.names)
             ):
                 self.add_error(
                     node.lineno,
                     "CRITICAL DEPRECATION: 'get_module_resource' is removed.",
                 )
-                
+
             if any(alias.name == "SUPERUSER_ID" for alias in node.names):
                 self.add_error(
                     node.lineno,
-                    "[!] DIAGNOSTIC FOR AI: `.sudo()` and `SUPERUSER_ID` are completely forbidden on this platform to prevent privilege escalation. Use the service account architecture (`with_user()`) instead."
+                    "[!] DIAGNOSTIC FOR AI: `.sudo()` and `SUPERUSER_ID` are completely forbidden on this platform to prevent privilege escalation. Use the service account architecture (`with_user()`) instead.",
                 )
-                
+
             self.generic_visit(node)
 
         def visit_Constant(self, node):
@@ -1051,9 +1181,15 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 if node.id == "numbercall":
                     self.add_error(node.lineno, "Remove 'numbercall'.")
                 elif node.id == "_sql_constraints":
-                    self.add_error(node.lineno, "[!] DIAGNOSTIC FOR AI: Use 'models.Constraint' instead of '_sql_constraints'.")
+                    self.add_error(
+                        node.lineno,
+                        "[!] DIAGNOSTIC FOR AI: Use 'models.Constraint' instead of '_sql_constraints'.",
+                    )
                 elif node.id == "SUPERUSER_ID":
-                    self.add_error(node.lineno, "[!] DIAGNOSTIC FOR AI: `.sudo()` and `SUPERUSER_ID` are completely forbidden on this platform to prevent privilege escalation. Use the service account architecture (`with_user()`) instead.")
+                    self.add_error(
+                        node.lineno,
+                        "[!] DIAGNOSTIC FOR AI: `.sudo()` and `SUPERUSER_ID` are completely forbidden on this platform to prevent privilege escalation. Use the service account architecture (`with_user()`) instead.",
+                    )
             self.generic_visit(node)
 
         def visit_keyword(self, node):
@@ -1080,9 +1216,13 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         getattr(node, "lineno", 1),
                         f"CRITICAL DEPRECATION: '{node.arg}' is a legacy attribute.",
                     )
-                elif node.arg == "type" and getattr(node.value, "value", None) == "json":
+                elif (
+                    node.arg == "type" and getattr(node.value, "value", None) == "json"
+                ):
                     self.add_error(getattr(node, "lineno", 1), "Use type='jsonrpc'.")
-                elif node.arg == "index" and getattr(node.value, "value", None) == "trgm":
+                elif (
+                    node.arg == "index" and getattr(node.value, "value", None) == "trgm"
+                ):
                     self.add_error(getattr(node, "lineno", 1), "Use index='trigram'.")
                 elif (
                     node.arg == "csrf"
@@ -1093,9 +1233,9 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         getattr(node, "lineno", 1),
                         "SECURITY ALERT: csrf=False found outside an API.",
                     )
-                elif node.arg == "related" and getattr(node.value, "value", "").endswith(
-                    ".users"
-                ):
+                elif node.arg == "related" and getattr(
+                    node.value, "value", ""
+                ).endswith(".users"):
                     self.add_error(
                         getattr(node, "lineno", 1),
                         "Legacy security relation: Use 'user_ids'.",
@@ -1114,8 +1254,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         "# burn-ignore-sudo" in line_content  # fmt: skip
                         and (
                             "sudo()._generate(" in line_content
-                            or
-                            ".sudo().unlink()" in line_content
+                            or ".sudo().unlink()" in line_content
                         )
                     ):
                         self.add_error(
@@ -1123,7 +1262,10 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             "[!] DIAGNOSTIC FOR AI: `.sudo()` is completely forbidden on this platform to prevent privilege escalation. Use the service account architecture (`with_user()`) instead.",
                         )
                 if node.attr == "testing":
-                    if isinstance(node.value, ast.Call) and getattr(node.value.func, "attr", "") == "current_thread":
+                    if (
+                        isinstance(node.value, ast.Call)
+                        and getattr(node.value.func, "attr", "") == "current_thread"
+                    ):
                         self.add_error(
                             node.lineno,
                             "CRITICAL ARCHITECTURE: Probing `threading.current_thread().testing` is forbidden test evasion.",
@@ -1136,7 +1278,9 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 elif node.attr == "users" and getattr(
                     node.value, "id", getattr(node.value, "attr", "")
                 ) in ("group", "groups", "_group_id"):
-                    self.add_error(node.lineno, "Legacy security relation: Use 'user_ids'.")
+                    self.add_error(
+                        node.lineno, "Legacy security relation: Use 'user_ids'."
+                    )
             self.generic_visit(node)
 
         def _check_forbidden_functions(self, node):
@@ -1146,7 +1290,12 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             if fid == "hasattr":
                 # Allow hasattr(super(), ...) for cooperative mixin architecture
                 is_super = False
-                if node.args and isinstance(node.args[0], ast.Call) and isinstance(node.args[0].func, ast.Name) and node.args[0].func.id == "super":
+                if (
+                    node.args
+                    and isinstance(node.args[0], ast.Call)
+                    and isinstance(node.args[0].func, ast.Name)
+                    and node.args[0].func.id == "super"
+                ):
                     is_super = True
                 if not is_super:
                     self.add_error(
@@ -1182,9 +1331,14 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         "ORM cache invalidation in Odoo 19+ MUST use targeted `.clear_cache(self)` or `self.env.registry.clear_cache()`.",
                     )
                 elif fid == "_check_recursion":
-                    self.add_error(node.lineno, "Odoo 18+ Hierarchy: Use '_has_cycle()'...")
+                    self.add_error(
+                        node.lineno, "Odoo 18+ Hierarchy: Use '_has_cycle()'..."
+                    )
                 elif fid == "getattr":
-                    if len(node.args) >= 2 and getattr(node.args[1], "value", None) == "sudo":
+                    if (
+                        len(node.args) >= 2
+                        and getattr(node.args[1], "value", None) == "sudo"
+                    ):
                         self.add_error(
                             node.lineno,
                             "[!] DIAGNOSTIC FOR AI: Obfuscated use of sudo via getattr() detected and blocked.",
@@ -1235,15 +1389,25 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
             if attr == "system" and getattr(node.func.value, "id", "") == "os":
                 self.add_error(
-                    node.lineno, "CRITICAL SECURITY: 'os.system' is banned due to shell injection vulnerabilities. Use 'subprocess.run' with array arguments."
+                    node.lineno,
+                    "CRITICAL SECURITY: 'os.system' is banned due to shell injection vulnerabilities. Use 'subprocess.run' with array arguments.",
                 )
-            if attr in ("loads", "dumps") and getattr(node.func.value, "id", "") == "pickle":
+            if (
+                attr in ("loads", "dumps")
+                and getattr(node.func.value, "id", "") == "pickle"
+            ):
                 self.add_error(
                     node.lineno, "CRITICAL RCE: The pickle module is vulnerable."
                 )
-            elif attr in ("md5", "sha1") and getattr(node.func.value, "id", "") == "hashlib":
+            elif (
+                attr in ("md5", "sha1")
+                and getattr(node.func.value, "id", "") == "hashlib"
+            ):
                 self.add_error(node.lineno, "WEAK CRYPTO: MD5/SHA1 broken.")
-            elif attr in ("choice", "randint", "random") and getattr(node.func.value, "id", "") == "random":
+            elif (
+                attr in ("choice", "randint", "random")
+                and getattr(node.func.value, "id", "") == "random"
+            ):
                 self.add_error(node.lineno, "WEAK CRYPTO: Do not use 'random'.")
 
             if self.is_odoo_module:
@@ -1263,28 +1427,44 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     and getattr(node.func.value, "id", "") == "self"
                 ):
                     self.add_error(
-                        node.lineno, "Ambiguous ORM call: Use `self.env['your.model']...`"
+                        node.lineno,
+                        "Ambiguous ORM call: Use `self.env['your.model']...`",
                     )
                 elif attr in ("with_user", "with_context"):
                     if attr == "with_user" and getattr(node, "args", []):
                         arg0 = node.args[0]
                         if isinstance(arg0, ast.Constant) and arg0.value == 1:
-                            self.add_error(node.lineno, "CRITICAL ZERO-SUDO VIOLATION: Using .with_user(1) is a sudo bypass cheat. Query for a designated service account ID instead.")
-                        elif getattr(arg0, "id", "") == "SUPERUSER_ID" or getattr(arg0, "attr", "") == "SUPERUSER_ID":
-                            self.add_error(node.lineno, "CRITICAL ZERO-SUDO VIOLATION: Using .with_user(SUPERUSER_ID) is a sudo bypass cheat. Query for a designated service account ID instead.")
+                            self.add_error(
+                                node.lineno,
+                                "CRITICAL ZERO-SUDO VIOLATION: Using .with_user(1) is a sudo bypass cheat. Query for a designated service account ID instead.",
+                            )
+                        elif (
+                            getattr(arg0, "id", "") == "SUPERUSER_ID"
+                            or getattr(arg0, "attr", "") == "SUPERUSER_ID"
+                        ):
+                            self.add_error(
+                                node.lineno,
+                                "CRITICAL ZERO-SUDO VIOLATION: Using .with_user(SUPERUSER_ID) is a sudo bypass cheat. Query for a designated service account ID instead.",
+                            )
                     caller = node.func.value
                     if isinstance(caller, ast.Name) and caller.id == "env":
                         self.add_error(
                             node.lineno,
-                            f"CRITICAL ORM ERROR: Cannot call `.{attr}()` directly on the Environment object. Call it on a RecordSet (e.g., `env['model'].{attr}(...)`)."
+                            f"CRITICAL ORM ERROR: Cannot call `.{attr}()` directly on the Environment object. Call it on a RecordSet (e.g., `env['model'].{attr}(...)`).",
                         )
-                    elif isinstance(caller, ast.Attribute) and caller.attr == "env" and getattr(caller.value, "id", "") == "self":
+                    elif (
+                        isinstance(caller, ast.Attribute)
+                        and caller.attr == "env"
+                        and getattr(caller.value, "id", "") == "self"
+                    ):
                         self.add_error(
                             node.lineno,
-                            f"CRITICAL ORM ERROR: Cannot call `.{attr}()` directly on the Environment object. Call it on a RecordSet (e.g., `self.env['model'].{attr}(...)`)."
+                            f"CRITICAL ORM ERROR: Cannot call `.{attr}()` directly on the Environment object. Call it on a RecordSet (e.g., `self.env['model'].{attr}(...)`).",
                         )
                 elif attr == "_check_recursion":
-                    self.add_error(node.lineno, "Odoo 18+ Hierarchy: Use '_has_cycle()'...")
+                    self.add_error(
+                        node.lineno, "Odoo 18+ Hierarchy: Use '_has_cycle()'..."
+                    )
                 elif attr in ("message_post", "message_subscribe") and (
                     "res.users"
                     in (
@@ -1319,20 +1499,31 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         else ""
                     )
                 ):
-                    if not any(x in getattr(self, "filepath", self.filename).replace("\\", "/") for x in ("tools/", "daemon/", "daemons/")):
+                    if not any(
+                        x in getattr(self, "filepath", self.filename).replace("\\", "/")
+                        for x in ("tools/", "daemon/", "daemons/", "tests/")
+                    ):
                         self.add_warning(
                             node.lineno,
                             "[%AUDIT] THREAD BLOCKING: 'time.sleep()' halts the worker...",
                         )
-                elif attr == "Thread" and getattr(node.func.value, "id", "") == "threading":
-                    self.add_error(node.lineno, "CRITICAL DOS VECTOR: Unbounded Thread.")
+                elif (
+                    attr == "Thread"
+                    and getattr(node.func.value, "id", "") == "threading"
+                ):
+                    self.add_error(
+                        node.lineno, "CRITICAL DOS VECTOR: Unbounded Thread."
+                    )
 
             if self.in_http_controller and self.is_odoo_module:
-                if attr == "website" and getattr(node.func.value, "id", "") == "request":
-                     self.add_warning(
-                         node.lineno,
-                         "[%AUDIT] MULTI-TENANT ISOLATION: When extracting 'request.website', ensure you immediately extract its '.id' or fallback to 0 for distributed cache keys (ADR-0083)."
-                     )
+                if (
+                    attr == "website"
+                    and getattr(node.func.value, "id", "") == "request"
+                ):
+                    self.add_warning(
+                        node.lineno,
+                        "[%AUDIT] MULTI-TENANT ISOLATION: When extracting 'request.website', ensure you immediately extract its '.id' or fallback to 0 for distributed cache keys (ADR-0083).",
+                    )
 
                 if (
                     attr == "get"
@@ -1372,7 +1563,8 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     )
                 if any(kw.arg == "count" for kw in node.keywords):
                     self.add_error(
-                        node.lineno, "[!] DIAGNOSTIC FOR AI: Use `search_count(...)` instead of search with count=True."
+                        node.lineno,
+                        "[!] DIAGNOSTIC FOR AI: Use `search_count(...)` instead of search with count=True.",
                     )
 
             val = node.func.value
@@ -1403,8 +1595,15 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
         def visit_Subscript(self, node):
             if self.is_odoo_module:
                 val = getattr(node.value, "id", getattr(node.value, "attr", ""))
-                if val == "config" and isinstance(node.slice, ast.Constant) and node.slice.value in ("test_enable", "test_file"):
-                    self.add_error(node.lineno, "CRITICAL ARCHITECTURE: Probing `config['test_enable']` to evade execution is strictly forbidden.")
+                if (
+                    val == "config"
+                    and isinstance(node.slice, ast.Constant)
+                    and node.slice.value in ("test_enable", "test_file")
+                ):
+                    self.add_error(
+                        node.lineno,
+                        "CRITICAL ARCHITECTURE: Probing `config['test_enable']` to evade execution is strictly forbidden.",
+                    )
             self.generic_visit(node)
 
         def visit_Call(self, node):
@@ -1414,28 +1613,64 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
             if func_name == "getattr" and len(node.args) >= 2:
                 arg1, arg2 = node.args[0], node.args[1]
-                if isinstance(arg1, ast.Call) and getattr(arg1.func, "attr", "") == "current_thread":
+                if (
+                    isinstance(arg1, ast.Call)
+                    and getattr(arg1.func, "attr", "") == "current_thread"
+                ):
                     if isinstance(arg2, ast.Constant) and arg2.value == "testing":
-                        self.add_error(node.lineno, "CRITICAL ARCHITECTURE: Probing `threading.current_thread().testing` via getattr is forbidden test evasion.")
-            
+                        self.add_error(
+                            node.lineno,
+                            "CRITICAL ARCHITECTURE: Probing `threading.current_thread().testing` via getattr is forbidden test evasion.",
+                        )
+
             if func_name == "get" and isinstance(node.func, ast.Attribute):
-                parent = getattr(node.func.value, "attr", getattr(node.func.value, "id", ""))
-                if parent in ("registry", "models") or (isinstance(node.func.value, ast.Attribute) and getattr(node.func.value.value, "attr", "") in ("registry", "models")):
-                    self.add_error(node.lineno, "CRITICAL ARCHITECTURE: Soft-dependency checking via `registry.get()` is forbidden. Declare dependencies in __manifest__.py.")
+                parent = getattr(
+                    node.func.value, "attr", getattr(node.func.value, "id", "")
+                )
+                if parent in ("registry", "models") or (
+                    isinstance(node.func.value, ast.Attribute)
+                    and getattr(node.func.value.value, "attr", "")
+                    in ("registry", "models")
+                ):
+                    self.add_error(
+                        node.lineno,
+                        "CRITICAL ARCHITECTURE: Soft-dependency checking via `registry.get()` is forbidden. Declare dependencies in __manifest__.py.",
+                    )
 
             if func_name in ("search", "search_count"):
                 val = getattr(node.func, "value", None)
-                if isinstance(val, ast.Subscript) and getattr(val.value, "attr", getattr(val.value, "id", "")) == "env":
-                    if isinstance(val.slice, ast.Constant) and val.slice.value == "ir.module.module":
-                        self.add_error(node.lineno, "CRITICAL ARCHITECTURE: Dynamic database querying for 'ir.module.module' is forbidden. Declare dependencies in __manifest__.py.")
+                if (
+                    isinstance(val, ast.Subscript)
+                    and getattr(val.value, "attr", getattr(val.value, "id", ""))
+                    == "env"
+                ):
+                    if (
+                        isinstance(val.slice, ast.Constant)
+                        and val.slice.value == "ir.module.module"
+                    ):
+                        self.add_error(
+                            node.lineno,
+                            "CRITICAL ARCHITECTURE: Dynamic database querying for 'ir.module.module' is forbidden. Declare dependencies in __manifest__.py.",
+                        )
 
             if func_name == "get" and isinstance(node.func, ast.Attribute):
-                parent = getattr(node.func.value, "id", getattr(node.func.value, "attr", ""))
+                parent = getattr(
+                    node.func.value, "id", getattr(node.func.value, "attr", "")
+                )
                 if parent == "config":
-                    if node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value in ("test_enable", "test_file"):
-                        self.add_error(node.lineno, "CRITICAL ARCHITECTURE: Probing `config.get('test_enable')` to evade execution is strictly forbidden.")
+                    if (
+                        node.args
+                        and isinstance(node.args[0], ast.Constant)
+                        and node.args[0].value in ("test_enable", "test_file")
+                    ):
+                        self.add_error(
+                            node.lineno,
+                            "CRITICAL ARCHITECTURE: Probing `config.get('test_enable')` to evade execution is strictly forbidden.",
+                        )
 
-            if func_name == "Environment" or (isinstance(node.func, ast.Attribute) and node.func.attr == "Environment"):
+            if func_name == "Environment" or (
+                isinstance(node.func, ast.Attribute) and node.func.attr == "Environment"
+            ):
                 uid_arg = None
                 if len(node.args) >= 2:
                     uid_arg = node.args[1]
@@ -1450,43 +1685,92 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         is_su = True
                     elif isinstance(uid_arg, ast.Name) and uid_arg.id == "SUPERUSER_ID":
                         is_su = True
-                    elif isinstance(uid_arg, ast.Attribute) and uid_arg.attr == "SUPERUSER_ID":
+                    elif (
+                        isinstance(uid_arg, ast.Attribute)
+                        and uid_arg.attr == "SUPERUSER_ID"
+                    ):
                         is_su = True
                     if is_su:
                         self.add_error(
                             node.lineno,
-                            "CRITICAL ZERO-SUDO VIOLATION: Instantiating an Environment with SUPERUSER_ID or uid=1 is strictly forbidden (sudo cheat). Query for a service account ID instead."
+                            "CRITICAL ZERO-SUDO VIOLATION: Instantiating an Environment with SUPERUSER_ID or uid=1 is strictly forbidden (sudo cheat). Query for a service account ID instead.",
                         )
 
             if isinstance(node.func, ast.Name) and node.func.id == "print":
-                if not ("tools/" in getattr(self, "filepath", self.filename).replace("\\", "/") or self.filename == "check_burn_list.py"):
-                    self.add_error(node.lineno, "CRITICAL AI LAZINESS: Native print() is banned. Use logging (_logger.info, etc.) for centralized log aggregation.")
+                if not (
+                    "tools/"
+                    in getattr(self, "filepath", self.filename).replace("\\", "/")
+                    or self.filename == "check_burn_list.py"
+                ):
+                    self.add_error(
+                        node.lineno,
+                        "CRITICAL AI LAZINESS: Native print() is banned. Use logging (_logger.info, etc.) for centralized log aggregation.",
+                    )
 
-            if func_name == "open" or (isinstance(node.func, ast.Attribute) and getattr(node.func, "attr", "") in ("open", "remove", "unlink", "symlink") and getattr(node.func.value, "id", "") == "os"):
+            if func_name == "open" or (
+                isinstance(node.func, ast.Attribute)
+                and getattr(node.func, "attr", "")
+                in ("open", "remove", "unlink", "symlink")
+                and getattr(node.func.value, "id", "") == "os"
+            ):
                 if self.in_http_controller or "model" in self.current_decorators:
                     self.add_warning(
                         node.lineno,
-                        "[%AUDIT] PATH TRAVERSAL: Ensure paths passed to filesystem operations in RPC/controller methods are strictly sanitized against directory traversal (e.g., checking for '..')."
+                        "[%AUDIT] PATH TRAVERSAL: Ensure paths passed to filesystem operations in RPC/controller methods are strictly sanitized against directory traversal (e.g., checking for '..').",
                     )
 
             if func_name in ("assertTrue", "assertFalse"):
-                if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, bool):
-                    if (func_name == "assertTrue" and node.args[0].value is True) or (func_name == "assertFalse" and node.args[0].value is False):
-                        self.add_error(node.lineno, f"CRITICAL AI LAZINESS: Hollow assertion {func_name}({node.args[0].value}) is banned. Assert against actual variables.")
-                if node.args and isinstance(node.args[0], ast.BoolOp) and isinstance(node.args[0].op, ast.And):
-                    self.add_error(node.lineno, f"CRITICAL TEST ANTI-PATTERN: {func_name} with multiple conditions (and). Split into individual assertions for precise diagnostics.")
+                if (
+                    node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, bool)
+                ):
+                    if (func_name == "assertTrue" and node.args[0].value is True) or (
+                        func_name == "assertFalse" and node.args[0].value is False
+                    ):
+                        self.add_error(
+                            node.lineno,
+                            f"CRITICAL AI LAZINESS: Hollow assertion {func_name}({node.args[0].value}) is banned. Assert against actual variables.",
+                        )
+                if (
+                    node.args
+                    and isinstance(node.args[0], ast.BoolOp)
+                    and isinstance(node.args[0].op, ast.And)
+                ):
+                    self.add_error(
+                        node.lineno,
+                        f"CRITICAL TEST ANTI-PATTERN: {func_name} with multiple conditions (and). Split into individual assertions for precise diagnostics.",
+                    )
             elif func_name == "Markup":
                 if node.args:
                     arg0 = node.args[0]
-                    if isinstance(arg0, ast.JoinedStr) or (isinstance(arg0, ast.Call) and getattr(arg0.func, "attr", "") == "format") or (isinstance(arg0, ast.BinOp) and isinstance(arg0.op, ast.Mod)):
-                        self.add_error(node.lineno, "CRITICAL XSS VULNERABILITY: Do not interpolate variables directly into Markup(). Use odoo.tools.html_escape on user inputs first or use standard QWeb rendering.")
+                    if (
+                        isinstance(arg0, ast.JoinedStr)
+                        or (
+                            isinstance(arg0, ast.Call)
+                            and getattr(arg0.func, "attr", "") == "format"
+                        )
+                        or (
+                            isinstance(arg0, ast.BinOp) and isinstance(arg0.op, ast.Mod)
+                        )
+                    ):
+                        self.add_error(
+                            node.lineno,
+                            "CRITICAL XSS VULNERABILITY: Do not interpolate variables directly into Markup(). Use odoo.tools.html_escape on user inputs first or use standard QWeb rendering.",
+                        )
             elif func_name == "assertEqual" and len(node.args) == 2:
                 arg1, arg2 = node.args[0], node.args[1]
                 if type(arg1) == type(arg2):
                     if isinstance(arg1, ast.Constant) and arg1.value == arg2.value:
-                        self.add_error(node.lineno, "CRITICAL AI LAZINESS: Hollow assertion (comparing identical literals) is banned.")
+                        self.add_error(
+                            node.lineno,
+                            "CRITICAL AI LAZINESS: Hollow assertion (comparing identical literals) is banned.",
+                        )
                     elif isinstance(arg1, ast.Name) and arg1.id == arg2.id:
-                        self.add_error(node.lineno, "CRITICAL AI LAZINESS: Hollow assertion (comparing a variable to itself) is banned.")
+                        self.add_error(
+                            node.lineno,
+                            "CRITICAL AI LAZINESS: Hollow assertion (comparing a variable to itself) is banned.",
+                        )
 
             if getattr(node.func, "attr", getattr(node.func, "id", "")) == "env":
                 for kw in node.keywords:
@@ -1503,7 +1787,11 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 else ""
             )
 
-            if attr in ("commit", "rollback") and self.filename.startswith("test_") and self.is_odoo_module:
+            if (
+                attr in ("commit", "rollback")
+                and self.filename.startswith("test_")
+                and self.is_odoo_module
+            ):
                 val = getattr(node.func, "value", None)
                 if isinstance(val, ast.Attribute) and val.attr == "cr":
                     if (
@@ -1519,7 +1807,11 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             if attr:
                 is_cr_execute = self._check_forbidden_attributes(node, attr)
 
-            if self.loop_depth > 0 and attr in ("search", "search_count", "read_group") and self.is_odoo_module:
+            if (
+                self.loop_depth > 0
+                and attr in ("search", "search_count", "read_group")
+                and self.is_odoo_module
+            ):
                 caller_id = (
                     getattr(node.func.value, "id", "")
                     if hasattr(node.func, "value")
@@ -1535,11 +1827,15 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 self._check_search_methods(node, attr)
 
             if func_name == "start_tour":
-                if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                if (
+                    node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)
+                ):
                     if "debug=" not in node.args[0].value:
                         self.add_error(
                             node.lineno,
-                            "[!] DIAGNOSTIC FOR AI: start_tour() URLs MUST explicitly include 'debug=1' to prevent Owl 'dev' mode crashes per ADR-0081."
+                            "[!] DIAGNOSTIC FOR AI: start_tour() URLs MUST explicitly include 'debug=1' to prevent Owl 'dev' mode crashes per ADR-0081.",
                         )
 
             self._check_cr_execute(node, is_cr_execute)
@@ -1564,12 +1860,16 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
             if func_name == "symlink":
                 is_os_symlink = False
-                if isinstance(node.func, ast.Attribute) and getattr(node.func.value, "id", "") == "os":
+                if (
+                    isinstance(node.func, ast.Attribute)
+                    and getattr(node.func.value, "id", "") == "os"
+                ):
                     is_os_symlink = True
                 elif isinstance(node.func, ast.Name):
                     is_os_symlink = True
 
                 if is_os_symlink and node.args:
+
                     def _resolve_str(n):
                         if isinstance(n, ast.Constant) and isinstance(n.value, str):
                             return n.value
@@ -1582,14 +1882,16 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         check_paths = [
                             src_val,
                             os.path.join(os.path.dirname(self.filepath), src_val),
-                            os.path.join(os.getcwd(), src_val)
+                            os.path.join(os.getcwd(), src_val),
                         ]
                         for p in check_paths:
                             try:
-                                if os.path.isdir(p) and os.path.isfile(os.path.join(p, '__manifest__.py')):
+                                if os.path.isdir(p) and os.path.isfile(
+                                    os.path.join(p, "__manifest__.py")
+                                ):
                                     self.add_error(
                                         node.lineno,
-                                        "CRITICAL ARCHITECTURE: Creating symbolic links to resolve modules (like zero_sudo or distributed_redis_cache) is strictly forbidden. You MUST configure the Odoo --addons-path correctly instead."
+                                        "CRITICAL ARCHITECTURE: Creating symbolic links to resolve modules (like zero_sudo or distributed_redis_cache) is strictly forbidden. You MUST configure the Odoo --addons-path correctly instead.",
                                     )
                                     break
                             except Exception:
@@ -1605,6 +1907,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 # -------------------------------------------------------------------------
 # FILE INGESTION & XML SCANNING
 # -------------------------------------------------------------------------
+
 
 def scan_file(filepath, is_odoo_module=False):
     filename = os.path.basename(filepath)
@@ -1626,15 +1929,25 @@ def scan_file(filepath, is_odoo_module=False):
                 if isinstance(node, ast.Expr) and isinstance(node.value, ast.Dict):
                     manifest_dict = ast.literal_eval(node.value)
                     valid_licenses = [
-                        "GPL-2", "GPL-2 or any later version", "GPL-3",
-                        "GPL-3 or any later version", "AGPL-3", "LGPL-3",
-                        "Other OSI approved licence", "OEEL-1", "OPL-1",
-                        "Other proprietary"
+                        "GPL-2",
+                        "GPL-2 or any later version",
+                        "GPL-3",
+                        "GPL-3 or any later version",
+                        "AGPL-3",
+                        "LGPL-3",
+                        "Other OSI approved licence",
+                        "OEEL-1",
+                        "OPL-1",
+                        "Other proprietary",
                     ]
                     if "license" not in manifest_dict:
-                        errors_found.append(f"Line {node.lineno}: CRITICAL MANIFEST ERROR: 'license' key is missing. It MUST be present and set to a valid Odoo license (e.g., 'Other proprietary').")
+                        errors_found.append(
+                            f"Line {node.lineno}: CRITICAL MANIFEST ERROR: 'license' key is missing. It MUST be present and set to a valid Odoo license (e.g., 'Other proprietary')."
+                        )
                     elif manifest_dict.get("license") not in valid_licenses:
-                        errors_found.append(f"Line {node.lineno}: CRITICAL MANIFEST ERROR: Invalid 'license' value '{manifest_dict.get('license')}'. Valid options are: {', '.join(valid_licenses)}. Note: 'Other proprietary' must use a lowercase 'p'.")
+                        errors_found.append(
+                            f"Line {node.lineno}: CRITICAL MANIFEST ERROR: Invalid 'license' value '{manifest_dict.get('license')}'. Valid options are: {', '.join(valid_licenses)}. Note: 'Other proprietary' must use a lowercase 'p'."
+                        )
         except Exception:
             pass
 
@@ -1653,10 +1966,14 @@ def scan_file(filepath, is_odoo_module=False):
             stripped_line = line.strip()
             if not stripped_line:
                 if i < len(lines):
-                    errors_found.append(f"Line {i}: CRITICAL CSV FORMAT: Blank lines are forbidden in Odoo CSV files.")
+                    errors_found.append(
+                        f"Line {i}: CRITICAL CSV FORMAT: Blank lines are forbidden in Odoo CSV files."
+                    )
                 continue
             if stripped_line.startswith("#"):
-                errors_found.append(f"Line {i}: CRITICAL CSV FORMAT: Comments (#) are forbidden in Odoo CSV files.")
+                errors_found.append(
+                    f"Line {i}: CRITICAL CSV FORMAT: Comments (#) are forbidden in Odoo CSV files."
+                )
 
             if line.startswith("id,"):
                 continue
@@ -1678,10 +1995,14 @@ def scan_file(filepath, is_odoo_module=False):
             for node in root_node.walk():
                 if node.tag != "#comment":
                     if node.text and "[@ANCHOR:" in node.text:
-                        errors_found.append(f"Line {node.lineno}: CRITICAL ANCHOR FORMAT: Semantic anchors in XML/HTML MUST be enclosed within comments ().")
+                        errors_found.append(
+                            f"Line {node.lineno}: CRITICAL ANCHOR FORMAT: Semantic anchors in XML/HTML MUST be enclosed within comments ()."
+                        )
                     for attr_name, attr_val in node.attrs.items():
                         if "[@ANCHOR:" in str(attr_val):
-                            errors_found.append(f"Line {node.lineno}: CRITICAL ANCHOR FORMAT: Semantic anchors in XML/HTML MUST be enclosed within comments (). Found in attribute.")
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL ANCHOR FORMAT: Semantic anchors in XML/HTML MUST be enclosed within comments (). Found in attribute."
+                            )
 
                 if node.tag == "template" or (
                     node.tag == "record" and node.attrs.get("model") == "ir.ui.view"
@@ -1744,10 +2065,20 @@ def scan_file(filepath, is_odoo_module=False):
                     )
                 if node.tag == "record":
                     model_name = node.attrs.get("model")
-                    defined_fields = {child.attrs.get("name") for child in node.children if child.tag == "field"}
+                    defined_fields = {
+                        child.attrs.get("name")
+                        for child in node.children
+                        if child.tag == "field"
+                    }
 
                     mandatory_model_fields = {
-                        "res.users": {"name", "login", "company_id", "company_ids", "notification_type"},
+                        "res.users": {
+                            "name",
+                            "login",
+                            "company_id",
+                            "company_ids",
+                            "notification_type",
+                        },
                         "ir.rule": {"name", "model_id"},
                         "ir.model.access": {"name", "model_id", "group_id"},
                         "ir.ui.view": {"name", "model"},
@@ -1766,7 +2097,11 @@ def scan_file(filepath, is_odoo_module=False):
                                 f"Line {node.lineno}: CRITICAL XML DATA INTEGRITY: \x3crecord model='{model_name}'\x3e is missing mandatory fields required in Odoo 19: {', '.join(missing)}. This causes silent installation failures."
                             )
 
-                    if model_name == "res.users" and any(anc.tag == "data" and anc.attrs.get("noupdate") in ("1", "True", "true") for anc in node.get_ancestors()):
+                    if model_name == "res.users" and any(
+                        anc.tag == "data"
+                        and anc.attrs.get("noupdate") in ("1", "True", "true")
+                        for anc in node.get_ancestors()
+                    ):
                         warnings_found.append(
                             f"Line {node.lineno}: [%AUDIT] RECORD UPDATE: \x3crecord model='res.users'\x3e is inside a noupdate='1' block. If this service account requires updates in the future, Odoo will ignore them."
                         )
@@ -1815,20 +2150,39 @@ def scan_file(filepath, is_odoo_module=False):
                 if "t-raw" in node.attrs:
                     errors_found.append(f"Line {node.lineno}: CRITICAL XSS: use t-out.")
                 if "t-esc" in node.attrs:
-                    errors_found.append(f"Line {node.lineno}: CRITICAL DEPRECATION: t-esc is banned. Use t-out.")
+                    errors_found.append(
+                        f"Line {node.lineno}: CRITICAL DEPRECATION: t-esc is banned. Use t-out."
+                    )
                 if "attrs" in node.attrs:
-                    errors_found.append(f"Line {node.lineno}: CRITICAL DEPRECATION: The 'attrs' attribute was removed in Odoo 17+. Use invisible, readonly, and required directly.")
+                    errors_found.append(
+                        f"Line {node.lineno}: CRITICAL DEPRECATION: The 'attrs' attribute was removed in Odoo 17+. Use invisible, readonly, and required directly."
+                    )
                 if node.attrs.get("t-name") == "kanban-box":
-                    errors_found.append(f"Line {node.lineno}: CRITICAL DEPRECATION: t-name=\"kanban-box\" is banned in Odoo 19. Use t-name=\"card\".")
+                    errors_found.append(
+                        f'Line {node.lineno}: CRITICAL DEPRECATION: t-name="kanban-box" is banned in Odoo 19. Use t-name="card".'
+                    )
                 if node.attrs.get("data-snippet", "").startswith("s_dynamic_snippet"):
-                    if "data-filter-id" not in node.attrs or "data-template-key" not in node.attrs:
-                        errors_found.append(f"Line {node.lineno}: CRITICAL OWL 2 CRASH: Dynamic snippets ({node.attrs.get('data-snippet')}) must explicitly declare 'data-filter-id' and 'data-template-key' to prevent InteractionService null pointer crashes on empty datasets.")
-                if node.tag == "group" and (node.attrs.get("expand") == "0" or "string" in node.attrs):
-                    errors_found.append(f"Line {node.lineno}: CRITICAL DEPRECATION: \x3cgroup expand=\"0\"\x3e and \x3cgroup string=\"...\"\x3e are banned in Odoo 19. Odoo 19 requires clean group tags.")
+                    if (
+                        "data-filter-id" not in node.attrs
+                        or "data-template-key" not in node.attrs
+                    ):
+                        errors_found.append(
+                            f"Line {node.lineno}: CRITICAL OWL 2 CRASH: Dynamic snippets ({node.attrs.get('data-snippet')}) must explicitly declare 'data-filter-id' and 'data-template-key' to prevent InteractionService null pointer crashes on empty datasets."
+                        )
+                if node.tag == "group" and (
+                    node.attrs.get("expand") == "0" or "string" in node.attrs
+                ):
+                    errors_found.append(
+                        f'Line {node.lineno}: CRITICAL DEPRECATION: \x3cgroup expand="0"\x3e and \x3cgroup string="..."\x3e are banned in Odoo 19. Odoo 19 requires clean group tags.'
+                    )
                 if node.tag == "xpath" and "expr" in node.attrs:
                     expr = str(node.attrs.get("expr", ""))
-                    if ".." in expr or re.search(r"//[a-zA-Z0-9_]+\[\s*[a-zA-Z0-9_]+\[@", expr):
-                        errors_found.append(f"Line {node.lineno}: FRAGILE XPATH: Parent axis traversals (..) and complex container predicates are banned.")
+                    if ".." in expr or re.search(
+                        r"//[a-zA-Z0-9_]+\[\s*[a-zA-Z0-9_]+\[@", expr
+                    ):
+                        errors_found.append(
+                            f"Line {node.lineno}: FRAGILE XPATH: Parent axis traversals (..) and complex container predicates are banned."
+                        )
 
                 # WCAG Accessibility Enforcement
                 if node.tag == "i":
@@ -1889,61 +2243,144 @@ def scan_file(filepath, is_odoo_module=False):
                     # Inappropriate Data Assignment Traps
                     if field_name in ("user_id", "user_ids"):
                         if "base.group_" in ref_val or "base.group_" in eval_val:
-                            errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a group to a user field '{field_name}'.")
-                        if "base.partner_" in ref_val or "base.partner_" in eval_val or "base.main_partner" in ref_val or "base.main_partner" in eval_val:
-                            errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a partner to a user field '{field_name}'.")
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a group to a user field '{field_name}'."
+                            )
+                        if (
+                            "base.partner_" in ref_val
+                            or "base.partner_" in eval_val
+                            or "base.main_partner" in ref_val
+                            or "base.main_partner" in eval_val
+                        ):
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a partner to a user field '{field_name}'."
+                            )
 
                     if field_name in ("group_id", "group_ids", "groups"):
                         if "base.user_" in ref_val or "base.user_" in eval_val:
-                            errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a user to a group field '{field_name}'.")
-                        if "base.module_category_" in ref_val or "base.module_category_" in eval_val:
-                            errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a module category to a group field '{field_name}'.")
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a user to a group field '{field_name}'."
+                            )
+                        if (
+                            "base.module_category_" in ref_val
+                            or "base.module_category_" in eval_val
+                        ):
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a module category to a group field '{field_name}'."
+                            )
 
                     if field_name in ("company_id", "company_ids"):
-                        if "base.user_" in ref_val or "base.user_" in eval_val or "base.group_" in ref_val or "base.group_" in eval_val:
-                            errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a user or group to a company field '{field_name}'.")
+                        if (
+                            "base.user_" in ref_val
+                            or "base.user_" in eval_val
+                            or "base.group_" in ref_val
+                            or "base.group_" in eval_val
+                        ):
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a user or group to a company field '{field_name}'."
+                            )
 
                     if field_name in ("partner_id", "partner_ids"):
-                        if "base.user_" in ref_val or "base.user_" in eval_val or "base.group_" in ref_val or "base.group_" in eval_val or "base.module_category_" in ref_val or "base.module_category_" in eval_val:
-                            errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a user, group, or category to a partner field '{field_name}'.")
+                        if (
+                            "base.user_" in ref_val
+                            or "base.user_" in eval_val
+                            or "base.group_" in ref_val
+                            or "base.group_" in eval_val
+                            or "base.module_category_" in ref_val
+                            or "base.module_category_" in eval_val
+                        ):
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a user, group, or category to a partner field '{field_name}'."
+                            )
 
                     if field_name == "model_id":
-                        if "base.group_" in ref_val or "base.user_" in ref_val or "base.module_category_" in ref_val or "base.partner_" in ref_val:
-                            errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a non-model reference to a 'model_id' field '{field_name}'.")
+                        if (
+                            "base.group_" in ref_val
+                            or "base.user_" in ref_val
+                            or "base.module_category_" in ref_val
+                            or "base.partner_" in ref_val
+                        ):
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a non-model reference to a 'model_id' field '{field_name}'."
+                            )
 
-                    if field_name in ("active", "sequence", "is_published", "color", "priority"):
+                    if field_name in (
+                        "active",
+                        "sequence",
+                        "is_published",
+                        "color",
+                        "priority",
+                    ):
                         if ref_val:
-                            errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Using 'ref' on primitive/boolean/integer field '{field_name}'. Use 'eval' or node text instead.")
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Using 'ref' on primitive/boolean/integer field '{field_name}'. Use 'eval' or node text instead."
+                            )
 
                         if model == "ir.cron" and field_name == "user_id":
-                            if "base.user_root" in ref_val or "base.user_admin" in ref_val or "base.user_root" in eval_val or "base.user_admin" in eval_val:
-                                errors_found.append(f"Line {node.lineno}: CRITICAL ZERO-SUDO VIOLATION: ir.cron cannot be assigned to base.user_root or base.user_admin. You MUST use a dedicated service account.")
+                            if (
+                                "base.user_root" in ref_val
+                                or "base.user_admin" in ref_val
+                                or "base.user_root" in eval_val
+                                or "base.user_admin" in eval_val
+                            ):
+                                errors_found.append(
+                                    f"Line {node.lineno}: CRITICAL ZERO-SUDO VIOLATION: ir.cron cannot be assigned to base.user_root or base.user_admin. You MUST use a dedicated service account."
+                                )
 
                         if field_name.endswith("_ids") and eval_val:
                             eval_stripped = eval_val.replace(" ", "")
-                            if eval_stripped.startswith("[") and not eval_stripped.startswith("[(6,") and not eval_stripped.startswith("[(4,") and not eval_stripped.startswith("[(5,"):
-                                errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a raw list to an x2many field '{field_name}'. You MUST use Odoo ORM commands (e.g., [(6, 0, [...])]).")
+                            if (
+                                eval_stripped.startswith("[")
+                                and not eval_stripped.startswith("[(6,")
+                                and not eval_stripped.startswith("[(4,")
+                                and not eval_stripped.startswith("[(5,")
+                            ):
+                                errors_found.append(
+                                    f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a raw list to an x2many field '{field_name}'. You MUST use Odoo ORM commands (e.g., [(6, 0, [...])])."
+                                )
 
                         if ref_val and ref_val.isdigit():
-                            errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: 'ref' attribute must be an XML ID string, not a hardcoded numeric ID '{ref_val}'.")
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: 'ref' attribute must be an XML ID string, not a hardcoded numeric ID '{ref_val}'."
+                            )
 
-                        if eval_val and any(bad in eval_val for bad in ("__import__", "exec(", "eval(")):
-                            errors_found.append(f"Line {node.lineno}: CRITICAL SECURITY: Dangerous built-in execution detected in 'eval' expression.")
+                        if eval_val and any(
+                            bad in eval_val for bad in ("__import__", "exec(", "eval(")
+                        ):
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL SECURITY: Dangerous built-in execution detected in 'eval' expression."
+                            )
 
                         if model == "ir.actions.act_window" and field_name == "type":
                             node_text = node.text.strip() if node.text else ""
                             if node_text and node_text != "ir.actions.act_window":
-                                errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: 'type' for ir.actions.act_window must be 'ir.actions.act_window'.")
+                                errors_found.append(
+                                    f"Line {node.lineno}: CRITICAL TYPE MISMATCH: 'type' for ir.actions.act_window must be 'ir.actions.act_window'."
+                                )
 
                         if field_name in ("employee_id", "employee_ids"):
                             if "base.user_" in ref_val or "base.user_" in eval_val:
-                                errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a user to an employee field '{field_name}'.")
+                                errors_found.append(
+                                    f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a user to an employee field '{field_name}'."
+                                )
 
                     if node.tag == "record":
                         model_name = node.attrs.get("model", "")
                         if "_" in model_name and "." not in model_name:
-                            if model_name.startswith(("res_", "ir_", "account_", "mail_", "website_", "crm_", "sale_")):
-                                errors_found.append(f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Odoo models use dots, not underscores. Found '{model_name}'. Did you mean '{model_name.replace('_', '.', 1)}'?")
+                            if model_name.startswith(
+                                (
+                                    "res_",
+                                    "ir_",
+                                    "account_",
+                                    "mail_",
+                                    "website_",
+                                    "crm_",
+                                    "sale_",
+                                )
+                            ):
+                                errors_found.append(
+                                    f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Odoo models use dots, not underscores. Found '{model_name}'. Did you mean '{model_name.replace('_', '.', 1)}'?"
+                                )
 
                 for k, v in node.attrs.items():
                     v_str = str(v)
@@ -2002,18 +2439,42 @@ def scan_file(filepath, is_odoo_module=False):
 
     if filename.endswith(".js") and ("tour" in filename or "tours" in filepath):
         js_tour_rules = [
-            (r"trigger:\s*['\"`]button\[name=[^\]]+\]['\"`][^}]+run:\s*['\"`]click['\"`]\s*\}[\s\]\),;]*$", f"CRITICAL JS TOUR DIRTY FORM: The tour '{filename}' appears to end immediately after clicking an action button. It MUST explicitly wait for an RPC resolution (e.g., a verifiable DOM field state change) in a subsequent step to prevent a dirty form crash."),
-            (r"window\.(confirm|alert)\s*\(", f"CRITICAL JS TOUR DIALOG: Tour '{filename}' contains an execution of window.confirm or window.alert. This will freeze the headless browser. You MUST override it (e.g., window.confirm = () => true;) in a separate step targeting 'body' before clicking the trigger."),
-            (r"trigger:\s*['\"`]\.(modal-dialog|modal-content)['\"`][^}]+run:\s*['\"`][a-zA-Z]+['\"`]", f"CRITICAL JS TOUR MODAL: Tour '{filename}' attempts to perform an action (run: '...') directly on '.modal-dialog' or '.modal-content'. These must be used strictly as empty DOM polling steps (run: function() {{}}) to wait for the modal to render. Use '.modal-body' for neutral clicks."),
-            (r"expectUnloadPage:\s*true[^}]+run:\s*(?:function|\(\)\s*=>)|run:\s*(?:function|\(\)\s*=>)[^}]+expectUnloadPage:\s*true", f"CRITICAL JS TOUR UNLOAD: Tour '{filename}' uses 'expectUnloadPage: true' alongside a custom JS closure for 'run'. This breaks Odoo's native unload event binding. You MUST use the native Odoo helper \"run: 'click'\" when expecting a page unload."),
-            (r"run:\s*['\"`]edit[^}]*\}\s*\]\s*\.\s*concat\(\s*TourUtils\.safeSave", f"CRITICAL JS TOUR DOM BLUR: Tour '{filename}' calls TourUtils.safeSave() immediately after an 'edit' step. You MUST inject a neutral 'click away' step (e.g., trigger: '.o_form_sheet' or '.modal-body', run: 'click') before saving to ensure DOM blur events fire and prevent dirty form race conditions."),
-            (r"run:\s*['\"`]edit[^}]+}\s*,\s*\{\s*(?:content:\s*['\"`][^'\"`]+['\"`]\s*,\s*)?trigger:\s*['\"`]button\[name=", f"CRITICAL JS TOUR DOM BLUR: Tour '{filename}' attempts to click a backend action button immediately after an 'edit' step. You MUST inject a neutral 'click away' step (e.g., trigger: '.o_form_sheet' or '.modal-body', run: 'click') to force the DOM blur event before the RPC fires."),
-            (r"trigger:\s*['\"`]button\[name=[^\]]+\]['\"`][^}]+run:\s*['\"`]click['\"`]\s*\}[^\]]+trigger:\s*['\"`]\.o_notification['\"`]", f"CRITICAL JS TOUR RPC RESOLUTION: Tour '{filename}' clicks an action button and immediately waits for '.o_notification'. Backend methods returning 'True' (form reloads) DO NOT spawn notifications. Wait for a verifiable DOM state change (e.g., '.o_field_widget[name=\"...\"]:not(.o_field_empty)') instead."),
-            (r"\{(?![^{}]*expectUnloadPage:\s*true)(?=[^{}]*run:\s*['\"`]click['\"`])[^{}]*trigger:\s*['\"`][^'\"`]*type=[\"']submit[\"'][^'\"`]*['\"`][^{}]*\}", f"CRITICAL JS TOUR UNLOAD EXPECTATION: Tour '{filename}' clicks a 'type=\"submit\"' button but lacks 'expectUnloadPage: true'. Form submissions trigger hard browser reloads. You MUST declare this flag to prevent the tour runner from crashing on the beforeUnload event.")
+            (
+                r"trigger:\s*['\"`]button\[name=[^\]]+\]['\"`][^}]+run:\s*['\"`]click['\"`]\s*\}[\s\]\),;]*$",
+                f"CRITICAL JS TOUR DIRTY FORM: The tour '{filename}' appears to end immediately after clicking an action button. It MUST explicitly wait for an RPC resolution (e.g., a verifiable DOM field state change) in a subsequent step to prevent a dirty form crash.",
+            ),
+            (
+                r"window\.(confirm|alert)\s*\(",
+                f"CRITICAL JS TOUR DIALOG: Tour '{filename}' contains an execution of window.confirm or window.alert. This will freeze the headless browser. You MUST override it (e.g., window.confirm = () => true;) in a separate step targeting 'body' before clicking the trigger.",
+            ),
+            (
+                r"trigger:\s*['\"`]\.(modal-dialog|modal-content)['\"`][^}]+run:\s*['\"`][a-zA-Z]+['\"`]",
+                f"CRITICAL JS TOUR MODAL: Tour '{filename}' attempts to perform an action (run: '...') directly on '.modal-dialog' or '.modal-content'. These must be used strictly as empty DOM polling steps (run: function() {{}}) to wait for the modal to render. Use '.modal-body' for neutral clicks.",
+            ),
+            (
+                r"expectUnloadPage:\s*true[^}]+run:\s*(?:function|\(\)\s*=>)|run:\s*(?:function|\(\)\s*=>)[^}]+expectUnloadPage:\s*true",
+                f"CRITICAL JS TOUR UNLOAD: Tour '{filename}' uses 'expectUnloadPage: true' alongside a custom JS closure for 'run'. This breaks Odoo's native unload event binding. You MUST use the native Odoo helper \"run: 'click'\" when expecting a page unload.",
+            ),
+            (
+                r"run:\s*['\"`]edit[^}]*\}\s*\]\s*\.\s*concat\(\s*TourUtils\.safeSave",
+                f"CRITICAL JS TOUR DOM BLUR: Tour '{filename}' calls TourUtils.safeSave() immediately after an 'edit' step. You MUST inject a neutral 'click away' step (e.g., trigger: '.o_form_sheet' or '.modal-body', run: 'click') before saving to ensure DOM blur events fire and prevent dirty form race conditions.",
+            ),
+            (
+                r"run:\s*['\"`]edit[^}]+}\s*,\s*\{\s*(?:content:\s*['\"`][^'\"`]+['\"`]\s*,\s*)?trigger:\s*['\"`]button\[name=",
+                f"CRITICAL JS TOUR DOM BLUR: Tour '{filename}' attempts to click a backend action button immediately after an 'edit' step. You MUST inject a neutral 'click away' step (e.g., trigger: '.o_form_sheet' or '.modal-body', run: 'click') to force the DOM blur event before the RPC fires.",
+            ),
+            (
+                r"trigger:\s*['\"`]button\[name=[^\]]+\]['\"`][^}]+run:\s*['\"`]click['\"`]\s*\}[^\]]+trigger:\s*['\"`]\.o_notification['\"`]",
+                f"CRITICAL JS TOUR RPC RESOLUTION: Tour '{filename}' clicks an action button and immediately waits for '.o_notification'. Backend methods returning 'True' (form reloads) DO NOT spawn notifications. Wait for a verifiable DOM state change (e.g., '.o_field_widget[name=\"...\"]:not(.o_field_empty)') instead.",
+            ),
+            (
+                r"\{(?![^{}]*expectUnloadPage:\s*true)(?=[^{}]*run:\s*['\"`]click['\"`])[^{}]*trigger:\s*['\"`][^'\"`]*type=[\"']submit[\"'][^'\"`]*['\"`][^{}]*\}",
+                f"CRITICAL JS TOUR UNLOAD EXPECTATION: Tour '{filename}' clicks a 'type=\"submit\"' button but lacks 'expectUnloadPage: true'. Form submissions trigger hard browser reloads. You MUST declare this flag to prevent the tour runner from crashing on the beforeUnload event.",
+            ),
         ]
         for pattern, msg in js_tour_rules:
             for match in re.finditer(pattern, content, re.DOTALL):
-                lineno = content[:match.start()].count('\n') + 1
+                lineno = content[: match.start()].count("\n") + 1
                 errors_found.append(f"Line {lineno}: {msg}")
 
     if filename.startswith("test_") and filename.endswith(".py"):
@@ -2029,14 +2490,22 @@ def scan_file(filepath, is_odoo_module=False):
             if "/** @odoo-module **/" in stripped or "/** @odoo-module" in stripped:
                 has_pragma = True
                 break
-            if not stripped.startswith("//") and not stripped.startswith("/*") and not stripped.startswith("*"):
+            if (
+                not stripped.startswith("//")
+                and not stripped.startswith("/*")
+                and not stripped.startswith("*")
+            ):
                 code_started = True
                 break
         if code_started and not has_pragma:
-            errors_found.append("Line 1: CRITICAL ASSET BUNDLER: JavaScript file is missing the `/** @odoo-module **/` pragma at the absolute top of the file. Native imports will fail.")
+            errors_found.append(
+                "Line 1: CRITICAL ASSET BUNDLER: JavaScript file is missing the `/** @odoo-module **/` pragma at the absolute top of the file. Native imports will fail."
+            )
 
     if filename.endswith(".py"):
-        ast_errs, ast_warns = check_ast_vulnerabilities(filepath, content, lines, is_odoo_module)
+        ast_errs, ast_warns = check_ast_vulnerabilities(
+            filepath, content, lines, is_odoo_module
+        )
         for lineno, msg in ast_errs:
             code_snippet = lines[lineno - 1].strip() if lineno <= len(lines) else ""
             errors_found.append(
@@ -2097,7 +2566,7 @@ def scan_file(filepath, is_odoo_module=False):
                 "burn-ignore-sudo",
                 "burn-ignore-route",
                 "burn-ignore-env",
-                "burn-ignore-test-tags"
+                "burn-ignore-test-tags",
             ]
         ):
             errors_found.append(
@@ -2181,6 +2650,7 @@ def scan_file(filepath, is_odoo_module=False):
 # -------------------------------------------------------------------------
 # CI/CD BYPASS TEST VERIFICATION
 # -------------------------------------------------------------------------
+
 
 def _verify_test_ast(
     req, target_content, target_file, verification_errors, total_errors
@@ -2324,20 +2794,26 @@ def _verify_test_ast(
         return verification_errors + 1, total_errors + 1
     return verification_errors, total_errors
 
+
 def _is_odoo_module(filepath, target_dir):
     filepath_forward = filepath.replace("\\", "/")
-    if "/daemons/" in filepath_forward or "/daemon/" in filepath_forward or "/tools/" in filepath_forward:
+    if (
+        "/daemons/" in filepath_forward
+        or "/daemon/" in filepath_forward
+        or "/tools/" in filepath_forward
+    ):
         return False
 
     current = os.path.dirname(os.path.abspath(filepath))
     target_abs = os.path.abspath(target_dir)
     while current:
-        if os.path.exists(os.path.join(current, '__manifest__.py')):
+        if os.path.exists(os.path.join(current, "__manifest__.py")):
             return True
         if current == target_abs or current == os.path.dirname(current):
             break
         current = os.path.dirname(current)
     return False
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -2398,7 +2874,9 @@ def main():
                         manifest_content = f.read()
                     tree = ast.parse(manifest_content, filename=filepath)
                     for node in tree.body:
-                        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Dict):
+                        if isinstance(node, ast.Expr) and isinstance(
+                            node.value, ast.Dict
+                        ):
                             manifest_dict = ast.literal_eval(node.value)
                             FOUND_MANIFESTS[os.path.abspath(root)] = manifest_dict
                 except Exception:
@@ -2413,12 +2891,23 @@ def main():
                         with open(filepath, "r", encoding="utf-8") as f:
                             first_line = f.readline()
                             filepath_forward = filepath.replace("\\", "/")
-                            if first_line.startswith("#!") and not "daemons/" in filepath_forward and not "daemon/" in filepath_forward and not "tools/" in filepath_forward and not filepath.endswith("setup.py") and not filepath.endswith("__init__.py"):
-                                errors.append("Line 1 (Shebang): Shebangs are strictly prohibited in standard Odoo module files as they can interfere with packaging and execution expectations.")
+                            if (
+                                first_line.startswith("#!")
+                                and not "daemons/" in filepath_forward
+                                and not "daemon/" in filepath_forward
+                                and not "tools/" in filepath_forward
+                                and not filepath.endswith("setup.py")
+                                and not filepath.endswith("__init__.py")
+                            ):
+                                errors.append(
+                                    "Line 1 (Shebang): Shebangs are strictly prohibited in standard Odoo module files as they can interfere with packaging and execution expectations."
+                                )
                             if file == "__manifest__.py":
                                 f.seek(0)
                                 if first_line.startswith("#!"):
-                                    errors.append("Line 1 (__manifest__.py format): __manifest__.py must not contain a shebang. It should ideally start with the dictionary '{' or standard -*- coding -*- comment.")
+                                    errors.append(
+                                        "Line 1 (__manifest__.py format): __manifest__.py must not contain a shebang. It should ideally start with the dictionary '{' or standard -*- coding -*- comment."
+                                    )
                     except Exception:
                         pass
                 if errors or warnings:
@@ -2437,7 +2926,8 @@ def main():
         def get_mod_dir(p):
             d = os.path.dirname(os.path.abspath(p))
             while d and d != os.path.dirname(d):
-                if os.path.exists(os.path.join(d, "__manifest__.py")): return d
+                if os.path.exists(os.path.join(d, "__manifest__.py")):
+                    return d
                 d = os.path.dirname(d)
             return None
 
@@ -2485,7 +2975,10 @@ def main():
         for bundle_name, patterns in assets.items():
             for pattern in patterns:
                 abs_glob_pattern = os.path.join(parent_dir, pattern)
-                matched_files = [os.path.abspath(p) for p in glob.glob(abs_glob_pattern, recursive=True)]
+                matched_files = [
+                    os.path.abspath(p)
+                    for p in glob.glob(abs_glob_pattern, recursive=True)
+                ]
                 if abs_tour in matched_files:
                     matched = True
                     break
@@ -2493,7 +2986,9 @@ def main():
                 break
 
         if not matched:
-            print(f"  ❌ ERROR: Tour Asset Registration Trap. Tour file '{os.path.relpath(tour_path, target_dir)}' is not matched by any glob pattern in 'assets' of its __manifest__.py.")
+            print(
+                f"  ❌ ERROR: Tour Asset Registration Trap. Tour file '{os.path.relpath(tour_path, target_dir)}' is not matched by any glob pattern in 'assets' of its __manifest__.py."
+            )
             total_errors += 1
 
     # Audit Orphaned o_tour_ classes and Dangling Tour Targets (Bidirectional Audit)
@@ -2502,30 +2997,41 @@ def main():
     xml_content_all = ""
     js_content_all = ""
     for root, dirs, files in os.walk(target_dir):
-        if "node_modules" in root: continue
+        if "node_modules" in root:
+            continue
         for file in files:
             filepath = os.path.join(root, file)
-            if file.endswith('.xml'):
+            if file.endswith(".xml"):
                 try:
-                    content = open(filepath, 'r', encoding='utf-8').read()
-                    xml_tour_classes.update(re.findall(r'o_tour_[a-zA-Z0-9_-]+', content))
+                    content = open(filepath, "r", encoding="utf-8").read()
+                    xml_tour_classes.update(
+                        re.findall(r"o_tour_[a-zA-Z0-9_-]+", content)
+                    )
                     xml_content_all += content
-                except Exception: pass
-            elif file.endswith('.js'):
+                except Exception:
+                    pass
+            elif file.endswith(".js"):
                 try:
-                    content = open(filepath, 'r', encoding='utf-8').read()
-                    js_tour_targets.update(re.findall(r'o_tour_[a-zA-Z0-9_-]+', content))
+                    content = open(filepath, "r", encoding="utf-8").read()
+                    js_tour_targets.update(
+                        re.findall(r"o_tour_[a-zA-Z0-9_-]+", content)
+                    )
                     js_content_all += content
-                except Exception: pass
+                except Exception:
+                    pass
 
     for cls in xml_tour_classes:
         if cls not in js_content_all:
-            print(f"  ❌ ERROR: Orphaned Tour Class: '{cls}' found in XML but never targeted in any JS tour. Remove dead code.")
+            print(
+                f"  ❌ ERROR: Orphaned Tour Class: '{cls}' found in XML but never targeted in any JS tour. Remove dead code."
+            )
             total_errors += 1
 
     for target in js_tour_targets:
         if target not in xml_content_all:
-            print(f"  ❌ ERROR: Dangling Tour Target: '{target}' found in a JS tour but missing from all backend XML views. Tour will fatally timeout.")
+            print(
+                f"  ❌ ERROR: Dangling Tour Target: '{target}' found in a JS tour but missing from all backend XML views. Tour will fatally timeout."
+            )
             total_errors += 1
 
     if total_errors > 0 or total_warnings > 0:

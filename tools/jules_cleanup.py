@@ -14,10 +14,8 @@ if not API_KEY:
     sys.exit(1)
 
 # Pass authentication via the required x-goog-api-key header
-headers = {
-    "x-goog-api-key": API_KEY,
-    "Content-Type": "application/json"
-}
+headers = {"x-goog-api-key": API_KEY, "Content-Type": "application/json"}
+
 
 def clean_completed_sessions():
     print("Fetching sessions from Jules API...")
@@ -29,23 +27,23 @@ def clean_completed_sessions():
     except requests.exceptions.RequestException as e:
         print(f"Failed to fetch sessions: {e}", file=sys.stderr)
         sys.exit(1)
-        
+
     sessions = data.get("sessions", [])
     if not sessions:
         print("No active or historical sessions found.")
         return
 
     completed_count = 0
-    
+
     # 2. Iterate through sessions and isolate completed tasks
     for session in sessions:
         session_id = session.get("id")
         # Completed sessions are reported as "DONE" or "COMPLETED" in the REST API payload
         status = session.get("state").upper()
-        
+
         if status in ["DONE", "COMPLETED"]:
             print(f"Clearing Completed Session ID: {session_id}...")
-            
+
             # 3. Request task deletion from the session layout
             delete_url = f"{BASE_URL}/{session_id}"
             try:
@@ -54,12 +52,14 @@ def clean_completed_sessions():
                     print(f"Successfully removed session {session_id}.")
                     completed_count += 1
                 else:
-                    print(f"Failed to delete {session_id}: HTTP {del_response.status_code}")
+                    print(
+                        f"Failed to delete {session_id}: HTTP {del_response.status_code}"
+                    )
             except requests.exceptions.RequestException as e:
                 print(f"Error executing delete request for {session_id}: {e}")
 
     print(f"\nTask cleanup complete. Total tasks archived/cleared: {completed_count}")
 
+
 if __name__ == "__main__":
     clean_completed_sessions()
-

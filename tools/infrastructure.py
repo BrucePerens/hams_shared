@@ -21,6 +21,7 @@ from datetime import datetime
 
 _logger = logging.getLogger(__name__)
 
+
 def get_pg_bin(name):
     """Locates PostgreSQL binaries dynamically across installed versions."""
     paths = glob.glob(f"/usr/lib/postgresql/*/bin/{name}")
@@ -29,9 +30,11 @@ def get_pg_bin(name):
     res = shutil.which(name)
     if not res:
         for p in [f"/usr/bin/{name}", f"/usr/local/bin/{name}"]:
-            if os.path.exists(p): return p
+            if os.path.exists(p):
+                return p
         raise FileNotFoundError(f"Could not find PostgreSQL binary: {name}")
     return res
+
 
 def get_os_identifier():
     try:
@@ -43,6 +46,7 @@ def get_os_identifier():
         _logger.debug("Ignored OSError reading /etc/os-release: %s", e)
     return "ubuntu"
 
+
 def get_os_codename():
     try:
         with open("/etc/os-release") as f:
@@ -52,6 +56,7 @@ def get_os_codename():
     except OSError as e:
         _logger.debug("Ignored OSError reading /etc/os-release: %s", e)
     return "jammy"
+
 
 @contextlib.contextmanager
 def micro_privilege(username):
@@ -78,13 +83,16 @@ def micro_privilege(username):
         os.setresuid(orig_ruid, orig_euid, orig_suid)
         os.setresgid(orig_rgid, orig_egid, orig_sgid)
 
+
 def format_env(text, env_vars):
-    if not text: return ""
+    if not text:
+        return ""
     try:
         return text.format(**(env_vars or {}))
     except KeyError as e:
         _logger.debug("KeyError formatting %s: %s", text, e)
         return text
+
 
 def safe_remove(path):
     if os.path.exists(path):
@@ -92,6 +100,7 @@ def safe_remove(path):
             os.remove(path)
         except OSError as e:
             _logger.debug("OSError removing file: %s", e)
+
 
 def apply_permissions(path, owner_str, mode_int):
     uid, gid = -1, -1
@@ -114,13 +123,17 @@ def apply_permissions(path, owner_str, mode_int):
 
     _apply(path)
 
+
 def download_file(url, path, mode, env_vars):
-    ua = env_vars.get("SYSTEM_USER_AGENT", "Hams.com Bruce Perens K6BP <bruce@perens.com> +1 510-394-5627")
+    ua = env_vars.get(
+        "SYSTEM_USER_AGENT",
+        "Hams.com Bruce Perens K6BP <bruce@perens.com> +1 510-394-5627",
+    )
     req = urllib.request.Request(url, headers={"User-Agent": ua})
     try:
         with urllib.request.urlopen(req) as response:
             data = response.read()
-    except Exception as e: # audit-ignore-catch-all
+    except Exception as e:  # audit-ignore-catch-all
         _logger.warning("Network partition fallback safety hit fetching %s: %s", url, e)
         data = b""
 
@@ -129,64 +142,113 @@ def download_file(url, path, mode, env_vars):
     with open(fd, "wb") as f:
         f.write(data)
 
+
 def hook_generate_ssl(env_vars, dest_dir, path, run_cmd_func):
-    domain = env_vars.get('DOMAIN', 'localhost')
+    domain = env_vars.get("DOMAIN", "localhost")
     ssl_dir = path
-    fullchain = os.path.join(ssl_dir, 'fullchain.pem')
-    privkey = os.path.join(ssl_dir, 'privkey.pem')
-    lotw = os.path.join(ssl_dir, 'lotw_root.pem')
+    fullchain = os.path.join(ssl_dir, "fullchain.pem")
+    privkey = os.path.join(ssl_dir, "privkey.pem")
+    lotw = os.path.join(ssl_dir, "lotw_root.pem")
     if not os.path.exists(fullchain):
         try:
-            run_cmd_func(['openssl', 'req', '-x509', '-nodes', '-days', '3650', '-newkey', 'rsa:2048', '-keyout', privkey, '-out', fullchain, '-subj', f'/C=US/ST=CA/L=SF/O=Hams/CN={domain}'])
-        except Exception as e: # audit-ignore-catch-all
+            run_cmd_func(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-nodes",
+                    "-days",
+                    "3650",
+                    "-newkey",
+                    "rsa:2048",
+                    "-keyout",
+                    privkey,
+                    "-out",
+                    fullchain,
+                    "-subj",
+                    f"/C=US/ST=CA/L=SF/O=Hams/CN={domain}",
+                ]
+            )
+        except Exception as e:  # audit-ignore-catch-all
             _logger.warning("Failed to generate SSL certs: %s", e)
         if os.path.exists(fullchain):
             shutil.copy2(fullchain, lotw)
 
+
 def hook_clear_pycache(env_vars, dest_dir, path, run_cmd_func):
     pycache = path
-    daemons = os.path.join(dest_dir, 'opt/hams/daemons') if dest_dir else '/opt/hams/daemons'
+    daemons = (
+        os.path.join(dest_dir, "opt/hams/daemons") if dest_dir else "/opt/hams/daemons"
+    )
     if os.path.exists(pycache):
         for item in os.listdir(pycache):
             item_path = os.path.join(pycache, item)
-            shutil.rmtree(item_path, ignore_errors=True) if os.path.isdir(item_path) else safe_remove(item_path)
+            (
+                shutil.rmtree(item_path, ignore_errors=True)
+                if os.path.isdir(item_path)
+                else safe_remove(item_path)
+            )
     if os.path.isdir(daemons):
         compileall.compile_dir(daemons, quiet=1)
 
+
 def hook_install_odoo_key(env_vars, dest_dir, path, run_cmd_func):
-    out = os.path.join(dest_dir, 'usr/share/keyrings/odoo-archive-keyring.gpg') if dest_dir else '/usr/share/keyrings/odoo-archive-keyring.gpg'
+    out = (
+        os.path.join(dest_dir, "usr/share/keyrings/odoo-archive-keyring.gpg")
+        if dest_dir
+        else "/usr/share/keyrings/odoo-archive-keyring.gpg"
+    )
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    run_cmd_func(['gpg', '--dearmor', '-o', out, '--yes', path])
+    run_cmd_func(["gpg", "--dearmor", "-o", out, "--yes", path])
     safe_remove(path)
 
+
 def hook_install_pg_key(env_vars, dest_dir, path, run_cmd_func):
-    out = os.path.join(dest_dir, 'usr/share/keyrings/postgresql-keyring.gpg') if dest_dir else '/usr/share/keyrings/postgresql-keyring.gpg'
+    out = (
+        os.path.join(dest_dir, "usr/share/keyrings/postgresql-keyring.gpg")
+        if dest_dir
+        else "/usr/share/keyrings/postgresql-keyring.gpg"
+    )
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    run_cmd_func(['gpg', '--dearmor', '-o', out, '--yes', path])
+    run_cmd_func(["gpg", "--dearmor", "-o", out, "--yes", path])
     safe_remove(path)
+
 
 def hook_install_kopia_binary(env_vars, dest_dir, path, run_cmd_func):
     try:
-        target_dir = os.path.join(dest_dir, 'usr/bin') if dest_dir else '/usr/bin'
+        target_dir = os.path.join(dest_dir, "usr/bin") if dest_dir else "/usr/bin"
         os.makedirs(target_dir, exist_ok=True)
-        run_cmd_func(['tar', '-xzf', path, '-C', target_dir, '--strip-components=1', 'kopia-0.23.0-linux-x64/kopia'])
-        run_cmd_func(['chmod', '+x', os.path.join(target_dir, 'kopia')])
-    except Exception as e: # audit-ignore-catch-all
+        run_cmd_func(
+            [
+                "tar",
+                "-xzf",
+                path,
+                "-C",
+                target_dir,
+                "--strip-components=1",
+                "kopia-0.23.0-linux-x64/kopia",
+            ]
+        )
+        run_cmd_func(["chmod", "+x", os.path.join(target_dir, "kopia")])
+    except Exception as e:  # audit-ignore-catch-all
         _logger.warning("Kopia binary install failed: %s", e)
     safe_remove(path)
 
+
 def hook_install_cloudflared(env_vars, dest_dir, path, run_cmd_func):
-    token = env_vars.get('CLOUDFLARE_TUNNEL_TOKEN')
-    run_cmd_func(['dpkg', '-i', path])
+    token = env_vars.get("CLOUDFLARE_TUNNEL_TOKEN")
+    run_cmd_func(["dpkg", "-i", path])
     if token:
-        run_cmd_func(['cloudflared', 'service', 'install', token])
+        run_cmd_func(["cloudflared", "service", "install", token])
     safe_remove(path)
+
 
 def hook_daemons_perms(env_vars, dest_dir, path, run_cmd_func):
     target = path
     if os.path.exists(target):
-        run_cmd_func(['chown', '-R', 'hams_com:hams_com', target])
-        run_cmd_func(['chmod', '-R', 'a+rX', target])
+        run_cmd_func(["chown", "-R", "hams_com:hams_com", target])
+        run_cmd_func(["chmod", "-R", "a+rX", target])
+
 
 MANIFEST = {
     "system_accounts": [
@@ -998,53 +1060,209 @@ WantedBy=multi-user.target
     ],
     "apt_packages": [
         {"name": "odoo", "debian_name": "odoo", "environments": ["early_prod"]},
-        {"name": "postgresql", "debian_name": "postgresql", "environments": ["early_prod"]},
-        {"name": "postgresql-common", "debian_name": "postgresql-common", "environments": ["early_prod"]},
-        {"name": "postgresql-client", "debian_name": "postgresql-client", "environments": ["early_prod"]},
+        {
+            "name": "postgresql",
+            "debian_name": "postgresql",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "postgresql-common",
+            "debian_name": "postgresql-common",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "postgresql-client",
+            "debian_name": "postgresql-client",
+            "environments": ["early_prod"],
+        },
         {"name": "nginx", "debian_name": "nginx", "environments": ["early_prod"]},
-        {"name": "redis-server", "debian_name": "redis-server", "environments": ["early_prod"]},
-        {"name": "rabbitmq-server", "debian_name": "rabbitmq-server", "environments": ["early_prod"]},
-        {"name": "python3-redis", "debian_name": "python3-redis", "environments": ["early_prod"]},
-        {"name": "python3-pika", "debian_name": "python3-pika", "environments": ["early_prod"]},
+        {
+            "name": "redis-server",
+            "debian_name": "redis-server",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "rabbitmq-server",
+            "debian_name": "rabbitmq-server",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-redis",
+            "debian_name": "python3-redis",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-pika",
+            "debian_name": "python3-pika",
+            "environments": ["early_prod"],
+        },
         {"name": "sqlite3", "debian_name": "sqlite3", "environments": ["early_prod"]},
-        {"name": "pdns-server", "debian_name": "pdns-server", "environments": ["early_prod"]},
-        {"name": "pdns-backend-sqlite3", "debian_name": "pdns-backend-sqlite3", "environments": ["early_prod"]},
-        {"name": "pgbackrest", "debian_name": "pgbackrest", "environments": ["early_prod"]},
+        {
+            "name": "pdns-server",
+            "debian_name": "pdns-server",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "pdns-backend-sqlite3",
+            "debian_name": "pdns-backend-sqlite3",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "pgbackrest",
+            "debian_name": "pgbackrest",
+            "environments": ["early_prod"],
+        },
         {"name": "certbot", "debian_name": "certbot", "environments": ["early_prod"]},
-        {"name": "python3-certbot-nginx", "debian_name": "python3-certbot-nginx", "environments": ["early_prod"]},
-        {"name": "python3-passlib", "debian_name": "python3-passlib", "environments": ["early_prod"]},
-        {"name": "python3-cryptography", "debian_name": "python3-cryptography", "environments": ["early_prod"]},
-        {"name": "build-essential", "debian_name": "build-essential", "environments": ["early_prod"]},
-        {"name": "libpq-dev", "debian_name": "libpq-dev", "environments": ["early_prod"]},
-        {"name": "python3-dev", "debian_name": "python3-dev", "environments": ["early_prod"]},
-        {"name": "bind9-dnsutils", "debian_name": "bind9-dnsutils", "environments": ["early_prod"]},
-        {"name": "python3-stdeb", "debian_name": "python3-stdeb", "environments": ["early_prod"]},
+        {
+            "name": "python3-certbot-nginx",
+            "debian_name": "python3-certbot-nginx",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-passlib",
+            "debian_name": "python3-passlib",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-cryptography",
+            "debian_name": "python3-cryptography",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "build-essential",
+            "debian_name": "build-essential",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "libpq-dev",
+            "debian_name": "libpq-dev",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-dev",
+            "debian_name": "python3-dev",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "bind9-dnsutils",
+            "debian_name": "bind9-dnsutils",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-stdeb",
+            "debian_name": "python3-stdeb",
+            "environments": ["early_prod"],
+        },
         {"name": "fakeroot", "debian_name": "fakeroot", "environments": ["early_prod"]},
-        {"name": "python3-all", "debian_name": "python3-all", "environments": ["early_prod"]},
-        {"name": "python3-pypdf2", "debian_name": "python3-pypdf", "environments": ["early_prod"]},
-        {"name": "python3-setuptools", "debian_name": "python3-setuptools", "environments": ["early_prod"]},
-        {"name": "dh-python", "debian_name": "dh-python", "environments": ["early_prod"]},
+        {
+            "name": "python3-all",
+            "debian_name": "python3-all",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-pypdf2",
+            "debian_name": "python3-pypdf",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-setuptools",
+            "debian_name": "python3-setuptools",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "dh-python",
+            "debian_name": "dh-python",
+            "environments": ["early_prod"],
+        },
         {"name": "jing", "debian_name": "jing", "environments": ["early_prod"]},
         {"name": "dbus-x11", "debian_name": "dbus-x11", "environments": ["early_prod"]},
-        {"name": "python3-asyncpg", "debian_name": "python3-asyncpg", "environments": ["early_prod"]},
+        {
+            "name": "python3-asyncpg",
+            "debian_name": "python3-asyncpg",
+            "environments": ["early_prod"],
+        },
         {"name": "black", "debian_name": "black", "environments": ["early_prod"]},
-        {"name": "python3-psutil", "debian_name": "python3-psutil", "environments": ["early_prod"]},
-        {"name": "python3-ephem", "debian_name": "python3-ephem", "environments": ["early_prod"]},
-        {"name": "python3-ldap3", "debian_name": "python3-ldap3", "environments": ["early_prod"]},
-        {"name": "python3-lxml", "debian_name": "python3-lxml", "environments": ["early_prod"]},
-        {"name": "python3-ntplib", "debian_name": "python3-ntplib", "environments": ["early_prod"]},
-        {"name": "python3-pyinotify", "debian_name": "python3-pyinotify", "environments": ["early_prod"]},
-        {"name": "python3-pymysql", "debian_name": "python3-pymysql", "environments": ["early_prod"]},
-        {"name": "python3-docx", "debian_name": "python3-docx", "environments": ["early_prod"]},
-        {"name": "python3-yaml", "debian_name": "python3-yaml", "environments": ["early_prod"]},
-        {"name": "python3-requests", "debian_name": "python3-requests", "environments": ["early_prod"]},
-        {"name": "python3-websocket", "debian_name": "python3-websocket", "environments": ["early_prod"]},
-        {"name": "python3-websockets", "debian_name": "python3-websockets", "environments": ["early_prod"]},
+        {
+            "name": "python3-psutil",
+            "debian_name": "python3-psutil",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-ephem",
+            "debian_name": "python3-ephem",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-ldap3",
+            "debian_name": "python3-ldap3",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-lxml",
+            "debian_name": "python3-lxml",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-ntplib",
+            "debian_name": "python3-ntplib",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-pyinotify",
+            "debian_name": "python3-pyinotify",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-pymysql",
+            "debian_name": "python3-pymysql",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-docx",
+            "debian_name": "python3-docx",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-yaml",
+            "debian_name": "python3-yaml",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-requests",
+            "debian_name": "python3-requests",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-websocket",
+            "debian_name": "python3-websocket",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-websockets",
+            "debian_name": "python3-websockets",
+            "environments": ["early_prod"],
+        },
         {"name": "flake8", "debian_name": "flake8", "environments": ["early_prod"]},
-        {"name": "python3-pip", "debian_name": "python3-pip", "environments": ["early_prod"]},
-        {"name": "python3-pandas", "debian_name": "python3-pandas", "environments": ["early_prod"]},
-        {"name": "python3-numpy", "debian_name": "python3-numpy", "environments": ["early_prod"]},
-        {"name": "python3-markdown", "debian_name": "python3-markdown", "environments": ["early_prod"]},
+        {
+            "name": "python3-pip",
+            "debian_name": "python3-pip",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-pandas",
+            "debian_name": "python3-pandas",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-numpy",
+            "debian_name": "python3-numpy",
+            "environments": ["early_prod"],
+        },
+        {
+            "name": "python3-markdown",
+            "debian_name": "python3-markdown",
+            "environments": ["early_prod"],
+        },
     ],
     "env_defaults": {
         "DB_PORT": "5432",
@@ -1069,7 +1287,7 @@ WantedBy=multi-user.target
             ],
             "Environment": [
                 "PYTHONPYCACHEPREFIX=/opt/hams/pycache",
-                "ODOO_RC=/etc/odoo/odoo.conf"
+                "ODOO_RC=/etc/odoo/odoo.conf",
             ],
             "ProtectSystem": "strict",
             "BindPaths": "/opt/hams/etc/keys:/var/lib/odoo/daemon_keys",
@@ -1082,6 +1300,7 @@ WantedBy=multi-user.target
     },
 }
 
+
 def scaffold_test_environment(args_db, provision_dirs=True):
     for k, v in MANIFEST["env_defaults"].items():
         os.environ.setdefault(k, v)
@@ -1092,7 +1311,9 @@ def scaffold_test_environment(args_db, provision_dirs=True):
     os.environ.setdefault("DB_PASS", "odoo")
     os.environ.setdefault("DB_HOST", "postgres")
     os.environ.setdefault("ODOO_URL", "http://odoo:8069")
-    os.environ.setdefault("PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones")
+    os.environ.setdefault(
+        "PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones"
+    )
     os.environ.setdefault("PDNS_API_KEY", "secret")
 
     if provision_dirs:
@@ -1103,8 +1324,14 @@ def scaffold_test_environment(args_db, provision_dirs=True):
             print("[*] Note: 'sudo' fallback removed per strict DevSecOps mandates.")
             raise
 
+
 def get_mount_paths(environment, mount_type):
-    return [d["path"] for d in MANIFEST["directories"] if environment in d["environments"] and d.get("runtime_mount") == mount_type]
+    return [
+        d["path"]
+        for d in MANIFEST["directories"]
+        if environment in d["environments"] and d.get("runtime_mount") == mount_type
+    ]
+
 
 def provision_system_accounts(run_cmd_func, environment="prod", dest_dir=""):
     for acc in MANIFEST.get("system_accounts", []):
@@ -1125,7 +1352,9 @@ def provision_system_accounts(run_cmd_func, environment="prod", dest_dir=""):
         try:
             pwd.getpwnam(user)
         except KeyError:
-            run_cmd_func(["useradd", "--system", "-g", group, "-d", home, "-s", shell, user])
+            run_cmd_func(
+                ["useradd", "--system", "-g", group, "-d", home, "-s", shell, user]
+            )
 
         for extra_user in add_to_users:
             try:
@@ -1134,6 +1363,7 @@ def provision_system_accounts(run_cmd_func, environment="prod", dest_dir=""):
             except KeyError:
                 _logger.debug("User %s not found, skipping group addition.", extra_user)
 
+
 def execute_hooks(environment, run_cmd_func, env_vars=None, dest_dir=""):
     if dest_dir and dest_dir.endswith("/"):
         dest_dir = dest_dir[:-1]
@@ -1141,16 +1371,24 @@ def execute_hooks(environment, run_cmd_func, env_vars=None, dest_dir=""):
     for d in MANIFEST["directories"]:
         if environment in d["environments"] and "post_provision_hooks" in d:
             for hook in d["post_provision_hooks"]:
-                physical_path = os.path.join(dest_dir, d["path"].lstrip("/")) if dest_dir else d["path"]
+                physical_path = (
+                    os.path.join(dest_dir, d["path"].lstrip("/"))
+                    if dest_dir
+                    else d["path"]
+                )
                 hook(env_vars or {}, dest_dir, physical_path, run_cmd_func)
+
 
 def apply_production_directories(run_cmd_func=None, environment="prod", dest_dir=""):
     for d in MANIFEST["directories"]:
         if environment in d["environments"]:
-            path = os.path.join(dest_dir, d["path"].lstrip("/")) if dest_dir else d["path"]
+            path = (
+                os.path.join(dest_dir, d["path"].lstrip("/")) if dest_dir else d["path"]
+            )
             mode = int(d["provision_mode"], 8)
             os.makedirs(path, mode=mode, exist_ok=True)
             apply_permissions(path, d.get("owner"), mode)
+
 
 def write_env_files(base_etc_dir, env_vars, run_cmd_func, dest_dir=""):
     if dest_dir:
@@ -1168,6 +1406,7 @@ def write_env_files(base_etc_dir, env_vars, run_cmd_func, dest_dir=""):
 
         apply_permissions(filepath, "root:root", 0o400)
 
+
 def provision_custom_addons(run_cmd_func, env_vars, environment="prod", dest_dir=""):
     if environment not in ["prod", "test"]:
         return
@@ -1175,18 +1414,23 @@ def provision_custom_addons(run_cmd_func, env_vars, environment="prod", dest_dir
     if not env_vars.get("REPO_ROOT"):
         return
 
-    custom_addons_dir = os.path.join(dest_dir, "opt/hams/odoo") if dest_dir else "/opt/hams/odoo"
+    custom_addons_dir = (
+        os.path.join(dest_dir, "opt/hams/odoo") if dest_dir else "/opt/hams/odoo"
+    )
 
     if os.path.isdir(env_vars["REPO_ROOT"]):
         for item in os.listdir(env_vars["REPO_ROOT"]):
             item_path = os.path.join(env_vars["REPO_ROOT"], item)
-            if os.path.isdir(item_path) and os.path.exists(os.path.join(item_path, "__manifest__.py")):
+            if os.path.isdir(item_path) and os.path.exists(
+                os.path.join(item_path, "__manifest__.py")
+            ):
                 target = os.path.join(custom_addons_dir, item)
                 shutil.rmtree(target, ignore_errors=True)
                 os.makedirs(target, exist_ok=True)
                 shutil.copytree(item_path, target, dirs_exist_ok=True)
 
     apply_permissions(custom_addons_dir, "odoo:odoo", None)
+
 
 def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=""):
     for file_spec in MANIFEST.get("static_files", []):
@@ -1216,12 +1460,19 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
                     shutil.copy2(src, path)
         elif url:
             if "{DEB_TARGET_ARCH_CPU}" in url and "DEB_TARGET_ARCH_CPU" not in env_vars:
-                res = subprocess.run(["dpkg-architecture", "-q", "DEB_TARGET_ARCH_CPU"], capture_output=True, text=True)
+                res = subprocess.run(
+                    ["dpkg-architecture", "-q", "DEB_TARGET_ARCH_CPU"],
+                    capture_output=True,
+                    text=True,
+                )
                 if res.returncode == 0:
                     env_vars["DEB_TARGET_ARCH_CPU"] = res.stdout.strip()
             download_file(format_env(url, env_vars), path, mode, env_vars)
         else:
-            if "{DEB_CODENAME}" in file_spec.get("content", "") and "DEB_CODENAME" not in env_vars:
+            if (
+                "{DEB_CODENAME}" in file_spec.get("content", "")
+                and "DEB_CODENAME" not in env_vars
+            ):
                 env_vars["DEB_CODENAME"] = get_os_codename()
             content = format_env(file_spec.get("content", ""), env_vars)
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
@@ -1235,6 +1486,7 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
             for hook in file_spec["post_provision_hooks"]:
                 hook(env_vars or {}, dest_dir, path, run_cmd_func)
 
+
 def provision_systemd_override(run_cmd_func, env_vars, environment="prod", dest_dir=""):
     if environment not in ["prod", "test"]:
         return
@@ -1242,7 +1494,11 @@ def provision_systemd_override(run_cmd_func, env_vars, environment="prod", dest_
     if not override_data:
         return
 
-    override_dir = os.path.join(dest_dir, "etc/systemd/system/odoo.service.d".lstrip("/")) if dest_dir else "/etc/systemd/system/odoo.service.d"
+    override_dir = (
+        os.path.join(dest_dir, "etc/systemd/system/odoo.service.d".lstrip("/"))
+        if dest_dir
+        else "/etc/systemd/system/odoo.service.d"
+    )
     os.makedirs(override_dir, exist_ok=True)
     override_file = os.path.join(override_dir, "override.conf")
 
@@ -1268,8 +1524,9 @@ def provision_systemd_override(run_cmd_func, env_vars, environment="prod", dest_
     if not dest_dir and run_cmd_func and not is_isolated_ns:
         try:
             run_cmd_func(["systemctl", "daemon-reload"])
-        except Exception as e: # audit-ignore-catch-all
+        except Exception as e:  # audit-ignore-catch-all
             _logger.warning("Failed to reload systemd daemons: %s", e)
+
 
 def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
     _logger.info("[*] Running post-provisioning smoketest on all services...")
@@ -1280,7 +1537,11 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
         _logger.debug("Ignored OSError during daemon-reload: %s", e)
 
     potential_services = [
-        "postgresql", "redis-server", "rabbitmq-server", "pdns", "odoo"
+        "postgresql",
+        "redis-server",
+        "rabbitmq-server",
+        "pdns",
+        "odoo",
     ]
 
     skip_in_test = {
@@ -1289,7 +1550,7 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
         "qrz.scraper.service",
         "lotw.eqsl.sync.service",
         "dx.firehose.service",
-        "system-startup.service"
+        "system-startup.service",
     }
 
     for sf in MANIFEST.get("static_files", []):
@@ -1307,29 +1568,48 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
 
     services_to_test = []
     for svc in potential_services:
-        res = subprocess.run(["systemctl", "status", svc], capture_output=True, text=True)
-        if "could not be found" not in res.stderr and "could not be found" not in res.stdout:
+        res = subprocess.run(
+            ["systemctl", "status", svc], capture_output=True, text=True
+        )
+        if (
+            "could not be found" not in res.stderr
+            and "could not be found" not in res.stdout
+        ):
             services_to_test.append(svc)
 
     started_services = []
     already_active_services = []
 
     for svc in services_to_test:
-        res_active = subprocess.run(["systemctl", "is-active", svc], capture_output=True, text=True)
+        res_active = subprocess.run(
+            ["systemctl", "is-active", svc], capture_output=True, text=True
+        )
         if res_active.stdout.strip() == "active":
             _logger.info("    %s is already active, skipping start.", svc)
             already_active_services.append(svc)
             continue
 
         _logger.info("    Starting %s...", svc)
-        res = subprocess.run(["systemctl", "start", svc], capture_output=True, text=True)
+        res = subprocess.run(
+            ["systemctl", "start", svc], capture_output=True, text=True
+        )
         started_services.append(svc)
         if res.returncode != 0:
-            _logger.error("    [!] systemctl start %s returned non-zero exit code: %s", svc, res.returncode)
+            _logger.error(
+                "    [!] systemctl start %s returned non-zero exit code: %s",
+                svc,
+                res.returncode,
+            )
             _logger.error("stdout: %s", res.stdout)
             _logger.error("stderr: %s", res.stderr)
-            logs = subprocess.run(["journalctl", "-u", svc, "-n", "100", "--no-pager"], capture_output=True, text=True)
-            _logger.error("--- LOGS FOR %s ---\n%s\n-------------------", svc, logs.stdout)
+            logs = subprocess.run(
+                ["journalctl", "-u", svc, "-n", "100", "--no-pager"],
+                capture_output=True,
+                text=True,
+            )
+            _logger.error(
+                "--- LOGS FOR %s ---\n%s\n-------------------", svc, logs.stdout
+            )
             sys.exit(1)
 
     _logger.info("[*] Waiting for services to stabilize (5 seconds)...")
@@ -1337,16 +1617,26 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
 
     failed = False
     for svc in started_services + already_active_services:
-        res = subprocess.run(["systemctl", "is-failed", svc], capture_output=True, text=True)
+        res = subprocess.run(
+            ["systemctl", "is-failed", svc], capture_output=True, text=True
+        )
         state = res.stdout.strip()
         if state == "failed":
             _logger.error("[!] Service %s failed to start or crashed.", svc)
-            logs = subprocess.run(["journalctl", "-u", svc, "-n", "100", "--no-pager"], capture_output=True, text=True)
-            _logger.error("--- LOGS FOR %s ---\n%s\n-------------------", svc, logs.stdout)
+            logs = subprocess.run(
+                ["journalctl", "-u", svc, "-n", "100", "--no-pager"],
+                capture_output=True,
+                text=True,
+            )
+            _logger.error(
+                "--- LOGS FOR %s ---\n%s\n-------------------", svc, logs.stdout
+            )
             failed = True
 
     if failed:
-        _logger.error("[!] One or more services failed the smoketest. Aborting snapshot.")
+        _logger.error(
+            "[!] One or more services failed the smoketest. Aborting snapshot."
+        )
         sys.exit(1)
 
     _logger.info("[*] All services started successfully. Shutting them down...")
@@ -1356,11 +1646,16 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
 
     _logger.info("[*] Smoketest complete: %s", datetime.now())
 
-def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_apt=False):
+
+def provision_environment(
+    run_cmd_func, env_vars, orig_user, os_id=None, skip_apt=False
+):
     _logger.info("[*] Provision version 1")
     os_id = os_id or get_os_identifier()
     repo_root = env_vars.get("REPO_ROOT", "/app")
-    has_hams_com = os.path.exists(os.path.join(repo_root, "ham_base", "__manifest__.py"))
+    has_hams_com = os.path.exists(
+        os.path.join(repo_root, "ham_base", "__manifest__.py")
+    )
 
     # Inject safe testing defaults for provisioning context so .env files populate
     for k, v in MANIFEST.get("env_defaults", {}).items():
@@ -1372,14 +1667,18 @@ def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_ap
     env_vars.setdefault("DB_USER", "odoo")
     env_vars.setdefault("DB_PASS", "odoo")
     env_vars.setdefault("DB_HOST", "postgres")
-    env_vars.setdefault("PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones")
+    env_vars.setdefault(
+        "PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones"
+    )
     env_vars.setdefault("PDNS_API_KEY", "secret")
     env_vars.setdefault("DOMAIN", "localhost")
     env_vars.setdefault("ODOO_ADMIN_PASSWORD", "admin")
     env_vars.setdefault("ODOO_SERVICE_PASSWORD", "service")
     env_vars.setdefault("SMTP_HOST", "localhost")
     env_vars.setdefault("SMTP_PORT", "1025")
-    env_vars.setdefault("HAMS_CRYPTO_KEY", "0000000000000000000000000000000000000000000=")
+    env_vars.setdefault(
+        "HAMS_CRYPTO_KEY", "0000000000000000000000000000000000000000000="
+    )
 
     hams_com_dir = None
     hams_community_dir = None
@@ -1394,31 +1693,57 @@ def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_ap
     if os.path.exists(os.path.join(repo_root, "zero_sudo")):
         hams_community_dir = repo_root
     elif os.path.exists(os.path.join(repo_root, "..", "hams_community", "zero_sudo")):
-        hams_community_dir = os.path.abspath(os.path.join(repo_root, "..", "hams_community"))
+        hams_community_dir = os.path.abspath(
+            os.path.join(repo_root, "..", "hams_community")
+        )
     elif os.path.exists("/hams_community/zero_sudo"):
         hams_community_dir = "/hams_community"
 
     if not hams_com_dir:
         hams_com_dir = "/hams_com"
-        _logger.warning("[!] Primary repository hams_com not found. Cloning disabled due to headless auth constraints.")
+        _logger.warning(
+            "[!] Primary repository hams_com not found. Cloning disabled due to headless auth constraints."
+        )
 
     if not hams_community_dir:
         hams_community_dir = "/hams_community"
-        _logger.info("[*] Sibling repository not found. Cloning hams_community to %s...", hams_community_dir)
+        _logger.info(
+            "[*] Sibling repository not found. Cloning hams_community to %s...",
+            hams_community_dir,
+        )
         try:
             clone_env = dict(env_vars)
             clone_env["GIT_TERMINAL_PROMPT"] = "0"
-            run_cmd_func(["git", "clone", "https://github.com/BrucePerens/hams_community", hams_community_dir], env=clone_env)
+            run_cmd_func(
+                [
+                    "git",
+                    "clone",
+                    "https://github.com/BrucePerens/hams_community",
+                    hams_community_dir,
+                ],
+                env=clone_env,
+            )
             if orig_user:
                 try:
                     u_info = pwd.getpwnam(orig_user)
-                    run_cmd_func(["chown", "-R", f"{u_info.pw_uid}:{u_info.pw_gid}", hams_community_dir])
+                    run_cmd_func(
+                        [
+                            "chown",
+                            "-R",
+                            f"{u_info.pw_uid}:{u_info.pw_gid}",
+                            hams_community_dir,
+                        ]
+                    )
                 except KeyError as e:
                     _logger.debug("Original user %s not found: %s", orig_user, e)
         except subprocess.CalledProcessError as e:
             _logger.warning("[*] Failed to clone hams_community: %s", e)
-            _logger.error("[!] DIAGNOSTIC FOR AI: The sibling repository could not be cloned due to GitHub authentication restrictions in this headless VM.")
-            _logger.error("    If required modules are not present, tests will crash. Document this in JULES_ISSUES.md.")
+            _logger.error(
+                "[!] DIAGNOSTIC FOR AI: The sibling repository could not be cloned due to GitHub authentication restrictions in this headless VM."
+            )
+            _logger.error(
+                "    If required modules are not present, tests will crash. Document this in JULES_ISSUES.md."
+            )
 
     env_vars["HAMS_COM_DIR"] = hams_com_dir
     env_vars["HAMS_COMMUNITY_DIR"] = hams_community_dir
@@ -1427,7 +1752,9 @@ def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_ap
         with open("/etc/hosts", "r") as f:
             hosts_content = f.read()
         if "redis" not in hosts_content:
-            _logger.info("[*] Ensuring docker-compose hostnames resolve locally in /etc/hosts...")
+            _logger.info(
+                "[*] Ensuring docker-compose hostnames resolve locally in /etc/hosts..."
+            )
             with open("/etc/hosts", "a") as f:
                 f.write("\n127.0.0.1 redis rabbitmq postgres pdns memcached\n")
     except OSError as e:
@@ -1441,22 +1768,42 @@ def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_ap
 
         if not skip_apt:
             _logger.info("[*] Provisioning APT Sources and Packages...")
-            apt_opts = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", "-o", "Dpkg::Lock::Timeout=120", "-o", "Acquire::Check-Valid-Until=false"]
+            apt_opts = [
+                "-o",
+                "Dpkg::Options::=--force-confdef",
+                "-o",
+                "Dpkg::Options::=--force-confold",
+                "-o",
+                "Dpkg::Lock::Timeout=120",
+                "-o",
+                "Acquire::Check-Valid-Until=false",
+            ]
 
             run_cmd_func(["apt-get", "update"] + apt_opts)
             run_cmd_func(["apt-get", "install", "-y"] + apt_opts + ["gnupg"])
-            run_cmd_func(["apt-get", "update"] + apt_opts + ["--allow-insecure-repositories"])
+            run_cmd_func(
+                ["apt-get", "update"] + apt_opts + ["--allow-insecure-repositories"]
+            )
 
             all_packages = []
 
             for pkg_spec in MANIFEST.get("apt_packages", []):
                 if "early_prod" in pkg_spec["environments"]:
-                    pkg_name = pkg_spec.get("debian_name", pkg_spec["name"]) if os_id == "debian" else pkg_spec["name"]
+                    pkg_name = (
+                        pkg_spec.get("debian_name", pkg_spec["name"])
+                        if os_id == "debian"
+                        else pkg_spec["name"]
+                    )
                     all_packages.append(pkg_name)
 
             pg_res = subprocess.run(
-                ["bash", "-c", "apt-cache depends postgresql | grep -Eo 'postgresql-[0-9]+' | head -n1 | grep -Eo '[0-9]+'"],
-                capture_output=True, text=True
+                [
+                    "bash",
+                    "-c",
+                    "apt-cache depends postgresql | grep -Eo 'postgresql-[0-9]+' | head -n1 | grep -Eo '[0-9]+'",
+                ],
+                capture_output=True,
+                text=True,
             )
             if pg_res.returncode == 0 and pg_res.stdout.strip():
                 pg_major = pg_res.stdout.strip()
@@ -1466,9 +1813,30 @@ def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_ap
             run_cmd_func(["apt-get", "install", "-y"] + apt_opts + all_packages)
 
             _logger.info("[*] Installing pip packages...")
-            run_cmd_func(["pip3", "install", "pgeocode", "telnetlib3", "mcp", "--ignore-installed", "typing_extensions", "--break-system-packages"])
+            run_cmd_func(
+                [
+                    "pip3",
+                    "install",
+                    "pgeocode",
+                    "telnetlib3",
+                    "mcp",
+                    "--ignore-installed",
+                    "typing_extensions",
+                    "--break-system-packages",
+                ]
+            )
             # Remove pip's cryptography to prevent it from shadowing Debian's python3-cryptography, which breaks python3-openssl
-            run_cmd_func(["pip3", "uninstall", "-y", "cryptography", "cffi", "pycparser", "--break-system-packages"])
+            run_cmd_func(
+                [
+                    "pip3",
+                    "uninstall",
+                    "-y",
+                    "cryptography",
+                    "cffi",
+                    "pycparser",
+                    "--break-system-packages",
+                ]
+            )
         else:
             _logger.info("[*] Bypassing APT phase (skip_apt=True)...")
 
@@ -1479,11 +1847,13 @@ def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_ap
 
         try:
             run_cmd_func(["usermod", "-a", "-G", "hams_com", "odoo"])
-        except Exception as e: # audit-ignore-catch-all
+        except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to add odoo to hams_com group: %s", e)
 
         is_isolated_ns = os.environ.get("HAMS_ISOLATED_NS") == "1"
-        is_jules = bool(os.environ.get("IN_JULES_VM")) or bool(os.environ.get("JULES_SESSION_ID"))
+        is_jules = bool(os.environ.get("IN_JULES_VM")) or bool(
+            os.environ.get("JULES_SESSION_ID")
+        )
         is_test_env = is_isolated_ns or is_jules
 
         _logger.info("[*] Preparing testing directories with production paths...")
@@ -1497,23 +1867,49 @@ def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_ap
                 f.write("NODE_IP_ADDRESS=127.0.0.1\n")
             if not is_isolated_ns:
                 run_cmd_func(["systemctl", "restart", "rabbitmq-server"])
-        except Exception as e: # audit-ignore-catch-all
+        except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to configure RabbitMQ bindings: %s", e)
 
         try:
             _logger.info("[*] Locking down PostgreSQL to local loopback...")
-            run_cmd_func(["bash", "-c", "sed -i 's/peer/trust/g; s/md5/trust/g; s/scram-sha-256/trust/g' /etc/postgresql/*/main/pg_hba.conf"])
-            run_cmd_func(["bash", "-c", "echo \"listen_addresses = '127.0.0.1, ::1'\" >> /etc/postgresql/*/main/postgresql.conf"])
-            run_cmd_func(["bash", "-c", "echo \"shared_preload_libraries = 'pg_stat_statements'\" >> /etc/postgresql/*/main/postgresql.conf"])
+            run_cmd_func(
+                [
+                    "bash",
+                    "-c",
+                    "sed -i 's/peer/trust/g; s/md5/trust/g; s/scram-sha-256/trust/g' /etc/postgresql/*/main/pg_hba.conf",
+                ]
+            )
+            run_cmd_func(
+                [
+                    "bash",
+                    "-c",
+                    "echo \"listen_addresses = '127.0.0.1, ::1'\" >> /etc/postgresql/*/main/postgresql.conf",
+                ]
+            )
+            run_cmd_func(
+                [
+                    "bash",
+                    "-c",
+                    "echo \"shared_preload_libraries = 'pg_stat_statements'\" >> /etc/postgresql/*/main/postgresql.conf",
+                ]
+            )
 
             if not is_isolated_ns:
                 run_cmd_func(["systemctl", "restart", "postgresql"])
 
-                _logger.info("[*] Bootstrapping initial Odoo PostgreSQL role and test database...")
+                _logger.info(
+                    "[*] Bootstrapping initial Odoo PostgreSQL role and test database..."
+                )
                 sql_create_roles = "DO $$BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'odoo') THEN CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD 'odoo'; END IF; END$$;"
                 run_cmd_func(["sudo", "-u", "postgres", "psql", "-c", sql_create_roles])
-                run_cmd_func(["bash", "-c", "sudo -u postgres dropdb --if-exists hams_test && sudo -u postgres createdb hams_test"])
-        except Exception as e: # audit-ignore-catch-all
+                run_cmd_func(
+                    [
+                        "bash",
+                        "-c",
+                        "sudo -u postgres dropdb --if-exists hams_test && sudo -u postgres createdb hams_test",
+                    ]
+                )
+        except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to configure PostgreSQL settings: %s", e)
 
         _logger.info("[*] Writing environment configuration files...")
@@ -1547,7 +1943,9 @@ def provision_environment(run_cmd_func, env_vars, orig_user, os_id=None, skip_ap
         if not is_isolated_ns:
             run_post_provision_smoketest(has_hams_com, is_test_env=is_test_env)
         else:
-            _logger.info("[*] Skipping systemd smoketest inside isolated unshare namespace.")
+            _logger.info(
+                "[*] Skipping systemd smoketest inside isolated unshare namespace."
+            )
 
     except subprocess.CalledProcessError as e:
         _logger.error("Failed to provision system packages: %s", e)

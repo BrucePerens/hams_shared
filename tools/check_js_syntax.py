@@ -6,6 +6,7 @@ import multiprocessing
 import re
 import logging
 
+
 def load_ignore_file(filepath):
     patterns = []
     if filepath and os.path.exists(filepath):
@@ -16,17 +17,19 @@ def load_ignore_file(filepath):
                     patterns.append(re.compile(line))
     return patterns
 
+
 def is_ignored(path, patterns):
     for pat in patterns:
         if re.search(pat, path):
             return True
     return False
 
+
 def check_file(file_path):
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
-    except Exception as e: # audit-ignore-catch-all
+    except Exception as e:  # audit-ignore-catch-all
         logging.warning("Failed to read %s: %s", file_path, e)
         return None
 
@@ -44,17 +47,18 @@ def check_file(file_path):
     # Using --input-type=module forces Node to natively parse ES6 Imports/Exports
     # without needing experimental VM modules or package.json overrides.
     res = subprocess.run(
-        ['node', '--input-type=module', '--check'],
+        ["node", "--input-type=module", "--check"],
         input=code,
         capture_output=True,
-        text=True
+        text=True,
     )
 
     if res.returncode != 0:
         # Node reports stdin errors as '[stdin]:line'. Inject the real filename.
-        err_msg = res.stderr.replace('[stdin]', os.path.basename(file_path))
+        err_msg = res.stderr.replace("[stdin]", os.path.basename(file_path))
         return file_path, err_msg
     return None
+
 
 def main():
     parser = argparse.ArgumentParser(description="Check JS syntax")
@@ -70,9 +74,14 @@ def main():
             continue
         for root, dirs, files in os.walk(d):
             # Prune hidden folders and standard library directories to save time
-            dirs[:] = [dir_name for dir_name in dirs if not dir_name.startswith('.') and dir_name not in ('node_modules', '__pycache__', 'lib', 'static/lib')]
+            dirs[:] = [
+                dir_name
+                for dir_name in dirs
+                if not dir_name.startswith(".")
+                and dir_name not in ("node_modules", "__pycache__", "lib", "static/lib")
+            ]
             for f in files:
-                if f.endswith('.js') and '.min.' not in f:
+                if f.endswith(".js") and ".min." not in f:
                     full_path = os.path.join(root, f)
                     rel_path = os.path.relpath(full_path, os.path.dirname(d))
                     if not is_ignored(rel_path, ignore_patterns):
@@ -100,6 +109,7 @@ def main():
 
     print(f"[+] JS Syntax Linter: All {len(js_files)} files passed.")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

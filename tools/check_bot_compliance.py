@@ -4,14 +4,18 @@ import urllib.request
 import json
 import sys
 
+
 def get_public_ip():
     try:
-        req = urllib.request.Request('https://api.ipify.org?format=json', headers={'User-Agent': 'Mozilla/5.0'})
+        req = urllib.request.Request(
+            "https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"}
+        )
         response = urllib.request.urlopen(req, timeout=5).read()
-        return json.loads(response)['ip']
+        return json.loads(response)["ip"]
     except Exception as e:
         print(f"Error fetching public IP: {e}")
         return None
+
 
 def check_fcrdns(ip):
     try:
@@ -24,10 +28,14 @@ def check_fcrdns(ip):
         try:
             forward_ip = socket.gethostbyname(host)
             if forward_ip == ip:
-                print(f"Forward DNS (A) check passed. Hostname {host} resolves back to {ip}.")
+                print(
+                    f"Forward DNS (A) check passed. Hostname {host} resolves back to {ip}."
+                )
                 return True
             else:
-                print(f"Forward DNS (A) check failed. Hostname {host} resolves to {forward_ip}, not {ip}.")
+                print(
+                    f"Forward DNS (A) check failed. Hostname {host} resolves to {forward_ip}, not {ip}."
+                )
                 return False
         except socket.gaierror as e:
             print(f"Forward DNS (A) check failed for hostname {host}: {e}")
@@ -39,6 +47,7 @@ def check_fcrdns(ip):
     except Exception as e:
         print(f"Error checking Reverse DNS for IP {ip}: {e}")
         return False
+
 
 def main():
     print("Checking host bot compliance...")
@@ -53,12 +62,19 @@ def main():
     has_fcrdns = check_fcrdns(ip)
 
     if not has_fcrdns:
-        print("\nWARNING: This host lacks a valid Forward-Confirmed Reverse DNS (FCrDNS) setup.")
-        print("Without FCrDNS, Cloudflare, Akamai, and other CDNs may block automated requests.")
-        print("Please configure a PTR record with your hosting provider and ensure it points back to this IP.")
+        print(
+            "\nWARNING: This host lacks a valid Forward-Confirmed Reverse DNS (FCrDNS) setup."
+        )
+        print(
+            "Without FCrDNS, Cloudflare, Akamai, and other CDNs may block automated requests."
+        )
+        print(
+            "Please configure a PTR record with your hosting provider and ensure it points back to this IP."
+        )
         sys.exit(1)
 
     print("\nSUCCESS: Basic host compliance checks passed.")
+
 
 if __name__ == "__main__":
     main()

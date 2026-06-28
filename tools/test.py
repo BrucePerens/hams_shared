@@ -34,10 +34,12 @@ import functools
 import multiprocessing
 import psutil
 
+
 class OOMWatchdog(multiprocessing.Process):
-    def __init__(self, target_pid, rss_limit_gb=3.0):
+    def __init__(self, target_pid, runner_pid, rss_limit_gb=3.5):
         super().__init__(daemon=True)
         self.target_pid = target_pid
+        self.runner_pid = runner_pid
         self.rss_limit_gb = rss_limit_gb
 
     def run(self):
@@ -57,27 +59,61 @@ class OOMWatchdog(multiprocessing.Process):
             pass
         while True:
             try:
-                parent = psutil.Process(self.target_pid)
-                for p in parent.children(recursive=True):
+                runner = psutil.Process(self.runner_pid)
+                procs = runner.children(recursive=True)
+                total_rss = 0
+                for p in procs:
+                    if p.pid == os.getpid():
+                        continue
                     try:
                         mem = p.memory_info()
-                        rss_gb = mem.rss / (1024**3)
-                        vm_gb = mem.vms / (1024**3)
-                        if rss_gb > self.rss_limit_gb:
-                            print(f"\n[🚨 OOM WATCHDOG] Process {p.pid} ({p.name()}) exceeded memory limits! (RSS: {rss_gb:.2f}GB > {self.rss_limit_gb}GB, VM was {vm_gb:.2f}GB). Terminating it!\n", flush=True)
-                            p.kill()
+                        total_rss += mem.rss
                     except psutil.NoSuchProcess:
                         pass
+
+                total_rss_gb = total_rss / (1024**3)
+                
+                # Also check host system available memory
+                mem_avail_mb = 10000
+                try:
+                    with open("/proc/meminfo", "r") as f:
+                        for line in f:
+                            if line.startswith("MemAvailable:"):
+                                mem_avail_mb = int(line.split()[1]) // 1024
+                                break
+                except Exception:
+                    pass
+
+                if total_rss_gb > self.rss_limit_gb or mem_avail_mb < 512:
+                    reason = f"Total RSS: {total_rss_gb:.2f}GB > {self.rss_limit_gb}GB" if total_rss_gb > self.rss_limit_gb else f"Host available memory ({mem_avail_mb}MB) is critically low (< 512MB)"
+                    print(
+                        f"\n[🚨 OOM WATCHDOG] Aggregate memory exceeded limits! ({reason}). Terminating children...\n",
+                        flush=True,
+                    )
+                    for p in procs:
+                        if p.pid == os.getpid():
+                            continue
+                        try:
+                            p.kill()
+                        except psutil.NoSuchProcess:
+                            pass
+                    try:
+                        psutil.Process(self.target_pid).kill()
+                    except psutil.NoSuchProcess:
+                        pass
+                    break
             except psutil.NoSuchProcess:
                 break
             except Exception:
                 pass
             time.sleep(2.0)
 
+
 # Force all print statements to flush immediately to prevent
 # inter-process pipe buffering from chronologically reordering log lines
 # relative to the unbuffered child test process output.
 print = functools.partial(print, flush=True)
+
 
 @contextlib.contextmanager
 def micro_privilege(username):
@@ -104,15 +140,18 @@ def micro_privilege(username):
         os.setresuid(orig_ruid, orig_euid, orig_suid)
         os.setresgid(orig_rgid, orig_egid, orig_sgid)
 
+
 # Local modules resolve natively without sys.path hacks.
 
 _logger = logging.getLogger(__name__)
+
 
 class VirtualClockThread(threading.Thread):
     """
     A CPU-time equivalent clock that suppresses massive jumps in wall-clock time
     caused by the VM being suspended or heavily timeshared.
     """
+
     def __init__(self):
         super().__init__(daemon=True)
         self.vtime = 0.0
@@ -132,8 +171,10 @@ class VirtualClockThread(threading.Thread):
         with self._lock:
             return self.vtime
 
+
 global_vclock = VirtualClockThread()
 global_vclock.start()
+
 
 class ResourceMonitorThread(threading.Thread):
     def __init__(self):
@@ -151,7 +192,9 @@ class ResourceMonitorThread(threading.Thread):
 
     def get_chrome_count(self):
         try:
-            res = subprocess.run(["pgrep", "-c", "-f", "chrom"], capture_output=True, text=True)
+            res = subprocess.run(
+                ["pgrep", "-c", "-f", "chrom"], capture_output=True, text=True
+            )
             if res.returncode == 0:
                 return int(res.stdout.strip())
         except Exception:
@@ -163,16 +206,18 @@ class ResourceMonitorThread(threading.Thread):
             time.sleep(10)
             mem_mb = self.get_available_memory_mb()
             chrome_count = self.get_chrome_count()
-            
+
             alerts = []
             if mem_mb is not None and mem_mb < 512:
                 alerts.append(f"CRITICAL MEMORY: Only {mem_mb} MB available!")
             elif mem_mb is not None and mem_mb < 2048:
                 alerts.append(f"LOW MEMORY: {mem_mb} MB available.")
-            
+
             if chrome_count > 40:
-                alerts.append(f"POSSIBLE BROWSER LEAK: {chrome_count} active Chromium processes detected!")
-                
+                alerts.append(
+                    f"POSSIBLE BROWSER LEAK: {chrome_count} active Chromium processes detected!"
+                )
+
             if alerts:
                 msg = f"\n\x1b[91m{'!' * 60}\n[!] RESOURCE MONITOR ALERT:\n"
                 for a in alerts:
@@ -180,8 +225,10 @@ class ResourceMonitorThread(threading.Thread):
                 msg += f"{'!' * 60}\x1b[0m\n"
                 print(msg, flush=True)
 
+
 global_resource_monitor = ResourceMonitorThread()
 global_resource_monitor.start()
+
 
 def load_ignore_file(filepath):
     patterns = []
@@ -213,7 +260,7 @@ class FailureExtractor:
         )
         self.mcp_mode = mcp_mode
         self.display_path = os.path.join(base_dir, "filtered_test.txt")
-        
+
         if os.environ.get("HAMS_ISOLATED_NS") == "1":
             self.output_path = "/mnt/real_tmp/filtered_test.txt"
         else:
@@ -228,11 +275,12 @@ class FailureExtractor:
             if os.path.exists(self.output_path):
                 os.remove(self.output_path)
         except OSError as os_err:
-            _logger.warning("Could not remove log natively, attempting sudo fallback: %s", os_err)
+            _logger.warning(
+                "Could not remove log natively, attempting fallback: %s", os_err
+            )
             try:
-                if not os.access(self.output_path, os.W_OK):
-                    subprocess.run(["sudo", "rm", "-f", self.output_path], check=False)
-            except Exception as cleanup_e: # audit-ignore-catch-all
+                subprocess.run(["rm", "-f", self.output_path], check=False)
+            except Exception as cleanup_e:  # audit-ignore-catch-all
                 _logger.warning("Ignored Exception removing log: %s", cleanup_e)
 
         self.log_prefix_pattern = re.compile(
@@ -254,7 +302,8 @@ class FailureExtractor:
         if os.environ.get("HAMS_ISOLATED_NS") == "1":
             self.progress_path = "/mnt/real_tmp/test_progress.txt"
         else:
-            self.progress_path = os.path.join(base_dir, "test_progress.txt")
+            self.progress_path = os.path.expanduser("~/tmp/test_progress.txt")
+            os.makedirs(os.path.dirname(self.progress_path), exist_ok=True)
         self.passed_tests = 0
         self.failed_tests = 0
         self.current_test = "Initializing..."
@@ -267,7 +316,6 @@ class FailureExtractor:
                 f.write(f"Passed: {self.passed_tests}\n")
                 f.write(f"Failed: {self.failed_tests}\n")
                 f.flush()
-                os.fsync(f.fileno())
         except Exception:
             pass
 
@@ -278,11 +326,17 @@ class FailureExtractor:
                 self.captured_blocks = self.captured_blocks[-50:]
             self.capturing = False
             self.current_block = []
-            
+
         if "Starting " in context_name:
             test_name = context_name.split("Starting ")[-1].strip()
-            if hasattr(self, 'current_test') and self.current_test and self.current_test != test_name:
-                failed = any(self.current_test in ctx for ctx, _ in self.captured_blocks)
+            if (
+                hasattr(self, "current_test")
+                and self.current_test
+                and self.current_test != test_name
+            ):
+                failed = any(
+                    self.current_test in ctx for ctx, _ in self.captured_blocks
+                )
                 if failed:
                     self.failed_tests += 1
                 else:
@@ -293,7 +347,7 @@ class FailureExtractor:
         self.current_context = context_name
 
     def process_line(self, line):
-        line_clean = re.sub(r'\x1b\[[0-9;]*m', '', line)
+        line_clean = re.sub(r"\x1b\[[0-9;]*m", "", line)
         if self.test_start_pattern.search(line_clean):
             self.set_context(line_clean.strip())
 
@@ -301,7 +355,10 @@ class FailureExtractor:
         line_lower = line_clean.lower()
 
         is_test_failure_content = (
-            ("======================================================================" in line_clean)
+            (
+                "======================================================================"
+                in line_clean
+            )
             or ("Traceback (most recent call last):" in line_clean)
             or ("FAIL: " in line_clean)
             or ("ERROR: " in line_clean)
@@ -309,7 +366,7 @@ class FailureExtractor:
             or ("FATAL:" in line_clean)
             or ("[watchdog alarm]" in line_lower)
         )
-        
+
         # Ignore Python GC Exceptions on Chrome headless termination
         if "ChromeBrowser._chrome_start" in "".join(self.current_block):
             is_test_failure_content = False
@@ -333,7 +390,9 @@ class FailureExtractor:
 
             if is_safe:
                 if self.capturing:
-                    self.captured_blocks.append((self.current_context, self.current_block))
+                    self.captured_blocks.append(
+                        (self.current_context, self.current_block)
+                    )
                     if len(self.captured_blocks) > 50:
                         self.captured_blocks = self.captured_blocks[-50:]
                     self.current_block = []
@@ -342,9 +401,12 @@ class FailureExtractor:
                 if not self.capturing:
                     self.capturing = True
                 if len(self.current_block) < 5000:
-                    self.current_block.append(line)
+                    capped = line[:4096] + "\n" if len(line) > 4096 else line
+                    self.current_block.append(capped)
                 elif len(self.current_block) == 5000:
-                    self.current_block.append("[!] TRUNCATED: Block exceeded 5000 lines (possible log spam).")
+                    self.current_block.append(
+                        "[!] TRUNCATED: Block exceeded 5000 lines (possible log spam)."
+                    )
         else:
             if is_test_failure_content:
                 if not self.capturing:
@@ -366,23 +428,32 @@ class FailureExtractor:
 
             if self.capturing:
                 if len(self.current_block) < 5000:
-                    self.current_block.append(line)
+                    capped = line[:4096] + "\n" if len(line) > 4096 else line
+                    self.current_block.append(capped)
                 elif len(self.current_block) == 5000:
-                    self.current_block.append("[!] TRUNCATED: Block exceeded 5000 lines (possible log spam).")
+                    self.current_block.append(
+                        "[!] TRUNCATED: Block exceeded 5000 lines (possible log spam)."
+                    )
 
     def _extract_failed_modules(self):
         modules = set()
         addon_pattern = re.compile(r"odoo\.addons\.([a-zA-Z0-9_]+)")
-        filepath_pattern = re.compile(r"\/([a-zA-Z0-9_]+)\/(?:models|controllers|tests|wizard|tools)\/.*?\.py")
+        filepath_pattern = re.compile(
+            r"\/([a-zA-Z0-9_]+)\/(?:models|controllers|tests|wizard|tools)\/.*?\.py"
+        )
         daemon_pattern = re.compile(r"\/daemons\/([a-zA-Z0-9_]+)\/.*?\.py")
 
         for context, block in self.captured_blocks:
-            for match in addon_pattern.findall(context): modules.add(match)
-            for match in filepath_pattern.findall(context): modules.add(match)
-            for match in daemon_pattern.findall(context): modules.add(f"daemons/{match}")
+            for match in addon_pattern.findall(context):
+                modules.add(match)
+            for match in filepath_pattern.findall(context):
+                modules.add(match)
+            for match in daemon_pattern.findall(context):
+                modules.add(f"daemons/{match}")
 
             for line in block:
-                for match in addon_pattern.findall(line): modules.add(match)
+                for match in addon_pattern.findall(line):
+                    modules.add(match)
         return modules
 
     def finish_and_write(self):
@@ -398,7 +469,10 @@ class FailureExtractor:
         filtered_blocks = []
         for context, block in self.captured_blocks:
             block_text = "".join(block)
-            if "ChromeBrowser._chrome_start" in block_text and "psutil.NoSuchProcess" in block_text:
+            if (
+                "ChromeBrowser._chrome_start" in block_text
+                and "psutil.NoSuchProcess" in block_text
+            ):
                 continue
             filtered_blocks.append((context, block))
         self.captured_blocks = filtered_blocks
@@ -416,28 +490,41 @@ class FailureExtractor:
 
         try:
             with open(self.output_path, "a", encoding="utf-8") as out:
-                out.write(f"\n=== EXTRACTED TEST FAILURES & ERRORS (Captured {num_failures} blocks) ===\n")
+                out.write(
+                    f"\n=== EXTRACTED TEST FAILURES & ERRORS (Captured {num_failures} blocks) ===\n"
+                )
                 if num_failures == 0:
                     out.write("\nNo errors or failures detected in the log.\n")
                 else:
                     failed_modules = self._extract_failed_modules()
                     out.write("\n" + "*" * 80 + "\n")
                     out.write("SYSTEM DIRECTIVE FOR AI ASSISTANT:\n")
-                    out.write("The following log contains extracted test failures, tracebacks, and CRITICAL errors from the Odoo test suite.\n")
-                    out.write("Your immediate task is to analyze these errors, identify the root causes within the provided codebase, and generate the necessary patches to fix these test flaws.\n")
+                    out.write(
+                        "The following log contains extracted test failures, tracebacks, and CRITICAL errors from the Odoo test suite.\n"
+                    )
+                    out.write(
+                        "Your immediate task is to analyze these errors, identify the root causes within the provided codebase, and generate the necessary patches to fix these test flaws.\n"
+                    )
 
                     if failed_modules:
                         out.write("\nTARGET MODULES FOR ANALYSIS:\n")
-                        out.write("Based on the tracebacks, the following modules are responsible for or implicated in the failure:\n")
+                        out.write(
+                            "Based on the tracebacks, the following modules are responsible for or implicated in the failure:\n"
+                        )
                         for mod in failed_modules:
                             out.write(f"  - {mod}\n")
-                        out.write("\nASSUMPTION: The GitHub repository containing these modules has been imported to your environment.\n")
-                        out.write("ACTION: Please look up the code for the implicated modules above to diagnose and fix the issue.\n")
+                        out.write(
+                            "\nASSUMPTION: The GitHub repository containing these modules has been imported to your environment.\n"
+                        )
+                        out.write(
+                            "ACTION: Please look up the code for the implicated modules above to diagnose and fix the issue.\n"
+                        )
 
                     out.write("*" * 80 + "\n")
 
                     for context, block in grouped_blocks.items():
-                        if not block: continue
+                        if not block:
+                            continue
                         out.write("\n" + "=" * 80 + "\n")
                         out.write(f"CONTEXT: {context}\n")
                         out.write("-" * 80 + "\n")
@@ -446,20 +533,29 @@ class FailureExtractor:
                         out.write("\n")
 
                 out.flush()
-                os.fsync(out.fileno())
 
         except PermissionError as e:
-            print(f"\n❌ [ERROR] FailureExtractor could not write to {self.output_path} due to permission denied: {e}")
-            print("To resolve this, delete the file manually: sudo rm -f " + self.output_path + "\n")
+            print(
+                f"\n❌ [ERROR] FailureExtractor could not write to {self.output_path} due to permission denied: {e}"
+            )
+            print(
+                "To resolve this, delete the file manually: sudo rm -f "
+                + self.output_path
+                + "\n"
+            )
             return
 
         print("\n==========================================================")
         if getattr(self, "aborted", False):
-            print("🛑 TEST RUN ABORTED: Did not complete due to pre-flight linter errors.")
+            print(
+                "🛑 TEST RUN ABORTED: Did not complete due to pre-flight linter errors."
+            )
         elif num_failures == 0:
             print("🎉 TEST RUN COMPLETE: No test failures or system crashes detected.")
         else:
-            print(f"🚨 TEST RUN COMPLETE: {num_failures} issue(s) detected (test failures or system crashes)!")
+            print(
+                f"🚨 TEST RUN COMPLETE: {num_failures} issue(s) detected (test failures or system crashes)!"
+            )
             print(f"📄 Failure details extracted and saved to: {self.display_path}")
         print("==========================================================\n")
 
@@ -471,8 +567,12 @@ def robust_reap(pid):
     """
     print(f"\n[*] [REAPER] Initiating robust reaper for PID {pid}...")
     try:
-        subprocess.run(["pkill", "-u", str(os.getuid()), "-TERM", "-f", "chrome"], check=False)
-        subprocess.run(["pkill", "-u", str(os.getuid()), "-TERM", "-f", "chromium"], check=False)
+        subprocess.run(
+            ["pkill", "-u", "odoo", "-TERM", "-f", "chrome"], check=False, timeout=2
+        )
+        subprocess.run(
+            ["pkill", "-u", "odoo", "-TERM", "-f", "chromium"], check=False, timeout=2
+        )
 
         pgid = os.getpgid(pid)
         print(f"[*] [REAPER] Sending SIGTERM to Process Group {pgid}")
@@ -487,10 +587,16 @@ def robust_reap(pid):
                 return
             time.sleep(0.5)
 
-        print(f"[*] [REAPER] Process {pid} did not exit after SIGTERM. Sending SIGKILL to Process Group {pgid}")
+        print(
+            f"[*] [REAPER] Process {pid} did not exit after SIGTERM. Sending SIGKILL to Process Group {pgid}"
+        )
         os.killpg(pgid, signal.SIGKILL)
-        subprocess.run(["pkill", "-u", str(os.getuid()), "-KILL", "-f", "chrome"], check=False)
-        subprocess.run(["pkill", "-u", str(os.getuid()), "-KILL", "-f", "chromium"], check=False)
+        subprocess.run(
+            ["pkill", "-u", "odoo", "-KILL", "-f", "chrome"], check=False, timeout=2
+        )
+        subprocess.run(
+            ["pkill", "-u", "odoo", "-KILL", "-f", "chromium"], check=False, timeout=2
+        )
     except OSError as e:
         print(f"[*] [REAPER] Error during reap: {e}")
 
@@ -505,14 +611,21 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
     env.setdefault("REDIS_HOST", "localhost")
     env.setdefault("RMQ_USER", "guest")
     env.setdefault("RMQ_PASS", "guest")
-    host_tmp_dir = "/var/tmp" if os.environ.get("HAMS_ISOLATED_NS") == "1" else os.environ.get("HAMS_REAL_LOG_DIRECTORY", "/var/tmp")
+    host_tmp_dir = (
+        "/opt/hams/test"
+        if os.environ.get("HAMS_ISOLATED_NS") == "1"
+        else os.environ.get("HAMS_REAL_LOG_DIRECTORY", "/opt/hams/test")
+    )
     if os.environ.get("HAMS_ISOLATED_NS") != "1":
         os.makedirs(host_tmp_dir, exist_ok=True)
         try:
             os.chmod(host_tmp_dir, 0o777)
         except OSError as e:
             _logger.debug("Ignored OSError: %s", e)
-    env.setdefault("ODOO_TEST_CHROME_ARGS", "--headless --ignore-certificate-errors --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading")
+    env.setdefault(
+        "ODOO_TEST_CHROME_ARGS",
+        "--headless --ignore-certificate-errors --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
+    )
     env.setdefault("DBUS_SESSION_BUS_ADDRESS", "autolaunch:")
 
     def preexec_child():
@@ -521,12 +634,11 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
             libc = ctypes.CDLL("libc.so.6")
             PR_SET_PDEATHSIG = 1
             libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
-        except Exception: # audit-ignore-catch-all
+        except Exception:  # audit-ignore-catch-all
             # We are post-fork in preexec_fn; logging is unsafe here.
             pass
 
     process = subprocess.Popen(
-
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -537,10 +649,12 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         env=env,
     )
 
-    print(f"\n[*] [DEBUG-RUNNER] Subprocess spawned: PID {process.pid}, PGID {os.getpgid(process.pid)}")
+    print(
+        f"\n[*] [DEBUG-RUNNER] Subprocess spawned: PID {process.pid}, PGID {os.getpgid(process.pid)}"
+    )
     print(f"[*] [DEBUG-RUNNER] Executing command: {' '.join(cmd)}")
 
-    watchdog = OOMWatchdog(process.pid)
+    watchdog = OOMWatchdog(process.pid, os.getpid())
     watchdog.start()
 
     force_killed = False
@@ -552,7 +666,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         try:
             for line in process.stdout:
                 q.put(line)
-        except Exception as e: # audit-ignore-catch-all
+        except Exception as e:  # audit-ignore-catch-all
             _logger.error("Reader exception: %s", e)
             print(f"[*] [DEBUG-RUNNER] IO Reader thread exception: {e}")
         q.put(None)
@@ -567,7 +681,9 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                 # Short blocking wait allows us to check if the primary process died while a child kept stdout open
                 line = q.get(timeout=1.0)
                 if line is None:
-                    print("[*] [DEBUG-RUNNER] Received EOF sentinel from IO Reader thread.")
+                    print(
+                        "[*] [DEBUG-RUNNER] Received EOF sentinel from IO Reader thread."
+                    )
                     break
 
                 last_output_time = time.time()
@@ -584,16 +700,26 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                 line_lower = line.lower()
 
                 if "[watchdog alarm]" in line_lower:
-                    print("\n[!] FATAL JS WATCHDOG ALARM DETECTED in JS! Allowing Odoo framework to process the dump and continue...\n")
+                    print(
+                        "\n[!] FATAL JS WATCHDOG ALARM DETECTED in JS! Allowing Odoo framework to process the dump and continue...\n"
+                    )
             except queue.Empty:
                 if process.poll() is not None:
-                    sys.stdout.write(f"[*] [DEBUG-RUNNER] Process {process.pid} exited with {process.poll()}, but stdout pipe remains open. Breaking loop.\n")
+                    sys.stdout.write(
+                        f"[*] [DEBUG-RUNNER] Process {process.pid} exited with {process.poll()}, but stdout pipe remains open. Breaking loop.\n"
+                    )
                     sys.stdout.flush()
                     # The test process died but something (like a Postgres background worker) is holding the pipe open
                     break
 
-                if not (extractor and extractor.mcp_mode) and not os.environ.get("HAMS_PAUSE_ON_FAIL") and (time.time() - last_output_time > 60.0):
-                    print("\n[!] TEST TIMEOUT: No output received for 60 seconds. Tour or test likely hung. Terminating...\n")
+                if (
+                    not (extractor and extractor.mcp_mode)
+                    and not os.environ.get("HAMS_PAUSE_ON_FAIL")
+                    and (time.time() - last_output_time > 60.0)
+                ):
+                    print(
+                        "\n[!] TEST TIMEOUT: No output received for 60 seconds. Tour or test likely hung. Terminating...\n"
+                    )
 
                     if extractor:
                         extractor.capturing = True
@@ -605,8 +731,14 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                         )
                         extractor.capturing = False
 
-                    print("[*] [DEBUG-RUNNER] Killing headless chrome to un-hang the test framework...")
-                    subprocess.run(["pkill", "-u", str(os.getuid()), "-TERM", "-f", "chrome"], check=False)
+                    print(
+                        "[*] [DEBUG-RUNNER] Killing headless chrome to un-hang the test framework..."
+                    )
+                    subprocess.run(
+                        ["pkill", "-u", "odoo", "-TERM", "-f", "chrome"],
+                        check=False,
+                        timeout=2,
+                    )
                     last_output_time = time.time()
     except KeyboardInterrupt:
         print("\n[!] CTRL-C detected! Forcefully terminating the test process...")
@@ -615,25 +747,54 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         sys.exit(1)
     finally:
         # Always reap stray processes like headless chrome to prevent zombie exhaustion
-        print(f"[*] [DEBUG-RUNNER] Ensuring all child processes are reaped for PID {process.pid}...")
+        print(
+            f"[*] [DEBUG-RUNNER] Ensuring all child processes are reaped for PID {process.pid}..."
+        )
         try:
-            subprocess.run(["pkill", "-u", str(os.getuid()), "-TERM", "-f", "chrome"], check=False)
-            subprocess.run(["pkill", "-u", str(os.getuid()), "-TERM", "-f", "chromium"], check=False)
-            pgid = os.getpgid(process.pid)
-            os.killpg(pgid, signal.SIGTERM)
+            subprocess.run(
+                ["pkill", "-u", "odoo", "-TERM", "-f", "chrome"], check=False, timeout=2
+            )
+            subprocess.run(
+                ["pkill", "-u", "odoo", "-TERM", "-f", "chromium"],
+                check=False,
+                timeout=2,
+            )
+            process.terminate()
         except OSError:
             pass
 
-    print(f"[*] [DEBUG-RUNNER] Waiting for process {process.pid} to cleanly terminate...")
-    process.wait()
-    print(f"[*] [DEBUG-RUNNER] Process {process.pid} terminated with return code {process.returncode}.")
+    print(
+        f"[*] [DEBUG-RUNNER] Waiting for process {process.pid} to cleanly terminate...",
+        flush=True,
+    )
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        print(
+            f"[*] [DEBUG-RUNNER] Process {process.pid} hung during shutdown. Escalating to SIGKILL.",
+            flush=True,
+        )
+        try:
+            process.kill()
+            process.wait(timeout=5)
+        except OSError:
+            pass
+    print(
+        f"[*] [DEBUG-RUNNER] Process {process.pid} terminated with return code {process.returncode}."
+    )
+
+    # Reap the OOMWatchdog process to prevent orphan leak
+    try:
+        watchdog.terminate()
+        watchdog.join(timeout=2)
+    except Exception:  # audit-ignore-catch-all
+        pass
 
     if force_killed:
         final_errors = len(extractor.captured_blocks) if extractor else 0
         return 1 if final_errors > initial_errors else 0
 
     return process.returncode
-
 
 
 def get_local_modules(base_dir, ignore_patterns):
@@ -644,7 +805,9 @@ def get_local_modules(base_dir, ignore_patterns):
         mod_path = os.path.join(base_dir, item)
         if is_ignored(mod_path, ignore_patterns):
             continue
-        if os.path.isdir(mod_path) and os.path.isfile(os.path.join(mod_path, "__manifest__.py")):
+        if os.path.isdir(mod_path) and os.path.isfile(
+            os.path.join(mod_path, "__manifest__.py")
+        ):
             mods.append(item)
     return sorted(mods)
 
@@ -673,7 +836,13 @@ def get_addons_path(base_dir):
         root_community = "/hams_open"
 
         app_community = "/app/hams_open"
-        for d in [community_dir, primary_dir, nested_community, root_community, app_community]:
+        for d in [
+            community_dir,
+            primary_dir,
+            nested_community,
+            root_community,
+            app_community,
+        ]:
             if os.path.isdir(d) and d not in paths:
                 paths.append(d)
                 found_community = True
@@ -682,36 +851,77 @@ def get_addons_path(base_dir):
     return ",".join(paths)
 
 
-def check_linters(python_exec, base_dir, ignore_filepath, extractor=None, target_modules=None):
+def check_linters(
+    python_exec, base_dir, ignore_filepath, extractor=None, target_modules=None
+):
     shared_dir = os.path.abspath(os.path.join(base_dir, "hams_shared"))
     print("[*] Running Manifest Dependency Graph Linter...")
-    res_manifest = subprocess.run([python_exec, os.path.join(shared_dir, "tools", "check_manifest_dependencies.py"), base_dir])
+    res_manifest = subprocess.run(
+        [
+            python_exec,
+            os.path.join(shared_dir, "tools", "check_manifest_dependencies.py"),
+            base_dir,
+        ]
+    )
     if res_manifest.returncode != 0:
         print("🛑 Halting due to manifest load-order violations.")
-        if extractor: extractor.aborted = True
+        if extractor:
+            extractor.aborted = True
         sys.exit(1)
 
     print("[*] Running AST Burn List Linter...")
     burn_script = os.path.join(shared_dir, "tools", "check_burn_list.py")
-    cmd_burn = [python_exec, burn_script, os.path.join(base_dir, target_modules[0]), "--ignore-file", ignore_filepath] if target_modules and len(target_modules) == 1 else [python_exec, burn_script, base_dir, "--ignore-file", ignore_filepath]
+    cmd_burn = (
+        [
+            python_exec,
+            burn_script,
+            os.path.join(base_dir, target_modules[0]),
+            "--ignore-file",
+            ignore_filepath,
+        ]
+        if target_modules and len(target_modules) == 1
+        else [python_exec, burn_script, base_dir, "--ignore-file", ignore_filepath]
+    )
 
     res_burn = subprocess.run(cmd_burn, capture_output=True, text=True)
     if res_burn.returncode != 0:
         print(res_burn.stdout)
         print(res_burn.stderr)
         print("🛑 Halting due to burn list violations.")
-        if extractor: extractor.aborted = True
+        if extractor:
+            extractor.aborted = True
         sys.exit(1)
     else:
         print(res_burn.stdout)
 
+    print("[*] Running Init Imports Linter...")
+    res_init = subprocess.run(
+        [
+            python_exec,
+            os.path.join(shared_dir, "tools", "check_init_imports.py"),
+            base_dir,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res_init.returncode != 0:
+        print(res_init.stdout)
+        print(res_init.stderr)
+    else:
+        print(res_init.stdout)
+
     print("[*] Scanning for Semantic Anchors...")
-    res_anchor = subprocess.run([python_exec, os.path.join(shared_dir, "tools", "verify_anchors.py"), base_dir], capture_output=True, text=True)
+    res_anchor = subprocess.run(
+        [python_exec, os.path.join(shared_dir, "tools", "verify_anchors.py"), base_dir],
+        capture_output=True,
+        text=True,
+    )
     if res_anchor.returncode != 0:
         print(res_anchor.stdout)
         print(res_anchor.stderr)
         print("🛑 Halting due to anchor violations.")
-        if extractor: extractor.aborted = True
+        if extractor:
+            extractor.aborted = True
         sys.exit(1)
     else:
         print(res_anchor.stdout)
@@ -725,7 +935,8 @@ def check_linters(python_exec, base_dir, ignore_filepath, extractor=None, target
         print(res_js.stdout)
         print(res_js.stderr)
         print("🛑 Halting due to JavaScript syntax errors.")
-        if extractor: extractor.aborted = True
+        if extractor:
+            extractor.aborted = True
         sys.exit(1)
     else:
         print(res_js.stdout)
@@ -771,7 +982,8 @@ def get_pg_bin(name):
     res = shutil.which(name)
     if not res:
         for p in [f"/usr/bin/{name}", f"/usr/local/bin/{name}"]:
-            if os.path.exists(p): return p
+            if os.path.exists(p):
+                return p
         raise FileNotFoundError(f"Could not find PostgreSQL binary: {name}")
     return res
 
@@ -784,6 +996,8 @@ def rebuild_db(db_name):
         print("[*] Starting core daemons before testing...")
         for svc in ["postgresql", "redis-server", "rabbitmq-server", "pdns"]:
             subprocess.run(["sudo", "systemctl", "start", svc], check=False)
+        print("[*] Stopping system Odoo service to free memory...")
+        subprocess.run(["sudo", "systemctl", "stop", "odoo"], check=False)
 
     print("[*] Flushing persistent daemons (Redis / RabbitMQ)...")
     subprocess.run(["redis-cli", "flushall"], check=False, env=env)
@@ -791,17 +1005,29 @@ def rebuild_db(db_name):
     # Get the working directory where data is saved
     subprocess.run(["redis-cli", "CONFIG", "GET", "dir"], check=False, env=env)
     subprocess.run(["redis-cli", "CONFIG", "GET", "dbfilename"], check=False, env=env)
-    is_jules = bool(os.environ.get("IN_JULES_VM")) or bool(os.environ.get("JULES_SESSION_ID"))
+    is_jules = bool(os.environ.get("IN_JULES_VM")) or bool(
+        os.environ.get("JULES_SESSION_ID")
+    )
     if is_jules:
         try:
             subprocess.run(["rabbitmqctl", "stop_app"], check=False)
             subprocess.run(["rabbitmqctl", "reset"], check=False)
             subprocess.run(["rabbitmqctl", "start_app"], check=False)
-            subprocess.run(["sudo", "systemctl", "stop", "dx.firehose.service", "adif.processor.service", "qrz.scraper.service"], check=False)
+            subprocess.run(
+                [
+                    "sudo",
+                    "systemctl",
+                    "stop",
+                    "dx.firehose.service",
+                    "adif.processor.service",
+                    "qrz.scraper.service",
+                ],
+                check=False,
+            )
             subprocess.run(["pkill", "-f", "dx_firehose.py"], check=False)
             subprocess.run(["pkill", "-f", "adif_processor.py"], check=False)
             subprocess.run(["pkill", "-f", "qrz_scraper.py"], check=False)
-        except Exception as e: # audit-ignore-catch-all
+        except Exception as e:  # audit-ignore-catch-all
             _logger.warning("Daemon flush exception: %s", e)
 
     try:
@@ -812,11 +1038,35 @@ def rebuild_db(db_name):
         print(f"❌ ERROR: {e}")
         sys.exit(1)
 
-    subprocess.run([psql_cmd, "postgres", "-c", f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db_name}';"], check=False, env=env)
-    subprocess.run([psql_cmd, "postgres", "-c", f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE);"], check=False, env=env)
-    subprocess.run([dropdb_cmd, "--if-exists", "--force", db_name], check=False, env=env)
+    subprocess.run(
+        [
+            psql_cmd,
+            "postgres",
+            "-c",
+            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db_name}';",
+        ],
+        check=False,
+        env=env,
+    )
+    subprocess.run(
+        [
+            psql_cmd,
+            "postgres",
+            "-c",
+            f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE);",
+        ],
+        check=False,
+        env=env,
+    )
+    subprocess.run(
+        [dropdb_cmd, "--if-exists", "--force", db_name], check=False, env=env
+    )
     subprocess.run([createdb_cmd, db_name], check=True, env=env)
-    subprocess.run([psql_cmd, db_name, "-c", "CREATE EXTENSION IF NOT EXISTS vector;"], check=True, env=env)
+    subprocess.run(
+        [psql_cmd, db_name, "-c", "CREATE EXTENSION IF NOT EXISTS vector;"],
+        check=True,
+        env=env,
+    )
 
 
 def setup_namespace_and_run_tests(real_log_dir, sys_args):
@@ -829,11 +1079,14 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     subprocess.run(["mount", "-t", "tmpfs", "tmpfs", "/mnt"], check=True)
     for d in ["/mnt/upper", "/mnt/work", "/mnt/host_test_dir", "/opt/hams/test"]:
         os.makedirs(d, exist_ok=True)
-    subprocess.run(["mount", "--bind", "/opt/hams/test", "/mnt/host_test_dir"], check=True)
+    subprocess.run(
+        ["mount", "--bind", "/opt/hams/test", "/mnt/host_test_dir"], check=True
+    )
 
     base_dir = os.getcwd()
 
-    def _safe_run(cmd, **kw): return subprocess.run(cmd, check=True, **kw)
+    def _safe_run(cmd, **kw):
+        return subprocess.run(cmd, check=True, **kw)
 
     print("[*] Preserving host daemon sockets...")
     pg_socks = ["/var/run/postgresql", "/run/postgresql"]
@@ -846,7 +1099,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
             preserved_socks.append((temp_sock, sock))
 
     # Anchor the true host path to an un-overlaid tmpfs directory BEFORE overlaying /home
-    host_tmp_dir = real_log_dir if real_log_dir else "/var/tmp"
+    host_tmp_dir = real_log_dir if real_log_dir else "/opt/hams/test"
     os.makedirs(host_tmp_dir, exist_ok=True)
     try:
         os.chmod(host_tmp_dir, 0o777)
@@ -855,7 +1108,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     os.makedirs("/mnt/real_tmp", exist_ok=True)
     subprocess.run(["mount", "--bind", host_tmp_dir, "/mnt/real_tmp"], check=True)
 
-    # Explicitly prepare the host log directory (~/tmp/log) before overlay
+    # Explicitly prepare the host log directory (/opt/hams/test/log) before overlay
     host_log_dir = os.path.join(host_tmp_dir, "log")
     os.makedirs(host_log_dir, exist_ok=True)
     try:
@@ -868,11 +1121,23 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
     print("[*] Creating overlay filesystem for isolated testing...")
     for item in ["etc", "opt", "var", "usr", "home", "tmp", "run"]:
-        if not os.path.exists(f"/{item}"): continue
+        if not os.path.exists(f"/{item}"):
+            continue
         os.makedirs(f"/mnt/upper/{item}", exist_ok=True)
         os.makedirs(f"/mnt/work/{item}", exist_ok=True)
         try:
-            subprocess.run(["mount", "-t", "overlay", "overlay", "-o", f"lowerdir=/{item},upperdir=/mnt/upper/{item},workdir=/mnt/work/{item}", f"/{item}"], check=True)
+            subprocess.run(
+                [
+                    "mount",
+                    "-t",
+                    "overlay",
+                    "overlay",
+                    "-o",
+                    f"lowerdir=/{item},upperdir=/mnt/upper/{item},workdir=/mnt/work/{item}",
+                    f"/{item}",
+                ],
+                check=True,
+            )
         except subprocess.CalledProcessError as e:
             _logger.debug("Failed to overlay mount /%s: %s", item, e)
 
@@ -884,7 +1149,16 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     print("[*] Provisioning isolated environment via infrastructure.py...")
     os.environ["HAMS_ISOLATED_NS"] = "1"
     orig_user = os.environ.get("SUDO_USER", "odoo")
+
+    # GNUPG isolated home
+    os.makedirs("/opt/hams/test/.gnupg", exist_ok=True)
+    try:
+        os.chmod("/opt/hams/test/.gnupg", 0o700)
+    except OSError as e:
+        _logger.debug("Failed to set permissions on .gnupg: %s", e)
+
     env_vars = dict(os.environ)
+    env_vars["GNUPGHOME"] = "/opt/hams/test/.gnupg"
     env_vars["REPO_ROOT"] = base_dir
 
     infrastructure.provision_environment(_safe_run, env_vars, orig_user, skip_apt=True)
@@ -897,15 +1171,17 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         libc = ctypes.CDLL(None, use_errno=True)
 
     if libc.unshare(CLONE_NEWNET) != 0:
-        print(f"❌ ERROR: Failed to dynamically isolate network namespace: {ctypes.get_errno()}")
+        print(
+            f"❌ ERROR: Failed to dynamically isolate network namespace: {ctypes.get_errno()}"
+        )
         sys.exit(1)
 
     # Bring up the isolated loopback interface now that we are in the new network namespace
     subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
 
-    # Bind the preserved host directory to the overlay's /var/tmp
-    os.makedirs("/var/tmp", exist_ok=True)
-    subprocess.run(["mount", "--bind", "/mnt/real_tmp", "/var/tmp"], check=True)
+    # Bind the preserved host directory to the overlay's /opt/hams/test
+    os.makedirs("/opt/hams/test", exist_ok=True)
+    subprocess.run(["mount", "--bind", "/mnt/real_tmp", "/opt/hams/test"], check=True)
 
     # Bind the preserved host log directory to the overlay's /var/log
     os.makedirs("/var/log", exist_ok=True)
@@ -913,7 +1189,10 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
     if os.path.exists("/var/run/postgresql"):
         os.makedirs("/var/run/postgresql", exist_ok=True)
-        subprocess.run(["mount", "--bind", "/var/run/postgresql", "/var/run/postgresql"], check=True)
+        subprocess.run(
+            ["mount", "--bind", "/var/run/postgresql", "/var/run/postgresql"],
+            check=True,
+        )
 
     subprocess.run(["mount", "--bind", base_dir, base_dir], check=True)
     subprocess.run(["mount", "-o", "remount,bind,ro", base_dir], check=True)
@@ -926,7 +1205,14 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
                 extra_mounts.append(os.path.join(parent_dir, item))
     except OSError as e:
         _logger.debug("Ignored OSError: %s", e)
-    extra_mounts.extend([os.path.join(base_dir, "..", "hams_open"), "/hams_open", "/app/hams_open", os.path.join(base_dir, "hams_open")])
+    extra_mounts.extend(
+        [
+            os.path.join(base_dir, "..", "hams_open"),
+            "/hams_open",
+            "/app/hams_open",
+            os.path.join(base_dir, "hams_open"),
+        ]
+    )
 
     mounted_dirs = set()
     for extra_dir in extra_mounts:
@@ -961,7 +1247,12 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
     wait_for_socket(f"{pg_sock}/.s.PGSQL.5432", "PostgreSQL")
 
-    p = subprocess.Popen([psql_cmd, "-h", pg_sock, "-d", "postgres"], stdin=subprocess.PIPE, preexec_fn=preexec_pg, text=True)
+    p = subprocess.Popen(
+        [psql_cmd, "-h", pg_sock, "-d", "postgres"],
+        stdin=subprocess.PIPE,
+        preexec_fn=preexec_pg,
+        text=True,
+    )
     sql_create_roles = f"""
     DO $$
     BEGIN
@@ -993,25 +1284,33 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
                 if line.startswith("dir "):
                     parts = line.split()
                     if len(parts) >= 2:
-                        redis_dir = parts[1].strip('"\'')
+                        redis_dir = parts[1].strip("\"'")
                 elif line.startswith("dbfilename "):
                     parts = line.split()
                     if len(parts) >= 2:
-                        db_filename = parts[1].strip('"\'')
+                        db_filename = parts[1].strip("\"'")
                 elif line.startswith("logfile "):
                     parts = line.split()
                     if len(parts) >= 2:
-                        log_file = parts[1].strip('"\'')
+                        log_file = parts[1].strip("\"'")
 
     # Explicitly grant the redis user ownership over its dynamic production directories
-    for d in [redis_dir, "/var/log/redis", "/run/redis", "/etc/redis", os.path.dirname(log_file) if log_file and log_file != '""' else ""]:
+    for d in [
+        redis_dir,
+        "/var/log/redis",
+        "/run/redis",
+        "/etc/redis",
+        os.path.dirname(log_file) if log_file and log_file != '""' else "",
+    ]:
         if d:
             os.makedirs(d, exist_ok=True)
             try:
                 os.chown(d, redis_user.pw_uid, redis_user.pw_gid)
                 os.chmod(d, 0o750)
             except OSError as e:
-                _logger.debug("Ignored OSError when setting directory permissions: %s", e)
+                _logger.debug(
+                    "Ignored OSError when setting directory permissions: %s", e
+                )
 
     if os.path.exists(conf_path):
         try:
@@ -1049,6 +1348,13 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         os.initgroups("redis", redis_user.pw_gid)
         os.setresgid(redis_user.pw_gid, redis_user.pw_gid, redis_user.pw_gid)
         os.setresuid(redis_user.pw_uid, redis_user.pw_uid, redis_user.pw_uid)
+        try:
+            import ctypes
+
+            libc = ctypes.CDLL("libc.so.6")
+            libc.prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
+        except Exception:
+            pass
 
     redis_proc = subprocess.Popen(cmd, cwd=redis_dir, preexec_fn=preexec_redis)
     wait_for_port(6379, "Redis")
@@ -1071,13 +1377,26 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         os.setresgid(rmq_user.pw_gid, rmq_user.pw_gid, rmq_user.pw_gid)
         os.setresuid(rmq_user.pw_uid, rmq_user.pw_uid, rmq_user.pw_uid)
         os.environ["HOME"] = "/var/lib/rabbitmq"
+        os.setpgid(0, 0)
+        try:
+            import ctypes
+
+            libc = ctypes.CDLL("libc.so.6")
+            libc.prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
+        except Exception:
+            pass
 
     try:
-        subprocess.run(["rabbitmq-server", "-detached"], preexec_fn=preexec_rmq, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as e:
+        rmq_proc = subprocess.Popen(
+            ["bash", "-c", "trap 'kill -TERM 0 2>/dev/null; exit 0' TERM; rabbitmq-server & wait $!"],
+            preexec_fn=preexec_rmq,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as e:
         print(f"❌ ERROR starting RabbitMQ: {e}")
-        print(f"STDOUT: {e.stdout}")
-        print(f"STDERR: {e.stderr}")
+        print(f"STDOUT: {getattr(e, 'stdout', '')}")
+        print(f"STDERR: {getattr(e, 'stderr', '')}")
         sys.exit(1)
 
     wait_for_port(5672, "RabbitMQ")
@@ -1086,17 +1405,21 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     os.environ["PGHOST"] = pg_sock
 
-    # Inside the namespace, /var/tmp is perfectly bound to the real log dir.
-    host_tmp_dir = "/var/tmp"
-    os.environ["ODOO_TEST_CHROME_ARGS"] = "--headless --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,dbus,OptimizationGuideModelDownloading"
+    # Inside the namespace, /opt/hams/test is perfectly bound to the real log dir.
+    host_tmp_dir = "/opt/hams/test"
+    os.environ["ODOO_TEST_CHROME_ARGS"] = (
+        "--headless --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,dbus,OptimizationGuideModelDownloading"
+    )
     os.environ["HAMS_REAL_LOG_DIRECTORY"] = real_log_dir
     os.environ["HOME"] = "/var/lib/odoo"
     os.environ["XDG_DATA_HOME"] = "/var/lib/odoo/.local/share"
 
     odoo_user = pwd.getpwnam("odoo")
+
     def preexec_odoo():
         try:
             import resource
+
             # 1200 seconds (20 minutes) of ACTIVE CPU TIME. Safe for tests, deadly for infinite loops.
             resource.setrlimit(resource.RLIMIT_CPU, (1200, 1200))
         except OSError:
@@ -1105,24 +1428,51 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         os.setresgid(odoo_user.pw_gid, odoo_user.pw_gid, odoo_user.pw_gid)
         os.setresuid(odoo_user.pw_uid, odoo_user.pw_uid, odoo_user.pw_uid)
 
+    ret = 1
+    try:
+        test_cmd = [sys.executable, os.path.abspath(__file__)] + sys_args
+        ret = subprocess.run(test_cmd, preexec_fn=preexec_odoo).returncode
+    finally:
+        # 7. Graceful Ephemeral Teardown — wait and escalate to SIGKILL
+        for proc_name, proc in [
+            ("RabbitMQ", rmq_proc),
+            ("Redis", redis_proc),
+        ]:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print(
+                    f"[*] {proc_name} PID {proc.pid}"
+                    " did not exit after SIGTERM."
+                    " Escalating to SIGKILL.",
+                    flush=True,
+                )
+                try:
+                    os.killpg(
+                        os.getpgid(proc.pid),
+                        signal.SIGKILL,
+                    )
+                except OSError:
+                    pass
+                try:
+                    proc.kill()
+                    proc.wait(timeout=2)
+                except Exception:  # audit-ignore-catch-all
+                    pass
+            except Exception:  # audit-ignore-catch-all
+                pass
 
-
-    test_cmd = [sys.executable, os.path.abspath(__file__)] + sys_args
-    ret = subprocess.run(test_cmd, preexec_fn=preexec_odoo).returncode
-
-    # 7. Graceful Ephemeral Teardown
-    subprocess.run(["rabbitmqctl", "stop"], preexec_fn=preexec_rmq, check=False)
-    redis_proc.terminate()
+    # Explicitly kill Erlang Port Mapper Daemon (epmd) spawned by RabbitMQ
+    subprocess.run(["epmd", "-kill"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     try:
         orig_uid = pwd.getpwnam(orig_user).pw_uid
     except KeyError:
         orig_uid = -1
 
-
-
     if orig_uid != -1:
-        for prof in glob.glob("/var/tmp/*.prof"):
+        for prof in glob.glob("/opt/hams/test/*.prof"):
             os.chown(prof, orig_uid, -1)
 
     sys.exit(ret)
@@ -1141,10 +1491,18 @@ def _safe_run(cmd, **kw):
 orig_user = '{os.environ.get("USER", "odoo")}'
 env_vars = dict(os.environ)
 env_vars["REPO_ROOT"] = '{base_dir}'
+env_vars["HOME"] = "/opt/hams/test"
+env_vars["GNUPGHOME"] = "/opt/hams/test/.gnupg"
+os.environ["GNUPGHOME"] = "/opt/hams/test/.gnupg"
 infrastructure.provision_environment(_safe_run, env_vars, orig_user, skip_apt=True)"""
 
     cmd = ["sudo", "-E", sys.executable, "-c", script]
-    subprocess.run(cmd, check=True)
+    run_env = os.environ.copy()
+    run_env["HOME"] = "/opt/hams/test"
+    run_env["GNUPGHOME"] = "/opt/hams/test/.gnupg"
+    subprocess.run(["mkdir", "-p", "/opt/hams/test/.gnupg"], check=False)
+    subprocess.run(["chmod", "700", "/opt/hams/test/.gnupg"], check=False)
+    subprocess.run(cmd, check=True, env=run_env)
 
     pg_socket = "/var/run/postgresql"
     if not os.path.exists(pg_socket):
@@ -1161,12 +1519,16 @@ def check_host_apt_packages():
     missing = []
     try:
         for pkg_spec in infrastructure.MANIFEST.get("apt_packages", []):
-            pkg_name = pkg_spec.get("debian_name", pkg_spec["name"]) if os_id == "debian" else pkg_spec["name"]
+            pkg_name = (
+                pkg_spec.get("debian_name", pkg_spec["name"])
+                if os_id == "debian"
+                else pkg_spec["name"]
+            )
             res = subprocess.run(
                 ["dpkg-query", "-W", "-f=${Status}", pkg_name],
                 capture_output=True,
                 text=True,
-                check=False
+                check=False,
             )
             if "install ok installed" not in res.stdout:
                 missing.append(pkg_name)
@@ -1176,68 +1538,110 @@ def check_host_apt_packages():
 
     if missing:
         print(f"❌ ERROR: Missing required host APT packages: {', '.join(missing)}")
-        print(f"Please install them via: sudo apt-get update && sudo apt-get install -y {' '.join(missing)}")
+        print(
+            f"Please install them via: sudo apt-get update && sudo apt-get install -y {' '.join(missing)}"
+        )
         sys.exit(1)
 
 
 _single_instance_lock = None
 
+
 def main():
     global _single_instance_lock
-    lock_file_path = "/var/tmp/odoo_test_runner.lock"
-    try:
-        _single_instance_lock = open(lock_file_path, "a")
-        os.chmod(lock_file_path, 0o777)
-    except Exception:
-        _single_instance_lock = open(lock_file_path, "r")
-    try:
-        fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except IOError:
-        print("🛑 ERROR: Another instance of test.py is already running. Exiting.")
-        sys.exit(1)
+    if os.environ.get("HAMS_ISOLATED_NS") != "1":
+        lock_file_path = "/opt/hams/test/odoo_test_runner.lock"
+        try:
+            _single_instance_lock = open(lock_file_path, "a")
+            os.chmod(lock_file_path, 0o777)
+        except Exception:
+            _single_instance_lock = open(lock_file_path, "r")
+        try:
+            fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except IOError:
+            print("🛑 ERROR: Another instance of test.py is already running. Exiting.")
+            sys.exit(1)
 
     cwd = os.getcwd()
-    if not os.path.isdir(os.path.join(cwd, ".git")) or not (os.path.isfile(os.path.join(cwd, "hams_shared", "tools", "test.py")) or os.path.isfile(os.path.join(cwd, "tools", "test.py"))):
-        print("================================================================================")
+    if not os.path.isdir(os.path.join(cwd, ".git")) or not (
+        os.path.isfile(os.path.join(cwd, "hams_shared", "tools", "test.py"))
+        or os.path.isfile(os.path.join(cwd, "tools", "test.py"))
+    ):
+        print(
+            "================================================================================"
+        )
         print("🚨 CRITICAL EXECUTION ENVIRONMENT ERROR 🚨")
         print(f"Current Working Directory: {cwd}")
-        print("You MUST execute hams_shared/tools/test.py from the root of the Git repository.")
-        print("The current directory is either not a git repository or lacks hams_shared/tools/test.py.")
-        print("[!] DIAGNOSTIC FOR AI: `cd` into the proper repository root before invoking this script.")
-        print("================================================================================")
+        print(
+            "You MUST execute hams_shared/tools/test.py from the root of the Git repository."
+        )
+        print(
+            "The current directory is either not a git repository or lacks hams_shared/tools/test.py."
+        )
+        print(
+            "[!] DIAGNOSTIC FOR AI: `cd` into the proper repository root before invoking this script."
+        )
+        print(
+            "================================================================================"
+        )
         sys.exit(1)
 
     os.environ.setdefault("HAMS_KEYS_DIR", "/opt/hams/etc/keys")
 
-    is_jules = bool(os.environ.get("IN_JULES_VM")) or bool(os.environ.get("JULES_SESSION_ID"))
+    is_jules = bool(os.environ.get("IN_JULES_VM")) or bool(
+        os.environ.get("JULES_SESSION_ID")
+    )
 
     if is_jules:
         existing_args = os.environ.get("ODOO_TEST_CHROME_ARGS", "")
         if "--no-sandbox" not in existing_args:
-            os.environ["ODOO_TEST_CHROME_ARGS"] = f"{existing_args} --no-sandbox --disable-dev-shm-usage".strip()
+            os.environ["ODOO_TEST_CHROME_ARGS"] = (
+                f"{existing_args} --no-sandbox --disable-dev-shm-usage".strip()
+            )
 
         if os.geteuid() != 0:
             print("[*] Elevating privileges for Jules provisioning...")
             exec_cmd = ["sudo", "-H", "-E", sys.executable] + sys.argv
             os.execvpe("sudo", exec_cmd, os.environ)
 
-    if os.environ.get("HAMS_ISOLATED_NS") != "1" and not os.environ.get("IN_JULES_VM") and not os.environ.get("JULES_SESSION_ID"):
+    if (
+        os.environ.get("HAMS_ISOLATED_NS") != "1"
+        and not os.environ.get("IN_JULES_VM")
+        and not os.environ.get("JULES_SESSION_ID")
+    ):
         if "--internal-ns-init" not in sys.argv:
             check_host_apt_packages()
 
         if "--internal-ns-init" in sys.argv:
             # Phase 2: Execute completely within Python (No bash script interpolation)
+            import resource
+
+            try:
+                resource.setrlimit(
+                    resource.RLIMIT_STACK, (16 * 1024 * 1024, resource.RLIM_INFINITY)
+                )
+            except (ValueError, OSError) as e:
+                print(f"[*] Warning: Could not set RLIMIT_STACK to 16MB: {e}")
             real_log_dir = os.environ.get("HAMS_REAL_LOG_DIRECTORY")
             sys_args = [arg for arg in sys.argv[1:] if arg != "--internal-ns-init"]
             setup_namespace_and_run_tests(real_log_dir, sys_args)
             return
 
         parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
-        parser.add_argument("-l", "--log-directory", default="~/tmp")
+        parser.add_argument("-l", "--log-directory", default="/opt/hams/test")
         args, _ = parser.parse_known_args()
 
         real_log_dir = os.path.abspath(os.path.expanduser(args.log_directory))
         os.makedirs(real_log_dir, exist_ok=True)
+        user_tmp = os.path.expanduser("~/tmp")
+        os.makedirs(user_tmp, exist_ok=True)
+        symlink_target = os.path.join(user_tmp, "test_progress.txt")
+        if os.path.lexists(symlink_target):
+            os.remove(symlink_target)
+        try:
+            os.symlink(os.path.join(real_log_dir, "test_progress.txt"), symlink_target)
+        except OSError:
+            pass
         try:
             os.chmod(real_log_dir, 0o777)
         except OSError as e:
@@ -1245,26 +1649,54 @@ def main():
         print("[*] Routing test execution to isolated Python namespace...")
 
         os.environ["HAMS_REAL_LOG_DIRECTORY"] = real_log_dir
-        # Isolate mount (-m) namespace. Network isolation happens dynamically post-provisioning.
-        exec_cmd = ["unshare", "-m", sys.executable, os.path.abspath(__file__), "--internal-ns-init"] + sys.argv[1:]
+        # Isolate mount (-m) and PID (-p) namespaces. Network isolation happens dynamically post-provisioning.
+        exec_cmd = [
+            "unshare",
+            "-m",
+            "-p",
+            "-f",
+            "--mount-proc",
+            sys.executable,
+            os.path.abspath(__file__),
+            "--internal-ns-init",
+        ] + sys.argv[1:]
 
         if os.geteuid() != 0:
-            print("[*] Elevating privileges (sudo) to construct isolated mount namespace...")
-            exec_cmd = ["sudo", "-H", "-E"] + exec_cmd
+            print(
+                "[*] Elevating privileges and applying 4G memory limit via systemd-run..."
+            )
+            exec_cmd = [
+                "sudo",
+                "-E",
+                "systemd-run",
+                "--scope",
+                "-q",
+                "-p",
+                "MemoryMax=4G",
+                "-p",
+                "TasksMax=infinity",
+            ] + exec_cmd
             os.execvpe("sudo", exec_cmd, os.environ)
         else:
             # os.execvpe completely replaces the current process, passing control natively
             os.execvpe("unshare", exec_cmd, os.environ)
         return
     os.environ["PYTHONWARNINGS"] = "ignore::DeprecationWarning"
-    host_tmp_dir = "/var/tmp" if os.environ.get("HAMS_ISOLATED_NS") == "1" else os.environ.get("HAMS_REAL_LOG_DIRECTORY", "/var/tmp")
+    host_tmp_dir = (
+        "/opt/hams/test"
+        if os.environ.get("HAMS_ISOLATED_NS") == "1"
+        else os.environ.get("HAMS_REAL_LOG_DIRECTORY", "/opt/hams/test")
+    )
     if os.environ.get("HAMS_ISOLATED_NS") != "1":
         os.makedirs(host_tmp_dir, exist_ok=True)
         try:
             os.chmod(host_tmp_dir, 0o777)
         except OSError as e:
             _logger.debug("Ignored OSError: %s", e)
-    os.environ.setdefault("ODOO_TEST_CHROME_ARGS", "--headless --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading")
+    os.environ.setdefault(
+        "ODOO_TEST_CHROME_ARGS",
+        "--headless --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
+    )
     os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", "autolaunch:")
 
     shared_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -1284,15 +1716,28 @@ def main():
     os.environ.setdefault("REDIS_HOST", "localhost")
 
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("-m", "--mode", choices=["standard", "individual", "xml", "downloads"], default="standard")
+    parser.add_argument(
+        "-m",
+        "--mode",
+        choices=["standard", "individual", "xml", "downloads"],
+        default="standard",
+    )
     parser.add_argument("-d", "--db", default="hams_test")
     parser.add_argument("-u", "--module")
-    parser.add_argument("-l", "--log-directory", default="~/tmp")
+    parser.add_argument("-l", "--log-directory", default="/opt/hams/test")
     parser.add_argument("-c", "--config", default="ignore_list.txt")
     parser.add_argument("--daemon")
     parser.add_argument("--profile", action="store_true")
-    parser.add_argument("--mcp", action="store_true", help="Launch the MCP server instead of running tests and shutting down.")
-    parser.add_argument("--pause-on-fail", action="store_true", help="Pause the browser indefinitely on tour failure (exposes port 9222).")
+    parser.add_argument(
+        "--mcp",
+        action="store_true",
+        help="Launch the MCP server instead of running tests and shutting down.",
+    )
+    parser.add_argument(
+        "--pause-on-fail",
+        action="store_true",
+        help="Pause the browser indefinitely on tour failure (exposes port 9222).",
+    )
     args = parser.parse_args()
 
     if args.pause_on_fail:
@@ -1309,7 +1754,11 @@ def main():
     ignore_patterns = load_ignore_file(ignore_filepath)
 
     target_modules = [m.strip() for m in args.module.split(",")] if args.module else []
-    install_modules = [m.split(":")[0] for m in target_modules] if args.module else get_local_modules(base_dir, ignore_patterns)
+    install_modules = (
+        [m.split(":")[0] for m in target_modules]
+        if args.module
+        else get_local_modules(base_dir, ignore_patterns)
+    )
     if not target_modules:
         target_modules = list(install_modules)
 
@@ -1326,11 +1775,15 @@ def main():
     def get_odoo_test_cmd(suffix=""):
         cmd = [python_exec]
         if args.profile:
-            cmd.extend(["-m", "cProfile", "-o", f"/var/tmp/odoo_test{suffix}.prof"])
+            cmd.extend(
+                ["-m", "cProfile", "-o", f"/opt/hams/test/odoo_test{suffix}.prof"]
+            )
         return cmd
 
     extractor = FailureExtractor(args.log_directory, mcp_mode=args.mcp)
-    print(f"==========================================================\n 🧪 ODOO TEST RUNNER [{args.mode.upper()} MODE]\n==========================================================")
+    print(
+        f"==========================================================\n 🧪 ODOO TEST RUNNER [{args.mode.upper()} MODE]\n=========================================================="
+    )
 
     check_linters(python_exec, base_dir, ignore_filepath, extractor, target_modules)
 
@@ -1346,9 +1799,25 @@ def main():
 
         mcp_server_script = os.path.join(shared_dir, "tools", "test_mcp_server.py")
         cmd = get_odoo_test_cmd() + [
-            mcp_server_script, "--load=base,web,zero_sudo", "--addons-path", addons_path,
-            "--dev=all", "-d", args.db, "-i", mod_string, "--workers=0",
-            "--max-cron-threads=0", "--http-interface", "127.0.0.1", "--http-port", "8069"
+            mcp_server_script,
+            "--load=base,web,zero_sudo",
+            "--addons-path",
+            addons_path,
+            "--dev=xml",
+            "-d",
+            args.db,
+            "-i",
+            mod_string,
+            "--workers=0",
+            "--max-cron-threads=0",
+            "--http-interface",
+            "127.0.0.1",
+            "--http-port",
+            "8069",
+            "--limit-memory-soft",
+            "0",
+            "--limit-memory-hard",
+            "0",
         ]
 
         if is_jules:
@@ -1369,10 +1838,29 @@ def main():
         os.environ["ODOO_PASSWORD"] = "admin"
 
         cmd = get_odoo_test_cmd() + [
-            odoo_bin, "--load=base,web,zero_sudo", "--addons-path", addons_path,
-            "--dev=all", "-d", args.db, "-i", mod_string, "--test-enable",
-            "--test-tags", test_tags, "--stop-after-init", "--workers=0",
-            "--max-cron-threads=0", "--http-interface", "127.0.0.1", "--http-port", "8069"
+            odoo_bin,
+            "--load=base,web,zero_sudo",
+            "--addons-path",
+            addons_path,
+            "--dev=xml",
+            "-d",
+            args.db,
+            "-i",
+            mod_string,
+            "--test-enable",
+            "--test-tags",
+            test_tags,
+            "--stop-after-init",
+            "--workers=0",
+            "--max-cron-threads=0",
+            "--http-interface",
+            "127.0.0.1",
+            "--http-port",
+            "8069",
+            "--limit-memory-soft",
+            "0",
+            "--limit-memory-hard",
+            "0",
         ]
 
         if is_jules:
@@ -1393,10 +1881,29 @@ def main():
         for mod in target_modules:
             rebuild_db(args.db)
             cmd = get_odoo_test_cmd(f"_{mod}") + [
-                odoo_bin, "--load=base,web,zero_sudo", "--addons-path", addons_path,
-                "--dev=all", "-d", args.db, "-i", mod, "--test-enable",
-                "--test-tags", f"/{mod}", "--stop-after-init", "--workers=0",
-                "--max-cron-threads=0", "--http-interface", "127.0.0.1", "--http-port", "8069"
+                odoo_bin,
+                "--load=base,web,zero_sudo",
+                "--addons-path",
+                addons_path,
+                "--dev=xml",
+                "-d",
+                args.db,
+                "-i",
+                mod,
+                "--test-enable",
+                "--test-tags",
+                f"/{mod}",
+                "--stop-after-init",
+                "--workers=0",
+                "--max-cron-threads=0",
+                "--http-interface",
+                "127.0.0.1",
+                "--http-port",
+                "8069",
+                "--limit-memory-soft",
+                "0",
+                "--limit-memory-hard",
+                "0",
             ]
 
             if is_jules:
@@ -1405,9 +1912,24 @@ def main():
                 cmd = ["sudo", "-E", "-u", "odoo"] + cmd
 
             rc = run_cmd(cmd, extractor)
-            if rc != 0: final_rc = 1
+            if rc != 0:
+                final_rc = 1
+
+    print("[*] Cleaning up Chrome temporary directories...")
+    if is_jules:
+        subprocess.run(
+            ["sudo", "sh", "-c", "rm -rf /tmp/*_chrome_odoo /var/tmp/*_chrome_odoo"],
+            capture_output=True,
+        )
+    else:
+        subprocess.run(
+            "rm -rf /tmp/*_chrome_odoo /var/tmp/*_chrome_odoo",
+            shell=True,
+            capture_output=True,
+        )
 
     sys.exit(final_rc)
+
 
 if __name__ == "__main__":
     main()

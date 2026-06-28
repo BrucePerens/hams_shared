@@ -13,6 +13,7 @@ import sys
 import os
 import threading
 
+
 def main():
     parser = argparse.ArgumentParser(description="List all active Odoo web routes.")
     parser.add_argument(
