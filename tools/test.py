@@ -612,9 +612,9 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
     env.setdefault("RMQ_USER", "guest")
     env.setdefault("RMQ_PASS", "guest")
     host_tmp_dir = (
-        "/opt/hams/test"
+        os.path.expanduser('~/tmp')
         if os.environ.get("HAMS_ISOLATED_NS") == "1"
-        else os.environ.get("HAMS_REAL_LOG_DIRECTORY", "/opt/hams/test")
+        else os.environ.get("HAMS_REAL_LOG_DIRECTORY", os.path.expanduser('~/tmp'))
     )
     if os.environ.get("HAMS_ISOLATED_NS") != "1":
         os.makedirs(host_tmp_dir, exist_ok=True)
@@ -1077,10 +1077,10 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     # 1. Ephemeral OverlayFS File System
     subprocess.run(["mount", "--make-rprivate", "/"], check=True)
     subprocess.run(["mount", "-t", "tmpfs", "tmpfs", "/mnt"], check=True)
-    for d in ["/mnt/upper", "/mnt/work", "/mnt/host_test_dir", "/opt/hams/test"]:
+    for d in ["/mnt/upper", "/mnt/work", "/mnt/host_test_dir", os.path.expanduser('~/tmp')]:
         os.makedirs(d, exist_ok=True)
     subprocess.run(
-        ["mount", "--bind", "/opt/hams/test", "/mnt/host_test_dir"], check=True
+        ["mount", "--bind", os.path.expanduser('~/tmp'), "/mnt/host_test_dir"], check=True
     )
 
     base_dir = os.getcwd()
@@ -1099,7 +1099,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
             preserved_socks.append((temp_sock, sock))
 
     # Anchor the true host path to an un-overlaid tmpfs directory BEFORE overlaying /home
-    host_tmp_dir = real_log_dir if real_log_dir else "/opt/hams/test"
+    host_tmp_dir = real_log_dir if real_log_dir else os.path.expanduser('~/tmp')
     os.makedirs(host_tmp_dir, exist_ok=True)
     try:
         os.chmod(host_tmp_dir, 0o777)
@@ -1108,7 +1108,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     os.makedirs("/mnt/real_tmp", exist_ok=True)
     subprocess.run(["mount", "--bind", host_tmp_dir, "/mnt/real_tmp"], check=True)
 
-    # Explicitly prepare the host log directory (/opt/hams/test/log) before overlay
+    # Explicitly prepare the host log directory (~/tmp/log) before overlay
     host_log_dir = os.path.join(host_tmp_dir, "log")
     os.makedirs(host_log_dir, exist_ok=True)
     try:
@@ -1151,14 +1151,14 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     orig_user = os.environ.get("SUDO_USER", "odoo")
 
     # GNUPG isolated home
-    os.makedirs("/opt/hams/test/.gnupg", exist_ok=True)
+    os.makedirs(f"{os.path.expanduser('~/tmp')}/.gnupg", exist_ok=True)
     try:
-        os.chmod("/opt/hams/test/.gnupg", 0o700)
+        os.chmod(f"{os.path.expanduser('~/tmp')}/.gnupg", 0o700)
     except OSError as e:
         _logger.debug("Failed to set permissions on .gnupg: %s", e)
 
     env_vars = dict(os.environ)
-    env_vars["GNUPGHOME"] = "/opt/hams/test/.gnupg"
+    env_vars["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
     env_vars["REPO_ROOT"] = base_dir
 
     infrastructure.provision_environment(_safe_run, env_vars, orig_user, skip_apt=True)
@@ -1179,9 +1179,9 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     # Bring up the isolated loopback interface now that we are in the new network namespace
     subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
 
-    # Bind the preserved host directory to the overlay's /opt/hams/test
-    os.makedirs("/opt/hams/test", exist_ok=True)
-    subprocess.run(["mount", "--bind", "/mnt/real_tmp", "/opt/hams/test"], check=True)
+    # Bind the preserved host directory to the overlay's host tmp dir
+    os.makedirs(os.path.expanduser('~/tmp'), exist_ok=True)
+    subprocess.run(["mount", "--bind", "/mnt/real_tmp", os.path.expanduser('~/tmp')], check=True)
 
     # Bind the preserved host log directory to the overlay's /var/log
     os.makedirs("/var/log", exist_ok=True)
@@ -1405,8 +1405,8 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     os.environ["PGHOST"] = pg_sock
 
-    # Inside the namespace, /opt/hams/test is perfectly bound to the real log dir.
-    host_tmp_dir = "/opt/hams/test"
+    # Inside the namespace, host tmp dir is perfectly bound to the real log dir.
+    host_tmp_dir = os.path.expanduser('~/tmp')
     os.environ["ODOO_TEST_CHROME_ARGS"] = (
         "--headless --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,dbus,OptimizationGuideModelDownloading"
     )
@@ -1472,7 +1472,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         orig_uid = -1
 
     if orig_uid != -1:
-        for prof in glob.glob("/opt/hams/test/*.prof"):
+        for prof in glob.glob(f"{os.path.expanduser('~/tmp')}/*.prof"):
             os.chown(prof, orig_uid, -1)
 
     sys.exit(ret)
@@ -1491,17 +1491,17 @@ def _safe_run(cmd, **kw):
 orig_user = '{os.environ.get("USER", "odoo")}'
 env_vars = dict(os.environ)
 env_vars["REPO_ROOT"] = '{base_dir}'
-env_vars["HOME"] = "/opt/hams/test"
-env_vars["GNUPGHOME"] = "/opt/hams/test/.gnupg"
-os.environ["GNUPGHOME"] = "/opt/hams/test/.gnupg"
+env_vars["HOME"] = os.path.expanduser('~/tmp')
+env_vars["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
+os.environ["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
 infrastructure.provision_environment(_safe_run, env_vars, orig_user, skip_apt=True)"""
 
     cmd = ["sudo", "-E", sys.executable, "-c", script]
     run_env = os.environ.copy()
-    run_env["HOME"] = "/opt/hams/test"
-    run_env["GNUPGHOME"] = "/opt/hams/test/.gnupg"
-    subprocess.run(["mkdir", "-p", "/opt/hams/test/.gnupg"], check=False)
-    subprocess.run(["chmod", "700", "/opt/hams/test/.gnupg"], check=False)
+    run_env["HOME"] = os.path.expanduser('~/tmp')
+    run_env["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
+    subprocess.run(["mkdir", "-p", f"{os.path.expanduser('~/tmp')}/.gnupg"], check=False)
+    subprocess.run(["chmod", "700", f"{os.path.expanduser('~/tmp')}/.gnupg"], check=False)
     subprocess.run(cmd, check=True, env=run_env)
 
     pg_socket = "/var/run/postgresql"
@@ -1550,7 +1550,7 @@ _single_instance_lock = None
 def main():
     global _single_instance_lock
     if os.environ.get("HAMS_ISOLATED_NS") != "1":
-        lock_file_path = "/opt/hams/test/odoo_test_runner.lock"
+        lock_file_path = f"{os.path.expanduser('~/tmp')}/odoo_test_runner.lock"
         try:
             _single_instance_lock = open(lock_file_path, "a")
             os.chmod(lock_file_path, 0o777)
@@ -1628,7 +1628,7 @@ def main():
             return
 
         parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
-        parser.add_argument("-l", "--log-directory", default="/opt/hams/test")
+        parser.add_argument("-l", "--log-directory", default=os.path.expanduser('~/tmp'))
         args, _ = parser.parse_known_args()
 
         real_log_dir = os.path.abspath(os.path.expanduser(args.log_directory))
@@ -1683,9 +1683,9 @@ def main():
         return
     os.environ["PYTHONWARNINGS"] = "ignore::DeprecationWarning"
     host_tmp_dir = (
-        "/opt/hams/test"
+        os.path.expanduser('~/tmp')
         if os.environ.get("HAMS_ISOLATED_NS") == "1"
-        else os.environ.get("HAMS_REAL_LOG_DIRECTORY", "/opt/hams/test")
+        else os.environ.get("HAMS_REAL_LOG_DIRECTORY", os.path.expanduser('~/tmp'))
     )
     if os.environ.get("HAMS_ISOLATED_NS") != "1":
         os.makedirs(host_tmp_dir, exist_ok=True)
@@ -1724,7 +1724,7 @@ def main():
     )
     parser.add_argument("-d", "--db", default="hams_test")
     parser.add_argument("-u", "--module")
-    parser.add_argument("-l", "--log-directory", default="/opt/hams/test")
+    parser.add_argument("-l", "--log-directory", default=os.path.expanduser('~/tmp'))
     parser.add_argument("-c", "--config", default="ignore_list.txt")
     parser.add_argument("--daemon")
     parser.add_argument("--profile", action="store_true")
@@ -1776,7 +1776,7 @@ def main():
         cmd = [python_exec]
         if args.profile:
             cmd.extend(
-                ["-m", "cProfile", "-o", f"/opt/hams/test/odoo_test{suffix}.prof"]
+                ["-m", "cProfile", "-o", f"{os.path.expanduser('~/tmp')}/odoo_test{suffix}.pro"]
             )
         return cmd
 

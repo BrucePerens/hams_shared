@@ -36,6 +36,11 @@ Hot-reload Python test files.
 - **Parameters:** `module_names` (string, comma-separated list).
 - **Behavior:** If you only modify a test file (e.g. `test_security_utils.py`), you do *not* need to update the whole module. Just run this tool to hot-reload the test modules into Python's `sys.modules`, and then run `run_tests` again.
 
+### `kill_server`
+Kill the MCP server and Odoo processes entirely.
+- **Parameters:** None.
+- **Behavior:** Kills the MCP server and its process group, taking down Chrome, Odoo, and the server itself. Useful when you need to start fresh or have completed testing.
+
 ## Standard Workflow
 
 1. Modify an Odoo Model / View / Controller: Use `update_modules("my_module")`, then `run_tests("my_module")`.
