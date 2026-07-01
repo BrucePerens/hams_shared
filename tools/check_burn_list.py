@@ -195,6 +195,21 @@ GENERAL_ERROR_RULES = [
         "JS DOM XSS: Template literal passed to bindPopup or innerHTML.",
     ),
     (
+        r"\.js$",
+        re.compile(r"^(?!\s*try\s*\{).*useService\(['\"]rpc['\"]\)", re.MULTILINE),
+        "CRITICAL TESTING: useService('rpc') MUST be wrapped in a try/catch block (e.g. `try { this.rpc = useService('rpc'); } catch(e) {}`) to prevent crashes in the standalone testing harness.",
+    ),
+    (
+        r"\.xml$",
+        re.compile(r"state\.[a-zA-Z0-9_]+\.toUpperCase\(\)"),
+        "CRITICAL OWL SYNTAX: Calling .toUpperCase() directly on a state variable in XML will crash the component if the state is uninitialized. Use a fallback like `(state.var || '').toUpperCase()`.",
+    ),
+    (
+        r"\.xml$",
+        re.compile(r"t-foreach=[\"']state\.[a-zA-Z0-9_]+[\"']"),
+        "CRITICAL OWL SYNTAX: Iterating directly over `state.X` in a t-foreach can crash if the array is uninitialized in useState(). Use a fallback like `t-foreach=\"state.X || []\"` or ensure strict initialization in the component.",
+    ),
+    (
         r"\.py$",
         re.compile(r"except\s+ImportError\s*:"),
         "CRITICAL AI FAILURE: Wrapping imports in try/except ImportError is forbidden. Use manifest external_dependencies.",
@@ -2003,6 +2018,10 @@ def scan_file(filepath, is_odoo_module=False):
                             errors_found.append(
                                 f"Line {node.lineno}: CRITICAL ANCHOR FORMAT: Semantic anchors in XML/HTML MUST be enclosed within comments (). Found in attribute."
                             )
+                        if attr_name.startswith("t-on-") and re.search(r"=>\s*\{", str(attr_val)):
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL OWL SYNTAX: Owl 2 does not support arrow functions with block bodies (e.g. `() => {{ ... }}`) in `{attr_name}`. Use an expression arrow function (e.g. `() => doSomething()`) or bind to a component method."
+                            )
 
                 if node.tag == "template" or (
                     node.tag == "record" and node.attrs.get("model") == "ir.ui.view"
@@ -2845,6 +2864,17 @@ def main():
         return False
 
     for root, dirs, files in os.walk(target_dir):
+        if "venv" in dirs: dirs.remove("venv")
+        if ".venv" in dirs: dirs.remove(".venv")
+        if "test_env" in dirs: dirs.remove("test_env")
+        if "env" in dirs: dirs.remove("env")
+        dirs[:] = [d for d in dirs if "env" not in d]
+        if "venv" in dirs: dirs.remove("venv")
+        if ".venv" in dirs: dirs.remove(".venv")
+        if "venv" in root or "site-packages" in root: continue
+        if "venv" in dirs: dirs.remove("venv")
+        if "venv" in root:
+            continue
         dirs[:] = [
             d
             for d in dirs
@@ -2997,6 +3027,16 @@ def main():
     xml_content_all = ""
     js_content_all = ""
     for root, dirs, files in os.walk(target_dir):
+        if "venv" in dirs: dirs.remove("venv")
+        if ".venv" in dirs: dirs.remove(".venv")
+        if "test_env" in dirs: dirs.remove("test_env")
+        if "env" in dirs: dirs.remove("env")
+        dirs[:] = [d for d in dirs if "env" not in d]
+        if "venv" in dirs: dirs.remove("venv")
+        if ".venv" in dirs: dirs.remove(".venv")
+        if "venv" in root or "site-packages" in root: continue
+        if "venv" in root:
+            continue
         if "node_modules" in root:
             continue
         for file in files:

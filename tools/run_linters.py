@@ -132,7 +132,7 @@ def main():
             [
                 flake8_cmd,
                 dir_path,
-                "--exclude=venv,env,.venv,__pycache__,node_modules",
+                "--exclude=venv,env,.venv,__pycache__,node_modules,target,daemons",
                 "--select=E9,F,E402",
                 "--per-file-ignores=__init__.py:F401",
             ],
@@ -232,7 +232,11 @@ def main():
 
     # 13. check_absolute_paths
     res = subprocess.run(
-        [python_exec, os.path.join(dir_path, "tools", "check_absolute_paths.py"), dir_path],
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_absolute_paths.py"),
+            dir_path,
+        ],
         capture_output=True,
         text=True,
     )

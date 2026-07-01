@@ -9,6 +9,17 @@ you MUST read `hams_shared/docs/LLM_WRITING_TOURS.md`. The environment is heavil
 and prone to race conditions if native macros are ignored.
 """
 
+import builtins
+import sys
+
+if "--mcp" in sys.argv:
+    _orig_print = builtins.print
+    def _mcp_print(*args, **kwargs):
+        if kwargs.get("file") is None:
+            kwargs["file"] = sys.stderr
+        _orig_print(*args, **kwargs)
+    builtins.print = _mcp_print
+
 import infrastructure
 import sys
 
@@ -72,7 +83,7 @@ class OOMWatchdog(multiprocessing.Process):
                         pass
 
                 total_rss_gb = total_rss / (1024**3)
-                
+
                 # Also check host system available memory
                 mem_avail_mb = 10000
                 try:
@@ -85,7 +96,11 @@ class OOMWatchdog(multiprocessing.Process):
                     pass
 
                 if total_rss_gb > self.rss_limit_gb or mem_avail_mb < 512:
-                    reason = f"Total RSS: {total_rss_gb:.2f}GB > {self.rss_limit_gb}GB" if total_rss_gb > self.rss_limit_gb else f"Host available memory ({mem_avail_mb}MB) is critically low (< 512MB)"
+                    reason = (
+                        f"Total RSS: {total_rss_gb:.2f}GB > {self.rss_limit_gb}GB"
+                        if total_rss_gb > self.rss_limit_gb
+                        else f"Host available memory ({mem_avail_mb}MB) is critically low (< 512MB)"
+                    )
                     print(
                         f"\n[🚨 OOM WATCHDOG] Aggregate memory exceeded limits! ({reason}). Terminating children...\n",
                         flush=True,
@@ -612,9 +627,9 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
     env.setdefault("RMQ_USER", "guest")
     env.setdefault("RMQ_PASS", "guest")
     host_tmp_dir = (
-        os.path.expanduser('~/tmp')
+        os.path.expanduser("~/tmp")
         if os.environ.get("HAMS_ISOLATED_NS") == "1"
-        else os.environ.get("HAMS_REAL_LOG_DIRECTORY", os.path.expanduser('~/tmp'))
+        else os.environ.get("HAMS_REAL_LOG_DIRECTORY", os.path.expanduser("~/tmp"))
     )
     if os.environ.get("HAMS_ISOLATED_NS") != "1":
         os.makedirs(host_tmp_dir, exist_ok=True)
@@ -1077,10 +1092,16 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     # 1. Ephemeral OverlayFS File System
     subprocess.run(["mount", "--make-rprivate", "/"], check=True)
     subprocess.run(["mount", "-t", "tmpfs", "tmpfs", "/mnt"], check=True)
-    for d in ["/mnt/upper", "/mnt/work", "/mnt/host_test_dir", os.path.expanduser('~/tmp')]:
+    for d in [
+        "/mnt/upper",
+        "/mnt/work",
+        "/mnt/host_test_dir",
+        os.path.expanduser("~/tmp"),
+    ]:
         os.makedirs(d, exist_ok=True)
     subprocess.run(
-        ["mount", "--bind", os.path.expanduser('~/tmp'), "/mnt/host_test_dir"], check=True
+        ["mount", "--bind", os.path.expanduser("~/tmp"), "/mnt/host_test_dir"],
+        check=True,
     )
 
     base_dir = os.getcwd()
@@ -1099,7 +1120,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
             preserved_socks.append((temp_sock, sock))
 
     # Anchor the true host path to an un-overlaid tmpfs directory BEFORE overlaying /home
-    host_tmp_dir = real_log_dir if real_log_dir else os.path.expanduser('~/tmp')
+    host_tmp_dir = real_log_dir if real_log_dir else os.path.expanduser("~/tmp")
     os.makedirs(host_tmp_dir, exist_ok=True)
     try:
         os.chmod(host_tmp_dir, 0o777)
@@ -1180,8 +1201,10 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
 
     # Bind the preserved host directory to the overlay's host tmp dir
-    os.makedirs(os.path.expanduser('~/tmp'), exist_ok=True)
-    subprocess.run(["mount", "--bind", "/mnt/real_tmp", os.path.expanduser('~/tmp')], check=True)
+    os.makedirs(os.path.expanduser("~/tmp"), exist_ok=True)
+    subprocess.run(
+        ["mount", "--bind", "/mnt/real_tmp", os.path.expanduser("~/tmp")], check=True
+    )
 
     # Bind the preserved host log directory to the overlay's /var/log
     os.makedirs("/var/log", exist_ok=True)
@@ -1388,7 +1411,11 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
     try:
         rmq_proc = subprocess.Popen(
-            ["bash", "-c", "trap 'kill -TERM 0 2>/dev/null; exit 0' TERM; rabbitmq-server & wait $!"],
+            [
+                "bash",
+                "-c",
+                "trap 'kill -TERM 0 2>/dev/null; exit 0' TERM; rabbitmq-server & wait $!",
+            ],
             preexec_fn=preexec_rmq,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -1406,7 +1433,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     os.environ["PGHOST"] = pg_sock
 
     # Inside the namespace, host tmp dir is perfectly bound to the real log dir.
-    host_tmp_dir = os.path.expanduser('~/tmp')
+    host_tmp_dir = os.path.expanduser("~/tmp")
     os.environ["ODOO_TEST_CHROME_ARGS"] = (
         "--headless --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,dbus,OptimizationGuideModelDownloading"
     )
@@ -1464,7 +1491,12 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
                 pass
 
     # Explicitly kill Erlang Port Mapper Daemon (epmd) spawned by RabbitMQ
-    subprocess.run(["epmd", "-kill"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(
+        ["epmd", "-kill"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
     try:
         orig_uid = pwd.getpwnam(orig_user).pw_uid
@@ -1498,10 +1530,14 @@ infrastructure.provision_environment(_safe_run, env_vars, orig_user, skip_apt=Tr
 
     cmd = ["sudo", "-E", sys.executable, "-c", script]
     run_env = os.environ.copy()
-    run_env["HOME"] = os.path.expanduser('~/tmp')
+    run_env["HOME"] = os.path.expanduser("~/tmp")
     run_env["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
-    subprocess.run(["mkdir", "-p", f"{os.path.expanduser('~/tmp')}/.gnupg"], check=False)
-    subprocess.run(["chmod", "700", f"{os.path.expanduser('~/tmp')}/.gnupg"], check=False)
+    subprocess.run(
+        ["mkdir", "-p", f"{os.path.expanduser('~/tmp')}/.gnupg"], check=False
+    )
+    subprocess.run(
+        ["chmod", "700", f"{os.path.expanduser('~/tmp')}/.gnupg"], check=False
+    )
     subprocess.run(cmd, check=True, env=run_env)
 
     pg_socket = "/var/run/postgresql"
@@ -1628,7 +1664,9 @@ def main():
             return
 
         parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
-        parser.add_argument("-l", "--log-directory", default=os.path.expanduser('~/tmp'))
+        parser.add_argument(
+            "-l", "--log-directory", default=os.path.expanduser("~/tmp")
+        )
         args, _ = parser.parse_known_args()
 
         real_log_dir = os.path.abspath(os.path.expanduser(args.log_directory))
@@ -1683,9 +1721,9 @@ def main():
         return
     os.environ["PYTHONWARNINGS"] = "ignore::DeprecationWarning"
     host_tmp_dir = (
-        os.path.expanduser('~/tmp')
+        os.path.expanduser("~/tmp")
         if os.environ.get("HAMS_ISOLATED_NS") == "1"
-        else os.environ.get("HAMS_REAL_LOG_DIRECTORY", os.path.expanduser('~/tmp'))
+        else os.environ.get("HAMS_REAL_LOG_DIRECTORY", os.path.expanduser("~/tmp"))
     )
     if os.environ.get("HAMS_ISOLATED_NS") != "1":
         os.makedirs(host_tmp_dir, exist_ok=True)
@@ -1724,7 +1762,7 @@ def main():
     )
     parser.add_argument("-d", "--db", default="hams_test")
     parser.add_argument("-u", "--module")
-    parser.add_argument("-l", "--log-directory", default=os.path.expanduser('~/tmp'))
+    parser.add_argument("-l", "--log-directory", default=os.path.expanduser("~/tmp"))
     parser.add_argument("-c", "--config", default="ignore_list.txt")
     parser.add_argument("--daemon")
     parser.add_argument("--profile", action="store_true")
@@ -1776,7 +1814,12 @@ def main():
         cmd = [python_exec]
         if args.profile:
             cmd.extend(
-                ["-m", "cProfile", "-o", f"{os.path.expanduser('~/tmp')}/odoo_test{suffix}.pro"]
+                [
+                    "-m",
+                    "cProfile",
+                    "-o",
+                    f"{os.path.expanduser('~/tmp')}/odoo_test{suffix}.pro",
+                ]
             )
         return cmd
 

@@ -391,13 +391,7 @@ MANIFEST = {
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
-        {
-            "path": "/var/lib/odoo/daemon_keys",
-            "owner": "odoo:hams_com",
-            "provision_mode": "750",
-            "runtime_mount": "rw",
-            "environments": ["prod", "test"],
-        },
+
         {
             "path": "/var/lib/odoo/backups",
             "owner": "odoo:hams_com",
@@ -1290,7 +1284,7 @@ WantedBy=multi-user.target
                 "ODOO_RC=/etc/odoo/odoo.conf",
             ],
             "ProtectSystem": "strict",
-            "BindPaths": "/opt/hams/etc/keys:/var/lib/odoo/daemon_keys",
+            "ReadWritePaths": "/opt/hams/etc/keys",
             "PrivateTmp": "true",
             "PrivateDevices": "true",
             "NoNewPrivileges": "true",

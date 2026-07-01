@@ -211,10 +211,12 @@ def _process_file_for_anchors(
                 cross_references.setdefault(anchor, []).append(loc_str)
 
             elif anchor_name.startswith(("story_", "journey_", "doc_")):
-                pass  # Documentation-only anchors, ignored in code logic tracing.
+                # Documentation-only anchors, ignored in code logic tracing.
+                pass
 
             elif re.search(r"\b(See|and|also|or|to)\b$", first_prefix, re.IGNORECASE):
-                pass  # Conversational/Inline references, ignored in logic tracing.
+                # Conversational/Inline references, ignored in logic tracing.
+                pass
 
             else:
                 # LLM NOTE: Matches a BASE declaration, e.g., `# [@ANCHOR: my_feature]`

@@ -226,7 +226,8 @@ def build_packages():
 
     # 1. macOS Package
     mac_zip_path = os.path.join(DOWNLOADS_DIR, "hams_relay_macos.zip")
-    with zipfile.ZipFile(mac_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:  # audit-ignore-path  # fmt: skip
+    # audit-ignore-path  # fmt: skip
+    with zipfile.ZipFile(mac_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("hams_local_relay.py", RELAY_PY)
 
         info = zipfile.ZipInfo("install_macos.command")
@@ -237,7 +238,8 @@ def build_packages():
 
     # 2. Linux Package
     linux_zip_path = os.path.join(DOWNLOADS_DIR, "hams_relay_linux.zip")
-    with zipfile.ZipFile(linux_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:  # audit-ignore-path  # fmt: skip
+    # audit-ignore-path  # fmt: skip
+    with zipfile.ZipFile(linux_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("hams_local_relay.py", RELAY_PY)
 
         info = zipfile.ZipInfo("install_linux.sh")
@@ -250,7 +252,8 @@ def build_packages():
     win_url, win_name = fetch_latest_hamlib_windows()
     with tempfile.TemporaryDirectory() as tmpdir:
         win_zip_path = os.path.join(DOWNLOADS_DIR, "hams_relay_windows.zip")
-        with zipfile.ZipFile(win_zip_path, "w", zipfile.ZIP_DEFLATED) as target_zip:  # audit-ignore-path  # fmt: skip
+        # audit-ignore-path  # fmt: skip
+        with zipfile.ZipFile(win_zip_path, "w", zipfile.ZIP_DEFLATED) as target_zip:
             target_zip.writestr("hams_local_relay.py", RELAY_PY)
             target_zip.writestr("install_windows.bat", INSTALL_WINDOWS)
 
@@ -258,7 +261,8 @@ def build_packages():
                 local_hamlib_zip = os.path.join(tmpdir, win_name)
                 download_file(win_url, local_hamlib_zip)
                 print("[*] Extracting Hamlib binaries into Windows package...")
-                with zipfile.ZipFile(local_hamlib_zip, "r") as source_zip:  # audit-ignore-path  # fmt: skip
+                # audit-ignore-path  # fmt: skip
+                with zipfile.ZipFile(local_hamlib_zip, "r") as source_zip:
                     for item in source_zip.infolist():
                         extracted_data = source_zip.read(item.filename)
                         parts = item.filename.split("/")

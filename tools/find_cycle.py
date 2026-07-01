@@ -1,4 +1,5 @@
-import os, ast
+import os
+import ast
 
 
 def get_deps(path):

@@ -37,6 +37,7 @@ def main():
     warnings = 0
 
     for root, dirs, files in os.walk(repo_root):
+        dirs[:] = [d for d in dirs if d not in ('target', 'venv', '.venv', 'node_modules', 'daemons', 'test_env', '.git')]
         if "__init__.py" in files:
             init_path = os.path.join(root, "__init__.py")
             imported = get_imported_names(init_path)
