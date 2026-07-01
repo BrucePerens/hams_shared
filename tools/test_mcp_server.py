@@ -5,6 +5,7 @@ import logging
 import io
 import unittest
 import importlib
+import subprocess
 from contextlib import redirect_stdout, redirect_stderr
 
 from mcp.server.fastmcp import FastMCP, Context
@@ -116,8 +117,6 @@ def run_tests(module_names: str, ctx: Context) -> str:
             _logger.exception("Error running tests:")
 
     return out.getvalue()
-
-import subprocess
 
 @mcp.tool()
 def run_linters(module_names: str, ctx: Context) -> str:

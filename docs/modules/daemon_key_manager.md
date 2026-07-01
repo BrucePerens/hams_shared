@@ -15,7 +15,7 @@ def setup_daemon_credentials(env):
     env['daemon.key.registry'].register_daemon(
         daemon_name="My External Daemon",
         user_xml_id="my_module.my_service_account",
-        env_file_path="/var/lib/odoo/daemon_keys/my_daemon.env"
+        env_file_path="/opt/hams/etc/keys/my_daemon.env"
     )
 ```
 
@@ -27,7 +27,7 @@ The module operates under the `user_daemon_key_manager_service` account. It uses
 ### OS-Level Sandboxing
 * **Strict Permissions:** `.env` files are created with `0600` (read/write only for the Odoo server process user).
 * **Directory Isolation:** Parent directories are created with `0700` to prevent other users on the system from traversing into the key storage area.
-* **Path Validation:** All paths MUST start with `/var/lib/odoo/daemon_keys/`. The module strictly blocks directory traversal (`..`) and symlink attacks by resolving the `os.path.realpath` of the requested path before performing any file operations [@ANCHOR: security_constraints_path].
+* **Path Validation:** All paths MUST start with `/opt/hams/etc/keys/`. The module strictly blocks directory traversal (`..`) and symlink attacks by resolving the `os.path.realpath` of the requested path before performing any file operations [@ANCHOR: security_constraints_path].
 * **System Directory Protection:** Writing to sensitive system directories (like `/etc`, `/root`, `/boot`, `/home`, `/usr`, `/bin`, `/lib`, `/var/log`) is explicitly forbidden regardless of the prefix check [@ANCHOR: write_secure_env_file_logic].
 
 ### Automated Key Rotation
@@ -41,7 +41,7 @@ Keys are automatically rotated every 60 days via an `ir.cron` job [@ANCHOR: cron
 ## 🛠️ Technical Reference
 
 ### 1. Storage & Orchestration Mandate
-All credentials **MUST** be written to `/var/lib/odoo/daemon_keys/`.
+All credentials **MUST** be written to `/opt/hams/etc/keys/`.
 In containerized/orchestrated environments:
 * **Odoo Container:** Mount the volume as **Read/Write**.
 * **Daemon Containers:** Mount the volume as **Read-Only**.
@@ -51,7 +51,7 @@ In containerized/orchestrated environments:
 #### `register_daemon(daemon_name, user_xml_id, env_file_path)` [@ANCHOR: register_daemon_api]
 * **`daemon_name`**: A unique string identifier for the external service.
 * **`user_xml_id`**: The XML ID of the service account record (e.g., `pager_duty.user_pager_service_internal`). This account must have `is_service_account` set to `True`.
-* **`env_file_path`**: The absolute path where the `.env` file should be written. It must reside within `/var/lib/odoo/daemon_keys/`.
+* **`env_file_path`**: The absolute path where the `.env` file should be written. It must reside within `/opt/hams/etc/keys/`.
 * **Behavior**: This method is idempotent. If a daemon with the same name exists, its service account and path are updated. It immediately triggers the generation of the first API key and writes the file [@ANCHOR: register_daemon_logic] [@ANCHOR: register_daemon_idempotency].
 
 #### `action_force_provision_all()` [@ANCHOR: action_force_provision_all_api]

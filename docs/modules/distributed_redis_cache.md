@@ -78,7 +78,7 @@ Provides a management form to check Redis status and manually invalidate model c
 
 <config>
 ## 5. Configuration [@ANCHOR: cache_manager_config]
-Configurable via environment variables or `.env` file at `/var/lib/odoo/daemon_keys/cache_manager.env`.
+Configurable via environment variables or `.env` file at `/opt/hams/etc/keys/cache_manager.env`.
 </config>
 
 <stories_and_journeys>
