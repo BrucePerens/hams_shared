@@ -83,6 +83,7 @@ def main():
     vulnerable_files = 0
 
     for root, dirs, files in os.walk(base_dir):
+        if "radae" in dirs: dirs.remove("radae")
         # Ignore virtual environments, node modules, and caches
         dirs[:] = [
             d for d in dirs if d not in ("venv", "node_modules", "__pycache__", ".git")

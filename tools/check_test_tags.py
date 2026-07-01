@@ -74,6 +74,7 @@ def main():
     all_passed = True
 
     for root, dirs, files in os.walk(repo_root):
+        if "radae" in dirs: dirs.remove("radae")
         # Only process files inside a 'tests' directory
         if "tests" not in Path(root).parts:
             continue

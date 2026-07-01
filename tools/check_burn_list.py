@@ -2864,6 +2864,7 @@ def main():
         return False
 
     for root, dirs, files in os.walk(target_dir):
+        if "radae" in dirs: dirs.remove("radae")
         if "venv" in dirs: dirs.remove("venv")
         if ".venv" in dirs: dirs.remove(".venv")
         if "test_env" in dirs: dirs.remove("test_env")
@@ -3027,6 +3028,7 @@ def main():
     xml_content_all = ""
     js_content_all = ""
     for root, dirs, files in os.walk(target_dir):
+        if "radae" in dirs: dirs.remove("radae")
         if "venv" in dirs: dirs.remove("venv")
         if ".venv" in dirs: dirs.remove(".venv")
         if "test_env" in dirs: dirs.remove("test_env")

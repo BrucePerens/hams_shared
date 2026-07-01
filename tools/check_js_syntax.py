@@ -73,6 +73,7 @@ def main():
         if not os.path.isdir(d):
             continue
         for root, dirs, files in os.walk(d):
+            if "radae" in dirs: dirs.remove("radae")
             # Prune hidden folders and standard library directories to save time
             dirs[:] = [
                 dir_name

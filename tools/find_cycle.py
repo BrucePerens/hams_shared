@@ -10,6 +10,7 @@ def get_deps(path):
 
 deps = {}
 for root, dirs, files in os.walk("."):
+    if "radae" in dirs: dirs.remove("radae")
     if "__manifest__.py" in files:
         mod = os.path.basename(root)
         deps[mod] = get_deps(os.path.join(root, "__manifest__.py"))

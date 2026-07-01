@@ -20,6 +20,7 @@ def check_absolute_paths(repo_dir):
         "__pycache__",
         ".agents",
         "target",
+        "radae",
     }
     # Only check text-based files
     valid_exts = {

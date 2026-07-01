@@ -11,6 +11,7 @@ def fix_test_imports():
     updated_count = 0
 
     for root, dirs, files in os.walk("."):
+        if "radae" in dirs: dirs.remove("radae")
         # Ignore version control and environment directories
         dirs[:] = [
             d

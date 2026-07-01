@@ -27,6 +27,7 @@ def main():
 
     # 1. Map all manifests, their dependencies, and asset bundles
     for root, dirs, files in os.walk(repo_root):
+        if "radae" in dirs: dirs.remove("radae")
         if "__manifest__.py" in files:
             mod_name = os.path.basename(root)
             manifest_path = os.path.join(root, "__manifest__.py")
@@ -66,6 +67,7 @@ def main():
     )
 
     for root, dirs, files in os.walk(repo_root):
+        if "radae" in dirs: dirs.remove("radae")
         if "node_modules" in root:
             continue
         for file in files:

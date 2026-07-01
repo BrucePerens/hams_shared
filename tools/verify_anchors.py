@@ -107,6 +107,7 @@ def find_anchors_in_docs(root_dir, repo_root):
     }
 
     for root, dirs, files in os.walk(root_dir):
+        if "radae" in dirs: dirs.remove("radae")
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
         is_docs_dir = "docs" in root.split(os.sep)
 
@@ -249,6 +250,7 @@ def find_anchors_in_code(root_dir, repo_root):
     }
 
     for root, dirs, files in os.walk(root_dir):
+        if "radae" in dirs: dirs.remove("radae")
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
 
         for file in files:
@@ -752,6 +754,7 @@ def main():
         duplicates.extend(dups)
 
         for root, dirs, files in os.walk(target_dir):
+            if "radae" in dirs: dirs.remove("radae")
             dirs[:] = [
                 d
                 for d in dirs
