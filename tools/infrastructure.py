@@ -131,7 +131,7 @@ def download_file(url, path, mode, env_vars):
     )
     req = urllib.request.Request(url, headers={"User-Agent": ua})
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=5) as response:
             data = response.read()
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("Network partition fallback safety hit fetching %s: %s", url, e)
