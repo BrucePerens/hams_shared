@@ -45,6 +45,24 @@ def provision():
             kw["env"] = env_vars
         return subprocess.run(cmd, check=True, **kw)
 
+    if os_id == "debian":
+        _logger.info("[*] Generating dummy python3-pypdf2 package for Debian compatibility")
+        run_sys(["apt-get", "update", "-y"])
+        run_sys(["apt-get", "install", "-y", "equivs"])
+        equivs_config = (
+            "Section: python\n"
+            "Priority: optional\n"
+            "Standards-Version: 4.1.4\n"
+            "Package: python3-pypdf2\n"
+            "Version: 1.0\n"
+            "Depends: python3-pypdf\n"
+            "Description: Dummy python3-pypdf2 package for Ubuntu compatibility\n"
+        )
+        with open("/tmp/python3-pypdf2.control", "w") as f:
+            f.write(equivs_config)
+        run_sys(["equivs-build", "python3-pypdf2.control"], cwd="/tmp")
+        run_sys(["dpkg", "-i", "/tmp/python3-pypdf2_1.0_all.deb"])
+
     infrastructure.provision_environment(run_sys, env_vars, orig_user, os_id)
 
 
