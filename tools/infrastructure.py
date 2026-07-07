@@ -1824,6 +1824,7 @@ def provision_environment(
                     "pgeocode",
                     "telnetlib3",
                     "mcp",
+                    "adif-io",
                     "--ignore-installed",
                     "typing_extensions",
                     "--break-system-packages",
