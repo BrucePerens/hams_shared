@@ -1563,7 +1563,7 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
             svc_name = os.path.basename(path)
             if not has_hams_com and svc_name != "hams-pycache.service":
                 continue
-            if svc_name in ("hams.daemon.keys.service", "system-startup.service"):
+            if svc_name == "system-startup.service":
                 continue
             if is_test_env and svc_name in skip_in_test:
                 continue
