@@ -1,1 +1,34 @@
+# Internationalization
+i18n/hams_master.pot
+
+# Python / Bytecode
 __pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+.venv/
+
+# Environment Variables / Secrets
+.env
+
+# IDEs / Editors
+.vscode/
+.idea/
+
+# OS Generated
+.DS_Store
+Thumbs.db
+
+# Odoo Local Dev
+*.log
+filestore/
+sessions/
+
+# Custom Tooling Workspaces
+task_workspace_*/
+*.patch
+*.bak
+*.tmp
