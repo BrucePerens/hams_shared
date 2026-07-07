@@ -1421,7 +1421,12 @@ def provision_custom_addons(run_cmd_func, env_vars, environment="prod", dest_dir
                 target = os.path.join(custom_addons_dir, item)
                 shutil.rmtree(target, ignore_errors=True)
                 os.makedirs(target, exist_ok=True)
-                shutil.copytree(item_path, target, dirs_exist_ok=True)
+                shutil.copytree(
+                    item_path,
+                    target,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("target", ".git", "__pycache__"),
+                )
 
     apply_permissions(custom_addons_dir, "odoo:odoo", None)
 
@@ -1449,7 +1454,12 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
             src = format_env(src, env_vars)
             if os.path.exists(src):
                 if os.path.isdir(src):
-                    shutil.copytree(src, path, dirs_exist_ok=True)
+                    shutil.copytree(
+                        src,
+                        path,
+                        dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("target", ".git", "__pycache__"),
+                    )
                 else:
                     shutil.copy2(src, path)
         elif url:
