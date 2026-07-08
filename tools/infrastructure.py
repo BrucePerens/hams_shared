@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Infrastructure Blueprint & Provisioning Engine
-Serves as the Single Source of Truth for test.py and deploy_wizard.py.
+Serves as the Single Source of Truth for test.py and provision.py.
 Supports environment scoping, lifecycle hooks, and precise runtime mount states.
 """
 
@@ -17,6 +17,10 @@ import subprocess
 import sys
 import time
 import urllib.request
+import secrets
+import string
+import base64
+import getpass
 from datetime import datetime
 
 _logger = logging.getLogger(__name__)
@@ -278,8 +282,8 @@ MANIFEST = {
         },
         {
             "path": "/opt/hams/etc/keys",
-            "owner": "hams_com:hams_com",
-            "provision_mode": "770",
+            "owner": "odoo:odoo",
+            "provision_mode": "700",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
@@ -698,6 +702,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/dx_firehose
@@ -749,6 +754,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/ham_dx_daemon
@@ -799,6 +805,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/noaa_swpc_sync
@@ -852,6 +859,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/pdns_sync
@@ -902,6 +910,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/lotw_eqsl_sync
@@ -953,6 +962,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool
 Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/amsat_tle_sync
@@ -1017,6 +1027,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/qrz_scraper
@@ -1284,7 +1295,11 @@ WantedBy=multi-user.target
                 "ODOO_RC=/etc/odoo/odoo.conf",
             ],
             "ProtectSystem": "strict",
-            "ReadWritePaths": "/opt/hams/etc/keys",
+            "ReadWritePaths": [
+                "/opt/hams/etc/keys",
+                "/var/lib/odoo",
+                "/var/log/odoo"
+            ],
             "PrivateTmp": "true",
             "PrivateDevices": "true",
             "NoNewPrivileges": "true",
@@ -1532,6 +1547,55 @@ def provision_systemd_override(run_cmd_func, env_vars, environment="prod", dest_
             _logger.warning("Failed to reload systemd daemons: %s", e)
 
 
+def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
+    _logger.info("[*] Initializing Odoo database with custom modules...")
+    modules = set()
+    for d in filter(None, [hams_open_dir, hams_com_dir]):
+        if os.path.exists(d):
+            for item in os.listdir(d):
+                item_path = os.path.join(d, item)
+                if os.path.isdir(item_path):
+                    if os.path.exists(os.path.join(item_path, "__manifest__.py")):
+                        modules.add(item)
+
+    if not modules:
+        _logger.info("No custom modules found to initialize.")
+        return
+
+    mod_string = "base," + ",".join(modules)
+    _logger.info("Initializing modules: %s", mod_string)
+
+    addons_path_str = ",".join(filter(None, [
+        "/usr/lib/python3/dist-packages/odoo/addons",
+        "/var/lib/odoo/.local/share/Odoo/addons/19.0",
+        "/usr/lib/python3/dist-packages/addons",
+        hams_com_dir,
+        hams_open_dir
+    ]))
+
+    try:
+        run_cmd_func(["sudo", "sed", "-i", "/^addons_path/d", "/etc/odoo/odoo.conf"])
+        run_cmd_func(["sudo", "bash", "-c", f"echo 'addons_path = {addons_path_str}' >> /etc/odoo/odoo.conf"])
+    except Exception as e:
+        _logger.warning("Failed to update addons_path in /etc/odoo/odoo.conf: %s", e)
+
+    cmd = [
+        "sudo", "-u", "odoo", "odoo",
+        "-c", "/etc/odoo/odoo.conf",
+        "-d", "hams_test",
+        "-i", mod_string,
+        "--stop-after-init",
+        "--without-demo=all",
+        "--workers=0",
+        "--max-cron-threads=0",
+        "--addons-path", addons_path_str
+    ]
+    try:
+        run_cmd_func(cmd)
+    except subprocess.CalledProcessError as e:
+        _logger.error("Failed to initialize Odoo database: %s", e)
+        raise
+
 def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
     _logger.info("[*] Running post-provisioning smoketest on all services...")
 
@@ -1548,13 +1612,9 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
         "odoo",
     ]
 
-    skip_in_test = {
-        "amsat.tle.sync.service",
-        "noaa-swpc-sync.service",
-        "qrz.scraper.service",
-        "lotw.eqsl.sync.service",
-        "dx.firehose.service",
+    daemons_to_skip = {
         "system-startup.service",
+        "hams-pycache.service"
     }
 
     for sf in MANIFEST.get("static_files", []):
@@ -1563,12 +1623,13 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
             svc_name = os.path.basename(path)
             if not has_hams_com and svc_name != "hams-pycache.service":
                 continue
-            if svc_name == "system-startup.service":
-                continue
-            if is_test_env and svc_name in skip_in_test:
+            if not is_test_env and svc_name in daemons_to_skip:
                 continue
             if svc_name not in potential_services and "@" not in svc_name:
                 potential_services.append(svc_name)
+
+    _logger.info("DEBUG potential_services: %s", potential_services)
+    _logger.info("DEBUG has_hams_com: %s, is_test_env: %s", has_hams_com, is_test_env)
 
     services_to_test = []
     for svc in potential_services:
@@ -1589,6 +1650,8 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
             ["systemctl", "is-active", svc], capture_output=True, text=True
         )
         if res_active.stdout.strip() == "active":
+            if svc == "odoo":
+                subprocess.run(["systemctl", "restart", "odoo"])
             _logger.info("    %s is already active, skipping start.", svc)
             already_active_services.append(svc)
             continue
@@ -1643,46 +1706,105 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
         )
         sys.exit(1)
 
-    _logger.info("[*] All services started successfully. Shutting them down...")
-    for svc in reversed(started_services):
-        _logger.info("    Stopping %s...", svc)
-        subprocess.run(["systemctl", "stop", svc], capture_output=True)
+    if is_test_env:
+        _logger.info("[*] All services started successfully. Shutting them down (--test mode)...")
+        for svc in reversed(started_services):
+            _logger.info("    Stopping %s...", svc)
+            subprocess.run(["systemctl", "stop", svc], capture_output=True)
+    else:
+        _logger.info("[*] All services started successfully and are running.")
 
     _logger.info("[*] Smoketest complete: %s", datetime.now())
 
 
+def generate_secure_password(length=32):
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+def load_and_prompt_env(env_vars, is_test):
+    env_dir = "/opt/hams/etc"
+    if os.path.exists(env_dir):
+        for env_file in glob.glob(os.path.join(env_dir, "*.env")):
+            try:
+                with open(env_file, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            key, val = line.split("=", 1)
+                            env_vars.setdefault(key.strip(), val.strip())
+            except OSError as e:
+                _logger.warning("Failed to read %s: %s", env_file, e)
+
+    if is_test:
+        env_vars.setdefault("ODOO_URL", "http://odoo:8069")
+        env_vars.setdefault("REDIS_HOST", "redis")
+        env_vars.setdefault("RABBITMQ_HOST", "rabbitmq")
+        env_vars.setdefault("DB_NAME", "hams_test")
+        env_vars.setdefault("DB_USER", "odoo")
+        env_vars.setdefault("DB_PASS", "odoo")
+        env_vars.setdefault("DB_HOST", "postgres")
+        env_vars.setdefault("PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones")
+        env_vars.setdefault("PDNS_API_KEY", "secret")
+        env_vars.setdefault("DOMAIN", "localhost")
+        env_vars.setdefault("ODOO_ADMIN_PASSWORD", "admin")
+        env_vars.setdefault("ODOO_SERVICE_PASSWORD", "service")
+        env_vars.setdefault("SMTP_HOST", "localhost")
+        env_vars.setdefault("SMTP_PORT", "1025")
+        env_vars.setdefault("HAMS_CRYPTO_KEY", "0000000000000000000000000000000000000000000=")
+    else:
+        env_vars.setdefault("ODOO_URL", "http://odoo:8069")
+        env_vars.setdefault("REDIS_HOST", "redis")
+        env_vars.setdefault("RABBITMQ_HOST", "rabbitmq")
+        env_vars.setdefault("DB_NAME", "hams_prod")
+        env_vars.setdefault("DB_USER", "odoo")
+        env_vars.setdefault("DB_HOST", "postgres")
+        env_vars.setdefault("PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones")
+        env_vars.setdefault("SMTP_HOST", "localhost")
+        env_vars.setdefault("SMTP_PORT", "1025")
+
+        if "DB_PASS" not in env_vars:
+            env_vars["DB_PASS"] = generate_secure_password()
+        if "PDNS_API_KEY" not in env_vars:
+            env_vars["PDNS_API_KEY"] = generate_secure_password()
+        if "ODOO_SERVICE_PASSWORD" not in env_vars:
+            env_vars["ODOO_SERVICE_PASSWORD"] = generate_secure_password()
+        if "HAMS_CRYPTO_KEY" not in env_vars:
+            env_vars["HAMS_CRYPTO_KEY"] = base64.b64encode(secrets.token_bytes(32)).decode('utf-8')
+        
+        if "DOMAIN" not in env_vars:
+            print("")
+            while True:
+                domain = input("Enter the primary domain for this instance (e.g. hams.com): ").strip()
+                if domain:
+                    env_vars["DOMAIN"] = domain
+                    break
+                print("Domain cannot be empty.")
+        
+        if "ODOO_ADMIN_PASSWORD" not in env_vars:
+            print("")
+            while True:
+                pwd1 = getpass.getpass("Enter a secure Odoo admin password: ")
+                if pwd1:
+                    pwd2 = getpass.getpass("Confirm Odoo admin password: ")
+                    if pwd1 == pwd2:
+                        env_vars["ODOO_ADMIN_PASSWORD"] = pwd1
+                        break
+                    print("Passwords do not match. Try again.")
+                else:
+                    print("Password cannot be empty.")
+            print("")
+
 def provision_environment(
-    run_cmd_func, env_vars, orig_user, os_id=None, skip_apt=False
+    run_cmd_func, env_vars, orig_user, os_id=None, skip_apt=False, is_test=False
 ):
     _logger.info("[*] Provision version 1")
     os_id = os_id or get_os_identifier()
     repo_root = env_vars.get("REPO_ROOT", "/app")
-    has_hams_com = os.path.exists(
-        os.path.join(repo_root, "ham_base", "__manifest__.py")
-    )
-
     # Inject safe testing defaults for provisioning context so .env files populate
     for k, v in MANIFEST.get("env_defaults", {}).items():
         env_vars.setdefault(k, v)
-    env_vars.setdefault("ODOO_URL", "http://odoo:8069")
-    env_vars.setdefault("REDIS_HOST", "redis")
-    env_vars.setdefault("RABBITMQ_HOST", "rabbitmq")
-    env_vars.setdefault("DB_NAME", "hams_test")
-    env_vars.setdefault("DB_USER", "odoo")
-    env_vars.setdefault("DB_PASS", "odoo")
-    env_vars.setdefault("DB_HOST", "postgres")
-    env_vars.setdefault(
-        "PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones"
-    )
-    env_vars.setdefault("PDNS_API_KEY", "secret")
-    env_vars.setdefault("DOMAIN", "localhost")
-    env_vars.setdefault("ODOO_ADMIN_PASSWORD", "admin")
-    env_vars.setdefault("ODOO_SERVICE_PASSWORD", "service")
-    env_vars.setdefault("SMTP_HOST", "localhost")
-    env_vars.setdefault("SMTP_PORT", "1025")
-    env_vars.setdefault(
-        "HAMS_CRYPTO_KEY", "0000000000000000000000000000000000000000000="
-    )
+
+    load_and_prompt_env(env_vars, is_test)
 
     hams_com_dir = None
     hams_community_dir = None
@@ -1691,14 +1813,26 @@ def provision_environment(
         hams_com_dir = repo_root
     elif os.path.exists(os.path.join(repo_root, "..", "hams_com", "daemons")):
         hams_com_dir = os.path.abspath(os.path.join(repo_root, "..", "hams_com"))
+    elif os.path.exists(os.path.join(repo_root, "..", "..", "hams_com", "daemons")):
+        hams_com_dir = os.path.abspath(os.path.join(repo_root, "..", "..", "hams_com"))
     elif os.path.exists("/hams_com/daemons"):
         hams_com_dir = "/hams_com"
+        
+    has_hams_com = False
+    if hams_com_dir:
+        has_hams_com = os.path.exists(os.path.join(hams_com_dir, "ham_base", "__manifest__.py"))
 
     if os.path.exists(os.path.join(repo_root, "zero_sudo")):
         hams_community_dir = repo_root
+    elif os.path.exists(os.path.join(repo_root, "..", "zero_sudo")):
+        hams_community_dir = os.path.abspath(os.path.join(repo_root, ".."))
     elif os.path.exists(os.path.join(repo_root, "..", "hams_community", "zero_sudo")):
         hams_community_dir = os.path.abspath(
             os.path.join(repo_root, "..", "hams_community")
+        )
+    elif os.path.exists(os.path.join(repo_root, "..", "..", "hams_community", "zero_sudo")):
+        hams_community_dir = os.path.abspath(
+            os.path.join(repo_root, "..", "..", "hams_community")
         )
     elif os.path.exists("/hams_community/zero_sudo"):
         hams_community_dir = "/hams_community"
@@ -1859,7 +1993,7 @@ def provision_environment(
         is_jules = bool(os.environ.get("IN_JULES_VM")) or bool(
             os.environ.get("JULES_SESSION_ID")
         )
-        is_test_env = is_isolated_ns or is_jules
+        is_test_env = is_isolated_ns or is_jules or is_test
 
         _logger.info("[*] Preparing testing directories with production paths...")
         apply_production_directories(run_cmd_func, environment="prod")
@@ -1902,18 +2036,29 @@ def provision_environment(
             if not is_isolated_ns:
                 run_cmd_func(["systemctl", "restart", "postgresql"])
 
+                db_name = env_vars.get("DB_NAME", "hams_test")
                 _logger.info(
-                    "[*] Bootstrapping initial Odoo PostgreSQL role and test database..."
+                    "[*] Bootstrapping initial Odoo PostgreSQL role and database (%s)...", db_name
                 )
                 sql_create_roles = "DO $$BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'odoo') THEN CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD 'odoo'; END IF; END$$;"
                 run_cmd_func(["sudo", "-u", "postgres", "psql", "-c", sql_create_roles])
-                run_cmd_func(
-                    [
-                        "bash",
-                        "-c",
-                        "sudo -u postgres dropdb --if-exists hams_test && sudo -u postgres createdb hams_test",
-                    ]
-                )
+                
+                if is_test:
+                    run_cmd_func(
+                        [
+                            "bash",
+                            "-c",
+                            f"sudo -u postgres dropdb --if-exists {db_name} && sudo -u postgres createdb -O odoo {db_name}",
+                        ]
+                    )
+                else:
+                    run_cmd_func(
+                        [
+                            "bash",
+                            "-c",
+                            f"sudo -u postgres psql -tc \"SELECT 1 FROM pg_database WHERE datname = '{db_name}'\" | grep -q 1 || sudo -u postgres createdb -O odoo {db_name}",
+                        ]
+                    )
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to configure PostgreSQL settings: %s", e)
 
@@ -1946,6 +2091,7 @@ def provision_environment(
             _logger.warning("Failed to link systemd units: %s", e)
 
         if not is_isolated_ns:
+            initialize_odoo_database(run_cmd_func, hams_community_dir, hams_com_dir)
             run_post_provision_smoketest(has_hams_com, is_test_env=is_test_env)
         else:
             _logger.info(

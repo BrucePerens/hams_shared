@@ -33,11 +33,18 @@ def provision():
     os_id = infrastructure.get_os_identifier()
     _logger.info(f"[*] Discovered OS: {os_id}")
 
+    import argparse
+    parser = argparse.ArgumentParser(description="Standalone Environment Provisioning Script")
+    parser.add_argument("--test", action="store_true", help="Smoke-test all daemons and stop them after")
+    args, _ = parser.parse_known_args()
+
     if os_id not in ("ubuntu", "debian"):
         _logger.error(
             f"[!] Unsupported OS: {os_id}. Only Debian and Ubuntu are currently supported."
         )
         sys.exit(1)
+
+    infrastructure.load_and_prompt_env(env_vars, args.test)
 
     def run_sys(cmd, **kw):
         _logger.info(f"[*] Running: {' '.join(cmd)}")
@@ -63,7 +70,7 @@ def provision():
         run_sys(["equivs-build", "python3-pypdf2.control"], cwd="/tmp")
         run_sys(["dpkg", "-i", "/tmp/python3-pypdf2_1.0_all.deb"])
 
-    infrastructure.provision_environment(run_sys, env_vars, orig_user, os_id)
+    infrastructure.provision_environment(run_sys, env_vars, orig_user, os_id, is_test=args.test)
 
 
 if __name__ == "__main__":

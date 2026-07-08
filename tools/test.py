@@ -621,6 +621,10 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
     if env is None:
         env = dict(os.environ)
 
+    existing_warnings = env.get("PYTHONWARNINGS", "")
+    new_warning = "ignore::DeprecationWarning:pyasn1.codec.ber.encoder"
+    env["PYTHONWARNINGS"] = f"{existing_warnings},{new_warning}" if existing_warnings else new_warning
+
     env.setdefault("RABBITMQ_HOST", "localhost")
     env.setdefault("RMQ_HOST", "localhost")
     env.setdefault("REDIS_HOST", "localhost")
