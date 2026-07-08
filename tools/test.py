@@ -1182,8 +1182,8 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     except OSError as e:
         _logger.debug("Failed to set permissions on .gnupg: %s", e)
 
+    os.environ["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
     env_vars = dict(os.environ)
-    env_vars["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
     env_vars["REPO_ROOT"] = base_dir
 
     infrastructure.provision_environment(_safe_run, env_vars, orig_user, skip_apt=True)
