@@ -22,8 +22,8 @@ def get_imported_names(init_path):
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     imported.add(alias.name)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error parsing {init_path}: {e}")
     return imported
 
 
@@ -37,7 +37,8 @@ def main():
     warnings = 0
 
     for root, dirs, files in os.walk(repo_root):
-        if "radae" in dirs: dirs.remove("radae")
+        if "radae" in dirs:
+            dirs.remove("radae")
         dirs[:] = [d for d in dirs if d not in ('target', 'venv', '.venv', 'node_modules', 'daemons', 'test_env', '.git')]
         if "__init__.py" in files:
             init_path = os.path.join(root, "__init__.py")
