@@ -5,6 +5,7 @@ or suspicious empty strings that may indicate tags stripped by LLM UIs.
 """
 import os
 import re
+import sys
 import ast
 import logging
 
@@ -83,7 +84,8 @@ def main():
     vulnerable_files = 0
 
     for root, dirs, files in os.walk(base_dir):
-        if "radae" in dirs: dirs.remove("radae")
+        if "radae" in dirs:
+            dirs.remove("radae")
         # Ignore virtual environments, node modules, and caches
         dirs[:] = [
             d for d in dirs if d not in ("venv", "node_modules", "__pycache__", ".git")
@@ -100,8 +102,10 @@ def main():
         print(
             f"[!] Found {vulnerable_files} file(s) requiring hex-escape immunization (\\x3c / \\x3e)."
         )
+        sys.exit(1)
     else:
         print("[*] No vulnerabilities found. Python strings are immunized.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

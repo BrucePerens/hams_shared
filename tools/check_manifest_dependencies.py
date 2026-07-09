@@ -66,8 +66,10 @@ def main():
         r"(?:import|export)\s+(?:.*?\s+from\s+)?['\"]@([a-zA-Z0-9_-]+)/(.*?)['\"]"
     )
 
+    mod_cache = {}
     for root, dirs, files in os.walk(repo_root):
-        if "radae" in dirs: dirs.remove("radae")
+        if "radae" in dirs:
+            dirs.remove("radae")
         if "node_modules" in root:
             continue
         for file in files:
@@ -77,11 +79,22 @@ def main():
                 # Determine which module this JS file belongs to
                 mod_dir = os.path.dirname(os.path.abspath(filepath))
                 current_mod = None
-                while mod_dir and mod_dir != os.path.dirname(mod_dir):
-                    if os.path.exists(os.path.join(mod_dir, "__manifest__.py")):
-                        current_mod = os.path.basename(mod_dir)
+                
+                search_dir = mod_dir
+                while search_dir and search_dir != os.path.dirname(search_dir):
+                    if search_dir in mod_cache:
+                        current_mod = mod_cache[search_dir]
                         break
-                    mod_dir = os.path.dirname(mod_dir)
+                    if os.path.exists(os.path.join(search_dir, "__manifest__.py")):
+                        current_mod = os.path.basename(search_dir)
+                        mod_cache[search_dir] = current_mod
+                        break
+                    search_dir = os.path.dirname(search_dir)
+                
+                temp_dir = mod_dir
+                while temp_dir and temp_dir != search_dir:
+                    mod_cache[temp_dir] = current_mod
+                    temp_dir = os.path.dirname(temp_dir)
 
                 if not current_mod or current_mod not in manifests:
                     continue

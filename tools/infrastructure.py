@@ -2059,6 +2059,15 @@ def provision_environment(
                             f"sudo -u postgres psql -tc \"SELECT 1 FROM pg_database WHERE datname = '{db_name}'\" | grep -q 1 || sudo -u postgres createdb -O odoo {db_name}",
                         ]
                     )
+                
+                # Unconditionally ensure the database is owned by odoo to fix pre-existing DBs
+                run_cmd_func(
+                    [
+                        "bash",
+                        "-c",
+                        f"sudo -u postgres psql -c \"ALTER DATABASE {db_name} OWNER TO odoo;\"",
+                    ]
+                )
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to configure PostgreSQL settings: %s", e)
 

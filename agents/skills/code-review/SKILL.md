@@ -19,10 +19,17 @@ each of the daemons, and tools and other facilities in hams_shared. The sub-agen
 task is to perform a deep code-review of that individual module or directory
 only, so that its context window is not saturated. Have them review
 the code for:
+* Any possible improvements to the linters that would help to avoid issues that
+  come up during your review, to improve code quality and Odoo 19 compatibility,
+  and to avoid AI foibles.
 * Licensing: Code in hams_com must be proprietary _except_ for code that we don't
   own, like radae. Code in hams_shared and hams_open should be AGPL-3, again
   preserving the license of anything we don't own.
-* Odoo 19 compliance and repair of deprecated and removed coding patterns.
+* Odoo 19 compliance and repair of deprecated and removed coding patterns. Specifically:
+  * Replace legacy `_sql_constraints` with the new `models.Constraint` API defined as direct class attributes.
+  * Use `self._has_cycle()` instead of the legacy `_check_recursion()` method.
+  * Ensure `@api.constrains` validations are robust, especially when fields are redefined in subclasses. Pay special attention to tests failing with `ValidationError not raised`, which often indicate missing constraints on overridden fields or `IntegrityError` catching gaps between `create` and `write` methods.
+  * Move local/function-level imports (like `werkzeug` components) to the module level to satisfy linter rules.
 * Quality and lack of conflict in AI directives and documentation - put resolving
   these as open questions for the user in the implementation plan, where
   you are not clear upon the correct action.

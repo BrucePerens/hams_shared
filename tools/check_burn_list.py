@@ -545,6 +545,16 @@ ODOO_ERROR_RULES = [
         re.compile(r"class\s+[a-zA-Z0-9_]+\s*\((?:HttpCase|TransactionCase)\):"),
         "CRITICAL TEST ARCHITECTURE: Do not inherit directly from Odoo's native HttpCase or TransactionCase. You MUST inherit from HamsHttpCase or HamsTransactionCase to ensure the Process Reaper and latency safeguards are active.",
     ),
+    (
+        r"\.py$",
+        re.compile(r"IS\s+NULL\s+AND\s+.*?IS\s+NULL", re.IGNORECASE),
+        "CRITICAL SQL EFFICIENCY: Verbose NULL checks (e.g., A IS NULL AND B IS NULL) are forbidden. Use 'IS NOT DISTINCT FROM' for NULL-safe comparisons.",
+    ),
+    (
+        r"\.py$",
+        re.compile(r"SET\s+LOCAL\s+default_transaction_read_only", re.IGNORECASE),
+        "CRITICAL SQL SECURITY: 'SET LOCAL default_transaction_read_only' is vulnerable to semicolon chaining if concatenated dynamically. Use 'SET TRANSACTION READ ONLY' instead.",
+    ),
 ]
 
 WARNING_RULES = [
@@ -828,6 +838,18 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                                                 elt.lineno,
                                                 "CRITICAL ASSET COMPILER CRASH: Glob patterns (*) are strictly forbidden in __manifest__.py asset lists. Odoo's asset compiler fails silently when matching directories. You MUST enumerate every file explicitly.",
                                             )
+                    if self.filename == "__manifest__.py" and k.value == "license":
+                        if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                            if "hams_com" in self.filepath and v.value != "Other proprietary":
+                                self.add_error(
+                                    v.lineno,
+                                    "CRITICAL LICENSING: All modules in hams_com MUST use the 'Other proprietary' license.",
+                                )
+                            elif ("hams_open" in self.filepath or "hams_shared" in self.filepath) and v.value != "AGPL-3":
+                                self.add_error(
+                                    v.lineno,
+                                    "CRITICAL LICENSING: All modules in hams_open and hams_shared MUST use the 'AGPL-3' license.",
+                                )
             if (
                 self.is_odoo_module
                 and "owner_user_id" in keys_found
@@ -912,6 +934,12 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         node.lineno,
                         "[!] DIAGNOSTIC FOR AI: Empty functions using 'pass' are forbidden. Implement the logic or remove the method.",
                     )
+
+            if self.is_odoo_module and node.name == "_auto_init":
+                self.add_error(
+                    node.lineno,
+                    "CRITICAL DEPRECATION: Overriding '_auto_init' is discouraged in Odoo 19. Move custom SQL (extensions, indexes) to 'init(self)' instead."
+                )
 
             is_controller = any(
                 (
@@ -2084,6 +2112,24 @@ def scan_file(filepath, is_odoo_module=False):
                     )
                 if node.tag == "record":
                     model_name = node.attrs.get("model")
+                    if model_name == "ir.rule":
+                        domain_force = None
+                        perm_write = False
+                        perm_unlink = False
+                        for child in node.children:
+                            if child.tag == "field":
+                                fname = child.attrs.get("name")
+                                if fname == "domain_force":
+                                    domain_force = child.text
+                                elif fname == "perm_write" and (child.attrs.get("eval") in ("1", "True", "true") or child.text in ("1", "True", "true")):
+                                    perm_write = True
+                                elif fname == "perm_unlink" and (child.attrs.get("eval") in ("1", "True", "true") or child.text in ("1", "True", "true")):
+                                    perm_unlink = True
+                        if domain_force and "publish_to_public" in domain_force and (perm_write or perm_unlink):
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL SECURITY: ir.rule grants write/unlink permissions alongside public read access (publish_to_public). Split into separate read and write rules."
+                            )
+
                     defined_fields = {
                         child.attrs.get("name")
                         for child in node.children
@@ -2864,17 +2910,10 @@ def main():
         return False
 
     for root, dirs, files in os.walk(target_dir):
-        if "radae" in dirs: dirs.remove("radae")
-        if "venv" in dirs: dirs.remove("venv")
-        if ".venv" in dirs: dirs.remove(".venv")
-        if "test_env" in dirs: dirs.remove("test_env")
-        if "env" in dirs: dirs.remove("env")
+        if "radae" in dirs:
+            dirs.remove("radae")
         dirs[:] = [d for d in dirs if "env" not in d]
-        if "venv" in dirs: dirs.remove("venv")
-        if ".venv" in dirs: dirs.remove(".venv")
-        if "venv" in root or "site-packages" in root: continue
-        if "venv" in dirs: dirs.remove("venv")
-        if "venv" in root:
+        if "venv" in root or "site-packages" in root:
             continue
         dirs[:] = [
             d
@@ -3028,16 +3067,10 @@ def main():
     xml_content_all = ""
     js_content_all = ""
     for root, dirs, files in os.walk(target_dir):
-        if "radae" in dirs: dirs.remove("radae")
-        if "venv" in dirs: dirs.remove("venv")
-        if ".venv" in dirs: dirs.remove(".venv")
-        if "test_env" in dirs: dirs.remove("test_env")
-        if "env" in dirs: dirs.remove("env")
+        if "radae" in dirs:
+            dirs.remove("radae")
         dirs[:] = [d for d in dirs if "env" not in d]
-        if "venv" in dirs: dirs.remove("venv")
-        if ".venv" in dirs: dirs.remove(".venv")
-        if "venv" in root or "site-packages" in root: continue
-        if "venv" in root:
+        if "venv" in root or "site-packages" in root:
             continue
         if "node_modules" in root:
             continue

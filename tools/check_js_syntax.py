@@ -73,13 +73,15 @@ def main():
         if not os.path.isdir(d):
             continue
         for root, dirs, files in os.walk(d):
-            if "radae" in dirs: dirs.remove("radae")
+            if "radae" in dirs:
+                dirs.remove("radae")
             # Prune hidden folders and standard library directories to save time
             dirs[:] = [
                 dir_name
                 for dir_name in dirs
                 if not dir_name.startswith(".")
-                and dir_name not in ("node_modules", "__pycache__", "lib", "static/lib")
+                and dir_name not in ("node_modules", "__pycache__")
+                and not (os.path.basename(root) == "static" and dir_name == "lib")
             ]
             for f in files:
                 if f.endswith(".js") and ".min." not in f:

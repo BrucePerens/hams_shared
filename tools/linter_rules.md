@@ -228,3 +228,10 @@ Odoo's `ast.literal_eval` parser requires valid, strict Python dictionary syntax
                 * **Catch-All Exception Bypass:** If you are writing a top-level daemon loop or external RPC boundary where an operation must continue past failure, you MUST append the `# audit-ignore-catch-all` bypass tag to the except line. Furthermore, even with this bypass, the block MUST contain a `logging` method call (e.g. `_logger.exception(...)`) to prevent silently swallowed tracebacks.
         </python_standards>
 - Ban sudo() from production code so that the AI will use the micro-privilege architecture. Allow it in tools and tests.
+
+## 8. 🚨 Recent Additions (Odoo 19 & Security)
+* **Verbose NULL Checks:** Using `A IS NULL AND B IS NULL` is banned. You MUST use Postgres-native `IS NOT DISTINCT FROM`.
+* **Read-Only Transactions:** Using `SET LOCAL default_transaction_read_only` is vulnerable to semicolon injection. You MUST use `SET TRANSACTION READ ONLY`.
+* **_auto_init Overrides:** Overriding `_auto_init(self)` is deprecated in Odoo 19. You MUST put custom SQL constraints or extensions inside `init(self)`.
+* **Public Write/Unlink Rules:** Defining `perm_write="1"` or `perm_unlink="1"` inside an `ir.rule` where `domain_force` contains `publish_to_public` is banned. You MUST split the read and write rules.
+* **Manifest Licensing:** `hams_com` modules MUST use `Other proprietary`. `hams_open` and `hams_shared` MUST use `AGPL-3`.
