@@ -59,3 +59,5 @@ issues the sub-agents report.
 Run the linter, using run_linters.py, in hams_open, hams_open/hams_shared,
 and hams_com; and fix all linter complaints. Run full tests in both hams_open
 and hams_com and fix any remaining problems until the tests 100% pass.
+
+Finally, check all of your changes in to git. Do a git push if you are able.
