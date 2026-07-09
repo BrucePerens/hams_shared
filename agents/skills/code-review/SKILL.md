@@ -61,9 +61,9 @@ the code for:
 
 Have the sub-agents report to you, but don't have them fix anything, because
 they would conflict when they break modules for other sub-agents. Fix all of the
-issues the sub-agents report.
+issues the sub-agents report, either by yourself or using sub-agents to do it.
 
-Run the linter, using run_linters.py, in hams_open, hams_open/hams_shared,
+Run the linter, using tools/run_linters.py, in hams_open, hams_open/hams_shared,
 and hams_com; and fix all linter complaints. Run full tests in both hams_open
 and hams_com and fix any remaining problems until the tests 100% pass.
 
