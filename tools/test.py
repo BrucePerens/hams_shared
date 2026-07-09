@@ -583,11 +583,9 @@ def robust_reap(pid):
     print(f"\n[*] [REAPER] Initiating robust reaper for PID {pid}...")
     try:
         subprocess.run(
-            ["pkill", "-u", "odoo", "-TERM", "-f", "chrome"], check=False, timeout=2
+            ["pkill", "-u", "odoo", "-TERM", "-f", "_chrome_odoo"], check=False, timeout=2
         )
-        subprocess.run(
-            ["pkill", "-u", "odoo", "-TERM", "-f", "chromium"], check=False, timeout=2
-        )
+        # Chromium is caught by the _chrome_odoo filter above.
 
         pgid = os.getpgid(pid)
         print(f"[*] [REAPER] Sending SIGTERM to Process Group {pgid}")
@@ -607,11 +605,9 @@ def robust_reap(pid):
         )
         os.killpg(pgid, signal.SIGKILL)
         subprocess.run(
-            ["pkill", "-u", "odoo", "-KILL", "-f", "chrome"], check=False, timeout=2
+            ["pkill", "-u", "odoo", "-KILL", "-f", "_chrome_odoo"], check=False, timeout=2
         )
-        subprocess.run(
-            ["pkill", "-u", "odoo", "-KILL", "-f", "chromium"], check=False, timeout=2
-        )
+        # Chromium is caught by the _chrome_odoo filter above.
     except OSError as e:
         print(f"[*] [REAPER] Error during reap: {e}")
 
@@ -754,7 +750,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                         "[*] [DEBUG-RUNNER] Killing headless chrome to un-hang the test framework..."
                     )
                     subprocess.run(
-                        ["pkill", "-u", "odoo", "-TERM", "-f", "chrome"],
+                        ["pkill", "-u", "odoo", "-TERM", "-f", "_chrome_odoo"],
                         check=False,
                         timeout=2,
                     )
@@ -771,13 +767,9 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         )
         try:
             subprocess.run(
-                ["pkill", "-u", "odoo", "-TERM", "-f", "chrome"], check=False, timeout=2
+                ["pkill", "-u", "odoo", "-TERM", "-f", "_chrome_odoo"], check=False, timeout=2
             )
-            subprocess.run(
-                ["pkill", "-u", "odoo", "-TERM", "-f", "chromium"],
-                check=False,
-                timeout=2,
-            )
+            # Chromium is caught by the _chrome_odoo filter above.
             process.terminate()
         except OSError:
             pass
@@ -1515,8 +1507,8 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
 
 def start_jules_daemons(base_dir):
-    print("[*] Clearing port 8069 bindings...")
-    subprocess.run(["sudo", "fuser", "-k", "8069/tcp"], check=False)
+    print("[*] Clearing port 8075 bindings...")
+    subprocess.run(["sudo", "fuser", "-k", "8075/tcp"], check=False)
 
     print("[*] Provisioning Jules environment via infrastructure.py...")
     script = f"""import sys, os, subprocess
@@ -1839,7 +1831,7 @@ def main():
     if args.mcp:
         rebuild_db(args.db)
 
-        os.environ["ODOO_URL"] = "http://127.0.0.1:8069"
+        os.environ["ODOO_URL"] = "http://127.0.0.1:8075"
         os.environ["DB_NAME"] = args.db
         os.environ["ODOO_USER"] = "admin"
         os.environ["ODOO_PASSWORD"] = "admin"
@@ -1860,7 +1852,7 @@ def main():
             "--http-interface",
             "127.0.0.1",
             "--http-port",
-            "8069",
+            "8075",
             "--limit-memory-soft",
             "0",
             "--limit-memory-hard",
@@ -1879,7 +1871,7 @@ def main():
         rebuild_db(args.db)
 
         # Inject environment variables for daemons spawned securely by tests
-        os.environ["ODOO_URL"] = "http://127.0.0.1:8069"
+        os.environ["ODOO_URL"] = "http://127.0.0.1:8075"
         os.environ["DB_NAME"] = args.db
         os.environ["ODOO_USER"] = "admin"
         os.environ["ODOO_PASSWORD"] = "admin"
@@ -1903,7 +1895,7 @@ def main():
             "--http-interface",
             "127.0.0.1",
             "--http-port",
-            "8069",
+            "8075",
             "--limit-memory-soft",
             "0",
             "--limit-memory-hard",
@@ -1920,7 +1912,7 @@ def main():
             final_rc = rc_odoo
 
     elif args.mode == "individual":
-        os.environ["ODOO_URL"] = "http://127.0.0.1:8069"
+        os.environ["ODOO_URL"] = "http://127.0.0.1:8075"
         os.environ["DB_NAME"] = args.db
         os.environ["ODOO_USER"] = "admin"
         os.environ["ODOO_PASSWORD"] = "admin"
@@ -1946,7 +1938,7 @@ def main():
                 "--http-interface",
                 "127.0.0.1",
                 "--http-port",
-                "8069",
+                "8075",
                 "--limit-memory-soft",
                 "0",
                 "--limit-memory-hard",

@@ -8,17 +8,33 @@ description: How to do a code-review.
 When asked to do a code-review:
 
 Start sub-agents at a rate you are comfortable with. For example: start
-5 and then start additional ones as the ones already started finish
-until you have performed the entire task, which is a review of about
-70 directories (at this writing, the number will change) constituting
-the entire code-base. The number of sub-agents to run in parallel is
-entirely your choice.
+5 and then continuously start additional ones as the ones already started finish.
+**CRITICAL: DO NOT STOP or wait for user approval between batches.** You must continue this cycle of spawning sub-agents until you have performed the entire task, which is a review of about 70 directories (at this writing, the number will change) constituting the entire code-base.
 
-Start a sub-agent for each module in the hams_open and hams_com repositories, and
-each of the daemons, and tools and other facilities in hams_shared. The sub-agents
+Start a sub-agent for each module and daemon in the hams_open and hams_com
+repositories, and tools and other facilities in hams_shared. The sub-agents
 task is to perform a deep code-review of that individual module or directory
-only, so that its context window is not saturated. Have them review
-the code for:
+only, so that its context window is not saturated, and report the issues to you.
+
+**CRITICAL: Preventing Sub-Agent Hallucinations**
+When defining the initial prompt for each sub-agent, you MUST include strict anti-hallucination guardrails:
+1.  **Mandatory Tool Use**: Instruct the sub-agent to use `list_dir` to find actual files and `view_file` to read the exact code *before* drawing any conclusions.
+2.  **No Guessing**: Explicitly forbid the sub-agent from guessing file names, assuming code logic, or reporting issues without reading the source first.
+3.  **Strict Citation Format**: Require the sub-agent to quote the exact `File Path`, `Line Number`, and `Original Code Snippet` for every reported issue.
+4.  **Acceptance of Perfection**: Tell the sub-agent that it is perfectly fine to return "No issues found." They should not invent bugs just to provide a finding.
+
+The sub-agent should suggest changes but not perform the fixes by themselves,
+you do them, to prevent collisions between sub-modules. As the submodules report,
+incrementally create an implementation plan. Once you start doing fixes, you MUST follow a strict Test-Driven Development (TDD) workflow. You have the choice to perform these fixes yourself, or, for maximum efficiency, you can spawn specialized "TDD Fixer" sub-agents to perform them concurrently across different modules. 
+
+The TDD workflow (whether done by you or your sub-agents) is:
+* Add a test that specifically exercises the bug or vulnerability (it should fail before the fix).
+* Run the test to confirm it fails (Fail Fast).
+* Fix the issue in the source code.
+* Run the test again to confirm it passes.
+* Add a check mark to the item in the implementation plan that you have fixed.
+
+Have the sub-modules review the code for:
 * Any possible improvements to the linters that would help to avoid issues that
   come up during your review, to improve code quality and Odoo 19 compatibility,
   and to avoid AI foibles.
@@ -58,10 +74,6 @@ the code for:
 * Coverage and quality of testing
 * Coverage and quality of documentation in data/*.html .
 * Any thing else you think of.
-
-Have the sub-agents report to you, but don't have them fix anything, because
-they would conflict when they break modules for other sub-agents. Fix all of the
-issues the sub-agents report.
 
 Run the linter, using run_linters.py, in hams_open, hams_open/hams_shared,
 and hams_com; and fix all linter complaints. Run full tests in both hams_open
