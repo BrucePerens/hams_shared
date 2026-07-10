@@ -49,13 +49,14 @@ def main():
                     mod_name = file[:-3]
                     if mod_name not in imported:
                         print(
-                            f"  ⚠️  WARNING: File '{file}' in '{root}' is never imported in its __init__.py"
+                            f"  ❌  ERROR: File '{file}' in '{root}' is never imported in its __init__.py"
                         )
                         warnings += 1
 
     if warnings > 0:
-        print(f"Total Warnings (Init Imports): {warnings}")
-    sys.exit(0)  # Warnings usually do not fail the build
+        print(f"Total Errors (Init Imports): {warnings}")
+        sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

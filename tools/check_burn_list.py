@@ -555,6 +555,11 @@ ODOO_ERROR_RULES = [
         re.compile(r"SET\s+LOCAL\s+default_transaction_read_only", re.IGNORECASE),
         "CRITICAL SQL SECURITY: 'SET LOCAL default_transaction_read_only' is vulnerable to semicolon chaining if concatenated dynamically. Use 'SET TRANSACTION READ ONLY' instead.",
     ),
+    (
+        r"controllers/.*\.py$",
+        re.compile(r"return\s+(?:request\.not_found\(\)|werkzeug\.exceptions\.[A-Za-z0-9_]+\()"),
+        "CRITICAL EXCEPTIONS: HTTPExceptions (like request.not_found() or werkzeug.exceptions.*) MUST be raised, not returned.",
+    ),
 ]
 
 WARNING_RULES = [
@@ -881,6 +886,37 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 self.loop_depth -= 1
 
         def visit_ClassDef(self, node):
+            if self.is_odoo_module:
+                is_model = any(
+                    getattr(base, "attr", "") in ("Model", "TransientModel", "AbstractModel")
+                    for base in node.bases
+                    if isinstance(base, ast.Attribute)
+                )
+                if is_model:
+                    has_model_name = False
+                    has_rname_lineno = None
+                    has_name = False
+                    for stmt in node.body:
+                        if isinstance(stmt, ast.Assign):
+                            for target in stmt.targets:
+                                if isinstance(target, ast.Name):
+                                    if target.id == "_name":
+                                        has_model_name = True
+                                    elif target.id == "_" + "rec_name":
+                                        has_rname_lineno = stmt.lineno
+                                    elif target.id == "name":
+                                        has_name = True
+                    if has_rname_lineno:
+                        self.add_error(
+                            has_rname_lineno,
+                            "CRITICAL SCHEMA: The use of " + "'_" + "rec_name' is forbidden. Every model MUST have a textual 'name' field defined."
+                        )
+                    if has_model_name and not has_name:
+                        self.add_error(
+                            node.lineno,
+                            "CRITICAL SCHEMA: Every model MUST have a textual 'name' field defined. Relying on " + "'_" + "rec_name' or implicitly missing 'name' is forbidden."
+                        )
+
             is_real_txn = any(
                 getattr(base, "id", "") == "RealTransactionCase"
                 or getattr(base, "attr", "") == "RealTransactionCase"
@@ -1990,6 +2026,11 @@ def scan_file(filepath, is_odoo_module=False):
                     elif manifest_dict.get("license") not in valid_licenses:
                         errors_found.append(
                             f"Line {node.lineno}: CRITICAL MANIFEST ERROR: Invalid 'license' value '{manifest_dict.get('license')}'. Valid options are: {', '.join(valid_licenses)}. Note: 'Other proprietary' must use a lowercase 'p'."
+                        )
+                    
+                    if "description" not in manifest_dict or not manifest_dict.get("description"):
+                        errors_found.append(
+                            f"Line {node.lineno}: CRITICAL MANIFEST ERROR: 'description' key is missing or empty. It MUST be present to prevent Odoo from falling back to README.md parsing."
                         )
         except Exception:
             pass

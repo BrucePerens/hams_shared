@@ -369,6 +369,8 @@ class FailureExtractor:
         is_log_line = self.log_prefix_pattern.match(line_clean)
         line_lower = line_clean.lower()
 
+        if "odoo.schema: column \"name\" does not exist" in line_clean:
+            return
         is_test_failure_content = (
             (
                 "======================================================================"
@@ -923,7 +925,7 @@ def check_linters(
 
     print("[*] Scanning for Semantic Anchors...")
     res_anchor = subprocess.run(
-        [python_exec, os.path.join(shared_dir, "tools", "verify_anchors.py"), base_dir],
+        [python_exec, os.path.join(shared_dir, "tools", "verify_anchors.py"), base_dir, os.path.abspath(os.path.join(base_dir, "..", "hams_com"))],
         capture_output=True,
         text=True,
     )

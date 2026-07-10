@@ -41,13 +41,14 @@ def main():
                             manifest_dict = ast.literal_eval(node.value)
                             manifests[mod_name] = manifest_dict.get("depends", [])
 
-                            if "description" not in manifest_dict:
+                            desc = manifest_dict.get("description", "")
+                            if not desc or not str(desc).strip():
                                 print(
                                     f"🚨 MANIFEST DESCRIPTION VIOLATION in {mod_name}"
                                 )
                                 print(f"  File: {manifest_path}")
                                 print(
-                                    "  Error: __manifest__.py MUST contain a 'description' key to prevent Odoo from falling back to RST parsing on README.md during module installation."
+                                    "  Error: __manifest__.py MUST contain a non-empty 'description' string to prevent Odoo from falling back to RST parsing on README.md during module installation."
                                 )
                                 errors_found = True
 
