@@ -346,9 +346,9 @@ ODOO_ERROR_RULES = [
         "CRITICAL DEPRECATION: 'get_resource_path' was removed in Odoo 19. Use 'odoo.tools.misc.file_path'.",
     ),
     (
-        r"controllers/.*\.py$",
+        r"\.py$",
         re.compile(r"@(?:tools\.)?ormcache"),
-        "CRITICAL ARCHITECTURE: Cannot use @ormcache on Controller methods.",
+        "CRITICAL ARCHITECTURE: Cannot use @ormcache anywhere. Use @distributed_cache from distributed_redis_cache instead.",
     ),
     (
         r"^(?!.*daemon_key_manager/).*\.(py|js|xml|csv)$",

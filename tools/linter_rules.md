@@ -170,7 +170,7 @@ Odoo's `ast.literal_eval` parser requires valid, strict Python dictionary syntax
         * **Test Cursor Corruption:** Odoo 19 tests run in a single transaction.
         Calling `env.cr.commit()` or `env.cr.rollback()` inside a `test_` file will raise an `AssertionError`.
         If testing background loop functions, you MUST utilize the `RealTransactionCase`. You are strictly **FORBIDDEN** from using `odoo.tools.config.get('test_enable')` or similar checks to bypass logic during a test.
-        * **Controller Caching:** Using `@tools.ormcache` on an `@http.route` controller method is banned.
+        * **Distributed Cache Enforcer:** Using `@tools.ormcache` anywhere in the codebase is strictly banned to prevent multi-node cache coherence issues. You MUST use `@distributed_cache` from `distributed_redis_cache` instead.
     </database_rules>
 - <python_standards>
         ## 3.5 📜 Imports
