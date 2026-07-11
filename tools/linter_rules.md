@@ -235,3 +235,9 @@ Odoo's `ast.literal_eval` parser requires valid, strict Python dictionary syntax
 * **_auto_init Overrides:** Overriding `_auto_init(self)` is deprecated in Odoo 19. You MUST put custom SQL constraints or extensions inside `init(self)`.
 * **Public Write/Unlink Rules:** Defining `perm_write="1"` or `perm_unlink="1"` inside an `ir.rule` where `domain_force` contains `publish_to_public` is banned. You MUST split the read and write rules.
 * **Manifest Licensing:** `hams_com` modules MUST use `Other proprietary`. `hams_open` and `hams_shared` MUST use `AGPL-3`.
+
+## RabbitMQ Connection Pool (check_rabbitmq_pool.py)
+
+**Rule:** Modules must NOT manually instantiate RabbitMQ connections (`pika.BlockingConnection` or `pika.SelectConnection`).
+**Reason:** Spawning ad-hoc RabbitMQ connections exhausts OS threads and TCP ports under high load.
+**Fix:** Use the global thread-safe RabbitMQ connection pool: `self.env['hams_rabbitmq.pool'].publish(exchange, routing_key, body)`
