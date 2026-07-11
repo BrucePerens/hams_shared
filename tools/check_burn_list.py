@@ -212,7 +212,7 @@ GENERAL_ERROR_RULES = [
     (
         r"\.py$",
         re.compile(r"except\s+ImportError\s*:"),
-        "CRITICAL AI FAILURE: Wrapping imports in try/except ImportError is forbidden. Use manifest external_dependencies.",
+        "CRITICAL FAST FAIL: Soft dependencies (try/except ImportError) are forbidden. Modules and daemons must fast-fail on missing dependencies. If Odoo, use manifest external_dependencies.",
     ),
     (
         r"test_.*\.py$",
@@ -262,7 +262,7 @@ GENERAL_ERROR_RULES = [
     ),
     (
         r"test_.*\.py$",
-        re.compile(r"(?:@patch\b|with\s+patch\b|with\s+patch\.object\b)"),
+        re.compile(r"(?:@(?:mock\.)?patch\b|\b(?:mock\.)?patch(?:\.object)?\s*\()"),
         "CRITICAL ARCHITECTURE: Native patch decorators and context managers are forbidden. Use self.safe_patch() or self.safe_patch_object().",
     ),
     (
@@ -1173,7 +1173,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 ):
                     self.add_error(
                         node.lineno,
-                        "CRITICAL AI FAILURE: Wrapping imports in try/except ImportError is forbidden. Use manifest external_dependencies.",
+                        "CRITICAL FAST FAIL: Soft dependencies (try/except ImportError) are forbidden. Modules and daemons must fast-fail on missing dependencies. If Odoo, use manifest external_dependencies.",
                     )
                 is_catch_all = handler.type is None or (
                     isinstance(handler.type, ast.Name)

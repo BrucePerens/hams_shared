@@ -215,8 +215,8 @@ Odoo's `ast.literal_eval` parser requires valid, strict Python dictionary syntax
                 * **Thread Blocking:** `time.sleep()` in main application code is banned..
                 If used in a background daemon for rate-limiting, it MUST be appended with `# audit-ignore-sleep`.
                 * **Thread Spawning:** `threading.Thread` is banned as a DoS vector. Use `concurrent.futures.ThreadPoolExecutor`.
-                * **Import Error Evasion:** Wrapping imports in `try...except ImportError` blocks is strictly forbidden (ADR-0073).
-                You MUST declare dependencies in `__manifest__.py` and let the system fail-fast.
+                * **Import Error Evasion:** Wrapping imports in `try...except ImportError` blocks is strictly forbidden to prevent soft dependencies (ADR-0073).
+                Modules and daemons must fast-fail on missing dependencies. If Odoo, use manifest `external_dependencies`.
                 * **Dynamic Data-Type Introspection Banned:** The use of `hasattr()` or `getattr(..., 'column_type')` to dynamically check for fields, methods, or database columns at runtime is strictly forbidden ("CRITICAL AI LAZINESS"). You MUST rely on explicit schema contracts and hard dependencies. If a module requires a method or field from another module, declare it in the `depends` array of your `__manifest__.py`.
                 * **Hallucinatory sys.path Manipulation:** You MUST NOT use `sys.path.append` or `sys.path.insert` to resolve sibling imports using `..` or to redundantly append the script directory (using `__file__`).
                 Python naturally resolves local imports. Isolated background daemons are the only permitted exception.
