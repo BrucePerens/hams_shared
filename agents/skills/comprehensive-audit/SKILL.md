@@ -12,9 +12,9 @@ When invoked, you MUST execute the following steps completely non-interactively:
 
 1. **Discover Target Directories**:
    Use `list_dir` or a terminal command to find all directories containing Python code, Rust code, tests, daemons, tools, or UI assets inside the three core repositories:
-   - `/home/bruce/workspace/hams_com` (Make sure to include `daemons/` and other non-module folders!)
-   - `/home/bruce/workspace/hams_open`
-   - `/home/bruce/workspace/hams_open/hams_shared`
+   - `hams_com` (Make sure to include `daemons/` and other non-module folders!)
+   - `hams_open`
+   - `hams_open/hams_shared`
    DO NOT discover only Odoo modules! There is lots of code that isn't part of
    an Odoo module in this code-base.
 
@@ -63,7 +63,7 @@ When invoked, you MUST execute the following steps completely non-interactively:
 
    **Subagent 11: The Missing Features Hunter**
    - **Role**: `Missing Features Hunter`
-   - **Prompt**: "Audit the directory {module_path}. Analyze the module's domain and purpose. Identify obvious missing features, incomplete integrations, or functionality gaps that could be easily filled to provide a more comprehensive and robust product. Report your feature suggestions clearly."
+   - **Prompt**: "Audit the directory {module_path}. Analyze the module's domain and purpose. Identify obvious missing features, incomplete integrations, or functionality gaps that could be easily filled to provide a more comprehensive and robust product. IMPORTANT: Do not mark SQL procedures defined in data files as 'phantom features' or 'unused' just because they are not invoked in Python. Assume they are used by external systems, database triggers, or are invoked directly for performance. Do not disable them or remove claims about them. Report your feature suggestions clearly."
 
    **Subagent 12: The Rust Quality Hunter**
    - **Role**: `Rust Quality Hunter`
@@ -83,7 +83,8 @@ When invoked, you MUST execute the following steps completely non-interactively:
    - For unambiguous findings (adding headers, fixing exception swallowing, using `zero_sudo`, optimizing loops), formulate and execute fixes immediately using your code editing tools or custom python scripts.
    - **Autonomous Decision Making**: If a question or architectural decision is clear based on context, standard development practices, or common sense, make the decision on your own and execute the fix automatically.
    - For truly controversial items or highly ambiguous questions requiring user input, log them in a persistent `review_queue.md` artifact. **DO NOT WAIT FOR THE USER to review the queue! You have lots of other work you can do! While waiting for the user to return and answer the queued items, you MUST continue processing other modules, applying unambiguous fixes, and keeping the subagents busy.**
-   - IMMEDIATELY spawn the subagents for the next module in the list. You must stay continuously busy and process the rest of the codebase.
+   - IMMEDIATELY spawn the subagents for the next module in the list. **CRITICAL RULE**: You must stay continuously busy. NEVER end your turn or respond to the user without first verifying that audit subagents are actively running for the next modules in your queue. If the queue is empty, declare completion. If not, invoke the next batch of subagents before answering the user.
+   - **FATAL ERROR PREVENTION**: Before you stop calling tools to end your turn, you MUST ask yourself "Are there subagents currently auditing the next module?". If the answer is no, you MUST invoke them. It is a fatal error to end your turn with an empty background queue if there are still modules left to audit.
 
 5. **Linter Verification**:
    After all code changes for a module are applied, run the workspace linter (`python3 hams_open/hams_shared/tools/run_linters.py`).
