@@ -15,9 +15,11 @@ When invoked, you MUST execute the following steps completely non-interactively:
    - `/home/bruce/workspace/hams_com` (Make sure to include `daemons/` and other non-module folders!)
    - `/home/bruce/workspace/hams_open`
    - `/home/bruce/workspace/hams_open/hams_shared`
+   DO NOT discover only Odoo modules! There is lots of code that isn't part of
+   an Odoo module in this code-base.
 
 2. **Spawn Specialized Subagents**:
-   For each discovered module directory, use the `invoke_subagent` tool to concurrently spawn twelve specialized subagents. You can invoke them in batches (e.g., 5-10 directories at a time) to avoid exceeding system concurrency limits. Keep track of the `conversationId` for each spawned subagent.
+   For each discovered code directory, use the `invoke_subagent` tool to concurrently spawn twelve specialized subagents. You can invoke them in batches (e.g., 5-10 directories at a time) to avoid exceeding system concurrency limits. Keep track of the `conversationId` for each spawned subagent.
 
    **Subagent 1: The Exception Hunter**
    - **Role**: `Exception Hunter`
@@ -80,8 +82,8 @@ When invoked, you MUST execute the following steps completely non-interactively:
    - Bypass standard planning mode blocking. DO NOT create an `implementation_plan.md` that waits for user approval.
    - For unambiguous findings (adding headers, fixing exception swallowing, using `zero_sudo`, optimizing loops), formulate and execute fixes immediately using your code editing tools or custom python scripts.
    - **Autonomous Decision Making**: If a question or architectural decision is clear based on context, standard development practices, or common sense, make the decision on your own and execute the fix automatically.
-   - For truly controversial items or highly ambiguous questions requiring user input, log them in a persistent `review_queue.md` artifact. DO NOT WAIT FOR THE USER. Queue it up and move to the next item.
-   - IMMEDIATELY spawn the subagents for the next module in the list. You must stay continuously busy.
+   - For truly controversial items or highly ambiguous questions requiring user input, log them in a persistent `review_queue.md` artifact. **DO NOT WAIT FOR THE USER to review the queue! You have lots of other work you can do! While waiting for the user to return and answer the queued items, you MUST continue processing other modules, applying unambiguous fixes, and keeping the subagents busy.**
+   - IMMEDIATELY spawn the subagents for the next module in the list. You must stay continuously busy and process the rest of the codebase.
 
 5. **Linter Verification**:
    After all code changes for a module are applied, run the workspace linter (`python3 hams_open/hams_shared/tools/run_linters.py`).
