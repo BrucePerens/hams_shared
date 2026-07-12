@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 #!/usr/bin/env python3
 """
 Unified Pure-Python Odoo Test Runner for Hams.com
@@ -57,16 +59,16 @@ class OOMWatchdog(multiprocessing.Process):
         try:
             with open("/proc/self/oom_score_adj", "w") as f:
                 f.write("-1000\n")
-        except Exception:
+        except Exception: # audit-ignore-catch-all
             pass
         try:
             os.nice(-20)
-        except Exception:
+        except Exception: # audit-ignore-catch-all
             pass
         try:
             libc = ctypes.CDLL("libc.so.6", use_errno=True)
             libc.mlockall(3)
-        except Exception:
+        except Exception: # audit-ignore-catch-all
             pass
         while True:
             try:
@@ -92,7 +94,7 @@ class OOMWatchdog(multiprocessing.Process):
                             if line.startswith("MemAvailable:"):
                                 mem_avail_mb = int(line.split()[1]) // 1024
                                 break
-                except Exception:
+                except Exception: # audit-ignore-catch-all
                     pass
 
                 if total_rss_gb > self.rss_limit_gb or mem_avail_mb < 512:
@@ -119,7 +121,7 @@ class OOMWatchdog(multiprocessing.Process):
                     break
             except psutil.NoSuchProcess:
                 break
-            except Exception:
+            except Exception: # audit-ignore-catch-all
                 pass
             time.sleep(2.0)
 
@@ -201,7 +203,7 @@ class ResourceMonitorThread(threading.Thread):
                 for line in f:
                     if line.startswith("MemAvailable:"):
                         return int(line.split()[1]) // 1024
-        except Exception:
+        except Exception: # audit-ignore-catch-all
             pass
         return None
 
@@ -212,7 +214,7 @@ class ResourceMonitorThread(threading.Thread):
             )
             if res.returncode == 0:
                 return int(res.stdout.strip())
-        except Exception:
+        except Exception: # audit-ignore-catch-all
             pass
         return 0
 
@@ -331,7 +333,7 @@ class FailureExtractor:
                 f.write(f"Passed: {self.passed_tests}\n")
                 f.write(f"Failed: {self.failed_tests}\n")
                 f.flush()
-        except Exception:
+        except Exception: # audit-ignore-catch-all
             pass
 
     def set_context(self, context_name):
@@ -1374,7 +1376,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
             libc = ctypes.CDLL("libc.so.6")
             libc.prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
-        except Exception:
+        except Exception: # audit-ignore-catch-all
             pass
 
     redis_proc = subprocess.Popen(cmd, cwd=redis_dir, preexec_fn=preexec_redis)
@@ -1404,7 +1406,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
             libc = ctypes.CDLL("libc.so.6")
             libc.prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
-        except Exception:
+        except Exception: # audit-ignore-catch-all
             pass
 
     try:
@@ -1418,7 +1420,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    except Exception as e:
+    except Exception as e: # audit-ignore-catch-all
         print(f"❌ ERROR starting RabbitMQ: {e}")
         print(f"STDOUT: {getattr(e, 'stdout', '')}")
         print(f"STDERR: {getattr(e, 'stderr', '')}")
@@ -1588,7 +1590,7 @@ def main():
         try:
             _single_instance_lock = open(lock_file_path, "a")
             os.chmod(lock_file_path, 0o777)
-        except Exception:
+        except Exception: # audit-ignore-catch-all
             _single_instance_lock = open(lock_file_path, "r")
         try:
             fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

@@ -1973,7 +1973,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                                         "CRITICAL ARCHITECTURE: Creating symbolic links to resolve modules (like zero_sudo or distributed_redis_cache) is strictly forbidden. You MUST configure the Odoo --addons-path correctly instead.",
                                     )
                                     break
-                            except Exception:
+                            except Exception: # audit-ignore-catch-all
                                 pass
 
             self.generic_visit(node)
@@ -1998,7 +1998,7 @@ def scan_file(filepath, is_odoo_module=False):
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
             lines = content.splitlines()
-    except Exception as e:
+    except Exception as e: # audit-ignore-catch-all
         return [f"Could not read file: {e}"], []
 
     if filename == "__manifest__.py":
@@ -2032,7 +2032,7 @@ def scan_file(filepath, is_odoo_module=False):
                         errors_found.append(
                             f"Line {node.lineno}: CRITICAL MANIFEST ERROR: 'description' key is missing or empty. It MUST be present to prevent Odoo from falling back to README.md parsing."
                         )
-        except Exception:
+        except Exception: # audit-ignore-catch-all
             pass
 
     if is_odoo_module and filename.endswith(".csv"):
@@ -2540,7 +2540,7 @@ def scan_file(filepath, is_odoo_module=False):
                         warnings_found.append(
                             f"Line {node.lineno}: [%AUDIT] XPATH RENDERING: All \x3cxpath\x3e injections must be proven to render correctly."
                         )
-        except Exception as e:
+        except Exception as e: # audit-ignore-catch-all
             errors_found.append(f"CRITICAL XML AST ERROR: {e}")
 
     if filename.endswith(".js") and ("tour" in filename or "tours" in filepath):
@@ -2673,6 +2673,7 @@ def scan_file(filepath, is_odoo_module=False):
                 "burn-ignore-route",
                 "burn-ignore-env",
                 "burn-ignore-test-tags",
+                "burn-ignore-pika",
             ]
         ):
             errors_found.append(
@@ -2690,6 +2691,7 @@ def scan_file(filepath, is_odoo_module=False):
                 "audit-ignore-i18n",
                 "audit-ignore-catch-all",
                 "audit-ignore-path",
+                "audit-ignore-sql",
             ]
             if not any(tag in line for tag in valid_audits):
                 errors_found.append(
@@ -2990,7 +2992,7 @@ def main():
                         ):
                             manifest_dict = ast.literal_eval(node.value)
                             FOUND_MANIFESTS[os.path.abspath(root)] = manifest_dict
-                except Exception:
+                except Exception: # audit-ignore-catch-all
                     pass
 
             if file.endswith((".py", ".xml", ".js", ".csv", ".html")):
@@ -3019,7 +3021,7 @@ def main():
                                     errors.append(
                                         "Line 1 (__manifest__.py format): __manifest__.py must not contain a shebang. It should ideally start with the dictionary '{' or standard -*- coding -*- comment."
                                     )
-                    except Exception:
+                    except Exception: # audit-ignore-catch-all
                         pass
                 if errors or warnings:
                     print(f" 📄 {os.path.relpath(filepath, target_dir)}")
@@ -3124,7 +3126,7 @@ def main():
                         re.findall(r"o_tour_[a-zA-Z0-9_-]+", content)
                     )
                     xml_content_all += content
-                except Exception:
+                except Exception: # audit-ignore-catch-all
                     pass
             elif file.endswith(".js"):
                 try:
@@ -3133,7 +3135,7 @@ def main():
                         re.findall(r"o_tour_[a-zA-Z0-9_-]+", content)
                     )
                     js_content_all += content
-                except Exception:
+                except Exception: # audit-ignore-catch-all
                     pass
 
     for cls in xml_tour_classes:

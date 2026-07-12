@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Copyright © Bruce Perens K6BP. All Rights Reserved.
@@ -52,7 +54,7 @@ def main():
     try:
         # Explicitly initialize the Registry class to avoid the attribute error
         registry = odoo.modules.registry.Registry(args.database)
-    except Exception as e:
+    except Exception as e: # audit-ignore-catch-all
         print(f"Error initializing registry for database '{args.database}': {e}")
         sys.exit(1)
 

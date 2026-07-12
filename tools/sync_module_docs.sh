@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 #!/bin/bash
 # Automatically syncs module README.md files to the docs/modules/ directory.
 # Discovers module names dynamically from their directory structures.

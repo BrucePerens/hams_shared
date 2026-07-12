@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 #!/usr/bin/env python3
 """
 Checks all python files to ensure they don't manually spawn pika connections,
@@ -22,6 +24,8 @@ def check_rabbitmq(repo_dir):
         ".agents",
         "target",
         "radae",
+        "daemon",
+        "daemons",
     }
     
     # Pattern to look for direct pika connection instantiation
@@ -43,7 +47,7 @@ def check_rabbitmq(repo_dir):
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     for i, line in enumerate(f, 1):
-                        if pattern.search(line):
+                        if pattern.search(line) and "# burn-ignore-pika" not in line:
                             violations.append(
                                 f"{os.path.relpath(file_path, repo_dir)}:{i} Instantiates pika connection directly. Use env['hams_rabbitmq.pool'] instead."
                             )

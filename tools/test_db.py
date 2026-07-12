@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 import odoo
 
 odoo.tools.config.parse_config(["-c", "tools/odoo.conf", "-d", "hams_test"])

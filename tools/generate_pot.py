@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os
@@ -49,7 +51,7 @@ def find_translatable_strings(root_dir):
 
                 except SyntaxError as e:
                     print(f"[WARN] Syntax error, skipping {filepath}: {e}")
-                except Exception as e:
+                except Exception as e: # audit-ignore-catch-all
                     print(f"[WARN] Could not parse {filepath}: {e}")
 
     return translations

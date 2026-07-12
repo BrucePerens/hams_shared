@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 #!/usr/bin/env python3
 import ast
 import os
@@ -71,7 +73,7 @@ def main():
                     filepath = os.path.join(root, file)
                     try:
                         all_errors.extend(check_file(filepath))
-                    except Exception:
+                    except Exception: # audit-ignore-catch-all
                         pass  # Ignore syntax errors in unsupported files
 
     if all_errors:

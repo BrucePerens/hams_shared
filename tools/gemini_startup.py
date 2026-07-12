@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 #!/usr/bin/env python3
 """
 gemini_startup.py
@@ -176,7 +178,7 @@ def generate_payload(modules=None):
                 except UnicodeDecodeError:
                     # Gracefully skip binaries disguised without extensions
                     pass
-                except Exception as e:
+                except Exception as e: # audit-ignore-catch-all
                     print(f"[!] Error reading {filepath}: {e}")
         else:
             out.write("[No uncommitted text files found. Rely on GitHub state.]\n\n")

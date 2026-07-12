@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -59,7 +61,7 @@ def main():
         try:
             with open(args.file, "r", encoding="utf-8") as f:
                 base_prompt = f.read().strip()
-        except Exception as e:
+        except Exception as e: # audit-ignore-catch-all
             print(f"Error reading file {args.file}: {e}", file=sys.stderr)
             sys.exit(1)
     else:

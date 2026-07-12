@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 #!/usr/bin/env bash
 # ==============================================================================
 # Synchronizes architectural files, tools, and documentation from hams_community

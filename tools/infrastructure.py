@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 #!/usr/bin/env python3
 """
 Infrastructure Blueprint & Provisioning Engine
@@ -1576,7 +1578,7 @@ def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
     try:
         run_cmd_func(["sudo", "sed", "-i", "/^addons_path/d", "/etc/odoo/odoo.conf"])
         run_cmd_func(["sudo", "bash", "-c", f"echo 'addons_path = {addons_path_str}' >> /etc/odoo/odoo.conf"])
-    except Exception as e:
+    except Exception as e: # audit-ignore-catch-all
         _logger.warning("Failed to update addons_path in /etc/odoo/odoo.conf: %s", e)
 
     cmd = [

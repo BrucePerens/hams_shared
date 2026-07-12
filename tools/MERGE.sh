@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 # List draft PRs and mark each as ready
 gh pr list --json number,isDraft --jq '.[] | select(.isDraft == true) | .number' | \
 xargs -I {} gh pr ready {}

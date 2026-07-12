@@ -1,3 +1,5 @@
+# This software is distributed under the terms of the Affero General Public License (AGPL-3).
+
 #!/usr/bin/env python3
 import sys
 import os
@@ -145,7 +147,7 @@ def run_linters(module_names: str, ctx: Context) -> str:
             else:
                 ctx.info("No modified modules detected, running on all modules.")
                 module_names = "."
-        except Exception as e:
+        except Exception as e: # audit-ignore-catch-all
             ctx.info(f"Failed to detect modified files via git: {e}")
 
     cmd = [sys.executable, os.path.join(dir_path, "tools", "run_linters.py"), module_names]
