@@ -66,7 +66,7 @@ You are strictly FORBIDDEN from using `.sudo()` inline. To escalate privileges:
 3. Execute using the impersonation idiom:
    `self.env['target.model'].with_user(svc_uid).create(vals)`
 
-* **Cache & Resolution:** `_get_service_uid` `[@ANCHOR: get_service_uid]` safely resolves `[@ANCHOR: get_service_uid_sql_resolve]` and verifies `[@ANCHOR: get_service_uid_sql_verify]` the service account UID using raw SQL to prevent redundant database hits and bypasses. It also enforces a mandatory block on accounts with global administrative rights `[@ANCHOR: god_mode_block_sql]`. This logic is verified by `[@ANCHOR: test_get_service_uid]`.
+* **Cache & Resolution:** `_get_service_uid` `[@ANCHOR: COMM_get_service_uid]` safely resolves `[@ANCHOR: COMM_get_service_uid_sql_resolve]` and verifies `[@ANCHOR: COMM_get_service_uid_sql_verify]` the service account UID using raw SQL to prevent redundant database hits and bypasses. It also enforces a mandatory block on accounts with global administrative rights `[@ANCHOR: god_mode_block_sql]`. This logic is verified by `[@ANCHOR: COMM_test_get_service_uid]`.
 </service_account_pattern>
 
 ---
@@ -75,7 +75,7 @@ You are strictly FORBIDDEN from using `.sudo()` inline. To escalate privileges:
 ## 2. System Parameter Whitelisting
 
 If you need to fetch a configuration parameter securely:
-`value = self.env['zero_sudo.security.utils']._get_system_param('my.key')` `[@ANCHOR: get_system_param]`
+`value = self.env['zero_sudo.security.utils']._get_system_param('my.key')` `[@ANCHOR: COMM_get_system_param]`
 
 **CRITICAL:** The key MUST be explicitly added to the `PARAM_WHITELIST` array in `zero_sudo/models/security_utils.py`. Cryptographic keys (like `database.secret`) are permanently banned from this whitelist to prevent Server-Side Template Injection (SSTI) exposure.
 </system_parameters>
@@ -104,7 +104,7 @@ When a daemon or unprivileged user strictly requires native ERP framework intera
 
 <global_cache>
 ## 4. Global Cache Signaling
-* **Postgres NOTIFY Bus:** The `_notify_cache_invalidation` function `[@ANCHOR: coherent_cache_signal]` provides an entry point to trigger cross-worker cache flushes via the distributed event bus. It supports both single invalidations `[@ANCHOR: coherent_cache_signal_single]` and bulk chunked notifications `[@ANCHOR: coherent_cache_signal_batch]`. This behavior is covered by `[@ANCHOR: test_coherent_cache_signal]`.
+* **Postgres NOTIFY Bus:** The `_notify_cache_invalidation` function `[@ANCHOR: COMM_coherent_cache_signal]` provides an entry point to trigger cross-worker cache flushes via the distributed event bus. It supports both single invalidations `[@ANCHOR: COMM_coherent_cache_signal_single]` and bulk chunked notifications `[@ANCHOR: COMM_coherent_cache_signal_batch]`. This behavior is covered by `[@ANCHOR: COMM_test_coherent_cache_signal]`.
 </global_cache>
 
 ---
@@ -115,17 +115,17 @@ When a daemon or unprivileged user strictly requires native ERP framework intera
 For detailed narratives and end-to-end workflows, refer to the following:
 
 ### Stories
-* **Secure Privilege Escalation** `[@ANCHOR: story_secure_escalation]`: Narrative on how developers securely escalate privileges using service accounts instead of `.sudo()`. [Read Story](zero_sudo/hams_shared/docs/stories/secure_escalation.md)
-* **Blocking Service Account Login** `[@ANCHOR: story_login_blocking]`: How the system prevents service accounts from accessing the interactive web interface. [Read Story](zero_sudo/hams_shared/docs/stories/login_blocking.md)
-* **Parameter Whitelisting** `[@ANCHOR: story_parameter_whitelisting]`: Protection of sensitive system parameters from unauthorized access. [Read Story](zero_sudo/hams_shared/docs/stories/parameter_whitelisting.md)
+* **Secure Privilege Escalation** `[@ANCHOR: COMM_story_secure_escalation]`: Narrative on how developers securely escalate privileges using service accounts instead of `.sudo()`. [Read Story](zero_sudo/hams_shared/docs/stories/secure_escalation.md)
+* **Blocking Service Account Login** `[@ANCHOR: COMM_story_login_blocking]`: How the system prevents service accounts from accessing the interactive web interface. [Read Story](zero_sudo/hams_shared/docs/stories/login_blocking.md)
+* **Parameter Whitelisting** `[@ANCHOR: COMM_story_parameter_whitelisting]`: Protection of sensitive system parameters from unauthorized access. [Read Story](zero_sudo/hams_shared/docs/stories/parameter_whitelisting.md)
 * **Multi-Website Awareness** `[@ANCHOR: story_multi_website]`: How the security core behaves in multi-website environments. [Read Story](zero_sudo/hams_shared/docs/stories/multi_website.md)
-* **Coherent Cache Signaling** `[@ANCHOR: story_cache_signaling]`: Ensuring cache consistency across multiple Odoo workers using Postgres NOTIFY. [Read Story](zero_sudo/hams_shared/docs/stories/cache_signaling.md)
-* **Deterministic Hashing** `[@ANCHOR: story_deterministic_hash]`: Generation of stable integer hashes for PostgreSQL advisory locks. [Read Story](zero_sudo/hams_shared/docs/stories/deterministic_hashing.md)
+* **Coherent Cache Signaling** `[@ANCHOR: COMM_story_cache_signaling]`: Ensuring cache consistency across multiple Odoo workers using Postgres NOTIFY. [Read Story](zero_sudo/hams_shared/docs/stories/cache_signaling.md)
+* **Deterministic Hashing** `[@ANCHOR: COMM_story_deterministic_hash]`: Generation of stable integer hashes for PostgreSQL advisory locks. [Read Story](zero_sudo/hams_shared/docs/stories/deterministic_hashing.md)
 * **Centralized Documentation Bootstrap** `[@ANCHOR: story_zero_sudo_doc_installer]`: How documentation is centrally installed across the platform. [Read Story](zero_sudo/hams_shared/docs/stories/documentation_bootstrap.md)
 
 ### Journeys
-* **Service Account Lifecycle** `[@ANCHOR: journey_service_account_lifecycle]`: The end-to-end flow of a service account from provisioning to secure execution. [Read Journey](zero_sudo/hams_shared/docs/journeys/service_account_lifecycle.md)
-* **Securing Configuration Parameters** `[@ANCHOR: journey_securing_configuration]`: The workflow for safely integrating and accessing new configuration parameters. [Read Journey](zero_sudo/hams_shared/docs/journeys/securing_configuration.md)
+* **Service Account Lifecycle** `[@ANCHOR: COMM_journey_service_account_lifecycle]`: The end-to-end flow of a service account from provisioning to secure execution. [Read Journey](zero_sudo/hams_shared/docs/journeys/service_account_lifecycle.md)
+* **Securing Configuration Parameters** `[@ANCHOR: COMM_journey_securing_configuration]`: The workflow for safely integrating and accessing new configuration parameters. [Read Journey](zero_sudo/hams_shared/docs/journeys/securing_configuration.md)
 * **Developer Integration** `[@ANCHOR: journey_developer_integration]`: End-to-end workflow for developers to integrate with the Zero-Sudo ecosystem. [Read Journey](zero_sudo/hams_shared/docs/journeys/developer_integration.md)
 </stories_and_journeys>
 
@@ -136,29 +136,29 @@ For detailed narratives and end-to-end workflows, refer to the following:
 
 This `AbstractModel` is the only approved way to escalate privileges for system-level operations.
 
-#### `_get_service_uid(xml_id)` `[@ANCHOR: get_service_uid]`
+#### `_get_service_uid(xml_id)` `[@ANCHOR: COMM_get_service_uid]`
 Safely retrieves the database ID of a Service Account without requiring inline `.sudo()`. The result is RAM-cached for extreme performance.
 * **Arguments:** `xml_id` (str): The external ID of the service account (e.g., `'your_module.your_service_account'`).
 * **Returns:** `int` (The User ID).
 
-#### `_get_deterministic_hash(input_string)` `[@ANCHOR: deterministic_hash]`
+#### `_get_deterministic_hash(input_string)` `[@ANCHOR: COMM_deterministic_hash]`
 Generates a high-speed, cryptographically deterministic 32-bit integer hash. MUST be used instead of Python's native `hash()` for `pg_advisory_xact_lock`.
 * **Arguments:** `input_string` (str): The unique string to hash.
 * **Returns:** `int` (A 32-bit integer safe for Postgres).
 
-#### `_get_system_param(key, default=None)` `[@ANCHOR: get_system_param]`
+#### `_get_system_param(key, default=None)` `[@ANCHOR: COMM_get_system_param]`
 Safely retrieves a whitelisted system configuration parameter.
 * **Arguments:** `key` (str): The configuration parameter key.
 * **Returns:** `str` or the default value.
 
-#### `_notify_cache_invalidation(model_name, key_value)` `[@ANCHOR: coherent_cache_signal]`
+#### `_notify_cache_invalidation(model_name, key_value)` `[@ANCHOR: COMM_coherent_cache_signal]`
 Emits a PostgreSQL `NOTIFY` event to synchronize distributed caches.
 * **Arguments:** `model_name` (str): The Odoo model. `key_value` (str): The unique identifier.
 
-#### `_get_crypto_secret()` `[@ANCHOR: get_crypto_secret]`
+#### `_get_crypto_secret()` `[@ANCHOR: COMM_get_crypto_secret]`
 Retrieves the root cryptographic key from environment or local file, bypassing DB. This is the only approved way to access the master system secret without risking exposure via the database's `ir.config_parameter` table.
 
-#### `_set_kv(key, value)` `[@ANCHOR: set_kv_sql_check]`
+#### `_set_kv(key, value)` `[@ANCHOR: COMM_set_kv_sql_check]`
 Sets a key-value pair in a lightweight service account storage.
 </python_api>
 
@@ -168,10 +168,10 @@ Sets a key-value pair in a lightweight service account storage.
 ## 7. Additional Utilities
 
 ### Web Login Security
-* **Key-Value Store:** Lightweight SA key-value storage `[@ANCHOR: set_kv_sql_check]`.
-* **Field:** `is_service_account` `[@ANCHOR: is_service_account_field]` on `res.users`.
-* **Interceptor:** `web_login` `[@ANCHOR: web_login_interceptor]` in `Home` controller.
-* **Security Check:** Performs direct SQL check `[@ANCHOR: web_login_interceptor_check]` for isolation.
+* **Key-Value Store:** Lightweight SA key-value storage `[@ANCHOR: COMM_set_kv_sql_check]`.
+* **Field:** `is_service_account` `[@ANCHOR: COMM_is_service_account_field]` on `res.users`.
+* **Interceptor:** `web_login` `[@ANCHOR: COMM_web_login_interceptor]` in `Home` controller.
+* **Security Check:** Performs direct SQL check `[@ANCHOR: COMM_web_login_interceptor_check]` for isolation.
 * **Effect:** Prevents interactive web logins for any user flagged as a service account.
 </additional_features>
 

@@ -83,10 +83,10 @@ ODOO_RPC_KEY=12345abcd...
 ---
 
 ## 🧪 Verification
-* **register_daemon_api**: Verified by [@ANCHOR: test_register_daemon_api]
-* **force_provision_all**: Verified by [@ANCHOR: test_force_provisioning]
-* **security_constraints**: Verified by [@ANCHOR: test_security_constraints]
-* **ui_tour**: Verified by [@ANCHOR: test_daemon_key_manager_tour]
-* **unauthorized_access**: Verified by [@ANCHOR: test_unauthorized_access]
-* **key_ownership**: Verified by [@ANCHOR: test_key_ownership]
-* **documentation_installed**: Verified by [@ANCHOR: documentation_installed] [@ANCHOR: test_documentation_installed]
+* **register_daemon_api**: Verified by [@ANCHOR: COMM_test_register_daemon_api]
+* **force_provision_all**: Verified by [@ANCHOR: COMM_test_force_provisioning]
+* **security_constraints**: Verified by [@ANCHOR: COMM_test_security_constraints]
+* **ui_tour**: Verified by [@ANCHOR: COMM_test_daemon_key_manager_tour]
+* **unauthorized_access**: Verified by [@ANCHOR: COMM_test_unauthorized_access]
+* **key_ownership**: Verified by [@ANCHOR: COMM_test_key_ownership]
+* **documentation_installed**: Verified by [@ANCHOR: COMM_documentation_installed] [@ANCHOR: test_documentation_installed]

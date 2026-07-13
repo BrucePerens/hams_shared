@@ -2826,7 +2826,7 @@ def _verify_test_ast(
                 "assertTrue",
             ):
                 found_security_check = True
-            if func_attr == "object":
+            if func_attr in ("object", "safe_patch_object"):
                 for arg in getattr(node, "args", []):
                     if isinstance(arg, ast.Constant) and arg.value in (
                         "send_mail",

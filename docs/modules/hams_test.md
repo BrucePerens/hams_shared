@@ -111,10 +111,10 @@ To prevent CSS bloat, the AST Burn List linter (`check_burn_list.py`) automatica
 ### Core Architecture
 The module implements three primary testing facilities:
 1. **Real Transaction Testing (`RealTransactionCase`)**: Bypasses Odoo's standard `TestCursor` to provide a real, committable database connection. It uses ORM instrumentation ([@ANCHOR: orm_instrumentation]) and mathematical table snapshots ([@ANCHOR: leak_snapshotting]) to ensure database integrity.
-2. **Integration Daemon Testing (`HamsTransactionCase`)**: Provides a lifecycle management wrapper for external Python daemons, including automated health polling. ([@ANCHOR: integration_daemon_testing]) Verified by [@ANCHOR: test_integration_daemon_testing]
+2. **Integration Daemon Testing (`HamsTransactionCase`)**: Provides a lifecycle management wrapper for external Python daemons, including automated health polling. ([@ANCHOR: integration_daemon_testing]) Verified by [@ANCHOR: COMM_test_integration_daemon_testing]
 3. **UI Tour Governance**: Defines standards for JavaScript-based UI tours and provides `TourUtils` for robust frontend testing.
 
-It also includes a **Noisy Table Management** interface ([@ANCHOR: UX_NOISY_TABLE_MANAGEMENT]) to allow administrators to whitelist tables from leak detection.
+It also includes a **Noisy Table Management** interface ([@ANCHOR: COMM_UX_NOISY_TABLE_MANAGEMENT]) to allow administrators to whitelist tables from leak detection.
 
 ### Security Design
 - **Service Accounts**: Utilizes `user_real_transaction_service` ([@ANCHOR: user_real_transaction_service]) for background tasks and documentation injection.

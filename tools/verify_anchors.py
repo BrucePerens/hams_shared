@@ -22,6 +22,9 @@ import re
 import sys
 
 
+def _clean(name):
+    return name.replace("COMM_", "").replace("PRI_", "")
+
 def get_module(path):
     """Resolves the Odoo module boundary for a given file path to enforce cross-module strictness."""
     abs_path = os.path.abspath(path)
@@ -213,7 +216,7 @@ def _process_file_for_anchors(
                 # Documents architectural handoffs between modules or daemons.
                 cross_references.setdefault(anchor, []).append(loc_str)
 
-            elif anchor_name.startswith(("story_", "journey_", "doc_")):
+            elif _clean(anchor_name).startswith(("story_", "journey_", "doc_")):
                 # Documentation-only anchors, ignored in code logic tracing.
                 pass
 
@@ -226,8 +229,8 @@ def _process_file_for_anchors(
                 base_name = anchor.split(":")[1]
                 if (
                     anchor in anchor_locations
-                    and not base_name.startswith("example_")
-                    and base_name not in ("unique_name", "name", "feature_name")
+                    and not _clean(base_name).startswith("example_")
+                    and _clean(base_name) not in ("unique_name", "name", "feature_name")
                 ):
                     duplicates.append((anchor, loc_str, anchor_locations[anchor]))
                 else:
@@ -334,7 +337,7 @@ def _report_duplicates(duplicates, primary_dirs, repo_root, explicit_non_primary
                 print(f"        -> {prior}")
 
             base_name = anchor.split(":")[1]
-            if base_name.startswith("test_"):
+            if _clean(base_name).startswith("test_"):
                 print(
                     "      [!] DIAGNOSTIC FOR AI: Do not use a 'test_' prefix for a base code anchor definition."
                 )
@@ -374,7 +377,7 @@ def _report_missing_cross_refs(
             continue
         if anchor not in all_known_anchors:
             base_name = anchor.split(":")[1]
-            if base_name.startswith("example_") or base_name in (
+            if _clean(base_name).startswith("example_") or _clean(base_name) in (
                 "unique_name",
                 "name",
                 "feature_name",
@@ -418,7 +421,7 @@ def _report_missing_tests(
         for anchor, line in links:
             if anchor not in all_known_anchors:
                 base_name = anchor.split(":")[1]
-                if base_name.startswith("example_") or base_name in (
+                if _clean(base_name).startswith("example_") or _clean(base_name) in (
                     "unique_name",
                     "name",
                     "feature_name",
@@ -459,17 +462,17 @@ def _report_bidirectional_orphans(
     test_anchors = {
         a: locs
         for a, locs in code_anchors.items()
-        if a.split(":")[1].startswith("test_")
+        if _clean(a.split(":")[1]).startswith("test_")
     }
 
     # All other base source code anchors
     source_anchors = {
         a: locs
         for a, locs in code_anchors.items()
-        if not a.split(":")[1].startswith("test_")
-        and not a.split(":")[1].startswith("example_")
-        and not a.split(":")[1].startswith("UX_")
-        and a.split(":")[1] not in ("unique_name", "name", "feature_name")
+        if not _clean(a.split(":")[1]).startswith("test_")
+        and not _clean(a.split(":")[1]).startswith("example_")
+        and not _clean(a.split(":")[1]).startswith("UX_")
+        and _clean(a.split(":")[1]) not in ("unique_name", "name", "feature_name")
     }
 
     # An orphan source is one that lacks a matching '# Tests [@ANCHOR: name]' in the test suite
@@ -488,7 +491,7 @@ def _report_bidirectional_orphans(
     orphaned_tests = {
         a: locs
         for a, locs in orphaned_tests.items()
-        if "test_tour_signup" not in a.split(":")[1]
+        if "test_tour_signup" not in _clean(a.split(":")[1])
     }
 
     if orphaned_source:
@@ -574,8 +577,8 @@ def _report_documentation_gaps(
         for a, locs in docs_anchors.items()
         if a not in code_anchors
         and a not in all_contracts
-        and not a.split(":")[1].startswith(("example_", "story_", "journey_", "doc_"))
-        and a.split(":")[1] not in ("unique_name", "name", "feature_name")
+        and not _clean(a.split(":")[1]).startswith(("example_", "story_", "journey_", "doc_"))
+        and _clean(a.split(":")[1]) not in ("unique_name", "name", "feature_name")
     }
 
     if undocumented:
@@ -644,7 +647,7 @@ def _report_missing_ux_docs(
     explicit_non_primary=None,
 ):
     ux_code_anchors = {
-        a: locs for a, locs in code_anchors.items() if a.split(":")[1].startswith("UX_")
+        a: locs for a, locs in code_anchors.items() if _clean(a.split(":")[1]).startswith("UX_")
     }
     has_errors = False
 
@@ -781,7 +784,7 @@ def main():
                             anchor_name = match.group(1)
                             if ":" in anchor_name:
                                 mod, anchor_name = anchor_name.split(":", 1)
-                            if anchor_name.startswith("UX_"):
+                            if _clean(anchor_name).startswith("UX_"):
                                 user_manual_anchors.add(f"{mod}:{anchor_name}")
                 except (OSError, UnicodeDecodeError):
                     continue

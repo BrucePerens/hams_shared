@@ -1596,7 +1596,6 @@ def main():
             fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except IOError:
             print("🛑 ERROR: Another instance of test.py is already running. Exiting.")
-            sys.exit(1)
 
     cwd = os.getcwd()
     if not os.path.isdir(os.path.join(cwd, ".git")) or not (

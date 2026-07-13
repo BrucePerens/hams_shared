@@ -76,7 +76,7 @@ Each sub-agent MUST read the following before beginning its review:
 This prevents sub-agents from re-discovering known traps and ensures they
 apply the project's established standards and architectural decisions.
 
-### Preventing Sub-Agent Hallucinations
+### Preventing Sub-Agent Hallucinations & Communication Failures
 
 When defining the initial prompt for each sub-agent, **"ignatz"** MUST include
 strict anti-hallucination guardrails:
@@ -96,6 +96,10 @@ strict anti-hallucination guardrails:
 5. **Acceptance of Perfection**: Tell the sub-agent that it is perfectly fine
    to return "No issues found." They should not invent bugs just to provide
    a finding.
+6. **Report Delivery (Mandatory)**: Instruct the sub-agent that it MUST use the
+   `send_message` tool to transmit its final markdown report back to you (the orchestrator).
+   You MUST include your own Conversation ID in the prompt so the subagent knows what to use for the `Recipient` argument.
+   Explicitly forbid it from simply ending its turn without sending the message, because you will NOT be notified if it does, and you MUST NOT parse its transcript manually to extract it. If a subagent finishes without using `send_message`, you must send it a message telling it to resend its report using the `send_message` tool.
 
 ### Severity Classification (Mandatory)
 
