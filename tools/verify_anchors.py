@@ -101,6 +101,7 @@ def find_anchors_in_docs(root_dir, repo_root):
     """Scans all markdown and documentation files for base feature declarations."""
     doc_anchors = {}
     contract_anchors = {}
+    doc_anchor_lines = {}
     pattern = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
     exclude_dirs = {
         "tools",
@@ -151,10 +152,11 @@ def find_anchors_in_docs(root_dir, repo_root):
                                     )
                                 else:
                                     doc_anchors.setdefault(anchor, []).append(loc_str)
+                                doc_anchor_lines.setdefault(full_path, set()).add(line_num)
                 except UnicodeDecodeError:
                     continue
 
-    return doc_anchors, contract_anchors
+    return doc_anchors, contract_anchors, doc_anchor_lines
 
 
 def _process_file_for_anchors(
@@ -168,6 +170,7 @@ def _process_file_for_anchors(
     verified_by_links,
     cross_references,
     duplicates,
+    code_anchor_lines,
     repo_root,
 ):
     """
@@ -184,6 +187,7 @@ def _process_file_for_anchors(
 
         first_prefix = line[: matches[0].start()].strip()
         loc_str = f"./{rel_path}:{line_num}"
+        code_anchor_lines.setdefault(full_path, set()).add(line_num)
 
         for match in matches:
             anchor_name = match.group(1)
@@ -242,6 +246,7 @@ def find_anchors_in_code(root_dir, repo_root):
     code_anchors, anchor_locations = {}, {}
     tests_links, tests_links_set = {}, {}
     verified_by_links, cross_references = {}, {}
+    code_anchor_lines = {}
     duplicates = []
     pattern = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
     exclude_dirs = {
@@ -277,6 +282,7 @@ def find_anchors_in_code(root_dir, repo_root):
                             verified_by_links,
                             cross_references,
                             duplicates,
+                            code_anchor_lines,
                             repo_root,
                         )
                 except UnicodeDecodeError:
@@ -290,6 +296,7 @@ def find_anchors_in_code(root_dir, repo_root):
         verified_by_links,
         cross_references,
         duplicates,
+        code_anchor_lines,
     )
 
 
@@ -639,6 +646,44 @@ def _report_documentation_gaps(
     return has_errors
 
 
+def _report_dummy_blocks(all_anchor_lines, primary_dirs, repo_root, explicit_non_primary=None):
+    has_errors = False
+    for filepath, lines_set in all_anchor_lines.items():
+        if not is_primary(filepath, primary_dirs, repo_root, explicit_non_primary):
+            continue
+            
+        lines = sorted(list(lines_set))
+        consecutive_blocks = []
+        current_block = []
+        
+        for line in lines:
+            if not current_block:
+                current_block.append(line)
+            elif line == current_block[-1] + 1:
+                current_block.append(line)
+            else:
+                if len(current_block) > 1:
+                    consecutive_blocks.append(current_block)
+                current_block = [line]
+        if len(current_block) > 1:
+            consecutive_blocks.append(current_block)
+            
+        if consecutive_blocks:
+            if not has_errors:
+                print("\n[!] CI/CD FAILURE: Dummy Test / Stacked Anchors Detected:")
+                has_errors = True
+            rel_path = os.path.relpath(filepath, repo_root)
+            print(f"    - Stacked anchors found in '{rel_path}'")
+            for block in consecutive_blocks:
+                print(f"      -> Lines {block[0]} to {block[-1]} have anchors right next to each other.")
+            print("      [!] DIAGNOSTIC FOR AI: You are strictly forbidden from creating 'dummy tests'")
+            print("          with multiple anchors stacked together. Each anchor MUST be placed inside")
+            print("          a real, functional test (one anchor per real test). If this is a document,")
+            print("          space out the definitions and write real content for them.")
+
+    return has_errors
+
+
 def _report_missing_ux_docs(
     code_anchors,
     user_manual_anchors,
@@ -732,15 +777,18 @@ def main():
     verified_by_links, cross_references = {}, {}
     user_manual_anchors = set()
     duplicates = []
+    all_anchor_lines = {}
 
     for target_dir in final_targets:
-        da, ca = find_anchors_in_docs(target_dir, repo_root)
+        da, ca, dal = find_anchors_in_docs(target_dir, repo_root)
         for k, v in da.items():
             docs_anchors.setdefault(k, []).extend(v)
         for k, v in ca.items():
             contract_anchors.setdefault(k, []).extend(v)
+        for k, v in dal.items():
+            all_anchor_lines.setdefault(k, set()).update(v)
 
-        (c_anchors, a_locs, t_links, t_links_set, v_by_links, c_refs, dups) = (
+        (c_anchors, a_locs, t_links, t_links_set, v_by_links, c_refs, dups, cal) = (
             find_anchors_in_code(target_dir, repo_root)
         )
 
@@ -756,6 +804,8 @@ def main():
             verified_by_links.setdefault(k, []).extend(v)
         for k, v in c_refs.items():
             cross_references.setdefault(k, []).extend(v)
+        for k, v in cal.items():
+            all_anchor_lines.setdefault(k, set()).update(v)
         duplicates.extend(dups)
 
         for root, dirs, files in os.walk(target_dir):
@@ -817,6 +867,12 @@ def main():
             repo_root,
             explicit_non_primary,
         ),
+        _report_dummy_blocks(
+            all_anchor_lines,
+            primary_dirs,
+            repo_root,
+            explicit_non_primary,
+        ),
     ]
 
     bidi_err, source_anchors = _report_bidirectional_orphans(
@@ -841,7 +897,7 @@ def main():
         )
     )
 
-    if False:
+    if any(errs):
         sys.exit(1)
     else:
         print(
