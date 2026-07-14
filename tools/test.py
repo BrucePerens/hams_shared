@@ -1011,11 +1011,10 @@ def rebuild_db(db_name):
         print("[*] Starting core daemons before testing...")
         for svc in ["postgresql", "redis-server", "rabbitmq-server", "pdns"]:
             subprocess.run(["sudo", "systemctl", "start", svc], check=False)
-        print("[*] Stopping system Odoo service to free memory...")
-        subprocess.run(["sudo", "systemctl", "stop", "odoo"], check=False)
 
     print("[*] Flushing persistent daemons (Redis / RabbitMQ)...")
-    subprocess.run(["redis-cli", "flushall"], check=False, env=env)
+    redis_db = os.environ.get("REDIS_DB", "0")
+    subprocess.run(["redis-cli", "-n", redis_db, "flushdb"], check=False, env=env)
 
     # Get the working directory where data is saved
     subprocess.run(["redis-cli", "CONFIG", "GET", "dir"], check=False, env=env)
@@ -1836,6 +1835,7 @@ def main():
 
         os.environ["ODOO_URL"] = "http://127.0.0.1:8075"
         os.environ["DB_NAME"] = args.db
+        os.environ["REDIS_DB"] = "1"
         os.environ["ODOO_USER"] = "admin"
         os.environ["ODOO_PASSWORD"] = "admin"
 
@@ -1876,6 +1876,7 @@ def main():
         # Inject environment variables for daemons spawned securely by tests
         os.environ["ODOO_URL"] = "http://127.0.0.1:8075"
         os.environ["DB_NAME"] = args.db
+        os.environ["REDIS_DB"] = "1"
         os.environ["ODOO_USER"] = "admin"
         os.environ["ODOO_PASSWORD"] = "admin"
 
@@ -1917,6 +1918,7 @@ def main():
     elif args.mode == "individual":
         os.environ["ODOO_URL"] = "http://127.0.0.1:8075"
         os.environ["DB_NAME"] = args.db
+        os.environ["REDIS_DB"] = "1"
         os.environ["ODOO_USER"] = "admin"
         os.environ["ODOO_PASSWORD"] = "admin"
 
