@@ -50,7 +50,7 @@ inventory has been reviewed.
 
 **CRITICAL: AVOID GHOST SUBAGENTS HANGING THE SYSTEM.** Subagents frequently crash or finish silently without sending a message back to you. If you go idle waiting for them, you will wait forever.
 Therefore, you MUST follow this protocol EVERY SINGLE TIME you go idle to wait for subagents:
-1. You MUST use the `schedule` tool to set a timer for 10 minutes (e.g. `DurationSeconds=600`, `TimerCondition="any"`) before you finish your turn.
+1. You MUST use the `schedule` tool to set a timer for 2 minutes (e.g. `DurationSeconds=120`, `TimerCondition="any"`) before you finish your turn.
 2. Every time you wake up, you MUST use the `manage_subagents` tool with `Action="list"` to check if the subagents you are waiting for are actually still running.
 3. If a subagent you are waiting for is NO LONGER in the `manage_subagents` list, it is a "ghost" (it died or finished silently). You must immediately use `manage_subagents` to `kill` any remaining stuck components, check its logs if necessary, and either move its module to Phase 2/3 or restart the subagent.
 Never assume a subagent will reliably message you back. Always trust `manage_subagents` to verify they are still alive.
