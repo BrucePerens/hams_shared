@@ -1,6 +1,6 @@
+#!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
 
-#!/usr/bin/env python3
 """
 Semantic Anchor Verification Linter (ADR-0054, ADR-0055, ADR-0074)
 
@@ -10,7 +10,9 @@ how to resolve anchor-related CI/CD failures.
 
 RULES OF TRACEABILITY:
 1. BASE ANCHOR: Define a feature in source code using: `# [@ANCHOR: COMM_feature_name]`
+
 2. TEST LINK: The test file testing that feature MUST contain: `# Tests [@ANCHOR: COMM_feature_name]`
+
 3. VERIFICATION LINK: The source code MUST point back to the test using: `# Verified by [@ANCHOR: COMM_test_method_name]`
 4. DOC LINK: The base anchor MUST exist in a Markdown file in `docs/stories/` or `docs/journeys/`.
 5. UX LINK: If the anchor starts with `UX_`, it MUST exist in the module's `data/documentation.html`.

@@ -1,6 +1,6 @@
+#!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
 
-#!/usr/bin/env python3
 """
 Scans the codebase for Python string literals containing raw XML/HTML tags
 or suspicious empty strings that may indicate tags stripped by LLM UIs.

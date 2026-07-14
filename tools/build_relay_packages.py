@@ -1,6 +1,6 @@
+#!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
 
-#!/usr/bin/env python3
 """
 Build script to package the Hams.com Local Hardware Relay.
 Generates advanced installation scripts that permanently install the daemons

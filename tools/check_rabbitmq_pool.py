@@ -1,6 +1,6 @@
+#!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
 
-#!/usr/bin/env python3
 """
 Checks all python files to ensure they don't manually spawn pika connections,
 but instead use the hams_rabbitmq.pool global connection.

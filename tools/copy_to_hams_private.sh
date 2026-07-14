@@ -1,6 +1,6 @@
+#!/bin/bash
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
 
-#!/bin/bash
 
 # Target repository path. Can be passed as the first argument.
 TARGET_REPO="${1:-../hams_private}"

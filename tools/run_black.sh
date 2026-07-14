@@ -1,6 +1,6 @@
+#!/bin/bash
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
 
-#!/bin/bash
 # Copyright © Bruce Perens K6BP. All Rights Reserved.
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

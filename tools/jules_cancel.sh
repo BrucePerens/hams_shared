@@ -1,6 +1,6 @@
+#!/bin/bash
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
 
-#!/bin/bash
 # Exit immediately if a command exits with a non-zero status
 set -e
 
