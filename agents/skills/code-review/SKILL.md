@@ -15,7 +15,7 @@ It must periodically report its progress to you. While "ignatz" is in charge of 
 This means you are accountable for ensuring that ALL phases are completed, including Phase 3 (Final Validation), where tests must be run and a 100% pass rate achieved across both repositories. If "ignatz" fails, crashes, loses the thread, or halts prematurely, YOU must NOT take over the work manually. Instead, you MUST spawn a NEW "ignatz" sub-agent and instruct it to resume the process from where the previous one left off. Your role remains strictly to supervise until the job is successfully completed.
 
 **CRITICAL ORCHESTRATOR REQUIREMENT:**
-As **"nudge"**, you MUST use the `schedule` tool to set a timer for 5 minutes (e.g. `DurationSeconds=300`, `TimerCondition="<ignatz-conversation-id>"`) before ending your turn. This ensures you wake up every 5 minutes to actively supervise "ignatz". You must monitor "ignatz" continuously and verify its performance until it fully completes Phase 3 (running tests and achieving 100% pass).
+As **"nudge"**, you MUST use the `schedule` tool to set a timer for 5 minutes (e.g. `DurationSeconds=300`, `TimerCondition="<ignatz-conversation-id>"`) before ending your turn. This ensures you wake up every 5 minutes to actively supervise "ignatz". When you wake up, you must read `review_status.md` and check the timestamps for any item that is `[In Progress]` or `[Validating]`. If an item's timestamp is over 45 minutes old, you MUST send a message to nudge Ignatz to handle the stalled task. You must monitor "ignatz" continuously and verify its performance until it fully completes Phase 3 (running tests and achieving 100% pass).
 
 ---
 
@@ -42,7 +42,7 @@ changes as the codebase evolves.
 In Progress, and Completed, so it doesn't lose track of its queue when
 processing incoming messages.
 
-**State Persistence with Timeouts:** When marking a module as `[In Progress]`, **"ignatz"** MUST include a timestamp (e.g., `[In Progress] (14:30) module_name`). If **"ignatz"** observes a module has been in progress for over 45 minutes, it must assume the worker sub-agent died or got stuck, mark the module as `[Failed - Timeout]`, and re-queue it or assign a new worker.
+**State Persistence with Timestamps:** When marking a module as `[In Progress]`, `[Validating]`, `[Done]`, or `[Failed]`, **"ignatz"** MUST include the current timestamp (e.g., `[In Progress] (2026-07-14 14:30) module_name`). If **"ignatz"** observes a module has been in progress or validating for over 45 minutes, it must assume the worker sub-agent died or got stuck, mark the module as `[Failed - Timeout]`, and re-queue it or assign a new worker.
 
 **CRITICAL: DO NOT STOP or wait for user approval between batches.** **"ignatz"**
 must continue this cycle of spawning sub-agents until every module in the
