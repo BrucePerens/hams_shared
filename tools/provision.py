@@ -38,6 +38,7 @@ def provision():
     import argparse
     parser = argparse.ArgumentParser(description="Standalone Environment Provisioning Script")
     parser.add_argument("--test", action="store_true", help="Smoke-test all daemons and stop them after")
+    parser.add_argument("--force-reset", action="store_true", help="Completely destroy the existing database, filestore, and cache before provisioning")
     args, _ = parser.parse_known_args()
 
     if os_id not in ("ubuntu", "debian"):
@@ -47,6 +48,23 @@ def provision():
         sys.exit(1)
 
     infrastructure.load_and_prompt_env(env_vars, args.test)
+
+    if args.force_reset:
+        db_name = env_vars.get("DB_NAME", "hams_test")
+        _logger.warning(f"[*] Force-reset enabled! Tearing down old environment for '{db_name}'...")
+        
+        _logger.info("[*] Stopping odoo service...")
+        subprocess.run(["systemctl", "stop", "odoo"], check=False)
+        
+        _logger.info(f"[*] Dropping database {db_name}...")
+        subprocess.run(["sudo", "-u", "postgres", "dropdb", "--if-exists", db_name], check=False)
+        
+        filestore_path = f"/var/lib/odoo/filestore/{db_name}"
+        _logger.info(f"[*] Wiping filestore at {filestore_path}...")
+        subprocess.run(["rm", "-rf", filestore_path], check=False)
+        
+        _logger.info("[*] Flushing redis cache...")
+        subprocess.run(["redis-cli", "flushall"], check=False)
 
     def run_sys(cmd, **kw):
         _logger.info(f"[*] Running: {' '.join(cmd)}")
