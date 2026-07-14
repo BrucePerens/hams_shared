@@ -1,6 +1,6 @@
+#!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
 
-#!/usr/bin/env python3
 """
 Odoo DevSecOps Linter Orchestrator
 ----------------------------------
@@ -256,6 +256,25 @@ def main():
         [
             python_exec,
             os.path.join(dir_path, "tools", "check_rabbitmq_pool.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
+    # 15. check_shebang
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_shebang.py"),
             dir_path,
         ],
         capture_output=True,

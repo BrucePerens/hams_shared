@@ -2130,7 +2130,7 @@ def scan_file(filepath, is_odoo_module=False):
                             has_tour = True
                     if not has_tour:
                         errors_found.append(
-                            f"Line {node.lineno}: UI TOUR MANDATE VIOLATION: All XML views (\x3crecord model='ir.ui.view'\x3e) and templates must be tested by a UI tour (include an '\x3c!-- [@ANCHOR: ...] --\x3e' comment linking to the tour) or explicitly bypassed using '\x3c!-- audit-ignore-view --\x3e' if a tour is unjustified."
+                            f"Line {node.lineno}: UI TOUR MANDATE VIOLATION: All XML views (\x3crecord model='ir.ui.view'\x3e) and templates must be tested by a UI tour (include an '\x3c!-- [@ANCHOR: COMM_...] --\x3e' comment linking to the tour) or explicitly bypassed using '\x3c!-- audit-ignore-view --\x3e' if a tour is unjustified."
                         )
                     if node.attrs.get("inherit_id") in (
                         "website.snippet_options",
@@ -2783,7 +2783,7 @@ def _verify_test_ast(
 
     anchor_line = -1
     for i, line_text in enumerate(target_content.splitlines(), 1):
-        if f"[@ANCHOR: {anchor}]" in line_text:
+        if f"[@ANCHOR: COMM_{anchor}]" in line_text:
             anchor_line = i
             break
 
@@ -3002,25 +3002,29 @@ def main():
                 if file.endswith(".py"):
                     try:
                         with open(filepath, "r", encoding="utf-8") as f:
-                            first_line = f.readline()
-                            filepath_forward = filepath.replace("\\", "/")
-                            if (
-                                first_line.startswith("#!")
-                                and not "daemons/" in filepath_forward
-                                and not "daemon/" in filepath_forward
-                                and not "tools/" in filepath_forward
-                                and not filepath.endswith("setup.py")
-                                and not filepath.endswith("__init__.py")
-                            ):
-                                errors.append(
-                                    "Line 1 (Shebang): Shebangs are strictly prohibited in standard Odoo module files as they can interfere with packaging and execution expectations."
-                                )
-                            if file == "__manifest__.py":
-                                f.seek(0)
-                                if first_line.startswith("#!"):
+                            lines = f.readlines()
+                            if lines:
+                                first_line = lines[0]
+                                filepath_forward = filepath.replace("\\", "/")
+                                if (
+                                    first_line.startswith("#!")
+                                    and not "daemons/" in filepath_forward
+                                    and not "daemon/" in filepath_forward
+                                    and not "tools/" in filepath_forward
+                                    and not filepath.endswith("setup.py")
+                                    and not filepath.endswith("__init__.py")
+                                ):
                                     errors.append(
-                                        "Line 1 (__manifest__.py format): __manifest__.py must not contain a shebang. It should ideally start with the dictionary '{' or standard -*- coding -*- comment."
+                                        "Line 1 (Shebang): Shebangs are strictly prohibited in standard Odoo module files as they can interfere with packaging and execution expectations."
                                     )
+                                if file == "__manifest__.py":
+                                    if first_line.startswith("#!"):
+                                        errors.append(
+                                            "Line 1 (__manifest__.py format): __manifest__.py must not contain a shebang. It should ideally start with the dictionary '{' or standard -*- coding -*- comment."
+                                        )
+                                for idx, line in enumerate(lines[1:], start=2):
+                                    if line.startswith("#!"):
+                                        errors.append(f"Line {idx} (Shebang): Shebangs are only allowed on the first line of the file.")
                     except Exception: # audit-ignore-catch-all
                         pass
                 if errors or warnings:
@@ -3047,7 +3051,7 @@ def main():
         req_mod = get_mod_dir(req["file"])
         best_match = None
         for f, c in FOUND_TEST_CONTENTS.items():
-            if f"[@ANCHOR: {anchor}]" in c:
+            if f"[@ANCHOR: COMM_{anchor}]" in c:
                 if req_mod and get_mod_dir(f) == req_mod:
                     best_match = (c, f)
                     break
