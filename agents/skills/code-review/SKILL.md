@@ -8,13 +8,14 @@ description: How to do a code-review.
 When asked to do a code-review:
 
 You are the orchestrating agent, designated **"nudge"**, responsible for overseeing the entire code‑review workflow.
+
 Start a sub-agent called **"ignatz"** that will run the code-review process.
 It must periodically report its progress to you. While "ignatz" is in charge of all artifacts, reporting to the user, and asking the user for review, you are ULTIMATELY RESPONSIBLE for the complete and thorough performance of the entire code-review skill from start to finish.
 
 This means you are accountable for ensuring that ALL phases are completed, including Phase 3 (Final Validation), where tests must be run and a 100% pass rate achieved across both repositories. If "ignatz" fails, crashes, loses the thread, or halts prematurely, YOU must NOT take over the work manually. Instead, you MUST spawn a NEW "ignatz" sub-agent and instruct it to resume the process from where the previous one left off. Your role remains strictly to supervise until the job is successfully completed.
 
 **CRITICAL ORCHESTRATOR REQUIREMENT:**
-As **"nudge"**, you MUST use the `schedule` tool to set a timer for 15 minutes (e.g. `DurationSeconds=900`, `TimerCondition="<ignatz-conversation-id>"`) before ending your turn. This ensures you wake up every 15 minutes to actively supervise "ignatz". You must monitor "ignatz" continuously and verify its performance until it fully completes Phase 3 (running tests and achieving 100% pass).
+As **"nudge"**, you MUST use the `schedule` tool to set a timer for 5 minutes (e.g. `DurationSeconds=300`, `TimerCondition="<ignatz-conversation-id>"`) before ending your turn. This ensures you wake up every 5 minutes to actively supervise "ignatz". You must monitor "ignatz" continuously and verify its performance until it fully completes Phase 3 (running tests and achieving 100% pass).
 
 ---
 
@@ -47,7 +48,12 @@ processing incoming messages.
 must continue this cycle of spawning sub-agents until every module in the
 inventory has been reviewed.
 
-**CRITICAL: USE THE SCHEDULE TOOL.** You MUST use the `schedule` tool to set a timer for 15 minutes (e.g. DurationSeconds=900, TimerCondition="any") before you finish your turn. This ensures you wake up every 15 minutes to check on the progress of your sub-agents and consolidate their reports. If you do not schedule this timer, you will sleep through the entire night and fail your task.
+**CRITICAL: AVOID GHOST SUBAGENTS HANGING THE SYSTEM.** Subagents frequently crash or finish silently without sending a message back to you. If you go idle waiting for them, you will wait forever.
+Therefore, you MUST follow this protocol EVERY SINGLE TIME you go idle to wait for subagents:
+1. You MUST use the `schedule` tool to set a timer for 10 minutes (e.g. `DurationSeconds=600`, `TimerCondition="any"`) before you finish your turn.
+2. Every time you wake up, you MUST use the `manage_subagents` tool with `Action="list"` to check if the subagents you are waiting for are actually still running.
+3. If a subagent you are waiting for is NO LONGER in the `manage_subagents` list, it is a "ghost" (it died or finished silently). You must immediately use `manage_subagents` to `kill` any remaining stuck components, check its logs if necessary, and either move its module to Phase 2/3 or restart the subagent.
+Never assume a subagent will reliably message you back. Always trust `manage_subagents` to verify they are still alive.
 
 ### Tiered Sub-Agent Allocation and File Chunking
 
