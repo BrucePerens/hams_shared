@@ -175,6 +175,9 @@ When fixing logic, security, or structural bugs, **"ignatz"** (or its fixer sub-
 5. Run the test suite to confirm the tests pass.
 6. Mark the item in the implementation plan as fixed.
 
+**CRITICAL RULE - NO DUMMY TESTS:**
+When satisfying `[@ANCHOR]` requirements for linters (such as for `audit-ignore-sql`), you MUST write **real, functional tests**. You are strictly forbidden from creating "dummy" test functions (e.g., `test_dummy_anchors_satisfy_linter`) that just contain a list of anchor comments and a `pass` statement. Every anchor MUST be placed inside a real test that actively executes and verifies the specific code or SQL query being ignored. One anchor per real test.
+
 **The "3-Strike" Timeboxing Rule:**
 If a fixer sub-agent attempts to fix an issue but fails validation (linter or tests) 3 consecutive times, it MUST STOP trying. It must leave the file in its last (broken or partially fixed) state, log the failure in a `failed_fixes.md` artifact, and immediately move on to the next task in the queue.
 If, and only if, the rest of the entire code-review process is completely finished and there is still ample time remaining in the shift (e.g., the user is still asleep for hours), the orchestrator may return to the items in `failed_fixes.md` and attempt to resolve them.
