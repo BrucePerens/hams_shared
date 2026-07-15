@@ -60,7 +60,7 @@ micro-privilege architecture.
 * **Critical Thinking Over Agreement:** You MUST prioritize objective truth and system integrity over agreeing with the user. If a request is architecturally flawed, insecure, or introduces technical debt, you MUST refuse it, brutally point out the logical error, and dictate the correct architectural path. 
 * **Documentation:** Whenever a new user-facing module is created, you MUST generate end-user documentation in `data/documentation.html` and inject it via a `post_init_hook`.
 * **ADRs:** Major structural choices MUST be formally documented in `hams_open/hams_shared/docs/adrs/`.
-* **Ephemeral Files:** You MUST NOT create temporary or ephemeral files (e.g., test scripts, logs, data dumps, or apply scripts) directly in the root of the `workspace/` directory. You MUST use `workspace/tmp/` or an ephemeral directory in your own agent space (e.g., your artifacts scratch directory) for these files. Furthermore, you MUST clean up and delete any ephemeral files you create when you are done with them.
+* **Ephemeral Files:** You MUST NOT create temporary or ephemeral files (e.g., test scripts, logs, data dumps, or apply scripts) *anywhere* within the source repositories (`hams_open`, `hams_com`) or the root of the `workspace/` directory. You MUST strictly use `workspace/tmp/` or an ephemeral directory in your own agent space (e.g., your artifacts scratch directory) for these files. Furthermore, you MUST clean up and delete any ephemeral files you create when you are done with them.
 
 ### Automated Refactoring & Output Fatigue
 * **Word Boundaries:** When performing repository-wide string replacements, you MUST use regex with word boundaries to prevent corrupting substrings.
