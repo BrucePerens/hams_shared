@@ -40,7 +40,9 @@ A non-interactive configuration module that enforces baseline regulatory complia
 
 #### Stories
 * [Automatic Legal Pages Generation](./hams_shared/docs/stories/automatic_legal_pages.md) `[@ANCHOR: story_automatic_legal_pages]`
+
 * [Enforced Cookie Consent](./hams_shared/docs/stories/cookie_consent.md) `[@ANCHOR: story_cookie_consent]`
+
 * [Site Owner Documentation](./hams_shared/docs/stories/compliance_documentation.md) `[@ANCHOR: story_compliance_documentation]`
 
 #### Journeys
@@ -48,10 +50,15 @@ A non-interactive configuration module that enforces baseline regulatory complia
 
 ## 2. Enforcement Details
 * **Automated Cookie Consent:** Programmatically enables the Odoo `website` native `cookies_bar` boolean on install and sets it as the default for new websites. `[@ANCHOR: compliance_post_init_cookie_bar]`
+
 * **Safe Legal Page Provisioning:** Provisions AGPL-3 compatible legal pages safely via `noupdate="1"` XML records. `[@ANCHOR: compliance_legal_pages_rendering]`
+
     * Privacy Policy Template `[@ANCHOR: compliance_privacy_policy_template]`
+
     * Cookie Policy Template `[@ANCHOR: compliance_cookie_policy_template]`
+
     * Terms of Service Template `[@ANCHOR: compliance_terms_of_service_template]`
+
 * **Non-Destructive Mandate:** If a page already exists at one of the target URLs, the module's boilerplate is unpublished to avoid duplication. `[@ANCHOR: test_compliance_non_destructive_mandate]`
 * **Editability Mandate:** Legal pages are standard `website.page` records, allowing administrators to use the Odoo website builder for customization.
 
@@ -73,6 +80,7 @@ This module adheres to **ADR-0002 (Zero-Sudo)** and **ADR-0005 (Service Account 
 
 * **Micro-Privilege Account:** Automated post-install configuration is executed via the `compliance.user_compliance_service` service account.
 * **ACLs:** The service account is granted minimal read/write access to `website`, `website.page`, and `ir.ui.view` models. `[@ANCHOR: compliance_security_acls]`
+
 * **Impersonation:** Escalation is handled via `env.with_user(svc_uid)` instead of `.sudo()` for core operations. `[@ANCHOR: compliance_zero_sudo_impersonation]`
 
 ## 5. Website-Aware Scope

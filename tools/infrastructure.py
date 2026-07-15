@@ -244,7 +244,7 @@ def hook_install_kopia_binary(env_vars, dest_dir, path, run_cmd_func):
 def hook_install_cloudflared(env_vars, dest_dir, path, run_cmd_func):
     token = env_vars.get("CLOUDFLARE_TUNNEL_TOKEN")
     run_cmd_func(["dpkg", "-i", path])
-    if token:
+    if token and token != "none":
         run_cmd_func(["cloudflared", "service", "install", token])
     safe_remove(path)
 
@@ -530,9 +530,9 @@ Before=odoo.service
 
 [Service]
 Type=oneshot
-User=hams_com
+User=root
 Environment="PYTHONPYCACHEPREFIX=/opt/hams/pycache"
-ExecStart=/usr/bin/python3 -m compileall -q /opt/hams
+ExecStart=/bin/bash -c "/usr/bin/python3 -m compileall -q /opt/hams; chown -R hams_com:hams_com /opt/hams/pycache"
 RemainAfterExit=yes
 
 [Install]
@@ -704,7 +704,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/dx_firehose
@@ -756,7 +756,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/ham_dx_daemon
@@ -807,7 +807,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/noaa_swpc_sync
@@ -861,7 +861,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/pdns_sync
@@ -912,7 +912,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/lotw_eqsl_sync
@@ -964,7 +964,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
 Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/amsat_tle_sync
@@ -1029,7 +1029,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/qrz_scraper
@@ -1754,15 +1754,50 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault("SMTP_PORT", "1025")
         env_vars.setdefault("HAMS_CRYPTO_KEY", "0000000000000000000000000000000000000000000=")
     else:
-        env_vars.setdefault("ODOO_URL", "http://odoo:8069")
-        env_vars.setdefault("REDIS_HOST", "redis")
-        env_vars.setdefault("RABBITMQ_HOST", "rabbitmq")
+        def prompt_if_missing(key, prompt_text, default=None, is_password=False):
+            if key in env_vars and env_vars[key].strip():
+                return
+            print("")
+            while True:
+                if is_password:
+                    val = getpass.getpass(f"{prompt_text}: ")
+                    if val:
+                        val2 = getpass.getpass(f"Confirm {key}: ")
+                        if val == val2:
+                            env_vars[key] = val
+                            break
+                        print("Passwords do not match. Try again.")
+                    elif default is not None:
+                        env_vars[key] = default
+                        break
+                    else:
+                        print(f"{key} cannot be empty.")
+                else:
+                    default_hint = f" [{default}]" if default is not None else ""
+                    val = input(f"{prompt_text}{default_hint}: ").strip()
+                    if val:
+                        env_vars[key] = val
+                        break
+                    elif default is not None:
+                        env_vars[key] = default
+                        break
+                    else:
+                        print(f"{key} cannot be empty.")
+
+        # Set automatic sensible defaults
         env_vars.setdefault("DB_NAME", "hams_prod")
         env_vars.setdefault("DB_USER", "odoo")
         env_vars.setdefault("DB_HOST", "postgres")
+        env_vars.setdefault("REDIS_HOST", "redis")
+        env_vars.setdefault("REDIS_PORT", "6379")
+        env_vars.setdefault("RABBITMQ_HOST", "rabbitmq")
+        env_vars.setdefault("RMQ_PORT", "5672")
+        env_vars.setdefault("RMQ_USER", "guest")
         env_vars.setdefault("PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones")
-        env_vars.setdefault("SMTP_HOST", "localhost")
-        env_vars.setdefault("SMTP_PORT", "1025")
+        env_vars.setdefault("WS_PORT", "8080")
+        env_vars.setdefault("PYTHONPYCACHEPREFIX", "/tmp/pycache")
+        env_vars.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/opt/hams/playwright")
+        env_vars.setdefault("SYSTEM_USER_AGENT", "HAMS/1.0")
 
         if "DB_PASS" not in env_vars:
             env_vars["DB_PASS"] = generate_secure_password()
@@ -1772,29 +1807,53 @@ def load_and_prompt_env(env_vars, is_test):
             env_vars["ODOO_SERVICE_PASSWORD"] = generate_secure_password()
         if "HAMS_CRYPTO_KEY" not in env_vars:
             env_vars["HAMS_CRYPTO_KEY"] = base64.b64encode(secrets.token_bytes(32)).decode('utf-8')
+        if "RMQ_PASS" not in env_vars:
+            env_vars["RMQ_PASS"] = generate_secure_password()
+
+        # Prompt for critical missing values
+        prompt_if_missing("DOMAIN", "Enter the primary domain for this instance (e.g. hams.com)")
+        domain = env_vars.get("DOMAIN", "hams.com")
         
-        if "DOMAIN" not in env_vars:
-            print("")
-            while True:
-                domain = input("Enter the primary domain for this instance (e.g. hams.com): ").strip()
-                if domain:
-                    env_vars["DOMAIN"] = domain
-                    break
-                print("Domain cannot be empty.")
+        env_vars.setdefault("ODOO_URL", "http://odoo:8069")
+        env_vars.setdefault("SYSADMIN_EMAILS", f"admin@{domain}")
+
+        prompt_if_missing("ODOO_ADMIN_PASSWORD", "Enter a secure Odoo admin password", is_password=True)
         
-        if "ODOO_ADMIN_PASSWORD" not in env_vars:
-            print("")
-            while True:
-                pwd1 = getpass.getpass("Enter a secure Odoo admin password: ")
-                if pwd1:
-                    pwd2 = getpass.getpass("Confirm Odoo admin password: ")
-                    if pwd1 == pwd2:
-                        env_vars["ODOO_ADMIN_PASSWORD"] = pwd1
-                        break
-                    print("Passwords do not match. Try again.")
-                else:
-                    print("Password cannot be empty.")
-            print("")
+        prompt_if_missing("SMTP_HOST", "Enter SMTP Host", default="smtp.mailgun.org")
+        prompt_if_missing("SMTP_PORT", "Enter SMTP Port", default="587")
+        prompt_if_missing("SMTP_USER", "Enter SMTP User", default=f"postmaster@{domain}")
+        prompt_if_missing("SMTP_PASS", "Enter SMTP Password", default="none", is_password=True)
+
+        prompt_if_missing("GEMINI_API_KEY", "Enter Gemini API Key (or press enter for none)", default="none", is_password=True)
+        prompt_if_missing("GEMINI_MODEL", "Enter Gemini Model", default="gemini-2.5-pro")
+        
+        prompt_if_missing("CLOUDFLARE_API_TOKEN", "Enter Cloudflare API Token (or 'none')", default="none", is_password=True)
+        
+        # Auto-derive Cloudflare Zone ID from Domain
+        if "CLOUDFLARE_ZONE_ID" not in env_vars:
+            cf_token = env_vars.get("CLOUDFLARE_API_TOKEN", "none")
+            if cf_token and cf_token != "none":
+                print(f"[*] Attempting to derive Cloudflare Zone ID for {domain}...")
+                try:
+                    import urllib.request
+                    import json
+                    req = urllib.request.Request(
+                        f"https://api.cloudflare.com/client/v4/zones?name={domain}",
+                        headers={"Authorization": f"Bearer {cf_token}", "Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        data = json.loads(response.read().decode())
+                        if data.get("success") and data.get("result"):
+                            zone_id = data["result"][0]["id"]
+                            print(f"[*] Successfully derived Zone ID: {zone_id}")
+                            env_vars["CLOUDFLARE_ZONE_ID"] = zone_id
+                        else:
+                            print("[!] Could not find Zone ID for domain.")
+                except Exception as e:
+                    print(f"[!] Failed to fetch Cloudflare Zone ID: {e}")
+            
+        prompt_if_missing("CLOUDFLARE_ZONE_ID", "Enter Cloudflare Zone ID (or 'none')", default="none")
+        prompt_if_missing("CLOUDFLARE_TUNNEL_TOKEN", "Enter Cloudflare Tunnel Token (or 'none')", default="none", is_password=True)
 
 def provision_environment(
     run_cmd_func, env_vars, orig_user, os_id=None, skip_apt=False, is_test=False
@@ -1836,6 +1895,8 @@ def provision_environment(
         hams_community_dir = os.path.abspath(
             os.path.join(repo_root, "..", "..", "hams_community")
         )
+    elif os.path.exists(os.path.expanduser("~/workspace/hams_open/zero_sudo")):
+        hams_community_dir = os.path.expanduser("~/workspace/hams_open")
     elif os.path.exists("/hams_community/zero_sudo"):
         hams_community_dir = "/hams_community"
 

@@ -9,15 +9,15 @@ When asked to do a code-review:
 
 You are the orchestrating agent, designated **"nudge"**, responsible for overseeing the entire code‑review workflow.
 
-Start a sub-agent called **"ignatz"** that will run the code-review process.
+**INITIALIZATION**: Start a sub-agent called **"ignatz"** that will run the code-review process. Use the `invoke_subagent` tool to spawn "ignatz" using the `self` subagent type, passing the instructions for Ignatz as the prompt.
 It must periodically report its progress to you. While "ignatz" is in charge of all artifacts, reporting to the user, and asking the user for review, you are ULTIMATELY RESPONSIBLE for the complete and thorough performance of the entire code-review skill from start to finish.
 
-This means you are accountable for ensuring that ALL phases are completed, including Phase 3 (Final Validation), where tests must be run and a 100% pass rate achieved across both repositories. If "ignatz" fails, crashes, loses the thread, or halts prematurely, YOU must NOT take over the work manually. Instead, you MUST spawn a NEW "ignatz" sub-agent and instruct it to resume the process from where the previous one left off. Your role remains strictly to supervise until the job is successfully completed.
+This means you are accountable for ensuring that ALL phases are completed, including Phase 3 (Final Validation), where tests must be run and a 100% pass rate achieved across both repositories. If "ignatz" fails, crashes, loses the thread, or halts prematurely (which you will be alerted to by the Python Sidecar), YOU must NOT take over the work manually. Instead, you MUST spawn a NEW "ignatz" sub-agent and instruct it to resume the process from where the previous one left off. Your role remains strictly to supervise until the job is successfully completed.
 
 **CRITICAL ORCHESTRATOR REQUIREMENT:**
 As **"nudge"**, you have two critical responsibilities:
-1. **User Interface Visibility:** When you initially spawn "ignatz", you MUST use the `write_to_file` tool to create a placeholder `review_status.md` artifact in your OWN artifact directory (setting `UserFacing: true`). Once "ignatz" is spawned, use `run_command` to delete your placeholder and create a symbolic link (`ln -s`) pointing from your artifact directory to "ignatz's" `review_status.md` file (located at `/home/bruce/.gemini/antigravity/brain/<ignatz-conversation-id>/review_status.md`). This ensures the live progress checklist is always visible to the user in the UI.
-2. **Watchdog Timer:** You MUST use the `schedule` tool to set a timer for 5 minutes (e.g. `DurationSeconds=300`, `TimerCondition="<ignatz-conversation-id>"`) before ending your turn. This ensures you wake up every 5 minutes to actively supervise "ignatz". When you wake up, you must read `review_status.md` and check the timestamps for any item that is `[In Progress]` or `[Validating]`. If an item's timestamp is over 45 minutes old, you MUST send a message to nudge Ignatz to handle the stalled task. You must monitor "ignatz" continuously and verify its performance until it fully completes Phase 3 (running tests and achieving 100% pass).
+1. **User Interface Visibility:** When you initially spawn "ignatz", you MUST use the `write_to_file` tool to create a placeholder `review_status.md` artifact in your OWN artifact directory (setting `UserFacing: true`). Once "ignatz" is spawned, use `run_command` to delete your placeholder and create a symbolic link (`ln -s`) pointing from your artifact directory to "ignatz's" `review_status.md` file (located at `~/.gemini/antigravity/brain/<ignatz-conversation-id>/review_status.md`). This ensures the live progress checklist is always visible to the user in the UI.
+2. **Sidecar Monitoring:** To monitor "ignatz", you MUST use the `sidecar_watchdog` MCP server's `wait_for_agent_state_change` tool. IMMEDIATELY after spawning "ignatz", call `wait_for_agent_state_change` with `target_agent_ids` set to a list containing "ignatz"'s conversation ID, `timeout_mins` set to 5, and `max_wait_mins` set to 15. The tool will block and wait. When it returns (e.g. because "ignatz" stalled, finished, sent a message, or the wait period ended), you will receive the event string. If "ignatz" is still running, you must immediately call the tool again in a loop (across multiple turns) to continue monitoring until the code review is complete. You do NOT need to run any background scripts. If you get a permission error calling the tool, use the `ask_permission` tool to request access to `sidecar_watchdog/*`.
 
 ---
 
@@ -46,16 +46,10 @@ processing incoming messages.
 
 **State Persistence with Timestamps:** When marking a module as `[In Progress]`, `[Validating]`, `[Done]`, or `[Failed]`, **"ignatz"** MUST include the current timestamp (e.g., `[In Progress] (2026-07-14 14:30) module_name`). If **"ignatz"** observes a module has been in progress or validating for over 45 minutes, it must assume the worker sub-agent died or got stuck, mark the module as `[Failed - Timeout]`, and re-queue it or assign a new worker.
 
-**CRITICAL: DO NOT STOP or wait for user approval between batches.** **"ignatz"**
-must continue this cycle of spawning sub-agents until every module in the
-inventory has been reviewed.
+**CRITICAL: AGGRESSIVE AUTONOMY (NIGHT SHIFT PROTOCOL).** **"ignatz"** MUST NEVER pause, idle, or ask the user for permission between batches! When a batch finishes and fixes are committed, you MUST instantly trigger the `invoke_subagent` tool for the next batch in the EXACT SAME TURN. Do not ask "How would you like to proceed?". Just do it. You are running unattended on the night shift.
 
-**CRITICAL: AVOID GHOST SUBAGENTS HANGING THE SYSTEM.** Subagents frequently crash or finish silently without sending a message back to you. If you go idle waiting for them, you will wait forever.
-Therefore, you MUST follow this protocol EVERY SINGLE TIME you go idle to wait for subagents:
-1. You MUST use the `schedule` tool to set a timer for 2 minutes (e.g. `DurationSeconds=120`, `TimerCondition="any"`) before you finish your turn.
-2. Every time you wake up, you MUST use the `manage_subagents` tool with `Action="list"` to check if the subagents you are waiting for are actually still running.
-3. If a subagent you are waiting for is NO LONGER in the `manage_subagents` list, it is a "ghost" (it died or finished silently). You must immediately use `manage_subagents` to `kill` any remaining stuck components, check its logs if necessary, and either move its module to Phase 2/3 or restart the subagent.
-Never assume a subagent will reliably message you back. Always trust `manage_subagents` to verify they are still alive.
+**CRITICAL: AVOID GHOST SUBAGENTS.** Subagents frequently crash or finish silently without sending a message back to you.
+To monitor your reviewer subagents, you MUST use the `sidecar_watchdog` MCP server's `wait_for_agent_state_change` tool. After spawning a batch of subagents, call `wait_for_agent_state_change` providing their conversation IDs in `target_agent_ids`, `timeout_mins` set to 5, and `max_wait_mins` set to 15. The tool will block until an event occurs (e.g., a subagent stalls, finishes, sends a message, or the wait ends). You must continuously use this tool (across multiple turns) to monitor your subagents until all subagents in the batch have successfully reported back or failed. If you get a permission error calling the tool, use the `ask_permission` tool to request access to `sidecar_watchdog/*`.
 
 ### Tiered Sub-Agent Allocation and File Chunking
 
@@ -286,10 +280,14 @@ If, and only if, the rest of the entire code-review process is completely finish
 1. `cd hams_open && python3 tools/run_linters.py` — this also covers
    `hams_shared` since it is a subdirectory of `hams_open`.
 2. `cd hams_com && python3 tools/run_linters.py`
+3. `cd hams_open && python3 tools/test.py`
+4. `cd hams_com && python3 tools/test.py`
 
-Fix all linter complaints. Then run full tests in both `hams_open` and
-`hams_com` and iteratively fix any remaining problems until the tests
+Fix all linter complaints. Then iteratively fix any remaining problems until the tests
 100% pass.
+
+**CRITICAL RULE - TEST INFRASTRUCTURE FAILURES:**
+If **"ignatz"** is completely unable to run tests (e.g. the test runner hangs, refuses to start due to environment issues, or is blocked by systemic infrastructure failures outside of normal test failures), it MUST immediately inform you (the orchestrator) using the `send_message` tool and QUIT. Do not attempt to bypass this by running tests manually or assuming the code is fine. Stop the review process immediately.
 
 ---
 

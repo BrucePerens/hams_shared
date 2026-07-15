@@ -76,7 +76,7 @@ def main():
         if os.path.isdir(sibling_community):
             community_dir = sibling_community
 
-    addons_paths = ["/usr/lib/python3/dist-packages/odoo/addons", dir_path]
+    addons_paths = ["/usr/lib/python3/dist-packages/odoo/addons", dir_path, os.path.abspath(os.path.join(dir_path, "..", "hams_com"))]
     if community_dir:
         addons_paths.append(community_dir)
     addons_path_str = ",".join(addons_paths)
@@ -128,12 +128,14 @@ def main():
 
     # 7. Flake8
     flake8_cmd = "/usr/bin/flake8"
+    
+    targets = [os.path.join(dir_path, m) for m in mod_array] if target_modules_str else [dir_path]
 
     try:
         res = subprocess.run(
             [
                 flake8_cmd,
-                dir_path,
+                *targets,
                 "--exclude=venv,env,.venv,__pycache__,node_modules,target,daemons",
                 "--select=E9,F,E402",
                 "--per-file-ignores=__init__.py:F401",
@@ -155,7 +157,7 @@ def main():
 
     # 8. check_burn_list
     res = subprocess.run(
-        [python_exec, os.path.join(dir_path, "tools", "check_burn_list.py"), dir_path],
+        [python_exec, os.path.join(dir_path, "tools", "check_burn_list.py")] + targets,
         capture_output=True,
         text=True,
     )
@@ -170,7 +172,7 @@ def main():
 
     # 9. verify_anchors
     res = subprocess.run(
-        [python_exec, os.path.join(dir_path, "tools", "verify_anchors.py"), dir_path],
+        [python_exec, os.path.join(dir_path, "tools", "verify_anchors.py")] + targets,
         capture_output=True,
         text=True,
     )
@@ -188,8 +190,7 @@ def main():
         [
             python_exec,
             os.path.join(dir_path, "tools", "check_manifest_dependencies.py"),
-            dir_path,
-        ],
+        ] + targets,
         capture_output=True,
         text=True,
     )
@@ -204,7 +205,7 @@ def main():
 
     # 11. check_js_syntax
     res = subprocess.run(
-        [python_exec, os.path.join(dir_path, "tools", "check_js_syntax.py"), dir_path],
+        [python_exec, os.path.join(dir_path, "tools", "check_js_syntax.py")] + targets,
         capture_output=True,
         text=True,
     )
@@ -219,7 +220,7 @@ def main():
 
     # 12. check_test_tags
     res = subprocess.run(
-        [python_exec, os.path.join(dir_path, "tools", "check_test_tags.py"), dir_path],
+        [python_exec, os.path.join(dir_path, "tools", "check_test_tags.py")] + targets,
         capture_output=True,
         text=True,
     )
@@ -237,8 +238,7 @@ def main():
         [
             python_exec,
             os.path.join(dir_path, "tools", "check_absolute_paths.py"),
-            dir_path,
-        ],
+        ] + targets,
         capture_output=True,
         text=True,
     )
@@ -256,8 +256,7 @@ def main():
         [
             python_exec,
             os.path.join(dir_path, "tools", "check_rabbitmq_pool.py"),
-            dir_path,
-        ],
+        ] + targets,
         capture_output=True,
         text=True,
     )
@@ -275,8 +274,7 @@ def main():
         [
             python_exec,
             os.path.join(dir_path, "tools", "check_shebang.py"),
-            dir_path,
-        ],
+        ] + targets,
         capture_output=True,
         text=True,
     )

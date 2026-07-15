@@ -51,6 +51,7 @@ Standard Odoo `@tools.ormcache` relies on a local worker registry cache, which c
 **The Invalidation Pipeline:**
 1. An Odoo worker mutates a cached model and fires a PostgreSQL `NOTIFY` on the `distributed_cache_invalidation` channel.
 2. The standalone `cache_manager.py` daemon receives the `NOTIFY`, validates the payload, and publishes to the Redis `odoo_cache_invalidation_bus` channel. [@ANCHOR: cache_manager_redis_publish]
+
 3. A background thread in every Odoo worker's `ir.http` middleware intercepts the broadcast and queues the model for local flushing. [@ANCHOR: redis_cache_interceptor]
 </architecture>
 
@@ -67,12 +68,15 @@ from odoo.addons.distributed_redis_cache.redis_cache import distributed_cache, i
 ```
 
 * **`@distributed_cache()`**: Decorator for `api.model` functions. Generates SHA256 cache keys based on serialized arguments and writes to Redis with a 24h TTL. Handles `bytes`, `sets`, `frozensets`, and recordsets deterministically. **Website Aware**: Isolated keys if `website_id` is in context. [@ANCHOR: distributed_cache_decorator]
+
 * **`invalidate_model_cache(env, model_name, local_only=False)`**: Forcibly flushes model cache. Uses batched `SCAN` for production safety. [@ANCHOR: invalidate_model_cache_logic]
+
 * **`notify_model_invalidation(env, model_name)`**: Triggers cluster-wide invalidation signal via Postgres NOTIFY. [@ANCHOR: notify_model_invalidation_logic]
 </api>
 
 <ui>
 ## 4. UI: Distributed Cache View [@ANCHOR: distributed_cache_view]
+
 Provides a management form to check Redis status and manually invalidate model caches. [@ANCHOR: manual_cache_invalidation] [@ANCHOR: check_redis_status_logic]
 </ui>
 

@@ -66,6 +66,7 @@ Triggers manual installation via the UI.
 # To be called by other modules needing a binary dependency
 bin_path = self.env["binary.manifest"].ensure_executable("kopia")
 # Verified by [@ANCHOR: test_binary_manifest_standard]
+
 # Verified by [@ANCHOR: test_binary_manifest_integration]
 subprocess.run([bin_path, "--version"], check=True)
 ```
@@ -88,11 +89,18 @@ For detailed narratives and end-to-end workflows, refer to the following:
 <semantic_anchors>
 ## 5. Semantic Anchors
 - `[@ANCHOR: binary_ensure_executable]` - Core binary resolution method.
+
 - `[@ANCHOR: binary_compute_installed]` - Installation status computation.
+
 - `[@ANCHOR: binary_action_install]` - UI installation trigger.
+
 - `[@ANCHOR: UX_BINARY_INSTALL]` - UI elements for installation.
+
 - `[@ANCHOR: test_binary_manifest_standard]` - Standard unit tests.
+
 - `[@ANCHOR: test_binary_manifest_integration]` - Unmocked physical integration tests.
+
 - `[@ANCHOR: test_binary_install_tour]` - UI tour for binary installation.
+
 - `[@ANCHOR: test_binary_manifest_views]` - View rendering tests.
 </semantic_anchors>

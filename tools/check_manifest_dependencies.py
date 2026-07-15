@@ -54,6 +54,17 @@ def main():
                                 )
                                 errors_found = True
 
+                            knowledge_docs = manifest_dict.get("knowledge_docs", [])
+                            if isinstance(knowledge_docs, list):
+                                for doc in knowledge_docs:
+                                    if isinstance(doc, dict):
+                                        category = doc.get("category", "workspace")
+                                        if category not in ("workspace", "private", "shared"):
+                                            print(f"🚨 KNOWLEDGE DOC CATEGORY VIOLATION in {mod_name}")
+                                            print(f"  File: {manifest_path}")
+                                            print(f"  Error: Invalid category '{category}' in knowledge_docs. Odoo knowledge.article only recognizes 'workspace', 'private', and 'shared'.")
+                                            errors_found = True
+
                             assets = manifest_dict.get("assets", {})
                             for bundle_name, file_list in assets.items():
                                 for asset_path in file_list:

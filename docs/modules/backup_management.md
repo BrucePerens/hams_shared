@@ -5,12 +5,15 @@
 ### 1. Automated Volume Synchronization
 Handles the execution loops for continuous file system snapshots and system storage mappings.
 * **Core Sync Anchor:** `[@ANCHOR: backup_management:backup_sync_kopia]`
+
 * **Database Target Sync Anchor:** `[@ANCHOR: backup_management:backup_sync_pgbackrest]`
+
 * **Cron Routine Orchestration:** `[@ANCHOR: backup_management:cron_sync_all_backups]`
 
 ### 2. Retention & Purge Governance
 Ensures structural space recovery processes comply with multi-website tenant data privacy mandates.
 * **Policy Application Engine:** `[@ANCHOR: backup_management:backup_apply_policies]`
+
 * **Interactive Dashboard Telemetry:** `[@ANCHOR: backup_management:backup_board_data]`
 
 ## Cross-Module Interfaces

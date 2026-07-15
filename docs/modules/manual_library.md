@@ -64,10 +64,15 @@ Uses a standard parent-child relationship for hierarchy. Inherits from `mail.thr
 <features>
 ## 3. Core Features & Logic
 * **User Feedback:** Handles user submissions of helpful/not-helpful article ratings via the feedback controller `[@ANCHOR: controller_manual_feedback]`.
+
 * **Search Integration:** Supports live querying of article contents via the search controller `[@ANCHOR: controller_manual_search]`.
+
 * **URL Resolution:** Computes the public website URL path for articles dynamically based on their hierarchy `[@ANCHOR: manual_compute_website_url]`.
+
 * **Structural Integrity:** Strictly enforces parent-child hierarchy checks to prevent recursive or invalid tree structures using `_has_cycle()` `[@ANCHOR: manual_check_hierarchy]`.
+
 * **Dynamic TOC:** Automatically parses article HTML on the frontend to generate a dynamic Table of Contents `[@ANCHOR: manual_toc_logic]`.
+
 * **Automated Documentation Installation:** Utilizes the central `_bootstrap_knowledge_docs` facility from the `zero_sudo` module to automatically discover and install documentation for all installed modules via the `knowledge_docs` manifest key. This supports soft dependencies on `knowledge.article` or `knowledge.article` `[@ANCHOR: manual_doc_auto_install]`. `[@ANCHOR: manual_doc_injection]`
 * **Zero-Sudo Execution:** All automated operations and frontend feedback increments are performed using the `knowledge.user_knowledge_service_account` micro-privilege account.
 * **Multi-Website Isolation:** Articles are isolated by `website_id`. Controllers and sidebar logic strictly filter content to the current website context.
@@ -96,16 +101,25 @@ For detailed narratives and end-to-end workflows, refer to the following:
 
 ### Stories
 * [Article Feedback](hams_shared/docs/stories/feedback.md) `[@ANCHOR: story_manual_feedback]`
+
 * [Article Hierarchy Integrity](hams_shared/docs/stories/hierarchy.md) `[@ANCHOR: story_manual_hierarchy]`
+
 * [Automated Documentation Installation](hams_shared/docs/stories/doc_installation.md) `[@ANCHOR: story_manual_doc_installation]`
+
 * [Backend Management Views](hams_shared/docs/stories/backend_views.md) `[@ANCHOR: story_manual_backend_views]`
+
 * [Dynamic Table of Contents](hams_shared/docs/stories/toc.md) `[@ANCHOR: story_manual_toc]`
+
 * [Dynamic URL Generation](hams_shared/docs/stories/url_generation.md) `[@ANCHOR: story_manual_url_generation]`
+
 * [Searching the Manual](hams_shared/docs/stories/search.md) `[@ANCHOR: story_manual_search]`
+
 * [Viewing Manual Articles](hams_shared/docs/stories/article_view.md) `[@ANCHOR: story_article_view]`
 
 ### Journeys
 * [Administrator Managing Articles](hams_shared/docs/journeys/admin_managing_articles.md) `[@ANCHOR: journey_admin_managing]`
+
 * [Developer Integrating Documentation](hams_shared/docs/journeys/developer_doc_integration.md) `[@ANCHOR: journey_developer_integration]`
+
 * [User Browsing the Manual](hams_shared/docs/journeys/user_browsing_journey.md) `[@ANCHOR: journey_user_browsing]`
 </stories_and_journeys>

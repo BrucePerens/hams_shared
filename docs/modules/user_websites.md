@@ -56,6 +56,7 @@ We used a few neat tricks to make this secure and fast:
 
 The `user_websites` module enables decentralized content creation. It employs the **Proxy Ownership Pattern**: standard Odoo users cannot create `ir.ui.view` or `website.page` records due to core security. The module securely circumvents this by assigning an `owner_user_id`, evaluating custom Record Rules against it, and escalating privileges via a dedicated Service Account (`.with_user(svc_uid)`) strictly for the database write.
 * **Ownership Validation:** Safely asserted by mixin create `[@ANCHOR: mixin_proxy_ownership_create]` and write `[@ANCHOR: mixin_proxy_ownership_write]` methods. Explicitly verified by `[@ANCHOR: test_mixin_ownership_validation]`.
+
 * **Tenant Isolation:** Enforced via strict record rules verified by `[@ANCHOR: test_tenant_view_isolation]` and ACL overhead elimination to prevent log spam `[@ANCHOR: test_acl_overhead_loop_elimination]`.
 * **Lazy JIT Provisioning:** Websites and Blogs do not exist upon user creation. They are provisioned Just-In-Time when the owner visits their slug root and triggers a POST request to `create_site`. This ensures explicit user consent to publish.
 </core_patterns>
@@ -79,6 +80,7 @@ The `user_websites` module enables decentralized content creation. It employs th
 
 ### Moderation Models
 * **`content.violation.report`**: Stores abuse reports. Originator is masked from the target owner. The system automatically generates a report and issues a strike if a user attempts to inject malicious SSTI/XSS payloads into their site architecture `[@ANCHOR: action_take_action_and_strike]`, tested by `[@ANCHOR: test_moderation_suspension]`. Admin spam is prevented via a daily digest cron (`ir_cron_notify_pending_reports` `[@ANCHOR: ir_cron_notify_pending_reports]`, `[@ANCHOR: cron_notify_pending_reports]`, verified by `[@ANCHOR: test_cron_pending_reports]`) and a session-guarded UI toast (`[@ANCHOR: toast_notifications_logic]`, `[@ANCHOR: admin_toast_logic]`, tested by `[@ANCHOR: test_tour_toast_notifications]`).
+
 * **Security Auto-Moderation**: The `website.page` model includes `_sanitize_user_arch` `[@ANCHOR: website_page_sanitize_arch]`, verified by `[@ANCHOR: test_website_page_sanitize_arch]`, which forcefully strips dangerous QWeb directives (`t-*`) and JS event handlers.
 * **`content.violation.appeal`**: Used by suspended users to petition for account restoration.
 </data_model>
@@ -91,15 +93,25 @@ The `user_websites` module enables decentralized content creation. It employs th
 ### Explicit Dropzones
 To prevent monolithic entanglement, `user_websites` provides the following explicitly designated dropzones. You MUST use `<xpath>` targeting these specific IDs and cite the corresponding Semantic Anchor:
 * **Home Header:** `id="user_websites_master_header"` -> `[@ANCHOR: dropzone_home_header]`
+
 * **Home Footer:** `id="user_websites_master_footer"` -> `[@ANCHOR: dropzone_home_footer]`
+
 * **Global Navbar:** `id="user_websites_dropzone_navbar"` -> `[@ANCHOR: dropzone_navbar]`
+
 * **Portal Templates:** `id="user_websites_dropzone_templates"` -> `[@ANCHOR: dropzone_templates]`
+
 * **Snippets Sidebar:** `id="user_websites_dropzone_snippets"` -> `[@ANCHOR: dropzone_snippets]`
+
 * **Website Layout:** `id="user_websites_dropzone_layout"` -> `[@ANCHOR: dropzone_layout]`
+
 * **User Settings:** `id="user_websites_dropzone_users"` -> `[@ANCHOR: dropzone_users]`
+
 * **Blog Post Form:** `id="user_websites_dropzone_blog_post"` -> `[@ANCHOR: dropzone_blog_post]`
+
 * **Navbar Actions:** `id="user_websites_dropzone_navbar_actions"` -> `[@ANCHOR: dropzone_navbar_actions]`
+
 * **Directory Card:** `id="user_websites_dropzone_directory_card"` -> `[@ANCHOR: dropzone_directory_card]`
+
 * **Global Settings Form:** -> `[@ANCHOR: dropzone_settings]`
 
 ### Prohibited Dropzones
@@ -107,15 +119,25 @@ DO NOT USE user_websites_settings_dropzone. All settings views must now inherit 
 
 ### Endpoints & Webhooks
 * **Community Directory:** Renders public pages `/community` `[@ANCHOR: UX_COMMUNITY_DIRECTORY]`.
+
 * **Violation Reporting:** Form endpoint `/website/report_violation` `[@ANCHOR: user_websites:UX_REPORT_VIOLATION]`, `[@ANCHOR: violation_report_logic]`, verified by `[@ANCHOR: test_tour_violation_report]`.
+
 * **Home Routing:** Target view `/<slug>/home` `[@ANCHOR: controller_user_websites_home]`.
+
 * **Site Creation:** `/<slug>/create_site` `[@ANCHOR: UX_CREATE_SITE]`, concurrency scaling proven by `[@ANCHOR: test_site_creation_performance_scaling]`.
+
 * **Blog Routing:** `/<slug>/blog` `[@ANCHOR: controller_user_blog_index]`.
+
 * **Blog Creation:** `/<slug>/create_blog` `[@ANCHOR: UX_CREATE_BLOG_POST]`.
+
 * **Documentation:** Proxies knowledge records `/user-websites/documentation` `[@ANCHOR: controller_user_websites_documentation]`.
+
 * **Appeals:** User submission endpoint `/website/submit_appeal` `[@ANCHOR: UX_SUBMIT_APPEAL]`.
+
 * **Subscriptions:** `/<slug>/subscribe` `[@ANCHOR: UX_SUBSCRIBE]`. Unsubscribe verification with HMAC TTL token validation `[@ANCHOR: controller_unsubscribe_digest]`.
+
 * **`GET /api/v1/user_websites/pending_reports`**: Returns a JSON object `{'count': int}` of unhandled violation reports. Restricted to administrators `[@ANCHOR: api_pending_reports]`. Verified by `[@ANCHOR: test_admin_violation_toast_rpc]`.
+
 * **GDPR Actions:** Privacy dashboard `/my/privacy` `[@ANCHOR: controller_my_privacy_dashboard]`. Data exports `/my/privacy/export` `[@ANCHOR: UX_GDPR_EXPORT]`. Data erasure via background cascading unlinks `/my/privacy/delete_content` `[@ANCHOR: UX_GDPR_ERASURE]`.
 
 ### 🚨 Privilege Deprecation & Cross-Module Execution (CRITICAL)
@@ -135,9 +157,13 @@ If your dependent module (e.g., `cloudflare`, `custom_dns`) needs to programmati
   * **Mandatory Assignment:** Standard users MUST supply either `owner_user_id` OR `user_websites_group_id` upon record creation.
   * **Mutual Exclusivity:** A record CANNOT be owned by both a user and a group simultaneously. Attempting to assign both will raise a strict `ValidationError`.
 * **Cache Invalidation Hooks:** Distributed slug caches are safely invalidated upon user mutation via `[@ANCHOR: slug_cache_invalidation]`, `[@ANCHOR: slug_cache_invalidation_unlink]`, `[@ANCHOR: group_slug_cache_invalidation]`, and `[@ANCHOR: group_slug_cache_invalidation_unlink]`.
+
 * **String Utilities:** Safe slugification generation logic `[@ANCHOR: utils_slugify]`.
+
 * **Limits:** Individual page quota enforcement `[@ANCHOR: website_page_quota_check]`.
+
 * **GDPR Hooks**: The module extends `_get_gdpr_export_data()` `[@ANCHOR: res_users_gdpr_export]`, tested by `[@ANCHOR: test_gdpr_export_hook]`, and `_execute_gdpr_erasure()` `[@ANCHOR: gdpr_sudo_erasure]`, tested by `[@ANCHOR: test_gdpr_erasure_pages]` and `[@ANCHOR: test_gdpr_erasure_posts]`. Dependent modules storing PII MUST override these to append their data to the export payload and hard-delete it during erasure.
+
 * **Documentation Injection**: The module follows the soft-dependency pattern for documentation. It attempts to install its `data/documentation.html` into `knowledge.article` or `knowledge.article` via `res.users._register_hook()`. This ensures compatibility with both Odoo Enterprise and the Community `knowledge` module without hard dependencies `[@ANCHOR: documentation_bootstrap]`.
 </public_api>
 
@@ -167,7 +193,10 @@ For detailed narratives and end-to-end workflows, refer to the following:
 <crons_and_subscriptions>
 ## 5. 📧 Weekly Digests & Subscriptions
 * Features an automated `ir.cron` job (`send_weekly_digest` `[@ANCHOR: ir_cron_send_weekly_digest]`, `[@ANCHOR: send_weekly_digest]`) that iterates through `blog.post` objects and dispatches emails to followers. Re-entrant batching algorithm resumption is tested by `[@ANCHOR: test_cron_batching_resumption]`. QWeb Mail templates are verified by `[@ANCHOR: test_weekly_digest_mail_template]`.
+
 * Utilizes HMAC-SHA256 tokens to generate secure, one-click `List-Unsubscribe` header links for GDPR/CAN-SPAM compliance `[@ANCHOR: test_weekly_digest_secret]`.
+
 * **Background View Counter Sync:** High-throughput Redis view counters are safely flushed to Postgres via cron `[@ANCHOR: ir_cron_flush_view_counters]`, tested extensively by `[@ANCHOR: test_cron_redis_flush]`.
+
 * **High-Speed Simulation Tests:** The full operational load of the module is end-to-end verified via the High-Speed Simulation Environment `[@ANCHOR: simulation_environment]`.
 </crons_and_subscriptions>

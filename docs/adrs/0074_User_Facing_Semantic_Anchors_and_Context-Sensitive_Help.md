@@ -10,6 +10,7 @@ We need a standardized methodology to bind frontend interactive elements to our 
 2. **Explicit Module Prefixes:** To maintain modular boundaries, cross-module structural references inside global design docs must explicitly target their destination context namespace.
 
 * *Example Definition:* `[@ANCHOR: user_websites:UX_REPORT_VIOLATION]`
+
 * *Example Implementation:* `<h3 id="UX_REPORT_VIOLATION" data-trace="[@ANCHOR: user_websites:UX_REPORT_VIOLATION]">Reporting Content</h3>`
 
 3. **Centralized Fragment Routing:** Frontend template view buttons or helper icons targeting deep documentation elements must map their source parameters to standardized target URL fragment hashes.

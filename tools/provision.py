@@ -92,6 +92,30 @@ def provision():
 
     infrastructure.provision_environment(run_sys, env_vars, orig_user, os_id, is_test=args.test)
 
+    domain = env_vars.get("DOMAIN", "hams.com")
+    _logger.info(f"""
+======================================================================
+[!] EMAIL REPUTATION ACTION REQUIRED
+======================================================================
+To ensure high deliverability and stay on the good side of mailing 
+services (SES, Mailgun, etc.), you must add the following DNS records 
+to your domain ({domain}):
+
+1. SPF Record (TXT):
+   Name: @
+   Value: v=spf1 include:mailgun.org ~all  (replace with your provider)
+
+2. DMARC Record (TXT):
+   Name: _dmarc
+   Value: v=DMARC1; p=quarantine; rua=mailto:admin@{domain};
+
+3. DKIM Record (TXT):
+   (Fetch this specific value from your email provider's dashboard)
+
+The system is now configured to automatically append 'List-Unsubscribe' 
+headers and compliance footers to all outgoing mail.
+======================================================================
+""")
 
 if __name__ == "__main__":
     provision()

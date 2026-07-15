@@ -116,16 +116,24 @@ For detailed narratives and end-to-end workflows, refer to the following:
 
 ### Stories
 * **Secure Privilege Escalation** `[@ANCHOR: COMM_story_secure_escalation]`: Narrative on how developers securely escalate privileges using service accounts instead of `.sudo()`. [Read Story](zero_sudo/hams_shared/docs/stories/secure_escalation.md)
+
 * **Blocking Service Account Login** `[@ANCHOR: COMM_story_login_blocking]`: How the system prevents service accounts from accessing the interactive web interface. [Read Story](zero_sudo/hams_shared/docs/stories/login_blocking.md)
+
 * **Parameter Whitelisting** `[@ANCHOR: COMM_story_parameter_whitelisting]`: Protection of sensitive system parameters from unauthorized access. [Read Story](zero_sudo/hams_shared/docs/stories/parameter_whitelisting.md)
+
 * **Multi-Website Awareness** `[@ANCHOR: story_multi_website]`: How the security core behaves in multi-website environments. [Read Story](zero_sudo/hams_shared/docs/stories/multi_website.md)
+
 * **Coherent Cache Signaling** `[@ANCHOR: COMM_story_cache_signaling]`: Ensuring cache consistency across multiple Odoo workers using Postgres NOTIFY. [Read Story](zero_sudo/hams_shared/docs/stories/cache_signaling.md)
+
 * **Deterministic Hashing** `[@ANCHOR: COMM_story_deterministic_hash]`: Generation of stable integer hashes for PostgreSQL advisory locks. [Read Story](zero_sudo/hams_shared/docs/stories/deterministic_hashing.md)
+
 * **Centralized Documentation Bootstrap** `[@ANCHOR: story_zero_sudo_doc_installer]`: How documentation is centrally installed across the platform. [Read Story](zero_sudo/hams_shared/docs/stories/documentation_bootstrap.md)
 
 ### Journeys
 * **Service Account Lifecycle** `[@ANCHOR: COMM_journey_service_account_lifecycle]`: The end-to-end flow of a service account from provisioning to secure execution. [Read Journey](zero_sudo/hams_shared/docs/journeys/service_account_lifecycle.md)
+
 * **Securing Configuration Parameters** `[@ANCHOR: COMM_journey_securing_configuration]`: The workflow for safely integrating and accessing new configuration parameters. [Read Journey](zero_sudo/hams_shared/docs/journeys/securing_configuration.md)
+
 * **Developer Integration** `[@ANCHOR: journey_developer_integration]`: End-to-end workflow for developers to integrate with the Zero-Sudo ecosystem. [Read Journey](zero_sudo/hams_shared/docs/journeys/developer_integration.md)
 </stories_and_journeys>
 
@@ -169,8 +177,11 @@ Sets a key-value pair in a lightweight service account storage.
 
 ### Web Login Security
 * **Key-Value Store:** Lightweight SA key-value storage `[@ANCHOR: COMM_set_kv_sql_check]`.
+
 * **Field:** `is_service_account` `[@ANCHOR: COMM_is_service_account_field]` on `res.users`.
+
 * **Interceptor:** `web_login` `[@ANCHOR: COMM_web_login_interceptor]` in `Home` controller.
+
 * **Security Check:** Performs direct SQL check `[@ANCHOR: COMM_web_login_interceptor_check]` for isolation.
 * **Effect:** Prevents interactive web logins for any user flagged as a service account.
 </additional_features>

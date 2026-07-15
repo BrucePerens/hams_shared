@@ -4,7 +4,9 @@ This journey describes the full lifecycle of a daemon's credentials, from regist
 
 1.  **Birth: Registration**
     - A module calls `register_daemon()` [@ANCHOR: daemon_key_manager:COMM_register_daemon_api].
+
     - `daemon_key_manager` creates a record and generates the first key [@ANCHOR: daemon_key_manager:COMM_register_daemon_logic].
+
     - The key is written to a secure `.env` file [@ANCHOR: daemon_key_manager:COMM_write_secure_env_file_logic].
 
 2.  **Usage: Consumption**
@@ -14,6 +16,7 @@ This journey describes the full lifecycle of a daemon's credentials, from regist
 
 3.  **Renewal: Periodic Rotation**
     - After 60 days, the cron job triggers [@ANCHOR: daemon_key_manager:COMM_cron_rotation_trigger].
+
     - `daemon_key_manager` revokes the old key and generates a new one [@ANCHOR: daemon_key_manager:COMM_revoke_old_keys_logic] [@ANCHOR: daemon_key_manager:COMM_generate_new_key_logic].
     - The `.env` file is updated with the new key.
 

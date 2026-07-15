@@ -33,10 +33,15 @@ Control plane for the CDN edge. Manages Cache-Tags, WAF bans, and Turnstile CAPT
 
 ## 2. API Interfaces
 * **WAF IP Banning:** `env['cloudflare.waf'].ban_ip(...)` dynamically injects firewall rules `[@ANCHOR: cf_execute_ban]`. Supports multiple websites.
+
 * **WAF Management:** Pull `[@ANCHOR: cf_action_pull_waf_rules]` and push `[@ANCHOR: cf_action_push_waf_rules]` firewall rules.
+
 * **Cache Purging:** `env['cloudflare.purge.queue'].enqueue_urls(...)` and `enqueue_tags(...)`. Processes an asynchronous queue grouped by website to prevent credential mixing `[@ANCHOR: cf_process_queue_logic]`.
+
 * **Turnstile API:** `env['cloudflare.turnstile'].verify_token(...)` evaluates tokens against the Cloudflare API `[@ANCHOR: cf_turnstile_verify]`.
+
 * **Edge Context:** `env['cloudflare.utils'].get_request_context()` extracts geographic and threat data from trusted headers `[@ANCHOR: cf_get_request_context]`.
+
 * **Tunnel Management:** Wizard generates installation commands `[@ANCHOR: cf_tunnel_setup]`. Sync and delete tunnels across accounts `[@ANCHOR: cf_sync_tunnels]`, `[@ANCHOR: cf_delete_tunnel]`.
 
 ## 3. Automated Subsystems
@@ -56,14 +61,21 @@ Strictly adheres to Zero-Sudo architecture using dedicated service accounts:
 ## 5. Architectural Stories & Journeys
 
 * [Asynchronous Cache Purging](hams_shared/docs/stories/cache_purging.md) `[@ANCHOR: story_cache_purging]`
+
 * [Geo-Aware Request Context](hams_shared/docs/stories/request_context.md) `[@ANCHOR: story_request_context]`
+
 * [Secure Edge Bridging via Tunnels](hams_shared/docs/stories/tunnels.md) `[@ANCHOR: story_tunnels]`
+
 * [CAPTCHA Verification with Turnstile](hams_shared/docs/stories/turnstile_verification.md) `[@ANCHOR: story_turnstile]`
+
 * [Automated WAF IP Banning](hams_shared/docs/stories/waf_banning.md) `[@ANCHOR: story_waf_banning]`
 
 ### Journeys
 * [High-Performance Content Invalidation](hams_shared/docs/journeys/content_invalidation.md) `[@ANCHOR: journey_content_invalidation]`
+
 * [Managing Edge Security](hams_shared/docs/journeys/edge_security.md) `[@ANCHOR: journey_edge_security]`
+
 * [Infrastructure Provisioning](hams_shared/docs/journeys/infrastructure.md) `[@ANCHOR: journey_infrastructure]`
+
 * [Intelligent Traffic Handling](hams_shared/docs/journeys/traffic_handling.md) `[@ANCHOR: journey_traffic_handling]`
 </stories_and_journeys>
