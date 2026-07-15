@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
 Semantic Anchor Verification Linter (ADR-0054, ADR-0055, ADR-0074)
@@ -720,7 +721,7 @@ def _report_missing_ux_docs(
                 "      [!] DIAGNOSTIC FOR AI: UI features starting with 'UX_' must be documented for the end-user."
             )
             print(
-                f"          ACTION: Append a container item '<span style=\"display:none;\">[@ANCHOR: COMM_{anchor.split(':')[1]}]</span>' to your module's data/documentation.html file."
+                f"          ACTION: Add a tracking attribute to a user-facing element in data/documentation.html (e.g., <h3 id=\"{anchor.split(':')[1]}\" data-trace=\"[@ANCHOR: {anchor}]\">Title</h3>)."
             )
     return has_errors
 
@@ -829,15 +830,16 @@ def main():
                 full_doc_path = os.path.join(root, "documentation.html")
                 try:
                     with open(full_doc_path, "r", encoding="utf-8") as f:
-                        for match in re.finditer(
-                            r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]", f.read()
-                        ):
-                            mod = get_module(full_doc_path)
-                            anchor_name = match.group(1)
-                            if ":" in anchor_name:
-                                mod, anchor_name = anchor_name.split(":", 1)
-                            if _clean(anchor_name).startswith("UX_"):
-                                user_manual_anchors.add(f"{mod}:{anchor_name}")
+                        for line in f:
+                            for match in re.finditer(
+                                r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]", line
+                            ):
+                                mod = get_module(full_doc_path)
+                                anchor_name = match.group(1)
+                                if ":" in anchor_name:
+                                    mod, anchor_name = anchor_name.split(":", 1)
+                                if _clean(anchor_name).startswith("UX_"):
+                                    user_manual_anchors.add(f"{mod}:{anchor_name}")
                 except (OSError, UnicodeDecodeError):
                     continue
 

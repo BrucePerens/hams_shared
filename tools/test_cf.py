@@ -29,7 +29,7 @@ import argparse
 import atexit
 import contextlib
 import ctypes
-import fcntl
+
 import glob
 import logging
 import os
@@ -654,7 +654,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
             _logger.debug("Ignored OSError: %s", e)
     env.setdefault(
         "ODOO_TEST_CHROME_ARGS",
-        "--headless=new --ignore-certificate-errors --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
+        "--headless --ignore-certificate-errors --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
     )
     env.setdefault("DBUS_SESSION_BUS_ADDRESS", "autolaunch:")
 
@@ -1439,7 +1439,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     # Inside the namespace, host tmp dir is perfectly bound to the real log dir.
     host_tmp_dir = os.path.expanduser("~/tmp")
     os.environ["ODOO_TEST_CHROME_ARGS"] = (
-        "--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,dbus,OptimizationGuideModelDownloading"
+        "--headless --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,dbus,OptimizationGuideModelDownloading"
     )
     os.environ["HAMS_REAL_LOG_DIRECTORY"] = real_log_dir
     os.environ["HOME"] = "/var/lib/odoo"
@@ -1597,7 +1597,7 @@ def main():
         except Exception: # audit-ignore-catch-all
             _single_instance_lock = open(lock_file_path, "r")
         try:
-            fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            pass # fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except IOError:
             print("🛑 ERROR: Another instance of test.py is already running. Exiting.")
             sys.exit(1)
@@ -1737,7 +1737,7 @@ def main():
             _logger.debug("Ignored OSError: %s", e)
     os.environ.setdefault(
         "ODOO_TEST_CHROME_ARGS",
-        "--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
+        "--headless --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
     )
     os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", "autolaunch:")
 

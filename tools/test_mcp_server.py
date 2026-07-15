@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 import sys
 import os
@@ -184,6 +185,7 @@ def update_modules(module_names: str) -> str:
                 mod_records = env["ir.module.module"].search([("name", "in", modules)])
                 if mod_records:
                     mod_records.button_immediate_upgrade()
+                    cr.commit()
                     print(
                         f"Successfully triggered update for: {', '.join(mod_records.mapped('name'))}"
                     )
