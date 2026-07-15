@@ -1,5 +1,6 @@
 #!/bin/bash
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 
 # Target repository path. Can be passed as the first argument.
@@ -24,7 +25,7 @@ git log --since="1 week ago" --name-only --format="" | sort | uniq | while read 
             mkdir -p "$target_dir"
 
             # Copy file
-            cp "$file" "$TARGET_REPO/$file"
+            cp -- "$file" "$TARGET_REPO/$file"
         fi
     fi
 done

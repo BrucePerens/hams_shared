@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
 Odoo Manifest & JS Dependency Contract Linter
@@ -29,7 +30,8 @@ def main():
 
     # 1. Map all manifests, their dependencies, and asset bundles
     for root, dirs, files in os.walk(repo_root):
-        if "radae" in dirs: dirs.remove("radae")
+        if "radae" in dirs:
+            dirs.remove("radae")
         if "__manifest__.py" in files:
             mod_name = os.path.basename(root)
             manifest_path = os.path.join(root, "__manifest__.py")

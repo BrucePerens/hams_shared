@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
 Odoo Test Tag Enforcer
@@ -41,16 +42,15 @@ def check_test_file(filepath):
             for decorator in node.decorator_list:
                 if (
                     isinstance(decorator, ast.Call)
-                    and getattr(decorator.func, "id", "") == "tagged"
+                    and isinstance(decorator.func, ast.Name)
+                    and decorator.func.id == "tagged"
                 ):
                     args = []
                     for arg in decorator.args:
                         # Python 3.8+ uses ast.Constant
                         if isinstance(arg, ast.Constant):
                             args.append(arg.value)
-                        # Fallback for older python versions
-                        elif getattr(ast, "Str", None) and isinstance(arg, ast.Str):
-                            args.append(arg.s)
+
 
                     if "post_install" in args and "-at_install" in args:
                         has_tagged = True
@@ -76,7 +76,8 @@ def main():
     all_passed = True
 
     for root, dirs, files in os.walk(repo_root):
-        if "radae" in dirs: dirs.remove("radae")
+        if "radae" in dirs:
+            dirs.remove("radae")
         # Only process files inside a 'tests' directory
         if "tests" not in Path(root).parts:
             continue

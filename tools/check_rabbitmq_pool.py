@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
 Checks all python files to ensure they don't manually spawn pika connections,
@@ -51,8 +52,8 @@ def check_rabbitmq(repo_dir):
                             violations.append(
                                 f"{os.path.relpath(file_path, repo_dir)}:{i} Instantiates pika connection directly. Use env['hams_rabbitmq.pool'] instead."
                             )
-            except UnicodeDecodeError:
-                pass
+            except UnicodeDecodeError as e:
+                print(f"Warning: UnicodeDecodeError reading {file_path}: {e}")
 
     return violations
 

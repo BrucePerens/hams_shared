@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
 Checks all source files to ensure that a shebang (#!), if present,
@@ -47,9 +48,9 @@ def check_shebang(repo_dir):
                             violations.append(
                                 f"{os.path.relpath(file_path, repo_dir)}:{i} Contains shebang `#!` on a line other than line 1"
                             )
-            except UnicodeDecodeError:
+            except UnicodeDecodeError as e:
                 # Skip binary files or files with weird encodings
-                pass
+                print(f"Warning: UnicodeDecodeError reading {file_path}: {e}")
 
     return violations
 
