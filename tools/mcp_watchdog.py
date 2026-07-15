@@ -119,9 +119,12 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                                 entry = json.loads(line)
                                 if entry.get('source') == 'MODEL' and entry.get('type') == 'PLANNER_RESPONSE':
                                     tool_calls = entry.get('tool_calls', [])
-                                    for call in tool_calls:
-                                        if call.get('name') == 'send_message' or call.get('toolName') == 'send_message':
-                                            return f"Agent {agent_id} sent a message."
+                                    if not tool_calls:
+                                        return f"Agent {agent_id} is waiting for user input (idle/finished). ACTION REQUIRED: You must immediately alert your Orchestrator via send_message."
+                                    else:
+                                        for call in tool_calls:
+                                            if call.get('name') == 'send_message' or call.get('toolName') == 'send_message':
+                                                return f"Agent {agent_id} sent a message."
                             except json.JSONDecodeError as e:  # audit-ignore-catch-all
                                 import logging
                                 logging.getLogger(__name__).warning("JSONDecodeError: %s", e)
