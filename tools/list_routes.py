@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 # -*- coding: utf-8 -*-
 # Copyright © Bruce Perens K6BP. All Rights Reserved.
-# This software is proprietary and confidential.
 
 """
 Utility to list all registered web routes in the operating Odoo environment.
@@ -55,6 +55,8 @@ def main():
         # Explicitly initialize the Registry class to avoid the attribute error
         registry = odoo.modules.registry.Registry(args.database)
     except Exception as e: # audit-ignore-catch-all
+        import logging
+        logging.getLogger(__name__).error(f"Error initializing registry for database '{args.database}': {e}")
         print(f"Error initializing registry for database '{args.database}': {e}")
         sys.exit(1)
 
@@ -76,11 +78,10 @@ def main():
 
         for rule in rules:
             methods = ",".join(rule.methods) if rule.methods else "ALL"
-            endpoint_name = (
-                rule.endpoint.__name__
-                if hasattr(rule.endpoint, "__name__")
-                else str(rule.endpoint)
-            )
+            try:
+                endpoint_name = rule.endpoint.__name__
+            except AttributeError:
+                endpoint_name = str(rule.endpoint)
             print(f"{rule.rule:<65} | {methods:<15} | {endpoint_name}")
 
         print(f"{'='*110}\n")

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
 Infrastructure Blueprint & Provisioning Engine
@@ -2053,10 +2054,7 @@ def provision_environment(
             _logger.warning("[*] Failed to add odoo to hams_com group: %s", e)
 
         is_isolated_ns = os.environ.get("HAMS_ISOLATED_NS") == "1"
-        is_jules = bool(os.environ.get("IN_JULES_VM")) or bool(
-            os.environ.get("JULES_SESSION_ID")
-        )
-        is_test_env = is_isolated_ns or is_jules or is_test
+        is_test_env = is_isolated_ns or is_test
 
         _logger.info("[*] Preparing testing directories with production paths...")
         apply_production_directories(run_cmd_func, environment="prod")
@@ -2078,7 +2076,7 @@ def provision_environment(
                 [
                     "bash",
                     "-c",
-                    "sed -i 's/peer/trust/g; s/md5/trust/g; s/scram-sha-256/trust/g' /etc/postgresql/*/main/pg_hba.conf",
+                    "sed -i 's/peer/trust/g' /etc/postgresql/*/main/pg_hba.conf",
                 ]
             )
             run_cmd_func(
@@ -2103,17 +2101,13 @@ def provision_environment(
                 _logger.info(
                     "[*] Bootstrapping initial Odoo PostgreSQL role and database (%s)...", db_name
                 )
-                sql_create_roles = "DO $$BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'odoo') THEN CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD 'odoo'; END IF; END$$;"
+                db_pass = env_vars.get("DB_PASS", "odoo")
+                sql_create_roles = f"DO $$BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'odoo') THEN CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD '{db_pass}'; END IF; END$$;"
                 run_cmd_func(["sudo", "-u", "postgres", "psql", "-c", sql_create_roles])
                 
                 if is_test:
-                    run_cmd_func(
-                        [
-                            "bash",
-                            "-c",
-                            f"sudo -u postgres dropdb --if-exists {db_name} && sudo -u postgres createdb -O odoo {db_name}",
-                        ]
-                    )
+                    run_cmd_func(["sudo", "-u", "postgres", "dropdb", "--if-exists", db_name])
+                    run_cmd_func(["sudo", "-u", "postgres", "createdb", "-O", "odoo", db_name])
                 else:
                     run_cmd_func(
                         [

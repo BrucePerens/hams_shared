@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 # -*- coding: utf-8 -*-
 import os
@@ -36,7 +37,11 @@ def find_translatable_strings(root_dir):
                     for node in ast.walk(tree):
                         if isinstance(node, ast.Call):
                             # Check if the function being called is named '_'
-                            if getattr(node.func, "id", None) == "_":
+                            try:
+                                func_id = node.func.id
+                            except AttributeError:
+                                func_id = None
+                            if func_id == "_":
                                 # Ensure it has at least one argument and that argument is a static string
                                 if (
                                     node.args
@@ -52,6 +57,8 @@ def find_translatable_strings(root_dir):
                 except SyntaxError as e:
                     print(f"[WARN] Syntax error, skipping {filepath}: {e}")
                 except Exception as e: # audit-ignore-catch-all
+                    import logging
+                    logging.getLogger(__name__).warning(f"[WARN] Could not parse {filepath}: {e}")
                     print(f"[WARN] Could not parse {filepath}: {e}")
 
     return translations

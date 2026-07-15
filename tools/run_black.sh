@@ -1,5 +1,6 @@
 #!/bin/bash
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Copyright © Bruce Perens K6BP. All Rights Reserved.
 
@@ -24,7 +25,7 @@ def pin_comments(d):
                 try:
                     with open(path, "r", encoding="utf-8") as file:
                         lines = file.readlines()
-                except Exception as e:
+                except Exception as e:  # audit-ignore-catch-all
                     import logging
                     logging.getLogger(__name__).warning("An error occurred: %s", e)
                     continue

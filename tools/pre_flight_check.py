@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
 Odoo Module Dependency Pre-Flight Check
@@ -24,6 +25,8 @@ def parse_manifest(manifest_path):
             manifest_content = f.read()
             return ast.literal_eval(manifest_content)
     except Exception as e: # audit-ignore-catch-all
+        import logging
+        logging.getLogger(__name__).error(f"❌ Error parsing manifest at '{manifest_path}': {e}")
         print(f"❌ Error parsing manifest at '{manifest_path}': {e}")
         sys.exit(1)
 
