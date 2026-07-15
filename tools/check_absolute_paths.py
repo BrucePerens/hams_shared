@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
 Checks all source files for hard-coded absolute paths based in /home.
@@ -51,7 +52,7 @@ def check_absolute_paths(repo_dir):
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     for i, line in enumerate(f, 1):
-                        if "/home" + "/" in line:
+                        if "/home/" in line:
                             # Skip if it is a file URI which may be in SKILL.md examples or similar
                             # Actually, we should even prohibit the h-o-m-e path because it's non-portable
                             violations.append(

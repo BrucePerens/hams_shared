@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 import os
 import sys
@@ -24,7 +25,7 @@ def get_imported_names(init_path):
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     imported.add(alias.name)
-    except Exception as e: # audit-ignore-catch-all
+    except (SyntaxError, OSError) as e:
         print(f"Error parsing {init_path}: {e}")
     return imported
 

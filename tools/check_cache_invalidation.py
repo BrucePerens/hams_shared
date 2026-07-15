@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 import ast
 import os
@@ -73,7 +74,7 @@ def main():
                     filepath = os.path.join(root, file)
                     try:
                         all_errors.extend(check_file(filepath))
-                    except Exception: # audit-ignore-catch-all
+                    except (SyntaxError, OSError):
                         pass  # Ignore syntax errors in unsupported files
 
     if all_errors:

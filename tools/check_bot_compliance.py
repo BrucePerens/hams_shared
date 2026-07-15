@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 import socket
 import urllib.request
@@ -14,7 +15,7 @@ def get_public_ip():
         )
         response = urllib.request.urlopen(req, timeout=5).read()
         return json.loads(response)["ip"]
-    except Exception as e: # audit-ignore-catch-all
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
         print(f"Error fetching public IP: {e}")
         return None
 
@@ -46,7 +47,7 @@ def check_fcrdns(ip):
     except socket.herror as e:
         print(f"Reverse DNS (PTR) check failed for IP {ip}: {e}")
         return False
-    except Exception as e: # audit-ignore-catch-all
+    except OSError as e:
         print(f"Error checking Reverse DNS for IP {ip}: {e}")
         return False
 

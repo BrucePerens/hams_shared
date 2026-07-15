@@ -1,5 +1,6 @@
+#!/usr/bin/env python3
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 import os
 import sys
 import subprocess
@@ -31,7 +32,7 @@ def check_file(file_path):
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
-    except Exception as e:  # audit-ignore-catch-all
+    except (OSError, UnicodeDecodeError) as e:
         logging.warning("Failed to read %s: %s", file_path, e)
         return None
 
