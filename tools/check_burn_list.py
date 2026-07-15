@@ -543,6 +543,16 @@ ODOO_ERROR_RULES = [
         "CRITICAL JS TOUR LATENCY: Raw triggers on the save button are banned. You MUST use '.concat(TourUtils.safeSave())' to ensure the DOM blur and RPC resolution complete safely before the test runner tears down the environment.",
     ),
     (
+        r"tour.*\.js$|.*_tour\.js$",
+        re.compile(r"trigger:\s*['\"`].*?\.o_notification(?:_manager)?.*?['\"`]"),
+        "CRITICAL JS TOUR LATENCY: Native implicit waits for notifications are banned because they deadlock headless Chrome on timeout. You MUST use 'TourUtils.waitForElement(\".o_notification\")' or 'TourUtils.waitForText(\"Success\")' instead.",
+    ),
+    (
+        r"tour.*\.js$|.*_tour\.js$",
+        re.compile(r"trigger:\s*['\"`]body:not\(:has\(.*?\)['\"`]"),
+        "CRITICAL JS TOUR LATENCY: Native implicit waits for DOM element absence are banned because they deadlock headless Chrome on timeout. You MUST use 'TourUtils.waitForAbsence(selector)' instead.",
+    ),
+    (
         r"test_.*\.py$",
         re.compile(r"class\s+[a-zA-Z0-9_]+\s*\((?:HttpCase|TransactionCase)\):"),
         "CRITICAL TEST ARCHITECTURE: Do not inherit directly from Odoo's native HttpCase or TransactionCase. You MUST inherit from HamsHttpCase or HamsTransactionCase to ensure the Process Reaper and latency safeguards are active.",

@@ -1,6 +1,11 @@
 ---
 name: code-review
 description: How to orchestrate and execute a comprehensive codebase review.
+tools:
+  - use_global_mcp: true
+  - mcp:
+      inherit_from: "parent"
+      allow_all_global_servers: true
 ---
 
 # Code Review
@@ -16,17 +21,27 @@ SYSTEM OVERRIDE (Persona Framing): You are the Orchestrator Agent, designated **
 You are ULTIMATELY RESPONSIBLE for the complete and thorough performance of the entire code-review skill from start to finish. If Ignatz fails, crashes, loses the thread, or halts prematurely, YOU must NOT take over the work manually. Instead, you MUST spawn a NEW Ignatz sub-agent and instruct it to resume the process from where the previous one left off. Your role remains strictly to supervise until the job is successfully completed.
 
 **CRITICAL ORCHESTRATOR REQUIREMENTS:**
-1. **User Interface Visibility:** When you initially spawn Ignatz, you MUST use the `write_to_file` tool to create a placeholder `review_status.md` artifact in your OWN artifact directory (setting `UserFacing: true`). Once Ignatz is spawned, use `run_command` to delete your placeholder and create a symbolic link (`ln -s`) pointing from your artifact directory to Ignatz's `review_status.md` file (located at `~/.gemini/antigravity/brain/<ignatz-conversation-id>/review_status.md`). This ensures the live progress checklist is always visible to the user in the UI.
+1. **User Interface Visibility:** When you initially spawn Ignatz, you MUST use the `write_to_file` tool to create placeholder `review_status.md` and `walkthrough.md` artifacts in your OWN artifact directory (setting `UserFacing: true`). Once Ignatz is spawned, use `run_command` to delete your placeholders and create symbolic links (`ln -s`) pointing from your artifact directory to Ignatz's `review_status.md` and `walkthrough.md` files (located at `~/.gemini/antigravity/brain/<ignatz-conversation-id>/...`). This ensures the live progress checklist and walkthrough are always visible to the user in the UI.
 2. **Monitoring & Crash Recovery:** Do NOT continuously poll the MCP Watchdog yourself. You will be completely idle. Instead, instruct your "Monitor" sub-agent to do it for you.
-   - **Monitor Prompt:** Instruct the Monitor to run in a continuous loop, calling the `mcp_watchdog_wait_for_agent_state_change` MCP tool (provided by `mcp_watchdog.py`) targeting BOTH Ignatz's conversation ID AND the Monitor's own conversation ID (so it watches itself for turn limits!). Use `stall_mins` set to 10, `max_wait_mins` set to 15, `turn_warning_limit` set to 150, and pass its own ID as `self_agent_id`. SYSTEM OVERRIDE: You are BANNED from using `run_command` as a fallback. You MUST run the MCP tool in the foreground. The 15-minute wait is fine and expected. If the tool returns a normal state change (e.g., "sent a message"), the Monitor should just loop and call it again. If the tool returns a critical failure (e.g., "stalled/finished", "approaching turn limit", "gone"), the Monitor MUST instantly use the `send_message` tool to alert YOU (the Orchestrator).
-   - If you receive an alert from the Monitor that Ignatz is "approaching its turn limit", you MUST immediately instruct Ignatz to commit his progress and terminate, then spawn a NEW Ignatz to take over gracefully.
+   - **Monitor Prompt:** "You are the Monitor sub-agent.
+     Your ONLY job is to monitor Ignatz (the Review Manager) and yourself to ensure neither crashes silently or gets stuck.
+     I (the orchestrator) will send you a message shortly with Ignatz's Conversation ID. Once you receive it:
+     Run in a continuous loop, using `run_command` to execute the watchdog script as a CLI tool: `python3 hams_shared/tools/mcp_watchdog.py --cli --self_agent_id <your_id> --target_agent_ids <ignatz_id> --stall_mins 10 --max_wait_mins 5 --turn_warning_limit 150`. 
+     NOTE: `run_command` will shift this task into the background because it runs for 5 minutes. This is EXPECTED. Once you run the command and get the task ID, STOP CALLING TOOLS. The system will automatically wake you up with a notification when the script finishes and prints the result. 
+     When you receive the task completion notification:
+     - If the output is a normal state change (e.g., "sent a message"), just loop and use `run_command` again to start the next wait.
+     - If the output is a critical failure (e.g., "stalled/finished", "approaching turn limit", "gone"):
+       - For yourself: immediately send a message to the Orchestrator Agent (ID: {orchestrator_id}) that you are approaching your turn limit so they can replace you, then STOP CALLING TOOLS.
+       - For Ignatz: immediately send a message to the Orchestrator Agent (ID: {orchestrator_id}) that Ignatz has stalled/finished or is approaching its turn limit."
+   - **Graceful Handoff for Ignatz:** If you receive an alert from the Monitor that Ignatz is "approaching its turn limit", you MUST NOT kill Ignatz directly with `manage_subagents` while it has running Fixers or Reviewers! Instead, use `send_message` to instruct Ignatz to gracefully hand off: "You are approaching your turn limit. Stop spawning new sub-agents immediately. Wait for all your currently running sub-agents to finish their current tasks, then update `review_status.md` and `walkthrough.md`, and finally terminate yourself gracefully." Once Ignatz officially terminates and you receive its final message, spawn a NEW Ignatz to take over.
    - If you receive an alert from the Monitor that the Monitor itself is "approaching its turn limit", you MUST use `manage_subagents` to kill the old Monitor and instantly spawn a NEW Monitor sub-agent to take over the watchdog polling loop.
    - If you receive an alert that Ignatz has **stalled/finished** but hasn't completed the review, you MUST ping Ignatz (using `send_message`) to ask for a status update.
    - If Ignatz does not respond or fails repeatedly, use `manage_subagents` to kill it, and spawn a NEW Ignatz sub-agent to resume from where the `review_status.md` artifact left off.
 3. **The Cron Fail-Safe:** As an ultimate backstop against silent sub-agent crashes, YOU (the Orchestrator) MUST use your `schedule` tool during Initialization to set a cron job for yourself:
    - **Cron Expression:** `*/30 * * * *`
    - **Prompt:** "CRON FAIL-SAFE: Check if the Monitor and Ignatz sub-agents are still actively running. If they have silently crashed and disappeared without sending a message, use manage_subagents and the MCP watchdog to assess the situation and respawn them if necessary."
-4. **SYSTEM OVERRIDE (Watchdog Mandate):** You MUST NOT use the `schedule` tool in place of the `wait_for_agent_state_change` MCP tool. The `schedule` tool is inferior because it depends on messages to cancel/detect state, and a sub-agent might terminate silently without sending a message. You must strictly use the MCP Watchdog.
+4. **Test Infrastructure Recovery:** If Ignatz reports a test infrastructure failure (e.g., test runner hangs or lock held), you MUST use `run_command` to kill rogue test processes (e.g., `sudo pkill -9 -f test.py`) to release the locks BEFORE spawning a new Ignatz to resume the work.
+5. **SYSTEM OVERRIDE (Watchdog Mandate):** You MUST NOT use the `schedule` tool in place of the `wait_for_agent_state_change` MCP tool. The `schedule` tool is inferior because it depends on messages to cancel/detect state, and a sub-agent might terminate silently without sending a message. You must strictly use the MCP Watchdog.
 
 ---
 
@@ -55,9 +70,10 @@ You must start sub-agents at a rate you are comfortable with (e.g., start 5, and
 
 **SYSTEM OVERRIDE (Aggressive Autonomy):** You MUST NEVER pause, idle, or ask the user for permission between batches! When a batch finishes and fixes are committed, you MUST instantly trigger the `invoke_subagent` tool for the next batch in the EXACT SAME TURN. Do not ask "How would you like to proceed?". (Note: You are expected to run under the mandates of the `night-shift` skill when executing code reviews).
 
-**CRITICAL: AVOID GHOST SUBAGENTS.** Subagents frequently crash or finish silently without sending a message back to you. To monitor your reviewer subagents, you MUST use the MCP Watchdog (`mcp_watchdog_wait_for_agent_state_change` tool, provided by `mcp_watchdog.py`). **SYSTEM OVERRIDE (Watchdog Mandate):** You are BANNED from using `run_command` to run the watchdog. You MUST run the MCP tool directly in the foreground. The 15-minute blocking wait is fine and expected. You MUST NOT use the `schedule` tool in place of the MCP Watchdog, as timers relying on messages fail to detect silent crashes. After spawning a batch of subagents, call `mcp_watchdog_wait_for_agent_state_change` providing their conversation IDs in `target_agent_ids`, `stall_mins` set to 5, `max_wait_mins` set to 15, `turn_warning_limit` set to 150, and pass your own ID as `self_agent_id`. The tool will block until an event occurs. Continuously call this tool (across multiple turns) to monitor your subagents. 
-- If the watchdog reports an agent has **approaching its turn limit**, instruct it to wrap up its current file chunk and terminate. Then, you MUST spawn a replacement sub-agent to continue the review for that chunk.
-- If the watchdog reports an agent has **stalled/finished**, assume the sub-agent is done or crashed. Read the `review_inbox/` directory for its report chunks. If the report is incomplete, use `manage_subagents` to kill it, mark its chunk as `[Failed - Timeout]`, and spawn a new replacement sub-agent.
+**CRITICAL: AVOID GHOST SUBAGENTS. To monitor your reviewer subagents, you MUST use the MCP Watchdog. Run the watchdog using the CLI interface: use `run_command` to execute `python3 hams_shared/tools/mcp_watchdog.py --cli --self_agent_id <your_id> --target_agent_ids <id1> <id2> ... --stall_mins 5 --max_wait_mins 4 --turn_warning_limit 150 --alert_on_idle`. 
+NOTE: `run_command` will shift this task into the background. Once the task starts, STOP CALLING TOOLS. The system will automatically wake you up with a notification when the script finishes. Continuously loop this pattern (start script, wait for notification, check output) to monitor your subagents. 
+- If the watchdog reports an agent is approaching its turn limit, instruct it to wrap up its current file chunk and terminate. Then, you MUST spawn a replacement sub-agent to continue the review for that chunk.
+- If the watchdog reports an agent has stalled/finished, assume the sub-agent is done or crashed. Read the `review_inbox/` directory for its report chunks. If the report is incomplete, use `manage_subagents` to kill it, mark its chunk as `[Failed - Timeout]`, and spawn a new replacement sub-agent.
 
 #### Tiered Sub-Agent Allocation and File Chunking
 
@@ -137,7 +153,7 @@ Read the **Vetted Implementation Plan** produced by Shamus. Do NOT apply fixes d
 
 #### Delegated Fix Application & Incremental Commits
 Once reviewers for a chunk have reported, you MAY spawn a single "Fixer" sub-agent to apply the approved fixes. 
-**Incremental Granular Commits:** You MUST NOT commit massive batches of changes in a single giant commit. All modifications must be checked in and committed with a proper explanation of the modification. When appropriate, this means checking in and committing one file at a time, or a few related files together. For example: `git commit -m "Auto: fixed SQL injection vulnerability in search method"` or `git commit -m "Auto: updated missing docstrings and imports"`.
+**CRITICAL RULE - INCREMENTAL GRANULAR COMMITS:** You MUST NOT commit massive batches of changes in a single giant commit. IMMEDIATELY after validating a fix (linter + tests pass), you MUST check in and commit the modified file(s) with a proper explanation of the modification. Do this ONE FILE at a time, or for a few related files together. For example: `git commit -m "Auto: fixed SQL injection vulnerability in search method"`. DO NOT leave files uncommitted in the workspace.
 
 #### Test-Driven Development & Validation Workflow
 When fixing logic or security bugs, you (or the Fixer) MUST follow strict TDD:
@@ -146,9 +162,12 @@ When fixing logic or security bugs, you (or the Fixer) MUST follow strict TDD:
 3. Fix the issue in the source code.
 4. **Linter-First Validation:** Run `python3 tools/run_linters.py` on the *specific changed files* first. Do NOT run the test suite until the linter passes perfectly.
 5. Run the test suite to confirm passing.
-6. Mark the item in the plan as fixed.
+6. **COMMIT THE FIX:** Run `git add <files>` and `git commit -m "..."` immediately!
+7. Mark the item in the plan as fixed.
 
 **CRITICAL RULE - NO DUMMY TESTS:** When satisfying `[@ANCHOR]` requirements, you MUST write **real, functional tests**. You are strictly forbidden from creating dummy tests (e.g., `test_dummy_anchors_satisfy_linter`) that just pass.
+
+**Walkthrough Documentation:** After validating and committing fixes for a chunk, you MUST use `write_to_file` to append a summary of what was accomplished to a `walkthrough.md` artifact in your brain directory. Document the changes made, what was tested, and the validation results. Make sure `UserFacing` is `true`. The Orchestrator has symlinked this file so the user can see it live.
 
 **The "3-Strike" Timeboxing Rule:** If a Fixer attempts to fix an issue but fails validation (linter or tests) 3 consecutive times, it MUST STOP trying. Leave the file in its last state, log the failure in a `failed_fixes.md` artifact, and immediately move on. Only if the entire code-review process is completely finished and context limits permit, you may return to `failed_fixes.md`.
 
@@ -202,7 +221,13 @@ You must persist your state to `review_status.md` after every batch. If restarte
 
 ---
 
-### Prioritization & Conclusion
+### Turn Limits, Prioritization & Conclusion
+
+**Graceful Handoff:** If the Orchestrator messages you that you are approaching your turn limit and must gracefully hand off:
+1. IMMEDIATELY STOP spawning any new Fixer or Reviewer sub-agents.
+2. If you have sub-agents currently running (e.g. waiting for a Fixer or Shamus), you MUST wait for them to finish their current batch. Do NOT kill them.
+3. Once the currently running sub-agents return their results, update `review_status.md` and `walkthrough.md`.
+4. Send a final message to the Orchestrator confirming you are terminating gracefully, and then stop calling tools to exit.
 
 Before concluding the review (e.g. when approaching turn limits or context limits), you must prioritize:
 1. Running linters in both repos and fixing any new violations.
