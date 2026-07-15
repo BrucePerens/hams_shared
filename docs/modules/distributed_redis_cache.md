@@ -20,7 +20,7 @@ Ensure the `redis` and `asyncpg` Python packages are installed.
 
 ## Configuration
 Configure the Redis connection via environment variables:
-- `REDIS_HOST`: Defaults to `redis` or `127.0.0.1`.
+- `REDIS_HOST`: Defaults to `redis` or `localhost`.
 - `REDIS_PORT`: Defaults to `6379`.
 - `REDIS_PASSWORD`: Optional Redis password.
 

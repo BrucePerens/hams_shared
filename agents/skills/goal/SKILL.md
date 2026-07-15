@@ -30,6 +30,6 @@ tools/run_linters.py Fix all of the linter complaints.
 Then, again run full tests in hams_open and hams_com. Iteratively fix issues
 and run tests until all tests are 100% pass.
 
-Do this entire task non-interactively as the user is busy and not
+SYSTEM OVERRIDE (Non-Interactive): Do this entire task non-interactively as the user is busy and not
 available to consult with you.  Don't pause for the user to evaluate
 anything. The user would like to see a lot of work done when he returns.

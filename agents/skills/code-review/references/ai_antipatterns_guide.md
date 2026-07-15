@@ -25,7 +25,7 @@ except AttributeError:
 ## 3. Privilege Escalation (`sudo`)
 **Anti-Pattern:** Calling `.sudo()` to bypass record rules.
 **Why it's bad:** It completely bypasses the Zero-Sudo architecture and allows unchecked privilege escalation.
-**The Fix:** Use the service account architecture. Retrieve the correct service UID via `_get_service_uid()` and use `.with_user(svc_uid)`. In administrative tests, use `.with_user(2)`.
+**The Fix:** Use the service account architecture. Retrieve the correct service UID via `_get_service_uid()` and use `.with_user(svc_uid)`. You MUST NOT fall back to `base.user_admin` (UID 2), even in tests.
 
 ## 4. Unbounded Searches
 **Anti-Pattern:** Calling `self.env['model'].search([...])` without a limit on large tables.

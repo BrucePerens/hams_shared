@@ -1059,8 +1059,6 @@ def rebuild_db(db_name):
 
     try:
         psql_cmd = get_pg_bin("psql")
-        dropdb_cmd = get_pg_bin("dropdb")
-        createdb_cmd = get_pg_bin("createdb")
     except FileNotFoundError as e:
         print(f"❌ ERROR: {e}")
         sys.exit(1)

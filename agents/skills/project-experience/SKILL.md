@@ -111,7 +111,7 @@ It must guarantee that EVERY single rule, bullet point, table, and constraint fr
 ### Trap: Ephemeral Session Amnesia & Repository Disconnect
 * **The Trap:** The AI operates in strictly isolated, ephemeral context windows. Even if a repository was "imported" or analyzed early in a conversation, the AI will inevitably lose its internal map of the workspace as the context window fills or the session is restarted.
 * **The Solution:** If the AI detects this, write any relevant experience to pass
-on to the next session in hams_shared/docs/LLM_EXPERIENCE.md, and ask the user to start a new
+on to the next session in hams_shared/agents/skills/project-experience/SKILL.md, and ask the user to start a new
 session.
 
 ### The Dirty Form Test Corruption Trap

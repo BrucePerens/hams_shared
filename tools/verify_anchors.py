@@ -14,7 +14,7 @@ RULES OF TRACEABILITY:
 
 2. TEST LINK: The test file testing that feature MUST contain: `# Tests [@ANCHOR: COMM_feature_name]`
 
-3. VERIFICATION LINK: The source code MUST point back to the test using: `# Verified by [@ANCHOR: COMM_test_method_name]`
+3. VERIFICATION LINK: The source code MUST point back to the test using: `# # Verified by [@ANCHOR: COMM_test_method_name]`
 4. DOC LINK: The base anchor MUST exist in a Markdown file in `docs/stories/` or `docs/journeys/`.
 5. UX LINK: If the anchor starts with `UX_`, it MUST exist in the module's `data/documentation.html`.
 6. CROSS-REF: If code triggers another module's anchor, use: `# Triggers [@ANCHOR: COMM_target_module:feature_name]`
@@ -212,7 +212,7 @@ def _process_file_for_anchors(
             elif first_prefix.endswith("Verified by") or first_prefix.endswith(
                 "Tested by"
             ):
-                # LLM NOTE: Matches `# Verified by [@ANCHOR: COMM_test_method_name]`
+                # LLM NOTE: Matches `# # Verified by [@ANCHOR: COMM_test_method_name]`
                 # Used in source files to point to the test that verifies it.
                 verified_by_links.setdefault(anchor, []).append(loc_str)
 
@@ -492,7 +492,7 @@ def _report_bidirectional_orphans(
         if a not in tests_links_set and a not in all_contracts
     }
 
-    # An orphan test is one that lacks a matching '# Verified by [@ANCHOR: COMM_name]' in the source code
+    # An orphan test is one that lacks a matching '# # Verified by [@ANCHOR: COMM_name]' in the source code
     orphaned_tests = {
         a: locs
         for a, locs in test_anchors.items()
@@ -557,7 +557,7 @@ def _report_bidirectional_orphans(
                 "      [!] DIAGNOSTIC FOR AI: The test file defines a test anchor, but the production code does not acknowledge it."
             )
             print(
-                f"          ACTION: Open the production code file being tested and insert: `# Verified by [@ANCHOR: COMM_{anchor.split(':')[1]}]` near the logic."
+                f"          ACTION: Open the production code file being tested and insert: `# # Verified by [@ANCHOR: COMM_{anchor.split(':')[1]}]` near the logic."
             )
         if reported:
             has_errors = True

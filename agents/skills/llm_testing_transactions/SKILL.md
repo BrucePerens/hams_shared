@@ -63,3 +63,13 @@ If you use `RealTransactionCase` for standard HTTP tests (`url_open`) and explic
 7. The next test in the suite tries to create the same user slug and crashes with a "Duplicate key value" error.
 
 **Always default to `HamsHttpCase` with `flush_all()` unless building UI Tours or testing strict database locks.**
+
+## 3. Database Cursors MUST NOT Be Mocked
+
+**CRITICAL RULE:** You are strictly forbidden from mocking or patching `self.env.cr` (e.g., using `patch.object(self.env.cr, 'execute')` or `self.safe_patch_object(self.env.cr, ...)`).
+
+Odoo's test runner fundamentally relies on the database cursor to rollback the test database during teardown. If you mock the cursor, the teardown logic will silently fail, leaving test data in the database and causing unpredictable "Cursor already closed" crashes for subsequent tests.
+
+If you need to verify that a specific SQL query was executed:
+1. Do not mock `cr.execute`.
+2. Instead, run the operation and then write a real SQL query to assert on the resulting data state.

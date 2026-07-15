@@ -5,8 +5,8 @@ description: Activated when working on Odoo 19+ modules, emphasizing dynamic SQL
 
 # ODOO-SPECIFIC TECHNICAL STANDARDS
 
-*Copyright © Bruce Perens K6BP. All Rights Reserved.
-This software is proprietary and confidential.*
+*Copyright © Bruce Perens K6BP.*
+SPDX-License-Identifier: AGPL-3.0-or-later
 
 <system_role>
 These standards apply specifically to Odoo 19+ module development. This document natively extends `LLM_GENERAL_REQUIREMENTS.md`.

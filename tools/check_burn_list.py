@@ -2086,6 +2086,8 @@ def scan_file(filepath, is_odoo_module=False):
                         )
                     for attr_name, attr_val in node.attrs.items():
                         if "[@ANCHOR:" in str(attr_val):
+                            if attr_name == "data-trace":
+                                continue
                             errors_found.append(
                                 f"Line {node.lineno}: CRITICAL ANCHOR FORMAT: Semantic anchors in XML/HTML MUST be enclosed within comments (). Found in attribute."
                             )

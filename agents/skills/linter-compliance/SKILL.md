@@ -6,6 +6,7 @@ description: Activated when the AI is writing code to ensure strict adherence to
 # 🚨 LLM LINTER GUIDE & ANTI-EVASION REFERENCE
 
 *Copyright © Bruce Perens K6BP.*
+SPDX-License-Identifier: AGPL-3.0-or-later
 
 <system_role>
 **Purpose:** This document is the ultimate reference sheet for the platform's DevSecOps pipeline.
@@ -86,7 +87,7 @@ Ensure all dynamic data injected into the DOM is sanitized.
 * **OWL `rpc` Service Deprecation:** The raw `useService('rpc')` method is banned in Odoo 19 frontend components. You MUST use `useService('orm')` which securely handles batching, caching, and model security, unless explicitly burning this rule for a custom controller.
 * **The /web/ Asset & Login Mandate:** While general routing has moved to `/odoo`, core static assets (`/web/assets/`), images (`/web/image`), and the authentication endpoint (`/web/login`) MUST remain under the `/web` path. You are strictly FORBIDDEN from refactoring these specific paths to `/odoo`. The Cloudflare and Caching modules rely on `/web/assets/` for edge caching. If necessary, use `# burn-ignore-route` to bypass linters for these valid exceptions.
 
-> **NOTICE (UI TOURS):** All strict architectural mandates, workarounds, and syntax rules required to write stable UI Tours have been relocated to the dedicated **`hams_shared/docs/LLM_WRITING_TOURS.md`** manual. You MUST consult that document for all tour-related directives.
+> **NOTICE (UI TOURS):** All strict architectural mandates, workarounds, and syntax rules required to write stable UI Tours have been relocated to the dedicated **`hams_shared/agents/skills/odoo-ui-tours/SKILL.md`** skill. You MUST consult that skill for all tour-related directives.
 </javascript_standards>
 
 ---

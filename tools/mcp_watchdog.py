@@ -23,12 +23,13 @@ def get_fsize(path):
         return 0
 
 @mcp.tool()
-async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_mins: int = 5, max_wait_mins: int = 0) -> str:
+async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_mins: int = 5, max_wait_mins: int = 0, turn_warning_limit: int = 150) -> str:
     """
     Waits until a monitored agent changes state (stalls for more than stall_mins, resumes, or finishes),
     or until all monitored agents are gone.
     If target_agent_ids is provided, only those specific conversation IDs are monitored.
     If max_wait_mins is > 0, the tool will return a 'wait-over' event after that many minutes if no state changes occur.
+    If turn_warning_limit is > 0, it will return a warning if an agent's transcript line count exceeds this limit.
     """
     brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
     timeout_secs = stall_mins * 60
@@ -60,6 +61,7 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
 
     initial_states = get_states()
     last_sizes = {aid: state["fsize"] for aid, state in initial_states.items()}
+    warned_agents = set()
     start_time = time.time()
     
     while True:
@@ -81,12 +83,23 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
             fsize = state["fsize"]
             transcript_path = state["path"]
             
+            # Check for turn limit
+            if turn_warning_limit > 0 and agent_id not in warned_agents:
+                try:
+                    with open(transcript_path, 'r', encoding='utf-8') as f:
+                        lines = sum(1 for line in f if line.strip())
+                    if lines >= turn_warning_limit:
+                        warned_agents.add(agent_id)
+                        return f"Agent {agent_id} is approaching its turn limit ({lines} turns). ACTION REQUIRED: You must immediately alert your Orchestrator via send_message to replace this agent."
+                except OSError:
+                    pass
+            
             # Check for stalled/resumed states
             if mtime > init_state["mtime"] and init_state["is_stalled"]:
                 return f"Agent {agent_id} resumed activity."
                 
             if is_stalled and not init_state["is_stalled"]:
-                return f"Agent {agent_id} stalled/finished (idle for > {stall_mins}m)."
+                return f"Agent {agent_id} stalled/finished (idle for > {stall_mins}m). ACTION REQUIRED: You must immediately alert your Orchestrator via send_message."
                 
             # Check for newly sent messages
             last_size = last_sizes.get(agent_id, init_state["fsize"])
@@ -101,10 +114,14 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                             if not line: continue
                             try:
                                 entry = json.loads(line)
-                                if 'tool_calls' in entry:
-                                    for call in entry['tool_calls']:
-                                        if call.get('name') == 'send_message' or call.get('toolName') == 'send_message':
-                                            return f"Agent {agent_id} sent a message."
+                                if entry.get('source') == 'MODEL' and entry.get('type') == 'PLANNER_RESPONSE':
+                                    tool_calls = entry.get('tool_calls', [])
+                                    if not tool_calls:
+                                        return f"Agent {agent_id} is waiting for user input (idle/finished). ACTION REQUIRED: You must immediately alert your Orchestrator via send_message."
+                                    else:
+                                        for call in tool_calls:
+                                            if call.get('name') == 'send_message' or call.get('toolName') == 'send_message':
+                                                return f"Agent {agent_id} sent a message."
                             except json.JSONDecodeError as e:  # audit-ignore-catch-all
                                 import logging
                                 logging.getLogger(__name__).warning("JSONDecodeError: %s", e)
