@@ -23,7 +23,7 @@ def get_fsize(path):
         return 0
 
 @mcp.tool()
-async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_mins: int = 5, max_wait_mins: int = 0, turn_warning_limit: int = 150) -> str:
+async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_mins: int = 5, max_wait_mins: int = 0, turn_warning_limit: int = 150, self_agent_id: str = None) -> str:
     """
     Waits until a monitored agent changes state (stalls for more than stall_mins, resumes, or finishes),
     or until all monitored agents are gone.
@@ -93,6 +93,9 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                         return f"Agent {agent_id} is approaching its turn limit ({lines} turns). ACTION REQUIRED: You must immediately alert your Orchestrator via send_message to replace this agent."
                 except OSError:
                     pass
+            if self_agent_id and agent_id == self_agent_id:
+                last_sizes[agent_id] = fsize
+                continue
             
             # Check for stalled/resumed states
             if mtime > init_state["mtime"] and init_state["is_stalled"]:
