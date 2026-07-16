@@ -46,7 +46,7 @@ During Phase 3 (Fix Application) and Phase 4 (Final Validation), Ignatz must fol
 2. Run the full test suites: `python3 tools/test.py`
 3. **NO DUMMY TESTS:** When satisfying `[@ANCHOR]` requirements, real functional tests are mandatory.
 
-At the very end of the review process, run a full, global sweep in both repositories:
+At the very end of the review process, run a full, global sweep in both repositories, fix any issues, and run the linter or test again. When done, should be no linter complaints, and 100% of tests should pass:
 1. `cd hams_open && python3 tools/run_linters.py`
 2. `cd hams_com && python3 tools/run_linters.py`
 3. `cd hams_open && python3 tools/test.py`
