@@ -3010,6 +3010,8 @@ def main():
                     pass
 
             if file.endswith((".py", ".xml", ".js", ".csv", ".html")):
+                if file.endswith(".min.js"):
+                    continue
                 scanned_files += 1
                 is_odoo = _is_odoo_module(filepath, target_dir)
                 errors, warnings = scan_file(filepath, is_odoo_module=is_odoo)
