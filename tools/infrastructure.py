@@ -1297,6 +1297,7 @@ WantedBy=multi-user.target
                 "PYTHONPYCACHEPREFIX=/opt/hams/pycache",
                 "ODOO_RC=/etc/odoo/odoo.conf",
             ],
+            "ExecStartPre": "/usr/bin/python3 /opt/hams/shared/tools/env_validator.py",
             "ProtectSystem": "strict",
             "ReadWritePaths": [
                 "/opt/hams/etc/keys",
