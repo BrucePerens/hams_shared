@@ -42,7 +42,7 @@ All roles must read the skill files for `linter-compliance`, `project-experience
 
 ## 4. Test-Driven Validation Workflow
 During Phase 3 (Fix Application) and Phase 4 (Final Validation), Ignatz must follow this strict TDD protocol:
-1. **Linter-First Validation:** Run `python3 tools/run_linters.py --files <list_of_modified_files>` on the specific changed files first. Do NOT run the test suite until the linter passes perfectly.
+1. **Linter-First Validation:** Run `python3 tools/run_linters.py <list_of_modified_files>` on the specific changed files first. Do NOT run the test suite until the linter passes perfectly.
 2. Run the full test suites: `python3 tools/test.py`
 3. **NO DUMMY TESTS:** When satisfying `[@ANCHOR]` requirements, real functional tests are mandatory.
 
