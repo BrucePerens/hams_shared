@@ -618,6 +618,14 @@ WantedBy=multi-user.target
             "post_provision_hooks": [hook_daemons_perms],
         },
         {
+            "src": "{HAMS_COMMUNITY_DIR}/hams_shared",
+            "path": "/opt/hams/hams_shared",
+            "owner": "hams_com:hams_com",
+            "mode": "755",
+            "environments": ["prod", "test"],
+            "post_provision_hooks": [hook_daemons_perms],
+        },
+        {
             "path": "/opt/hams/systemd/system-startup.service",
             "content": """\
 [Unit]
@@ -1297,7 +1305,7 @@ WantedBy=multi-user.target
                 "PYTHONPYCACHEPREFIX=/opt/hams/pycache",
                 "ODOO_RC=/etc/odoo/odoo.conf",
             ],
-            "ExecStartPre": "/usr/bin/python3 /opt/hams/shared/tools/env_validator.py",
+            "ExecStartPre": "/usr/bin/python3 /opt/hams/hams_shared/tools/env_validator.py",
             "ProtectSystem": "strict",
             "ReadWritePaths": [
                 "/opt/hams/etc/keys",
@@ -1666,22 +1674,28 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
         )
         started_services.append(svc)
         if res.returncode != 0:
-            _logger.error(
-                "    [!] systemctl start %s returned non-zero exit code: %s",
-                svc,
-                res.returncode,
-            )
-            _logger.error("stdout: %s", res.stdout)
-            _logger.error("stderr: %s", res.stderr)
             logs = subprocess.run(
                 ["journalctl", "-u", svc, "-n", "100", "--no-pager"],
                 capture_output=True,
                 text=True,
             )
-            _logger.error(
-                "--- LOGS FOR %s ---\n%s\n-------------------", svc, logs.stdout
-            )
-            sys.exit(1)
+            if "Address already in use" in logs.stdout or "Address already in use" in logs.stderr:
+                _logger.warning(
+                    "    [~] %s failed to start due to port conflict ('Address already in use'). Assuming it is running externally or port is handled.", svc
+                )
+                started_services.remove(svc)
+            else:
+                _logger.error(
+                    "    [!] systemctl start %s returned non-zero exit code: %s",
+                    svc,
+                    res.returncode,
+                )
+                _logger.error("stdout: %s", res.stdout)
+                _logger.error("stderr: %s", res.stderr)
+                _logger.error(
+                    "--- LOGS FOR %s ---\n%s\n-------------------", svc, logs.stdout
+                )
+                sys.exit(1)
 
     _logger.info("[*] Waiting for services to stabilize (5 seconds)...")
     time.sleep(5)

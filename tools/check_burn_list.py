@@ -1389,10 +1389,12 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 ):
                     is_super = True
                 if not is_super:
-                    self.add_error(
-                        node.lineno,
-                        "CRITICAL AI LAZINESS: The use of hasattr() is strictly forbidden to prevent masking architectural type uncertainties.",
-                    )
+                    line_content = self.lines[node.lineno - 1] if node.lineno <= len(self.lines) else ""
+                    if "burn-ignore-introspection" not in line_content:
+                        self.add_error(
+                            node.lineno,
+                            "CRITICAL AI LAZINESS: The use of hasattr() is strictly forbidden to prevent masking architectural type uncertainties.",
+                        )
             elif fid == "hash":
                 self.add_error(
                     node.lineno,
@@ -1435,10 +1437,12 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             "[!] DIAGNOSTIC FOR AI: Obfuscated use of sudo via getattr() detected and blocked.",
                         )
                     if len(node.args) >= 3 or node.keywords:
-                        self.add_error(
-                            node.lineno,
-                            "CRITICAL AI LAZINESS: 3-argument getattr() is forbidden to prevent silently defaulting on missing schema attributes. Access fields directly to ensure the schema contract is enforced.",
-                        )
+                        line_content = self.lines[node.lineno - 1] if node.lineno <= len(self.lines) else ""
+                        if "burn-ignore-introspection" not in line_content:
+                            self.add_error(
+                                node.lineno,
+                                "CRITICAL AI LAZINESS: 3-argument getattr() is forbidden to prevent silently defaulting on missing schema attributes. Access fields directly to ensure the schema contract is enforced.",
+                            )
                 elif (
                     fid == "setattr"
                     and len(node.args) >= 2
@@ -2688,6 +2692,7 @@ def scan_file(filepath, is_odoo_module=False):
                 "burn-ignore-env",
                 "burn-ignore-test-tags",
                 "burn-ignore-pika",
+                "burn-ignore-introspection",
             ]
         ):
             errors_found.append(

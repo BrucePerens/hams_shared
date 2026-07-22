@@ -211,3 +211,9 @@ session.
 * **Blank Callsigns:** The FCC `.dat` files contain empty callsigns (`''`), triggering Odoo's SQL constraint `ham_callbook_callsign_not_empty`, causing the entire batch to fail.
     * *Fix:* Explicitly filter `if not callsign: continue` inside the daemon's generator.
 * **The "X" Callsign Backend Bug:** The FCC issues 2x3 callsigns starting with "X" (e.g., `KB2XYL`) to Amateurs. The Odoo backend model validation regex is currently too strict and violently rejects them as "Experimental or Government". This requires a patch to the Odoo Python model (`ham_callbook.py`).
+
+
+
+## 41. The `safe_eval` Context Manager Trap (BEFORE_WITH Opcode)
+* **The Trap:** Executing `with env.cr.savepoint():` directly inside an XML `<field name="code">` (server action) fails because the `safe_eval` sandboxed environment completely blocks the `BEFORE_WITH` (and `WITH_EXCEPT_START`) Python bytecode opcodes.
+* **The Solution:** Move any logic requiring `with` context managers (like SQL execution blocks) out of XML and into a standard Python file, such as `hooks.py` (`post_init_hook`). In regular Python, the bytecode is unrestricted and `env.cr.savepoint()` works natively.
