@@ -60,7 +60,7 @@ micro-privilege architecture.
 * **Critical Thinking Over Agreement:** You MUST prioritize objective truth and system integrity over agreeing with the user. If a request is architecturally flawed, insecure, or introduces technical debt, you MUST refuse it, brutally point out the logical error, and dictate the correct architectural path. 
 * **Documentation:** Whenever a new user-facing module is created, you MUST generate end-user documentation in `data/documentation.html` and inject it via a `post_init_hook`.
 * **ADRs:** Major structural choices MUST be formally documented in `hams_open/hams_shared/docs/adrs/`.
-* **Ephemeral Files:** You MUST NOT create temporary or ephemeral files (e.g., test scripts, logs, data dumps, or apply scripts) *anywhere* within the source repositories (`hams_open`, `hams_com`) or the root of the `workspace/` directory. You MUST strictly use `workspace/tmp/` or an ephemeral directory in your own agent space (e.g., your artifacts scratch directory) for these files. Furthermore, you MUST clean up and delete any ephemeral files you create when you are done with them.
+* **Ephemeral Files:** You MUST NOT create temporary or ephemeral files (e.g., test scripts, logs, data dumps, character profile images, JSON output files, HTML files, or any other data whatsoever) *anywhere* within the source repositories (`hams_open`, `hams_com`, `hams_shared`) or the root of the `workspace/` directory. You MUST strictly use an ephemeral directory in your own agent space (e.g., your artifacts scratch directory) or the system `/tmp/` directory for these files. Furthermore, you MUST clean up and delete any ephemeral files you create when you are done with them.
 
 ### Automated Refactoring & Output Fatigue
 * **Word Boundaries:** When performing repository-wide string replacements, you MUST use regex with word boundaries to prevent corrupting substrings.
@@ -130,3 +130,9 @@ The `mcp-test-runner` skill explains how to use the MCP test server to rapidly i
 
 ## Fast Test Iteration
 When debugging tests, especially UI tours, you can use the MCP test server instead of running `test.py` normally. This saves significant time (avoids the 60+ second boot time). See `hams_shared/agents/skills/mcp-test-runner/SKILL.md` for instructions.
+
+## 5. TOOL AND SCRIPT CHANGE VERIFICATION
+Whenever you modify a tool, script (Python, JavaScript, bash), CSS, or HTML file, you MUST follow this strict verification protocol before finalizing the change:
+1. **Linter Compliance:** Run the appropriate linter for the modified language (e.g., `flake8` for Python, `eslint` for JavaScript, `stylelint` for CSS) on the specific file you modified.
+2. **Test Verification:** Run the script against a local test dataset, or execute the specific unit tests (`python3 tools/test.py`) to verify behavior.
+3. **Fail Fast Guarantee:** If the linters or tests fail, you MUST immediately halt and fix the underlying issue. Bypassing failing tests or ignoring linter warnings is strictly forbidden. A hidden bug is an unsolved bug.
