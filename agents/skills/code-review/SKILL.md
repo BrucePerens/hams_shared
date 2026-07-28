@@ -10,7 +10,7 @@ tools:
 
 # Code Review
 
-When asked to do a code-review, you MUST activate and follow the `divide-and-conquer` skill framework, utilizing the Nudge, Ignatz, Shamus, and Monitor architecture.
+When asked to do a code-review, you MUST activate and follow the `divide-and-conquer` skill framework, utilizing the Conductor, Ignatz, Shamus, and Monitor architecture.
 
 Provide the `divide-and-conquer` orchestrator with the following specific configuration parameters for this specialized topic:
 

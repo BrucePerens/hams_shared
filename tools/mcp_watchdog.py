@@ -43,7 +43,7 @@ def get_fsize(path):
         return 0
 
 @mcp.tool()
-async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_mins: int = 5, max_wait_mins: int = 0, turn_warning_limit: int = 150, self_agent_id: str = None, alert_on_idle: bool = False) -> str:
+async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_mins: int = 5, max_wait_mins: int = 0, turn_warning_limit: int = 150, self_agent_id: str = None, alert_on_idle: bool = False, ignore_idle_for_ids: list[str] = None) -> str:
     """
     Waits until a monitored agent changes state (stalls for more than stall_mins, resumes, or finishes),
     or until all monitored agents are gone.
@@ -162,8 +162,9 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                                 if entry.get('source') == 'MODEL' and entry.get('type') == 'PLANNER_RESPONSE':
                                     tool_calls = entry.get('tool_calls', [])
                                     if alert_on_idle and not tool_calls:
-                                        save_persisted_states(current_states, self_agent_id)
-                                        return f"Agent {agent_id} stalled/finished (idle/finished). ACTION REQUIRED: You must immediately alert your Orchestrator via send_message."
+                                        if ignore_idle_for_ids is None or agent_id not in ignore_idle_for_ids:
+                                            save_persisted_states(current_states, self_agent_id)
+                                            return f"Agent {agent_id} stalled/finished (idle/finished). ACTION REQUIRED: You must immediately alert your Orchestrator via send_message."
                                     for call in tool_calls:
                                         if call.get('name') == 'send_message' or call.get('toolName') == 'send_message':
                                             save_persisted_states(current_states, self_agent_id)
@@ -201,6 +202,7 @@ if __name__ == "__main__":
     parser.add_argument("--turn_warning_limit", type=int, default=150, help="Turn warning limit")
     parser.add_argument("--self_agent_id", type=str, default=None, help="Agent ID of the monitor")
     parser.add_argument("--alert_on_idle", action="store_true", help="Instantly alert if an agent stops calling tools")
+    parser.add_argument("--ignore_idle_for_ids", type=str, nargs="*", default=None, help="Agent IDs to ignore for alert_on_idle")
     
     args = parser.parse_args()
     
@@ -211,7 +213,8 @@ if __name__ == "__main__":
             max_wait_mins=args.max_wait_mins,
             turn_warning_limit=args.turn_warning_limit,
             self_agent_id=args.self_agent_id,
-            alert_on_idle=args.alert_on_idle
+            alert_on_idle=args.alert_on_idle,
+            ignore_idle_for_ids=args.ignore_idle_for_ids
         ))
         print(result)
         sys.exit(0)
