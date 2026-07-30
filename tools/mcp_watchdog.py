@@ -122,6 +122,12 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
             # Check for turn limit
             if turn_warning_limit > 0 and not state.get("warned"):
                 try:
+                    # Silently ignore legacy agents (unmodified in the last 24 hours)
+                    if time.time() - mtime > 86400:
+                        state["warned"] = True
+                        save_persisted_states(current_states, self_agent_id)
+                        continue
+                        
                     with open(transcript_path, 'r', encoding='utf-8') as f:
                         lines = sum(1 for line in f if line.strip())
                     if lines >= turn_warning_limit:

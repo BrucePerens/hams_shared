@@ -29,7 +29,7 @@ Generate a minimal `.html` file that includes the components and CSS you wish to
 Instead of relying on the `browser_subagent`, execute the native Chrome binary via the `run_headless_chrome.py` wrapper script. This script provides a lock to prevent concurrent executions and ensures robust process cleanup to prevent memory exhaustion from zombie browsers:
 
 ```bash
-/home/bruce/workspace/hams_open/hams_shared/scripts/run_headless_chrome.py --headless=new --no-sandbox --disable-gpu --screenshot=/home/bruce/.gemini/antigravity/brain/<conversation-id>/screenshot.png http://127.0.0.1:8089/test_render.html
+../scripts/run_headless_chrome.py --headless=new --no-sandbox --disable-gpu --screenshot=~/.gemini/antigravity/brain/<conversation-id>/screenshot.png http://127.0.0.1:8089/test_render.html
 ```
 
 *(Note: Always use `--no-sandbox` and `--disable-gpu` when running Chrome inside a container shell. If you receive an error that "Sequential execution only is required," wait a few seconds and try again, or check your background tasks.)*

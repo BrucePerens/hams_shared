@@ -24,6 +24,8 @@ def check_absolute_paths(repo_dir):
         ".agents",
         "target",
         "radae",
+        "agents",
+        "scratch",
     }
     # Only check text-based files
     valid_exts = {
