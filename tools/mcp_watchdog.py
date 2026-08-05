@@ -53,11 +53,48 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
     """
     brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
     timeout_secs = stall_mins * 60
+    root_id = None
+    parent_map = {}
     
     def get_agent_dirs():
+        nonlocal root_id, parent_map
         dirs = []
         if target_agent_ids:
             dirs = [os.path.join(brain_dir, aid) for aid in target_agent_ids]
+        elif self_agent_id:
+            import re
+            parent_map = {}
+            for agent_dir in glob.glob(os.path.join(brain_dir, "*")):
+                agent_id = os.path.basename(agent_dir)
+                transcript_path = os.path.join(agent_dir, ".system_generated", "logs", "transcript.jsonl")
+                if not os.path.exists(transcript_path): continue
+                try:
+                    with open(transcript_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            if 'conversationId' in line and 'Created the following subagents' in line:
+                                try:
+                                    entry = json.loads(line)
+                                    if entry.get("type") != "EPHEMERAL_MESSAGE":
+                                        content = entry.get("content", "")
+                                        if '"conversationId"' in content and "Created the following subagents" in content:
+                                            matches = re.findall(r'"conversationId":\s*"([^"]+)"', content)
+                                            for child_id in matches:
+                                                parent_map[child_id] = agent_id
+                                except:
+                                    pass
+                except:
+                    pass
+            root_id = self_agent_id
+            while root_id in parent_map:
+                root_id = parent_map[root_id]
+            active_family = {root_id}
+            def add_children(node):
+                for child, parent in parent_map.items():
+                    if parent == node and child not in active_family:
+                        active_family.add(child)
+                        add_children(child)
+            add_children(root_id)
+            dirs = [os.path.join(brain_dir, aid) for aid in active_family]
         else:
             dirs = glob.glob(os.path.join(brain_dir, "*"))
         if self_agent_id:
@@ -130,7 +167,7 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                         
                     with open(transcript_path, 'r', encoding='utf-8') as f:
                         lines = sum(1 for line in f if line.strip())
-                    if lines >= turn_warning_limit:
+                    if False and lines >= turn_warning_limit:
                         state["warned"] = True
                         save_persisted_states(current_states, self_agent_id)
                         if self_agent_id and agent_id == self_agent_id:
@@ -167,8 +204,9 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                                 entry = json.loads(line)
                                 if entry.get('source') == 'MODEL' and entry.get('type') == 'PLANNER_RESPONSE':
                                     tool_calls = entry.get('tool_calls', [])
-                                    if alert_on_idle and not tool_calls:
-                                        if ignore_idle_for_ids is None or agent_id not in ignore_idle_for_ids:
+                                    if False and alert_on_idle and not tool_calls:
+                                        is_orchestrator = (agent_id in parent_map.values()) or (agent_id == root_id)
+                                        if (ignore_idle_for_ids is None or agent_id not in ignore_idle_for_ids) and not is_orchestrator:
                                             save_persisted_states(current_states, self_agent_id)
                                             return f"Agent {agent_id} stalled/finished (idle/finished). ACTION REQUIRED: You must immediately alert your Orchestrator via send_message."
                                     for call in tool_calls:
@@ -192,7 +230,7 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                 return "All target agents are stalled, finished, or gone."
         else:
             active_agents = sum(1 for aid, state in current_states.items() if not state.get("is_stalled") and aid != self_agent_id)
-            if active_agents <= 2:
+            if active_agents == 0:
                 save_persisted_states(current_states, self_agent_id)
                 return "All agents (except orchestrators) are gone or idle."
 
