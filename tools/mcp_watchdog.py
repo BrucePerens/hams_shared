@@ -47,9 +47,10 @@ def get_fsize(path):
         return 0
 
 class WatchdogEventHandler(pyinotify.ProcessEvent):
-    def __init__(self, file_changed_event, changed_agents_set):
+    def __init__(self, file_changed_event, changed_agents_set, expected_file=None):
         self.file_changed_event = file_changed_event
         self.changed_agents_set = changed_agents_set
+        self.expected_file = expected_file
 
     def process_IN_MODIFY(self, event):
         self._handle(event)
@@ -58,6 +59,9 @@ class WatchdogEventHandler(pyinotify.ProcessEvent):
         self._handle(event)
 
     def _handle(self, event):
+        if self.expected_file and event.pathname == self.expected_file:
+            self.file_changed_event.set()
+
         if not event.pathname.endswith("transcript.jsonl"):
             return
         
@@ -305,7 +309,7 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                             entry = json.loads(line)
                             if entry.get('source') == 'MODEL' and entry.get('type') == 'PLANNER_RESPONSE':
                                 tool_calls = entry.get('tool_calls', [])
-                                if False and alert_on_idle and not tool_calls:
+                                if alert_on_idle and not tool_calls:
                                     is_orchestrator = (agent_id in parent_map.values()) or (agent_id == root_id)
                                     if (ignore_idle_for_ids is None or agent_id not in ignore_idle_for_ids) and not is_orchestrator:
                                         notifier.stop()
@@ -336,6 +340,118 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                 notifier.stop()
                 save_persisted_states(current_states, self_agent_id)
                 return "All agents (except orchestrators) are gone or idle."
+
+@mcp.tool()
+async def wait_for_result(target_agent_id: str, expected_file: str = None, timeout_mins: int = 15, self_agent_id: str = None, turn_warning_limit: int = 150) -> str:
+    """
+    Wait for a specific agent to finish a task, send a message, or for a file to be ready.
+    Returns immediately when the condition is met, if the target agent stalls, or if you receive a message.
+    """
+    brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
+    timeout_secs = timeout_mins * 60
+    
+    file_changed_event = asyncio.Event()
+    changed_agents_set = set()
+    
+    wm = pyinotify.WatchManager()
+    handler = WatchdogEventHandler(file_changed_event, changed_agents_set, expected_file=expected_file)
+    notifier = pyinotify.AsyncioNotifier(wm, asyncio.get_event_loop(), default_proc_fun=handler)
+    
+    wm.add_watch(brain_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE, rec=True, auto_add=True)
+    if expected_file:
+        expected_dir = os.path.dirname(expected_file)
+        if os.path.exists(expected_dir):
+            wm.add_watch(expected_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE)
+            
+    transcript_path = os.path.join(brain_dir, target_agent_id, ".system_generated", "logs", "transcript.jsonl")
+    
+    start_time = time.time()
+    last_mtime = get_mtime(transcript_path)
+    last_size = get_fsize(transcript_path)
+    
+    self_transcript_path = os.path.join(brain_dir, self_agent_id, ".system_generated", "logs", "transcript.jsonl") if self_agent_id else None
+    self_last_size = get_fsize(self_transcript_path) if self_transcript_path else 0
+    warned = False
+    
+    while True:
+        now = time.time()
+        
+        # Check expected file
+        if expected_file and os.path.exists(expected_file) and os.path.getsize(expected_file) > 0:
+            notifier.stop()
+            return f"Condition met: {expected_file} is ready."
+            
+        # Check timeout
+        if now - start_time > timeout_secs:
+            notifier.stop()
+            return f"Wait timeout reached after {timeout_mins} minutes."
+            
+        # Check self for messages
+        if self_transcript_path:
+            self_fsize = get_fsize(self_transcript_path)
+            if self_fsize > self_last_size:
+                notifier.stop()
+                return "You received a message."
+                
+        # Wait for events
+        time_left = max(0.1, timeout_secs - (now - start_time))
+        try:
+            await asyncio.wait_for(file_changed_event.wait(), timeout=time_left)
+            file_changed_event.clear()
+        except asyncio.TimeoutError:
+            pass
+            
+        # Re-check self for messages
+        if self_transcript_path:
+            self_fsize = get_fsize(self_transcript_path)
+            if self_fsize > self_last_size:
+                notifier.stop()
+                return "You received a message."
+                
+        # Re-check agent state
+        mtime = get_mtime(transcript_path)
+        fsize = get_fsize(transcript_path)
+        
+        if mtime > 0 and (time.time() - mtime) > timeout_secs:
+            notifier.stop()
+            return f"Agent {target_agent_id} stalled (idle for > {timeout_mins}m)."
+            
+        # Check turn warning limit
+        if turn_warning_limit > 0 and not warned and fsize > 0:
+            try:
+                with open(transcript_path, 'r', encoding='utf-8') as f:
+                    lines = sum(1 for line in f if line.strip())
+                if lines >= turn_warning_limit:
+                    warned = True
+                    notifier.stop()
+                    return f"Agent {target_agent_id} is approaching its turn limit ({lines} turns). It has ~50 turns remaining. ACTION REQUIRED: Instruct Agent {target_agent_id} to gracefully finish its work, notify you when it's ready for a hand-over, and exit. Then spawn a replacement."
+            except OSError:
+                pass
+                
+        if fsize > last_size:
+            try:
+                with open(transcript_path, 'r', encoding='utf-8') as f:
+                    f.seek(last_size)
+                    new_content = f.read()
+                    
+                for line in new_content.strip().split('\\n'):
+                    if not line: continue
+                    try:
+                        entry = json.loads(line)
+                        if entry.get('source') == 'MODEL' and entry.get('type') == 'PLANNER_RESPONSE':
+                            tool_calls = entry.get('tool_calls', [])
+                            if not tool_calls:
+                                notifier.stop()
+                                return f"Agent {target_agent_id} finished without sending a message."
+                            for call in tool_calls:
+                                if call.get('name') == 'send_message' or call.get('toolName') == 'send_message':
+                                    notifier.stop()
+                                    return f"Agent {target_agent_id} sent a message."
+                    except json.JSONDecodeError:
+                        pass
+            except OSError:
+                pass
+            last_size = fsize
 
 if __name__ == "__main__":
     import argparse

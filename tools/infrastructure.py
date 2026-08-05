@@ -1570,10 +1570,16 @@ def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
     ]))
 
     try:
+        import multiprocessing
+        cpu_count = multiprocessing.cpu_count()
+        workers = cpu_count * 2 + 1
+        
         run_cmd_func(["sudo", "sed", "-i", "/^addons_path/d", "/etc/odoo/odoo.conf"])
+        run_cmd_func(["sudo", "sed", "-i", "/^workers/d", "/etc/odoo/odoo.conf"])
         run_cmd_func(["sudo", "bash", "-c", f"echo 'addons_path = {addons_path_str}' >> /etc/odoo/odoo.conf"])
+        run_cmd_func(["sudo", "bash", "-c", f"echo 'workers = {workers}' >> /etc/odoo/odoo.conf"])
     except Exception as e: # audit-ignore-catch-all
-        _logger.warning("Failed to update addons_path in /etc/odoo/odoo.conf: %s", e)
+        _logger.warning("Failed to update odoo.conf: %s", e)
 
     cmd = [
         "sudo", "-u", "odoo", "odoo",
