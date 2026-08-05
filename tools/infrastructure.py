@@ -1289,7 +1289,7 @@ WantedBy=multi-user.target
                 "PYTHONPYCACHEPREFIX=/opt/hams/pycache",
                 "ODOO_RC=/etc/odoo/odoo.conf",
             ],
-            "ExecStartPre": f"/usr/bin/python3 {os.path.abspath(os.path.join(os.path.dirname(__file__), 'env_validator.py'))}",
+            "ExecStartPre": "+/usr/bin/python3 /opt/hams/hams_shared/tools/env_validator.py",
             "ProtectSystem": "strict",
             "ReadWritePaths": [
                 "/opt/hams/etc/keys",
@@ -1896,21 +1896,21 @@ def provision_environment(
     if hams_com_dir:
         has_hams_com = os.path.exists(os.path.join(hams_com_dir, "ham_base", "__manifest__.py"))
 
-    if os.path.exists(os.path.join(repo_root, "zero_sudo")):
+    if os.path.exists(os.path.join(repo_root, "hams_shared")):
         hams_community_dir = repo_root
-    elif os.path.exists(os.path.join(repo_root, "..", "zero_sudo")):
+    elif os.path.exists(os.path.join(repo_root, "..", "hams_shared")):
         hams_community_dir = os.path.abspath(os.path.join(repo_root, ".."))
-    elif os.path.exists(os.path.join(repo_root, "..", "hams_community", "zero_sudo")):
+    elif os.path.exists(os.path.join(repo_root, "..", "hams_community", "hams_shared")):
         hams_community_dir = os.path.abspath(
             os.path.join(repo_root, "..", "hams_community")
         )
-    elif os.path.exists(os.path.join(repo_root, "..", "..", "hams_community", "zero_sudo")):
+    elif os.path.exists(os.path.join(repo_root, "..", "..", "hams_community", "hams_shared")):
         hams_community_dir = os.path.abspath(
             os.path.join(repo_root, "..", "..", "hams_community")
         )
-    elif os.path.exists(os.path.expanduser("~/workspace/hams_open/zero_sudo")):
+    elif os.path.exists(os.path.expanduser("~/workspace/hams_open/hams_shared")):
         hams_community_dir = os.path.expanduser("~/workspace/hams_open")
-    elif os.path.exists("/hams_community/zero_sudo"):
+    elif os.path.exists("/hams_community/hams_shared"):
         hams_community_dir = "/hams_community"
 
     if not hams_com_dir:
