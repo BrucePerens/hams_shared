@@ -1581,6 +1581,12 @@ def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
     except Exception as e: # audit-ignore-catch-all
         _logger.warning("Failed to update odoo.conf: %s", e)
 
+    # Stop Odoo service to prevent database/port conflicts during initialization
+    try:
+        run_cmd_func(["sudo", "systemctl", "stop", "odoo.service"])
+    except Exception as e:
+        _logger.warning("Failed to stop odoo.service before init: %s", e)
+
     cmd = [
         "sudo", "-u", "odoo", "odoo",
         "-c", "/etc/odoo/odoo.conf",
@@ -1590,6 +1596,7 @@ def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
         "--without-demo=all",
         "--workers=0",
         "--max-cron-threads=0",
+        "--no-http",
         "--addons-path", addons_path_str
     ]
     try:
