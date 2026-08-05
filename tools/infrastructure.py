@@ -242,14 +242,6 @@ def hook_install_kopia_binary(env_vars, dest_dir, path, run_cmd_func):
     safe_remove(path)
 
 
-def hook_install_cloudflared(env_vars, dest_dir, path, run_cmd_func):
-    token = env_vars.get("CLOUDFLARE_TUNNEL_TOKEN")
-    run_cmd_func(["dpkg", "-i", path])
-    if token and token != "none":
-        run_cmd_func(["cloudflared", "service", "install", token])
-    safe_remove(path)
-
-
 def hook_daemons_perms(env_vars, dest_dir, path, run_cmd_func):
     target = path
     if os.path.exists(target):
@@ -600,15 +592,7 @@ WantedBy=multi-user.target
             "environments": ["prod"],
             "post_provision_hooks": [hook_install_kopia_binary],
         },
-        {
-            "path": "/tmp/cloudflared.deb",
-            "url": "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-{DEB_TARGET_ARCH_CPU}.deb",
-            "owner": "root:root",
-            "mode": "644",
-            "environments": ["prod"],
-            "condition_env": "CLOUDFLARE_TUNNEL_TOKEN",
-            "post_provision_hooks": [hook_install_cloudflared],
-        },
+
         {
             "src": "{HAMS_COM_DIR}/daemons",
             "path": "/opt/hams/daemons",
