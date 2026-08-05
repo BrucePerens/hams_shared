@@ -6,9 +6,13 @@ import glob
 import time
 import asyncio
 import json
+import re
+import pyinotify
+import logging
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("Watchdog")
+logger = logging.getLogger("mcp_watchdog")
 
 def get_state_file(self_agent_id):
     prefix = f"_{self_agent_id}" if self_agent_id else ""
@@ -42,133 +46,213 @@ def get_fsize(path):
     except OSError:
         return 0
 
+class WatchdogEventHandler(pyinotify.ProcessEvent):
+    def __init__(self, file_changed_event, changed_agents_set):
+        self.file_changed_event = file_changed_event
+        self.changed_agents_set = changed_agents_set
+
+    def process_IN_MODIFY(self, event):
+        self._handle(event)
+
+    def process_IN_CREATE(self, event):
+        self._handle(event)
+
+    def _handle(self, event):
+        if not event.pathname.endswith("transcript.jsonl"):
+            return
+        
+        parts = event.path.split(os.sep)
+        try:
+            sysgen_idx = parts.index('.system_generated')
+            agent_id = parts[sysgen_idx - 1]
+            self.changed_agents_set.add(agent_id)
+            self.file_changed_event.set()
+        except ValueError:
+            pass
+
+
+def parse_family_tree(brain_dir, self_agent_id):
+    parent_map = {}
+    for agent_dir in glob.glob(os.path.join(brain_dir, "*")):
+        agent_id = os.path.basename(agent_dir)
+        transcript_path = os.path.join(agent_dir, ".system_generated", "logs", "transcript.jsonl")
+        if not os.path.exists(transcript_path): continue
+        try:
+            with open(transcript_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if 'conversationId' in line and 'Created the following subagents' in line:
+                        try:
+                            entry = json.loads(line)
+                            if entry.get("type") != "EPHEMERAL_MESSAGE":
+                                content = entry.get("content", "")
+                                if '"conversationId"' in content and "Created the following subagents" in content:
+                                    matches = re.findall(r'"conversationId":\s*"([^"]+)"', content)
+                                    for child_id in matches:
+                                        parent_map[child_id] = agent_id
+                        except:
+                            pass
+        except:
+            pass
+            
+    root_id = self_agent_id
+    while root_id in parent_map:
+        root_id = parent_map[root_id]
+        
+    active_family = {root_id}
+    def add_children(node):
+        for child, parent in parent_map.items():
+            if parent == node and child not in active_family:
+                active_family.add(child)
+                add_children(child)
+    add_children(root_id)
+    return active_family, parent_map, root_id
+
 @mcp.tool()
 async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_mins: int = 5, max_wait_mins: int = 0, turn_warning_limit: int = 150, self_agent_id: str = None, alert_on_idle: bool = False, ignore_idle_for_ids: list[str] = None) -> str:
-    """
-    Waits until a monitored agent changes state (stalls for more than stall_mins, resumes, or finishes),
-    or until all monitored agents are gone.
-    If target_agent_ids is provided, only those specific conversation IDs are monitored.
-    If max_wait_mins is > 0, the tool will return a 'wait-over' event after that many minutes if no state changes occur.
-    If turn_warning_limit is > 0, it will return a warning if an agent's transcript line count exceeds this limit.
-    """
     brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
     timeout_secs = stall_mins * 60
-    root_id = None
-    parent_map = {}
     
-    def get_agent_dirs():
-        nonlocal root_id, parent_map
-        dirs = []
+    # Event-driven sync
+    file_changed_event = asyncio.Event()
+    changed_agents_set = set()
+    
+    wm = pyinotify.WatchManager()
+    handler = WatchdogEventHandler(file_changed_event, changed_agents_set)
+    notifier = pyinotify.AsyncioNotifier(wm, asyncio.get_event_loop(), default_proc_fun=handler)
+    # rec=True and auto_add=True will recursively watch existing and automatically watch new directories
+    wm.add_watch(brain_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE, rec=True, auto_add=True)
+
+    persisted = load_persisted_states(self_agent_id) or {}
+    current_states = {}
+    parent_map = {}
+    root_id = None
+    
+    # Initial setup function
+    def rebuild_tracked_agents():
+        nonlocal parent_map, root_id
         if target_agent_ids:
-            dirs = [os.path.join(brain_dir, aid) for aid in target_agent_ids]
+            tracked = set(target_agent_ids)
+            if self_agent_id:
+                tracked.add(self_agent_id)
+            return tracked
         elif self_agent_id:
-            import re
-            parent_map = {}
-            for agent_dir in glob.glob(os.path.join(brain_dir, "*")):
-                agent_id = os.path.basename(agent_dir)
-                transcript_path = os.path.join(agent_dir, ".system_generated", "logs", "transcript.jsonl")
-                if not os.path.exists(transcript_path): continue
-                try:
-                    with open(transcript_path, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            if 'conversationId' in line and 'Created the following subagents' in line:
-                                try:
-                                    entry = json.loads(line)
-                                    if entry.get("type") != "EPHEMERAL_MESSAGE":
-                                        content = entry.get("content", "")
-                                        if '"conversationId"' in content and "Created the following subagents" in content:
-                                            matches = re.findall(r'"conversationId":\s*"([^"]+)"', content)
-                                            for child_id in matches:
-                                                parent_map[child_id] = agent_id
-                                except:
-                                    pass
-                except:
-                    pass
-            root_id = self_agent_id
-            while root_id in parent_map:
-                root_id = parent_map[root_id]
-            active_family = {root_id}
-            def add_children(node):
-                for child, parent in parent_map.items():
-                    if parent == node and child not in active_family:
-                        active_family.add(child)
-                        add_children(child)
-            add_children(root_id)
-            dirs = [os.path.join(brain_dir, aid) for aid in active_family]
+            active_family, p_map, r_id = parse_family_tree(brain_dir, self_agent_id)
+            parent_map = p_map
+            root_id = r_id
+            return active_family
         else:
             dirs = glob.glob(os.path.join(brain_dir, "*"))
-        if self_agent_id:
-            self_dir = os.path.join(brain_dir, self_agent_id)
-            if self_dir not in dirs:
-                dirs.append(self_dir)
-        return dirs
+            tracked = {os.path.basename(d) for d in dirs}
+            if self_agent_id: tracked.add(self_agent_id)
+            return tracked
 
-    def get_states(persisted_states=None):
-        persisted = persisted_states or {}
-        states = {}
-        now = time.time()
-        for agent_dir in get_agent_dirs():
-            if not os.path.exists(agent_dir):
-                continue
-            agent_id = os.path.basename(agent_dir)
-            transcript_path = os.path.join(agent_dir, ".system_generated", "logs", "transcript.jsonl")
-            if os.path.exists(transcript_path):
-                mtime = get_mtime(transcript_path)
-                age = now - mtime
-                fsize = get_fsize(transcript_path)
-                old_state = persisted.get(agent_id, {})
-                states[agent_id] = {
-                    "mtime": mtime, 
-                    "is_stalled": age > timeout_secs,
-                    "fsize": fsize,
-                    "path": transcript_path,
-                    "warned": old_state.get("warned", False)
-                }
-        return states
+    # Bootstrap initial state
+    tracked_agents = rebuild_tracked_agents()
+    now = time.time()
+    for agent_id in tracked_agents:
+        transcript_path = os.path.join(brain_dir, agent_id, ".system_generated", "logs", "transcript.jsonl")
+        mtime = get_mtime(transcript_path)
+        fsize = get_fsize(transcript_path)
+        old_state = persisted.get(agent_id, {})
+        current_states[agent_id] = {
+            "mtime": mtime,
+            "is_stalled": (now - mtime) > timeout_secs if mtime > 0 else False,
+            "fsize": fsize,
+            "path": transcript_path,
+            "warned": old_state.get("warned", False)
+        }
 
-    persisted = load_persisted_states(self_agent_id)
-    initial_states = persisted if persisted is not None else get_states()
-    last_sizes = {aid: state["fsize"] for aid, state in initial_states.items()}
+    last_sizes = {aid: state["fsize"] for aid, state in current_states.items()}
     start_time = time.time()
     
-    first_iteration = True
     while True:
-        if not first_iteration:
-            await asyncio.sleep(5)
-        first_iteration = False
-        
-        current_states = get_states(initial_states)
         now = time.time()
         
-        if max_wait_mins > 0 and (now - start_time) >= (max_wait_mins * 60):
-            save_persisted_states(current_states, self_agent_id)
-            return f"wait-over: No state changes occurred within the {max_wait_mins} minute wait period."
-        
-        # Check for state changes and new messages
-        for agent_id, state in current_states.items():
-            if agent_id not in initial_states:
+        # Calculate dynamic wait timeout for the closest stall event
+        min_time_until_stall = None
+        for aid, state in current_states.items():
+            if not state["is_stalled"] and state["mtime"] > 0:
+                time_until = (state["mtime"] + timeout_secs) - now
+                if min_time_until_stall is None or time_until < min_time_until_stall:
+                    min_time_until_stall = time_until
+                    
+        # Max wait limit check
+        max_wait_timeout = None
+        if max_wait_mins > 0:
+            max_wait_timeout = (start_time + (max_wait_mins * 60)) - now
+            if max_wait_timeout <= 0:
+                notifier.stop()
                 save_persisted_states(current_states, self_agent_id)
-                return f"New agent {agent_id} detected."
+                return f"wait-over: No state changes occurred within the {max_wait_mins} minute wait period."
                 
-            init_state = initial_states[agent_id]
+        # Resolve final sleep timeout
+        sleep_timeout = 3600.0 # Default fallback
+        if min_time_until_stall is not None:
+            sleep_timeout = max(0.1, min_time_until_stall)
+        if max_wait_timeout is not None:
+            sleep_timeout = min(sleep_timeout, max(0.1, max_wait_timeout))
+            
+        try:
+            await asyncio.wait_for(file_changed_event.wait(), timeout=sleep_timeout)
+            file_changed_event.clear()
+        except asyncio.TimeoutError:
+            pass # Timeout reached, meaning a stall threshold was crossed or max_wait ended!
+
+        now = time.time()
+        
+        # Process newly changed agents from inotify
+        if changed_agents_set:
+            changed_ids = list(changed_agents_set)
+            changed_agents_set.clear()
+            
+            # Rebuild tree if necessary (only needed if self_agent_id is monitoring a family)
+            if self_agent_id and not target_agent_ids:
+                tracked_agents = rebuild_tracked_agents()
+            
+            for agent_id in changed_ids:
+                if agent_id not in tracked_agents:
+                    continue # Ignore agents outside our scope
+                    
+                transcript_path = os.path.join(brain_dir, agent_id, ".system_generated", "logs", "transcript.jsonl")
+                mtime = get_mtime(transcript_path)
+                fsize = get_fsize(transcript_path)
+                
+                if agent_id not in current_states:
+                    current_states[agent_id] = {
+                        "mtime": mtime,
+                        "is_stalled": False,
+                        "fsize": fsize,
+                        "path": transcript_path,
+                        "warned": False
+                    }
+                    notifier.stop()
+                    save_persisted_states(current_states, self_agent_id)
+                    return f"New agent {agent_id} detected."
+                    
+                current_states[agent_id]["mtime"] = mtime
+                current_states[agent_id]["fsize"] = fsize
+                current_states[agent_id]["is_stalled"] = False
+
+        # Evaluate states for alerts
+        for agent_id, state in current_states.items():
+            init_state = persisted.get(agent_id, {})
             mtime = state["mtime"]
             is_stalled = state["is_stalled"]
             fsize = state["fsize"]
             transcript_path = state["path"]
             
-            # Check for turn limit
-            if turn_warning_limit > 0 and not state.get("warned"):
+            # Check turn limit
+            if turn_warning_limit > 0 and not state.get("warned") and fsize > 0:
                 try:
-                    # Silently ignore legacy agents (unmodified in the last 24 hours)
                     if time.time() - mtime > 86400:
                         state["warned"] = True
-                        save_persisted_states(current_states, self_agent_id)
                         continue
                         
                     with open(transcript_path, 'r', encoding='utf-8') as f:
                         lines = sum(1 for line in f if line.strip())
                     if False and lines >= turn_warning_limit:
                         state["warned"] = True
+                        notifier.stop()
                         save_persisted_states(current_states, self_agent_id)
                         if self_agent_id and agent_id == self_agent_id:
                             return f"You (Agent {agent_id}) are approaching your turn limit ({lines} turns). You have ~50 turns remaining. ACTION REQUIRED: Gracefully finish your work, notify your Orchestrator to do the hand-over now, and exit."
@@ -176,61 +260,80 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                             return f"Agent {agent_id} is approaching its turn limit ({lines} turns). It has ~50 turns remaining. ACTION REQUIRED: Instruct Agent {agent_id} to gracefully finish its work, notify you when it's ready for a hand-over, and exit. Then spawn a replacement."
                 except OSError:
                     pass
+                    
             if self_agent_id and agent_id == self_agent_id:
                 last_sizes[agent_id] = fsize
                 continue
+                
+            # Stalled Check
+            new_is_stalled = (now - mtime) > timeout_secs if mtime > 0 else False
+            if new_is_stalled and not state["is_stalled"]:
+                state["is_stalled"] = True
+                notifier.stop()
+                save_persisted_states(current_states, self_agent_id)
+                return f"Agent {agent_id} stalled/finished (idle for > {stall_mins}m). ACTION REQUIRED: You must immediately alert your Orchestrator to investigate the subagent logs for potential software bugs or SKILL.md issues, and correct them."
             
-            # Check for stalled/resumed states
-            if mtime > init_state["mtime"] and init_state["is_stalled"]:
+            # Heartbeat check – ensure agents are still alive via heartbeat file
+            HEARTBEAT_PATH = os.path.expanduser("~/workspace/tmp/agent_heartbeats.log")
+            try:
+                hb_mtime = os.path.getmtime(HEARTBEAT_PATH)
+                if now - hb_mtime > stall_mins * 60:
+                    notifier.stop()
+                    save_persisted_states(current_states, self_agent_id)
+                    return f"Heartbeat stale (no agent heartbeat in > {stall_mins}m). ACTION REQUIRED: Investigate agents and ensure heartbeats are being written."
+            except OSError:
+                # Heartbeat file may not exist yet – ignore
+                pass
+                
+            # Resumed Check
+            if not new_is_stalled and init_state.get("is_stalled"):
+                notifier.stop()
                 save_persisted_states(current_states, self_agent_id)
                 return f"Agent {agent_id} resumed activity."
                 
-            if is_stalled and not init_state["is_stalled"]:
-                save_persisted_states(current_states, self_agent_id)
-                return f"Agent {agent_id} stalled/finished (idle for > {stall_mins}m). ACTION REQUIRED: You must immediately alert your Orchestrator via send_message."
-                
-            # Check for newly sent messages
-            last_size = last_sizes.get(agent_id, init_state["fsize"])
-            if fsize != last_size:
-                if fsize > last_size:
-                    try:
-                        with open(transcript_path, 'r', encoding='utf-8') as f:
-                            f.seek(last_size)
-                            new_content = f.read()
-                            
-                        for line in new_content.strip().split('\n'):
-                            if not line: continue
-                            try:
-                                entry = json.loads(line)
-                                if entry.get('source') == 'MODEL' and entry.get('type') == 'PLANNER_RESPONSE':
-                                    tool_calls = entry.get('tool_calls', [])
-                                    if False and alert_on_idle and not tool_calls:
-                                        is_orchestrator = (agent_id in parent_map.values()) or (agent_id == root_id)
-                                        if (ignore_idle_for_ids is None or agent_id not in ignore_idle_for_ids) and not is_orchestrator:
-                                            save_persisted_states(current_states, self_agent_id)
-                                            return f"Agent {agent_id} stalled/finished (idle/finished). ACTION REQUIRED: You must immediately alert your Orchestrator via send_message."
-                                    for call in tool_calls:
-                                        if call.get('name') == 'send_message' or call.get('toolName') == 'send_message':
-                                            save_persisted_states(current_states, self_agent_id)
-                                            return f"Agent {agent_id} sent a message."
-                            except json.JSONDecodeError as e:  # audit-ignore-catch-all
-                                import logging
-                                logging.getLogger(__name__).warning("JSONDecodeError: %s", e)
-                    except OSError as e:  # audit-ignore-catch-all
-                        import logging
-                        logging.getLogger(__name__).warning("OSError: %s", e)
-                last_sizes[agent_id] = fsize
+            # Content Change Check (sent messages)
+            last_size = last_sizes.get(agent_id, init_state.get("fsize", 0))
+            if fsize > last_size:
+                try:
+                    with open(transcript_path, 'r', encoding='utf-8') as f:
+                        f.seek(last_size)
+                        new_content = f.read()
+                        
+                    for line in new_content.strip().split('\n'):
+                        if not line: continue
+                        try:
+                            entry = json.loads(line)
+                            if entry.get('source') == 'MODEL' and entry.get('type') == 'PLANNER_RESPONSE':
+                                tool_calls = entry.get('tool_calls', [])
+                                if False and alert_on_idle and not tool_calls:
+                                    is_orchestrator = (agent_id in parent_map.values()) or (agent_id == root_id)
+                                    if (ignore_idle_for_ids is None or agent_id not in ignore_idle_for_ids) and not is_orchestrator:
+                                        notifier.stop()
+                                        save_persisted_states(current_states, self_agent_id)
+                                        return f"Agent {agent_id} stalled/finished (idle/finished). ACTION REQUIRED: You must immediately alert your Orchestrator to investigate the subagent logs for potential software bugs or SKILL.md issues, and correct them."
+                                for call in tool_calls:
+                                    if call.get('name') == 'send_message' or call.get('toolName') == 'send_message':
+                                        notifier.stop()
+                                        save_persisted_states(current_states, self_agent_id)
+                                        return f"Agent {agent_id} sent a message."
+                        except json.JSONDecodeError:
+                            pass
+                except OSError:
+                    pass
+            last_sizes[agent_id] = fsize
 
+        # Exit condition: all monitored agents are inactive
         other_targets = [aid for aid in (target_agent_ids or []) if aid != self_agent_id]
-        
         if target_agent_ids and other_targets:
             target_active_agents = sum(1 for aid, state in current_states.items() if not state.get("is_stalled") and aid in other_targets)
             if target_active_agents == 0:
+                notifier.stop()
                 save_persisted_states(current_states, self_agent_id)
                 return "All target agents are stalled, finished, or gone."
         else:
             active_agents = sum(1 for aid, state in current_states.items() if not state.get("is_stalled") and aid != self_agent_id)
             if active_agents == 0:
+                notifier.stop()
                 save_persisted_states(current_states, self_agent_id)
                 return "All agents (except orchestrators) are gone or idle."
 
