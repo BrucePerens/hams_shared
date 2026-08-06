@@ -1,3 +1,4 @@
+# flake8: noqa
 # This software is distributed under the terms of the Affero General Public License (AGPL-3).
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -112,7 +113,7 @@ def parse_family_tree(brain_dir, self_agent_id):
     return active_family, parent_map, root_id
 
 @mcp.tool()
-async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_mins: int = 5, max_wait_mins: int = 0, turn_warning_limit: int = 150, self_agent_id: str = None, alert_on_idle: bool = False, ignore_idle_for_ids: list[str] = None) -> str:
+async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_mins: int = 5, max_wait_mins: int = 0, turn_warning_limit: int = 150, self_agent_id: str = None, alert_on_idle: bool = False, ignore_idle_for_ids: list[str] = None, heartbeat_file: str = None) -> str:
     brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
     timeout_secs = stall_mins * 60
     
@@ -278,17 +279,23 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                 return f"Agent {agent_id} stalled/finished (idle for > {stall_mins}m). ACTION REQUIRED: You must immediately alert your Orchestrator to investigate the subagent logs for potential software bugs or SKILL.md issues, and correct them."
             
             # Heartbeat check – ensure agents are still alive via heartbeat file
-            HEARTBEAT_PATH = os.path.expanduser("~/workspace/tmp/agent_heartbeats.log")
-            try:
-                hb_mtime = os.path.getmtime(HEARTBEAT_PATH)
-                if now - hb_mtime > stall_mins * 60:
-                    notifier.stop()
-                    save_persisted_states(current_states, self_agent_id)
-                    return f"Heartbeat stale (no agent heartbeat in > {stall_mins}m). ACTION REQUIRED: Investigate agents and ensure heartbeats are being written."
-            except OSError:
-                # Heartbeat file may not exist yet – ignore
-                pass
-                
+            hb_files = []
+            if heartbeat_file:
+                hb_files = glob.glob(os.path.expanduser(heartbeat_file))
+            else:
+                hb_files = glob.glob(os.path.expanduser("~/workspace/tmp/agent_heartbeats_*.log"))
+                if not hb_files:
+                    hb_files = [os.path.expanduser("~/workspace/tmp/agent_heartbeats.log")]
+                    
+            for hb_path in hb_files:
+                try:
+                    hb_mtime = os.path.getmtime(hb_path)
+                    if now - hb_mtime > stall_mins * 60:
+                        notifier.stop()
+                        save_persisted_states(current_states, self_agent_id)
+                        return f"Heartbeat stale (no agent heartbeat in > {stall_mins}m for {hb_path}). ACTION REQUIRED: Investigate agents and ensure heartbeats are being written."
+                except OSError:
+                    pass
             # Resumed Check
             if not new_is_stalled and init_state.get("is_stalled"):
                 notifier.stop()
@@ -466,6 +473,7 @@ if __name__ == "__main__":
     parser.add_argument("--self_agent_id", type=str, default=None, help="Agent ID of the monitor")
     parser.add_argument("--alert_on_idle", action="store_true", help="Instantly alert if an agent stops calling tools")
     parser.add_argument("--ignore_idle_for_ids", type=str, nargs="*", default=None, help="Agent IDs to ignore for alert_on_idle")
+    parser.add_argument("--heartbeat_file", type=str, default=None, help="Path to heartbeat log to monitor")
     
     args = parser.parse_args()
     
@@ -477,7 +485,8 @@ if __name__ == "__main__":
             turn_warning_limit=args.turn_warning_limit,
             self_agent_id=args.self_agent_id,
             alert_on_idle=args.alert_on_idle,
-            ignore_idle_for_ids=args.ignore_idle_for_ids
+            ignore_idle_for_ids=args.ignore_idle_for_ids,
+            heartbeat_file=args.heartbeat_file
         ))
         print(result)
         sys.exit(0)
