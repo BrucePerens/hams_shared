@@ -1569,6 +1569,12 @@ def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
         hams_open_dir
     ]))
 
+    # Ensure Odoo daemon can access the addons paths if they are in a home directory
+    for p in [hams_com_dir, hams_open_dir]:
+        if p and p.startswith("/home/"):
+            home_dir = "/home/" + p.split("/")[2]
+            run_cmd_func(["sudo", "chmod", "a+x", home_dir])
+
     try:
         import multiprocessing
         cpu_count = multiprocessing.cpu_count()
