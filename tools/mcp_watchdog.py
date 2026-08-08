@@ -112,6 +112,35 @@ def parse_family_tree(brain_dir, self_agent_id):
     add_children(root_id)
     return active_family, parent_map, root_id
 
+def is_agent_dead(transcript_path):
+    try:
+        if not os.path.exists(transcript_path):
+            return True
+        with open(transcript_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        for line in reversed(lines):
+            line = line.strip()
+            if not line: continue
+            try:
+                entry = json.loads(line)
+                if entry.get("type") in ("CANCELLATION", "TERMINATION", "ERROR", "KILLED"):
+                    return True
+                if entry.get("status") in ("CANCELLED", "KILLED", "FAILED", "ERROR", "TERMINATED"):
+                    return True
+                if entry.get("source") == "SYSTEM" and entry.get("type") == "SYSTEM_MESSAGE":
+                    content = entry.get("content", "").lower()
+                    if "killed" in content or "cancelled" in content or "terminated" in content:
+                        return True
+                if entry.get("source") == "MODEL" and entry.get("type") == "PLANNER_RESPONSE":
+                    if not entry.get("tool_calls", []):
+                        return True
+                    return False
+            except json.JSONDecodeError:
+                continue
+    except Exception:
+        pass
+    return False
+
 @mcp.tool()
 async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_mins: int = 5, max_wait_mins: int = 0, turn_warning_limit: int = 150, self_agent_id: str = None, alert_on_idle: bool = False, ignore_idle_for_ids: list[str] = None, heartbeat_file: str = None) -> str:
     brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
@@ -123,7 +152,11 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
     
     wm = pyinotify.WatchManager()
     handler = WatchdogEventHandler(file_changed_event, changed_agents_set)
-    notifier = pyinotify.AsyncioNotifier(wm, asyncio.get_event_loop(), default_proc_fun=handler)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    notifier = pyinotify.AsyncioNotifier(wm, loop, default_proc_fun=handler)
     # rec=True and auto_add=True will recursively watch existing and automatically watch new directories
     wm.add_watch(brain_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE, rec=True, auto_add=True)
 
@@ -272,11 +305,18 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                 
             # Stalled Check
             new_is_stalled = (now - mtime) > timeout_secs if mtime > 0 else False
+            
             if new_is_stalled and not state["is_stalled"]:
-                state["is_stalled"] = True
-                notifier.stop()
-                save_persisted_states(current_states, self_agent_id)
-                return f"Agent {agent_id} stalled/finished (idle for > {stall_mins}m). ACTION REQUIRED: You must immediately alert your Orchestrator to investigate the subagent logs for potential software bugs or SKILL.md issues, and correct them."
+                if is_agent_dead(transcript_path):
+                    state["is_stalled"] = True
+                    save_persisted_states(current_states, self_agent_id)
+                    continue
+                else:
+                    state["is_stalled"] = True
+                    notifier.stop()
+                    save_persisted_states(current_states, self_agent_id)
+                    return f"Agent {agent_id} stalled/finished (idle for > {stall_mins}m). ACTION REQUIRED: You must immediately alert your Orchestrator to investigate the subagent logs for potential software bugs or SKILL.md issues, and correct them."
+
             
             # Heartbeat check – ensure agents are still alive via heartbeat file
             hb_files = []
@@ -362,13 +402,17 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
     
     wm = pyinotify.WatchManager()
     handler = WatchdogEventHandler(file_changed_event, changed_agents_set, expected_file=expected_file)
-    notifier = pyinotify.AsyncioNotifier(wm, asyncio.get_event_loop(), default_proc_fun=handler)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    notifier = pyinotify.AsyncioNotifier(wm, loop, default_proc_fun=handler)
     
     wm.add_watch(brain_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE, rec=True, auto_add=True)
     if expected_file:
         expected_dir = os.path.dirname(expected_file)
         if os.path.exists(expected_dir):
-            wm.add_watch(expected_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE)
+            wm.add_watch(expected_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE | pyinotify.IN_MOVED_TO)
             
     transcript_path = os.path.join(brain_dir, target_agent_id, ".system_generated", "logs", "transcript.jsonl")
     
@@ -421,7 +465,10 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
         
         if mtime > 0 and (time.time() - mtime) > timeout_secs:
             notifier.stop()
-            return f"Agent {target_agent_id} stalled (idle for > {timeout_mins}m)."
+            if is_agent_dead(transcript_path):
+                return f"Agent {target_agent_id} is dead/finished."
+            else:
+                return f"Agent {target_agent_id} stalled (idle for > {timeout_mins}m)."
             
         # Check turn warning limit
         if turn_warning_limit > 0 and not warned and fsize > 0:
@@ -441,7 +488,7 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
                     f.seek(last_size)
                     new_content = f.read()
                     
-                for line in new_content.strip().split('\\n'):
+                for line in new_content.strip().split('\n'):
                     if not line: continue
                     try:
                         entry = json.loads(line)
@@ -459,6 +506,181 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
             except OSError:
                 pass
             last_size = fsize
+
+@mcp.tool()
+def send_ipc_message(queue_name: str, content: str) -> str:
+    """
+    Send a POSIX IPC message to the specified queue.
+    Automatically handles chunking for messages > 8000 bytes.
+    """
+    import posix_ipc
+    import uuid
+    try:
+        mq = posix_ipc.MessageQueue(queue_name, posix_ipc.O_CREAT, max_messages=2, max_message_size=8192)
+    except Exception as e:
+        return f"Error creating POSIX queue {queue_name}: {e}"
+        
+    content_bytes = content.encode('utf-8')
+    chunk_size = 8000
+    try:
+        if len(content_bytes) <= chunk_size:
+            mq.send(b'\x00' + content_bytes)
+        else:
+            msg_id = uuid.uuid4().bytes
+            total_chunks = (len(content_bytes) + chunk_size - 1) // chunk_size
+            for i in range(total_chunks):
+                chunk_data = content_bytes[i*chunk_size : (i+1)*chunk_size]
+                header = b'\x01' + msg_id + total_chunks.to_bytes(4, 'big') + i.to_bytes(4, 'big')
+                mq.send(header + chunk_data)
+        return "Message sent successfully."
+    except Exception as e:
+        return f"Error sending message: {e}"
+    finally:
+        mq.close()
+
+@mcp.tool()
+async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id: str = None, writer_agent_id: str = None, writer_pid: int = None) -> str:
+    """
+    Wait for a POSIX IPC message on the specified queue (name must start with '/').
+    Returns immediately if a fully assembled message is available.
+    Automatically reassembles chunked messages.
+    """
+    import posix_ipc
+    
+    timeout_secs = timeout_mins * 60
+    
+    if not queue_name.startswith('/'):
+        queue_name = '/' + queue_name
+    
+    try:
+        mq = posix_ipc.MessageQueue(queue_name, posix_ipc.O_CREAT, max_messages=2, max_message_size=8192)
+    except Exception as e:
+        return f"Error creating POSIX queue {queue_name}: {e}"
+        
+    msg_received_event = asyncio.Event()
+    received_message = []
+    chunks = {} # msg_id -> {chunk_index: data}
+    
+    def process_message(msg_bytes):
+        if not msg_bytes: return False
+        is_chunked = msg_bytes[0] == 1
+        if not is_chunked:
+            received_message.append(msg_bytes[1:].decode('utf-8'))
+            msg_received_event.set()
+            return True
+        else:
+            msg_id = msg_bytes[1:17]
+            total_chunks = int.from_bytes(msg_bytes[17:21], 'big')
+            chunk_index = int.from_bytes(msg_bytes[21:25], 'big')
+            chunk_data = msg_bytes[25:]
+            if msg_id not in chunks:
+                chunks[msg_id] = {}
+            chunks[msg_id][chunk_index] = chunk_data
+            if len(chunks[msg_id]) == total_chunks:
+                full_bytes = b''.join(chunks[msg_id][i] for i in range(total_chunks))
+                received_message.append(full_bytes.decode('utf-8'))
+                msg_received_event.set()
+                return True
+        return False
+
+    # Try non-blocking receive immediately
+    while True:
+        try:
+            msg, _ = mq.receive(timeout=0)
+            if process_message(msg):
+                mq.close()
+                return received_message[0]
+        except posix_ipc.BusyError:
+            break
+    
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+        
+    def mq_callback():
+        while True:
+            try:
+                msg, _ = mq.receive(timeout=0)
+                process_message(msg)
+            except posix_ipc.BusyError:
+                break
+
+    added_reader = False
+    try:
+        loop.add_reader(mq.mqd, mq_callback)
+        added_reader = True
+    except Exception as e:
+        logger.warning(f"Could not add reader for mqd: {e}")
+    
+    brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
+    self_transcript_path = os.path.join(brain_dir, self_agent_id, ".system_generated", "logs", "transcript.jsonl") if self_agent_id else None
+    self_last_size = get_fsize(self_transcript_path) if self_transcript_path else 0
+    
+    writer_transcript_path = os.path.join(brain_dir, writer_agent_id, ".system_generated", "logs", "transcript.jsonl") if writer_agent_id else None
+    
+    start_time = time.time()
+    
+    try:
+        while True:
+            now = time.time()
+            
+            if received_message:
+                return received_message[0]
+
+            try:
+                while True:
+                    msg, _ = mq.receive(timeout=0)
+                    if process_message(msg):
+                        return received_message[0]
+            except posix_ipc.BusyError:
+                pass
+                
+            # Check timeout
+            if now - start_time > timeout_secs:
+                return f"Wait timeout reached after {timeout_mins} minutes."
+                
+            # Check self for messages (to break the block if needed)
+            if self_transcript_path:
+                self_fsize = get_fsize(self_transcript_path)
+                if self_fsize > self_last_size:
+                    return "You received a message."
+                    
+            # Check writer agent state
+            if writer_transcript_path:
+                w_mtime = get_mtime(writer_transcript_path)
+                if w_mtime > 0 and (now - w_mtime) > timeout_secs:
+                    if is_agent_dead(writer_transcript_path):
+                        return f"Writer agent {writer_agent_id} is dead/finished."
+                    else:
+                        return f"Writer agent {writer_agent_id} stalled (idle for > {timeout_mins}m)."
+            
+            # Check local OS writer process state
+            if writer_pid:
+                try:
+                    os.kill(writer_pid, 0)
+                except OSError:
+                    return f"Writer process {writer_pid} is dead/finished."
+                        
+            # Wait for events with a small max step for periodic checks
+            time_left = max(0.1, timeout_secs - (now - start_time))
+            step = min(1.0, time_left)
+            try:
+                await asyncio.wait_for(msg_received_event.wait(), timeout=step)
+                if received_message:
+                    return received_message[0]
+            except asyncio.TimeoutError:
+                pass
+    finally:
+        if added_reader:
+            try:
+                loop.remove_reader(mq.mqd)
+            except Exception:
+                pass
+        try:
+            mq.close()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     import argparse
