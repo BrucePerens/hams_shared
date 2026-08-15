@@ -15,6 +15,9 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("Watchdog")
 logger = logging.getLogger("mcp_watchdog")
 
+SESSION_REGISTRY = {}
+
+
 def get_state_file(self_agent_id):
     prefix = f"_{self_agent_id}" if self_agent_id else ""
     return os.path.expanduser(f"~/.gemini/antigravity/scratch/watchdog_state{prefix}.json")
@@ -508,6 +511,83 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
             last_size = fsize
 
 @mcp.tool()
+async def wait_for_all_complete(
+    agent_ids: list[str],
+    output_files: list[str] = None,
+    timeout_mins: int = 30,
+    self_agent_id: str = None
+) -> str:
+    """
+    Blocks until all specified agents have reached terminal state (idle, killed, cancelled, or errored).
+    Returns a JSON string containing the completion status of each agent and optional file outputs.
+    """
+    brain_dir = os.path.expanduser('~/.gemini/antigravity/brain')
+    completed = set()
+    
+    # Initial check
+    for aid in agent_ids:
+        transcript = os.path.join(brain_dir, aid, '.system_generated/logs/transcript.jsonl')
+        if is_agent_dead(transcript):
+            completed.add(aid)
+            
+    if len(completed) < len(agent_ids):
+        wm = pyinotify.WatchManager()
+        loop = asyncio.get_running_loop()
+        event = asyncio.Event()
+        changed_set = set()
+
+        handler = WatchdogEventHandler(event, changed_set)
+        notifier = pyinotify.AsyncioNotifier(wm, loop, default_proc_fun=handler)
+        wm.add_watch(brain_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE, rec=True, auto_add=True)
+
+        start_time = time.time()
+        timeout_secs = timeout_mins * 60
+        try:
+            while len(completed) < len(agent_ids):
+                elapsed = time.time() - start_time
+                if elapsed >= timeout_secs:
+                    break
+                    
+                for aid in agent_ids:
+                    if aid not in completed:
+                        transcript = os.path.join(brain_dir, aid, '.system_generated/logs/transcript.jsonl')
+                        if is_agent_dead(transcript):
+                            completed.add(aid)
+                            
+                if len(completed) == len(agent_ids):
+                    break
+                    
+                event.clear()
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            notifier.stop()
+
+    results = {
+        "agents": {aid: "COMPLETED" if aid in completed else "TIMED_OUT" for aid in agent_ids}
+    }
+    
+    if output_files:
+        outputs = []
+        for file_path in output_files:
+            try:
+                with open(file_path, 'r') as f:
+                    outputs.append({
+                        "file": file_path,
+                        "content": f.read()
+                    })
+            except Exception as e:
+                outputs.append({
+                    "file": file_path,
+                    "error": str(e)
+                })
+        results["outputs"] = outputs
+        
+    return json.dumps(results, indent=2)
+
+@mcp.tool()
 def send_ipc_message(queue_name: str, content: str) -> str:
     """
     Send a POSIX IPC message to the specified queue.
@@ -539,149 +619,200 @@ def send_ipc_message(queue_name: str, content: str) -> str:
         mq.close()
 
 @mcp.tool()
-async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id: str = None, writer_agent_id: str = None, writer_pid: int = None) -> str:
+async def wait_for_fatal_events(session_id: str, target_agent_ids: list) -> str:
     """
-    Wait for a POSIX IPC message on the specified queue (name must start with '/').
-    Returns immediately if a fully assembled message is available.
-    Automatically reassembles chunked messages.
+    Blocks indefinitely until a fatal event occurs (e.g. a managed daemon crashes, 
+    or a target agent stalls for > 5 minutes without writing to its transcript).
+    Returns the fatal error string.
     """
-    import posix_ipc
-    
-    timeout_secs = timeout_mins * 60
-    
-    if not queue_name.startswith('/'):
-        queue_name = '/' + queue_name
-    
-    try:
-        mq = posix_ipc.MessageQueue(queue_name, posix_ipc.O_CREAT, max_messages=2, max_message_size=8192)
-    except Exception as e:
-        return f"Error creating POSIX queue {queue_name}: {e}"
-        
-    msg_received_event = asyncio.Event()
-    received_message = []
-    chunks = {} # msg_id -> {chunk_index: data}
-    
-    def process_message(msg_bytes):
-        if not msg_bytes: return False
-        is_chunked = msg_bytes[0] == 1
-        if not is_chunked:
-            received_message.append(msg_bytes[1:].decode('utf-8'))
-            msg_received_event.set()
-            return True
-        else:
-            msg_id = msg_bytes[1:17]
-            total_chunks = int.from_bytes(msg_bytes[17:21], 'big')
-            chunk_index = int.from_bytes(msg_bytes[21:25], 'big')
-            chunk_data = msg_bytes[25:]
-            if msg_id not in chunks:
-                chunks[msg_id] = {}
-            chunks[msg_id][chunk_index] = chunk_data
-            if len(chunks[msg_id]) == total_chunks:
-                full_bytes = b''.join(chunks[msg_id][i] for i in range(total_chunks))
-                received_message.append(full_bytes.decode('utf-8'))
-                msg_received_event.set()
-                return True
-        return False
-
-    # Try non-blocking receive immediately
-    while True:
-        try:
-            msg, _ = mq.receive(timeout=0)
-            if process_message(msg):
-                mq.close()
-                return received_message[0]
-        except posix_ipc.BusyError:
-            break
-    
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-        
-    def mq_callback():
-        while True:
-            try:
-                msg, _ = mq.receive(timeout=0)
-                process_message(msg)
-            except posix_ipc.BusyError:
-                break
-
-    added_reader = False
-    try:
-        loop.add_reader(mq.mqd, mq_callback)
-        added_reader = True
-    except Exception as e:
-        logger.warning(f"Could not add reader for mqd: {e}")
+    import asyncio
+    import os
+    import time
     
     brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
-    self_transcript_path = os.path.join(brain_dir, self_agent_id, ".system_generated", "logs", "transcript.jsonl") if self_agent_id else None
-    self_last_size = get_fsize(self_transcript_path) if self_transcript_path else 0
     
-    writer_transcript_path = os.path.join(brain_dir, writer_agent_id, ".system_generated", "logs", "transcript.jsonl") if writer_agent_id else None
-    
-    start_time = time.time()
+    while True:
+        # 1. Check if any background daemons crashed
+        if session_id in SESSION_REGISTRY and SESSION_REGISTRY[session_id]["dead"]:
+            return f"DAEMON_CRASH: {SESSION_REGISTRY[session_id]['error']}"
+            
+        # 2. Check if any agents stalled
+        now = time.time()
+        for aid in target_agent_ids:
+            transcript = os.path.join(brain_dir, aid, '.system_generated/logs/transcript.jsonl')
+            if os.path.exists(transcript):
+                mtime = os.path.getmtime(transcript)
+                if now - mtime > 300: # 5 minutes
+                    return f"AGENT_STALL: Agent {aid} has stalled (no activity for > 5 minutes)."
+                    
+        # 3. Check SLA expectations (files not produced in time)
+        if session_id in SESSION_REGISTRY:
+            for exp in list(SESSION_REGISTRY[session_id].get("expectations", [])):
+                if os.path.exists(exp["file"]):
+                    SESSION_REGISTRY[session_id]["expectations"].remove(exp) # Met!
+                elif now > exp["deadline"]:
+                    SESSION_REGISTRY[session_id]["expectations"].remove(exp) # Fire alarm and remove
+                    return f"MISSING_OUTPUT: The expected file {exp['file']} was not produced in {exp['timeout']} minutes. Interrogate the responsible agent."
+                    
+        await asyncio.sleep(5)
+
+@mcp.tool()
+async def spawn_managed_daemons(session_id: str, commands_json: str) -> str:
+    """
+    Spawn and monitor a set of background Python daemons for a session.
+    commands_json should be a JSON array of dicts: [{"name": "daemon1", "cmd": ["python3", "script.py", "--arg"]}]
+    """
+    import asyncio
+    import json
     
     try:
-        while True:
-            now = time.time()
+        commands = json.loads(commands_json)
+    except Exception as e:
+        return f"Invalid JSON format for commands: {e}"
+        
+    if session_id in SESSION_REGISTRY:
+        return f"Session {session_id} is already managed."
+        
+    SESSION_REGISTRY[session_id] = {"dead": False, "error": "", "procs": [], "expectations": []}
+    
+    async def monitor_proc(proc, name):
+        code = await proc.wait()
+        if code != 0 and not SESSION_REGISTRY[session_id]["dead"]:
+            SESSION_REGISTRY[session_id]["dead"] = True
+            SESSION_REGISTRY[session_id]["error"] = f"Daemon '{name}' (PID {proc.pid}) crashed with exit code {code}."
+            for p in SESSION_REGISTRY[session_id]["procs"]:
+                if p != proc and p.returncode is None:
+                    try:
+                        p.terminate()
+                    except ProcessLookupError:
+                        pass
+    
+    try:
+        for item in commands:
+            name = item.get("name", "unknown")
+            cmd = item.get("cmd", [])
+            if not cmd: continue
             
-            if received_message:
-                return received_message[0]
+            log_file = os.path.expanduser(f"~/workspace/tmp/{name}_{session_id}.log")
+            out_f = open(log_file, "a")
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=out_f,
+                stderr=out_f
+            )
+            SESSION_REGISTRY[session_id]["procs"].append(proc)
+            asyncio.create_task(monitor_proc(proc, name))
+            
+        return f"Successfully spawned {len(SESSION_REGISTRY[session_id]['procs'])} daemons for session {session_id}."
+    except Exception as e:
+        SESSION_REGISTRY[session_id]["dead"] = True
+        SESSION_REGISTRY[session_id]["error"] = f"Failed to spawn daemons: {e}"
+        return SESSION_REGISTRY[session_id]["error"]
 
-            try:
-                while True:
-                    msg, _ = mq.receive(timeout=0)
-                    if process_message(msg):
-                        return received_message[0]
-            except posix_ipc.BusyError:
-                pass
-                
-            # Check timeout
-            if now - start_time > timeout_secs:
-                return f"Wait timeout reached after {timeout_mins} minutes."
-                
-            # Check self for messages (to break the block if needed)
-            if self_transcript_path:
-                self_fsize = get_fsize(self_transcript_path)
-                if self_fsize > self_last_size:
-                    return "You received a message."
-                    
-            # Check writer agent state
-            if writer_transcript_path:
-                w_mtime = get_mtime(writer_transcript_path)
-                if w_mtime > 0 and (now - w_mtime) > timeout_secs:
-                    if is_agent_dead(writer_transcript_path):
-                        return f"Writer agent {writer_agent_id} is dead/finished."
-                    else:
-                        return f"Writer agent {writer_agent_id} stalled (idle for > {timeout_mins}m)."
-            
-            # Check local OS writer process state
-            if writer_pid:
-                try:
-                    os.kill(writer_pid, 0)
-                except OSError:
-                    return f"Writer process {writer_pid} is dead/finished."
-                        
-            # Wait for events with a small max step for periodic checks
-            time_left = max(0.1, timeout_secs - (now - start_time))
-            step = min(1.0, time_left)
-            try:
-                await asyncio.wait_for(msg_received_event.wait(), timeout=step)
-                if received_message:
-                    return received_message[0]
-            except asyncio.TimeoutError:
-                pass
-    finally:
-        if added_reader:
-            try:
-                loop.remove_reader(mq.mqd)
-            except Exception:
-                pass
+@mcp.tool()
+async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id: str = None, writer_agent_id: str = None, writer_pid: int = None, session_id: str = None) -> str:
+    """
+    Wait for the specified inbox message via Abstract Unix Domain Socket.
+    If writer_pid is provided and the process is no longer alive, returns
+    an error so the agent can stop polling a dead queue.
+    """
+    import asyncio
+    import socket
+    import os
+    
+    if queue_name.startswith('/'):
+        queue_name = queue_name[1:]
+        
+    address = f"/home/bruce/workspace/tmp/{queue_name}.sock"
+    if os.path.exists(address):
         try:
-            mq.close()
+            os.remove(address)
+        except OSError:
+            pass
+    timeout_secs = timeout_mins * 60
+    
+    loop = asyncio.get_running_loop()
+    
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    
+    bound = False
+    for _ in range(5):
+        try:
+            sock.bind(address)
+            bound = True
+            break
+        except OSError:
+            await asyncio.sleep(0.2)
+            
+    if not bound:
+        return f"Error binding to socket {address}: Address in use"
+
+    try:
+        sock.listen(1)
+        sock.setblocking(False)
+        
+        # Check writer_pid liveness directly since MCP server runs on host
+        check_interval = 5  # Check PID every 5 seconds
+        elapsed = 0.0
+        while elapsed < timeout_secs:
+            wait_time = min(check_interval, timeout_secs - elapsed)
+            try:
+                client, _ = await asyncio.wait_for(loop.sock_accept(sock), timeout=wait_time)
+                with client:
+                    data = b""
+                    while True:
+                        chunk = await loop.sock_recv(client, 4096)
+                        if not chunk:
+                            break
+                        data += chunk
+                    
+                    raw_str = data.decode('utf-8')
+                    try:
+                        import json, time
+                        payload = json.loads(raw_str)
+                        if isinstance(payload, dict) and "_meta_expectation" in payload:
+                            exp = payload["_meta_expectation"]
+                            if session_id and session_id in SESSION_REGISTRY:
+                                SESSION_REGISTRY[session_id].setdefault("expectations", []).append({
+                                    "file": exp["file"],
+                                    "timeout": exp.get("timeout_mins", 60),
+                                    "deadline": time.time() + exp.get("timeout_mins", 60) * 60
+                                })
+                            return payload.get("prompt", raw_str)
+                    except Exception:
+                        pass
+                        
+                    return raw_str
+            except asyncio.TimeoutError:
+                elapsed += wait_time
+                if session_id and session_id in SESSION_REGISTRY:
+                    if SESSION_REGISTRY[session_id]["dead"]:
+                        return f"WRITER_DEAD: {SESSION_REGISTRY[session_id]['error']} You MUST stop polling and exit immediately."
+                elif writer_pid:
+                    try:
+                        import os
+                        os.kill(writer_pid, 0)
+                    except ProcessLookupError:
+                        return f"WRITER_DEAD: The writer process (PID {writer_pid}) is no longer running. You MUST stop polling and exit immediately."
+                    except PermissionError:
+                        pass
+        return "Timeout waiting for inbox message."
+    except asyncio.TimeoutError:
+        return "Timeout waiting for inbox message."
+    except Exception as e:
+        return f"Error waiting for inbox message: {e}"
+    finally:
+        try:
+            loop.remove_reader(sock.fileno())
         except Exception:
             pass
-
+        sock.close()
+        if os.path.exists(address):
+            try:
+                os.remove(address)
+            except OSError:
+                pass
 if __name__ == "__main__":
     import argparse
     import sys
