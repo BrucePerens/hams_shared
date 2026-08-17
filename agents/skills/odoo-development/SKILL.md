@@ -58,7 +58,7 @@ Execute logic using `.with_user(svc_uid)`.
 * **Public Guest User:** Grant `perm_create=1` to `base.group_public` for unauthenticated data submission.
 * **Impersonation:** Shift environment context: `request.env['target.model'].with_user(user).create(...)`.
 * **Login As:** Swap `request.session.uid` directly in HTTP controller, preceded by a `message_post` audit log.
-* **Self-Writable Fields:** Override `_get_writeable_fields` on `res.users`.
+* **Self-Writable Fields:** Override the `SELF_WRITEABLE_FIELDS` property on `res.users` (`return super().SELF_WRITEABLE_FIELDS + [...]`) -- not a method named `_get_writeable_fields`, which core never defines or calls.
 * **Privilege Hierarchy:** `res.groups` must be nested under a `res.groups.privilege` record.
 </security_idioms>
 

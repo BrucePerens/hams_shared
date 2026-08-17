@@ -14,7 +14,7 @@ Balancing an open community platform with stringent anti-spam and anti-hijacking
 * **CMS vs. App Segregation:** Because `website.page` creation triggers these Proxy Ownership intercepts, system facilities and interactive apps MUST be built as standard HTTP controllers returning `<template>` views. Do not create `website.page` records for static or dynamic app views unless the paradigm explicitly requires end-user drag-and-drop CMS editing.
 
 ### 2. The "Self-Writable Fields" Idiom (0015)
-* To allow users to modify their personal settings on the locked `res.users` table without `.sudo()`, models MUST override `_get_writeable_fields` and explicitly append the allowed preference fields.
+* To allow users to modify their personal settings on the locked `res.users` table without `.sudo()`, models MUST override the `SELF_WRITEABLE_FIELDS` property (`super().SELF_WRITEABLE_FIELDS + [...]`) and explicitly append the allowed preference fields. This is the actual hook Odoo core's `res.users.write()` consults for the self-write bypass; a method named `_get_writeable_fields` does not exist in core and is never called by it.
 
 ### 3. Public Guest User Idiom (0036)
 * Unauthenticated public submissions (like violation reports) MUST NOT use `.sudo().create()` in the controller.
