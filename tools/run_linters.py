@@ -340,6 +340,44 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 19. check_dependency_cycles
+    # Always scans the full repo (not the possibly-scoped `targets`) --
+    # a cycle is a property of the whole manifest graph, not any single
+    # module, and staying scoped could hide a cycle introduced by a
+    # module outside the current target list.
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_dependency_cycles.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
+    # 20. check_self_writeable_field_tests
+    # Same reasoning as step 19: this is a property of the whole repo's
+    # anchor graph (a SELF_WRITEABLE_FIELDS override in one module can be
+    # tested from that module's own tests/ dir only), not the possibly-
+    # scoped `targets`.
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_self_writeable_field_tests.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

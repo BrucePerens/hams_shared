@@ -1706,6 +1706,27 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             func_name = getattr(node.func, "id", getattr(node.func, "attr", ""))
             self._check_i18n_messages(node, func_name)
 
+            if func_name == "safe_patch_object" and node.args:
+                target = node.args[0]
+                target_attr = getattr(target, "attr", "")
+                if target_attr == "cr" or (
+                    isinstance(target, ast.Attribute)
+                    and getattr(target.value, "attr", "") == "cr"
+                ):
+                    self.add_error(
+                        node.lineno,
+                        "CRITICAL ARCHITECTURE: Mocking the database cursor "
+                        "(safe_patch_object(..., cr, ...)) is forbidden -- it "
+                        "corrupts test teardown and raises RuntimeError at "
+                        "runtime anyway. Use RealTransactionCase instead "
+                        "(MASTER_12 section 9) to observe a real side effect "
+                        "(e.g. LISTEN for a real pg_notify, or check real "
+                        "committed state), or patch the specific helper "
+                        "method that issues the query instead of the cursor "
+                        "itself, or compare self.env.cr.sql_log_count "
+                        "before/after for a zero-query-on-cache-hit proof.",
+                    )
+
             if func_name == "getattr" and len(node.args) >= 2:
                 arg1, arg2 = node.args[0], node.args[1]
                 if (

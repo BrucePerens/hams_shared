@@ -32,6 +32,7 @@ To guarantee the stability and security of the platform without a massive QA dep
 ### 8. Security & Architecture Behavior Testing
 * **Proxy Ownership & IDOR (Multi-Persona Testing):** Tests must rigorously prove data isolation across the entire spectrum of platform users. You MUST explicitly test all personas (Guest, Standard User, Domain Roles) to actively assert that Unauthorized Personas are violently denied access. Crucially, multi-persona tests MUST always include the Administrator persona (`base.user_admin`) to verify they either possess the correct global overrides or are correctly restricted by immutable architectural blocks (e.g., preventing log deletion).
 * **GDPR Erasure:** Tests must assert that calling the erasure hook actually executes the hard-delete cascade.
+* **Self-Writeable Fields:** Tests must perform the actual write as a non-admin user on their own record and assert it took effect, not merely inspect the `SELF_WRITEABLE_FIELDS` return value for the field name. See MASTER_10 section 2; enforced by `check_self_writeable_field_tests.py`.
 
 ### 9. Transaction Boundaries & Test Realism
 * **Anti-Mocking:** The `test_real_transaction.RealTransactionCase` facility MUST be used in favor of mocking to solve cross-thread or cross-transaction isolation issues (e.g., HTTP Controllers, Redis Pub/Sub, external daemons). It completely bypasses Odoo's test cursor wrapping, allowing tests to perform actual `env.cr.commit()` operations.
