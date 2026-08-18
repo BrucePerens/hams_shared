@@ -126,10 +126,6 @@ module.exports = tseslint.config(
       // scope, and not meant to follow the app-code ruleset (browser
       // globals, promise rules aimed at Odoo JS) at all.
       "**/eslint.config.js",
-      // A browser "Save Page As... Complete" artifact that appears to have
-      // been checked into hams_com by accident (not source code -- flagged
-      // to the user separately; excluded here regardless of its fate).
-      "**/Signal Check_files/**",
     ],
   }
 );
