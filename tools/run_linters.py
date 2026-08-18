@@ -378,6 +378,37 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 21. ESLint (JS-side analogue of flake8, config shared from hams_shared/)
+    # Flat config restricts scanning to the config's own directory tree, so
+    # this must run with cwd set to the common parent of hams_com and
+    # hams_open -- dir_path's parent, per this repo's established sibling
+    # layout -- rather than dir_path itself.
+    eslint_bin = os.path.join(dir_path, "hams_shared", "node_modules", ".bin", "eslint")
+    eslint_config = os.path.join(dir_path, "hams_shared", "eslint.config.js")
+    workspace_root = os.path.abspath(os.path.join(dir_path, ".."))
+    if os.path.isfile(eslint_bin):
+        res = subprocess.run(
+            [
+                eslint_bin,
+                "--config",
+                eslint_config,
+                "--no-error-on-unmatched-pattern",
+            ] + targets,
+            capture_output=True,
+            text=True,
+            cwd=workspace_root,
+        )
+        if res.returncode != 0:
+            print("❌ ESLint Violations:")
+            if res.stdout:
+                print(res.stdout, end="")
+            if res.stderr:
+                print(res.stderr, end="")
+            linters_failed = True
+    else:
+        print(f"❌ ESLint executable not found at {eslint_bin} (run `npm install` in hams_shared/).")
+        linters_failed = True
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

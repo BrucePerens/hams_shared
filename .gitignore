@@ -32,3 +32,6 @@ task_workspace_*/
 *.patch
 *.bak
 *.tmp
+
+# Node (ESLint config's own devDependencies -- see package.json)
+node_modules/
