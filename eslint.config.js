@@ -57,12 +57,27 @@ module.exports = tseslint.config(
         d3: "readonly",
         L: "readonly",
         topojson: "readonly",
+        satellite: "readonly",
       },
     },
     rules: {
       ...promiseRulesAllErrors,
       "no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
       "no-undef": "error",
+    },
+  },
+  {
+    // caching/static/src/sw/sw.js is served through a controller that does
+    // literal string substitution on these two tokens before the file ever
+    // reaches a browser (see caching/controllers/main.py) -- they're build
+    // -time placeholders, not real identifiers, so they can never be
+    // imported/declared in the source file itself.
+    files: ["**/caching/static/src/sw/sw.js"],
+    languageOptions: {
+      globals: {
+        __MAX_FILE_SIZE_BYTES__: "readonly",
+        __MAX_STORAGE_BYTES__: "readonly",
+      },
     },
   },
   {
@@ -101,6 +116,20 @@ module.exports = tseslint.config(
     },
   },
   {
-    ignores: ["**/node_modules/**", "**/target/**", "**/*.min.js", "**/static/lib/**"],
+    ignores: [
+      "**/node_modules/**",
+      "**/target/**",
+      "**/*.min.js",
+      "**/static/lib/**",
+      // This config file is itself a Node/CommonJS tooling script, not
+      // application code -- not covered by tsconfig.json's static/**
+      // scope, and not meant to follow the app-code ruleset (browser
+      // globals, promise rules aimed at Odoo JS) at all.
+      "**/eslint.config.js",
+      // A browser "Save Page As... Complete" artifact that appears to have
+      // been checked into hams_com by accident (not source code -- flagged
+      // to the user separately; excluded here regardless of its fate).
+      "**/Signal Check_files/**",
+    ],
   }
 );
