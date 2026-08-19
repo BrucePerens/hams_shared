@@ -35,14 +35,42 @@ def check_file(filepath):
                                     child.args[0], ast.Constant
                                 ):
                                     query = str(child.args[0].value).strip().upper()
-                                    if any(
-                                        query.startswith(kw)
-                                        for kw in ["INSERT", "UPDATE", "DELETE"]
-                                    ):
-                                        mutating_query = True
-                                    # Very heuristic for stored procedures
-                                    if "UPSERT" in query or "INCREMENT" in query:
-                                        mutating_query = True
+                                    # CREATE [OR REPLACE] FUNCTION/PROCEDURE is
+                                    # schema DDL that *defines* a stored
+                                    # procedure's body -- it does not itself
+                                    # mutate any table row when executed, only
+                                    # when the defined procedure is later
+                                    # CALLED/SELECTed elsewhere (a separate
+                                    # cr.execute(), checked on its own merits).
+                                    # Without this exclusion, a query like
+                                    # "CREATE OR REPLACE FUNCTION
+                                    # foo_upsert_batch(...) ... $$ ... $$"
+                                    # trips the "UPSERT" substring heuristic
+                                    # below purely because that word appears
+                                    # in the function's own name inside the
+                                    # DDL text, not because anything is being
+                                    # mutated right now. Caught by two
+                                    # real false positives in
+                                    # ham_callbook/models/ham_au_register.py
+                                    # and ham_callbook_procedures.py, both
+                                    # pure `init()` DDL with no data mutation
+                                    # of their own -- their actual callers
+                                    # already correctly call
+                                    # notify_model_invalidation() right after
+                                    # invoking the procedure.
+                                    is_ddl_definition = query.startswith(
+                                        ("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION",
+                                         "CREATE PROCEDURE", "CREATE OR REPLACE PROCEDURE")
+                                    )
+                                    if not is_ddl_definition:
+                                        if any(
+                                            query.startswith(kw)
+                                            for kw in ["INSERT", "UPDATE", "DELETE"]
+                                        ):
+                                            mutating_query = True
+                                        # Very heuristic for stored procedures
+                                        if "UPSERT" in query or "INCREMENT" in query:
+                                            mutating_query = True
 
                     # Check for notify_model_invalidation(...) or invalidate_model_cache(...)
                     if isinstance(child.func, ast.Name):
