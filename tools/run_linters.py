@@ -409,6 +409,28 @@ def main():
         print(f"❌ ESLint executable not found at {eslint_bin} (run `npm install` in hams_shared/).")
         linters_failed = True
 
+    # 22. check_model_extension_collisions
+    # Same reasoning as step 19: a same-_name collision or a cross-module
+    # _auto=False extension can be introduced by a module outside the
+    # possibly-scoped `targets`, so this always scans the full repo.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_model_extension_collisions.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
