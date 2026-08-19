@@ -431,6 +431,23 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 23. check_untyped_utility_files (ODOO_AWARE_TYPE_CHECKING.md Phase 1)
+    # Same reasoning as step 19/20/22: a plain-utility-file call-signature
+    # bug can be introduced anywhere in daemons/ or ingest/, not just the
+    # possibly-scoped `targets`, so this always scans the full repo's own
+    # curated file set rather than `targets`.
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_untyped_utility_files.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
