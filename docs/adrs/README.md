@@ -49,3 +49,5 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   Defines the strict criteria for when JavaScript UI Tours are mandatory ("The Gold Standard") and when the `burn-ignore-tour` tag is architecturally justified.
 * [ADR 0079: Hostname Resolution and Environment Fallbacks](0079_hostname_resolution_and_environment_fallbacks.md)
   Bans hardcoding 127.0.0.1 and enforces a two-argument environment variable fallback to "localhost" for service hostnames to ensure portability across Docker and bare-metal environments..
+* [ADR 0086: Own-Model Extension Consolidation](0086_own_model_extension_consolidation.md)
+  Requires code for an in-house model to live in that model's own base file rather than a separate cross-module `_inherit`, bans cross-module extension of `_auto = False` SQL-view models outright, and exempts genuinely optional/pluggable modules where merging would create a dependency cycle.
