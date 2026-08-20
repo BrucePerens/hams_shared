@@ -923,11 +923,14 @@ if __name__ == "__main__":
     parser.add_argument("--alert_on_idle", action="store_true", help="Instantly alert if an agent stops calling tools")
     parser.add_argument("--ignore_idle_for_ids", type=str, nargs="*", default=None, help="Agent IDs to ignore for alert_on_idle")
     parser.add_argument("--heartbeat_file", type=str, default=None, help="Path to heartbeat log to monitor")
-    parser.add_argument("--transport", type=str, default="streamable-http", choices=["stdio", "sse", "streamable-http"],
-                         help="MCP transport when not in --cli mode. streamable-http (the default) lets multiple "
-                              "independent clients (Claude Code, Antigravity/Gemini, and anything else) share ONE "
-                              "running server process instead of each spawning its own -- pass --transport stdio "
-                              "for the old one-process-per-client behavior if something still needs it.")
+    parser.add_argument("--transport", type=str, default="stdio", choices=["stdio", "sse", "streamable-http"],
+                         help="MCP transport when not in --cli mode. Defaults to stdio for backward compatibility "
+                              "with existing configs that launch this script directly via command/args (Claude "
+                              "Code's and Antigravity's current mcp_watchdog entries both do this, with no "
+                              "--transport flag -- defaulting this to streamable-http would make every one of those "
+                              "launches start ITS OWN competing HTTP server instead of talking stdio, breaking them "
+                              "outright). Pass --transport streamable-http explicitly to run the one shared server "
+                              "instance multiple clients then connect to via URL instead of a spawn command.")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on for streamable-http/sse transports")
 
     args = parser.parse_args()
