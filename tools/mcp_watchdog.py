@@ -949,7 +949,15 @@ if __name__ == "__main__":
         print(result)
         sys.exit(0)
     else:
-        start_legacy_bridge()
-        if args.transport in ("streamable-http", "sse"):
+        if args.transport == "streamable-http":
+            # Only the one deliberately-launched shared instance should own
+            # the legacy bridge socket -- a per-client stdio instance (what
+            # Claude Code's and Antigravity's current configs both spawn) is
+            # ephemeral and per-process, not the shared queue store, and
+            # binding the same fixed path here would silently steal it from
+            # whichever process is actually playing that role.
+            start_legacy_bridge()
+            mcp.settings.port = args.port
+        elif args.transport == "sse":
             mcp.settings.port = args.port
         mcp.run(transport=args.transport)
