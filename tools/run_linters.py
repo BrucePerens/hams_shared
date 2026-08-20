@@ -448,6 +448,22 @@ def main():
             print(res.stderr, end="")
         linters_failed = True
 
+    # 24. check_pip_audit (CODE_REVIEW_PROCESS.md's Python supply-chain scan,
+    # the direct parallel to cargo-deny/cargo-audit on the Rust side).
+    # Same reasoning as step 19/20/22/23: a vulnerable dependency can be
+    # introduced by any requirements.txt in the repo, not just `targets`.
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_pip_audit.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

@@ -723,7 +723,7 @@ async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id:
     if queue_name.startswith('/'):
         queue_name = queue_name[1:]
         
-    address = f"/home/bruce/workspace/tmp/{queue_name}.sock"
+    address = os.path.expanduser(f"~/workspace/tmp/{queue_name}.sock")
     if os.path.exists(address):
         try:
             os.remove(address)

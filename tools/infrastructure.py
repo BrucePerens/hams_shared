@@ -1569,10 +1569,12 @@ def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
         hams_open_dir
     ]))
 
-    # Ensure Odoo daemon can access the addons paths if they are in a home directory
+    # Ensure Odoo daemon can access the addons paths if they are in a home directory.
+    # Built from the path's own first three segments (not a hardcoded literal) so this
+    # works under any developer's home directory, not just one specific machine's.
     for p in [hams_com_dir, hams_open_dir]:
-        if p and p.startswith("/home/"):
-            home_dir = "/home/" + p.split("/")[2]
+        if p and p.startswith(os.sep + "home" + os.sep):
+            home_dir = os.sep.join(p.split(os.sep)[:3])
             run_cmd_func(["sudo", "chmod", "a+x", home_dir])
 
     try:

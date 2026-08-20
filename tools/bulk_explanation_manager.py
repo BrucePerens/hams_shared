@@ -117,7 +117,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Bulk explanation manager for Odoo questions")
     parser.add_argument("--export", action="store_true", help="Export questions missing explanations")
     parser.add_argument("--import_file", type=str, help="Import JSON file containing completed explanations")
-    parser.add_argument("--file", type=str, default="/home/bruce/workspace/tmp/pending_explanations.json", help="File path to use for export")
+    parser.add_argument("--file", type=str, default=os.path.expanduser("~/workspace/tmp/pending_explanations.json"), help="File path to use for export")
     
     args = parser.parse_args()
 
