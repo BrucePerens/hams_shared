@@ -588,35 +588,39 @@ async def wait_for_all_complete(
     return json.dumps(results, indent=2)
 
 @mcp.tool()
-def send_ipc_message(queue_name: str, content: str) -> str:
+async def send_ipc_message(queue_name: str, content: str) -> str:
     """
-    Send a POSIX IPC message to the specified queue.
-    Automatically handles chunking for messages > 8000 bytes.
+    Send a message to whatever peer session is currently blocked in
+    wait_for_inbox(queue_name=...) on the same queue name. This connects to the
+    exact Unix-domain socket wait_for_inbox binds, at ~/workspace/tmp/<queue>.sock
+    -- it does NOT use a POSIX message queue, precisely so this tool actually
+    reaches wait_for_inbox instead of writing to a mechanism nothing reads.
+    Retries for up to 5 minutes if no listener is bound yet, since the peer may
+    call wait_for_inbox slightly after this is called.
     """
-    import posix_ipc
-    import uuid
-    try:
-        mq = posix_ipc.MessageQueue(queue_name, posix_ipc.O_CREAT, max_messages=2, max_message_size=8192)
-    except Exception as e:
-        return f"Error creating POSIX queue {queue_name}: {e}"
-        
-    content_bytes = content.encode('utf-8')
-    chunk_size = 8000
-    try:
-        if len(content_bytes) <= chunk_size:
-            mq.send(b'\x00' + content_bytes)
-        else:
-            msg_id = uuid.uuid4().bytes
-            total_chunks = (len(content_bytes) + chunk_size - 1) // chunk_size
-            for i in range(total_chunks):
-                chunk_data = content_bytes[i*chunk_size : (i+1)*chunk_size]
-                header = b'\x01' + msg_id + total_chunks.to_bytes(4, 'big') + i.to_bytes(4, 'big')
-                mq.send(header + chunk_data)
-        return "Message sent successfully."
-    except Exception as e:
-        return f"Error sending message: {e}"
-    finally:
-        mq.close()
+    import asyncio
+    import socket
+    import os
+
+    if queue_name.startswith('/'):
+        queue_name = queue_name[1:]
+    address = os.path.expanduser(f"~/workspace/tmp/{queue_name}.sock")
+
+    loop = asyncio.get_running_loop()
+    for _ in range(600):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.setblocking(False)
+        try:
+            await loop.sock_connect(sock, address)
+            await loop.sock_sendall(sock, content.encode('utf-8'))
+            return "Message sent successfully."
+        except (FileNotFoundError, ConnectionRefusedError):
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            return f"Error sending message: {e}"
+        finally:
+            sock.close()
+    return f"Error: no listener ever appeared on queue '{queue_name}' within 5 minutes."
 
 @mcp.tool()
 async def wait_for_fatal_events(session_id: str, target_agent_ids: list) -> str:
