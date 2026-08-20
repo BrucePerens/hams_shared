@@ -69,6 +69,7 @@ EXCLUDED_FILES = {
     "ingest/accessory_daemon.py",
     "ingest/accessory_repair.py",
     "ingest/build_dependency_graph.py",
+    "ingest/build_field_cross_reference.py",
     "ingest/composite_text.py",
     "ingest/config.py",
     "ingest/curriculum_daemon.py",
