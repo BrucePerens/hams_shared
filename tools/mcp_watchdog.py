@@ -8,14 +8,114 @@ import time
 import asyncio
 import json
 import re
+import socket
+import queue as stdlib_queue
+import threading
+import functools
 import pyinotify
 import logging
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("Watchdog")
 logger = logging.getLogger("mcp_watchdog")
 
 SESSION_REGISTRY = {}
+
+# --- In-process message queues (replaces the old per-call AF_UNIX socket
+# rendezvous). Since this server now runs as ONE shared process for every
+# agent (Claude, Gemini's Conductor, Gemini's subagents), send_ipc_message
+# and wait_for_inbox can just be a dict of Queue: sends never block on a
+# listener existing yet, and messages queue up in order if nobody is
+# listening yet. _QUEUE_META tracks enough per-queue state (last send/receive
+# time, whether a receiver is currently blocked) for queue_status to tell
+# apart a dead/never-started receiver from a dead/never-started sender.
+#
+# Deliberately stdlib threading.Queue, not asyncio.Queue: FastMCP's
+# streamable-http transport hardcodes its own Starlette lifespan
+# (`lambda app: self.session_manager.run()`) and does not invoke the
+# `lifespan=` constructor argument the way its docstring suggests -- there is
+# no reliable hook to start an asyncio-native background listener bound to
+# the *same* event loop the HTTP transport ends up running on. A thread-safe
+# stdlib Queue sidesteps the question entirely: the legacy bridge below runs
+# in its own plain thread with a blocking accept loop, wait_for_inbox reaches
+# it via run_in_executor, and none of this cares which transport (stdio,
+# sse, streamable-http) or event loop the MCP server itself is using.
+_QUEUES: dict[str, "stdlib_queue.Queue"] = {}
+_QUEUE_META: dict[str, dict] = {}
+_QUEUE_LOCK = threading.Lock()
+
+def _get_queue(name: str):
+    with _QUEUE_LOCK:
+        if name not in _QUEUES:
+            _QUEUES[name] = stdlib_queue.Queue()
+            _QUEUE_META[name] = {
+                "created_at": time.time(),
+                "last_put_at": None,
+                "last_get_at": None,
+                "waiting_since": None,
+                "waiters": 0,
+            }
+        return _QUEUES[name]
+
+# --- Legacy bridge for plain (non-MCP-agent) Python processes ---
+# narrative_daemon.py, accessory_daemon.py, and friends are ordinary
+# subprocesses, not MCP clients -- they can't call send_ipc_message as a
+# tool. This ONE persistent Unix-domain socket (bound once when the server
+# process starts, never rebound per-call, unlike the old per-queue-name
+# sockets) lets them keep pushing messages in with a tiny, dependency-free
+# client (see daemon_utils.send_ipc_message). Wire format: connect, write
+# "<queue_name>\n<content>", close -- one connection is one message, same
+# framing convention the old per-queue sockets used. Runs in its own daemon
+# thread, started once from __main__ before the MCP server itself starts.
+_BRIDGE_SOCK_PATH = os.path.expanduser("~/workspace/tmp/mcp_watchdog_ipc.sock")
+
+def _handle_bridge_conn(conn):
+    try:
+        chunks = []
+        while True:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        raw = b"".join(chunks).decode("utf-8", errors="replace")
+        if "\n" not in raw:
+            logger.warning("[legacy bridge] dropped message with no queue-name header")
+            return
+        queue_name, content = raw.split("\n", 1)
+        queue_name = queue_name.strip()
+        if queue_name.startswith("/"):
+            queue_name = queue_name[1:]
+        if not queue_name:
+            return
+        q = _get_queue(queue_name)
+        q.put(content)
+        _QUEUE_META[queue_name]["last_put_at"] = time.time()
+    except Exception as e:
+        logger.warning(f"[legacy bridge] error handling client: {e}")
+    finally:
+        conn.close()
+
+def _run_legacy_bridge():
+    if os.path.exists(_BRIDGE_SOCK_PATH):
+        try:
+            os.remove(_BRIDGE_SOCK_PATH)
+        except OSError:
+            pass
+    os.makedirs(os.path.dirname(_BRIDGE_SOCK_PATH), exist_ok=True)
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(_BRIDGE_SOCK_PATH)
+    srv.listen(16)
+    logger.info(f"[legacy bridge] listening on {_BRIDGE_SOCK_PATH}")
+    while True:
+        try:
+            conn, _ = srv.accept()
+        except OSError:
+            break
+        threading.Thread(target=_handle_bridge_conn, args=(conn,), daemon=True).start()
+
+def start_legacy_bridge():
+    threading.Thread(target=_run_legacy_bridge, daemon=True).start()
+
+mcp = FastMCP("Watchdog")
 
 
 def get_state_file(self_agent_id):
@@ -588,39 +688,67 @@ async def wait_for_all_complete(
     return json.dumps(results, indent=2)
 
 @mcp.tool()
-async def send_ipc_message(queue_name: str, content: str) -> str:
+def send_ipc_message(queue_name: str, content: str) -> str:
     """
-    Send a message to whatever peer session is currently blocked in
-    wait_for_inbox(queue_name=...) on the same queue name. This connects to the
-    exact Unix-domain socket wait_for_inbox binds, at ~/workspace/tmp/<queue>.sock
-    -- it does NOT use a POSIX message queue, precisely so this tool actually
-    reaches wait_for_inbox instead of writing to a mechanism nothing reads.
-    Retries for up to 5 minutes if no listener is bound yet, since the peer may
-    call wait_for_inbox slightly after this is called.
+    Deliver a message to whatever wait_for_inbox(queue_name=...) call is, or
+    later will be, blocked on this queue name. Delivery is immediate and
+    in-process (a thread-safe Queue keyed by queue_name) -- there is no OS
+    socket involved and no need to retry waiting for a listener to appear: if
+    nobody is receiving yet, the message just waits in order until they do.
+    Use queue_status(queue_name) to check whether anyone is actually
+    receiving.
     """
-    import asyncio
-    import socket
-    import os
-
     if queue_name.startswith('/'):
         queue_name = queue_name[1:]
-    address = os.path.expanduser(f"~/workspace/tmp/{queue_name}.sock")
+    q = _get_queue(queue_name)
+    q.put(content)
+    _QUEUE_META[queue_name]["last_put_at"] = time.time()
+    return "Message sent successfully."
 
-    loop = asyncio.get_running_loop()
-    for _ in range(600):
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.setblocking(False)
-        try:
-            await loop.sock_connect(sock, address)
-            await loop.sock_sendall(sock, content.encode('utf-8'))
-            return "Message sent successfully."
-        except (FileNotFoundError, ConnectionRefusedError):
-            await asyncio.sleep(0.5)
-        except Exception as e:
-            return f"Error sending message: {e}"
-        finally:
-            sock.close()
-    return f"Error: no listener ever appeared on queue '{queue_name}' within 5 minutes."
+@mcp.tool()
+def queue_status(queue_name: str) -> str:
+    """
+    Diagnose a queue without consuming from it: how many messages are
+    pending, whether a receiver is currently blocked inside wait_for_inbox,
+    and how long since any send/receive activity. Use this to distinguish
+    "a receiver is waiting but the sender is idle/dead" from "messages are
+    piling up because nobody is receiving" -- from either side alone, both
+    look identical (silence), and this pipeline has been bitten by exactly
+    that ambiguity before.
+    """
+    if queue_name.startswith('/'):
+        queue_name = queue_name[1:]
+    if queue_name not in _QUEUE_META:
+        return json.dumps({
+            "queue": queue_name,
+            "exists": False,
+            "detail": "No message has ever been sent or waited for on this queue name.",
+        })
+    meta = _QUEUE_META[queue_name]
+    q = _QUEUES[queue_name]
+    now = time.time()
+    pending = q.qsize()
+    waiting = meta["waiters"] > 0
+    result = {
+        "queue": queue_name,
+        "exists": True,
+        "pending_messages": pending,
+        "receiver_currently_waiting": waiting,
+        "seconds_since_last_send": (now - meta["last_put_at"]) if meta["last_put_at"] else None,
+        "seconds_since_last_receive": (now - meta["last_get_at"]) if meta["last_get_at"] else None,
+        "seconds_since_waiter_arrived": (now - meta["waiting_since"]) if meta["waiting_since"] else None,
+    }
+    if pending > 0 and not waiting:
+        result["diagnosis"] = "Messages are piling up with nobody waiting to receive them -- likely a dead or never-started receiver."
+    elif waiting and pending == 0:
+        wait_s = result["seconds_since_waiter_arrived"] or 0
+        if wait_s > 120:
+            result["diagnosis"] = f"A receiver has been waiting {wait_s:.0f}s with nothing sent -- likely a dead or never-started sender."
+        else:
+            result["diagnosis"] = "A receiver is waiting; no message yet, but it hasn't been long."
+    else:
+        result["diagnosis"] = "Looks healthy."
+    return json.dumps(result, indent=2)
 
 @mcp.tool()
 async def wait_for_fatal_events(session_id: str, target_agent_ids: list) -> str:
@@ -716,107 +844,71 @@ async def spawn_managed_daemons(session_id: str, commands_json: str) -> str:
 @mcp.tool()
 async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id: str = None, writer_agent_id: str = None, writer_pid: int = None, session_id: str = None) -> str:
     """
-    Wait for the specified inbox message via Abstract Unix Domain Socket.
-    If writer_pid is provided and the process is no longer alive, returns
-    an error so the agent can stop polling a dead queue.
+    Wait for the specified inbox message on an in-process queue. Returns
+    immediately if a message is already pending (sent before this call
+    started). If writer_pid or session_id identifies a dead writer, returns
+    WRITER_DEAD so the agent can stop polling instead of waiting out the full
+    timeout for a sender that will never come.
     """
-    import asyncio
-    import socket
-    import os
-    
     if queue_name.startswith('/'):
         queue_name = queue_name[1:]
-        
-    address = os.path.expanduser(f"~/workspace/tmp/{queue_name}.sock")
-    if os.path.exists(address):
-        try:
-            os.remove(address)
-        except OSError:
-            pass
-    timeout_secs = timeout_mins * 60
-    
-    loop = asyncio.get_running_loop()
-    
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
-    bound = False
-    for _ in range(5):
-        try:
-            sock.bind(address)
-            bound = True
-            break
-        except OSError:
-            await asyncio.sleep(0.2)
-            
-    if not bound:
-        return f"Error binding to socket {address}: Address in use"
 
+    q = _get_queue(queue_name)
+    meta = _QUEUE_META[queue_name]
+    with _QUEUE_LOCK:
+        meta["waiters"] += 1
+        if meta["waiting_since"] is None:
+            meta["waiting_since"] = time.time()
+
+    timeout_secs = timeout_mins * 60
+    check_interval = 5  # Check writer liveness every 5 seconds
+    elapsed = 0.0
+    loop = asyncio.get_running_loop()
     try:
-        sock.listen(1)
-        sock.setblocking(False)
-        
-        # Check writer_pid liveness directly since MCP server runs on host
-        check_interval = 5  # Check PID every 5 seconds
-        elapsed = 0.0
         while elapsed < timeout_secs:
             wait_time = min(check_interval, timeout_secs - elapsed)
             try:
-                client, _ = await asyncio.wait_for(loop.sock_accept(sock), timeout=wait_time)
-                with client:
-                    data = b""
-                    while True:
-                        chunk = await loop.sock_recv(client, 4096)
-                        if not chunk:
-                            break
-                        data += chunk
-                    
-                    raw_str = data.decode('utf-8')
-                    try:
-                        import json, time
-                        payload = json.loads(raw_str)
-                        if isinstance(payload, dict) and "_meta_expectation" in payload:
-                            exp = payload["_meta_expectation"]
-                            if session_id and session_id in SESSION_REGISTRY:
-                                SESSION_REGISTRY[session_id].setdefault("expectations", []).append({
-                                    "file": exp["file"],
-                                    "timeout": exp.get("timeout_mins", 60),
-                                    "deadline": time.time() + exp.get("timeout_mins", 60) * 60
-                                })
-                            return payload.get("prompt", raw_str)
-                    except Exception:
-                        pass
-                        
-                    return raw_str
-            except asyncio.TimeoutError:
+                # q.get(timeout=...) is a blocking stdlib call -- run it in the
+                # default executor so it doesn't block the event loop while
+                # other tool calls (queue_status, send_ipc_message, the
+                # watchdog file-monitoring tools) need to keep running.
+                raw_str = await loop.run_in_executor(None, functools.partial(q.get, timeout=wait_time))
+                meta["last_get_at"] = time.time()
+
+                try:
+                    payload = json.loads(raw_str)
+                    if isinstance(payload, dict) and "_meta_expectation" in payload:
+                        exp = payload["_meta_expectation"]
+                        if session_id and session_id in SESSION_REGISTRY:
+                            SESSION_REGISTRY[session_id].setdefault("expectations", []).append({
+                                "file": exp["file"],
+                                "timeout": exp.get("timeout_mins", 60),
+                                "deadline": time.time() + exp.get("timeout_mins", 60) * 60
+                            })
+                        return payload.get("prompt", raw_str)
+                except Exception:
+                    pass
+
+                return raw_str
+            except stdlib_queue.Empty:
                 elapsed += wait_time
                 if session_id and session_id in SESSION_REGISTRY:
                     if SESSION_REGISTRY[session_id]["dead"]:
                         return f"WRITER_DEAD: {SESSION_REGISTRY[session_id]['error']} You MUST stop polling and exit immediately."
                 elif writer_pid:
                     try:
-                        import os
                         os.kill(writer_pid, 0)
                     except ProcessLookupError:
                         return f"WRITER_DEAD: The writer process (PID {writer_pid}) is no longer running. You MUST stop polling and exit immediately."
                     except PermissionError:
                         pass
         return "Timeout waiting for inbox message."
-    except asyncio.TimeoutError:
-        return "Timeout waiting for inbox message."
-    except Exception as e:
-        return f"Error waiting for inbox message: {e}"
     finally:
-        try:
-            loop.remove_reader(sock.fileno())
-        except Exception:
-            pass
-        sock.close()
-        if os.path.exists(address):
-            try:
-                os.remove(address)
-            except OSError:
-                pass
+        with _QUEUE_LOCK:
+            meta["waiters"] = max(0, meta["waiters"] - 1)
+            if meta["waiters"] == 0:
+                meta["waiting_since"] = None
+
 if __name__ == "__main__":
     import argparse
     import sys
@@ -831,9 +923,15 @@ if __name__ == "__main__":
     parser.add_argument("--alert_on_idle", action="store_true", help="Instantly alert if an agent stops calling tools")
     parser.add_argument("--ignore_idle_for_ids", type=str, nargs="*", default=None, help="Agent IDs to ignore for alert_on_idle")
     parser.add_argument("--heartbeat_file", type=str, default=None, help="Path to heartbeat log to monitor")
-    
+    parser.add_argument("--transport", type=str, default="streamable-http", choices=["stdio", "sse", "streamable-http"],
+                         help="MCP transport when not in --cli mode. streamable-http (the default) lets multiple "
+                              "independent clients (Claude Code, Antigravity/Gemini, and anything else) share ONE "
+                              "running server process instead of each spawning its own -- pass --transport stdio "
+                              "for the old one-process-per-client behavior if something still needs it.")
+    parser.add_argument("--port", type=int, default=8765, help="Port to listen on for streamable-http/sse transports")
+
     args = parser.parse_args()
-    
+
     if args.cli:
         result = asyncio.run(wait_for_agent_state_change(
             target_agent_ids=args.target_agent_ids,
@@ -848,4 +946,7 @@ if __name__ == "__main__":
         print(result)
         sys.exit(0)
     else:
-        mcp.run()
+        start_legacy_bridge()
+        if args.transport in ("streamable-http", "sse"):
+            mcp.settings.port = args.port
+        mcp.run(transport=args.transport)
