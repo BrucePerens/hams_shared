@@ -464,6 +464,56 @@ def main():
             print(res.stderr, end="")
         linters_failed = True
 
+    # 25. check_minified_js_nested_templates (rjsmin compatibility -- see
+    # hams_com commit f1f00511 for the real bug this class of check was
+    # written to catch). Same reasoning as step 19/20/22/23/24: a bundled
+    # JS asset that gets re-minified by Odoo can be declared by any
+    # module's manifest, not just the possibly-scoped `targets`, and the
+    # vendored/sibling-repo asset it references may live outside
+    # `dir_path` entirely, so this always scans the full repo and also
+    # searches the sibling repo root for cross-repo asset references.
+    sibling_dir = community_dir or os.path.abspath(os.path.join(dir_path, "..", "hams_com"))
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_minified_js_nested_templates.py"),
+            dir_path,
+            sibling_dir,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
+    # 26. check_external_library_locality -- same reasoning as step 25: a
+    # module vendoring its own copy of a library instead of using
+    # "external" can be introduced anywhere in the repo, not just the
+    # possibly-scoped `targets`, so this always scans the full repo.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_external_library_locality.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
