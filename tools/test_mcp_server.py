@@ -152,11 +152,16 @@ def run_linters(module_names: str, ctx: Context) -> str:
             ctx.info(f"Failed to detect modified files via git: {e}")
 
     cmd = [sys.executable, os.path.join(dir_path, "tools", "run_linters.py"), module_names]
-    
+
     ctx.info(f"Starting linters: {' '.join(cmd)}")
-    
-    # Run the linter subprocess, streaming output to intercept violations
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=dir_path)
+
+    # Run the linter subprocess, streaming output to intercept violations. run_linters.py
+    # never opts into unbuffered/line-buffered stdout itself, so without PYTHONUNBUFFERED=1
+    # here, Python defaults to block-buffering (~8KB) once stdout isn't a TTY (true for any
+    # PIPE) -- the readline() loop below would then see nothing until the child's internal
+    # buffer fills or it exits, defeating the whole point of streaming to catch violations live.
+    linter_env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=dir_path, env=linter_env)
     
     for line in iter(process.stdout.readline, ''):
         out_buf.write(line)
