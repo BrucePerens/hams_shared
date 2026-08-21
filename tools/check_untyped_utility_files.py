@@ -61,16 +61,9 @@ EXCLUDED_FILES = {
     "daemons/hams_local_relay/tools/rig_simulator.py",
     "daemons/hams_simulated_bots/main.py",
     "ingest/build_dependency_graph.py",
-    "ingest/build_field_cross_reference.py",
     "ingest/composite_text.py",
-    "ingest/extract_pdf_batch.py",
-    "ingest/forms_ingest_daemon.py",
-    "ingest/generate_html.py",
     "ingest/parse_pdfs.py",
     "ingest/reset_pipeline_state.py",
-    "ingest/scrape_fema.py",
-    "ingest/test_verify.py",
-    "ingest/verify_archive.py",
     "ingest/visual_daemon.py",
 }
 
