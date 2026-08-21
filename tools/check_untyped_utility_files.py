@@ -64,8 +64,6 @@ EXCLUDED_FILES = {
     "ingest/build_field_cross_reference.py",
     "ingest/composite_text.py",
     "ingest/extract_pdf_batch.py",
-    "ingest/extract_pdf_instructions.py",
-    "ingest/forms_daemon.py",
     "ingest/forms_ingest_daemon.py",
     "ingest/generate_html.py",
     "ingest/narrative_daemon.py",
@@ -73,7 +71,6 @@ EXCLUDED_FILES = {
     "ingest/reset_pipeline_state.py",
     "ingest/scrape_fema.py",
     "ingest/test_verify.py",
-    "ingest/validate_forms.py",
     "ingest/verify_archive.py",
     "ingest/visual_daemon.py",
 }
