@@ -524,27 +524,16 @@ class FailureExtractor:
                 else:
                     failed_modules = self._extract_failed_modules()
                     out.write("\n" + "*" * 80 + "\n")
-                    out.write("SYSTEM DIRECTIVE FOR AI ASSISTANT:\n")
                     out.write(
                         "The following log contains extracted test failures, tracebacks, and CRITICAL errors from the Odoo test suite.\n"
                     )
-                    out.write(
-                        "Your immediate task is to analyze these errors, identify the root causes within the provided codebase, and generate the necessary patches to fix these test flaws.\n"
-                    )
 
                     if failed_modules:
-                        out.write("\nTARGET MODULES FOR ANALYSIS:\n")
                         out.write(
-                            "Based on the tracebacks, the following modules are responsible for or implicated in the failure:\n"
+                            "\nBased on the tracebacks, these modules are implicated in the failure(s):\n"
                         )
                         for mod in failed_modules:
                             out.write(f"  - {mod}\n")
-                        out.write(
-                            "\nASSUMPTION: The GitHub repository containing these modules has been imported to your environment.\n"
-                        )
-                        out.write(
-                            "ACTION: Please look up the code for the implicated modules above to diagnose and fix the issue.\n"
-                        )
 
                     out.write("*" * 80 + "\n")
 

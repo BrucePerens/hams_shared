@@ -82,10 +82,6 @@ Do not use an f-string unless you are actively interpolating a variable inside `
 **The Solution:** You MUST isolate the process by passing `start_new_session=True` to `subprocess.Popen`, and terminate it using `os.killpg(os.getpgid(process.pid), signal.SIGKILL)`.
 This silently and instantly executes the entire process tree without triggering tracebacks.
 
-## 26. The Artifact Context Hijack
-**Experience:** When a script generates an error log or report that will be fed back into an LLM in a future session, prepending a strict "SYSTEM DIRECTIVE FOR AI ASSISTANT" block directly inside the text file is highly effective.
-It hijacks the LLM's attention mechanism upon file ingestion, forcing it to instantly adopt a debugging persona without the user having to write a manual prompt.
-
 ## 29. The Meta-Editing Summarization Bias Trap
 **The Trap:** When instructed by the user to modify, reorganize, or append rules to the architectural guides (`AGENTS.md`, `LLM_LINTER_GUIDE.md`, etc.), the LLM's native summarization bias activates.
 The LLM will silently drop, condense, or truncate existing bullet points, linter rules, and security idioms to save tokens, effectively destroying the system's exactness guarantees and defenses.
