@@ -236,11 +236,6 @@ GENERAL_ERROR_RULES = [
         "CRITICAL NETWORK HARDCODING: 'localhost' and '127.0.0.1' are prohibited. In containerized environments, these resolve to the container's internal loopback, NOT the target service. Use Docker DNS names (e.g., 'odoo', 'redis').",
     ),
     (
-        r"\.py$",
-        re.compile(r"\bdatetime\.datetime\.now\(\)|\bdatetime\.date\.today\(\)"),
-        "CRITICAL TIMEZONE BUG: Native datetime fetching bypasses Odoo's timezone context. Use 'odoo.fields.Datetime.now()' or 'odoo.fields.Date.context_today(self)'.",
-    ),
-    (
         r"test_.*\.py$",
         re.compile(r"['\"]/tmp(?:/|['\"])"),
         "CRITICAL TEST REALISM / PATHING: Hardcoding '/tmp' is forbidden. Tests must use the exact same paths as the production environment per AGENTS.md.",
@@ -341,6 +336,19 @@ ODOO_ERROR_RULES = [
         r"\.py$",
         re.compile(r"['\"]test_enable['\"]"),
         "CRITICAL TEST EVASION: The use of 'test_enable' to bypass code execution during tests is strictly forbidden. Use RealTransactionCase for commit handling.",
+    ),
+    (
+        # Moved here from GENERAL_ERROR_RULES: the rationale
+        # ("bypasses Odoo's timezone context") and its suggested fix
+        # (odoo.fields.Datetime.now() / Date.context_today(self)) both
+        # assume an Odoo env/self exists to call them on. It doesn't for a
+        # standalone script -- confirmed a real false positive on
+        # ingest/daemon_utils.py, which has no Odoo import at all and
+        # uses datetime.datetime.now() to timestamp a plain markdown log
+        # file, which is the only correct thing to do there.
+        r"\.py$",
+        re.compile(r"\bdatetime\.datetime\.now\(\)|\bdatetime\.date\.today\(\)"),
+        "CRITICAL TIMEZONE BUG: Native datetime fetching bypasses Odoo's timezone context. Use 'odoo.fields.Datetime.now()' or 'odoo.fields.Date.context_today(self)'.",
     ),
     (
         r"\.py$",
