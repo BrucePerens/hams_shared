@@ -66,7 +66,6 @@ EXCLUDED_FILES = {
     "ingest/extract_pdf_batch.py",
     "ingest/forms_ingest_daemon.py",
     "ingest/generate_html.py",
-    "ingest/narrative_daemon.py",
     "ingest/parse_pdfs.py",
     "ingest/reset_pipeline_state.py",
     "ingest/scrape_fema.py",
