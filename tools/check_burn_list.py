@@ -175,15 +175,22 @@ GENERAL_ERROR_RULES = [
         "CRITICAL AI LAZINESS: Placeholders, TODOs, and elisions (...) are strictly forbidden. You must write complete, functional code.",
     ),
     (
-        r"\.py$",
-        re.compile(
-            r"sys\.path\.append\(os\.path\.abspath\(os\.path\.join\(os\.path\.dirname\(__file__\),\s*['\"]\.\.['\"]"
-        ),
-        "CRITICAL HALLUCINATION: Unnecessary sys.path.append with '..'. Local modules and daemons should resolve sibling imports natively.",
-    ),
-    (
+        # No ".." in the matched call: this is specifically the "just
+        # re-adding my own directory" shape, which is genuinely always
+        # redundant (Python auto-adds the main script's own directory to
+        # sys.path). A "sys.path.append(...'..'...)" call reaching into a
+        # DIFFERENT, sibling directory is a different thing entirely and
+        # is excluded here -- see the false positive this rule used to
+        # produce on ingest/push_course_to_odoo.py: it imports
+        # daemons/hams_config.py, which is not a package and is not on
+        # sys.path any other way (confirmed: it's the only file anywhere
+        # in the repo that imports hams_config, and removing its
+        # sys.path.append makes the import fail). The old, unconditional
+        # "Unnecessary sys.path.append with '..'" rule that used to sit
+        # here made the same false claim for the same reason and has been
+        # folded into this one instead of duplicated.
         r"^(?!.*daemons?/|.*parcel_extract\.py).*\.py$",
-        re.compile(r"sys\.path\.(append|insert)\([^)]*__file__[^)]*\)"),
+        re.compile(r"sys\.path\.(append|insert)\((?!.*\.\.)[^)]*__file__[^)]*\)"),
         "CRITICAL HALLUCINATION: Redundant sys.path manipulation. Python automatically resolves imports from the script's directory.",
     ),
     (
