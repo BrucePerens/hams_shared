@@ -842,13 +842,24 @@ async def spawn_managed_daemons(session_id: str, commands_json: str) -> str:
         return SESSION_REGISTRY[session_id]["error"]
 
 @mcp.tool()
-async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id: str = None, writer_agent_id: str = None, writer_pid: int = None, session_id: str = None) -> str:
+async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id: str = None, writer_agent_id: str = None, writer_pid: int = None, session_id: str = None, reconnect_after_secs: int = None) -> str:
     """
     Wait for the specified inbox message on an in-process queue. Returns
     immediately if a message is already pending (sent before this call
     started). If writer_pid or session_id identifies a dead writer, returns
     WRITER_DEAD so the agent can stop polling instead of waiting out the full
     timeout for a sender that will never come.
+
+    reconnect_after_secs is an opt-in safety net for MCP clients known to
+    silently kill a long-idle tool call on their own (confirmed on Claude
+    Code's own client: it aborts a call after ~400s of server silence
+    regardless of timeout_mins, and a message arriving right at that
+    boundary can be consumed by the dying call before the client ever sees
+    the result -- lost, not just delayed). When set, this call returns a
+    RECONNECT_HINT well before that risk window instead of continuing to
+    block toward the full timeout, so the caller can voluntarily re-issue
+    the call and stay ahead of an involuntary kill. Leave unset for clients
+    without this constraint (no evidence Antigravity's own client needs it).
     """
     if queue_name.startswith('/'):
         queue_name = queue_name[1:]
@@ -866,7 +877,14 @@ async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id:
     loop = asyncio.get_running_loop()
     try:
         while elapsed < timeout_secs:
-            wait_time = min(check_interval, timeout_secs - elapsed)
+            if reconnect_after_secs is not None and elapsed >= reconnect_after_secs:
+                return (
+                    f"RECONNECT_HINT: No message after {elapsed:.0f}s. Your MCP client may "
+                    f"silently kill a long-idle call beyond this point, which can lose whatever "
+                    f"arrives right after -- call wait_for_inbox again now (same queue_name) "
+                    f"instead of continuing to wait here."
+                )
+            wait_time = min(check_interval, timeout_secs - elapsed, reconnect_after_secs - elapsed if reconnect_after_secs is not None else timeout_secs)
             try:
                 # q.get(timeout=...) is a blocking stdlib call -- run it in the
                 # default executor so it doesn't block the event loop while
