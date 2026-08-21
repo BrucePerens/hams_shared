@@ -19,22 +19,31 @@ cannot check correctly yet (see the proposal's "cross-module _inherit"
 section), so silently skipping them here is a safety filter, not a gap
 Phase 2 hasn't gotten to.
 
-Deliberately excluded even though they don't touch Odoo models:
+Deliberately excluded even though it doesn't touch Odoo models:
 `daemons/hams_local_relay/radae/` (vendored ML/DSP research code with
 extensive real mypy findings -- untangling third-party research code's
-typing is its own project, not Phase 1 scope) and the individual files in
-EXCLUDED_FILES below, each of which produced real mypy output on first
-evaluation that needs a human to actually look at before this becomes a
-hard gate on it. At least one of those (daemons/ham_dx_daemon/main.py)
-was checked by hand and confirmed to be a FALSE POSITIVE, not a real bug:
-telnetlib3.open_connection()'s return type is a bare
-`Union[TelnetWriter, TelnetWriterUnicode]` with no static way to narrow
-based on the `encoding=` argument's runtime value, so mypy assumes the
-bytes-only variant even though the actual call (encoding='utf8', the
-default) returns the str-accepting one. That's a reminder that a
-third-party library's own imprecise type signature is a second real
-source of Phase-1 noise beyond Odoo's dynamic typing -- excluded files
-are "not yet reviewed," not "presumed buggy."
+typing is its own project, not Phase 1 scope).
+
+EXCLUDED_FILES started as 33 files with real, not-yet-reviewed mypy
+findings on this check's introduction. As of 2026-08-20 that backlog has
+been fully worked through -- every file now passes cleanly, with real
+bugs fixed (e.g. a NoneType slice crash on a malformed NOAA payload, a
+websockets 15.x API mismatch that would TypeError the instant a test
+ran, a live-broken binary-discovery function that could never find
+Debian's own `pat` package) and false positives resolved honestly rather
+than blanket-suppressed (heterogeneous dict/list literals given real
+type annotations instead of mypy's overly-broad inferred join type,
+Python's function-wide variable typing conflicting across unrelated
+code paths reusing a name like `f` or `key`, and confirmed third-party
+stub gaps like telnetlib3.open_connection()'s bare
+`Union[TelnetWriter, TelnetWriterUnicode]` return type with no static
+way to narrow on the `encoding=` argument's runtime value). See git
+history for the individual fix commits. This is now a hard, unconditional
+gate (run_linters.py step 23 already fails the whole lint pass on any
+finding here, for any file this check reaches) -- EXCLUDED_FILES stays
+in the code, empty, as where a newly reviewed and deliberately accepted
+exclusion would go if one is ever needed again, not repopulated
+reflexively just because a new file trips this check.
 """
 
 import os
@@ -54,15 +63,14 @@ EXCLUDED_DIR_PREFIXES = [
     "daemons/hams_local_relay/radae",
 ]
 
-# Repo-relative files with real, not-yet-reviewed mypy findings as of this
-# check's introduction. See the module docstring above.
-EXCLUDED_FILES = {
-    "ingest/build_dependency_graph.py",
-    "ingest/composite_text.py",
-    "ingest/parse_pdfs.py",
-    "ingest/reset_pipeline_state.py",
-    "ingest/visual_daemon.py",
-}
+# As of 2026-08-20, every file this check can reach passes
+# mypy --check-untyped-defs cleanly -- the backlog that used to live
+# here (33 files) has been fully worked through, fixing real bugs and
+# false positives along the way (see git history for the individual
+# commits). This set stays here, empty, as where a *newly reviewed and
+# accepted* exclusion would go if one is ever needed again -- not
+# repopulated reflexively just because a new file trips this check.
+EXCLUDED_FILES: set = set()
 
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git"}
 
