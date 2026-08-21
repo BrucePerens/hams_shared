@@ -2792,11 +2792,26 @@ def scan_file(filepath, is_odoo_module=False):
                     f"Line {line_num}: UNAUTHORIZED BYPASS.\n      Code: `{stripped}`"
                 )
             else:
+                # Verification below re-adds the "COMM_" prefix itself
+                # (searching for f"[@ANCHOR: COMM_{anchor}]") -- strip it
+                # here if the source tag already carried it, or every
+                # correctly-tagged bypass whose anchor was written the
+                # normal way (with the prefix, matching every other
+                # [@ANCHOR: COMM_...] tag in the codebase) reports as
+                # "Orphaned Bypass" even when a real, correctly-tagged
+                # test exists, because the search string ends up doubled
+                # to "COMM_COMM_...". Confirmed against a real case:
+                # ham_init/hooks.py's audit-ignore-catch-all cites
+                # COMM_test_post_init_hook_daemon_registry, and
+                # ham_init/tests/test_admin_password_bootstrap.py already
+                # has a correctly-tagged
+                # `# Tests [@ANCHOR: COMM_test_post_init_hook_daemon_registry]`
+                # -- undetectable before this fix.
                 anchor_match = re.search(r"\[@ANCHOR:\s*([a-zA-Z0-9_]+)\s*\]", line)
                 if anchor_match:
                     REQUIRE_TEST_VERIFICATION.append(
                         {
-                            "anchor": anchor_match.group(1),
+                            "anchor": anchor_match.group(1).removeprefix("COMM_"),
                             "type": next(
                                 (tag for tag in valid_audits if tag in line), None
                             ),
@@ -2811,7 +2826,7 @@ def scan_file(filepath, is_odoo_module=False):
                 if anchor_match:
                     REQUIRE_TEST_VERIFICATION.append(
                         {
-                            "anchor": anchor_match.group(1),
+                            "anchor": anchor_match.group(1).removeprefix("COMM_"),
                             "type": burn_type,
                             "file": filepath,
                             "line": line_num,
