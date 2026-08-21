@@ -1149,7 +1149,27 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         node.lineno, "CRITICAL RCE: The pickle module is vulnerable."
                     )
                 elif alias.name == "random":
-                    self.add_error(node.lineno, "WEAK CRYPTO: Do not use 'random'.")
+                    line_content = (
+                        self.lines[node.lineno - 1]
+                        if node.lineno <= len(self.lines)
+                        else ""
+                    )
+                    # `random` is genuinely insecure for anything
+                    # security-sensitive (tokens, passwords, secrets) --
+                    # this rule should keep flagging that. It's also the
+                    # correct, standard tool for reproducible
+                    # (`random.seed()`-driven) simulation/test/exam
+                    # generation, a real, common, non-security use this
+                    # blanket ban has no way to distinguish -- confirmed
+                    # false-positive case: ingest/generate_practice_exam.py's
+                    # `random.seed(args.seed)` for deterministic exam
+                    # generation, which `secrets.SystemRandom` cannot do
+                    # by design (it refuses to be seeded, on purpose).
+                    if "audit-ignore-weak-random" not in line_content:
+                        self.add_error(
+                            node.lineno,
+                            "WEAK CRYPTO: Do not use 'random'. If this is deliberately non-security use needing reproducible/seedable output (e.g. random.seed() for deterministic test/exam generation), add '# audit-ignore-weak-random' with a comment explaining why -- otherwise use 'secrets' instead.",
+                        )
             self.generic_visit(node)
 
         def visit_Expr(self, node):
@@ -1260,7 +1280,16 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     node.lineno, "CRITICAL RCE: The pickle module is vulnerable."
                 )
             elif node.module == "random":
-                self.add_error(node.lineno, "WEAK CRYPTO: Do not use 'random'.")
+                line_content = (
+                    self.lines[node.lineno - 1]
+                    if node.lineno <= len(self.lines)
+                    else ""
+                )
+                if "audit-ignore-weak-random" not in line_content:
+                    self.add_error(
+                        node.lineno,
+                        "WEAK CRYPTO: Do not use 'random'. If this is deliberately non-security use needing reproducible/seedable output (e.g. random.seed() for deterministic test/exam generation), add '# audit-ignore-weak-random' with a comment explaining why -- otherwise use 'secrets' instead.",
+                    )
             elif (
                 self.is_odoo_module
                 and getattr(node, "module", "") == "odoo.modules"
