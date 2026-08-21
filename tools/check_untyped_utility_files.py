@@ -57,9 +57,6 @@ EXCLUDED_DIR_PREFIXES = [
 # Repo-relative files with real, not-yet-reviewed mypy findings as of this
 # check's introduction. See the module docstring above.
 EXCLUDED_FILES = {
-    "daemons/ham_dx_daemon/main.py",
-    "daemons/hams_local_relay/tools/rig_simulator.py",
-    "daemons/hams_simulated_bots/main.py",
     "ingest/build_dependency_graph.py",
     "ingest/composite_text.py",
     "ingest/parse_pdfs.py",
