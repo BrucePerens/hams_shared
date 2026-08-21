@@ -2732,7 +2732,17 @@ def scan_file(filepath, is_odoo_module=False):
         if filename.endswith(".xml") and stripped.startswith("\x3c!--"):
             continue
 
-        if "noqa" in line.lower():
+        # Word-boundaried, not a bare substring search: a real `# noqa` /
+        # `// noqa` suppression comment always has "noqa" as its own token.
+        # A bare substring match also fires on any line containing a long
+        # unbroken run of non-code text -- confirmed against a real false
+        # positive: ham_training/data/review_ham_tech.html embeds base64
+        # image blobs, and "noqa" turns up by pure alphabet coincidence
+        # inside several of them (e.g. "...KNoQAImLyor...", no boundary on
+        # either side), which the old bare-substring check flagged as 57
+        # separate "linter evasion" errors in a file that contains no
+        # actual noqa comment at all.
+        if re.search(r"\bnoqa\b", line, re.IGNORECASE):
             if "noqa: e402" in line.lower():
                 pass  # Exception allowed for sys.path injections in isolated daemon tests
             else:
