@@ -314,6 +314,21 @@ GENERAL_ERROR_RULES = [
     ),
 ]
 
+# Not in GENERAL_ERROR_RULES: every line this is meant to catch is, by
+# construction, a comment-only line (the pattern requires '#'/'//' to be
+# the first non-whitespace character) -- and scan_file's own main loop
+# unconditionally skips comment-only lines before GENERAL_ERROR_RULES ever
+# runs (to avoid false positives from other rules matching banned-pattern
+# names inside ordinary prose comments). Checked separately, earlier in
+# that same loop, before the skip.
+REMOVED_COMMENT_RULE_REGEX = re.compile(r"^\s*(?:#|//)\s*[Rr]emoved\b")
+REMOVED_COMMENT_RULE_MSG = (
+    "CRITICAL AI LAZINESS: A comment marking code as 'removed' is forbidden. "
+    "If it's gone, delete the comment too -- git history is the record of "
+    "what used to be here, not a trailing comment that rots as the file "
+    "changes around it."
+)
+
 ODOO_ERROR_RULES = [
     (
         r"\.py$",
@@ -2676,6 +2691,28 @@ def scan_file(filepath, is_odoo_module=False):
     py_multiline_marker = None
     for line_num, line in enumerate(lines, 1):
         stripped = line.strip()
+
+        # Checked here, before the pure-comment skip below, because it only
+        # ever matches a comment-only line -- see REMOVED_COMMENT_RULE_REGEX's
+        # own definition for why it can't live in GENERAL_ERROR_RULES.
+        # Excludes the line where "removed" is the wrapped continuation of a
+        # sentence the PREVIOUS comment line started (confirmed as a real
+        # false-positive shape: a multi-line prose comment whose word-wrap
+        # happens to put "removed" first on its own line, mid-sentence,
+        # with no tombstone intent) -- if the previous line is the same
+        # marker and doesn't end in sentence-final punctuation, treat this
+        # line as that continuation and don't flag it.
+        if REMOVED_COMMENT_RULE_REGEX.search(stripped) and "burn-ignore" not in line:
+            marker = "#" if stripped.startswith("#") else "//"
+            prev_stripped = lines[line_num - 2].strip() if line_num >= 2 else ""
+            prev_is_continuing_comment = prev_stripped.startswith(
+                marker
+            ) and not prev_stripped.rstrip().endswith((".", "!", "?", ":", ";"))
+            if not prev_is_continuing_comment:
+                errors_found.append(
+                    f"Line {line_num}: {REMOVED_COMMENT_RULE_MSG}\n      Code: `{stripped}`"
+                )
+
         if filename.endswith(".py"):
             if not in_py_multiline:
                 if '"""' in line or "'''" in line:
