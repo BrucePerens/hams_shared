@@ -2944,6 +2944,22 @@ def scan_file(filepath, is_odoo_module=False):
                 # user_websites/models/content_violation_report.py's
                 # _cron_notify_pending_reports().
                 "burn-ignore-company-scoped-loop",
+                # `'storage.backend' in self.env` detecting whether OCA's
+                # storage_backend addon is installed -- this is the one
+                # legitimate use of the soft-dependency check's target
+                # pattern: storage.backend is genuinely optional, installed
+                # after the fact by hams_s3/scripts/install_oca_storage.py,
+                # and hams_s3 must run identically whether or not an admin
+                # has ever run that script. A hard __manifest__.py
+                # dependency would force every hams_s3 install to also
+                # vendor and install an OCA addon that may not even exist in
+                # the tree, breaking that bootstrap flow entirely. This tag
+                # covers only the presence check itself (`'x' in self.env`)
+                # -- it does NOT cover .sudo() calls on the same lines,
+                # which remain a real, unresolved privilege-architecture
+                # question (see hams_s3/models/res_config_settings.py's own
+                # comment). First used there.
+                "burn-ignore-optional-oca-dep",
             ]
         ):
             errors_found.append(
