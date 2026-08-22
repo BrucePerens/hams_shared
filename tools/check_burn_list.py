@@ -2280,9 +2280,16 @@ def scan_file(filepath, is_odoo_module=False):
                         ):
                             has_tour = True
                     if not has_tour:
+                        # Widened from a 2-line lookback to 8, matching
+                        # the identical fix applied to the XPATH RENDERING
+                        # rule below (same false-positive class: a real
+                        # audit-ignore-view/anchor comment sitting a few
+                        # lines above the <record> tag, e.g. after a
+                        # multi-line explanatory comment block, rather
+                        # than immediately adjacent to it).
                         raw_text = "\n".join(
                             lines[
-                                max(0, node.lineno - 2) : min(
+                                max(0, node.lineno - 8) : min(
                                     len(lines), node.end_lineno + 1
                                 )
                             ]
@@ -2682,9 +2689,14 @@ def scan_file(filepath, is_odoo_module=False):
                         )
 
                 if node.tag == "record" and node.attrs.get("model") == "ir.cron":
+                    # Widened from a 2-line lookback to 8, same false-
+                    # positive class as the XPATH/UI-TOUR rules: a real
+                    # audit-ignore-cron comment sitting above a multi-line
+                    # explanatory block rather than immediately adjacent
+                    # to the <record> tag.
                     raw_text = "\n".join(
                         lines[
-                            max(0, node.lineno - 2) : min(
+                            max(0, node.lineno - 8) : min(
                                 len(lines), node.end_lineno + 1
                             )
                         ]
