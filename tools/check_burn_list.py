@@ -2930,6 +2930,20 @@ def scan_file(filepath, is_odoo_module=False):
                 # hams_s3/scripts/install_oca_storage.py's OCA
                 # storage_backend vendoring/patch script.
                 "burn-ignore-vendor-patch-text",
+                # A search()/search_count()/read_group() call inside a
+                # per-company loop that ISN'T the ordinary repeated-query
+                # N+1 pattern this rule exists to catch: the loop variable
+                # is passed to .with_company(company) on each iteration,
+                # which is what makes that company's records visible at
+                # all under the module's own ir.rule when the calling
+                # service account's own company_ids is scoped to a single
+                # company. Collapsing this into one grouped call outside
+                # the loop would require widening the service account's
+                # company membership -- a real privilege-scoping decision,
+                # not a mechanical query rewrite. First used by
+                # user_websites/models/content_violation_report.py's
+                # _cron_notify_pending_reports().
+                "burn-ignore-company-scoped-loop",
             ]
         ):
             errors_found.append(
