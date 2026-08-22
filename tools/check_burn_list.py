@@ -2920,6 +2920,16 @@ def scan_file(filepath, is_odoo_module=False):
                 # ingress rules genuinely route to
                 # ssh://localhost:22 / http://localhost:8069).
                 "burn-ignore-cloudflared-ingress",
+                # GENERAL_ERROR_RULES matches raw line text, not AST --
+                # a string literal used as search/replace *data* for
+                # patching a vendored third-party file (e.g. a dict key
+                # like 'try:\n    import x\nexcept ImportError:\n...'
+                # passed to a find-and-replace helper) can contain the
+                # literal text a rule is looking for without containing
+                # any real code that rule concerns. First used by
+                # hams_s3/scripts/install_oca_storage.py's OCA
+                # storage_backend vendoring/patch script.
+                "burn-ignore-vendor-patch-text",
             ]
         ):
             errors_found.append(
