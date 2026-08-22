@@ -1925,6 +1925,8 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 if not (
                     "tools/"
                     in getattr(self, "filepath", self.filename).replace("\\", "/")
+                    or "scripts/"
+                    in getattr(self, "filepath", self.filename).replace("\\", "/")
                     or self.filename == "check_burn_list.py"
                 ):
                     self.add_error(
@@ -2760,7 +2762,11 @@ def scan_file(filepath, is_odoo_module=False):
     if filename.startswith("test_") and filename.endswith(".py"):
         FOUND_TEST_CONTENTS[filepath] = content
 
-    if filename.endswith(".js"):
+    # Odoo's asset bundler only ever picks up JS from a module's static/
+    # directory -- a tool config file living outside one (eslint.config.js,
+    # webpack.config.js, etc.) is never bundled and can't carry the pragma
+    # at all. Found via a real false positive on hams_shared/eslint.config.js.
+    if filename.endswith(".js") and "/static/" in filepath.replace(os.sep, "/"):
         has_pragma = False
         code_started = False
         for i, line in enumerate(lines, 1):
@@ -3246,6 +3252,7 @@ def main():
                                     and not "daemons/" in filepath_forward
                                     and not "daemon/" in filepath_forward
                                     and not "tools/" in filepath_forward
+                                    and not "scripts/" in filepath_forward
                                     and not filepath.endswith("setup.py")
                                     and not filepath.endswith("__init__.py")
                                 ):

@@ -23,8 +23,10 @@ def reap_headless_chromes():
             ):
                 print(f"[*] Pre-killing stray headless chrome process {p.info['pid']}")
                 p.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, KeyError):
-            pass
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, KeyError) as e:
+            # Expected and harmless: the process can exit between
+            # process_iter()'s snapshot and this loop body inspecting it.
+            print(f"[*] Skipping a process that vanished mid-scan: {e}", file=sys.stderr)
 
     time.sleep(0.5)
     for p in psutil.process_iter(["pid", "name", "uids", "cmdline"]):
@@ -39,8 +41,10 @@ def reap_headless_chromes():
             ):
                 p.kill()
                 p.wait(timeout=1.0)
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, psutil.TimeoutExpired, KeyError):
-            pass
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, psutil.TimeoutExpired, KeyError) as e:
+            # Same benign race as above -- the process can exit or fail to
+            # reap within the timeout between the scan and this inspection.
+            print(f"[*] Skipping a process that vanished or didn't reap in time: {e}", file=sys.stderr)
 
 def main():
     if len(sys.argv) < 2:
@@ -69,8 +73,8 @@ def main():
         try:
             pgid = os.getpgid(process.pid)
             os.killpg(pgid, signal.SIGTERM)
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"[!] Could not signal process group for PID {process.pid}: {e}", file=sys.stderr)
         reap_headless_chromes()
         sys.exit(1)
         
@@ -84,8 +88,8 @@ def main():
         try:
             pgid = os.getpgid(process.pid)
             os.killpg(pgid, signal.SIGTERM)
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"[!] Could not signal process group for PID {process.pid}: {e}", file=sys.stderr)
         
         # Fallback to reap directly matching chromes
         reap_headless_chromes()
@@ -95,8 +99,8 @@ def main():
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(pgid, signal.SIGKILL)
-            except OSError:
-                pass
+            except OSError as e:
+                print(f"[!] Could not SIGKILL process group {pgid}: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
