@@ -2692,9 +2692,20 @@ def scan_file(filepath, is_odoo_module=False):
                             f"Line {node.lineno}: [%AUDIT] CRON ARCHITECTURE: Ensure the Python method implements stateless batching via _trigger()."
                         )
                 if node.tag == "xpath":
+                    # A 2-line lookback is too narrow whenever an
+                    # audit-ignore-xpath comment sits above other stacked
+                    # comments (e.g. an [@ANCHOR: ...] line and an
+                    # audit-ignore-view line) rather than immediately
+                    # before the <xpath> tag -- a real, previously
+                    # undiscovered false positive found via
+                    # ham_init/data/site_cleanup_data.xml's
+                    # hams_minimal_footer template, which already carries
+                    # a real audit-ignore-xpath comment 3 lines above the
+                    # tag (just outside the old 2-line window) rather than
+                    # immediately adjacent to it.
                     raw_text = "\n".join(
                         lines[
-                            max(0, node.lineno - 2) : min(
+                            max(0, node.lineno - 8) : min(
                                 len(lines), node.end_lineno + 1
                             )
                         ]
@@ -3380,16 +3391,23 @@ def main():
             )
             total_errors += 1
 
-    if total_errors > 0 or total_warnings > 0:
-        print(f"\nScan Complete: Checked {scanned_files} files.")
-        print(
-            f"Total Errors: {total_errors} | Total Warnings (Audits): {total_warnings}"
-        )
+    # Always print a summary, even with zero findings -- a fully silent,
+    # zero-byte-output exit was previously indistinguishable from the
+    # tool having crashed, hung, or been invoked wrong (e.g. against an
+    # empty/nonexistent directory), found by actually hitting it: a real
+    # scan that genuinely had zero errors and zero warnings printed
+    # nothing at all.
+    print(f"\nScan Complete: Checked {scanned_files} files.")
+    print(
+        f"Total Errors: {total_errors} | Total Warnings (Audits): {total_warnings}"
+    )
 
     if total_errors > 0:
         sys.exit(1)
     if total_warnings > 0:
         print("✅ Passed with warnings. Audits require manual verification.")
+    else:
+        print("✅ Passed with zero findings.")
     sys.exit(0)
 
 
