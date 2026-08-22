@@ -2897,6 +2897,17 @@ def scan_file(filepath, is_odoo_module=False):
                 # containerization. First used by ham_shack/tests/
                 # verify_noise_xx_handshake.py.
                 "burn-ignore-self-hosted-server",
+                # cloudflared's own ingress architecture: it runs on the
+                # SAME host as the services it fronts and proxies traffic
+                # from Cloudflare's edge back to them over loopback --
+                # localhost is the architecturally correct target here,
+                # not a container-to-container networking mistake. First
+                # used by cloudflare/models/tunnel.py's ingress config and
+                # tunnel_route.py's matching help text (found via a real
+                # false positive: this codebase's own established
+                # ingress rules genuinely route to
+                # ssh://localhost:22 / http://localhost:8069).
+                "burn-ignore-cloudflared-ingress",
             ]
         ):
             errors_found.append(
