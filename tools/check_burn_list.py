@@ -2690,14 +2690,50 @@ def scan_file(filepath, is_odoo_module=False):
                         )
 
                 if node.tag == "record" and node.attrs.get("model") == "ir.cron":
-                    # Widened from a 2-line lookback to 8, same false-
-                    # positive class as the XPATH/UI-TOUR rules: a real
-                    # audit-ignore-cron comment sitting above a multi-line
-                    # explanatory block rather than immediately adjacent
-                    # to the <record> tag.
+                    # A fixed line-count lookback (previously 2, then
+                    # widened to 8) is inherently arbitrary -- a real
+                    # audit-ignore-cron comment explaining a genuine
+                    # architectural exception can run longer than any
+                    # fixed guess (found a real 9-line one in
+                    # edge_routing/data/security_data.xml, one line past
+                    # the widened-to-8 window). Look back only as far as
+                    # the end of this record's own previous sibling (or
+                    # the enclosing <data> block's start if it's the
+                    # first child) -- a real structural boundary this
+                    # custom XML parser already tracks, not a magic
+                    # number, and one that can't accidentally pull in a
+                    # DIFFERENT <record>'s own comment when multiple
+                    # ir.cron records share one <data> block (confirmed
+                    # this happens for real: cloudflare/data/cron.xml,
+                    # user_websites/data/user_websites_data.xml both have
+                    # 2-3 ir.cron siblings under the same parent).
+                    # Comment siblings don't get a real end_lineno from
+                    # this parser (it never tracks where a comment's
+                    # text actually ends, only where it starts), so walk
+                    # back past any run of comment siblings immediately
+                    # preceding this record and anchor on the EARLIEST
+                    # one's start line -- that's where a multi-line
+                    # audit-ignore-cron explanation directly above this
+                    # record actually begins, however long it runs.
+                    lookback_start = node.lineno - 8
+                    if node.parent is not None:
+                        siblings = node.parent.children
+                        idx = siblings.index(node) if node in siblings else -1
+                        boundary_idx = idx
+                        while boundary_idx > 0 and siblings[boundary_idx - 1].tag == "#comment":
+                            boundary_idx -= 1
+                        if boundary_idx > 0:
+                            lookback_start = siblings[boundary_idx - 1].end_lineno
+                        elif boundary_idx < idx:
+                            # Ran back to the start of the parent's
+                            # children with only comments in between --
+                            # include from the first of those comments.
+                            lookback_start = siblings[boundary_idx].lineno - 1
+                        else:
+                            lookback_start = node.parent.lineno - 1
                     raw_text = "\n".join(
                         lines[
-                            max(0, node.lineno - 8) : min(
+                            max(0, lookback_start) : min(
                                 len(lines), node.end_lineno + 1
                             )
                         ]
