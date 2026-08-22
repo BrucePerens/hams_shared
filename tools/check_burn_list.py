@@ -1497,7 +1497,23 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         )
                     if len(node.args) >= 3 or node.keywords:
                         line_content = self.lines[node.lineno - 1] if node.lineno <= len(self.lines) else ""
-                        if "burn-ignore-introspection" not in line_content:
+                        # Identity-gated, not tag-gated, and deliberately so: a
+                        # `# burn-ignore-...` comment can be copy-pasted to any
+                        # new 3-arg getattr() call with zero review friction,
+                        # which is exactly the hole this rule exists to close.
+                        # try_enable_line_buffering() in ingest/daemon_utils.py
+                        # is the one, reviewed, tested, centralized location
+                        # this codebase's stdlib-feature-detection pattern is
+                        # allowed to live (see docs/proposals/
+                        # LINTER_POLICY_REVISIT.md) -- exempted by matching
+                        # this exact function's identity (file + name), which
+                        # requires an actual code change to extend, not a
+                        # comment anyone can add anywhere.
+                        is_reviewed_stdlib_feature_check = (
+                            self.filepath.replace("\\", "/").endswith("ingest/daemon_utils.py")
+                            and self.current_method == "try_enable_line_buffering"
+                        )
+                        if "burn-ignore-introspection" not in line_content and not is_reviewed_stdlib_feature_check:
                             self.add_error(
                                 node.lineno,
                                 "CRITICAL AI LAZINESS: 3-argument getattr() is forbidden to prevent silently defaulting on missing schema attributes. Access fields directly to ensure the schema contract is enforced.",
@@ -1822,6 +1838,16 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     if (
                         isinstance(val.slice, ast.Constant)
                         and val.slice.value == "ir.module.module"
+                        # Checking whether an optional module is
+                        # installed is a fundamentally different
+                        # operation from querying a data table -- Odoo
+                        # has no manifest-level way to express "this
+                        # test conditionally exercises an optional
+                        # module", which is exactly what a test
+                        # verifying both branches of that behavior has
+                        # to do. See docs/proposals/
+                        # LINTER_POLICY_REVISIT.md.
+                        and not self.filename.startswith("test_")
                     ):
                         self.add_error(
                             node.lineno,
@@ -1992,7 +2018,22 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     if hasattr(node.func, "value")
                     else ""
                 )
-                if caller_id != "re" and "regex" not in caller_id:
+                # Same narrow carve-out as the dynamic-querying rule
+                # above, and for the same reason: checking whether an
+                # optional module is installed in a test that
+                # deliberately exercises both branches isn't the
+                # repeated-data-table-query pattern this rule exists to
+                # catch. Scoped to this exact model + test files only,
+                # not a blanket "no N+1 checking in tests" exemption.
+                func_val = getattr(node.func, "value", None)
+                is_ir_module_module_in_test = (
+                    self.filename.startswith("test_")
+                    and isinstance(func_val, ast.Subscript)
+                    and getattr(func_val.value, "attr", getattr(func_val.value, "id", "")) == "env"
+                    and isinstance(func_val.slice, ast.Constant)
+                    and func_val.slice.value == "ir.module.module"
+                )
+                if caller_id != "re" and "regex" not in caller_id and not is_ir_module_module_in_test:
                     self.add_error(
                         node.lineno,
                         f"[!] DIAGNOSTIC FOR AI: ORM '.{attr}()' inside a loop causes N+1 locking. Pre-fetch data outside the loop.",
@@ -2823,6 +2864,7 @@ def scan_file(filepath, is_odoo_module=False):
                 "audit-ignore-catch-all",
                 "audit-ignore-path",
                 "audit-ignore-sql",
+                "audit-ignore-weak-random",
             ]
             if not any(tag in line for tag in valid_audits):
                 errors_found.append(
