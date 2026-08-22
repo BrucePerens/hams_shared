@@ -4,6 +4,11 @@
 
 """
 Checks all source files for hard-coded absolute paths based in /home.
+
+.mypy_cache is excluded: its .json files legitimately embed the host's
+real absolute paths as cached type-check data, not source code, and it
+self-ignores via mypy's own generated .mypy_cache/.gitignore -- flagging
+it here is a false positive, not a real finding.
 """
 
 import os
@@ -26,6 +31,7 @@ def check_absolute_paths(repo_dir):
         "radae",
         "agents",
         "scratch",
+        ".mypy_cache",
     }
     # Only check text-based files
     valid_exts = {

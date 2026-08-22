@@ -1,5 +1,4 @@
 import os
-import ast
 
 def fix_manifest(path):
     with open(path, 'r', encoding='utf-8') as f:
