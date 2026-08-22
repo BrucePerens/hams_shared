@@ -1674,11 +1674,12 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 elif (
                     attr == "sleep"
                     and getattr(node.func.value, "id", "") == "time"
-                    and "audit-ignore-sleep"
-                    not in (
-                        self.lines[node.lineno - 1]
-                        if node.lineno <= len(self.lines)
-                        else ""
+                    and not any(
+                        "audit-ignore-sleep" in self.lines[ln - 1]
+                        for ln in range(
+                            node.lineno,
+                            min(getattr(node, "end_lineno", node.lineno), len(self.lines)) + 1,
+                        )
                     )
                 ):
                     if not any(
