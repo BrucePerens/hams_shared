@@ -607,7 +607,19 @@ ODOO_ERROR_RULES = [
 WARNING_RULES = [
     (
         r"\.py$",
-        re.compile(r"zipfile\.ZipFile|tarfile\.open"),
+        # Was `zipfile\.ZipFile|tarfile\.open`, which fired on *every*
+        # construction of either object -- including write-mode archive
+        # creation (no extraction, no risk at all) and read-only member
+        # access via `.open()`/`.namelist()` (reads bytes into memory,
+        # never writes an archive-member's internal path to disk, so no
+        # symlink-slip risk either). The real risk is specifically
+        # `.extractall()`/`.extract()`, which write archive-member paths
+        # to the filesystem -- a real, previously undiscovered false
+        # positive found via ham_relay_bridge/tests/
+        # test_relay_source_publish_api.py's `zipfile.ZipFile(buf, "w")`
+        # (a test fixture that only ever writes a zip, never extracts
+        # one).
+        re.compile(r"\.extractall\(|\.extract\("),
         "[%AUDIT] PATH TRAVERSAL / ARCHIVE EXTRACTION: Ensure zip/tar extraction includes a check for symlink bits (e.g., `external_attr`) to prevent slip attacks.",
     ),
 ]
@@ -1721,7 +1733,19 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             return is_cr_execute
 
         def _check_search_methods(self, node, attr):
-            if getattr(node.func.value, "id", "") == "re":
+            receiver_id = getattr(node.func.value, "id", "")
+            if receiver_id == "re":
+                return
+            # A compiled regex object's own .search() (e.g. `_SCHEMA_SCRIPT_RE =
+            # re.compile(...); _SCHEMA_SCRIPT_RE.search(text)`) is unrelated to
+            # an Odoo recordset's .search() -- no 'limit' concept applies to it
+            # at all. AST alone can't know the receiver's runtime type, so this
+            # relies on the same _RE/_REGEX/_PATTERN naming convention this
+            # linter file's own module-level compiled patterns already use
+            # (e.g. REMOVED_COMMENT_RULE_REGEX above) -- a real, previously
+            # undiscovered false positive found via
+            # ics_forms/models/ics_form_handler.py's `_SCHEMA_SCRIPT_RE.search()`.
+            if receiver_id.upper().endswith(("_RE", "_REGEX", "_PATTERN")):
                 return
             if attr == "search":
                 if not any(
@@ -2846,6 +2870,16 @@ def scan_file(filepath, is_odoo_module=False):
                 "burn-ignore-test-tags",
                 "burn-ignore-pika",
                 "burn-ignore-introspection",
+                # A standalone verification script connecting to a
+                # 127.0.0.1 server it spawned itself moments earlier in
+                # the same process tree (e.g. `python3 -m http.server`)
+                # -- the CRITICAL NETWORK HARDCODING rule's own concern
+                # (a different service living in a different container in
+                # multi-service Odoo test infra) genuinely doesn't apply:
+                # parent and child share the same loopback regardless of
+                # containerization. First used by ham_shack/tests/
+                # verify_noise_xx_handshake.py.
+                "burn-ignore-self-hosted-server",
             ]
         ):
             errors_found.append(
