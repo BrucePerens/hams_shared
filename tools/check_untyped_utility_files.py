@@ -13,16 +13,53 @@ called with the wrong arg count, record.with_delay() when queue_job was
 never installed) without needing the registry-aware mypy plugin Phase 2
 would require to handle Odoo's `_inherit` merging correctly.
 
-Any file that imports `models` from the `odoo` package is automatically
-skipped -- Odoo Model classes are exactly the class of file vanilla mypy
-cannot check correctly yet (see the proposal's "cross-module _inherit"
-section), so silently skipping them here is a safety filter, not a gap
-Phase 2 hasn't gotten to.
+Any file that *defines* an Odoo Model/AbstractModel/TransientModel class
+is automatically skipped -- Odoo Model classes are exactly the class of
+file vanilla mypy cannot check correctly yet (see the proposal's
+"cross-module _inherit" section), so silently skipping them here is a
+safety filter, not a gap Phase 2 hasn't gotten to.
+
+This is a real AST check for a class deriving from one of those three
+bases, not a textual "imports models from odoo" scan (which used to be
+this function's entire test, ODOO_AWARE_TYPE_CHECKING.md's original
+Phase 1 shape) -- that textual check was a confirmed false negative for
+files that reference `models.Model` for something other than defining a
+class (e.g. an `isinstance(obj, models.Model)` runtime check in an
+otherwise plain utility module), silently exempting exactly the kind of
+file this tool exists to catch bugs in. Found via
+distributed_redis_cache/redis_cache.py: eight plain module-level
+functions, zero Model classes, one `isinstance(obj, models.Model)` check
+-- the proposal's own motivating `notify_model_invalidation()` bug lived
+in this exact file and was never actually scanned because of it.
 
 Deliberately excluded even though it doesn't touch Odoo models:
 `daemons/hams_local_relay/radae/` (vendored ML/DSP research code with
 extensive real mypy findings -- untangling third-party research code's
-typing is its own project, not Phase 1 scope).
+typing is its own project, not Phase 1 scope), and, as of this session,
+`daemons/cloudflared/` (the entire directory is vendored, upstream
+`cloudflared` client source -- see its own README -- not code owned by
+this repo). Confirmed real findings there, not assumed: 6 dataclass
+fields typed non-Optional but defaulted to None (config.py), a missing
+list[bytes] annotation (util.py), and a genuinely broken test --
+test_service.py references `CfdModes.CLASSIC`, an enum member that does
+not exist (only NAMED/QUICK are defined, and the fixture only handles
+those two), which would AttributeError the instant either of the two
+tests using it actually ran. None of this was patched here -- editing
+vendored upstream code creates a merge conflict on the next re-vendor,
+and CfdModes.CLASSIC specifically would mean guessing at Cloudflare's own
+classic-tunnel config semantics inside code this repo doesn't own.
+Flagged in night_shift_todo.md as an upstream defect instead.
+
+**This also means the claim below (dated 2026-08-20, before this
+exclusion existed) needs a caveat**: at the time this session checked it,
+the "hard, unconditional gate" was NOT actually green -- these vendored
+cloudflared findings made `run_linters.py` step 23 exit 1 on unmodified
+code (confirmed directly, not assumed, by running this exact checker
+before making any change). Whether that's dependency drift since the
+2026-08-18 `pytest`/`pytest-asyncio` bump or the claim never having
+covered this vendored subtree isn't something this session could
+determine -- not guessed at. The exclusion above is what makes the gate
+green again, verified by rerunning after adding it.
 
 EXCLUDED_FILES started as 33 files with real, not-yet-reviewed mypy
 findings on this check's introduction. As of 2026-08-20 that backlog has
@@ -46,14 +83,33 @@ exclusion would go if one is ever needed again, not repopulated
 reflexively just because a new file trips this check.
 """
 
+import ast
 import os
 import subprocess
 import sys
+
+# Mirrors check_model_extension_collisions.py's own MODEL_BASES/
+# _is_model_class -- not imported directly, since these tool scripts are
+# each self-contained (odoo_registry_builder.py mirrors the same AST
+# logic independently rather than cross-importing, the established
+# pattern in this directory).
+MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}
+
+
+def _is_model_class(node):
+    for base in node.bases:
+        if isinstance(base, ast.Attribute) and base.attr in MODEL_BASES:
+            return True
+        if isinstance(base, ast.Name) and base.id in MODEL_BASES:
+            return True
+    return False
 
 # Repo-relative paths (files or directories) to scan.
 SCAN_ROOTS = [
     "ham_com/models/callsign_validation.py",
     "ham_base/models/geo_utils.py",
+    "distributed_redis_cache/redis_cache.py",
+    "distributed_redis_cache/redis_pool.py",
     "daemons",
     "ingest",
 ]
@@ -61,6 +117,7 @@ SCAN_ROOTS = [
 # Repo-relative directory prefixes to never scan, even under SCAN_ROOTS.
 EXCLUDED_DIR_PREFIXES = [
     "daemons/hams_local_relay/radae",
+    "daemons/cloudflared",
 ]
 
 # As of 2026-08-20, every file this check can reach passes
@@ -75,19 +132,22 @@ EXCLUDED_FILES: set = set()
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git"}
 
 
-def imports_odoo_models(path):
+def defines_odoo_model_class(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                stripped = line.strip()
-                if stripped.startswith("from odoo import") and "models" in stripped:
-                    return True
-                if stripped.startswith("import odoo.models"):
-                    return True
-                if stripped.startswith("from odoo.models import"):
-                    return True
+            source = f.read()
     except OSError:
         return False
+    try:
+        tree = ast.parse(source, filename=path)
+    except SyntaxError:
+        # Not this checker's job to report a syntax error in a file it's
+        # only trying to classify -- mypy itself will fail loudly on this
+        # file if it's ever actually scanned, once this returns False.
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and _is_model_class(node):
+            return True
     return False
 
 
@@ -116,7 +176,7 @@ def collect_candidates(repo_root):
                 continue
             if rel_path in EXCLUDED_FILES:
                 continue
-            if imports_odoo_models(abs_path):
+            if defines_odoo_model_class(abs_path):
                 continue
             candidates.append(abs_path)
     return sorted(set(candidates))
