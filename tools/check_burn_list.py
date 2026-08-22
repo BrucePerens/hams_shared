@@ -3392,8 +3392,18 @@ def main():
 
         req_mod = get_mod_dir(req["file"])
         best_match = None
+        # Accept the citation both with and without the "COMM_" prefix.
+        # `anchor` above already had any "COMM_" the code-side tag carried
+        # stripped off (see where REQUIRE_TEST_VERIFICATION entries are
+        # built), so a real citation written the normal way (matching every
+        # other [@ANCHOR: COMM_...] tag in the codebase) is found either
+        # way. This only widens what counts as a match -- an anchor string
+        # still has to appear literally in a real test file for
+        # _verify_test_ast to run on it -- so a bypass that used to resolve
+        # still resolves, and nothing that used to be flagged as orphaned
+        # can newly resolve through a DIFFERENT anchor's citation.
         for f, c in FOUND_TEST_CONTENTS.items():
-            if f"[@ANCHOR: COMM_{anchor}]" in c:
+            if f"[@ANCHOR: COMM_{anchor}]" in c or f"[@ANCHOR: {anchor}]" in c:
                 if req_mod and get_mod_dir(f) == req_mod:
                     best_match = (c, f)
                     break
@@ -3404,7 +3414,8 @@ def main():
 
         if not target_content:
             print(
-                f"  ❌ ERROR: Orphaned Bypass. {req['type']} in {req['file']}:{req['line']} cites anchor '{anchor}' not found in any test file."
+                f"  ❌ ERROR: Orphaned Bypass. {req['type']} in {req['file']}:{req['line']} cites anchor '{anchor}', but no [@ANCHOR: {anchor}] or [@ANCHOR: COMM_{anchor}] citation was found in any test file. "
+                f"Note: the citation must be on the SAME source line as the {req['type']} tag itself -- one on a comment line just above/before it will not register."
             )
             verification_errors += 1
             total_errors += 1

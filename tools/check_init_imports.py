@@ -6,6 +6,33 @@ import os
 import sys
 import ast
 
+# Repo-relative paths of files that deliberately live in a tests/
+# directory but are NOT Odoo tests, so not importing them from
+# __init__.py is correct, not an oversight. Each entry must carry its
+# own in-file explanation of why it's here (this checker can't tell
+# "forgotten" from "deliberate" on its own).
+EXCLUDED_FILES = {
+    # A real-browser Playwright verification script for NoiseXXInitiator
+    # (see TRANSMITTER_HIJACK_PREVENTION.md section 1) that needs a real
+    # headless Chromium instance and real ES module loading over HTTP,
+    # neither of which Odoo's own test runner provides -- its own module
+    # docstring says so explicitly: "Not an Odoo test (no `test_` prefix,
+    # not imported from an __init__.py)". Run directly, not discovered.
+    "ham_shack/tests/verify_noise_xx_handshake.py",
+    # Real-browser Playwright verification scripts for sanitizeLessonHtml()
+    # and the <story-chapter>/<knowledge-check> web components in
+    # static/src/js/components/story-components.js -- their own module
+    # docstrings say so explicitly: "Not an Odoo test (no `test_` prefix,
+    # not imported from an __init__.py)". Formerly lived in the now-retired
+    # ham_training_auxcomm module (whose tests/ directory had no
+    # __init__.py at all, so this check never ran against them); moved
+    # into ham_training/tests/ along with the rest of that module's
+    # content, which does have an __init__.py, so the exclusion needs to
+    # be explicit here now. Run directly, not discovered.
+    "ham_training/tests/verify_sanitizer.py",
+    "ham_training/tests/verify_story_components.py",
+}
+
 
 def get_imported_names(init_path):
     imported = set()
@@ -49,6 +76,9 @@ def main():
 
             for file in files:
                 if file.endswith(".py") and file not in ignore_files:
+                    rel_path = os.path.relpath(os.path.join(root, file), repo_root)
+                    if rel_path in EXCLUDED_FILES:
+                        continue
                     mod_name = file[:-3]
                     if mod_name not in imported:
                         print(
