@@ -121,6 +121,12 @@ module.exports = tseslint.config(
       "**/target/**",
       "**/*.min.js",
       "**/static/lib/**",
+      // Python virtualenvs can bundle their own vendored JS (e.g.
+      // urllib3's Emscripten/Pyodide worker) as installed-package data,
+      // not application code -- same reasoning as node_modules/ above.
+      // First found via daemons/hams_simulated_bots/.venv/.
+      "**/.venv/**",
+      "**/venv/**",
       // This config file is itself a Node/CommonJS tooling script, not
       // application code -- not covered by tsconfig.json's static/**
       // scope, and not meant to follow the app-code ruleset (browser
