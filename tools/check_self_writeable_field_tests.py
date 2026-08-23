@@ -231,10 +231,10 @@ def main():
             errors += 1
             continue
 
-        module_dir = _owning_module(path, os.path.dirname(path))
-        # _owning_module walks up from path's dir; re-derive using the
-        # correct starting point (path itself may already BE in the
-        # module's models/ dir one level down).
+        # _owning_module(path, repo_root) needs a real ancestor repo_root
+        # to walk up to; only os.path.dirname(path) itself is known here,
+        # so walk up directly instead of calling it with a repo_root that
+        # would make the loop's `d != repo_root` check fail immediately.
         module_dir = None
         d = os.path.dirname(path)
         while d and os.path.dirname(d) != d:
