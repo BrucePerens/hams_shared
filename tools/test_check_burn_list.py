@@ -21,7 +21,22 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from check_burn_list import parse_odoo_xml, _xml_audit_lookback_start  # noqa: E402
+from check_burn_list import (  # noqa: E402
+    parse_odoo_xml,
+    _xml_audit_lookback_start,
+    check_ast_vulnerabilities,
+)
+
+
+def _domain_sandbox_warnings(source, filepath="/tmp/some_module/tests/test_foo.py"):
+    # DOMAIN SANDBOX (like the .sudo() ban above it in the same
+    # visit_Attribute method) only runs when is_odoo_module=True --
+    # confirmed by reading the real code, not assumed: the first version
+    # of this test omitted it and got zero warnings for a case that
+    # obviously should have fired.
+    lines = source.splitlines()
+    _errors, warnings = check_ast_vulnerabilities(filepath, source, lines, is_odoo_module=True)
+    return [msg for _lineno, msg in warnings if "DOMAIN SANDBOX" in msg]
 
 
 def _find_first(node, tag):
@@ -147,3 +162,91 @@ def test_lookback_on_a_record_with_no_parent_uses_the_fallback():
 
     start = _xml_audit_lookback_start(record, fallback_lines=8)
     assert start == record.lineno - 8
+
+
+def test_domain_sandbox_flags_a_direct_id_chained_grant():
+    # The canonical, always-caught shape: .id chained directly onto the
+    # ref() call, the exact pattern every real group_ids/groups_id grant
+    # in this codebase uses.
+    source = (
+        "def f(self, user):\n"
+        '    user.write({"group_ids": [(6, 0, [self.env.ref("base.group_user").id])]})\n'
+    )
+    warnings = _domain_sandbox_warnings(source)
+    assert len(warnings) == 1
+
+
+def test_domain_sandbox_flags_the_variable_assignment_evasion_this_session_fixed():
+    # This session's own real fix: g = self.env.ref(...) stores the
+    # ref() result in a variable first, then g.id is read on a LATER,
+    # separate line -- the direct .id-chain check alone can't see this
+    # at all. Confirming this still fires is exactly what protects that
+    # fix from being silently reverted.
+    source = (
+        "def f(self, user):\n"
+        '    g = self.env.ref("base.group_user")\n'
+        '    user.write({"group_ids": [(4, g.id)]})\n'
+    )
+    warnings = _domain_sandbox_warnings(source)
+    assert len(warnings) == 1
+
+
+def test_domain_sandbox_does_not_flag_a_bare_reference_with_no_id_access():
+    # Real false-positive case #1 from this rule's own code comment:
+    # backup_management/tests/test_tdd_batch2.py's
+    # test_service_account_no_base_user_group assigns the ref() result
+    # to a plain variable then asserts *absence* -- no .id access
+    # anywhere, so this is not a grant.
+    source = (
+        "def f(self, user):\n"
+        '    g = self.env.ref("base.group_user")\n'
+        "    self.assertNotIn(g, user.group_ids)\n"
+    )
+    warnings = _domain_sandbox_warnings(source)
+    assert warnings == [], f"a bare reference with no .id access anywhere must not be flagged as a grant, got: {warnings}"
+
+
+def test_domain_sandbox_does_not_flag_a_bare_read_of_an_ir_rule_groups_field():
+    # Real false-positive case #2 from this rule's own code comment: a
+    # bare self.assertIn(self.env.ref("base.group_user"), rule.groups)
+    # reads an ir.rule's groups field (an unrelated model, not a
+    # user/group grant) -- the ref()'s own .id is never accessed here
+    # either, on the same line or any other.
+    source = (
+        "def f(self, rule):\n"
+        '    self.assertIn(self.env.ref("base.group_user"), rule.groups)\n'
+    )
+    warnings = _domain_sandbox_warnings(source)
+    assert warnings == []
+
+
+def test_domain_sandbox_exempts_a_file_named_for_odoo_facility_service():
+    # Only odoo_facility_service_internal may actually hold this group
+    # -- per this rule's own warning message -- so its own module's real
+    # code granting it to itself must not be flagged. The exemption
+    # check is `"odoo_facility_service" in self.filename`, and
+    # check_ast_vulnerabilities sets self.filename to
+    # os.path.basename(filepath) -- the exemption is keyed to the
+    # FILE'S OWN NAME, not any directory it happens to live in. Verified
+    # directly: a first version of this test used a path whose
+    # *directory* was named odoo_facility_service but whose filename
+    # (setup.py) wasn't, and the warning still fired -- confirming this
+    # is filename-based, not path-based, rather than assuming either.
+    source = (
+        "def f(self, user):\n"
+        '    user.write({"group_ids": [(6, 0, [self.env.ref("base.group_user").id])]})\n'
+    )
+    warnings = _domain_sandbox_warnings(source, filepath="/tmp/odoo_facility_service/models/odoo_facility_service_setup.py")
+    assert warnings == []
+
+
+def test_domain_sandbox_ignores_an_unrelated_ref_call():
+    # Sanity check: referencing any other xml_id at all (not
+    # base.group_user specifically) must never trigger this rule.
+    source = (
+        "def f(self, user):\n"
+        '    g = self.env.ref("base.group_system")\n'
+        '    user.write({"group_ids": [(4, g.id)]})\n'
+    )
+    warnings = _domain_sandbox_warnings(source)
+    assert warnings == []
