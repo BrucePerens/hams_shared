@@ -84,7 +84,8 @@ def _find_self_writeable_overrides(repo_roots):
                     continue
                 path = os.path.join(root, f)
                 try:
-                    content = open(path, "r", encoding="utf-8").read()
+                    with open(path, "r", encoding="utf-8") as fh:
+                        content = fh.read()
                 except OSError:
                     continue
                 if "def SELF_WRITEABLE_FIELDS" not in content:
@@ -120,7 +121,8 @@ def _find_tests_anchor(module_dir, anchor):
                 continue
             path = os.path.join(root, f)
             try:
-                content = open(path, "r", encoding="utf-8").read()
+                with open(path, "r", encoding="utf-8") as fh:
+                    content = fh.read()
             except OSError:
                 continue
             lines = content.splitlines()

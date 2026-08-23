@@ -178,7 +178,8 @@ def _scan(roots):
                 if not mod:
                     continue
                 try:
-                    tree = ast.parse(open(fpath, "r", encoding="utf-8").read(), filename=fpath)
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        tree = ast.parse(f.read(), filename=fpath)
                 except (SyntaxError, OSError):
                     continue
                 for node in ast.walk(tree):

@@ -3552,7 +3552,8 @@ def main():
             filepath = os.path.join(root, file)
             if file.endswith(".xml"):
                 try:
-                    content = open(filepath, "r", encoding="utf-8").read()
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        content = f.read()
                     xml_tour_classes.update(
                         re.findall(r"o_tour_[a-zA-Z0-9_-]+", content)
                     )
@@ -3561,7 +3562,8 @@ def main():
                     pass
             elif file.endswith(".js"):
                 try:
-                    content = open(filepath, "r", encoding="utf-8").read()
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        content = f.read()
                     js_tour_targets.update(
                         re.findall(r"o_tour_[a-zA-Z0-9_-]+", content)
                     )
