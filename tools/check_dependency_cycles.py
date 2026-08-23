@@ -83,7 +83,8 @@ def _build_graph(roots):
             mod = os.path.basename(root)
             path = os.path.join(root, "__manifest__.py")
             try:
-                tree = ast.parse(open(path, "r", encoding="utf-8").read(), filename=path)
+                with open(path, "r", encoding="utf-8") as f:
+                    tree = ast.parse(f.read(), filename=path)
             except (SyntaxError, OSError):
                 continue
             for node in ast.walk(tree):
