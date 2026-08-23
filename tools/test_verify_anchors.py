@@ -271,6 +271,45 @@ class ReportMissingTestsTests(unittest.TestCase):
         )
 
 
+class ReportMissingCrossRefsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_triggers_target_that_does_not_exist_anywhere_is_flagged(self):
+        cross_references = {"mod_b:COMM_ghost": ["./mod_a/models/foo.py:5"]}
+        self.assertTrue(
+            va._report_missing_cross_refs(cross_references, {}, {}, [], self.tmp)
+        )
+
+    def test_a_triggers_target_that_exists_in_code_anchors_is_not_flagged(self):
+        cross_references = {"mod_b:COMM_real": ["./mod_a/models/foo.py:5"]}
+        code_anchors = {"mod_b:COMM_real": ["./mod_b/models/bar.py:1"]}
+        self.assertFalse(
+            va._report_missing_cross_refs(
+                cross_references, code_anchors, {}, [], self.tmp
+            )
+        )
+
+    def test_a_triggers_target_that_exists_only_as_a_contract_anchor_is_not_flagged(self):
+        cross_references = {"mod_b:COMM_real": ["./mod_a/models/foo.py:5"]}
+        contract_anchors = {"mod_b:COMM_real": ["./mod_b/README.md:1"]}
+        self.assertFalse(
+            va._report_missing_cross_refs(
+                cross_references, {}, contract_anchors, [], self.tmp
+            )
+        )
+
+    def test_a_triggers_source_with_only_non_primary_locations_is_never_checked(self):
+        cross_references = {"mod_b:COMM_ghost": ["./mod_b/models/foo.py:5"]}
+        primary = os.path.join(self.tmp, "mod_a")
+        self.assertFalse(
+            va._report_missing_cross_refs(cross_references, {}, {}, [primary], self.tmp)
+        )
+
+
 class ReportBidirectionalOrphansTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -378,6 +417,27 @@ class ReportDummyBlocksTests(unittest.TestCase):
         filepath = os.path.join(self.tmp, "mod_a", "tests", "test_foo.py")
         all_lines = {filepath: {5}}
         self.assertFalse(va._report_dummy_blocks(all_lines, [], self.tmp))
+
+    def test_the_check_is_blind_to_anchor_role_a_base_declaration_next_to_a_verified_by_still_trips_it(self):
+        # The real, empirically-discovered behavior that cost a fixture
+        # rewrite in MainIntegrationTests: this check only looks at
+        # adjacent line numbers, not what kind of anchor comment is on
+        # them. A base declaration immediately followed by an unrelated
+        # "# # Verified by" comment for a DIFFERENT anchor trips it exactly
+        # like two stacked test declarations would -- going through the
+        # real find_anchors_in_code() scan, not a hand-built line-number
+        # set, so a future change that makes the two functions disagree
+        # about what counts as "adjacent anchors" would be caught here.
+        _write(
+            os.path.join(self.tmp, "mod_a", "models", "foo.py"),
+            "# [@ANCHOR: COMM_my_feature]\n"
+            "# # Verified by [@ANCHOR: COMM_test_my_feature]\n"
+            "class Foo:\n    pass\n",
+        )
+        _code_anchors, _locs, _tests, _tests_set, _verified, _cross, _dups, code_anchor_lines = (
+            va.find_anchors_in_code(self.tmp, self.tmp)
+        )
+        self.assertTrue(va._report_dummy_blocks(code_anchor_lines, [], self.tmp))
 
 
 class ReportMissingUxDocsTests(unittest.TestCase):
