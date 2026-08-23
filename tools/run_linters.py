@@ -9,6 +9,7 @@ Replaces the legacy bash script to enforce the structural integrity
 of the repository, including child-directory detection and anti-symlink rules.
 """
 
+import glob
 import os
 import sys
 import subprocess
@@ -513,6 +514,38 @@ def main():
         linters_failed = True
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
+
+    # 27. hams_shared/tools/ unit test suites -- the test_check_*.py files
+    # verifying the checker scripts' OWN logic (test_check_burn_list.py,
+    # test_check_dependency_cycles.py, etc.), not the checker scripts
+    # themselves (steps 8/10/19/20/22/23/25/26 above already run those
+    # against real repo content). Without this step, nothing ever ran
+    # these suites at all -- confirmed directly, not assumed, before
+    # adding it. Explicit glob for the test_check_*.py naming convention,
+    # never bare directory discovery: tools/test.py, tools/test_cf.py, and
+    # tools/test_mcp_server.py all also match a bare `test_*.py` glob, but
+    # are Odoo test-runner/MCP-server launcher scripts, not suites --
+    # collecting them would execute their own module-level Odoo-launching
+    # code instead of running unit tests. Always the full glob, run once,
+    # not scoped to `targets`: a checker's own logic bug isn't a property
+    # of any one target module.
+    tool_test_files = sorted(glob.glob(os.path.join(dir_path, "tools", "test_check_*.py")))
+    if tool_test_files:
+        res = subprocess.run(
+            [python_exec, "-m", "pytest", "-q"] + tool_test_files,
+            capture_output=True,
+            text=True,
+            cwd=os.path.join(dir_path, "tools"),
+        )
+        if res.returncode != 0:
+            print("❌ hams_shared/tools/ unit test failures:")
+            if res.stdout:
+                print(res.stdout, end="")
+            if res.stderr:
+                print(res.stderr, end="")
+            linters_failed = True
+        elif res.stdout and res.stdout.strip():
+            print(res.stdout, end="")
 
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")

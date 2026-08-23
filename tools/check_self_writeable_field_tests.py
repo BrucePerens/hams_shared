@@ -231,17 +231,14 @@ def main():
             errors += 1
             continue
 
-        # _owning_module(path, repo_root) needs a real ancestor repo_root
-        # to walk up to; only os.path.dirname(path) itself is known here,
-        # so walk up directly instead of calling it with a repo_root that
-        # would make the loop's `d != repo_root` check fail immediately.
+        # path lives under exactly one of `roots`; try each as the bound
+        # _owning_module() walks up to (a wrong root just means the walk
+        # never hits `d == repo_root` early, so it's harmless to try).
         module_dir = None
-        d = os.path.dirname(path)
-        while d and os.path.dirname(d) != d:
-            if os.path.isfile(os.path.join(d, "__manifest__.py")):
-                module_dir = d
+        for candidate_root in roots:
+            module_dir = _owning_module(path, candidate_root)
+            if module_dir:
                 break
-            d = os.path.dirname(d)
 
         if not module_dir:
             print(f"❌ ERROR: {path}:{lineno}: could not resolve owning module for anchor lookup.")

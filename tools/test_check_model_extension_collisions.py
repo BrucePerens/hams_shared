@@ -20,7 +20,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import check_model_extension_collisions as chk
+import check_model_extension_collisions as chk  # noqa: E402
 
 
 def _write(path, content):

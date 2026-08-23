@@ -17,7 +17,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import check_self_writeable_field_tests as chk
+import check_self_writeable_field_tests as chk  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_self_writeable_field_tests.py")
 
@@ -55,10 +55,14 @@ class OwningModuleTests(unittest.TestCase):
         self.assertIsNone(chk._owning_module(target, self.tmp))
 
     def test_returns_none_when_repo_root_equals_the_files_own_directory(self):
-        # Documents the real, verified reason main() no longer calls this
-        # with os.path.dirname(path) as repo_root: the loop's `d !=
-        # repo_root` guard is false on the very first check, so it always
-        # returns None regardless of a real ancestor manifest existing.
+        # Documents a real edge case: the loop's `d != repo_root` guard is
+        # false on the very first check when repo_root is the file's own
+        # starting directory, so this always returns None regardless of a
+        # real ancestor manifest existing -- callers must pass a real
+        # ancestor above the file, not its immediate directory. main() got
+        # this wrong once (called with os.path.dirname(path) as repo_root,
+        # always returning None) before being fixed to try each real root
+        # in `roots` instead.
         _write(os.path.join(self.tmp, "__manifest__.py"), "{}\n")
         target = os.path.join(self.tmp, "models.py")
         self.assertIsNone(chk._owning_module(target, os.path.dirname(target)))
@@ -210,10 +214,9 @@ class VerifyWriteProofShapeTests(unittest.TestCase):
         errors = chk._verify_write_proof_shape(node)
         self.assertTrue(any("does not call .with_user" in e for e in errors))
 
-    def test_write_with_no_assertion_after_it_is_flagged(self):
+    def test_write_with_no_assertion_anywhere_is_flagged(self):
         node = _func_node(
             "def test_self_write_works(self):\n"
-            "    self.assertTrue(True)\n"
             "    user.with_user(user).write({'callsign': 'K6BP'})\n"
         )
         errors = chk._verify_write_proof_shape(node)

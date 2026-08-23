@@ -22,7 +22,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import check_dependency_cycles as cdc
+import check_dependency_cycles as cdc  # noqa: E402
 
 
 def _write_manifest(repo_root, module_name, depends=None, depends_cycle=None):
