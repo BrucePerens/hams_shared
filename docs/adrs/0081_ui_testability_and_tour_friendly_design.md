@@ -1,6 +1,6 @@
 # ADR 0081: Native Odoo Tour Resilience Architecture
 
-> **NOTICE:** The architectural decisions below have been aggregated into a unified developer guide. Please refer to `hams_shared/docs/LLM_WRITING_TOURS.md` for the complete, up-to-date manual on writing UI Tours.
+> **NOTICE:** This ADR is the complete, up-to-date manual on writing UI Tours in this codebase (see the numbered rules below). Every other doc/tool that references a UI-tour manual points here.
 
 ## Status
 Accepted

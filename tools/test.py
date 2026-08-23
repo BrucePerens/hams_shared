@@ -8,7 +8,7 @@ Combines test execution, integration modes, and real-time failure extraction.
 Strictly prohibits Bash wrapper scripts and CPU polling loops.
 
 AI DIRECTIVE: If UI Tours are failing with [watchdog alarm] or timeouts,
-you MUST read `hams_shared/docs/LLM_WRITING_TOURS.md`. The environment is heavily constrained
+you MUST read `hams_shared/docs/adrs/0081_ui_testability_and_tour_friendly_design.md`. The environment is heavily constrained
 and prone to race conditions if native macros are ignored.
 """
 
@@ -444,7 +444,7 @@ class FailureExtractor:
                         "    1. Did you click a 'save' button manually? You MUST use `.concat(TourUtils.safeSave())` instead.\n"
                         "    2. Did you use the `edit` helper for a format-validated input? `edit` simulates typing and causes validation races. Use raw JS event dispatching instead (see ADR-0081).\n"
                         "    3. Did you fail to insert a neutral `trigger: '.o_form_sheet', run: 'click'` step before clicking save to allow the DOM to blur?\n"
-                        "    4. Read `hams_shared/docs/LLM_WRITING_TOURS.md` for exact syntax.\n\n"
+                        "    4. Read `hams_shared/docs/adrs/0081_ui_testability_and_tour_friendly_design.md` (ADR 0081) for exact syntax.\n\n"
                     )
                     self.current_block.append(ai_diagnostic)
 

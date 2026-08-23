@@ -85,7 +85,7 @@ Ensure all dynamic data injected into the DOM is sanitized.
 * **OWL `rpc` Service Deprecation:** The raw `useService('rpc')` method is banned in Odoo 19 frontend components. You MUST use `useService('orm')` which securely handles batching, caching, and model security, unless explicitly burning this rule for a custom controller.
 * **The /web/ Asset & Login Mandate:** While general routing has moved to `/odoo`, core static assets (`/web/assets/`), images (`/web/image`), and the authentication endpoint (`/web/login`) MUST remain under the `/web` path. You are strictly FORBIDDEN from refactoring these specific paths to `/odoo`. The Cloudflare and Caching modules rely on `/web/assets/` for edge caching. If necessary, use `# burn-ignore-route` to bypass linters for these valid exceptions.
 
-> **NOTICE (UI TOURS):** All strict architectural mandates, workarounds, and syntax rules required to write stable UI Tours have been relocated to the dedicated **`hams_shared/docs/LLM_WRITING_TOURS.md`** manual. You MUST consult that document for all tour-related directives.
+> **NOTICE (UI TOURS):** All strict architectural mandates, workarounds, and syntax rules required to write stable UI Tours are maintained in **`hams_shared/docs/adrs/0081_ui_testability_and_tour_friendly_design.md`** (ADR 0081). You MUST consult that document for all tour-related directives.
 </javascript_standards>
 - <ci_cd_bypasses>
 ## 6. 🚦 CI/CD Bypasses & Automated Test Audits (The `ignore` Protocol)
