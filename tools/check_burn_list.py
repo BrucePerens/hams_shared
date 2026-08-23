@@ -1666,7 +1666,60 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     and isinstance(node.args[0], ast.Constant)
                     and node.args[0].value == "base.group_user"
                 ):
-                    if not ("odoo_facility_service" in self.filename):
+                    # Only a real grant -- the ref's .id chained directly
+                    # onto this call, e.g.
+                    # self.env.ref("base.group_user").id, the shape every
+                    # real group_ids/groups_id grant in this codebase uses
+                    # -- is what this rule exists to catch. A bare
+                    # reference used only to read/compare the group
+                    # record itself (no .id access) isn't a grant.
+                    # Confirmed false positive via two real examples:
+                    # backup_management/tests/test_tdd_batch2.py's
+                    # test_service_account_no_base_user_group assigns the
+                    # ref() result to a plain variable then asserts
+                    # absence with assertNotIn -- nearby "group_ids" text
+                    # (the field being read, not written) made an earlier,
+                    # looser same-line-text version of this check
+                    # misfire. Likewise a bare
+                    # self.assertIn(self.env.ref("base.group_user"),
+                    # rule.groups) reads an ir.rule's groups field, grants
+                    # nothing.
+                    line = self.lines[node.lineno - 1]
+                    after_call = line[node.end_col_offset:]
+                    is_grant = after_call.startswith(".id")
+                    if not is_grant:
+                        # Real evasion, not hypothetical: `.id` doesn't
+                        # have to chain directly onto the ref() call to
+                        # produce a real grant --
+                        #   g = self.env.ref("base.group_user")
+                        #   user.write({"group_ids": [(4, g.id)]})
+                        # stores the ref() result in a variable first,
+                        # which the same-line check above can't see at
+                        # all. If this line is a simple assignment of the
+                        # ref() call to a name, check whether that name's
+                        # `.id` is read anywhere else in the file -- a
+                        # real, if approximate (whole-file, not scope-
+                        # aware), close of that gap. A false positive here
+                        # (the name coincidentally reused for something
+                        # else entirely, unrelated to this ref()) is
+                        # possible but rare and easy to retag with an
+                        # explicit different variable name; a silent false
+                        # negative on a real grant is the worse failure
+                        # mode for a security-boundary rule.
+                        assign_match = re.match(
+                            r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", line
+                        )
+                        if assign_match:
+                            var_name = assign_match.group(1)
+                            id_pattern = re.compile(
+                                r"\b" + re.escape(var_name) + r"\.id\b"
+                            )
+                            is_grant = any(
+                                id_pattern.search(other_line)
+                                for i, other_line in enumerate(self.lines)
+                                if i != node.lineno - 1
+                            )
+                    if is_grant and not ("odoo_facility_service" in self.filename):
                         self.add_warning(
                             node.lineno,
                             "[%AUDIT] DOMAIN SANDBOX: Do not grant base.group_user (Internal User) in tests or logic. Only odoo_facility_service_internal may hold this.",
@@ -2152,6 +2205,62 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 # -------------------------------------------------------------------------
 
 
+def _xml_audit_lookback_start(node, fallback_lines=8):
+    """Where an audit-ignore-* comment search for `node` should start.
+
+    A fixed line-count lookback is inherently arbitrary -- a real
+    audit-ignore-* comment explaining a genuine architectural exception can
+    run longer than any fixed guess (a real 9-line audit-ignore-cron comment
+    in edge_routing/data/security_data.xml was found one line past an
+    earlier 8-line guess). Prefer a real structural boundary this custom XML
+    parser already tracks: the end of the nearest ancestor's own previous
+    non-comment sibling, or the start of the document if none exists.
+    Comment siblings don't get a real end_lineno from this parser (it never
+    tracks where a comment's text actually ends, only where it starts), so
+    walk back past any run of comment siblings immediately preceding that
+    ancestor and anchor on the EARLIEST one's start line -- that's where a
+    multi-line explanation directly above it actually begins, however long
+    it runs.
+
+    A tag like <xpath> is routinely nested several levels below the
+    <record>/<template> its audit-ignore comment actually sits beside (as a
+    sibling of the enclosing <record>, not of <xpath> or any of the plain
+    wrapper elements -- e.g. <field name="arch"> -- in between). Climbing
+    one ancestor level at a time from <xpath> stops the instant it meets
+    ANY non-comment sibling, even an unrelated wrapper element several
+    levels short of the real <record>/<template> -- found for real via
+    hams_s3/views/res_config_settings_views.xml, where <field name="arch">
+    (xpath's own immediate parent) has an ordinary preceding <field> sibling
+    of its own, so a naive one-level-at-a-time climb stopped there and
+    missed a real audit-ignore-xpath comment several lines further up,
+    above the <record> two levels higher still. The comment always applies
+    to the whole enclosing view, so jump straight to the nearest enclosing
+    <record>/<template> ancestor (or `node` itself, if it already is one --
+    the CRON rule's own case) before doing the sibling-comment walk.
+    `fallback_lines` is used only when `node` has no parent at all (should
+    not happen for a properly parsed XML tree).
+    """
+    if node.parent is None:
+        return node.lineno - fallback_lines
+    scope = node
+    while scope.parent is not None and scope.tag not in ("record", "template"):
+        scope = scope.parent
+    if scope.parent is None:
+        return scope.lineno - 1
+    siblings = scope.parent.children
+    idx = siblings.index(scope) if scope in siblings else -1
+    boundary_idx = idx
+    while boundary_idx > 0 and siblings[boundary_idx - 1].tag == "#comment":
+        boundary_idx -= 1
+    if boundary_idx > 0:
+        return siblings[boundary_idx - 1].end_lineno
+    if boundary_idx < idx:
+        # Ran back to the start of the parent's children with only
+        # comments in between -- include from the first of those comments.
+        return siblings[boundary_idx].lineno - 1
+    return scope.parent.lineno - 1
+
+
 def scan_file(filepath, is_odoo_module=False):
     filename = os.path.basename(filepath)
     if filename == "check_burn_list.py":
@@ -2268,29 +2377,19 @@ def scan_file(filepath, is_odoo_module=False):
                             if child.tag == "#comment"
                         ]
                     )
-                    if (
-                        not has_tour
-                        and node.parent
-                        and node.parent.children.index(node) > 0
-                    ):
-                        prev = node.parent.children[
-                            node.parent.children.index(node) - 1
-                        ]
-                        if prev.tag == "#comment" and "[@ANCHOR:" in prev.attrs.get(
-                            "text", ""
-                        ):
-                            has_tour = True
                     if not has_tour:
-                        # Widened from a 2-line lookback to 8, matching
-                        # the identical fix applied to the XPATH RENDERING
-                        # rule below (same false-positive class: a real
-                        # audit-ignore-view/anchor comment sitting a few
-                        # lines above the <record> tag, e.g. after a
-                        # multi-line explanatory comment block, rather
-                        # than immediately adjacent to it).
+                        # Real structural boundary, not a magic-number
+                        # lookback -- see _xml_audit_lookback_start()'s own
+                        # docstring. Subsumes the old immediate-previous-
+                        # sibling-only check (same false-positive class: a
+                        # real audit-ignore-view/anchor comment sitting a
+                        # few lines above the <record> tag, e.g. after a
+                        # multi-line explanatory comment block, rather than
+                        # immediately adjacent to it).
+                        lookback_start = _xml_audit_lookback_start(node)
                         raw_text = "\n".join(
                             lines[
-                                max(0, node.lineno - 8) : min(
+                                max(0, lookback_start) : min(
                                     len(lines), node.end_lineno + 1
                                 )
                             ]
@@ -2690,47 +2789,15 @@ def scan_file(filepath, is_odoo_module=False):
                         )
 
                 if node.tag == "record" and node.attrs.get("model") == "ir.cron":
-                    # A fixed line-count lookback (previously 2, then
-                    # widened to 8) is inherently arbitrary -- a real
-                    # audit-ignore-cron comment explaining a genuine
-                    # architectural exception can run longer than any
-                    # fixed guess (found a real 9-line one in
-                    # edge_routing/data/security_data.xml, one line past
-                    # the widened-to-8 window). Look back only as far as
-                    # the end of this record's own previous sibling (or
-                    # the enclosing <data> block's start if it's the
-                    # first child) -- a real structural boundary this
-                    # custom XML parser already tracks, not a magic
-                    # number, and one that can't accidentally pull in a
-                    # DIFFERENT <record>'s own comment when multiple
-                    # ir.cron records share one <data> block (confirmed
-                    # this happens for real: cloudflare/data/cron.xml,
+                    # Real structural boundary, not a magic-number lookback
+                    # -- see _xml_audit_lookback_start()'s own docstring.
+                    # Also can't accidentally pull in a DIFFERENT
+                    # <record>'s own comment when multiple ir.cron records
+                    # share one <data> block (confirmed this happens for
+                    # real: cloudflare/data/cron.xml,
                     # user_websites/data/user_websites_data.xml both have
                     # 2-3 ir.cron siblings under the same parent).
-                    # Comment siblings don't get a real end_lineno from
-                    # this parser (it never tracks where a comment's
-                    # text actually ends, only where it starts), so walk
-                    # back past any run of comment siblings immediately
-                    # preceding this record and anchor on the EARLIEST
-                    # one's start line -- that's where a multi-line
-                    # audit-ignore-cron explanation directly above this
-                    # record actually begins, however long it runs.
-                    lookback_start = node.lineno - 8
-                    if node.parent is not None:
-                        siblings = node.parent.children
-                        idx = siblings.index(node) if node in siblings else -1
-                        boundary_idx = idx
-                        while boundary_idx > 0 and siblings[boundary_idx - 1].tag == "#comment":
-                            boundary_idx -= 1
-                        if boundary_idx > 0:
-                            lookback_start = siblings[boundary_idx - 1].end_lineno
-                        elif boundary_idx < idx:
-                            # Ran back to the start of the parent's
-                            # children with only comments in between --
-                            # include from the first of those comments.
-                            lookback_start = siblings[boundary_idx].lineno - 1
-                        else:
-                            lookback_start = node.parent.lineno - 1
+                    lookback_start = _xml_audit_lookback_start(node)
                     raw_text = "\n".join(
                         lines[
                             max(0, lookback_start) : min(
@@ -2743,20 +2810,20 @@ def scan_file(filepath, is_odoo_module=False):
                             f"Line {node.lineno}: [%AUDIT] CRON ARCHITECTURE: Ensure the Python method implements stateless batching via _trigger()."
                         )
                 if node.tag == "xpath":
-                    # A 2-line lookback is too narrow whenever an
+                    # Real structural boundary, not a magic-number lookback
+                    # -- see _xml_audit_lookback_start()'s own docstring.
+                    # A fixed 2-line window was too narrow whenever an
                     # audit-ignore-xpath comment sits above other stacked
                     # comments (e.g. an [@ANCHOR: ...] line and an
                     # audit-ignore-view line) rather than immediately
                     # before the <xpath> tag -- a real, previously
                     # undiscovered false positive found via
                     # ham_init/data/site_cleanup_data.xml's
-                    # hams_minimal_footer template, which already carries
-                    # a real audit-ignore-xpath comment 3 lines above the
-                    # tag (just outside the old 2-line window) rather than
-                    # immediately adjacent to it.
+                    # hams_minimal_footer template.
+                    lookback_start = _xml_audit_lookback_start(node)
                     raw_text = "\n".join(
                         lines[
-                            max(0, node.lineno - 8) : min(
+                            max(0, lookback_start) : min(
                                 len(lines), node.end_lineno + 1
                             )
                         ]
