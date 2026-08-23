@@ -2395,15 +2395,21 @@ def scan_file(filepath, is_odoo_module=False):
                                 )
                             ]
                         )
+                        # ADR 0076 section 3: `audit-ignore-view` covers only
+                        # backend view-rendering test coverage, a distinct
+                        # concern from the tour mandate -- it must NOT also
+                        # satisfy this check on its own. Bypassing both
+                        # requires both tags side-by-side, so only a real
+                        # tour reference or the tour-specific bypass count
+                        # here.
                         if (
                             "[@ANCHOR:" in raw_text
                             or "burn-ignore-tour" in raw_text
-                            or "audit-ignore-view" in raw_text
                         ):
                             has_tour = True
                     if not has_tour:
                         errors_found.append(
-                            f"Line {node.lineno}: UI TOUR MANDATE VIOLATION: All XML views (\x3crecord model='ir.ui.view'\x3e) and templates must be tested by a UI tour (include an '\x3c!-- [@ANCHOR: COMM_...] --\x3e' comment linking to the tour) or explicitly bypassed using '\x3c!-- audit-ignore-view --\x3e' if a tour is unjustified."
+                            f"Line {node.lineno}: UI TOUR MANDATE VIOLATION: All XML views (\x3crecord model='ir.ui.view'\x3e) and templates must be tested by a UI tour (include an '\x3c!-- [@ANCHOR: COMM_...] --\x3e' comment linking to the tour) or explicitly bypassed using '\x3c!-- burn-ignore-tour --\x3e' if a tour is unjustified (see ADR 0076 for when this is a justified exception; note this is distinct from 'audit-ignore-view', which covers backend view-rendering test coverage, not the tour mandate -- both tags must be present side-by-side if bypassing both)."
                         )
                     if node.attrs.get("inherit_id") in (
                         "website.snippet_options",

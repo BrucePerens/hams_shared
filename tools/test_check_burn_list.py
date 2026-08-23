@@ -18,6 +18,7 @@ future change that reintroduces either bug fails a real test instead of
 requiring another manual before/after diff.
 """
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -25,7 +26,21 @@ from check_burn_list import (  # noqa: E402
     parse_odoo_xml,
     _xml_audit_lookback_start,
     check_ast_vulnerabilities,
+    scan_file,
 )
+
+
+def _tour_mandate_errors(xml, filename="test_view.xml"):
+    # scan_file reads from a real path (it opens the file itself rather
+    # than taking content directly), so the fixture has to actually hit
+    # disk -- this is what the real linter invocation does, not a
+    # shortcut around it.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = str(Path(tmpdir) / filename)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(xml)
+        errors, _warnings = scan_file(filepath, is_odoo_module=True)
+    return [e for e in errors if "UI TOUR MANDATE VIOLATION" in e]
 
 
 def _domain_sandbox_warnings(source, filepath="/tmp/some_module/tests/test_foo.py"):
@@ -250,3 +265,73 @@ def test_domain_sandbox_ignores_an_unrelated_ref_call():
     )
     warnings = _domain_sandbox_warnings(source)
     assert warnings == []
+
+
+def test_tour_mandate_is_not_satisfied_by_audit_ignore_view_alone():
+    # The real bug found and fixed this session (pager_check_views.xml):
+    # ADR 0076 section 3 says audit-ignore-view and burn-ignore-tour are
+    # distinct bypasses for distinct concerns (backend view-rendering
+    # test coverage vs. tour coverage) and "both tags must be explicitly
+    # defined side-by-side" to skip both. A bare audit-ignore-view alone
+    # must still flag the tour-mandate violation.
+    xml = """<odoo>
+    <!-- audit-ignore-view: rendering covered by test_view.py -->
+    <record id="test_view" model="ir.ui.view">
+        <field name="name">test.view</field>
+        <field name="model">test.model</field>
+        <field name="arch" type="xml">
+            <form/>
+        </field>
+    </record>
+</odoo>"""
+    errors = _tour_mandate_errors(xml)
+    assert len(errors) == 1, f"expected the tour mandate to still fire with only audit-ignore-view present, got: {errors}"
+
+
+def test_tour_mandate_is_satisfied_by_burn_ignore_tour_alone():
+    xml = """<odoo>
+    <!-- burn-ignore-tour: ROI is zero, a static lookup-table view -->
+    <record id="test_view" model="ir.ui.view">
+        <field name="name">test.view</field>
+        <field name="model">test.model</field>
+        <field name="arch" type="xml">
+            <form/>
+        </field>
+    </record>
+</odoo>"""
+    errors = _tour_mandate_errors(xml)
+    assert errors == []
+
+
+def test_tour_mandate_is_satisfied_by_a_real_tour_anchor():
+    xml = """<odoo>
+    <!-- [@ANCHOR: COMM_test_view_tour] -->
+    <record id="test_view" model="ir.ui.view">
+        <field name="name">test.view</field>
+        <field name="model">test.model</field>
+        <field name="arch" type="xml">
+            <form/>
+        </field>
+    </record>
+</odoo>"""
+    errors = _tour_mandate_errors(xml)
+    assert errors == []
+
+
+def test_tour_mandate_is_satisfied_when_both_tags_present_side_by_side():
+    # The explicitly-allowed ADR 0076 case: bypassing both the tour
+    # mandate AND the view-rendering-test requirement at once needs both
+    # tags present together, not either one alone.
+    xml = """<odoo>
+    <!-- audit-ignore-view: rendering covered by test_view.py -->
+    <!-- burn-ignore-tour: ROI is zero, a static lookup-table view -->
+    <record id="test_view" model="ir.ui.view">
+        <field name="name">test.view</field>
+        <field name="model">test.model</field>
+        <field name="arch" type="xml">
+            <form/>
+        </field>
+    </record>
+</odoo>"""
+    errors = _tour_mandate_errors(xml)
+    assert errors == []
