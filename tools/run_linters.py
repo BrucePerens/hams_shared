@@ -521,15 +521,25 @@ def main():
     # themselves (steps 8/10/19/20/22/23/25/26 above already run those
     # against real repo content). Without this step, nothing ever ran
     # these suites at all -- confirmed directly, not assumed, before
-    # adding it. Explicit glob for the test_check_*.py naming convention,
-    # never bare directory discovery: tools/test.py, tools/test_cf.py, and
-    # tools/test_mcp_server.py all also match a bare `test_*.py` glob, but
-    # are Odoo test-runner/MCP-server launcher scripts, not suites --
-    # collecting them would execute their own module-level Odoo-launching
-    # code instead of running unit tests. Always the full glob, run once,
-    # not scoped to `targets`: a checker's own logic bug isn't a property
-    # of any one target module.
-    tool_test_files = sorted(glob.glob(os.path.join(dir_path, "tools", "test_check_*.py")))
+    # adding it. A bare `test_*.py` glob with an explicit exclusion set,
+    # not a narrower `test_check_*.py` glob: this directory's suite names
+    # follow the checker script they cover (test_infrastructure.py,
+    # test_run_linters.py, etc.), not all of them start with "check_", so
+    # a `test_check_*` glob would silently skip most future suites -- the
+    # exact failure this step exists to prevent, recurring by naming
+    # accident. tools/test.py, tools/test_cf.py, and tools/test_mcp_server.py
+    # all also match a bare `test_*.py` glob, but are Odoo test-runner/
+    # MCP-server launcher scripts, not suites -- collecting them would
+    # execute their own module-level Odoo-launching code instead of
+    # running unit tests, so they're the ones excluded by name. Always the
+    # full glob, run once, not scoped to `targets`: a checker's own logic
+    # bug isn't a property of any one target module.
+    _RUNNER_SCRIPTS_NOT_SUITES = {"test.py", "test_cf.py", "test_mcp_server.py"}
+    tool_test_files = sorted(
+        f
+        for f in glob.glob(os.path.join(dir_path, "tools", "test_*.py"))
+        if os.path.basename(f) not in _RUNNER_SCRIPTS_NOT_SUITES
+    )
     if tool_test_files:
         res = subprocess.run(
             [python_exec, "-m", "pytest", "-q"] + tool_test_files,
