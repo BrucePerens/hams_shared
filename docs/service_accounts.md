@@ -76,6 +76,15 @@ Under the Zero-Sudo architecture, no Python code is allowed to use `sudo()`. Ins
 |--------|-------------|------------|
 | `distributed_redis_cache.cache_manager_service_internal` | Cache Manager | Interfaces with the Redis cluster to distribute object states globally. |
 
+`cache_manager.py`'s standalone daemon process connects directly to
+Postgres (not through the Odoo ORM/RPC layer this table otherwise
+catalogs), so it also has a dedicated raw Postgres role, not an Odoo
+`res.users` record: `cache_manager_ro`, created by
+`distributed_redis_cache/scripts/provision_cache_manager_db_role.py`,
+granted `CONNECT` on the daemon's target database and nothing else -- the
+daemon only ever `LISTEN`s and runs a constant-expression `SELECT 1`
+health check, neither of which touches a table.
+
 ### Hams Helpdesk (`hams_helpdesk`)
 | XML ID | Description | Privileges |
 |--------|-------------|------------|
@@ -87,3 +96,8 @@ Under the Zero-Sudo architecture, no Python code is allowed to use `sudo()`. Ins
 |--------|-------------|------------|
 | `knowledge.user_knowledge_service_account` | Knowledge System | Reads and organizes articles. |
 | `knowledge.user_knowledge_service_privileged` | Privileged Knowledge Admin | Publishes automated support articles and modifies the root hierarchy structure. |
+
+### SES Webhook (`ses_webhook`)
+| XML ID | Description | Privileges |
+|--------|-------------|------------|
+| `ses_webhook.user_ses_webhook_service_internal` | SES Webhook Service | Holds `base.group_user` plus its own `group_ses_webhook_service`, which carries a second, unconditional `ir.rule` -- unconditional cross-tenant read/write on `ses.webhook.domain` and `ses.webhook.log` only (Odoo ORs together the domains of every group-scoped rule a matching user holds). `company_ids` grows automatically as tenants configure webhook domains (`ses_webhook_domain.py`'s `_sync_service_account_companies()`), never a hardcoded per-tenant list. See `ses_webhook/security/ses_webhook_security.xml` for the exact rule shapes and `ses_webhook/controllers/webhook_api.py` for the still-open question about whether `message_process()` on this account's behalf should also require `.sudo()`/`base.group_system` for correct sender attribution (not yet resolved as of this entry).
