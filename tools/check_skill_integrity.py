@@ -38,7 +38,13 @@ def check_skill_file(filepath, workspace_root):
     # Check against HEAD to see if we deleted important sections
     rel_path = os.path.relpath(filepath, workspace_root)
     try:
-        res = subprocess.run(["git", "show", f"HEAD:{rel_path}"], capture_output=True, text=True, check=True)
+        res = subprocess.run(
+            ["git", "show", f"HEAD:{rel_path}"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=workspace_root,
+        )
         head_content = res.stdout
     except subprocess.CalledProcessError:
         head_content = ""
