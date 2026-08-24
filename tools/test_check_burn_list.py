@@ -335,3 +335,32 @@ def test_tour_mandate_is_satisfied_when_both_tags_present_side_by_side():
 </odoo>"""
     errors = _tour_mandate_errors(xml)
     assert errors == []
+
+
+def _routing_deprecation_errors(source, filename="test_widget.py"):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = str(Path(tmpdir) / filename)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(source)
+        errors, _warnings = scan_file(filepath, is_odoo_module=True)
+    return [e for e in errors if "ROUTING DEPRECATION" in e]
+
+
+def test_web_tests_route_is_not_flagged_as_deprecated_routing():
+    # Real false positive found and fixed this session: /web/tests is
+    # Odoo's own real, non-deprecated hoot unit-test runner route (used
+    # unmodified in odoo/addons/web/tests/test_js.py itself), but the
+    # allowlist only exempted /web/login, /web/signup, /web/assets, and
+    # /web/static -- so any code path calling browser_js() against
+    # /web/tests got a false "deprecated and forcefully redirected"
+    # error.
+    source = 'self.browser_js("/web/tests?headless&filter=my_suite", "", "")\n'
+    assert _routing_deprecation_errors(source) == []
+
+
+def test_a_real_deprecated_web_path_is_still_flagged():
+    # Guards against the allowlist fix above becoming so broad it stops
+    # catching the real thing this rule exists for.
+    source = 'response = self.url_open("/web/some_backend_action")\n'
+    errors = _routing_deprecation_errors(source)
+    assert len(errors) == 1
