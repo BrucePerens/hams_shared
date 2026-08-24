@@ -2108,10 +2108,9 @@ def provision_environment(
                     "(flask, flask-cors, aiohttp, feedparser)..."
                 )
                 run_cmd_func(
-                    [
-                        "apt-get",
-                        "install",
-                        "-y",
+                    ["apt-get", "install", "-y"]
+                    + apt_opts
+                    + [
                         "python3-flask",
                         "python3-flask-cors",
                         "python3-aiohttp",
