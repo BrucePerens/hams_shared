@@ -384,8 +384,15 @@ def main():
     # this must run with cwd set to the common parent of hams_com and
     # hams_open -- dir_path's parent, per this repo's established sibling
     # layout -- rather than dir_path itself.
-    eslint_bin = os.path.join(dir_path, "hams_shared", "node_modules", ".bin", "eslint")
-    eslint_config = os.path.join(dir_path, "hams_shared", "eslint.config.js")
+    # dir_path is already hams_shared/ itself (see its own definition
+    # above) -- a "hams_shared" segment here doubled the path
+    # (hams_shared/hams_shared/node_modules/...), which never resolves
+    # regardless of whether ESLint is actually installed, making step 21
+    # a hard, unconditional linter_failed=True on every run since it was
+    # added. Confirmed against the real filesystem, not assumed: eslint
+    # and eslint.config.js both exist directly under dir_path.
+    eslint_bin = os.path.join(dir_path, "node_modules", ".bin", "eslint")
+    eslint_config = os.path.join(dir_path, "eslint.config.js")
     workspace_root = os.path.abspath(os.path.join(dir_path, ".."))
     if os.path.isfile(eslint_bin):
         res = subprocess.run(
@@ -549,6 +556,30 @@ def main():
         )
         if res.returncode != 0:
             print("❌ hams_shared/tools/ unit test failures:")
+            if res.stdout:
+                print(res.stdout, end="")
+            if res.stderr:
+                print(res.stderr, end="")
+            linters_failed = True
+        elif res.stdout and res.stdout.strip():
+            print(res.stdout, end="")
+
+    # 28. hams_shared/scripts/ unit test suites -- same reasoning as step 27
+    # above, for the one other directory of standalone dev-tooling scripts
+    # this repo has. Found while adding test_run_headless_chrome.py: without
+    # this step, nothing would ever run it (or any future scripts/test_*.py
+    # suite) automatically either, the exact gap step 27 already closed for
+    # tools/.
+    scripts_test_files = sorted(glob.glob(os.path.join(dir_path, "scripts", "test_*.py")))
+    if scripts_test_files:
+        res = subprocess.run(
+            [python_exec, "-m", "pytest", "-q"] + scripts_test_files,
+            capture_output=True,
+            text=True,
+            cwd=os.path.join(dir_path, "scripts"),
+        )
+        if res.returncode != 0:
+            print("❌ hams_shared/scripts/ unit test failures:")
             if res.stdout:
                 print(res.stdout, end="")
             if res.stderr:
