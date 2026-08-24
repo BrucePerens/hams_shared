@@ -51,3 +51,5 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   Bans hardcoding 127.0.0.1 and enforces a two-argument environment variable fallback to "localhost" for service hostnames to ensure portability across Docker and bare-metal environments..
 * [ADR 0086: Own-Model Extension Consolidation](0086_own_model_extension_consolidation.md)
   Requires code for an in-house model to live in that model's own base file rather than a separate cross-module `_inherit`, bans cross-module extension of `_auto = False` SQL-view models outright, and exempts genuinely optional/pluggable modules where merging would create a dependency cycle.
+* [ADR 0087: Third-Party Dependency Version Tracking](0087_third_party_dependency_version_tracking.md)
+  Splits code we don't control the version of into three shapes (framework-vendored silent drift, vendored-by-copy silent staleness, external OS binaries) and mandates a version-check-and-warn, calendar check, or startup capability probe respectively -- never a hard failure.

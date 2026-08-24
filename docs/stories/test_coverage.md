@@ -149,3 +149,9 @@
 - Coverage for COMM_test_noisy_table_views: [@ANCHOR: zero_sudo:COMM_test_noisy_table_views]
 
 - Coverage for COMM_UX_NOISY_TABLE_MANAGEMENT: [@ANCHOR: zero_sudo:COMM_UX_NOISY_TABLE_MANAGEMENT]
+
+- Coverage for unsubscribe_page_template: [@ANCHOR: hams_base:unsubscribe_page_template]
+
+- Coverage for unsubscribe_lockout_success: [@ANCHOR: hams_base:unsubscribe_lockout_success]
+
+- Coverage for email_policy_template: [@ANCHOR: hams_base:email_policy_template]
