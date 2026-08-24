@@ -173,7 +173,7 @@ class IsAgentDeadTests(unittest.TestCase):
         self.assertFalse(wd.is_agent_dead(self.path))
 
     def test_an_empty_transcript_defaults_to_alive(self):
-        with open(self.path, "w") as f:
+        with open(self.path, "w"):
             pass
         self.assertFalse(wd.is_agent_dead(self.path))
 

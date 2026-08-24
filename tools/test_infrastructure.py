@@ -25,9 +25,9 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-_REAL_OPEN = builtins.open
-
 import infrastructure as infra
+
+_REAL_OPEN = builtins.open
 
 
 class _SafePatchTestCase(unittest.TestCase):
