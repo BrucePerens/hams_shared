@@ -2060,6 +2060,34 @@ def provision_environment(
                     "--break-system-packages",
                 ]
             )
+
+            if is_test:
+                # docs/proposals/CODE_REVIEW_PROCESS.md's own "Still not
+                # formalized" note: hypothesis (ham_com's property-based
+                # test suite) and pip-audit (the pip-side parallel to
+                # cargo-deny/audit-check on the Rust side) were only ever
+                # present on whichever box happened to get them installed
+                # by hand -- invisible to a fresh checkout or CI runner.
+                # Test-only tools, unlike pgeocode/adif-io/telnetlib3/mcp
+                # above (real runtime deps this module needs to load), so
+                # gated to is_test rather than added to the unconditional
+                # block -- a prod box has no reason to carry either.
+                # System-wide install, matching how the earlier
+                # hypothesis-invisible-to-the-odoo-user bug (found the
+                # night this note was written) was actually fixed --
+                # --user installs are invisible to the odoo system user
+                # test.py runs the Odoo process as.
+                _logger.info("[*] Installing test-only pip packages (hypothesis, pip-audit)...")
+                run_cmd_func(
+                    [
+                        "pip3",
+                        "install",
+                        "hypothesis",
+                        "pip-audit",
+                        "--ignore-installed",
+                        "--break-system-packages",
+                    ]
+                )
         else:
             _logger.info("[*] Bypassing APT phase (skip_apt=True)...")
 
