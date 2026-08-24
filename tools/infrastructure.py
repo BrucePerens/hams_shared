@@ -2088,6 +2088,36 @@ def provision_environment(
                         "--break-system-packages",
                     ]
                 )
+
+                # Same "invisible to a fresh checkout" gap, found via
+                # run_linters.py's own new daemons/ test-discovery step
+                # (hams_shared/tools/run_linters.py step 29): four of
+                # hams_com's daemons/ test suites import a package their
+                # own daemon needs to run at all but that had only ever
+                # been installed by hand on this box --
+                # hams_local_relay/main.py (flask, flask-cors),
+                # adif_ingress/main.py (aiohttp), and
+                # event_sync/wa7bnm_contest_sync.py (feedparser). apt, not
+                # pip, matching install_linux.sh's own dependency list for
+                # the first two and avoiding this box's PEP 668
+                # externally-managed-environment pip restriction
+                # (confirmed directly: a bare `pip install feedparser`
+                # here refuses without --break-system-packages).
+                _logger.info(
+                    "[*] Installing test-only apt packages for daemons/ test suites "
+                    "(flask, flask-cors, aiohttp, feedparser)..."
+                )
+                run_cmd_func(
+                    [
+                        "apt-get",
+                        "install",
+                        "-y",
+                        "python3-flask",
+                        "python3-flask-cors",
+                        "python3-aiohttp",
+                        "python3-feedparser",
+                    ]
+                )
         else:
             _logger.info("[*] Bypassing APT phase (skip_apt=True)...")
 

@@ -588,6 +588,92 @@ def main():
         elif res.stdout and res.stdout.strip():
             print(res.stdout, end="")
 
+    # 29. daemons/ standalone-daemon unit test suites -- same reasoning as
+    # steps 27/28, for the one other class of directory this repo has full
+    # of test_*.py files nothing ever runs automatically. Unlike tools/ and
+    # scripts/ (one shared directory, one shared cwd), daemons/*/test_*.py
+    # each need their OWN daemon directory as cwd (for a bare `import main`
+    # or `import <daemon>_sync` to resolve), plus PYTHONPATH pointed at
+    # daemons/ itself (for `import hams_config`, the shared RPC/download
+    # helper every sync daemon imports) -- so this runs pytest once per
+    # daemon directory rather than batching every file into one invocation
+    # the way steps 27/28 do. Confirmed directly, not assumed, that nothing
+    # else runs these: this repo's daemons/ is excluded by name from
+    # check_burn_list.py's own directory walk (see
+    # docs/proposals/LINTER_POLICY_REVISIT.md), and grepping run_linters.py
+    # itself before this step found no other test_*.py discovery under
+    # daemons/ at any level. ODOO_URL/DB_NAME are required, no-fallback
+    # module-level config in hams_config.py and most daemons' own main.py
+    # (this codebase's fail-fast policy) -- every test file already sets
+    # dummy values via os.environ.setdefault() before importing, but they're
+    # also set here so a test file that forgets to wouldn't silently import-
+    # crash this whole step instead of failing its own assertions.
+    daemon_test_files = sorted(
+        glob.glob(os.path.join(dir_path, "daemons", "test_*.py"))
+        + glob.glob(os.path.join(dir_path, "daemons", "*", "test_*.py"))
+        + glob.glob(os.path.join(dir_path, "daemons", "*", "tools", "test_*.py"))
+        + glob.glob(os.path.join(dir_path, "daemons", "*", "tests", "test_*.py"))
+    )
+    daemon_test_dirs = sorted({os.path.dirname(f) for f in daemon_test_files})
+    daemons_root = os.path.join(dir_path, "daemons")
+    daemon_env = dict(os.environ)
+    daemon_env.setdefault("ODOO_URL", "http://test-odoo.invalid:8069")
+    daemon_env.setdefault("DB_NAME", "hams_test")
+    # pdns_sync and qrz_scraper's own main.py read these at import time with
+    # no fallback -- the exact same dummy defaults provision_environment()
+    # already sets via env_vars.setdefault() elsewhere in this file, so this
+    # step is self-sufficient rather than depending on inheriting them from
+    # a fully-provisioned parent environment.
+    daemon_env.setdefault("PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones")
+    daemon_env.setdefault("PDNS_API_KEY", "secret")
+    daemon_env.setdefault("RMQ_PORT", "5672")
+    daemon_env.setdefault("RMQ_USER", "guest")
+    daemon_env.setdefault("RMQ_PASS", "guest")
+    daemon_env["PYTHONPATH"] = daemons_root + os.pathsep + daemon_env.get("PYTHONPATH", "")
+
+    def _venv_python_for(start_dir):
+        # A daemon with its own requirements.txt (e.g. hams_simulated_bots,
+        # whose deps -- aiortc, av, faster-whisper -- have no business being
+        # installed system-wide) provisions a .venv in its own directory or
+        # an ancestor between it and daemons_root. Prefer that interpreter
+        # over the generic python_exec when one exists, so this step
+        # actually exercises what that daemon runs against instead of
+        # failing on an import nothing outside its own venv ever provides.
+        current = start_dir
+        while True:
+            candidate = os.path.join(current, ".venv", "bin", "python3")
+            if os.path.exists(candidate):
+                return candidate
+            if current == daemons_root or len(current) <= len(daemons_root):
+                return python_exec
+            current = os.path.dirname(current)
+
+    for test_dir in daemon_test_dirs:
+        files_here = sorted(f for f in daemon_test_files if os.path.dirname(f) == test_dir)
+        # A test_dir one level below its daemon (tools/, tests/) imports its
+        # daemon's own main module by bare name (e.g. hams_simulated_bots/
+        # tests/test_main.py's `from main import ...`) -- that only
+        # resolves with the daemon's own directory on the path too, not
+        # just daemons_root.
+        this_env = dict(daemon_env)
+        this_env["PYTHONPATH"] = os.path.dirname(test_dir) + os.pathsep + this_env["PYTHONPATH"]
+        res = subprocess.run(
+            [_venv_python_for(test_dir), "-m", "pytest", "-q"] + files_here,
+            capture_output=True,
+            text=True,
+            cwd=test_dir,
+            env=this_env,
+        )
+        if res.returncode != 0:
+            print(f"❌ {os.path.relpath(test_dir, dir_path)} unit test failures:")
+            if res.stdout:
+                print(res.stdout, end="")
+            if res.stderr:
+                print(res.stderr, end="")
+            linters_failed = True
+        elif res.stdout and res.stdout.strip():
+            print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
