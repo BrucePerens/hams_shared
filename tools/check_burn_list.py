@@ -3071,6 +3071,27 @@ def scan_file(filepath, is_odoo_module=False):
                 # question (see hams_s3/models/res_config_settings.py's own
                 # comment). First used there.
                 "burn-ignore-optional-oca-dep",
+                # `_is_safe_redirect()`'s allow-list of literal hostnames a
+                # relay-login redirect_uri may target -- this isn't Odoo (or
+                # anything else) connecting OUT to a hardcoded service
+                # address, which is the CRITICAL NETWORK HARDCODING rule's
+                # actual concern (Docker networking making a bare loopback
+                # address resolve to the wrong container). It's the reverse
+                # direction entirely: validating that a URL the *browser*
+                # supplies is safe to redirect the user's own browser to.
+                # "localhost" belongs in the allow-list because it's
+                # hams_local_relay's own real default OAuth-callback address
+                # (activeRelayUrl defaults to http://localhost:7388 in
+                # web_shack.js) -- the relay daemon runs on the same
+                # physical machine as the browser initiating the redirect,
+                # so there is no docker-compose network boundary between
+                # them the way there is for odoo/redis/rabbitmq, and no
+                # Docker DNS name could stand in for "this browser's own
+                # machine" even in principle. First used by
+                # ham_relay_bridge/controllers/auth.py's _is_safe_redirect()
+                # and the localhost/localhost.evil.com test cases in
+                # ham_relay_bridge/tests/test_relay_node.py.
+                "burn-ignore-relay-loopback",
             ]
         ):
             errors_found.append(
