@@ -1,0 +1,51 @@
+{
+  "_comment": "External (non-package-manager) dependencies this codebase tracks pinned versions/commits of. check_dependency_releases.py reads this file and reports when upstream has moved past the pinned point. 'release' mode compares against GitHub's latest-release tag; 'branch' mode compares against a tracked branch's current HEAD commit (used when we deliberately build from a branch other than the default, e.g. a bug fix that only landed on 'develop'). IMPORTANT: 'pinned' means the last version this codebase's own real test suite was actually run against and confirmed working -- not whatever happens to be currently installed/deployed, and never a value copied from a fresh API query without also re-running the tests against it. Bump 'pinned' only after a real verification pass.",
+  "kopia": {
+    "repo": "kopia/kopia",
+    "mode": "release",
+    "pinned": "v0.18.2",
+    "pinned_via": "hams_shared/tools/binary_manifest.json"
+  },
+  "etcd": {
+    "repo": "etcd-io/etcd",
+    "mode": "release",
+    "pinned": "v3.5.12",
+    "pinned_via": "hams_shared/tools/binary_manifest.json"
+  },
+  "cloudflared": {
+    "repo": "cloudflare/cloudflared",
+    "mode": "release",
+    "pinned": "2025.9.0",
+    "pinned_via": "hams_shared/tools/binary_manifest.json"
+  },
+  "pat": {
+    "repo": "la5nta/pat",
+    "mode": "release",
+    "pinned": "v1.0.0",
+    "pinned_via": "real v1.0.0 release tarball, PATH-overridden and run against the full hams_local_relay suite this session (209/209 passing)",
+    "notes": "Winlink client subprocess. v1.0.0 added an interactive account-activation confirmation prompt that hung every real pat-connect test until spawn_pat_connect() was fixed to pipe \"c\\n\" to stdin -- found only by re-running the real tests, not by reading the changelog (which didn't mention it). The system-installed Debian package is still v0.16.0; the stdin fix is backward-compatible with it (verified separately, 35/35 passing) so this pin intentionally tracks the newer, fully-verified version rather than what happens to be deployed."
+  },
+  "ardopcf": {
+    "repo": "pflarue/ardop",
+    "mode": "branch",
+    "branch": "develop",
+    "pinned": "346b0c5a382f839d42a628b052960da56dda7bba",
+    "pinned_via": "daemons/hams_local_relay/src/ardop.rs find_ardopcf_binary()/spawn_ardopcf()",
+    "notes": "Deliberately tracking 'develop', not 'master' or the latest numbered release -- master still has a known, already-fixed-upstream build bug (GCC14 rejects lib/rawhid/rawhid.c's pointer/int mismatch; see pflarue/ardop issues #124 and #162) that was never merged from develop to master. See check-upstream-issues-before-filing lesson before assuming any future ardopcf build error is novel."
+  },
+  "mercury": {
+    "repo": "Rhizomatica/mercury",
+    "mode": "branch",
+    "branch": "mercuryv2",
+    "pinned": "4eac25e06a0c88996621bc74af5b7b2f0d353848",
+    "pinned_via": "daemons/hams_local_relay/src/mercury.rs find_mercury_binary()/spawn_mercury()",
+    "notes": "GPL-3.0, run as an isolated subprocess (see DATAC_TRANSPORT_INTEGRATION.md's GPL-isolation section) -- never linked into hams_local_relay itself, so a version bump here is a pure behavior/compatibility question, not a licensing one."
+  },
+  "hamlib": {
+    "repo": "Hamlib/Hamlib",
+    "mode": "release",
+    "pinned": "4.7.2",
+    "pinned_via": "system package (libhamlib-dev) used to build mercury and referenced by hamlib.rs",
+    "notes": "Currently tracked via distro package, not built from source -- this entry records the upstream release we last verified compatibility against, not a build pin."
+  }
+}
