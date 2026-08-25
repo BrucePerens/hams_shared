@@ -803,6 +803,32 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 34. check_gdpr_erasure_uses_service_utility -- enforces that every _execute_gdpr_erasure()
+    # override deletes records via zero_sudo.security.utils._erase_via_service_account() instead
+    # of hand-rolling search()+unlink(). The hand-rolled shape is what hid a real bug in
+    # ham_relay_bridge (a service account's own group memberships incidentally matched an
+    # unrelated restrictive ir.rule, so its search() silently saw zero records and erasure was a
+    # permanent no-op with no error anywhere) -- the utility verifies visibility against ground
+    # truth and raises loudly instead of ever repeating that silent failure. Same reasoning as
+    # step 19/20/22/23/30/31/32/33: always scans the full repo.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_gdpr_erasure_uses_service_utility.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
