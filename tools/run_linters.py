@@ -780,6 +780,29 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 33. check_xml_comment_double_hyphen -- catches a hard XML syntax error (a literal `--`
+    # inside a <!-- --> comment) hit twice in one night writing explanatory security-rule
+    # comments in an em-dash-style " -- " aside, both times only caught by a live module-load
+    # crash during a real test run. Same reasoning as step 19/20/22/23/30/31/32: always scans
+    # the full repo.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_xml_comment_double_hyphen.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
