@@ -249,6 +249,24 @@ def hook_daemons_perms(env_vars, dest_dir, path, run_cmd_func):
         run_cmd_func(["chmod", "-R", "a+rX", target])
 
 
+# Rust-crate daemons under daemons/ with no Python entry point -- each of
+# these needs a real compiled release binary at target/release/<crate_name>
+# before its systemd unit's ExecStart can run. Runs before
+# hook_daemons_perms in the same directory entry's hook list so the
+# perms fixup below also covers the freshly built binaries.
+RUST_DAEMON_CRATES = ["hams_data_relay", "hams_relay_bridge", "hams_simulated_band"]
+
+
+def hook_build_rust_daemons(env_vars, dest_dir, path, run_cmd_func):
+    for crate in RUST_DAEMON_CRATES:
+        manifest_path = os.path.join(path, crate, "Cargo.toml")
+        if os.path.exists(manifest_path):
+            try:
+                run_cmd_func(["cargo", "build", "--release", "--manifest-path", manifest_path])
+            except Exception as e:  # audit-ignore-catch-all
+                _logger.warning("Rust daemon build failed for %s: %s", crate, e)
+
+
 MANIFEST = {
     "system_accounts": [
         {
@@ -328,6 +346,13 @@ MANIFEST = {
         },
         {
             "path": "/opt/hams/cache/ms-playwright",
+            "owner": "hams_com:hams_com",
+            "provision_mode": "770",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/cache/whisper",
             "owner": "hams_com:hams_com",
             "provision_mode": "770",
             "runtime_mount": "rw",
@@ -460,6 +485,7 @@ MANIFEST = {
         ],
         "rabbitmq.env": ["RMQ_PASS", "RABBITMQ_HOST", "RMQ_PORT", "RMQ_USER"],
         "redis.env": ["REDIS_HOST", "REDIS_PORT"],
+        "bridge.env": ["BRIDGE_API_KEY"],
         "smtp.env": ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"],
         "core.env": [
             "DOMAIN",
@@ -599,7 +625,7 @@ WantedBy=multi-user.target
             "owner": "hams_com:hams_com",
             "mode": "755",
             "environments": ["prod", "test"],
-            "post_provision_hooks": [hook_daemons_perms],
+            "post_provision_hooks": [hook_build_rust_daemons, hook_daemons_perms],
         },
         {
             "src": "{HAMS_COMMUNITY_DIR}/hams_shared",
@@ -1049,6 +1075,1060 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=qrz.scraper
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/au.acma.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Australia ACMA Callsign Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/au_acma_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=callbook_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/au_acma_sync/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=au.acma.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/au.acma.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio Australia ACMA Callsign Sync Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/au.callsign.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Australia ACMA SPA Scraper (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads /opt/hams/cache/ms-playwright
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/au_callsign_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=callbook_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/au_callsign_sync/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=au.callsign.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/au.callsign.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio Australia ACMA SPA Scraper Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/br.anatel.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Brazil ANATEL Callsign Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/br_anatel_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=callbook_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/br_anatel_sync/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=br.anatel.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/br.anatel.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio Brazil ANATEL Callsign Sync Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/de.bnetza.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Germany BNetzA Callsign Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/de_bnetza_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=callbook_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/de_bnetza_sync/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=de.bnetza.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/de.bnetza.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio Germany BNetzA Callsign Sync Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/nz.rsm.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio New Zealand RSM Callsign Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/nz_rsm_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=callbook_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/nz_rsm_sync/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nz.rsm.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/nz.rsm.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio New Zealand RSM Callsign Sync Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/uk.ofcom.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio UK Ofcom Callsign Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/uk_ofcom_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=callbook_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/uk_ofcom_sync/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=uk.ofcom.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/uk.ofcom.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio UK Ofcom Callsign Sync Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/wa7bnm.contest.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio WA7BNM Contest Calendar Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/event_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=event_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/wa7bnm_contest_sync.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wa7bnm.contest.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/wa7bnm.contest.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio WA7BNM Contest Calendar Sync Weekly
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/arrl.hamfests.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio ARRL Hamfests Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/event_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=event_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/arrl_hamfests_sync.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arrl.hamfests.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/arrl.hamfests.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio ARRL Hamfests Sync Weekly
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/rac.events.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio RAC Events Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/event_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=event_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/rac_events_sync.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rac.events.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/rac.events.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio RAC Events Sync Weekly
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/sm3cer.contest.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio SM3CER Contest Calendar Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/event_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=event_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/sm3cer_contest_sync.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sm3cer.contest.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/sm3cer.contest.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio SM3CER Contest Calendar Sync Weekly
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/fcc.uls.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio FCC ULS Daily Sync Daemon
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/fcc_uls_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=callbook_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/fcc_uls_sync/main.py $DAEMON_ARGS
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fcc.uls.sync
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/ised.canada.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio ISED Canada Callbook Sync Daemon
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/ised_canada_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=callbook_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/ised_canada_sync/main.py $DAEMON_ARGS
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ised.canada.sync
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/ncvec.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio NCVEC Question Pool Sync Daemon
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/ncvec_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=ncvec_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/ncvec_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/ncvec_sync/main.py $DAEMON_ARGS
+
+Restart=always
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ncvec.sync
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/aprs.is.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio APRS-IS Sync Daemon
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/aprs_is_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=aprs_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/aprs_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/aprs_is_sync/main.py $DAEMON_ARGS
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aprs.is.sync
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/au.pii.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Australia PII Sync Daemon
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/au_pii_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=callbook_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/au_pii_sync/main.py $DAEMON_ARGS
+
+Restart=always
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=au.pii.sync
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/adif.ingress.service",
+            "content": """\
+[Unit]
+Description=Ham Radio ADIF Upload Ingress Daemon
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/spool/adif_uploads
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/adif_ingress
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=logbook_api_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/logbook_api_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/adif_ingress/main.py $DAEMON_ARGS
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=adif.ingress
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams.data.relay.service",
+            "content": """\
+[Unit]
+Description=Hams.com Live Map Data Relay (Aircraft/Marine/APRS)
+After=network.target redis-server.service
+Requires=redis-server.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/hams_data_relay
+
+EnvironmentFile=-/opt/hams/etc/redis.env
+
+ExecStart=/opt/hams/daemons/hams_data_relay/target/release/hams_data_relay
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.data.relay
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams.relay.bridge.service",
+            "content": """\
+[Unit]
+Description=Hams.com Central Relay Bridge (Browser <-> Local Hardware Relay)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/hams_relay_bridge
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+EnvironmentFile=-/opt/hams/etc/bridge.env
+
+ExecStart=/opt/hams/daemons/hams_relay_bridge/target/release/hams_relay_bridge
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.relay.bridge
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams.simulated.band.service",
+            "content": """\
+[Unit]
+Description=Hams.com Simulated Band WebRTC SFU
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/hams_simulated_band
+
+ExecStart=/opt/hams/daemons/hams_simulated_band/target/release/hams_simulated_band
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.simulated.band
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams.simulated.bots.service",
+            "content": """\
+[Unit]
+Description=Hams.com Simulated Band Bot Fleet (STT/TTS via WebRTC)
+After=network.target hams.simulated.band.service
+Requires=hams.simulated.band.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/cache/whisper
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/hams_simulated_bots
+
+Environment="HF_HOME=/opt/hams/cache/whisper"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/hams_simulated_bots/main.py $DAEMON_ARGS
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.simulated.bots
 
 [Install]
 WantedBy=multi-user.target

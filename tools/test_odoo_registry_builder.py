@@ -186,14 +186,14 @@ class ExtractClassInfoTests(unittest.TestCase):
 class MergeIntoTests(unittest.TestCase):
     def test_creates_a_new_merged_model_entry(self):
         registry = {}
-        orb._merge_into(registry, "ham.qso", "mod_a", "foo.py", 3, [], [])
+        orb._merge_into(registry, "ham.qso", "mod_a", "foo.py", 3, "Foo", [], [])
         self.assertIn("ham.qso", registry)
         self.assertEqual(len(registry["ham.qso"].contributors), 1)
 
     def test_a_second_contributor_appends_rather_than_replaces(self):
         registry = {}
-        orb._merge_into(registry, "ham.qso", "mod_a", "foo.py", 3, [], [])
-        orb._merge_into(registry, "ham.qso", "mod_b", "bar.py", 5, [], [])
+        orb._merge_into(registry, "ham.qso", "mod_a", "foo.py", 3, "Foo", [], [])
+        orb._merge_into(registry, "ham.qso", "mod_b", "bar.py", 5, "Bar", [], [])
         self.assertEqual(len(registry["ham.qso"].contributors), 2)
 
     def test_a_later_contributor_redeclaring_a_field_wins(self):
@@ -202,9 +202,63 @@ class MergeIntoTests(unittest.TestCase):
         node2 = _class_node("class Bar(models.Model):\n    name = fields.Text()\n")
         f1 = orb._extract_fields(node1, "mod_a", "foo.py")
         f2 = orb._extract_fields(node2, "mod_b", "bar.py")
-        orb._merge_into(registry, "ham.qso", "mod_a", "foo.py", 1, f1, [])
-        orb._merge_into(registry, "ham.qso", "mod_b", "bar.py", 2, f2, [])
+        orb._merge_into(registry, "ham.qso", "mod_a", "foo.py", 1, "Foo", f1, [])
+        orb._merge_into(registry, "ham.qso", "mod_b", "bar.py", 2, "Bar", f2, [])
         self.assertEqual(registry["ham.qso"].fields["name"].field_type, "Text")
+
+    def test_the_earlier_contributor_is_not_silently_lost_from_history(self):
+        # Regression test for the user's own direct objection to the
+        # previous behavior: "resolved" last-wins is fine as one answer,
+        # but the earlier contributor must still be inspectable, not
+        # discarded -- that silent loss is exactly what made an
+        # accidental cross-module name collision indistinguishable from a
+        # deliberate Odoo _inherit override.
+        registry = {}
+        node1 = _class_node("class Foo(models.Model):\n    name = fields.Char()\n")
+        node2 = _class_node("class Bar(models.Model):\n    name = fields.Text()\n")
+        f1 = orb._extract_fields(node1, "mod_a", "foo.py")
+        f2 = orb._extract_fields(node2, "mod_b", "bar.py")
+        orb._merge_into(registry, "ham.qso", "mod_a", "foo.py", 1, "Foo", f1, [])
+        orb._merge_into(registry, "ham.qso", "mod_b", "bar.py", 2, "Bar", f2, [])
+        history = registry["ham.qso"].field_contributions["name"]
+        self.assertEqual(len(history), 2)
+        self.assertEqual({c.module for c in history}, {"mod_a", "mod_b"})
+        self.assertEqual({c.field_type for c in history}, {"Char", "Text"})
+
+    def test_find_suspicious_redeclarations_flags_a_real_cross_module_collision(self):
+        registry = {}
+        node1 = _class_node("class Foo(models.Model):\n    def bar(self):\n        return 1\n")
+        node2 = _class_node("class Baz(models.Model):\n    def bar(self):\n        return 2\n")
+        m1 = orb._extract_methods(node1, "mod_a", "foo.py")
+        m2 = orb._extract_methods(node2, "mod_b", "baz.py")
+        orb._merge_into(registry, "ham.qso", "mod_a", "foo.py", 1, "Foo", [], m1)
+        orb._merge_into(registry, "ham.qso", "mod_b", "baz.py", 2, "Baz", [], m2)
+        suspicious = orb.find_suspicious_redeclarations(registry)
+        self.assertIn("ham.qso", suspicious)
+        self.assertIn("bar", suspicious["ham.qso"])
+        contributions, likely_cooperative = suspicious["ham.qso"]["bar"]
+        self.assertEqual(len(contributions), 2)
+        self.assertFalse(
+            likely_cooperative,
+            "neither contributor calls super() -- this must NOT be classified as likely-cooperative",
+        )
+
+    def test_find_suspicious_redeclarations_treats_a_super_chain_as_likely_cooperative(self):
+        registry = {}
+        node1 = _class_node("class Foo(models.Model):\n    def bar(self):\n        return 1\n")
+        node2 = _class_node(
+            "class Baz(models.Model):\n    def bar(self):\n        return super().bar() + 1\n"
+        )
+        m1 = orb._extract_methods(node1, "mod_a", "foo.py")
+        m2 = orb._extract_methods(node2, "mod_b", "baz.py")
+        orb._merge_into(registry, "ham.qso", "mod_a", "foo.py", 1, "Foo", [], m1)
+        orb._merge_into(registry, "ham.qso", "mod_b", "baz.py", 2, "Baz", [], m2)
+        suspicious = orb.find_suspicious_redeclarations(registry)
+        _contributions, likely_cooperative = suspicious["ham.qso"]["bar"]
+        self.assertTrue(
+            likely_cooperative,
+            "the root definer legitimately never calls super(); only the extender needs to",
+        )
 
 
 class BuildRegistryTests(unittest.TestCase):

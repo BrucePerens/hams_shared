@@ -755,6 +755,31 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 32. check_registry_test_cr_usage -- catches a real, repeatedly-found bug: an
+    # `is_test = vars(self.env.registry).get("test_cr") is not None` guard around
+    # env.cr.commit() that is always False, since registry.test_cr isn't a real attribute
+    # in this installed Odoo version. Found live in ham_relay_bridge (the guarded commit()
+    # had literally never been exercised end-to-end by any test) and as the same latent,
+    # not-yet-triggered bug in 10 places across user_websites. Same reasoning as
+    # step 19/20/22/23/30/31: always scans the full repo.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_registry_test_cr_usage.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
