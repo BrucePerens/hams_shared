@@ -34,6 +34,41 @@ import sys
 import ast
 
 
+def _resolve_repo_root(given_path):
+    """run_linters.py's own `dir_path` resolves to the hams_shared directory itself, not a real
+    repo root (same bug found and fixed in check_model_extension_collisions.py and others) --
+    confirmed directly: this checker was silently finding 0 bundled JS assets via run_linters.py's
+    actual invocation, versus 48 at a real repo root. Detect the hams_shared case by name and
+    redirect to its real parent repo."""
+    given_path = os.path.abspath(given_path)
+    if os.path.basename(given_path) == "hams_shared":
+        return os.path.dirname(given_path)
+    return given_path
+
+
+def _find_sibling_repo(repo_root):
+    """Mirrors check_dependency_cycles.py's own sibling-repo resolution. Computed internally
+    rather than only trusting sys.argv[2:] -- run_linters.py's own `sibling_dir` for this step is
+    derived from the same wrong `dir_path` (see _resolve_repo_root above), so a caller-supplied
+    sibling arg can be wrong even after repo_root itself is fixed; computing it here too means
+    this script is correct regardless of what run_linters.py passes."""
+    repo_root = os.path.abspath(repo_root)
+    for sibling_name in ("hams_open", "hams_com"):
+        if os.path.basename(repo_root) == sibling_name:
+            continue
+        candidate = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
+        if not os.path.isdir(candidate):
+            continue
+        has_a_module = any(
+            os.path.isfile(os.path.join(candidate, d, "__manifest__.py"))
+            for d in os.listdir(candidate)
+            if os.path.isdir(os.path.join(candidate, d))
+        )
+        if has_a_module:
+            return candidate
+    return None
+
+
 def find_nested_template_literals(code):
     """Scan JS source for backticks opened inside a `${...}` substitution
     of an already-open template literal. Returns a list of (line, col)
@@ -213,8 +248,11 @@ def main():
         print("Usage: check_minified_js_nested_templates.py <repo_root> [sibling_repo_root]")
         sys.exit(1)
 
-    repo_root = sys.argv[1]
+    repo_root = _resolve_repo_root(sys.argv[1])
     search_roots = [repo_root] + sys.argv[2:]
+    computed_sibling = _find_sibling_repo(repo_root)
+    if computed_sibling and computed_sibling not in search_roots:
+        search_roots.append(computed_sibling)
 
     asset_to_bundles = collect_minified_js_assets(repo_root)
     if not asset_to_bundles:

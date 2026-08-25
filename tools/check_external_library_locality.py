@@ -52,6 +52,21 @@ EXCLUDED_FILES = {
 }
 
 
+def _resolve_repo_root(given_path):
+    """run_linters.py's own `dir_path` resolves to the hams_shared directory itself, not a real
+    repo root (same bug found and fixed in check_model_extension_collisions.py and others).
+    Unlike those, this checker's own zero-violations result happened to be correct by coincidence
+    either way (hams_shared genuinely has no vendored-library files, so scanning it never
+    produced a false negative) -- but it was still scanning the wrong, much smaller tree (2684
+    files under hams_shared vs. 11210 under a real repo root), so a real future violation in
+    hams_com or hams_open could have gone undetected. Detect the hams_shared case by name and
+    redirect to its real parent repo, same as the other fixed checkers."""
+    given_path = os.path.abspath(given_path)
+    if os.path.basename(given_path) == "hams_shared":
+        return os.path.dirname(given_path)
+    return given_path
+
+
 def find_violations(repo_root):
     violations = []
     for root, dirs, files in os.walk(repo_root):
@@ -83,7 +98,7 @@ def main():
         print("Usage: check_external_library_locality.py <repo_root>")
         sys.exit(1)
 
-    repo_root = sys.argv[1]
+    repo_root = _resolve_repo_root(sys.argv[1])
     violations = find_violations(repo_root)
 
     if violations:

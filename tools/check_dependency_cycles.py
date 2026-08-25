@@ -46,6 +46,19 @@ import os
 import sys
 
 
+def _resolve_repo_root(given_path):
+    """run_linters.py's own `dir_path` resolves to the hams_shared directory itself, not a real
+    repo root (same bug found and fixed in check_model_extension_collisions.py,
+    check_access_csv_group_order.py, check_module_subpackage_imports.py) -- confirmed directly,
+    this checker was silently building a 0-node dependency graph via run_linters.py's actual
+    invocation (51 nodes when pointed at a real repo root). Detect the hams_shared case by name
+    and redirect to its real parent repo."""
+    given_path = os.path.abspath(given_path)
+    if os.path.basename(given_path) == "hams_shared":
+        return os.path.dirname(given_path)
+    return given_path
+
+
 def _find_sibling_repo(repo_root):
     """Mirrors run_linters.py's sibling-repo resolution so the graph this
     script builds is complete regardless of which repo it's invoked from."""
@@ -178,7 +191,7 @@ def main():
         print("Usage: check_dependency_cycles.py <repo_root>")
         sys.exit(1)
 
-    repo_root = os.path.abspath(sys.argv[1])
+    repo_root = _resolve_repo_root(sys.argv[1])
     roots = [repo_root]
     sibling = _find_sibling_repo(repo_root)
     if sibling:

@@ -88,6 +88,19 @@ import os
 import subprocess
 import sys
 
+
+def _resolve_repo_root(given_path):
+    """run_linters.py's own `dir_path` resolves to the hams_shared directory itself, not a real
+    repo root (same bug found and fixed in check_model_extension_collisions.py and others) --
+    confirmed directly: this checker was silently finding 0 utility-file candidates via
+    run_linters.py's actual invocation, versus 2 at a real repo root. Detect the hams_shared case
+    by name and redirect to its real parent repo."""
+    given_path = os.path.abspath(given_path)
+    if os.path.basename(given_path) == "hams_shared":
+        return os.path.dirname(given_path)
+    return given_path
+
+
 # Mirrors check_model_extension_collisions.py's own MODEL_BASES/
 # _is_model_class -- not imported directly, since these tool scripts are
 # each self-contained (odoo_registry_builder.py mirrors the same AST
@@ -187,7 +200,7 @@ def main():
         print("Usage: check_untyped_utility_files.py <repo_root>")
         sys.exit(1)
 
-    repo_root = sys.argv[1]
+    repo_root = _resolve_repo_root(sys.argv[1])
     candidates = collect_candidates(repo_root)
     if not candidates:
         sys.exit(0)

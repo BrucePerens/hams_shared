@@ -162,5 +162,23 @@ class CheckDependsCycleEntriesTests(unittest.TestCase):
         self.assertIn("UNJUSTIFIED", errors[0])
 
 
+class ResolveRepoRootTests(unittest.TestCase):
+    # Regression test for a real bug found the same night check_model_extension_collisions.py's
+    # own identical bug was found and fixed: run_linters.py's own dir_path resolves to
+    # .../hams_shared, not a real repo root -- confirmed directly, this checker was silently
+    # building a 0-node dependency graph via run_linters.py's actual invocation (51 nodes at a
+    # real repo root).
+    def test_a_hams_shared_path_redirects_to_its_parent_repo(self):
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(
+            cdc._resolve_repo_root(os.path.join(fake_repo, "hams_shared")),
+            fake_repo,
+        )
+
+    def test_a_real_repo_root_passes_through_unchanged(self):
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(cdc._resolve_repo_root(fake_repo), fake_repo)
+
+
 if __name__ == "__main__":
     unittest.main()

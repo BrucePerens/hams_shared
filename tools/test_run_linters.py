@@ -24,9 +24,14 @@ import glob
 import os
 import re
 import shutil
+import sys
 import tempfile
 import textwrap
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import run_linters  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_linters.py")
 
@@ -112,6 +117,26 @@ class DiscoverySnippetTests(unittest.TestCase):
     def test_no_matching_files_yields_an_empty_list(self):
         os.makedirs(os.path.join(self.tmp, "tools"))
         self.assertEqual(self._run_snippet(), [])
+
+
+class ResolveRepoRootTests(unittest.TestCase):
+    # Regression test for the same real bug found and fixed across 9 other checker scripts the
+    # same night (see docs/proposals/LINTER_POLICY_REVISIT.md): run_linters.py's own `dir_path`
+    # resolves to .../hams_shared, not a real repo root, whenever it's invoked from hams_shared
+    # directly -- a third, intentionally valid invocation mode per AGENTS.md. Confirmed directly:
+    # before this fix, check_burn_list.py scanned only 3 files via that exact invocation, versus
+    # 557 once `targets`/module-discovery/the sibling-repo resolution all switched from `dir_path`
+    # to `_resolve_repo_root(dir_path)`.
+    def test_a_hams_shared_path_redirects_to_its_parent_repo(self):
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(
+            run_linters._resolve_repo_root(os.path.join(fake_repo, "hams_shared")),
+            fake_repo,
+        )
+
+    def test_a_real_repo_root_passes_through_unchanged(self):
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(run_linters._resolve_repo_root(fake_repo), fake_repo)
 
 
 if __name__ == "__main__":

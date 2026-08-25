@@ -25,6 +25,19 @@ import sys
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git"}
 
 
+def _resolve_repo_root(given_path):
+    """run_linters.py's own `dir_path` resolves to the hams_shared directory itself, not a real
+    repo root (same bug found and fixed in check_model_extension_collisions.py and others) --
+    confirmed directly: this checker was silently finding 0 requirements.txt files via
+    run_linters.py's actual invocation, versus 2 at a real repo root -- this codebase's Python
+    supply-chain vulnerability gate (CODE_REVIEW_PROCESS.md) has never actually scanned anything
+    in CI. Detect the hams_shared case by name and redirect to its real parent repo."""
+    given_path = os.path.abspath(given_path)
+    if os.path.basename(given_path) == "hams_shared":
+        return os.path.dirname(given_path)
+    return given_path
+
+
 def find_requirements_files(repo_root):
     found = []
     for root, dirs, filenames in os.walk(repo_root):
@@ -40,7 +53,7 @@ def main():
         print("Usage: check_pip_audit.py <repo_root>")
         sys.exit(1)
 
-    repo_root = sys.argv[1]
+    repo_root = _resolve_repo_root(sys.argv[1])
     requirements_files = find_requirements_files(repo_root)
     if not requirements_files:
         sys.exit(0)

@@ -15,8 +15,31 @@ import sys
 import subprocess
 
 
+def _resolve_repo_root(given_path):
+    """`dir_path` (below) resolves to the hams_shared directory itself when this script is
+    invoked from hams_shared directly -- AGENTS.md documents that as a third, intentionally valid
+    invocation root (alongside hams_com and hams_open), but hams_shared has no Odoo addon modules
+    of its own, so anything that needs a real repo root to scan (module discovery, `targets`, the
+    sibling-repo/addons-path resolution used by pre_flight_check.py) must not use `dir_path`
+    as-is in that case. Confirmed directly, not assumed: check_burn_list.py scanned only 3 files
+    via this exact invocation before this fix, versus 78+ real files against a real repo root --
+    every `targets`-based step (7-18, 21) was silently scanning almost nothing. Same fix as the 9
+    individual checker scripts this same bug was found and fixed in earlier tonight (see
+    docs/proposals/LINTER_POLICY_REVISIT.md) -- detect the hams_shared case by name and redirect
+    to its real parent repo. Deliberately NOT used for steps 27-29 (the tools/scripts/daemons
+    test-suite runners) or the anti-symlink/child-directory structural checks just below: those
+    need `dir_path` to genuinely BE hams_shared (or resolve through a symlink to it) to find their
+    own tooling correctly, and redirecting it there would scan the wrong daemons/ tree entirely
+    (hams_open has its own separate, real daemons/ directory, unrelated to hams_shared's)."""
+    given_path = os.path.abspath(given_path)
+    if os.path.basename(given_path) == "hams_shared":
+        return os.path.dirname(given_path)
+    return given_path
+
+
 def main():
     dir_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    repo_root = _resolve_repo_root(dir_path)
 
     # 1. Anti-Symlink Mandate
     allowed_symlinks = {
@@ -73,12 +96,12 @@ def main():
 
     # 3. Resolve Sibling Dependency
     community_dir = None
-    if not os.path.exists(os.path.join(dir_path, "zero_sudo", "__manifest__.py")):
-        sibling_community = os.path.abspath(os.path.join(dir_path, "..", "hams_open"))
+    if not os.path.exists(os.path.join(repo_root, "zero_sudo", "__manifest__.py")):
+        sibling_community = os.path.abspath(os.path.join(repo_root, "..", "hams_open"))
         if os.path.isdir(sibling_community):
             community_dir = sibling_community
 
-    addons_paths = ["/usr/lib/python3/dist-packages/odoo/addons", dir_path, os.path.abspath(os.path.join(dir_path, "..", "hams_com"))]
+    addons_paths = ["/usr/lib/python3/dist-packages/odoo/addons", repo_root, os.path.abspath(os.path.join(repo_root, "..", "hams_com"))]
     if community_dir:
         addons_paths.append(community_dir)
     addons_path_str = ",".join(addons_paths)
@@ -90,8 +113,8 @@ def main():
     target_modules_str = sys.argv[1] if len(sys.argv) > 1 else ""
     mod_array = []
     if not target_modules_str:
-        for item in os.listdir(dir_path):
-            mod_path = os.path.join(dir_path, item)
+        for item in os.listdir(repo_root):
+            mod_path = os.path.join(repo_root, item)
             if os.path.isdir(mod_path) and os.path.isfile(
                 os.path.join(mod_path, "__manifest__.py")
             ):
@@ -101,7 +124,7 @@ def main():
 
     # 6. Pre-flight Checks
     for mod in mod_array:
-        mod_path = os.path.join(dir_path, mod)
+        mod_path = os.path.join(repo_root, mod)
         if not os.path.isfile(os.path.join(mod_path, "__manifest__.py")):
             if community_dir:
                 comm_mod_path = os.path.join(community_dir, mod)
@@ -131,7 +154,7 @@ def main():
     # 7. Flake8
     flake8_cmd = "/usr/bin/flake8"
     
-    targets = [os.path.join(dir_path, m) for m in mod_array] if target_modules_str else [dir_path]
+    targets = [os.path.join(repo_root, m) for m in mod_array] if target_modules_str else [repo_root]
 
     try:
         res = subprocess.run(
@@ -382,18 +405,24 @@ def main():
     # 21. ESLint (JS-side analogue of flake8, config shared from hams_shared/)
     # Flat config restricts scanning to the config's own directory tree, so
     # this must run with cwd set to the common parent of hams_com and
-    # hams_open -- dir_path's parent, per this repo's established sibling
-    # layout -- rather than dir_path itself.
-    # dir_path is already hams_shared/ itself (see its own definition
-    # above) -- a "hams_shared" segment here doubled the path
-    # (hams_shared/hams_shared/node_modules/...), which never resolves
-    # regardless of whether ESLint is actually installed, making step 21
-    # a hard, unconditional linter_failed=True on every run since it was
-    # added. Confirmed against the real filesystem, not assumed: eslint
-    # and eslint.config.js both exist directly under dir_path.
-    eslint_bin = os.path.join(dir_path, "node_modules", ".bin", "eslint")
-    eslint_config = os.path.join(dir_path, "eslint.config.js")
-    workspace_root = os.path.abspath(os.path.join(dir_path, ".."))
+    # hams_open (the workspace root).
+    # eslint and eslint.config.js live under the REAL hams_shared directory, which is not
+    # necessarily `dir_path` -- `dir_path` is whatever repo run_linters.py was invoked from
+    # (hams_com, hams_open, or hams_shared itself, all three valid per AGENTS.md), and only ONE
+    # of those three literally IS hams_shared. An earlier version of this comment/code assumed
+    # dir_path always equals hams_shared, which broke ESLint entirely (hard, unconditional
+    # linters_failed=True) for the other two -- the far more common -- invocation modes:
+    # confirmed directly, `dir_path/node_modules/.bin/eslint` does not exist when dir_path is a
+    # real repo root, only when dir_path is hams_shared itself. Fixed by resolving the REAL
+    # hams_shared directory via realpath() (which follows the hams_open/tools and hams_com/tools
+    # symlinks, unlike a dirname chain off `dir_path`), same technique as the fix to the same bug
+    # class in test_odoo_mypy_plugin.py the same night -- correct regardless of which of the
+    # three valid roots this script was invoked from.
+    _real_tools_dir = os.path.dirname(os.path.realpath(__file__))
+    hams_shared_dir = os.path.dirname(_real_tools_dir)
+    eslint_bin = os.path.join(hams_shared_dir, "node_modules", ".bin", "eslint")
+    eslint_config = os.path.join(hams_shared_dir, "eslint.config.js")
+    workspace_root = os.path.dirname(os.path.dirname(hams_shared_dir))
     if os.path.isfile(eslint_bin):
         res = subprocess.run(
             [
@@ -480,7 +509,7 @@ def main():
     # vendored/sibling-repo asset it references may live outside
     # `dir_path` entirely, so this always scans the full repo and also
     # searches the sibling repo root for cross-repo asset references.
-    sibling_dir = community_dir or os.path.abspath(os.path.join(dir_path, "..", "hams_com"))
+    sibling_dir = community_dir or os.path.abspath(os.path.join(repo_root, "..", "hams_com"))
     res = subprocess.run(
         [
             python_exec,
@@ -673,6 +702,58 @@ def main():
             linters_failed = True
         elif res.stdout and res.stdout.strip():
             print(res.stdout, end="")
+
+    # 30. check_access_csv_group_order -- catches the exact bug class that
+    # silently broke the ENTIRE test suite tonight (not just one module's
+    # tests): ham_aprs/__manifest__.py listed security/ir.model.access.csv
+    # before the XML file defining the group it references, and Odoo's
+    # whole boot died at that module with nothing after it in the -i list
+    # ever running. Same reasoning as step 19/20/22/23: a module's own
+    # data-list ordering bug can be introduced anywhere, not just the
+    # possibly-scoped `targets`, so this always scans the full repo.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_access_csv_group_order.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
+    # 31. check_module_subpackage_imports -- catches a second, real bug found tonight, the same
+    # shape as step 30's: a new ham_propagation/models/ subpackage was added (a real, correct
+    # _inherit extension of ham.sked) but ham_propagation/__init__.py only ever imported
+    # `controllers`, so Odoo's module loader never imported the new file at all -- the new
+    # method was genuinely correct Python sitting on disk, invisible to Odoo, and the real
+    # failure mode (a view validation error naming the method as "not a valid action") gave no
+    # hint the actual cause was a missing top-level import. Same reasoning as step 19/20/22/23/30:
+    # always scans the full repo.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_module_subpackage_imports.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
 
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")

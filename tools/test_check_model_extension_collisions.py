@@ -122,6 +122,28 @@ class ExtractClassInfoTests(unittest.TestCase):
         self.assertEqual(inherit, ["ham.qso"])
 
 
+class ResolveRepoRootTests(unittest.TestCase):
+    # Regression test for a real bug found the same night check_access_csv_group_order.py's own
+    # identical bug was found and fixed: run_linters.py's own dir_path resolves to
+    # .../hams_shared, not a real repo root -- confirmed directly, this checker (run_linters.py's
+    # own step 22, the ADR 0086 hard gate) was silently scanning 0 of the real 182 models via
+    # run_linters.py's actual invocation, and reporting a false clean pass, since this checker is
+    # silent on success by design (see main()) and never printed anything to reveal it was
+    # checking nothing.
+    def test_a_hams_shared_path_redirects_to_its_parent_repo(self):
+        # _resolve_repo_root is pure path-string logic (no filesystem access), so a
+        # synthetic, non-existent path exercises it exactly as well as a real one.
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(
+            chk._resolve_repo_root(os.path.join(fake_repo, "hams_shared")),
+            fake_repo,
+        )
+
+    def test_a_real_repo_root_passes_through_unchanged(self):
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(chk._resolve_repo_root(fake_repo), fake_repo)
+
+
 class ScanIntegrationTests(unittest.TestCase):
     """Exercises _scan() against real temp-directory module fixtures, the
     same way its actual filesystem-walking callers use it."""

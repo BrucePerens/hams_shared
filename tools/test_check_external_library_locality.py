@@ -113,5 +113,23 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("external/static/src/node_modules", out)
 
 
+class ResolveRepoRootTests(unittest.TestCase):
+    # Regression test for a real bug found the same night check_model_extension_collisions.py's
+    # own identical bug was found and fixed: run_linters.py's own dir_path resolves to
+    # .../hams_shared, not a real repo root. This checker's own zero-violations result happened
+    # to be correct by coincidence either way (hams_shared genuinely has no vendored-library
+    # files), but it was still scanning the wrong, much smaller tree.
+    def test_a_hams_shared_path_redirects_to_its_parent_repo(self):
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(
+            chk._resolve_repo_root(os.path.join(fake_repo, "hams_shared")),
+            fake_repo,
+        )
+
+    def test_a_real_repo_root_passes_through_unchanged(self):
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(chk._resolve_repo_root(fake_repo), fake_repo)
+
+
 if __name__ == "__main__":
     unittest.main()

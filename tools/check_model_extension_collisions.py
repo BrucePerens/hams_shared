@@ -55,6 +55,22 @@ MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "tools", "radae"}
 
 
+def _resolve_repo_root(given_path):
+    """run_linters.py's own `dir_path` (computed from its __file__, which lives inside
+    hams_shared/tools/) resolves to the hams_shared directory itself, not a real repo root --
+    confirmed directly: this checker was scanning 0 models (silently, since it's silent on
+    success) via run_linters.py's actual invocation, versus 182 models when pointed at either
+    real repo root directly. hams_shared has no Odoo modules of its own and isn't its own
+    sibling, so _find_sibling_repo/_scan found nothing and this whole hard gate (ADR 0086) was a
+    no-op in every CI run. Same fix as check_access_csv_group_order.py/
+    check_module_subpackage_imports.py: detect the hams_shared case by name and redirect to its
+    real parent repo."""
+    given_path = os.path.abspath(given_path)
+    if os.path.basename(given_path) == "hams_shared":
+        return os.path.dirname(given_path)
+    return given_path
+
+
 def _find_sibling_repo(repo_root):
     """Mirrors run_linters.py's / check_dependency_cycles.py's sibling-repo
     resolution so the graph this script builds is complete regardless of
@@ -207,7 +223,7 @@ def main():
         print("Usage: check_model_extension_collisions.py <repo_root>")
         sys.exit(1)
 
-    repo_root = os.path.abspath(sys.argv[1])
+    repo_root = _resolve_repo_root(sys.argv[1])
     roots = [repo_root]
     sibling = _find_sibling_repo(repo_root)
     if sibling:
