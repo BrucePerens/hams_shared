@@ -23,7 +23,6 @@ import urllib.request
 import secrets
 import string
 import base64
-import getpass
 from datetime import datetime
 
 _logger = logging.getLogger(__name__)
@@ -2825,6 +2824,33 @@ def generate_secure_password(length=32):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 def load_and_prompt_env(env_vars, is_test):
+    """
+    Populate env_vars for provisioning, non-interactively.
+
+    No longer prompts (formerly: a short interactive question-and-answer
+    program, run by whoever was at the terminal during provisioning). Instead:
+    site-specific values are read from any *.env file already dropped into
+    env_dir (KEY=VALUE lines, one file per concern -- db.env, smtp.env, etc.,
+    see MANIFEST["env_groups"]); anything still missing after that either
+    gets a safe, non-secret default (SMTP/Gemini/Cloudflare settings), gets
+    freshly generated (DB_PASS, ODOO_ADMIN_PASSWORD, and the other secrets
+    below -- write_env_files() later persists whatever was generated back
+    into env_dir at mode 400, so it's recoverable after the fact instead of
+    only ever having existed in one operator's terminal history), or, for the
+    one value with no safe default or generation strategy (DOMAIN -- which
+    *site* this box is being provisioned for), raises loudly instead of
+    guessing.
+
+    This generalizes to more than one box: provisioning a given server is
+    "populate env_dir on it, then run provision.py" regardless of how many
+    servers, databases, or Odoo sites eventually exist. Today that's one
+    flat env_dir on one server for the one hams.com site. A future
+    multi-server/multi-DB/multi-site topology doesn't need a different
+    mechanism, just more instances of this same one: each server or site
+    gets its own env_dir populated with its own DOMAIN and its own secrets
+    (e.g. a site-specific tar of *.env files, extracted onto a fresh box
+    before provision.py runs), not a new provisioning path.
+    """
     env_dir = "/opt/hams/etc"
     if os.path.exists(env_dir):
         for env_file in glob.glob(os.path.join(env_dir, "*.env")):
@@ -2855,36 +2881,6 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault("SMTP_PORT", "1025")
         env_vars.setdefault("HAMS_CRYPTO_KEY", "0000000000000000000000000000000000000000000=")
     else:
-        def prompt_if_missing(key, prompt_text, default=None, is_password=False):
-            if key in env_vars and env_vars[key].strip():
-                return
-            print("")
-            while True:
-                if is_password:
-                    val = getpass.getpass(f"{prompt_text}: ")
-                    if val:
-                        val2 = getpass.getpass(f"Confirm {key}: ")
-                        if val == val2:
-                            env_vars[key] = val
-                            break
-                        print("Passwords do not match. Try again.")
-                    elif default is not None:
-                        env_vars[key] = default
-                        break
-                    else:
-                        print(f"{key} cannot be empty.")
-                else:
-                    default_hint = f" [{default}]" if default is not None else ""
-                    val = input(f"{prompt_text}{default_hint}: ").strip()
-                    if val:
-                        env_vars[key] = val
-                        break
-                    elif default is not None:
-                        env_vars[key] = default
-                        break
-                    else:
-                        print(f"{key} cannot be empty.")
-
         # Set automatic sensible defaults
         env_vars.setdefault("DB_NAME", "hams_prod")
         env_vars.setdefault("DB_USER", "odoo")
@@ -2911,25 +2907,45 @@ def load_and_prompt_env(env_vars, is_test):
         if "RMQ_PASS" not in env_vars:
             env_vars["RMQ_PASS"] = generate_secure_password()
 
-        # Prompt for critical missing values
-        prompt_if_missing("DOMAIN", "Enter the primary domain for this instance (e.g. hams.com)")
-        domain = env_vars.get("DOMAIN", "hams.com")
-        
+        # DOMAIN identifies which site this box is being provisioned for and
+        # has no safe default -- silently assuming "hams.com" would mean a
+        # second site's box gets provisioned as hams.com by accident the
+        # first time someone forgets to set it. Fail fast instead of
+        # guessing or blocking on an interactive prompt: whoever is
+        # provisioning must supply it via an env file (see module docstring
+        # above load_and_prompt_env).
+        if not env_vars.get("DOMAIN", "").strip():
+            raise RuntimeError(
+                "DOMAIN is not set. Provisioning requires a DOMAIN=<site-domain> line in one "
+                f"of {env_dir}/*.env (or in the environment already), naming which site this "
+                "box is for -- e.g. DOMAIN=hams.com."
+            )
+        domain = env_vars["DOMAIN"]
+
         env_vars.setdefault("ODOO_URL", "http://odoo:8069")
         env_vars.setdefault("SYSADMIN_EMAILS", f"admin@{domain}")
 
-        prompt_if_missing("ODOO_ADMIN_PASSWORD", "Enter a secure Odoo admin password", is_password=True)
-        
-        prompt_if_missing("SMTP_HOST", "Enter SMTP Host", default="smtp.mailgun.org")
-        prompt_if_missing("SMTP_PORT", "Enter SMTP Port", default="587")
-        prompt_if_missing("SMTP_USER", "Enter SMTP User", default=f"postmaster@{domain}")
-        prompt_if_missing("SMTP_PASS", "Enter SMTP Password", default="none", is_password=True)
+        # ODOO_ADMIN_PASSWORD is a real, human-facing login credential (unlike
+        # DB_PASS/RMQ_PASS/etc above, which nothing but the software itself
+        # ever needs to know) -- but it's handled the same way: generated if
+        # absent, and recoverable afterward from wherever provision_environment()
+        # persists env_vars (write_env_files() writes it to one of
+        # /opt/hams/etc/*.env at mode 400, root:root, alongside every other
+        # generated secret) rather than requiring a human to sit at a
+        # terminal and type one in during provisioning.
+        if "ODOO_ADMIN_PASSWORD" not in env_vars:
+            env_vars["ODOO_ADMIN_PASSWORD"] = generate_secure_password()
 
-        prompt_if_missing("GEMINI_API_KEY", "Enter Gemini API Key (or press enter for none)", default="none", is_password=True)
-        prompt_if_missing("GEMINI_MODEL", "Enter Gemini Model", default="gemini-2.5-pro")
-        
-        prompt_if_missing("CLOUDFLARE_API_TOKEN", "Enter Cloudflare API Token (or 'none')", default="none", is_password=True)
-        
+        env_vars.setdefault("SMTP_HOST", "smtp.mailgun.org")
+        env_vars.setdefault("SMTP_PORT", "587")
+        env_vars.setdefault("SMTP_USER", f"postmaster@{domain}")
+        env_vars.setdefault("SMTP_PASS", "none")
+
+        env_vars.setdefault("GEMINI_API_KEY", "none")
+        env_vars.setdefault("GEMINI_MODEL", "gemini-2.5-pro")
+
+        env_vars.setdefault("CLOUDFLARE_API_TOKEN", "none")
+
         # Auto-derive Cloudflare Zone ID from Domain
         if "CLOUDFLARE_ZONE_ID" not in env_vars:
             cf_token = env_vars.get("CLOUDFLARE_API_TOKEN", "none")
@@ -2953,8 +2969,8 @@ def load_and_prompt_env(env_vars, is_test):
                 except Exception as e:
                     print(f"[!] Failed to fetch Cloudflare Zone ID: {e}")
             
-        prompt_if_missing("CLOUDFLARE_ZONE_ID", "Enter Cloudflare Zone ID (or 'none')", default="none")
-        prompt_if_missing("CLOUDFLARE_TUNNEL_TOKEN", "Enter Cloudflare Tunnel Token (or 'none')", default="none", is_password=True)
+        env_vars.setdefault("CLOUDFLARE_ZONE_ID", "none")
+        env_vars.setdefault("CLOUDFLARE_TUNNEL_TOKEN", "none")
 
 def provision_environment(
     run_cmd_func, env_vars, orig_user, os_id=None, skip_apt=False, is_test=False

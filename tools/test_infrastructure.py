@@ -343,5 +343,65 @@ class GetMountPathsTests(unittest.TestCase):
             self.assertEqual(infra.get_mount_paths("test", "tmpfs"), [])
 
 
+class LoadAndPromptEnvTests(_SafePatchTestCase):
+    """load_and_prompt_env() no longer prompts interactively -- these confirm
+    the replacement non-interactive contract: DOMAIN has no safe default and
+    must fail fast rather than silently guess or block on stdin; every other
+    previously-prompted value falls back to its old default unattended;
+    ODOO_ADMIN_PASSWORD is generated like the other secrets, not left for a
+    human to type in. Patches os.path.exists to False so these never touch
+    the real box's /opt/hams/etc."""
+
+    def setUp(self):
+        super().setUp()
+        self.safe_patch("infrastructure.os.path.exists", return_value=False)
+
+    def test_raises_when_domain_is_missing(self):
+        with self.assertRaisesRegex(RuntimeError, "DOMAIN"):
+            infra.load_and_prompt_env({}, is_test=False)
+
+    def test_does_not_raise_when_domain_is_supplied(self):
+        env_vars = {"DOMAIN": "hams.com"}
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(env_vars["DOMAIN"], "hams.com")
+
+    def test_test_mode_never_raises_even_without_domain(self):
+        env_vars = {}
+        infra.load_and_prompt_env(env_vars, is_test=True)
+        self.assertEqual(env_vars["DOMAIN"], "localhost")
+
+    def test_generates_odoo_admin_password_when_missing(self):
+        env_vars = {"DOMAIN": "hams.com"}
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(len(env_vars["ODOO_ADMIN_PASSWORD"]), 32)
+
+    def test_preserves_a_supplied_odoo_admin_password(self):
+        env_vars = {"DOMAIN": "hams.com", "ODOO_ADMIN_PASSWORD": "already-set"}
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(env_vars["ODOO_ADMIN_PASSWORD"], "already-set")
+
+    def test_previously_prompted_values_fall_back_to_their_old_defaults(self):
+        env_vars = {"DOMAIN": "hams.com"}
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(env_vars["SMTP_HOST"], "smtp.mailgun.org")
+        self.assertEqual(env_vars["SMTP_PORT"], "587")
+        self.assertEqual(env_vars["SMTP_USER"], "postmaster@hams.com")
+        self.assertEqual(env_vars["SMTP_PASS"], "none")
+        self.assertEqual(env_vars["GEMINI_API_KEY"], "none")
+        self.assertEqual(env_vars["GEMINI_MODEL"], "gemini-2.5-pro")
+        self.assertEqual(env_vars["CLOUDFLARE_API_TOKEN"], "none")
+        self.assertEqual(env_vars["CLOUDFLARE_ZONE_ID"], "none")
+        self.assertEqual(env_vars["CLOUDFLARE_TUNNEL_TOKEN"], "none")
+
+    def test_never_reads_stdin(self):
+        # A regression guard for the exact bug class being removed: nothing
+        # in load_and_prompt_env should call input() or getpass.getpass()
+        # unattended, which would hang a headless provisioning run forever.
+        env_vars = {"DOMAIN": "hams.com"}
+        with patch("builtins.input", side_effect=AssertionError("must not prompt")):
+            infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertFalse(hasattr(infra, "getpass"))
+
+
 if __name__ == "__main__":
     unittest.main()
