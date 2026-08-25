@@ -1694,9 +1694,7 @@ def main():
             print(
                 "[*] Elevating privileges and applying 4G memory limit via systemd-run..."
             )
-            exec_cmd = [
-                "sudo",
-                "-E",
+            systemd_run_args = [
                 "systemd-run",
                 "--scope",
                 "-q",
@@ -1704,7 +1702,26 @@ def main():
                 "MemoryMax=4G",
                 "-p",
                 "TasksMax=infinity",
-            ] + exec_cmd
+            ]
+            # `systemd-run --scope` does not forward the invoking shell's
+            # environment into the new scope by itself -- `sudo -E` only
+            # preserves env as far as systemd-run's own invocation, not
+            # into the child process systemd-run then starts. Without this,
+            # --pause-on-fail's non-headless Chrome (zero_sudo/tests/
+            # common.py: headless=not HAMS_PAUSE_ON_FAIL) has no DISPLAY to
+            # attach to at all and fails immediately with "Missing X server
+            # or $DISPLAY", regardless of X11 authorization -- confirmed
+            # directly (this environment already has DISPLAY set and a
+            # working X server; a bare Chrome launch with DISPLAY forwarded
+            # manually works, the same launch through this codepath
+            # doesn't). Scoped to only the two variables --pause-on-fail
+            # actually needs, and only when that flag is set -- normal
+            # headless test runs are unaffected.
+            if os.environ.get("HAMS_PAUSE_ON_FAIL") == "1":  # burn-ignore-env
+                if os.environ.get("DISPLAY"):
+                    systemd_run_args.append(f"--setenv=DISPLAY={os.environ['DISPLAY']}")
+                systemd_run_args.append("--setenv=XDG_SESSION_TYPE=x11")
+            exec_cmd = ["sudo", "-E"] + systemd_run_args + exec_cmd
             os.execvpe("sudo", exec_cmd, os.environ)
         else:
             # os.execvpe completely replaces the current process, passing control natively
