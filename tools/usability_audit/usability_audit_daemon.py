@@ -15,6 +15,7 @@ have read this repo, because it is never shown it.
 """
 import argparse
 import base64
+import io
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ import time
 from datetime import datetime, timezone
 
 import requests
+from PIL import Image
 from playwright.sync_api import sync_playwright
 
 _logger = logging.getLogger("usability_audit_daemon")
@@ -63,10 +65,44 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def call_gemini(api_key, model, prompt_text, timeout=60):
+# Simplified deuteranopia (red-green colorblindness, the common form) simulation matrix, in the
+# style widely used by browser-based simulators such as Coblis. Not clinically precise -- it's an
+# sRGB-space approximation -- but good enough to catch the case this tool cares about: meaning
+# conveyed by red-vs-green hue alone that collapses to the same perceived color.
+_DEUTERANOPIA_MATRIX = (
+    (0.625, 0.375, 0.0),
+    (0.7, 0.3, 0.0),
+    (0.0, 0.3, 0.7),
+)
+
+
+def simulate_deuteranopia(png_bytes):
+    """Returns PNG bytes with a deuteranopia (red-green colorblind) simulation applied, so the
+    persona is shown the page approximately as a red-green colorblind viewer would perceive it."""
+    img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+    px = img.load()
+    w, h = img.size
+    mr, mg, mb = _DEUTERANOPIA_MATRIX
+    for y in range(h):
+        for x in range(w):
+            r, g, b = px[x, y]
+            px[x, y] = (
+                min(255, int(mr[0] * r + mr[1] * g + mr[2] * b)),
+                min(255, int(mg[0] * r + mg[1] * g + mg[2] * b)),
+                min(255, int(mb[0] * r + mb[1] * g + mb[2] * b)),
+            )
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
+
+
+def call_gemini(api_key, model, prompt_text, timeout=60, image_bytes=None):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    parts = [{"text": prompt_text}]
+    if image_bytes is not None:
+        parts.append({"inlineData": {"mimeType": "image/png", "data": base64.b64encode(image_bytes).decode("utf-8")}})
     payload = {
-        "contents": [{"parts": [{"text": prompt_text}]}],
+        "contents": [{"parts": parts}],
         "generationConfig": {"responseMimeType": "application/json"},
     }
     response = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=timeout)
@@ -129,8 +165,11 @@ def extract_page_state(page):
     return visible_text, elements
 
 
-def build_prompt(persona_desc, goal, history, visible_text, elements, current_url):
+def build_prompt(persona_desc, goal, history, visible_text, elements, current_url, color_vision_note=None):
     lines = [PERSONA_SYSTEM_PREAMBLE, "", f"YOUR PERSONA: {persona_desc}", "", f"YOUR GOAL RIGHT NOW: {goal}", ""]
+    if color_vision_note:
+        lines.append(color_vision_note)
+        lines.append("")
     if history:
         lines.append("WHAT YOU'VE DONE SO FAR THIS SESSION:")
         for h in history[-MAX_HISTORY_ENTRIES_IN_PROMPT:]:
@@ -149,14 +188,29 @@ def build_prompt(persona_desc, goal, history, visible_text, elements, current_ur
     return "\n".join(lines)
 
 
-def run_leg(page, api_key, model, persona_desc, goal, base_url, max_steps, log_fh):
+COLOR_VISION_NOTE = """The attached image is a screenshot of the current page with a deuteranopia
+(red-green colorblindness) simulation applied, showing approximately what you actually perceive --
+not what a person with typical color vision sees. If two things that should look visually
+different (a status pill, a form-validation color, a chart legend, a "required" marker) look the
+same or nearly the same to you in this image, that IS a real confusion/finding: say so in
+"confusion_reason" and suggest a fix that doesn't rely on hue alone (an icon, a label, a pattern,
+not just "make it a different color a colorblind person can also tell apart," which restates the
+problem instead of solving it)."""
+
+
+def run_leg(page, api_key, model, persona_desc, goal, base_url, max_steps, log_fh, color_vision_simulation=False):
     history = []
     consecutive_confused = 0
     for step in range(1, max_steps + 1):
         visible_text, elements = extract_page_state(page)
-        prompt = build_prompt(persona_desc, goal, history, visible_text, elements, page.url)
+        image_bytes = None
+        color_vision_note = None
+        if color_vision_simulation:
+            image_bytes = simulate_deuteranopia(page.screenshot())
+            color_vision_note = COLOR_VISION_NOTE
+        prompt = build_prompt(persona_desc, goal, history, visible_text, elements, page.url, color_vision_note)
         try:
-            decision = call_gemini(api_key, model, prompt)
+            decision = call_gemini(api_key, model, prompt, image_bytes=image_bytes)
         except (requests.RequestException, json.JSONDecodeError, IndexError) as e:
             _logger.error("Gemini call failed at step %d: %s", step, e)
             record = {"ts": now_iso(), "step": step, "url": page.url, "error": str(e)}
@@ -240,6 +294,7 @@ def main():
         persona_spec = json.load(f)
     persona_desc = persona_spec["persona"]
     legs = persona_spec["legs"]
+    color_vision_simulation = bool(persona_spec.get("color_vision_simulation"))
 
     os.makedirs(args.out_dir, exist_ok=True)
     run_id = datetime.now().strftime("%Y%m%dT%H%M%S")
@@ -254,7 +309,17 @@ def main():
             _logger.info("=== Leg %d/%d: %s ===", leg_num, len(legs), goal)
             log_fh.write(json.dumps({"ts": now_iso(), "leg_start": leg_num, "goal": goal}) + "\n")
             log_fh.flush()
-            run_leg(page, api_key, args.gemini_model, persona_desc, goal, args.base_url, args.max_steps_per_leg, log_fh)
+            run_leg(
+                page,
+                api_key,
+                args.gemini_model,
+                persona_desc,
+                goal,
+                args.base_url,
+                args.max_steps_per_leg,
+                log_fh,
+                color_vision_simulation=color_vision_simulation,
+            )
 
         browser.close()
 
