@@ -39,11 +39,12 @@ one-off report.
 
 ## Personas
 
-Two personas exist so far. Each persona file is
-`{"persona": "<description>", "legs": ["<goal 1>", "<goal 2>", ...]}`; add more files here for the
-other personas `USABILITY_AUDIT_SIMULATED_HAM.md` suggests (an Extra-class ham with decades of RF
-experience but low recent computer literacy; someone attempting the whole flow from a
-tablet/Chromebook) rather than assuming one persona covers the range.
+Three personas exist so far. Each persona file is
+`{"persona": "<description>", "legs": ["<goal 1>", "<goal 2>", ...]}` (optionally
+`"color_vision_simulation": true`, see below); add more files here for the other personas
+`USABILITY_AUDIT_SIMULATED_HAM.md` suggests (an Extra-class ham with decades of RF experience but
+low recent computer literacy; someone attempting the whole flow from a tablet/Chromebook) rather
+than assuming one persona covers the range.
 
 - `personas/newcomer_technician.json` -- a brand-new Technician-class licensee with heavy
   smartphone/social-media fluency but zero radio or networking background.
@@ -57,6 +58,16 @@ tablet/Chromebook) rather than assuming one persona covers the range.
   falls back to `aria-label`/`title` when there's no visible text, which happens to double as a
   decent (if partial) approximation of what a screen reader exposes -- it does not yet reconstruct
   heading/landmark structure or true reading order, which a deeper accessibility pass would want.
+- `personas/red_green_colorblind.json` -- a licensed ham with deuteranopia (red-green
+  colorblindness), added per Bruce's explicit direction (he has red-green colorblindness himself).
+  Setting `"color_vision_simulation": true` in a persona file makes `run_leg` capture a real
+  screenshot at each step, apply a deuteranopia simulation matrix
+  (`usability_audit_daemon.simulate_deuteranopia`, an sRGB-space approximation in the style of
+  browser-based simulators like Coblis -- not clinically precise, but enough to catch red/green
+  hue collapsing to the same perceived color), and send it to Gemini as inline image data
+  alongside the usual text state, with an added instruction to flag anywhere meaning depends on
+  red-vs-green hue alone. This is the one persona that needs the page's actual rendered colors,
+  which the text-only extraction otherwise never captures at all.
 
 ## Triage
 
