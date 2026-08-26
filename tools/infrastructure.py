@@ -642,6 +642,18 @@ WantedBy=multi-user.target
             "post_provision_hooks": [hook_daemons_perms],
         },
         {
+            # backup_management's daemon lives in hams_open (AGPL), not
+            # hams_com's daemons/ tree, so it needs its own src -- the
+            # {HAMS_COM_DIR}/daemons entry above only copies hams_com's
+            # own daemons.
+            "src": "{HAMS_COMMUNITY_DIR}/backup_management/daemon",
+            "path": "/opt/hams/daemons/backup_worker",
+            "owner": "hams_com:hams_com",
+            "mode": "755",
+            "environments": ["prod", "test"],
+            "post_provision_hooks": [hook_daemons_perms],
+        },
+        {
             "path": "/opt/hams/systemd/system-startup.service",
             "content": """\
 [Unit]
@@ -704,6 +716,60 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=adif.processor
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/backup.worker.service",
+            "content": """\
+[Unit]
+Description=Asynchronous Backup Worker (RabbitMQ Consumer)
+After=network.target rabbitmq-server.service
+Requires=rabbitmq-server.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# Broader than most daemons' ReadWritePaths by necessity: this is the
+# same set backup_management/models/utils.py's validate_backup_path()
+# already treats as legitimate backup/restore destinations at the
+# application layer, plus pgBackRest's own state/log directories.
+ReadWritePaths=/var/lib/odoo/backups /var/lib/odoo/backup_repo /var/backups/global /opt/hams/backup /opt/hams/etc/keys /mnt/backup /var/lib/pgbackrest /var/log/pgbackrest
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/backup_worker
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+EnvironmentFile=/opt/hams/etc/keys/backup_worker.env
+Environment="PYTHONPATH=/opt/hams/daemons"
+
+# Smoketest Resource Verification
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/backup_worker/main.py --start-test
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/backup_worker/main.py
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=backup.worker
 
 [Install]
 WantedBy=multi-user.target
