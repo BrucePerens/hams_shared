@@ -17,13 +17,11 @@ up answering the prompt itself in the absence of one; see ask_executor()'s own d
 .claude/skills/avoiding-api-costs/SKILL.md for that real, disclosed tradeoff.
 """
 import argparse
-import base64
 import io
 import json
 import logging
 import os
 import socket
-import sys
 import time
 from datetime import datetime, timezone
 
