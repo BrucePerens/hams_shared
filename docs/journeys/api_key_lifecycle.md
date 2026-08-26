@@ -22,7 +22,7 @@ This journey describes the full lifecycle of a daemon's credentials, from regist
 
 4.  **Transition: Handover**
     - The daemon makes a call with the old key and receives an `AccessError`.
-    - The daemon catches the error, re-reads the `.env` file [@ANCHOR: daemon_key_manager:COMM_daemon_self_healing].
+    - The daemon catches the error, re-reads the `.env` file [@ANCHOR: zero_sudo:COMM_json_rpc_self_healing_retry].
     - The daemon retries with the new key and continues its work.
 
 5.  **End of Life: Uninstallation**

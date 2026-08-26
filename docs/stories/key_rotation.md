@@ -17,7 +17,7 @@ so that the security risk of a leaked key is limited in time and I don't have to
     - Overwrites the existing `.env` file with the new key [@ANCHOR: daemon_key_manager:COMM_write_secure_env_file_logic].
     - Updates the `last_rotated` timestamp.
 4.  The external daemon, upon its next JSON-RPC call, may receive an `AccessError`.
-5.  The daemon's error handler re-reads the `.env` file, acquires the new key, and retries the request successfully [@ANCHOR: daemon_key_manager:COMM_daemon_self_healing].
+5.  The daemon's error handler re-reads the `.env` file, acquires the new key, and retries the request successfully [@ANCHOR: zero_sudo:COMM_json_rpc_self_healing_retry].
 
 ## Manual Rotation
 
