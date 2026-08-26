@@ -3124,6 +3124,24 @@ def scan_file(filepath, is_odoo_module=False):
                 "audit-ignore-path",
                 "audit-ignore-sql",
                 "audit-ignore-weak-random",
+                # `_execute_gdpr_erasure()`'s own dedicated escape hatch,
+                # defined and enforced by
+                # hams_shared/tools/check_gdpr_erasure_uses_service_utility.py
+                # (see that file's own docstring): the ordinary path is
+                # `_erase_via_service_account`, but that utility is built for
+                # a single user's own small, personal-scale dataset, not the
+                # production-scale batching, savepoint-protected
+                # concurrent-update retry, and mid-loop commits that
+                # user_websites' website.page/blog.post/blog.blog erasure
+                # genuinely needs for datasets that can run into the
+                # thousands of records across users. Was already the one
+                # sanctioned exception that check enforces -- this file's own
+                # separate `audit-ignore` allow-list had simply never been
+                # told about it, so the two checks disagreed about the same
+                # three lines. First used by
+                # user_websites/models/res_users.py's
+                # _execute_gdpr_erasure().
+                "audit-ignore-gdpr-hand-rolled-unlink",
             ]
             if not any(tag in line for tag in valid_audits):
                 errors_found.append(
