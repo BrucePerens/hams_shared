@@ -829,6 +829,29 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 35. check_cargo_deny -- the Rust supply-chain/license/advisory scan
+    # check_pip_audit.py's own docstring already describes as its "direct
+    # Python parallel," but was never actually wired in here at all: a real
+    # gap found 2026-08-26 running `cargo deny check` by hand for the first
+    # time in this codebase's history and finding 11 real, previously-
+    # unremediated advisory/license/unmaintained findings in hams_local_relay
+    # alone (an HTTP/2 unbounded-DATA-frame DoS vector among them). Same
+    # reasoning as step 19/20/22/23/24/30/31/32/33/34: always scans the full
+    # repo, not a possibly-scoped `targets` list.
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_cargo_deny.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
