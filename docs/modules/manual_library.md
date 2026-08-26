@@ -1,6 +1,6 @@
 # Knowledge (`knowledge`)
 
-*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).*
+*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).*
 
 This is a free, open-source replacement for Odoo's Enterprise Knowledge app. It lets you write, organize, and publish documentation and user manuals directly inside Odoo Community.
 

@@ -1,6 +1,6 @@
 # Distributed Redis Cache (`distributed_redis_cache`)
 
-*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).*
+*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).*
 
 Fine-grained distributed caching and phase coherence for horizontally scaled Odoo clusters.
 

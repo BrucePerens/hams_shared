@@ -1,6 +1,6 @@
 # Hams Test Infrastructure (`zero_sudo`)
 
-*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).*
+*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).*
 
 This module is the unified testing infrastructure for the repository. It consolidates the Real Transaction Testing facility, the Daemon Integration Testing framework, and the UI Tour governance standards into a single, cohesive architecture.
 

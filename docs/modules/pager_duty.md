@@ -1,6 +1,6 @@
 # 📟 Pager Duty & Generalized Monitoring (`pager_duty`)
 
-*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).*
+*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).*
 
 [@ANCHOR: pager_duty_module_root]
 

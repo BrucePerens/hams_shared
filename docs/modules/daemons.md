@@ -1,6 +1,6 @@
 # ⚙️ Background Daemons (`daemons/`)
 
-*Copyright © Bruce Perens K6BP. AGPL-3.0.*
+*Copyright © Bruce Perens K6BP. AGPL-3.0-or-later.*
 
 **Context:** API Contracts for standalone background processes.
 

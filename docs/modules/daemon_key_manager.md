@@ -1,6 +1,6 @@
 # Daemon Key Manager (`daemon_key_manager`)
 
-*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).*
+*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).*
 
 The **Daemon Key Manager** is the centralized authority for managing Odoo API keys for external background services (daemons). It implements the **Service Account Pattern** by generating native Odoo API keys and exporting them to highly restricted local `.env` files, eliminating the need for hardcoded credentials or manual token rotation. This module is a critical component of the **Zero-Sudo Architecture**, ensuring that background processes operate with minimum privilege and without human intervention for credential management.
 

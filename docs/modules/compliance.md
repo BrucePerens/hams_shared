@@ -1,6 +1,6 @@
 # Global Compliance & Privacy (`compliance`)
 
-*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).*
+*Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).*
 
 This module automatically handles the annoying parts of running a legal website. It makes sure your Odoo instance complies with GDPR, CCPA, and ePrivacy rules without you having to configure anything manually.
 

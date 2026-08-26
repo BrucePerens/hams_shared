@@ -34,7 +34,7 @@ For example: gemini.google.com and jules.google.com.
 ## 2. Project Overview
 
 **Open Source Community Odoo Modules**
-* The hams_open and hams_open/hams_shared repositories contain open-source modules designed for **Odoo 19 Community** under the AGPL-3.0 license.
+* The hams_open and hams_open/hams_shared repositories contain open-source modules designed for **Odoo 19 Community** under the AGPL-3.0-or-later license.
 * The hams_com repository contains proprietary and trade-secret modules, to implement the hams.com web site and infrastructure associated with it.
 </project_overview>
 
