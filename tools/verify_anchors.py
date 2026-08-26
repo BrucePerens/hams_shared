@@ -527,7 +527,7 @@ def _report_bidirectional_orphans(
                 "      [!] DIAGNOSTIC FOR AI: The source code defines a feature, but no test claims to test it."
             )
             print(
-                f"          ACTION: Open the appropriate test file and insert: `# Tests [@ANCHOR: COMM_{anchor.split(':')[1]}]` above the test logic."
+                f"          ACTION: Open the appropriate test file and insert: `# Tests [@ANCHOR: {anchor.split(':')[1]}]` above the test logic."
             )
         if reported:
             has_errors = True
@@ -557,7 +557,7 @@ def _report_bidirectional_orphans(
                 "      [!] DIAGNOSTIC FOR AI: The test file defines a test anchor, but the production code does not acknowledge it."
             )
             print(
-                f"          ACTION: Open the production code file being tested and insert: `# # Verified by [@ANCHOR: COMM_{anchor.split(':')[1]}]` near the logic."
+                f"          ACTION: Open the production code file being tested and insert: `# # Verified by [@ANCHOR: {anchor.split(':')[1]}]` near the logic."
             )
         if reported:
             has_errors = True
@@ -614,7 +614,7 @@ def _report_documentation_gaps(
                 print(f"        -> {loc}")
             print("      [!] DIAGNOSTIC FOR AI: Every core feature must be documented.")
             print(
-                f"          ACTION: Add `[@ANCHOR: COMM_{anchor.split(':')[1]}]` to the relevant Markdown file in `docs/stories/` or `docs/journeys/`."
+                f"          ACTION: Add `[@ANCHOR: {anchor.split(':')[1]}]` to the relevant Markdown file in `docs/stories/` or `docs/journeys/`."
             )
         if reported:
             has_errors = True
