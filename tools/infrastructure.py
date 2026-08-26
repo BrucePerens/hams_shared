@@ -300,6 +300,13 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            "path": "/opt/hams/etc/relay_cert_renew",
+            "owner": "odoo:odoo",
+            "provision_mode": "700",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/nginx",
             "owner": "hams_com:hams_com",
             "provision_mode": "750",
@@ -1090,6 +1097,70 @@ Description=Poll SES Inbound Mail Every 2 Minutes
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/relay.cert.renew.service",
+            "content": """\
+[Unit]
+Description=Relay Wildcard TLS Cert Renewal Service
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/etc/relay_cert_renew
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/relay_cert_renew
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=relay_cert_renew_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/relay_cert_renew_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Smoketest Resource Verification
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_cert_renew/main.py --start-test
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/relay_cert_renew/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=relay.cert.renew
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/relay.cert.renew.timer",
+            "content": """\
+[Unit]
+Description=Check Relay Wildcard Cert For Renewal Twice Daily
+
+[Timer]
+OnCalendar=*-*-* 03,15:00:00
+RandomizedDelaySec=30m
 Persistent=true
 
 [Install]
