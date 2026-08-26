@@ -267,6 +267,55 @@ def test_domain_sandbox_ignores_an_unrelated_ref_call():
     assert warnings == []
 
 
+def _patch_ban_errors(filename):
+    # The NATIVE PATCH DECORATORS FORBIDDEN rule (GENERAL_ERROR_RULES,
+    # matched by scan_file against the real filepath, not the bare
+    # filename) is what these two tests exercise -- confirmed directly
+    # against real files, not assumed: before this exclusion existed,
+    # au_callsign_sync's own real test_au_callsign_sync.py (a standalone
+    # daemon test using patch.object() because self.safe_patch() is a
+    # method on zero_sudo's Odoo TestCase-derived HamsTransactionCase,
+    # which daemon tests are themselves forbidden from importing) was
+    # already tripping this rule whenever check_burn_list.py was pointed
+    # at a real directory.
+    source = (
+        "from unittest.mock import patch\n"
+        "\n"
+        "\n"
+        "def test_example():\n"
+        '    with patch.object(SomeClass, "method", return_value=1):\n'
+        "        pass\n"
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        full_path = Path(tmpdir) / filename
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(source, encoding="utf-8")
+        errors, _warnings = scan_file(str(full_path), is_odoo_module=False)
+    return [e for e in errors if "Native patch decorators" in e]
+
+
+def test_patch_ban_exempts_a_top_level_daemon_test():
+    errors = _patch_ban_errors("daemons/au_callsign_sync/test_au_callsign_sync.py")
+    assert errors == []
+
+
+def test_patch_ban_exempts_a_module_embedded_daemon_test():
+    # The singular daemon/ (module-embedded, e.g.
+    # backup_management/daemon/test_main.py) must be exempted the same
+    # way the plural top-level daemons/ is -- both forms are standalone,
+    # Odoo-decoupled daemon code.
+    errors = _patch_ban_errors("backup_management/daemon/test_main.py")
+    assert errors == []
+
+
+def test_patch_ban_still_flags_a_genuine_non_daemon_test():
+    # The exclusion must not swallow the rule entirely -- an ordinary
+    # Odoo module test using native patch.object() still needs to be
+    # caught.
+    errors = _patch_ban_errors("ham_callbook/tests/test_something.py")
+    assert len(errors) == 1
+
+
 def test_tour_mandate_is_not_satisfied_by_audit_ignore_view_alone():
     # The real bug found and fixed this session (pager_check_views.xml):
     # ADR 0076 section 3 says audit-ignore-view and burn-ignore-tour are

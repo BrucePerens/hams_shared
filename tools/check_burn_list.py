@@ -265,7 +265,20 @@ GENERAL_ERROR_RULES = [
         "CRITICAL ARCHITECTURE: Tests must inherit from HamsTransactionCase or HamsHttpCase. Direct Odoo base class inheritance is forbidden.",
     ),
     (
-        r"test_.*\.py$",
+        # Excludes daemons?/ the same way the DAEMON DECOUPLING rule above
+        # does: self.safe_patch()/self.safe_patch_object() are methods on
+        # zero_sudo's Odoo TestCase-derived HamsTransactionCase/HamsHttpCase
+        # (see zero_sudo/tests/common.py), which standalone daemon tests
+        # are themselves forbidden from importing or inheriting from (they
+        # "must run entirely isolated"). Without this exclusion the two
+        # rules directly contradict each other for any daemon test that
+        # needs to patch something -- confirmed this was already silently
+        # violated, not hypothetical: au_callsign_sync's existing
+        # test_au_callsign_sync.py uses native patch.object() and was
+        # already tripping this rule whenever check_burn_list.py was run
+        # against a real directory (its own filepath argument, not a bare
+        # filename, is what the selector regex is matched against).
+        r"^(?!.*daemons?/).*test_.*\.py$",
         re.compile(r"(?:@(?:mock\.)?patch\b|\b(?:mock\.)?patch(?:\.object)?\s*\()"),
         "CRITICAL ARCHITECTURE: Native patch decorators and context managers are forbidden. Use self.safe_patch() or self.safe_patch_object().",
     ),
