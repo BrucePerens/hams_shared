@@ -852,6 +852,26 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 36. check_cargo_clippy -- the Rust code-quality scan that is
+    # flake8/ESLint's direct parallel on the Rust side, but -- like
+    # cargo-deny above -- was never actually wired in here at all: a real
+    # gap found 2026-08-26 running `cargo clippy` by hand for the first time
+    # in this codebase's history. Same reasoning as step 35: always scans
+    # the full repo, not a possibly-scoped `targets` list.
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_cargo_clippy.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
