@@ -1237,6 +1237,58 @@ WantedBy=timers.target
             "environments": ["prod", "test"],
         },
         {
+            "path": "/opt/hams/systemd/gdpr.csv.export.service",
+            "content": """\
+[Unit]
+Description=GDPR CSV/Zip Export Daemon
+After=network.target redis-server.service
+Requires=redis-server.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/gdpr_csv_export
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=gdpr_export_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/gdpr_export_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Smoketest Resource Verification -- confirms Redis (the admission-control
+# counter store) is reachable before systemd brings this into service.
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/gdpr_csv_export/main.py --start-test
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/gdpr_csv_export/main.py $DAEMON_ARGS
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gdpr.csv.export
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/systemd/qrz.scraper.service",
             "content": """\
 [Unit]
