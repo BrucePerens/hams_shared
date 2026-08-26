@@ -1031,6 +1031,75 @@ WantedBy=timers.target
             "environments": ["prod", "test"],
         },
         {
+            "path": "/opt/hams/systemd/ses.inbound.mail.ingest.service",
+            "content": """\
+[Unit]
+Description=Ham Radio SES Inbound Mail Ingest Service
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/ses_inbound_mail_ingest
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+# TODO(bruce): AWS credentials for this service account are not yet
+# provisioned -- see docs/proposals/EMAIL_SEND_RECEIVE.md's "Also not
+# yet a real, persistent home" section. This needs a real IAM identity
+# for the `odoo` user (or an EnvironmentFile= line here sourcing one),
+# not a copy of the dev box's personal SSO session. --start-test warns
+# rather than failing until this is resolved.
+Environment="ODOO_USER=mail_ingest_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/mail_ingest_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Smoketest Resource Verification
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/ses_inbound_mail_ingest/main.py --start-test
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/ses_inbound_mail_ingest/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ses.inbound.mail.ingest
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/ses.inbound.mail.ingest.timer",
+            "content": """\
+[Unit]
+Description=Poll SES Inbound Mail Every 2 Minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/systemd/qrz.scraper.service",
             "content": """\
 [Unit]
