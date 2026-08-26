@@ -8,15 +8,20 @@ unsettled (persona count/cadence, where critique gets triaged, whether to allow 
 `CONSECUTIVE_CONFUSION_LIMIT` (3) confused steps in a row, to keep each run's signal comparable).
 
 This is deliberately **not** a Claude Agent/fork dispatch. Per
-`.claude/skills/avoiding-api-costs/SKILL.md`, it's a standalone daemon that calls Gemini directly
-per decision point (Pattern A in that skill) -- which also structurally enforces the proposal's
-"no implementation knowledge" constraint, since the model behind the persona is only ever shown
-the current page's own visible text and interactive elements, never this repository.
+`.claude/skills/avoiding-api-costs/SKILL.md`, it's a standalone daemon that routes each decision
+point through this codebase's own established MCP scheme (`hams_shared/tools/mcp_watchdog.py`'s
+IPC bridge, the same one `ingest/daemon_utils.py` uses for the course-content pipeline) rather
+than a direct API call -- no `GEMINI_API_KEY` needed. `ask_executor()` writes the prompt to a
+queue and blocks for a JSON response file; whichever agent answers (a fresh, isolated Gemini
+Conductor subagent if one is live and listening, or the orchestrating Claude Code session itself
+if not) is the real answerer. **Real, disclosed tradeoff**: the "no implementation knowledge"
+persona constraint only structurally holds when a genuinely fresh, isolated executor answers --
+if the orchestrating session ends up answering its own prompts, that session may have read this
+repository. See `ask_executor()`'s own docstring and the skill file for the full nuance.
 
 ## Running it
 
 ```
-export GEMINI_API_KEY=<same value stored in ir.config_parameter's gemini.api_key>
 python3 tools/usability_audit/usability_audit_daemon.py \
   --base-url http://127.0.0.1:8069 \
   --persona-file tools/usability_audit/personas/newcomer_technician.json \
@@ -25,8 +30,21 @@ python3 tools/usability_audit/usability_audit_daemon.py \
 ```
 
 Needs a real running hams.com instance at `--base-url` (any environment -- point it at a local
-dev server, a staging deploy, whatever you want audited) and Playwright's Chromium installed
-(`playwright install chromium`, already present in this dev environment).
+dev server, a staging deploy, whatever you want audited), Playwright's Chromium installed
+(`playwright install chromium`, already present in this dev environment), and something actually
+listening on the `mcp_watchdog` IPC bridge to answer prompts -- either a live Gemini Conductor
+session, or the orchestrating Claude Code session itself calling the `wait_for_inbox`/
+`send_ipc_message` MCP tools directly and answering each `usability_audit_<step_id>` queue by
+hand (reasoning in persona, writing the JSON response file the prompt names).
+
+**Verified 2026-08-26 against a real local dev server (leg 1 of a `newcomer_technician` run
+completed end to end, log content confirmed correct).** One real trap hit during that run, worth
+knowing before debugging this again: there are two MCP servers exposing near-identical
+`queue_status`/`wait_for_inbox`/`send_ipc_message` tools, `mcp__watchdog__*` and
+`mcp__watchdog_shared__*`. The legacy bridge socket `_send_ipc_message()` writes to is served by
+the **shared** one -- `queue_status` on the plain `mcp__watchdog__*` server will report
+`"exists": false` for a queue the daemon genuinely wrote to, because that server holds its own
+private, empty queue dict. Always use the `_shared` variants to answer this daemon's prompts.
 
 ## Output
 

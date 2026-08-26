@@ -6,12 +6,15 @@ non-technical-ham persona defined entirely by docs/proposals/USABILITY_AUDIT_SIM
 See tools/usability_audit/README.md for how to run this and how the output is structured.
 
 Deliberately NOT a Claude Agent/fork dispatch -- see .claude/skills/avoiding-api-costs/SKILL.md.
-Each decision point is one bounded Gemini REST call (the same direct-REST convention
-ham_onboarding/models/res_users_verification.py and ham_training use), not an agentic loop with
-a whole codebase in context. That is also what gives the "no implementation knowledge" persona
-constraint real teeth: the model behind the persona is handed nothing but the current page's own
-rendered text and interactive elements, on a fresh conversation each run -- it structurally cannot
-have read this repo, because it is never shown it.
+Each decision point is routed through this codebase's own established MCP scheme
+(hams_shared/tools/mcp_watchdog.py's IPC bridge, the same mechanism ingest/daemon_utils.py's
+prompt_and_parse_json()/wait_for_llm_action() already use for the course-content pipeline) --
+ask_executor() writes the prompt to a queue and blocks for a JSON response file, rather than
+making a direct Gemini REST call. This structurally supports the "no implementation knowledge"
+persona constraint when a genuinely fresh, isolated executor (a Gemini Conductor subagent with no
+repo context) answers -- but does NOT guarantee it if the orchestrating Claude Code session ends
+up answering the prompt itself in the absence of one; see ask_executor()'s own docstring and
+.claude/skills/avoiding-api-costs/SKILL.md for that real, disclosed tradeoff.
 """
 import argparse
 import base64
@@ -19,10 +22,11 @@ import io
 import json
 import logging
 import os
+import socket
 import sys
+import time
 from datetime import datetime, timezone
 
-import requests
 from PIL import Image
 from playwright.sync_api import sync_playwright
 
@@ -95,21 +99,77 @@ def simulate_deuteranopia(png_bytes):
     return out.getvalue()
 
 
-def call_gemini(api_key, model, prompt_text, timeout=60, image_bytes=None):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    parts = [{"text": prompt_text}]
+_WATCHDOG_BRIDGE_SOCK = os.path.expanduser("~/workspace/tmp/mcp_watchdog_ipc.sock")
+
+
+def _send_ipc_message(queue_name, content):
+    """Dependency-free client for mcp_watchdog.py's own "legacy bridge" -- the same mechanism
+    ingest/daemon_utils.py's send_ipc_message() uses for plain (non-MCP-agent) Python processes.
+    Wire format: connect, write "<queue_name>\\n<content>", close. Deliberately reimplemented
+    inline here rather than importing ingest/daemon_utils.py, to avoid a hams_shared -> hams_com
+    cross-repo import for three lines of socket code."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(_WATCHDOG_BRIDGE_SOCK)
+    try:
+        sock.sendall(f"{queue_name}\n{content}".encode("utf-8"))
+    finally:
+        sock.close()
+
+
+def ask_executor(model, prompt_text, timeout=60, image_bytes=None, out_dir=None, step_id=None):
+    """Per Bruce's direction (2026-08-26): routes each persona decision through this codebase's
+    own established MCP scheme (mcp_watchdog.py's IPC bridge, the same one ingest/daemon_utils.py's
+    prompt_and_parse_json()/wait_for_llm_action() already use for the course-content pipeline)
+    instead of a direct Gemini REST call needing GEMINI_API_KEY -- no key is required or read here
+    at all. Writes the prompt (plus, for the colorblind persona, the deuteranopia-simulated
+    screenshot saved to a real file the executor can view directly) to the queue, then blocks
+    polling for the executor's JSON response file, exactly like wait_for_llm_action().
+
+    **Real, disclosed deviation from this proposal's "no implementation knowledge" persona
+    constraint**: whichever agent is actually listening on this queue and answering (a fresh
+    Gemini Conductor subagent with no repo context, if one is live and picks it up -- the
+    contamination-free case this proposal was designed around -- or, in the absence of one, the
+    orchestrating Claude Code session driving this run directly) is the real answerer; if it's the
+    orchestrating session, that session may have read this repository, unlike the design's
+    original zero-knowledge intent. Flagged here and in the run's own log/README rather than
+    silently assumed away."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    step_id = step_id or ts
+    out_dir = out_dir or "/tmp"
+    output_file = os.path.join(out_dir, f"usability_audit_response_{step_id}.json")
+    if os.path.exists(output_file):
+        os.remove(output_file)
+
+    image_note = ""
     if image_bytes is not None:
-        parts.append({"inlineData": {"mimeType": "image/png", "data": base64.b64encode(image_bytes).decode("utf-8")}})
-    payload = {
-        "contents": [{"parts": parts}],
-        "generationConfig": {"responseMimeType": "application/json"},
-    }
-    response = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=timeout)
-    response.raise_for_status()
-    result_text = (
-        response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+        image_path = os.path.join(out_dir, f"usability_audit_screenshot_{step_id}.png")
+        with open(image_path, "wb") as f:
+            f.write(image_bytes)
+        image_note = f"\n\nAn attached screenshot (deuteranopia-simulated) is saved at: {image_path}\nView it directly before answering."
+
+    prompt_content = (
+        f"\nACTION_REQUIRED_BY_EXECUTOR:\n{prompt_text}{image_note}\n\n"
+        f"Respond with ONLY the JSON object described above.\n"
+        f"Use the `write_to_file` (or equivalent) tool to save your raw JSON output directly to `{output_file}`.\n"
+        f"CRITICAL INSTRUCTION: Do NOT end your turn until you have successfully written that JSON file. "
+        f"You must actively generate the file right now!"
     )
-    return json.loads(result_text)
+    queue_name = f"/usability_audit_{step_id}"
+    payload = json.dumps({"_meta_expectation": {"file": output_file, "timeout_mins": 15}, "prompt": prompt_content})
+    _send_ipc_message(queue_name, payload)
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if os.path.exists(output_file):
+            with open(output_file) as f:
+                text = f.read().strip()
+            if text.startswith("```"):
+                text = "\n".join(text.split("\n")[1:])
+            if text.endswith("```"):
+                text = "\n".join(text.split("\n")[:-1])
+            return json.loads(text.strip())
+        time.sleep(1)
+    raise TimeoutError(f"No response written to {output_file} within {timeout}s (queue: {queue_name})")
 
 
 def extract_page_state(page):
@@ -197,7 +257,7 @@ not just "make it a different color a colorblind person can also tell apart," wh
 problem instead of solving it)."""
 
 
-def run_leg(page, api_key, model, persona_desc, goal, base_url, max_steps, log_fh, color_vision_simulation=False):
+def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_vision_simulation=False, out_dir="/tmp", leg_id="leg"):
     history = []
     consecutive_confused = 0
     for step in range(1, max_steps + 1):
@@ -209,9 +269,11 @@ def run_leg(page, api_key, model, persona_desc, goal, base_url, max_steps, log_f
             color_vision_note = COLOR_VISION_NOTE
         prompt = build_prompt(persona_desc, goal, history, visible_text, elements, page.url, color_vision_note)
         try:
-            decision = call_gemini(api_key, model, prompt, image_bytes=image_bytes)
-        except (requests.RequestException, json.JSONDecodeError, IndexError) as e:
-            _logger.error("Gemini call failed at step %d: %s", step, e)
+            decision = ask_executor(
+                model, prompt, timeout=600, image_bytes=image_bytes, out_dir=out_dir, step_id=f"{leg_id}_{step}"
+            )
+        except (TimeoutError, OSError, json.JSONDecodeError, IndexError) as e:
+            _logger.error("Executor call failed at step %d: %s", step, e)
             record = {"ts": now_iso(), "step": step, "url": page.url, "error": str(e)}
             log_fh.write(json.dumps(record) + "\n")
             log_fh.flush()
@@ -284,11 +346,6 @@ def main():
     parser.add_argument("--gemini-model", default=os.environ.get("GEMINI_MODEL", GEMINI_MODEL_DEFAULT))
     args = parser.parse_args()
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        _logger.error("GEMINI_API_KEY not set in the environment. See tools/usability_audit/README.md.")
-        sys.exit(1)
-
     with open(args.persona_file) as f:
         persona_spec = json.load(f)
     persona_desc = persona_spec["persona"]
@@ -310,7 +367,6 @@ def main():
             log_fh.flush()
             run_leg(
                 page,
-                api_key,
                 args.gemini_model,
                 persona_desc,
                 goal,
@@ -318,6 +374,8 @@ def main():
                 args.max_steps_per_leg,
                 log_fh,
                 color_vision_simulation=color_vision_simulation,
+                out_dir=args.out_dir,
+                leg_id=f"run{run_id}_leg{leg_num}",
             )
 
         browser.close()
