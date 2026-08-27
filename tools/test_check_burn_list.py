@@ -2155,6 +2155,127 @@ def test_access_csv_granting_a_normal_non_financial_model_is_not_flagged():
     assert not any("FINANCIAL EXPOSURE" in e for e in errors)
 
 
+# scan_file()'s XML/HTML walk: the ANCHOR FORMAT ban (text content and attribute value,
+# with data-trace's real exemption), the OWL 2 arrow-function-with-block-body ban, the
+# snippet_options deprecation, and the ir.rule/res.groups noupdate-data-block requirement.
+
+
+def test_anchor_marker_in_plain_element_text_is_a_critical_anchor_format_error():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="description">[@ANCHOR: COMM_test]</field>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("ANCHOR FORMAT" in e and "MUST be enclosed within comments" in e for e in errors)
+
+
+def test_anchor_marker_in_an_attribute_value_is_a_critical_anchor_format_error():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="description" data-something="[@ANCHOR: COMM_test]"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("ANCHOR FORMAT" in e and "Found in attribute" in e for e in errors)
+
+
+def test_anchor_marker_in_the_exempt_data_trace_attribute_is_not_flagged():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="description" data-trace="[@ANCHOR: COMM_test]"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert not any("ANCHOR FORMAT" in e for e in errors)
+
+
+def test_owl_arrow_function_with_a_block_body_is_forbidden_syntax():
+    xml = (
+        "<odoo>\n"
+        '    <t t-name="my.template">\n'
+        '        <button t-on-click="() => { doSomething(); }">Click</button>\n'
+        "    </t>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_template.xml")
+    assert any("OWL SYNTAX" in e and "block bodies" in e for e in errors)
+
+
+def test_owl_arrow_function_expression_form_is_allowed():
+    xml = (
+        "<odoo>\n"
+        '    <t t-name="my.template">\n'
+        '        <button t-on-click="() => doSomething()">Click</button>\n'
+        "    </t>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_template.xml")
+    assert not any("OWL SYNTAX" in e for e in errors)
+
+
+def test_inheriting_website_snippet_options_is_a_critical_deprecation():
+    xml = (
+        "<odoo>\n"
+        "    <data>\n"
+        '        <record id="thing_view" model="ir.ui.view" inherit_id="website.snippet_options">\n'
+        '            <field name="name">Thing</field>\n'
+        '            <field name="arch" type="xml">\n'
+        "                <!-- [@ANCHOR: COMM_test] -->\n"
+        '                <xpath expr="//div" position="inside"/>\n'
+        "            </field>\n"
+        "        </record>\n"
+        "    </data>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_view.xml")
+    assert any("snippet_options" in e and "Odoo 19" in e for e in errors)
+
+
+def test_ir_rule_record_outside_a_noupdate_data_block_is_forbidden():
+    xml = (
+        "<odoo>\n"
+        '    <record id="my_rule" model="ir.rule">\n'
+        '        <field name="name">My Rule</field>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "security_data.xml")
+    assert any("must be inside noupdate data block" in e for e in errors)
+
+
+def test_ir_rule_record_inside_a_noupdate_data_block_is_allowed():
+    xml = (
+        "<odoo>\n"
+        '    <data noupdate="1">\n'
+        '        <record id="my_rule" model="ir.rule">\n'
+        '            <field name="name">My Rule</field>\n'
+        "        </record>\n"
+        "    </data>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "security_data.xml")
+    assert not any("must be inside noupdate data block" in e for e in errors)
+
+
+def test_res_groups_record_outside_a_noupdate_data_block_is_also_forbidden():
+    xml = (
+        "<odoo>\n"
+        '    <record id="my_group" model="res.groups">\n'
+        '        <field name="name">My Group</field>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "security_data.xml")
+    assert any("must be inside noupdate data block" in e for e in errors)
+
+
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
     source = "self.env.registry.clear_caches()\n"
     errors, _warnings = _dict_findings(source)
