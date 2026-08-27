@@ -29,6 +29,7 @@ from check_burn_list import (  # noqa: E402
     check_ast_vulnerabilities,
     scan_file,
     _verify_test_ast,
+    _is_odoo_module,
 )
 
 
@@ -1968,6 +1969,36 @@ def test_verify_test_ast_anchor_not_inside_any_function_is_invalid():
     assert result == (1, 1)
 
 
+def test_verify_test_ast_object_patch_of_send_mail_string_counts_as_mail_evidence():
+    # The `object`/`safe_patch_object` mock-detection branch: even a mocked call whose first
+    # string-literal argument names "send_mail" counts as mail-related evidence.
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_mail_patched(self):\n"
+        "        # [@ANCHOR: COMM_test_mail_patched]\n"
+        "        with patch.object(MailThread, 'send_mail', return_value=True):\n"
+        "            record.action_do_thing()\n"
+    )
+    req = {"anchor": "test_mail_patched", "type": "audit-ignore-mail"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (0, 0)
+
+
+def test_verify_test_ast_with_block_assert_raises_counts_as_a_security_check():
+    # The With-item branch (distinct from the plain-Call assertRaises already covered): using
+    # assertRaises as a context manager, not called directly.
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_financial_blocked(self):\n"
+        "        # [@ANCHOR: COMM_test_financial_blocked]\n"
+        "        with self.assertRaises(AccessError):\n"
+        "            self.env['account.move'].sudo().unlink()\n"
+    )
+    req = {"anchor": "test_financial_blocked", "type": "burn-ignore-financial"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (0, 0)
+
+
 def test_verify_test_ast_a_loop_wrapping_view_validation_is_ast_evasion():
     target_content = (
         "class FooTests(TestCase):\n"
@@ -1979,6 +2010,47 @@ def test_verify_test_ast_a_loop_wrapping_view_validation_is_ast_evasion():
     req = {"anchor": "test_view_in_loop", "type": "audit-ignore-view"}
     result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
     assert result == (1, 1)
+
+
+# _is_odoo_module() -- the real filesystem-walk used by main() to classify each scanned file
+# as Odoo-module code or not: a /daemons//daemon//tools/ path segment short-circuits to False
+# regardless of manifest presence, otherwise it walks up looking for a real __manifest__.py,
+# bounded by target_dir.
+
+
+def test_is_odoo_module_short_circuits_false_for_a_daemons_path():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        module_dir = Path(tmpdir) / "some_module"
+        daemon_file = module_dir / "daemons" / "worker.py"
+        daemon_file.parent.mkdir(parents=True)
+        (module_dir / "__manifest__.py").write_text("{}", encoding="utf-8")
+        daemon_file.write_text("", encoding="utf-8")
+        assert _is_odoo_module(str(daemon_file), tmpdir) is False
+
+
+def test_is_odoo_module_short_circuits_false_for_a_tools_path():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tools_file = Path(tmpdir) / "hams_shared" / "tools" / "some_checker.py"
+        tools_file.parent.mkdir(parents=True)
+        tools_file.write_text("", encoding="utf-8")
+        assert _is_odoo_module(str(tools_file), tmpdir) is False
+
+
+def test_is_odoo_module_true_when_a_real_manifest_exists_up_the_tree():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        model_file = Path(tmpdir) / "ham_qso" / "models" / "res_users.py"
+        model_file.parent.mkdir(parents=True)
+        model_file.write_text("", encoding="utf-8")
+        (Path(tmpdir) / "ham_qso" / "__manifest__.py").write_text("{}", encoding="utf-8")
+        assert _is_odoo_module(str(model_file), tmpdir) is True
+
+
+def test_is_odoo_module_false_when_no_manifest_exists_before_target_dir():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        plain_file = Path(tmpdir) / "scripts" / "helper.py"
+        plain_file.parent.mkdir(parents=True)
+        plain_file.write_text("", encoding="utf-8")
+        assert _is_odoo_module(str(plain_file), tmpdir) is False
 
 
 def test_symlink_source_resolved_through_an_intermediate_variable_assignment_is_checked():
