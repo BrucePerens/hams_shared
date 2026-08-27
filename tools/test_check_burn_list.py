@@ -1447,6 +1447,100 @@ def test_time_sleep_with_the_real_audit_ignore_tag_is_exempt():
     assert not any("THREAD BLOCKING" in w for w in warnings)
 
 
+# The rest of the in_http_controller-gated visit_Call cluster: CONTROLLER BINDING (probing
+# the request's own **kwargs dict via .get()), plus _check_search_methods() (unbounded
+# .search(), search(count=True), the regex-object and test-file exemptions, and the
+# Data Integrity env-subscript-inside-create/write warning), plus the visit_Subscript
+# config['test_enable']/['test_file'] probing ban.
+
+
+def test_controller_binding_probing_the_kwargs_dict_directly_is_warned_on():
+    source = (
+        "@http.route('/api/v1/thing', type='jsonrpc', auth='user')\n"
+        "def get_thing(self, **kwargs):\n"
+        "    value = kwargs.get('callsign')\n"
+        "    return value\n"
+    )
+    _errors, warnings = _dict_findings(source)
+    assert any("CONTROLLER BINDING" in w for w in warnings)
+
+
+def test_search_without_limit_is_an_unbounded_search_warning():
+    source = "results = self.env['ham.qso'].search([('active', '=', True)])\n"
+    _errors, warnings = _dict_findings(source)
+    assert any("UNBOUNDED SEARCH" in w for w in warnings)
+
+
+def test_search_with_limit_is_not_flagged_as_unbounded():
+    source = "results = self.env['ham.qso'].search([('active', '=', True)], limit=10)\n"
+    _errors, warnings = _dict_findings(source)
+    assert not any("UNBOUNDED SEARCH" in w for w in warnings)
+
+
+def test_search_without_limit_inside_a_real_test_file_is_exempt():
+    source = "results = self.env['ham.qso'].search([('active', '=', True)])\n"
+    _errors, warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_res_users.py"
+    )
+    assert not any("UNBOUNDED SEARCH" in w for w in warnings)
+
+
+def test_search_with_count_true_is_forbidden_use_search_count_instead():
+    source = "n = self.env['ham.qso'].search([('active', '=', True)], count=True)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("search_count" in e for e in errors)
+
+
+def test_a_compiled_regex_objects_own_search_is_not_an_odoo_search_call():
+    # AST alone can't know the receiver's runtime type -- this relies on the same
+    # _RE/_REGEX/_PATTERN naming convention check_burn_list.py's own module-level compiled
+    # patterns use, per the real ics_form_handler.py false positive this exemption fixed.
+    source = "match = SOME_THING_RE.search(text)\n"
+    _errors, warnings = _dict_findings(source)
+    assert not any("UNBOUNDED SEARCH" in w for w in warnings)
+
+
+def test_bare_re_dot_search_is_not_an_odoo_search_call():
+    source = "match = re.search(pattern, text)\n"
+    _errors, warnings = _dict_findings(source)
+    assert not any("UNBOUNDED SEARCH" in w for w in warnings)
+
+
+def test_env_subscript_search_directly_inside_create_is_a_data_integrity_warning():
+    source = (
+        "class Foo(models.Model):\n"
+        "    def create(self, vals):\n"
+        "        return self.env['ham.qso'].search([], limit=1)\n"
+    )
+    _errors, warnings = _dict_findings(source)
+    assert any("Data Integrity" in w and "with_user()" in w for w in warnings)
+
+
+def test_env_subscript_search_outside_any_sensitive_method_is_not_a_data_integrity_warning():
+    source = (
+        "class Foo(models.Model):\n"
+        "    def some_helper(self, vals):\n"
+        "        return self.env['ham.qso'].search([], limit=1)\n"
+    )
+    _errors, warnings = _dict_findings(source)
+    assert not any("Data Integrity" in w for w in warnings)
+
+
+def test_probing_config_test_enable_is_forbidden_test_evasion():
+    source = "if config['test_enable']:\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("config['test_enable']" in e or "test_enable" in e for e in errors)
+
+
+def test_probing_config_test_file_is_forbidden_test_evasion():
+    # The rule's own message is a fixed literal mentioning only "test_enable" regardless of
+    # which of the two probed keys (test_enable or test_file) actually triggered it -- real,
+    # verified behavior, not a test-writing assumption.
+    source = "path = config['test_file']\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("config['test_enable']" in e for e in errors)
+
+
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
     source = "self.env.registry.clear_caches()\n"
     errors, _warnings = _dict_findings(source)
