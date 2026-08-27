@@ -101,6 +101,33 @@ def _resolve_repo_root(given_path):
     return given_path
 
 
+def _resolve_repo_roots(given_path):
+    """The fix above only ever resolved to ONE repo -- but SCAN_ROOTS spans both:
+    `ham_com/models/callsign_validation.py`, `ham_base/models/geo_utils.py`, `daemons`, and
+    `ingest` all live under hams_com, while `distributed_redis_cache/redis_cache.py` and
+    `redis_pool.py` live under hams_open. Resolving to hams_open alone (what the fix above does
+    when run_linters.py's real `dir_path`, hams_shared, gets redirected to its parent) silently
+    scans only the 2 distributed_redis_cache files and misses every hams_com-rooted entry --
+    confirmed directly: run_linters.py's own actual invocation found 0 errors, but a direct call
+    against hams_com found 5 files with real mypy findings
+    (daemons/gdpr_csv_export/test_main.py, daemons/hams_simulated_bots/fine_tuning/
+    build_dataset.py, daemons/test_daemon_key_registration_coverage.py,
+    daemons/test_daemon_provisioning_coverage.py, daemons/test_hams_config.py) that step 23 of
+    run_linters.py has been silently never checking. Same sibling-repo-detection shape
+    check_self_writeable_field_tests.py already uses for the identical two-repos problem."""
+    repo_root = _resolve_repo_root(given_path)
+    roots = [repo_root]
+    sibling_name = "hams_open" if os.path.basename(repo_root) != "hams_open" else "hams_com"
+    sibling = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
+    if os.path.isdir(sibling) and any(
+        os.path.isfile(os.path.join(sibling, d, "__manifest__.py"))
+        for d in os.listdir(sibling)
+        if os.path.isdir(os.path.join(sibling, d))
+    ):
+        roots.append(sibling)
+    return roots
+
+
 # Mirrors check_model_extension_collisions.py's own MODEL_BASES/
 # _is_model_class -- not imported directly, since these tool scripts are
 # each self-contained (odoo_registry_builder.py mirrors the same AST
@@ -200,8 +227,8 @@ def main():
         print("Usage: check_untyped_utility_files.py <repo_root>")
         sys.exit(1)
 
-    repo_root = _resolve_repo_root(sys.argv[1])
-    candidates = collect_candidates(repo_root)
+    repo_roots = _resolve_repo_roots(sys.argv[1])
+    candidates = [(root, path) for root in repo_roots for path in collect_candidates(root)]
     if not candidates:
         sys.exit(0)
 
@@ -212,7 +239,7 @@ def main():
     # across different directories ("Duplicate module named main") when
     # given as a single batch with no __init__.py markers to disambiguate.
     any_failed = False
-    for candidate in candidates:
+    for repo_root, candidate in candidates:
         res = subprocess.run(
             ["mypy", "--check-untyped-defs", "--ignore-missing-imports", candidate],
             capture_output=True,
