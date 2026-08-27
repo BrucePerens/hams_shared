@@ -491,3 +491,340 @@ def test_get_ancestors_returns_every_parent_up_to_root_not_including_self():
     ancestors = span.get_ancestors()
     assert [a.tag for a in ancestors] == ["div", "root_wrapper"]
     assert span not in ancestors
+
+
+# visit_Dict() -- a real, self-contained cluster of dict-literal rules (I18N UI-feedback
+# strings, the res.users groups_id->group_ids Odoo 18+ rename, manifest asset-glob and license
+# enforcement, an owner_user_id/user_websites_group_id mutual-exclusivity trap) that had zero
+# coverage despite being independently readable and testable without deep visitor-wide context.
+
+
+def _dict_findings(source, filepath="/tmp/some_module/models/res_users.py", is_odoo_module=True):
+    lines = source.splitlines()
+    errors, warnings = check_ast_vulnerabilities(filepath, source, lines, is_odoo_module=is_odoo_module)
+    return [msg for _lineno, msg in errors], [msg for _lineno, msg in warnings]
+
+
+def test_an_untranslated_ui_feedback_string_is_warned_on():
+    source = 'result = {"error": "Something went wrong here"}\n'
+    _errors, warnings = _dict_findings(source)
+    assert any("I18N" in w for w in warnings)
+
+
+def test_a_translated_ui_feedback_string_is_not_warned_on():
+    source = 'result = {"error": _("Something went wrong here")}\n'
+    _errors, warnings = _dict_findings(source)
+    assert not any("I18N" in w for w in warnings)
+
+
+def test_i18n_ui_feedback_rule_is_silent_inside_an_api_py_file():
+    # The rule's own real exemption: files matching *_api.py or api.py are skipped, since
+    # they're often building a payload for something other than direct UI display.
+    source = 'result = {"error": "Something went wrong here"}\n'
+    _errors, warnings = _dict_findings(source, filepath="/tmp/some_module/controllers/csp_api.py")
+    assert not any("I18N" in w for w in warnings)
+
+
+def test_the_old_odoo_17_groups_id_key_is_flagged_as_a_real_error():
+    source = 'vals = {"groups_id": [(6, 0, [group.id])]}\n'
+    errors, _warnings = _dict_findings(source)
+    assert any("group_ids" in e for e in errors)
+
+
+def test_group_ids_mutation_outside_a_test_file_is_forbidden():
+    source = 'vals = {"group_ids": [(6, 0, [group.id])]}\n'
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/models/res_users.py")
+    assert any("group_ids" in e for e in errors)
+
+
+def test_group_ids_mutation_inside_a_real_test_file_is_allowed():
+    # The rule's own real exemption: self.filename.startswith("test_") -- test setup routinely
+    # needs to grant/revoke groups directly, unlike production code.
+    source = 'vals = {"group_ids": [(6, 0, [group.id])]}\n'
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/tests/test_res_users.py")
+    assert not any("group_ids" in e and "Mutating" in e for e in errors)
+
+
+def test_a_glob_pattern_in_manifest_py_assets_is_a_critical_error():
+    source = "{'assets': {'web.assets_backend': ['static/src/js/*.js']}}\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/__manifest__.py")
+    assert any("ASSET COMPILER CRASH" in e for e in errors)
+
+
+def test_an_explicit_asset_file_list_in_manifest_py_is_not_flagged():
+    source = "{'assets': {'web.assets_backend': ['static/src/js/a.js', 'static/src/js/b.js']}}\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/__manifest__.py")
+    assert not any("ASSET COMPILER CRASH" in e for e in errors)
+
+
+def test_hams_com_manifest_must_declare_other_proprietary_license():
+    source = "{'license': 'AGPL-3'}\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/workspace/hams_com/ham_base/__manifest__.py")
+    assert any("LICENSING" in e for e in errors)
+
+
+def test_hams_com_manifest_with_the_real_required_license_is_not_flagged():
+    source = "{'license': 'Other proprietary'}\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/workspace/hams_com/ham_base/__manifest__.py")
+    assert not any("LICENSING" in e for e in errors)
+
+
+def test_hams_open_manifest_must_declare_agpl3_license():
+    source = "{'license': 'Other proprietary'}\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/workspace/hams_open/zero_sudo/__manifest__.py")
+    assert any("LICENSING" in e for e in errors)
+
+
+def test_owner_user_id_and_user_websites_group_id_together_is_a_mutual_exclusivity_error():
+    source = "vals = {'owner_user_id': self.env.uid, 'user_websites_group_id': group.id}\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("MUTUAL EXCLUSIVITY" in e for e in errors)
+
+
+def test_owner_user_id_alone_is_not_a_mutual_exclusivity_error():
+    source = "vals = {'owner_user_id': self.env.uid}\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("MUTUAL EXCLUSIVITY" in e for e in errors)
+
+
+# visit_ClassDef() -- the "every real Odoo model needs a real textual name field" schema rule
+# (CRITICAL SCHEMA), independently readable/testable the same way visit_Dict()'s rules were.
+
+
+def test_a_model_using_the_forbidden_rec_name_override_is_flagged():
+    source = (
+        "class Foo(models.Model):\n"
+        "    _name = 'ham.foo'\n"
+        "    _rec_name = 'callsign'\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("_rec_name" in e and "forbidden" in e for e in errors)
+
+
+def test_a_model_with_a_real_name_field_and_no_rec_name_is_not_flagged():
+    source = (
+        "class Foo(models.Model):\n"
+        "    _name = 'ham.foo'\n"
+        "    name = fields.Char()\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("CRITICAL SCHEMA" in e for e in errors)
+
+
+def test_a_model_with_neither_name_nor_rec_name_is_flagged():
+    source = (
+        "class Foo(models.Model):\n"
+        "    _name = 'ham.foo'\n"
+        "    callsign = fields.Char()\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("CRITICAL SCHEMA" in e and "MUST have a textual" in e for e in errors)
+
+
+def test_a_plain_non_model_class_is_never_subject_to_the_schema_rule():
+    source = (
+        "class Foo:\n"
+        "    _name = 'not.a.real.model'\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("CRITICAL SCHEMA" in e for e in errors)
+
+
+def test_the_schema_rule_is_silent_outside_an_odoo_module():
+    source = (
+        "class Foo(models.Model):\n"
+        "    _name = 'ham.foo'\n"
+        "    _rec_name = 'callsign'\n"
+    )
+    errors, _warnings = _dict_findings(source, is_odoo_module=False)
+    assert not any("_rec_name" in e for e in errors)
+
+
+# _check_cr_execute()/is_tainted_sql() -- the real SQL-injection taint tracer this linter's
+# whole "AST vulnerability visitor" concept is centrally built around. Tested via the actual
+# visit_Call() path that fires it (cr.execute()), not the helper in isolation, so a test failure
+# here means the real rule is broken, not just a detail of how the helper happens to be called.
+
+
+def _sqli_errors(source):
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/models/ham_qso.py")
+    return [e for e in errors if "SQLi Prevention" in e]
+
+
+def test_an_fstring_passed_to_cr_execute_is_flagged():
+    source = 'self.env.cr.execute(f"SELECT * FROM ham_qso WHERE id={qso_id}")\n'
+    errors = _sqli_errors(source)
+    assert len(errors) == 1
+    assert "f-string" in errors[0]
+
+
+def test_percent_interpolation_passed_to_cr_execute_is_flagged():
+    source = 'self.env.cr.execute("SELECT * FROM ham_qso WHERE id=%s" % qso_id)\n'
+    errors = _sqli_errors(source)
+    assert "percent interpolation" in errors[0]
+
+
+def test_string_concatenation_passed_to_cr_execute_is_flagged():
+    source = 'self.env.cr.execute("SELECT * FROM ham_qso WHERE id=" + qso_id)\n'
+    errors = _sqli_errors(source)
+    assert "string concatenation" in errors[0]
+
+
+def test_dot_format_passed_to_cr_execute_is_flagged():
+    source = 'self.env.cr.execute("SELECT * FROM ham_qso WHERE id={}".format(qso_id))\n'
+    errors = _sqli_errors(source)
+    assert ".format()" in errors[0]
+
+
+def test_a_real_parameterized_query_is_not_flagged():
+    source = 'self.env.cr.execute("SELECT * FROM ham_qso WHERE id=%s", (qso_id,))\n'
+    assert _sqli_errors(source) == []
+
+
+def test_sql_module_wrapped_format_is_exempted_as_the_documented_safe_escape_hatch():
+    # is_tainted_sql()'s own real exemption requires the exact real-world call shape this
+    # codebase actually uses (confirmed against ham_callbook.py's own real usage): `from
+    # psycopg2 import sql` then `sql.SQL(...).format(...)` -- module-qualified attribute
+    # access, psycopg2.sql's real parameter-safe composition API, not string formatting.
+    # A bare imported `SQL(...).format(...)` name is NOT exempted (its .func is an ast.Name,
+    # not an ast.Attribute with .attr == "SQL") -- confirmed directly by first getting this
+    # test wrong with that form and seeing it correctly still flagged.
+    source = 'self.env.cr.execute(sql.SQL("SELECT * FROM {}").format(table_name))\n'
+    assert _sqli_errors(source) == []
+
+
+def test_taint_is_traced_through_an_intermediate_variable_assignment():
+    # is_tainted_sql() recurses through self.assignments -- a taint doesn't have to be inline
+    # in the cr.execute() call itself to be caught.
+    source = (
+        'query = f"SELECT * FROM ham_qso WHERE id={qso_id}"\n'
+        "self.env.cr.execute(query)\n"
+    )
+    errors = _sqli_errors(source)
+    assert len(errors) == 1
+    assert "variable 'query'" in errors[0] and "f-string" in errors[0]
+
+
+def test_a_plain_literal_query_is_not_flagged():
+    source = 'self.env.cr.execute("SELECT * FROM ham_qso")\n'
+    assert _sqli_errors(source) == []
+
+
+# Two more real, simple, self-contained security bans in the same visit_Call() family.
+
+
+def test_os_system_is_a_banned_shell_injection_risk():
+    source = "os.system(user_supplied_command)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("os.system" in e and "shell injection" in e for e in errors)
+
+
+def test_pickle_loads_is_banned_as_a_real_rce_risk():
+    source = "data = pickle.loads(payload)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("pickle" in e and "vulnerable" in e for e in errors)
+
+
+def test_pickle_dumps_is_also_banned():
+    source = "payload = pickle.dumps(data)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("pickle" in e for e in errors)
+
+
+# visit_ExceptHandler()/visit_Try() -- the fail-fast philosophy rule cluster (this codebase's
+# own standing "never let error paths silently mask a real bug" principle, enforced
+# structurally): empty `except: pass`, soft-dependency ImportError swallowing, catch-all
+# exceptions without an explicit audit-ignore tag, and audit-ignore'd catch-alls that still
+# don't log anything.
+
+
+def test_an_empty_except_pass_handler_is_forbidden():
+    source = "try:\n    risky()\nexcept ValueError:\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Empty exception handlers" in e for e in errors)
+
+
+def test_an_except_handler_that_actually_does_something_is_not_flagged():
+    source = "try:\n    risky()\nexcept ValueError:\n    log.warning('failed')\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Empty exception handlers" in e for e in errors)
+
+
+def test_except_importerror_is_a_forbidden_soft_dependency():
+    source = "try:\n    import optional_thing\nexcept ImportError:\n    optional_thing = None\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Soft dependencies" in e for e in errors)
+
+
+def test_a_bare_catch_all_except_is_forbidden_without_the_audit_tag():
+    source = "try:\n    risky()\nexcept:\n    handle_it()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Catch-all exceptions" in e for e in errors)
+
+
+def test_except_exception_is_forbidden_without_the_audit_tag():
+    source = "try:\n    risky()\nexcept Exception:\n    handle_it()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Catch-all exceptions" in e for e in errors)
+
+
+def test_a_catch_all_with_the_audit_tag_and_real_logging_is_allowed():
+    source = (
+        "try:\n"
+        "    risky()\n"
+        "except Exception as e:  # audit-ignore-catch-all\n"
+        "    logger.warning('failed: %s', e)\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("Catch-all exceptions" in e for e in errors)
+    assert not any("SILENT FAILURE" in e for e in errors)
+
+
+def test_a_catch_all_with_the_audit_tag_but_no_logging_is_still_flagged():
+    source = (
+        "try:\n"
+        "    risky()\n"
+        "except Exception:  # audit-ignore-catch-all\n"
+        "    pass\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("SILENT FAILURE" in e for e in errors)
+
+
+def test_get_service_uid_wrapped_in_try_except_fails_fast_check_when_ham_base_present():
+    # has_ham_base is discovered by walking up the REAL filesystem from filepath looking for
+    # ham_base/__manifest__.py -- a real temp-directory fixture with that file present, not a
+    # synthetic /tmp path (which would never find it and silently skip the rule), so the
+    # discovery walk itself is exercised for real, not just the rule logic downstream of it.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = Path(tmpdir) / "some_repo"
+        (repo / "ham_base").mkdir(parents=True)
+        (repo / "ham_base" / "__manifest__.py").write_text("{}")
+        target_dir = repo / "ham_relay_bridge" / "models"
+        target_dir.mkdir(parents=True)
+        source = (
+            "try:\n"
+            "    uid = utils._get_service_uid('some.service')\n"
+            "except Exception:  # audit-ignore-catch-all\n"
+            "    logger.warning('failed')\n"
+        )
+        errors, _warnings = _dict_findings(source, filepath=str(target_dir / "res_users.py"))
+    assert any("_get_service_uid MUST NOT be wrapped" in e for e in errors)
+
+
+def test_get_service_uid_wrapped_in_try_except_is_not_flagged_without_ham_base_present():
+    # The inverse of the test above -- no ham_base/__manifest__.py anywhere up the tree, so
+    # has_ham_base must stay False and this specific rule must not fire (a plain repo with no
+    # ham_base dependency has no fast-fail contract to enforce here).
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = Path(tmpdir) / "some_repo"
+        target_dir = repo / "some_module" / "models"
+        target_dir.mkdir(parents=True)
+        source = (
+            "try:\n"
+            "    uid = utils._get_service_uid('some.service')\n"
+            "except Exception:  # audit-ignore-catch-all\n"
+            "    logger.warning('failed')\n"
+        )
+        errors, _warnings = _dict_findings(source, filepath=str(target_dir / "res_users.py"))
+    assert not any("_get_service_uid MUST NOT be wrapped" in e for e in errors)
