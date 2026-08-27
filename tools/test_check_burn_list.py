@@ -28,6 +28,7 @@ from check_burn_list import (  # noqa: E402
     _xml_audit_lookback_start,
     check_ast_vulnerabilities,
     scan_file,
+    _verify_test_ast,
 )
 
 
@@ -1843,6 +1844,141 @@ def test_bare_symlink_call_form_is_also_checked_not_just_os_dot_symlink():
         source = "from os import symlink\nsymlink('zero_sudo', 'zero_sudo_link')\n"
         errors, _warnings = _dict_findings(source, filepath=str(filepath))
     assert any("symbolic links to resolve modules" in e for e in errors)
+
+
+# _verify_test_ast() -- the CI/CD bypass test-verification cross-reference: for each
+# audit-ignore-*/burn-ignore-financial tag with a linked [@ANCHOR:] comment, confirms the
+# anchored test function actually contains the specific AST shape that tag type requires,
+# rather than merely existing.
+
+
+def test_verify_test_ast_audit_ignore_view_valid_with_url_open_call():
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_view_renders(self):\n"
+        "        # [@ANCHOR: COMM_test_view_renders]\n"
+        "        self.url_open('/some/path')\n"
+    )
+    req = {"anchor": "test_view_renders", "type": "audit-ignore-view"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (0, 0)
+
+
+def test_verify_test_ast_audit_ignore_view_invalid_without_the_required_call():
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_view_renders(self):\n"
+        "        # [@ANCHOR: COMM_test_view_renders]\n"
+        "        pass\n"
+    )
+    req = {"anchor": "test_view_renders", "type": "audit-ignore-view"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 2, 3)
+    assert result == (3, 4)
+
+
+def test_verify_test_ast_audit_ignore_search_valid_with_assert_query_count_context_manager():
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_search_bounded(self):\n"
+        "        # [@ANCHOR: COMM_test_search_bounded]\n"
+        "        with self.assertQueryCount(5):\n"
+        "            self.env['ham.qso'].search([])\n"
+    )
+    req = {"anchor": "test_search_bounded", "type": "audit-ignore-search"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (0, 0)
+
+
+def test_verify_test_ast_audit_ignore_cron_valid_with_trigger_call():
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_cron_runs(self):\n"
+        "        # [@ANCHOR: COMM_test_cron_runs]\n"
+        "        self.env.ref('module.cron_id')._trigger()\n"
+    )
+    req = {"anchor": "test_cron_runs", "type": "audit-ignore-cron"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (0, 0)
+
+
+def test_verify_test_ast_audit_ignore_mail_valid_with_message_post_call():
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_mail_sent(self):\n"
+        "        # [@ANCHOR: COMM_test_mail_sent]\n"
+        "        record.message_post(body='hi')\n"
+    )
+    req = {"anchor": "test_mail_sent", "type": "audit-ignore-mail"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (0, 0)
+
+
+def test_verify_test_ast_burn_ignore_financial_valid_with_assert_raises():
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_financial_blocked(self):\n"
+        "        # [@ANCHOR: COMM_test_financial_blocked]\n"
+        "        self.assertRaises(AccessError, model.unlink)\n"
+    )
+    req = {"anchor": "test_financial_blocked", "type": "burn-ignore-financial"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (0, 0)
+
+
+def test_verify_test_ast_audit_ignore_i18n_is_always_valid_regardless_of_function_content():
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_something(self):\n"
+        "        # [@ANCHOR: COMM_test_something]\n"
+        "        pass\n"
+    )
+    req = {"anchor": "test_something", "type": "audit-ignore-i18n"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (0, 0)
+
+
+def test_verify_test_ast_js_file_with_trigger_is_valid_without_ast_parsing():
+    target_content = (
+        "registry.category('web_tour.tours').add('t', "
+        "{ steps: () => [{trigger: '.thing'}] });\n"
+    )
+    req = {"anchor": "whatever", "type": "audit-ignore-xpath"}
+    result = _verify_test_ast(req, target_content, "my_tour.js", 0, 0)
+    assert result == (0, 0)
+
+
+def test_verify_test_ast_js_file_without_trigger_is_invalid():
+    target_content = "console.log('nothing here');\n"
+    req = {"anchor": "whatever", "type": "audit-ignore-xpath"}
+    result = _verify_test_ast(req, target_content, "my_tour.js", 0, 0)
+    assert result == (1, 1)
+
+
+def test_verify_test_ast_a_python_syntax_error_in_the_target_file_is_invalid():
+    target_content = "def broken(:\n    pass\n"
+    req = {"anchor": "whatever", "type": "audit-ignore-view"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (1, 1)
+
+
+def test_verify_test_ast_anchor_not_inside_any_function_is_invalid():
+    target_content = "# [@ANCHOR: COMM_orphan]\nx = 1\n"
+    req = {"anchor": "orphan", "type": "audit-ignore-view"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (1, 1)
+
+
+def test_verify_test_ast_a_loop_wrapping_view_validation_is_ast_evasion():
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_view_in_loop(self):\n"
+        "        # [@ANCHOR: COMM_test_view_in_loop]\n"
+        "        for i in range(3):\n"
+        "            self.url_open('/some/path')\n"
+    )
+    req = {"anchor": "test_view_in_loop", "type": "audit-ignore-view"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (1, 1)
 
 
 def test_symlink_source_resolved_through_an_intermediate_variable_assignment_is_checked():
