@@ -23,7 +23,7 @@ import sys
 import tempfile
 import unittest
 
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -164,6 +164,10 @@ def _method_info_strategy(draw):
             lambda names: not (set(names) & set(arg_names))
         )
     )
+    # Deliberately wider than what real extraction produces (MethodInfo.min_args()'s own
+    # comment: posonly_count is "refined by the caller using defaults; see _extract_methods") --
+    # any value in this range is valid input to _render_method_params and yields valid syntax,
+    # which is the property under test here, not a claim that every drawn value is realistic.
     posonly_count = draw(st.integers(min_value=0, max_value=len(arg_names)))
     has_varargs = draw(st.booleans())
     # A bare "*" separator (no varargs, but kwonly names present) plus varargs are mutually
@@ -207,6 +211,10 @@ class RenderMethodParamsPropertyTests(unittest.TestCase):
         # parse at all (Python forbids duplicate parameter names). The strategy guarantees
         # arg_names and kwonly_names never overlap, and neither ever collides with the fixed
         # "args"/"kwargs" varargs names (real identifiers only, both come from _IDENTIFIER).
+        # When both lists are empty the assertion below passes trivially ([] == []) without
+        # actually exercising the property -- excluded so the 200 examples this runs are all
+        # real checks, not silently-vacuous ones.
+        assume(method.arg_names or method.kwonly_names)
         params = gen._render_method_params(method)
         source = f"def _f({params}) -> Any: ...\n"
         tree = ast.parse(source)
