@@ -115,6 +115,28 @@ class FindSelfWriteableOverridesTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "mod_a", "models", "res_users.py"), "class Foo:\n    pass\n")
         self.assertEqual(list(chk._find_self_writeable_overrides([self.tmp])), [])
 
+    def test_a_radae_directory_is_never_walked(self):
+        # radae is excluded from directory traversal same as node_modules/tools/daemons --
+        # even a real override sitting inside it must never be found.
+        _write(
+            os.path.join(self.tmp, "radae", "models", "res_users.py"),
+            "class ResUsers(models.Model):\n"
+            "    def SELF_WRITEABLE_FIELDS(self):\n"
+            "        return []\n",
+        )
+        self.assertEqual(list(chk._find_self_writeable_overrides([self.tmp])), [])
+
+    def test_a_non_python_file_alongside_a_real_override_is_skipped_not_crashed_on(self):
+        _write(os.path.join(self.tmp, "mod_a", "models", "README.md"), "# notes\n")
+        _write(
+            os.path.join(self.tmp, "mod_a", "models", "res_users.py"),
+            "class ResUsers(models.Model):\n"
+            "    def SELF_WRITEABLE_FIELDS(self):\n"
+            "        return []\n",
+        )
+        found = list(chk._find_self_writeable_overrides([self.tmp]))
+        self.assertEqual(len(found), 1)
+
 
 class FindTestsAnchorTests(unittest.TestCase):
     def setUp(self):
@@ -184,6 +206,30 @@ class FindTestsAnchorTests(unittest.TestCase):
         )
         result = chk._find_tests_anchor(self.module_dir, "mod_a:self_write")
         self.assertEqual(result, (None, None, None))
+
+    def test_a_file_with_a_matching_anchor_but_broken_syntax_is_skipped_not_crashed_on(self):
+        _write(
+            os.path.join(self.module_dir, "tests", "test_broken.py"),
+            "class T(TransactionCase:\n"
+            "    # Tests [@ANCHOR: mod_a:self_write]\n"
+            "    def test_a(self):\n"
+            "        pass\n",
+        )
+        result = chk._find_tests_anchor(self.module_dir, "mod_a:self_write")
+        self.assertEqual(result, (None, None, None))
+
+    def test_a_non_python_file_in_the_tests_directory_is_skipped(self):
+        _write(os.path.join(self.module_dir, "tests", "README.md"), "# notes\n")
+        _write(
+            os.path.join(self.module_dir, "tests", "test_self_write.py"),
+            "class T(TransactionCase):\n"
+            "    def test_self_write_works(self):\n"
+            "        # Tests [@ANCHOR: mod_a:self_write]\n"
+            "        pass\n",
+        )
+        path, node, _content = chk._find_tests_anchor(self.module_dir, "mod_a:self_write")
+        self.assertIsNotNone(path)
+        self.assertEqual(node.name, "test_self_write_works")
 
 
 class VerifyWriteProofShapeTests(unittest.TestCase):
