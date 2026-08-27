@@ -812,6 +812,143 @@ def test_get_service_uid_wrapped_in_try_except_fails_fast_check_when_ham_base_pr
     assert any("_get_service_uid MUST NOT be wrapped" in e for e in errors)
 
 
+def test_two_adjacent_string_literals_concatenated_with_plus_is_forbidden():
+    # The linter-evasion pattern this rule exists to block: splitting a banned literal
+    # ('os' + '.system', say) across two string constants joined with '+' to dodge a
+    # substring-based scan elsewhere. Using ordinary literals here, not the actual banned
+    # string, since the rule itself fires on the shape (two string literals + '+'), not on
+    # what the resulting text happens to spell.
+    source = "x = 'hello' + 'world'\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("STRING CONCATENATION" in e for e in errors)
+
+
+def test_a_string_literal_plus_a_variable_is_not_flagged():
+    source = "x = 'hello ' + name\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("STRING CONCATENATION" in e for e in errors)
+
+
+def test_two_fstrings_concatenated_with_plus_is_also_forbidden():
+    source = 'x = f"hello {a}" + f"world {b}"\n'
+    errors, _warnings = _dict_findings(source)
+    assert any("STRING CONCATENATION" in e for e in errors)
+
+
+def test_contextlib_suppress_is_a_forbidden_silent_black_hole():
+    source = "with contextlib.suppress(KeyError):\n    risky()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("contextlib.suppress()" in e for e in errors)
+
+
+def test_an_ordinary_with_block_is_not_flagged_by_the_suppress_rule():
+    source = "with self.env.cr.savepoint():\n    risky()\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("contextlib.suppress()" in e for e in errors)
+
+
+def test_manual_commit_inside_a_registry_cursor_block_is_forbidden():
+    source = (
+        "with registry.cursor() as cr:\n"
+        "    cr.execute('SELECT 1')\n"
+        "    cr.commit()\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("CURSOR MISMANAGEMENT" in e for e in errors)
+
+
+def test_manual_rollback_inside_a_registry_cursor_block_is_also_forbidden():
+    source = (
+        "with registry.cursor() as cr:\n"
+        "    cr.execute('SELECT 1')\n"
+        "    cr.rollback()\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("CURSOR MISMANAGEMENT" in e for e in errors)
+
+
+def test_commit_outside_a_registry_cursor_block_is_not_flagged_by_this_rule():
+    source = "cr.commit()\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("CURSOR MISMANAGEMENT" in e for e in errors)
+
+
+def test_create_inside_assert_raises_without_flush_all_is_flagged():
+    source = (
+        "with self.assertRaises(ValidationError):\n"
+        "    self.env['ham.qso'].create({'callsign': 'K6BP'})\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("flush_all()" in e for e in errors)
+
+
+def test_create_inside_assert_raises_with_flush_all_is_not_flagged():
+    source = (
+        "with self.assertRaises(ValidationError):\n"
+        "    self.env['ham.qso'].create({'callsign': 'K6BP'})\n"
+        "    self.env.flush_all()\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("flush_all()" in e for e in errors)
+
+
+def test_assert_raises_with_no_create_or_write_at_all_is_not_flagged():
+    source = "with self.assertRaises(ValidationError):\n    self.env['ham.qso'].search([])\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("flush_all()" in e for e in errors)
+
+
+# visit_ImportFrom() -- five distinct, independently readable import-time bans/deprecations.
+
+
+def test_an_import_from_inside_a_function_body_is_forbidden():
+    source = "def foo():\n    from collections import OrderedDict\n    return OrderedDict()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("LOCAL IMPORT" in e for e in errors)
+
+
+def test_a_top_level_import_from_is_not_flagged_as_local():
+    source = "from collections import OrderedDict\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("LOCAL IMPORT" in e for e in errors)
+
+
+def test_from_pickle_import_is_banned_the_same_as_import_pickle():
+    source = "from pickle import loads\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("pickle" in e and "vulnerable" in e for e in errors)
+
+
+def test_from_random_import_is_weak_crypto_without_the_audit_tag():
+    source = "from random import choice\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("WEAK CRYPTO" in e for e in errors)
+
+
+def test_from_random_import_with_the_audit_tag_is_allowed():
+    source = "from random import seed  # audit-ignore-weak-random: deterministic exam generation\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("WEAK CRYPTO" in e for e in errors)
+
+
+def test_get_module_resource_is_a_removed_deprecated_api():
+    source = "from odoo.modules import get_module_resource\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("get_module_resource" in e and "removed" in e for e in errors)
+
+
+def test_importing_superuser_id_is_forbidden_as_privilege_escalation():
+    source = "from odoo import SUPERUSER_ID\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("SUPERUSER_ID" in e and "privilege escalation" in e for e in errors)
+
+
+def test_an_unrelated_ordinary_import_is_not_flagged_by_any_of_these_rules():
+    source = "from odoo import models, fields\n"
+    errors, _warnings = _dict_findings(source)
+    assert errors == []
+
+
 def test_get_service_uid_wrapped_in_try_except_is_not_flagged_without_ham_base_present():
     # The inverse of the test above -- no ham_base/__manifest__.py anywhere up the tree, so
     # has_ham_base must stay False and this specific rule must not fire (a plain repo with no
