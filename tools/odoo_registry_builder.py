@@ -124,10 +124,18 @@ class MergedModel:
     methods: Dict[str, MethodInfo] = field(default_factory=dict)
     field_contributions: Dict[str, List[FieldInfo]] = field(default_factory=dict)
     method_contributions: Dict[str, List[MethodInfo]] = field(default_factory=dict)
-    # Every (module, file, lineno, class_name) that contributed to this
-    # merged model, in the order encountered -- not load order (this is a
-    # static walk, not a simulation of Odoo's actual module load sequence),
-    # but enough to see every contributor for debugging a false positive.
+    # Every (module, file, lineno, class_name, mixin_targets) that
+    # contributed to this merged model, in the order encountered -- not
+    # load order (this is a static walk, not a simulation of Odoo's actual
+    # module load sequence), but enough to see every contributor for
+    # debugging a false positive. `mixin_targets` is a tuple of OTHER model
+    # names this specific contributor's own `_inherit` also names, beyond
+    # whichever target(s) already match this model's own `name_values`
+    # (the mixin self-reference idiom: `_name = "res.users", _inherit =
+    # ["res.users", "some.mixin"]` -- "some.mixin" is a real target this
+    # class wants direct Python-level MRO access to, distinct from the
+    # same-model siblings the rest of this registry already tracks).
+    # Empty for the common case (a contributor with no such extra target).
     contributors: List[tuple] = field(default_factory=list)
 
 
@@ -453,9 +461,9 @@ def _extract_class_info(class_node, module, fpath):
     return name_values, inherit_values, fields_found, methods_found
 
 
-def _merge_into(registry: Dict[str, MergedModel], model_name, module, fpath, lineno, class_name, fields_found, methods_found):
+def _merge_into(registry: Dict[str, MergedModel], model_name, module, fpath, lineno, class_name, fields_found, methods_found, mixin_targets=()):
     merged = registry.setdefault(model_name, MergedModel(name=model_name))
-    merged.contributors.append((module, fpath, lineno, class_name))
+    merged.contributors.append((module, fpath, lineno, class_name, tuple(mixin_targets)))
     for f in fields_found:
         merged.fields[f.name] = f  # "resolved" value -- see MergedModel's own comment on why this alone isn't the source of truth
         merged.field_contributions.setdefault(f.name, []).append(f)
@@ -553,8 +561,19 @@ def build_registry(roots) -> Dict[str, MergedModel]:
                         # res.users AND is the thing check_model_extension_
                         # collisions.py calls "self-referencing" -- either way
                         # this class's fields/methods belong on res.users).
+                        # The mixin self-reference idiom: _inherit may list
+                        # a genuinely different model (a mixin) alongside
+                        # this class's own primary _name target(s) -- that
+                        # target isn't a same-model sibling the rest of
+                        # this registry tracks, it's a real second model
+                        # this specific contributor wants direct MRO access
+                        # to. Recorded once per contributor, not merged
+                        # into the model itself, since it describes THIS
+                        # class's own _inherit list, not res.users' (or
+                        # whatever nm is) merged identity.
+                        mixin_targets = [t for t in (inherit_values or []) if t not in name_values]
                         for nm in name_values:
-                            _merge_into(registry, nm, mod, fpath, node.lineno, node.name, fields_found, methods_found)
+                            _merge_into(registry, nm, mod, fpath, node.lineno, node.name, fields_found, methods_found, mixin_targets)
                     elif inherit_values:
                         # Bare _inherit, no _name: a pure extension. A list here
                         # (rare without _name, but handled defensively, same as
@@ -577,8 +596,9 @@ def _redeclaration_marker(contributions):
 def _print_model(model: MergedModel):
     print(f"=== {model.name} ===")
     print(f"  {len(model.contributors)} contributing class(es):")
-    for mod, fpath, lineno, class_name in model.contributors:
-        print(f"    {mod}: {fpath}:{lineno} (class {class_name})")
+    for mod, fpath, lineno, class_name, mixin_targets in model.contributors:
+        mixin_note = f" (also inherits: {', '.join(mixin_targets)})" if mixin_targets else ""
+        print(f"    {mod}: {fpath}:{lineno} (class {class_name}){mixin_note}")
     print(f"  {len(model.fields)} field(s):")
     for fname in sorted(model.fields):
         f = model.fields[fname]

@@ -114,7 +114,25 @@ def _find_hams_com():
     return None
 
 
+def _find_hams_open():
+    # Mirrors _find_hams_com() exactly, the other direction -- same
+    # discipline this file's own module docstring insists on: never assume
+    # a fixed directory relationship (this repo pair's mutual-symlink
+    # structure has already produced two real, confirmed bugs from doing
+    # that), always resolve through the same real, robust sibling lookup.
+    sys.path.insert(0, _TOOLS_DIR)
+    import odoo_registry_builder as orb  # noqa: E402
+
+    if os.path.basename(_OWN_REPO_DIR) == "hams_open":
+        return _OWN_REPO_DIR
+    sibling = orb._find_sibling_repo(_OWN_REPO_DIR)
+    if sibling and os.path.basename(sibling) == "hams_open":
+        return sibling
+    return None
+
+
 _HAMS_COM_DIR = _find_hams_com()
+_HAMS_OPEN_DIR = _find_hams_open()
 _SCRATCH_DIR = os.path.join(_HAMS_COM_DIR, "_test_scratch_mypy_plugin") if _HAMS_COM_DIR else None
 
 
@@ -199,6 +217,36 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
             "    def probe_nonexistent_via_env(self) -> None:\n"
             "        self.env['res.users']._this_method_genuinely_does_not_exist_anywhere()\n",
         )
+        # Mixin injection (ODOO_AWARE_TYPE_CHECKING.md's own "smaller gap found but NOT fixed"
+        # note, since closed): the same shape as the real production bug
+        # (user_websites_seo/models/res_users.py's real ResUsersSEO -- _name = "res.users",
+        # _inherit = ["res.users", "user.websites.seo.metadata.mixin"] -- calling
+        # _get_seo_fields(), defined only on the mixin, a genuinely different model reached
+        # through Odoo's own runtime registry merging, never a real Python base class). This
+        # probe reuses the SAME real mixin model already in the registry (no new fixture
+        # module needed for the mixin side) rather than inventing a synthetic one, so this
+        # test exercises the real _get_seo_fields resolution end to end, not just a shape
+        # that resembles it.
+        _write(
+            os.path.join(_SCRATCH_DIR, "models", "mixin_probe.py"),
+            "from odoo import models\n"
+            "\n"
+            "\n"
+            "class MixinProbe(models.Model):\n"
+            "    _name = 'res.users'\n"
+            "    _inherit = ['res.users', 'user.websites.seo.metadata.mixin']\n"
+            "\n"
+            "    def probe_real_mixin_method(self) -> None:\n"
+            "        # _get_seo_fields is real, declared only on\n"
+            "        # user_websites_seo/models/seo_metadata_mixin.py's mixin class --\n"
+            "        # never a same-model res.users sibling, only reachable via this\n"
+            "        # contributor's own second, non-primary _inherit target. Must\n"
+            "        # resolve if mixin injection works.\n"
+            "        self._get_seo_fields()\n"
+            "\n"
+            "    def probe_nonexistent_mixin_method(self) -> None:\n"
+            "        self._this_mixin_method_genuinely_does_not_exist_anywhere()\n",
+        )
 
     def tearDown(self):
         if os.path.isdir(_SCRATCH_DIR):
@@ -282,6 +330,33 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         probe = os.path.join(_SCRATCH_DIR, "models", "env_probe.py")
         output = self._run_mypy(probe)
         self.assertIn("_this_method_genuinely_does_not_exist_anywhere", output, output)
+
+    # --- Mixin injection (a second, different model named in the same contributor's own
+    # _inherit list, not a same-model sibling). Sibling passed explicitly here, matching
+    # test_real_cross_file_inherit_method_resolves_when_sibling_is_explicitly_passed's own
+    # pattern above -- this tests the MRO-injection mechanism itself in isolation from
+    # get_additional_deps's own single-file pulling-in behavior (already covered generally by
+    # test_get_additional_deps_pulls_in_the_sibling_even_when_not_explicitly_passed above; not
+    # re-proven per sibling-relationship kind here). The real, unmocked mechanism was also
+    # independently confirmed against real production code the same session this was written:
+    # a live 26-file mypy sweep including the actual user_websites_seo/models/res_users.py
+    # went from 13 to 11 errors with this fix, with the real ResUsersSEO._get_seo_fields() call
+    # (and a second, structurally identical real bug, ics_forms's message_new via mail.thread)
+    # both newly resolving -- see ODOO_AWARE_TYPE_CHECKING.md's own dated update.
+
+    @unittest.skipUnless(_HAMS_OPEN_DIR, "hams_open sibling repo not found -- the real mixin lives there")
+    def test_a_mixin_only_method_resolves_via_the_contributors_own_extra_inherit_target(self):
+        probe = os.path.join(_SCRATCH_DIR, "models", "mixin_probe.py")
+        mixin_sibling = os.path.join(_HAMS_OPEN_DIR, "user_websites_seo", "models", "seo_metadata_mixin.py")
+        output = self._run_mypy(probe, mixin_sibling)
+        self.assertNotIn("_get_seo_fields", output, output)
+
+    @unittest.skipUnless(_HAMS_OPEN_DIR, "hams_open sibling repo not found -- the real mixin lives there")
+    def test_a_genuinely_nonexistent_mixin_method_is_still_flagged(self):
+        probe = os.path.join(_SCRATCH_DIR, "models", "mixin_probe.py")
+        mixin_sibling = os.path.join(_HAMS_OPEN_DIR, "user_websites_seo", "models", "seo_metadata_mixin.py")
+        output = self._run_mypy(probe, mixin_sibling)
+        self.assertIn("_this_mixin_method_genuinely_does_not_exist_anywhere", output, output)
 
 
 _SCRATCH_DIR_SIBLINGS = os.path.join(_HAMS_COM_DIR, "_test_scratch_mypy_plugin_class_siblings") if _HAMS_COM_DIR else None

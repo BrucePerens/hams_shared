@@ -263,12 +263,25 @@ class OdooPlugin(Plugin):
     def _compute_sibling_map(self):
         for model in self._registry.values():
             fullnames = []
-            for mod, fpath, lineno, class_name in model.contributors:
+            # Per-contributor fullname -> the OTHER models (mixins) that
+            # specific contributor's own _inherit list also names, beyond
+            # this model itself (the mixin self-reference idiom: _name =
+            # "res.users", _inherit = ["res.users", "some.mixin"]). Recorded
+            # here, injected into _class_siblings below, once per
+            # contributor -- not merged into the model's own sibling set,
+            # since it describes this one class's extra MRO need, not
+            # res.users' merged identity. ODOO_AWARE_TYPE_CHECKING.md's own
+            # "smaller gap found but NOT fixed" note (the user_websites_seo/
+            # ResUsersSEO case, _get_seo_fields unresolved) is exactly this.
+            contributor_mixin_targets = {}
+            for mod, fpath, lineno, class_name, mixin_targets in model.contributors:
                 fn = _fullname_for_contributor(
                     mod, fpath, class_name, self._hams_roots, self._core_addons_path
                 )
                 if fn:
                     fullnames.append(fn)
+                    if mixin_targets:
+                        contributor_mixin_targets[fn] = mixin_targets
             # Accumulate, never overwrite: a class using the mixin
             # self-reference idiom (`_inherit = ["res.users",
             # "edge.routing.mixin"]`, no `_name`) is a real contributor to
@@ -293,6 +306,42 @@ class OdooPlugin(Plugin):
                 for other in fullnames:
                     if other != fn and other not in self._class_siblings[fn]:
                         self._class_siblings[fn].append(other)
+
+            # Mixin injection: for each contributor that also named a real,
+            # different model in its own _inherit list, add every one of
+            # THAT model's own contributors' fullnames as siblings too --
+            # one-directional (the mixin's own class doesn't need this
+            # contributor's members in ITS mro; only this contributor needs
+            # the mixin's). Looked up directly against self._registry
+            # (not self._model_class_fullnames, which is still being built
+            # across this same outer loop) so this doesn't depend on
+            # dict-iteration order ever reaching the mixin model first.
+            # Also forces the mixin's own module into the build graph via
+            # _module_siblings, the identical ordering fix
+            # get_additional_deps already relies on for same-model
+            # siblings -- otherwise get_customize_class_mro_hook's
+            # ctx.api.lookup_fully_qualified_or_none finds nothing for a
+            # mixin class mypy hasn't analyzed yet.
+            for fn, mixin_targets in contributor_mixin_targets.items():
+                fn_modname = fn.rsplit(".", 1)[0]
+                for mixin_target in mixin_targets:
+                    mixin_model = self._registry.get(mixin_target)
+                    if mixin_model is None:
+                        continue
+                    for m_mod, m_fpath, m_lineno, m_class_name, _m_mixin_targets in mixin_model.contributors:
+                        mixin_fn = _fullname_for_contributor(
+                            m_mod, m_fpath, m_class_name, self._hams_roots, self._core_addons_path
+                        )
+                        if not mixin_fn or mixin_fn == fn:
+                            continue
+                        self._class_siblings.setdefault(fn, [])
+                        if mixin_fn not in self._class_siblings[fn]:
+                            self._class_siblings[fn].append(mixin_fn)
+                        mixin_modname = mixin_fn.rsplit(".", 1)[0]
+                        if mixin_modname != fn_modname:
+                            self._module_siblings.setdefault(fn_modname, [])
+                            if mixin_modname not in self._module_siblings[fn_modname]:
+                                self._module_siblings[fn_modname].append(mixin_modname)
 
             modnames = sorted({fn.rsplit(".", 1)[0] for fn in fullnames})
             for modname in modnames:
