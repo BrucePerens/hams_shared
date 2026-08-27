@@ -19,6 +19,20 @@ configuration (skills, agent definitions, settings), not shipped
 application source, and a skill file legitimately documents a real,
 box-specific path (e.g. where a secret file lives on this dev box) as
 its actual content, not a mistake to flag.
+
+ics_training/ is excluded for the same reason as archive/, one stage
+earlier: it's the live, in-progress working directory of the ICS
+ingestion pipeline (confirmed by the total absence of a
+__manifest__.py anywhere under it -- it's not an installed Odoo
+module), holding dedup-tracking data (used_names.csv,
+used_disasters.csv) and in-progress course JSON that legitimately
+embeds real local staging paths (e.g. "reference_sheets_used") as
+internal provenance metadata, not shipped, user-facing content. Once
+a run completes it's snapshotted into archive/ under the identical
+naming convention (e.g. course_ICS_20260814_194206.json here becomes
+archive/ics_ingestion_20260814_194206/ -- same timestamp, same
+pipeline, just the next stage of the same lifecycle archive/ already
+covers).
 """
 
 import os
@@ -44,6 +58,7 @@ def check_absolute_paths(repo_dir):
         ".mypy_cache",
         "archive",
         ".claude",
+        "ics_training",
     }
     # Only check text-based files
     valid_exts = {

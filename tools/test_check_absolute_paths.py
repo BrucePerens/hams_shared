@@ -92,6 +92,18 @@ class CheckAbsolutePathsTests(unittest.TestCase):
         )
         self.assertEqual(chk.check_absolute_paths(self.tmp), [])
 
+    def test_ics_training_directory_is_specifically_excluded(self):
+        # Documented rationale: ics_training/ is the ICS ingestion
+        # pipeline's own live working directory (no __manifest__.py
+        # anywhere under it -- not an installed Odoo module), holding
+        # in-progress course data that legitimately embeds real local
+        # staging paths as internal provenance metadata.
+        _write(
+            os.path.join(self.tmp, "ics_training", "data", "course_ICS.json"),
+            f'{{"reference_sheets_used": ["{_HOME}/tmp/ics_ingestion/visual_assets/x.jpg"]}}',
+        )
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+
     def test_a_binary_file_with_invalid_utf8_is_skipped_without_crashing(self):
         p = os.path.join(self.tmp, "data.json")
         os.makedirs(os.path.dirname(p), exist_ok=True)
