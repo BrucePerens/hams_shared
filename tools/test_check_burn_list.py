@@ -1947,6 +1947,108 @@ def test_id_equals_string_key_lookup_is_not_a_hardcoded_id():
     assert not any("Hardcoded ID lookup" in e for e in errors)
 
 
+# check_ast_vulnerabilities()'s own syntax-error path, and visit_Compare()'s two
+# soft-dependency/test-evasion rules ('model' in self.env / request.env, sys.modules probing).
+
+
+def test_a_real_python_syntax_error_is_reported_as_a_single_error_not_a_crash():
+    source = "def broken(:\n    pass\n"
+    errors, warnings = _dict_findings(source)
+    assert warnings == []
+    assert len(errors) == 1
+    assert "SYNTAX/INDENTATION ERROR" in errors[0]
+
+
+def test_model_string_in_self_dot_env_is_forbidden_soft_dependency_checking():
+    source = "if 'optional.model' in self.env:\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Soft-dependency checking" in e and "self.env" in e for e in errors)
+
+
+def test_model_string_in_request_dot_env_is_forbidden_soft_dependency_checking():
+    source = "if 'optional.model' in request.env:\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Soft-dependency checking" in e for e in errors)
+
+
+def test_probing_sys_modules_is_forbidden_test_evasion():
+    source = "if 'ham_base' in sys.modules:\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("sys.modules" in e and "test evasion" in e for e in errors)
+
+
+def test_a_normal_in_comparison_unrelated_to_env_or_sys_modules_is_not_flagged():
+    source = "if item_id in allowed_ids:\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any(
+        "Soft-dependency checking" in e or "sys.modules" in e for e in errors
+    )
+
+
+# _check_test_empty()'s dead-code-testing-evasion rules (empty test detection and
+# unreachable-code-after-return detection, both gated on being inside a real test_*.py file's
+# own test_* method), @api.returns deprecation, and visit_For()'s chunking-loop exemption
+# from N+1 loop-query detection.
+
+
+def test_a_test_method_with_no_real_calls_at_all_is_an_empty_test():
+    source = "class FooTests(TestCase):\n    def test_something(self):\n        pass\n"
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_foo.py"
+    )
+    assert any("Empty test detected" in e for e in errors)
+
+
+def test_a_test_method_that_calls_a_real_external_assertion_is_not_an_empty_test():
+    source = (
+        "class FooTests(TestCase):\n"
+        "    def test_something(self):\n"
+        "        self.assertEqual(record.name, expected_name)\n"
+    )
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_foo.py"
+    )
+    assert not any("Empty test detected" in e for e in errors)
+
+
+def test_code_after_a_return_inside_a_test_method_is_unreachable_ast_evasion():
+    source = (
+        "class FooTests(TestCase):\n"
+        "    def test_something(self):\n"
+        "        self.assertEqual(record.name, expected_name)\n"
+        "        return\n"
+        "        self.assertEqual(other.name, other_expected)\n"
+    )
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_foo.py"
+    )
+    assert any("AST Evasion Detected" in e and "Unreachable code" in e for e in errors)
+
+
+def test_api_returns_decorator_call_form_is_deprecated():
+    source = "@api.returns('self')\ndef some_method(self):\n    return self.browse()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("@api.returns is deprecated" in e for e in errors)
+
+
+def test_api_returns_decorator_bare_attribute_form_is_deprecated():
+    source = "@api.returns\ndef some_method(self):\n    return self.browse()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("@api.returns is deprecated" in e for e in errors)
+
+
+def test_search_inside_a_chunk_size_stepped_range_loop_is_exempt_from_n_plus_one():
+    # visit_For()'s real chunking-loop exemption: a `range(start, stop, chunk_size)` (or
+    # `batch_size`) loop is deliberate batch pagination, not the N+1 pattern this rule exists
+    # to catch, so loop_depth is never incremented for it.
+    source = (
+        "for offset in range(0, total, chunk_size):\n"
+        "    self.env['ham.qso'].search([], limit=chunk_size, offset=offset)\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("N+1 locking" in e for e in errors)
+
+
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
     source = "self.env.registry.clear_caches()\n"
     errors, _warnings = _dict_findings(source)
