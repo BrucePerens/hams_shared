@@ -48,10 +48,11 @@ def _scan_file(content, filename, is_odoo_module=True):
     # scan_file reads from a real path -- same real-disk-hit rationale as
     # _tour_mandate_errors above.
     with tempfile.TemporaryDirectory() as tmpdir:
-        filepath = str(Path(tmpdir) / filename)
-        with open(filepath, "w", encoding="utf-8") as f:
+        full_path = Path(tmpdir) / filename
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
-        return scan_file(filepath, is_odoo_module=is_odoo_module)
+        return scan_file(str(full_path), is_odoo_module=is_odoo_module)
 
 
 def _domain_sandbox_warnings(source, filepath="/tmp/some_module/tests/test_foo.py"):
@@ -2274,6 +2275,86 @@ def test_res_groups_record_outside_a_noupdate_data_block_is_also_forbidden():
     )
     errors, _warnings = _scan_file(xml, "security_data.xml")
     assert any("must be inside noupdate data block" in e for e in errors)
+
+
+# scan_file()'s own per-line text-scanning loop (distinct from the AST visitor entirely):
+# the noqa ban, the tombstone "# Removed: ..." comment ban, unrecognized burn-ignore/
+# audit-ignore tags (UNAUTHORIZED BYPASS), and a sample of the table-driven
+# GENERAL_ERROR_RULES regex checks.
+
+
+def test_noqa_comment_is_forbidden_linter_evasion():
+    content = "import unused_module  # noqa\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert any("CRITICAL LINTER EVASION" in e and "noqa" in e for e in errors)
+
+
+def test_noqa_e402_is_the_one_real_exemption():
+    content = "import sys\nsys.path.insert(0, '.')\nimport thing  # noqa: E402\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert not any("LINTER EVASION" in e for e in errors)
+
+
+def test_noqa_as_a_substring_inside_unrelated_text_is_not_flagged():
+    # Word-boundaried, not a bare substring search -- confirmed real false positive this
+    # exact check was fixed for: base64 blobs containing "noqa" by pure coincidence.
+    content = "blob = 'xxxKNoQAImLyorxxx'\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert not any("LINTER EVASION" in e for e in errors)
+
+
+def test_a_fresh_removed_tombstone_comment_is_forbidden():
+    content = "# Removed: the old caching layer, see ADR-0042 for why.\nx = 1\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert any("Code: `# Removed:" in e for e in errors)
+
+
+def test_removed_word_wrapped_mid_sentence_from_the_previous_comment_line_is_not_a_tombstone():
+    # The real false-positive shape this exemption exists for: a multi-line prose comment
+    # whose word-wrap happens to put "removed" first on its own continuation line.
+    content = (
+        "# This code path was intentionally\n"
+        "# removed because it caused a race condition.\n"
+        "x = 1\n"
+    )
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert not any("Code: `# removed" in e for e in errors)
+
+
+def test_an_unrecognized_burn_ignore_tag_is_an_unauthorized_bypass():
+    content = "x = 1  # burn-ignore-made-up-tag-nobody-approved\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert any("UNAUTHORIZED BYPASS" in e for e in errors)
+
+
+def test_an_unrecognized_audit_ignore_tag_is_an_unauthorized_bypass():
+    content = "x = 1  # audit-ignore-made-up-tag-nobody-approved\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert any("UNAUTHORIZED BYPASS" in e for e in errors)
+
+
+def test_a_real_audit_ignore_tag_with_a_linked_anchor_is_not_an_unauthorized_bypass():
+    content = "x = 1  # audit-ignore-cron [@ANCHOR: COMM_test_my_cron_job]\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert not any("UNAUTHORIZED BYPASS" in e for e in errors)
+
+
+def test_todo_comment_is_a_forbidden_placeholder_via_general_error_rules():
+    content = "def helper():\n    pass  # TODO: implement this properly\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert any("Placeholders, TODOs" in e for e in errors)
+
+
+def test_redundant_sys_path_append_of_file_dunder_is_a_hallucination():
+    content = "import sys, os\nsys.path.append(os.path.dirname(__file__))\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert any("Redundant sys.path manipulation" in e for e in errors)
+
+
+def test_a_daemon_file_importing_odoo_is_forbidden_daemon_decoupling():
+    content = "import odoo\n"
+    errors, _warnings = _scan_file(content, "daemons/some_daemon.py")
+    assert any("DAEMON DECOUPLING" in e for e in errors)
 
 
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
