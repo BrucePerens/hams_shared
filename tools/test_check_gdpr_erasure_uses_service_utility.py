@@ -140,5 +140,46 @@ class ResolveRepoRootTests(unittest.TestCase):
         self.assertEqual(cge._resolve_repo_root(fake_repo), fake_repo)
 
 
+class ResolveRepoRootsTests(unittest.TestCase):
+    # Regression test for the second half of the same bug class, found 2026-08-27:
+    # _resolve_repo_root's redirect only ever lands on ONE repo (hams_shared's literal parent) --
+    # but real _execute_gdpr_erasure() overrides exist in both repos (17 files in hams_com, 7 in
+    # hams_open), so the single-repo redirect left the larger half unscanned via run_linters.py's
+    # actual invocation.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.workspace = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.workspace)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make_repo(self, name, module_names=()):
+        repo = os.path.join(self.workspace, name)
+        for module_name in module_names:
+            manifest_path = os.path.join(repo, module_name, "__manifest__.py")
+            os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                f.write("{}")
+        return repo
+
+    def test_hams_shared_input_appends_the_real_hams_com_sibling(self):
+        self._make_repo("hams_open", module_names=["zero_sudo"])
+        hams_com = self._make_repo("hams_com", module_names=["ham_base"])
+        hams_shared = os.path.join(self.workspace, "hams_open", "hams_shared")
+        os.makedirs(hams_shared)
+        roots = cge._resolve_repo_roots(hams_shared)
+        self.assertEqual(roots, [os.path.join(self.workspace, "hams_open"), hams_com])
+
+    def test_a_real_repo_root_with_no_odoo_sibling_present_scans_alone(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        self.assertEqual(cge._resolve_repo_roots(repo), [repo])
+
+    def test_a_sibling_directory_with_no_manifest_py_anywhere_is_not_treated_as_a_repo(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        os.makedirs(os.path.join(self.workspace, "hams_com", "not_a_module"))
+        self.assertEqual(cge._resolve_repo_roots(repo), [repo])
+
+
 if __name__ == "__main__":
     unittest.main()

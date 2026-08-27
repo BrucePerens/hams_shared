@@ -159,5 +159,60 @@ class MainTests(unittest.TestCase):
             self.assertEqual(mock_run.call_count, 3)
 
 
+class ResolveRepoRootTests(unittest.TestCase):
+    # This checker was added 2026-08-26, after the original dir_path-repo-root audit
+    # (LINTER_POLICY_REVISIT.md) that fixed 9 other checkers -- it inherited the same
+    # hams_shared-redirect pattern by copying it, but was never itself covered by that audit's
+    # own regression tests until now.
+    def test_a_hams_shared_path_redirects_to_its_parent_repo(self):
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(
+            chk._resolve_repo_root(os.path.join(fake_repo, "hams_shared")),
+            fake_repo,
+        )
+
+    def test_a_real_repo_root_passes_through_unchanged(self):
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(chk._resolve_repo_root(fake_repo), fake_repo)
+
+
+class ResolveRepoRootsTests(unittest.TestCase):
+    # Regression test for the real gap found 2026-08-27: the four real hams_com daemon crates
+    # this gate's own docstring cites findings from (hams_local_relay, hams_relay_bridge,
+    # hams_data_relay, hams_simulated_band) live under hams_com/daemons/, not hams_open --
+    # confirmed directly, run_linters.py's own real invocation was silently never checking any
+    # of them since being wired in.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.workspace = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.workspace)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make_repo(self, name, module_names=()):
+        repo = os.path.join(self.workspace, name)
+        for module_name in module_names:
+            _write(os.path.join(repo, module_name, "__manifest__.py"), "{}")
+        return repo
+
+    def test_hams_shared_input_appends_the_real_hams_com_sibling(self):
+        self._make_repo("hams_open", module_names=["zero_sudo"])
+        hams_com = self._make_repo("hams_com", module_names=["ham_base"])
+        hams_shared = os.path.join(self.workspace, "hams_open", "hams_shared")
+        os.makedirs(hams_shared)
+        roots = chk._resolve_repo_roots(hams_shared)
+        self.assertEqual(roots, [os.path.join(self.workspace, "hams_open"), hams_com])
+
+    def test_a_real_repo_root_with_no_odoo_sibling_present_scans_alone(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        self.assertEqual(chk._resolve_repo_roots(repo), [repo])
+
+    def test_a_sibling_directory_with_no_manifest_py_anywhere_is_not_treated_as_a_repo(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        os.makedirs(os.path.join(self.workspace, "hams_com", "not_a_module"))
+        self.assertEqual(chk._resolve_repo_roots(repo), [repo])
+
+
 if __name__ == "__main__":
     unittest.main()

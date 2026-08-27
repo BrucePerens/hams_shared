@@ -165,5 +165,43 @@ class ResolveRepoRootTests(unittest.TestCase):
         self.assertEqual(chk._resolve_repo_root(fake_repo), fake_repo)
 
 
+class ResolveRepoRootsTests(unittest.TestCase):
+    # Regression test for the second half of the same bug class, found 2026-08-27:
+    # _resolve_repo_root's redirect only ever lands on ONE repo (hams_shared's literal parent),
+    # but real requirements.txt files exist in both hams_open's own root and hams_com/daemons/ --
+    # confirmed directly, run_linters.py's own real invocation was catching hams_open's file but
+    # silently missing both hams_com ones.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.workspace = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.workspace)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make_repo(self, name, module_names=()):
+        repo = os.path.join(self.workspace, name)
+        for module_name in module_names:
+            _write(os.path.join(repo, module_name, "__manifest__.py"), "{}")
+        return repo
+
+    def test_hams_shared_input_appends_the_real_hams_com_sibling(self):
+        self._make_repo("hams_open", module_names=["zero_sudo"])
+        hams_com = self._make_repo("hams_com", module_names=["ham_base"])
+        hams_shared = os.path.join(self.workspace, "hams_open", "hams_shared")
+        os.makedirs(hams_shared)
+        roots = chk._resolve_repo_roots(hams_shared)
+        self.assertEqual(roots, [os.path.join(self.workspace, "hams_open"), hams_com])
+
+    def test_a_real_repo_root_with_no_odoo_sibling_present_scans_alone(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        self.assertEqual(chk._resolve_repo_roots(repo), [repo])
+
+    def test_a_sibling_directory_with_no_manifest_py_anywhere_is_not_treated_as_a_repo(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        os.makedirs(os.path.join(self.workspace, "hams_com", "not_a_module"))
+        self.assertEqual(chk._resolve_repo_roots(repo), [repo])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -240,5 +240,47 @@ class ResolveRepoRootTests(unittest.TestCase):
         self.assertEqual(chk._resolve_repo_root(fake_repo), fake_repo)
 
 
+class ResolveRepoRootsTests(unittest.TestCase):
+    # Regression test for the second half of the same bug class as ResolveRepoRootTests above,
+    # found 2026-08-27: _resolve_repo_root's redirect only ever lands on ONE repo (hams_shared's
+    # literal parent), but real SCAN_ROOTS entries (ham_com/, ham_base/, daemons, ingest) live
+    # only under the OTHER, sibling repo -- confirmed directly, run_linters.py's own real
+    # invocation was silently scanning just 2 distributed_redis_cache files and missing 5 real
+    # files with real mypy findings that only exist on the sibling side.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.workspace = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.workspace)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make_repo(self, name, module_names=()):
+        repo = os.path.join(self.workspace, name)
+        for module_name in module_names:
+            _write(os.path.join(repo, module_name, "__manifest__.py"), "{}")
+        return repo
+
+    def test_hams_shared_input_appends_the_real_hams_com_sibling(self):
+        self._make_repo("hams_open", module_names=["zero_sudo"])
+        hams_com = self._make_repo("hams_com", module_names=["ham_base"])
+        hams_shared = os.path.join(self.workspace, "hams_open", "hams_shared")
+        os.makedirs(hams_shared)
+        roots = chk._resolve_repo_roots(hams_shared)
+        self.assertEqual(roots, [os.path.join(self.workspace, "hams_open"), hams_com])
+
+    def test_a_real_repo_root_with_no_odoo_sibling_present_scans_alone(self):
+        # No hams_com dir at all next to this one -- must not crash or fabricate a second root.
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        self.assertEqual(chk._resolve_repo_roots(repo), [repo])
+
+    def test_a_sibling_directory_with_no_manifest_py_anywhere_is_not_treated_as_a_repo(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        # A same-named sibling exists on disk but isn't a real Odoo checkout (no __manifest__.py
+        # in any of its subdirectories) -- must not be appended as a second root.
+        os.makedirs(os.path.join(self.workspace, "hams_com", "not_a_module"))
+        self.assertEqual(chk._resolve_repo_roots(repo), [repo])
+
+
 if __name__ == "__main__":
     unittest.main()

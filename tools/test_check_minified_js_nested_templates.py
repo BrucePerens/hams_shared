@@ -270,9 +270,9 @@ class ResolveRepoRootTests(unittest.TestCase):
     # own identical bug was found and fixed: run_linters.py's own dir_path resolves to
     # .../hams_shared, not a real repo root -- confirmed directly, this checker was silently
     # finding 0 bundled JS assets via run_linters.py's actual invocation, versus 48 at a real
-    # repo root. Also covers _find_sibling_repo, added the same night: run_linters.py's own
-    # sibling_dir for this step is derived from the same wrong dir_path, so this checker computes
-    # its own sibling internally now rather than only trusting the caller-supplied second arg.
+    # repo root. run_linters.py's own sibling_dir for this step is derived from the same wrong
+    # dir_path, so this checker computes its own sibling internally too (see
+    # FindSiblingRepoTests below) rather than only trusting the caller-supplied second arg.
     def test_a_hams_shared_path_redirects_to_its_parent_repo(self):
         fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
         self.assertEqual(
@@ -283,6 +283,42 @@ class ResolveRepoRootTests(unittest.TestCase):
     def test_a_real_repo_root_passes_through_unchanged(self):
         fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
         self.assertEqual(chk._resolve_repo_root(fake_repo), fake_repo)
+
+
+class FindSiblingRepoTests(unittest.TestCase):
+    # _find_sibling_repo() itself was never independently tested until now -- the comment above
+    # (before this fix) claimed it was "also covered" by ResolveRepoRootTests, but that class's
+    # own test methods only ever exercised _resolve_repo_root, never this function.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.workspace = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.workspace)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make_repo(self, name, module_names=()):
+        repo = os.path.join(self.workspace, name)
+        for module_name in module_names:
+            path = os.path.join(repo, module_name, "__manifest__.py")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{}")
+        return repo
+
+    def test_hams_open_finds_a_real_hams_com_sibling(self):
+        hams_open = self._make_repo("hams_open", module_names=["zero_sudo"])
+        hams_com = self._make_repo("hams_com", module_names=["ham_base"])
+        self.assertEqual(chk._find_sibling_repo(hams_open), hams_com)
+
+    def test_no_sibling_directory_present_returns_none(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        self.assertIsNone(chk._find_sibling_repo(repo))
+
+    def test_a_sibling_directory_with_no_real_module_in_it_returns_none(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        os.makedirs(os.path.join(self.workspace, "hams_com", "not_a_module"))
+        self.assertIsNone(chk._find_sibling_repo(repo))
 
 
 if __name__ == "__main__":

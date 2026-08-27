@@ -103,6 +103,41 @@ class ResolveRepoRootTests(unittest.TestCase):
         self.assertEqual(chk._resolve_repo_root(fake_repo), fake_repo)
 
 
+class FindSiblingRepoTests(unittest.TestCase):
+    # _find_sibling_repo() itself was never independently tested -- only the resolve-root half
+    # of this checker's dual-repo scan had a regression test.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.workspace = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.workspace)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make_repo(self, name, module_names=()):
+        repo = os.path.join(self.workspace, name)
+        for module_name in module_names:
+            path = os.path.join(repo, module_name, "__manifest__.py")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{}")
+        return repo
+
+    def test_hams_open_finds_a_real_hams_com_sibling(self):
+        hams_open = self._make_repo("hams_open", module_names=["zero_sudo"])
+        hams_com = self._make_repo("hams_com", module_names=["ham_base"])
+        self.assertEqual(chk._find_sibling_repo(hams_open), hams_com)
+
+    def test_no_sibling_directory_present_returns_none(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        self.assertIsNone(chk._find_sibling_repo(repo))
+
+    def test_a_sibling_directory_with_no_real_module_in_it_returns_none(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        os.makedirs(os.path.join(self.workspace, "hams_com", "not_a_module"))
+        self.assertIsNone(chk._find_sibling_repo(repo))
+
+
 class MainIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()

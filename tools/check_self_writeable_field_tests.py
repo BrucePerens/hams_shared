@@ -217,12 +217,12 @@ def _verify_write_proof_shape(func_node):
     return errors
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: check_self_writeable_field_tests.py <repo_root>")
-        sys.exit(1)
-
-    repo_root = _resolve_repo_root(sys.argv[1])
+def _resolve_repo_roots(given_path):
+    """This checker's own dual-repo scan -- the template the other 8 checkers hit by the same
+    dir_path/sibling-repo bug (found 2026-08-27) now mirror exactly. Extracted here, unchanged in
+    behavior, so it's independently testable the same way theirs are rather than only reachable
+    through main()'s own argv-driven flow."""
+    repo_root = _resolve_repo_root(given_path)
     roots = [repo_root]
     sibling_name = "hams_open" if os.path.basename(repo_root) != "hams_open" else "hams_com"
     sibling = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
@@ -232,6 +232,15 @@ def main():
         if os.path.isdir(os.path.join(sibling, d))
     ):
         roots.append(sibling)
+    return roots
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: check_self_writeable_field_tests.py <repo_root>")
+        sys.exit(1)
+
+    roots = _resolve_repo_roots(sys.argv[1])
 
     errors = 0
     for path, anchor, lineno in _find_self_writeable_overrides(roots):
