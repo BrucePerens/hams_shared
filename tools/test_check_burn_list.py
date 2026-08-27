@@ -2555,6 +2555,183 @@ def test_dynamic_snippet_with_both_required_data_attributes_is_not_flagged():
     assert not any("OWL 2 CRASH" in e for e in errors)
 
 
+# The rest of scan_file()'s XML/HTML walk: deprecated <group> attributes, FRAGILE XPATH,
+# WCAG accessibility (icons, images, empty buttons/links), and a representative sample of the
+# field-value type-mismatch trap cluster (each distinct message tested once; the many
+# field-name variants sharing one branch, e.g. company_id/company_ids, are the same code path).
+
+
+def test_group_string_attribute_is_a_banned_deprecated_pattern():
+    xml = '<odoo>\n    <group string="Details">\n        <field name="x"/>\n    </group>\n</odoo>\n'
+    errors, _warnings = _scan_file(xml, "my_view.xml")
+    assert any("group" in e and "banned in Odoo 19" in e for e in errors)
+
+
+def test_xpath_with_a_parent_axis_traversal_is_fragile():
+    xml = '<odoo>\n    <xpath expr="//div/.." position="inside"/>\n</odoo>\n'
+    errors, _warnings = _scan_file(xml, "my_view.xml")
+    assert any("FRAGILE XPATH" in e for e in errors)
+
+
+def test_xpath_without_parent_axis_or_complex_predicate_is_not_fragile():
+    xml = '<odoo>\n    <xpath expr="//div[@id=\'thing\']" position="inside"/>\n</odoo>\n'
+    errors, _warnings = _scan_file(xml, "my_view.xml")
+    assert not any("FRAGILE XPATH" in e for e in errors)
+
+
+def test_icon_tag_with_fa_class_and_no_accessibility_attribute_is_forbidden():
+    xml = '<odoo>\n    <i class="fa fa-star"/>\n</odoo>\n'
+    errors, _warnings = _scan_file(xml, "my_view.xml")
+    assert any("ACCESSIBILITY" in e and "fa fa-star" in e for e in errors)
+
+
+def test_icon_tag_with_fa_class_and_aria_hidden_is_allowed():
+    xml = '<odoo>\n    <i class="fa fa-star" aria-hidden="true"/>\n</odoo>\n'
+    errors, _warnings = _scan_file(xml, "my_view.xml")
+    assert not any("ACCESSIBILITY" in e for e in errors)
+
+
+def test_img_tag_without_alt_attribute_is_forbidden():
+    xml = '<odoo>\n    <img src="thing.png"/>\n</odoo>\n'
+    errors, _warnings = _scan_file(xml, "my_view.xml")
+    assert any("ACCESSIBILITY" in e and "alt" in e for e in errors)
+
+
+def test_img_tag_with_alt_attribute_is_allowed():
+    xml = '<odoo>\n    <img src="thing.png" alt="A thing"/>\n</odoo>\n'
+    errors, _warnings = _scan_file(xml, "my_view.xml")
+    assert not any("ACCESSIBILITY" in e for e in errors)
+
+
+def test_empty_button_with_no_label_is_an_accessibility_audit_warning():
+    xml = "<odoo>\n    <button/>\n</odoo>\n"
+    _errors, warnings = _scan_file(xml, "my_view.xml")
+    assert any("ACCESSIBILITY" in w and "button" in w for w in warnings)
+
+
+def test_button_with_visible_text_is_not_an_accessibility_warning():
+    xml = "<odoo>\n    <button>Click me</button>\n</odoo>\n"
+    _errors, warnings = _scan_file(xml, "my_view.xml")
+    assert not any("ACCESSIBILITY" in w for w in warnings)
+
+
+def test_res_groups_users_field_is_a_bias_trap_use_user_ids():
+    xml = (
+        "<odoo>\n"
+        '    <record id="group1" model="res.groups">\n'
+        '        <field name="users" eval="[(6, 0, [ref(\'base.user_admin\')])]"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("BIAS TRAP" in e and "user_ids" in e for e in errors)
+
+
+def test_res_groups_privilege_id_referencing_a_standard_category_is_forbidden():
+    xml = (
+        "<odoo>\n"
+        '    <record id="group1" model="res.groups">\n'
+        '        <field name="privilege_id" ref="base.module_category_hidden"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("SECURITY PRIVILEGE" in e and "res.groups.privilege" in e for e in errors)
+
+
+def test_res_users_groups_id_field_is_a_bias_trap_use_group_ids():
+    xml = (
+        "<odoo>\n"
+        '    <record id="user1" model="res.users">\n'
+        '        <field name="groups_id" eval="[(6, 0, [ref(\'base.group_user\')])]"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("BIAS TRAP" in e and "group_ids" in e for e in errors)
+
+
+def test_assigning_a_group_ref_to_a_user_field_is_a_type_mismatch():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="user_id" ref="base.group_user"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any(
+        "TYPE MISMATCH" in e and "group" in e and "user field" in e for e in errors
+    )
+
+
+def test_assigning_a_user_ref_to_a_group_field_is_a_type_mismatch():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="group_ids" ref="base.user_admin"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any(
+        "TYPE MISMATCH" in e and "user" in e and "group field" in e for e in errors
+    )
+
+
+def test_assigning_a_user_ref_to_a_company_field_is_a_type_mismatch():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="company_id" ref="base.user_admin"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("TYPE MISMATCH" in e and "company field" in e for e in errors)
+
+
+def test_assigning_a_group_ref_to_a_partner_field_is_a_type_mismatch():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="partner_id" ref="base.group_user"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("TYPE MISMATCH" in e and "partner field" in e for e in errors)
+
+
+def test_assigning_a_group_ref_to_model_id_is_a_type_mismatch():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="ir.rule">\n'
+        '        <field name="model_id" ref="base.group_user"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any(
+        "TYPE MISMATCH" in e and "non-model reference" in e and "model_id" in e
+        for e in errors
+    )
+
+
+def test_using_ref_on_a_primitive_field_is_a_type_mismatch():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="active" ref="base.some_xml_id"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any(
+        "TYPE MISMATCH" in e and "primitive/boolean/integer field" in e for e in errors
+    )
+
+
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
     source = "self.env.registry.clear_caches()\n"
     errors, _warnings = _dict_findings(source)
