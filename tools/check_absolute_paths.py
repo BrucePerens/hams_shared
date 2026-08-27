@@ -9,6 +9,16 @@ Checks all source files for hard-coded absolute paths based in /home.
 real absolute paths as cached type-check data, not source code, and it
 self-ignores via mypy's own generated .mypy_cache/.gitignore -- flagging
 it here is a false positive, not a real finding.
+
+archive/ is excluded for the same reason: it holds frozen, historical
+snapshots of past pipeline runs (e.g. ingestion metadata), not live
+source -- rewriting a real developer path baked into a historical
+artifact to "fix" this check would make the archive inaccurate, not
+correct. .claude/ is excluded too: it's this tool's own local
+configuration (skills, agent definitions, settings), not shipped
+application source, and a skill file legitimately documents a real,
+box-specific path (e.g. where a secret file lives on this dev box) as
+its actual content, not a mistake to flag.
 """
 
 import os
@@ -32,6 +42,8 @@ def check_absolute_paths(repo_dir):
         "agents",
         "scratch",
         ".mypy_cache",
+        "archive",
+        ".claude",
     }
     # Only check text-based files
     valid_exts = {

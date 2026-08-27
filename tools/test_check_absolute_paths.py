@@ -73,6 +73,25 @@ class CheckAbsolutePathsTests(unittest.TestCase):
         _write(os.path.join(self.tmp, ".mypy_cache", "3.13", "foo.json"), f'"{_HOME}"')
         self.assertEqual(chk.check_absolute_paths(self.tmp), [])
 
+    def test_archive_directory_is_specifically_excluded(self):
+        # Documented rationale: archive/ holds frozen historical pipeline
+        # snapshots, not live source -- a real path baked into an old
+        # artifact isn't a bug to fix, and rewriting it would make the
+        # archive inaccurate.
+        _write(os.path.join(self.tmp, "archive", "run_1", "meta.json"), f'"{_HOME}"')
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+
+    def test_claude_directory_is_specifically_excluded(self):
+        # Documented rationale: .claude/ is this tool's own local
+        # configuration (skills, agent definitions), not shipped
+        # application source -- a skill legitimately documenting a real,
+        # box-specific path is its actual content, not a mistake.
+        _write(
+            os.path.join(self.tmp, ".claude", "skills", "example", "SKILL.md"),
+            f"Secret lives at `{_HOME}/.secrets/thing.ini`.\n",
+        )
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+
     def test_a_binary_file_with_invalid_utf8_is_skipped_without_crashing(self):
         p = os.path.join(self.tmp, "data.json")
         os.makedirs(os.path.dirname(p), exist_ok=True)
