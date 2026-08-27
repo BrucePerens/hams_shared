@@ -3105,6 +3105,21 @@ def scan_file(filepath, is_odoo_module=False):
                 # and the localhost/localhost.evil.com test cases in
                 # ham_relay_bridge/tests/test_relay_node.py.
                 "burn-ignore-relay-loopback",
+                # skipTest() for a genuinely optional soft dependency not being
+                # installed, mirroring production's own graceful degradation
+                # (e.g. a signup-flow CAPTCHA that silently omits itself when its
+                # soft-dependency module isn't present) -- the same conceptual
+                # category as "burn-ignore-optional-oca-dep" above (an optional
+                # module genuinely may not be installed), just for a test that
+                # exercises that dependency directly rather than an `in self.env`
+                # presence check. Does NOT cover skipping a test because it's
+                # inconvenient, flaky, or slow to fix -- that's exactly the "AI
+                # LAZINESS" this rule exists to catch, and remains forbidden.
+                # First used by ham_onboarding/tests/test_captcha_signup.py and
+                # test_onboarding_tours.py, both gated on the same
+                # zero_sudo.security.utils._resolve_dependency_cycle("ham_testing")
+                # check the production signup page itself uses.
+                "burn-ignore-skiptest-soft-dependency",
             ]
         ):
             errors_found.append(

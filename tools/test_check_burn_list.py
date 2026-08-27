@@ -2583,6 +2583,19 @@ def test_a_real_audit_ignore_tag_with_a_linked_anchor_is_not_an_unauthorized_byp
     assert not any("UNAUTHORIZED BYPASS" in e for e in errors)
 
 
+def test_burn_ignore_skiptest_soft_dependency_is_not_an_unauthorized_bypass():
+    content = (
+        "class T:\n"
+        "    def setUp(self):\n"
+        "        self.skipTest(  # burn-ignore-skiptest-soft-dependency: soft dep\n"
+        "            'not installed'\n"
+        "        )\n"
+    )
+    errors, _warnings = _scan_file(content, "test_something.py")
+    assert not any("UNAUTHORIZED BYPASS" in e for e in errors)
+    assert not any("AI LAZINESS" in e for e in errors)
+
+
 def test_todo_comment_is_a_forbidden_placeholder_via_general_error_rules():
     content = "def helper():\n    pass  # TODO: implement this properly\n"
     errors, _warnings = _scan_file(content, "some_module.py")
