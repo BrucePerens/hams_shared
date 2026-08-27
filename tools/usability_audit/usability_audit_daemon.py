@@ -215,6 +215,24 @@ def extract_page_state(page):
                     or ""
                 ).strip()
             if not label:
+                # A real, previously-undetected gap: a properly-accessible input with a
+                # real <label for="id">text</label> (exactly the pattern a real sighted
+                # user actually reads) but no aria-label/placeholder/value/title of its
+                # own -- e.g. hams.com's own real signup form's password fields -- fell
+                # through every fallback above and was silently dropped, making the
+                # persona unable to see a field a real user can see fine. Found live,
+                # 2026-08-26: a real audit run reported "no password box" against a page
+                # that genuinely has one, traced to exactly this gap. Mirrors how a
+                # sighted user actually resolves an unlabeled input's name.
+                el_id = (el.get_attribute("id") or "").strip()
+                if el_id:
+                    try:
+                        label_loc = page.locator(f'label[for="{el_id}"]').first
+                        if label_loc.count() > 0:
+                            label = (label_loc.inner_text() or "").strip()
+                    except Exception:
+                        pass
+            if not label:
                 continue
             elements.append({"tag": tag, "label": label[:120], "_locator_index": i})
         except Exception:
