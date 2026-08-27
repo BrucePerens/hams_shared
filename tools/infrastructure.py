@@ -232,7 +232,7 @@ def hook_install_kopia_binary(env_vars, dest_dir, path, run_cmd_func):
                 "-C",
                 target_dir,
                 "--strip-components=1",
-                "kopia-0.23.0-linux-x64/kopia",
+                "kopia-0.23.1-linux-x64/kopia",
             ]
         )
         run_cmd_func(["chmod", "+x", os.path.join(target_dir, "kopia")])
@@ -618,7 +618,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/tmp/kopia.tar.gz",
-            "url": "https://github.com/kopia/kopia/releases/download/v0.23.0/kopia-0.23.0-linux-x64.tar.gz",
+            "url": "https://github.com/kopia/kopia/releases/download/v0.23.1/kopia-0.23.1-linux-x64.tar.gz",
             "owner": "root:root",
             "mode": "644",
             "environments": ["prod"],
