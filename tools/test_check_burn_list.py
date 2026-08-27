@@ -949,6 +949,102 @@ def test_an_unrelated_ordinary_import_is_not_flagged_by_any_of_these_rules():
     assert errors == []
 
 
+# visit_FunctionDef() -- monkey-patch wrapper signature requirement, empty-function-pass ban
+# (with the real test_*.py exemption), and the _auto_init override deprecation.
+
+
+def test_a_monkeypatch_wrapper_missing_args_and_kwargs_is_flagged():
+    source = "def _patched_create(self, vals):\n    return orig_create(self, vals)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Monkey-patch wrapper" in e for e in errors)
+
+
+def test_a_monkeypatch_wrapper_with_real_args_and_kwargs_is_not_flagged():
+    source = "def _patched_create(self, *args, **kwargs):\n    return orig_create(self, *args, **kwargs)\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Monkey-patch wrapper" in e for e in errors)
+
+
+def test_an_ordinary_function_with_no_patched_prefix_is_never_subject_to_this_rule():
+    source = "def create(self, vals):\n    return super().create(vals)\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Monkey-patch wrapper" in e for e in errors)
+
+
+def test_an_empty_pass_only_function_is_forbidden_outside_a_test_file():
+    source = "def do_the_thing(self):\n    pass\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/models/ham_qso.py")
+    assert any("Empty functions" in e for e in errors)
+
+
+def test_an_empty_pass_only_function_is_allowed_inside_a_real_test_file():
+    # Real stub/placeholder test methods are an accepted pattern this rule deliberately
+    # exempts by filename, unlike production code.
+    source = "def test_todo_later(self):\n    pass\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/tests/test_ham_qso.py")
+    assert not any("Empty functions" in e for e in errors)
+
+
+def test_overriding_auto_init_is_a_deprecated_pattern():
+    source = "def _auto_init(self):\n    return super()._auto_init()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("_auto_init" in e and "discouraged" in e for e in errors)
+
+
+# The in_http_controller-gated rules in visit_Call() -- request.website extraction, explicit
+# controller kwarg binding, and RPC mass assignment -- all only apply inside a real
+# @http.route-decorated method, so each fixture below is a real controller method, not a bare
+# statement, to exercise the actual is_controller detection this state depends on.
+
+
+def test_request_website_extraction_inside_a_real_route_is_warned_on():
+    # Real, verified-by-running behavior, not assumed from the warning message's own wording:
+    # this rule lives inside visit_Call and only fires when `request.website` is itself CALLED
+    # (`request.website(...)`), not on the far more common plain attribute read
+    # (`website = request.website`) real Odoo code actually uses -- confirmed directly by
+    # running both shapes against the real checker before writing this fixture; the plain-
+    # attribute-read shape produces zero warnings. Whether that's the rule's real intent or a
+    # pre-existing narrower-than-described trigger is a design question for whoever owns this
+    # rule, not something to silently work around here -- this test documents the actual
+    # current behavior.
+    source = (
+        "@http.route('/api/v1/thing', type='jsonrpc', auth='user')\n"
+        "def get_thing(self, **kwargs):\n"
+        "    website = request.website()\n"
+        "    return website.name\n"
+    )
+    errors, warnings = _dict_findings(source)
+    assert any("MULTI-TENANT ISOLATION" in w for w in warnings)
+
+
+def test_request_website_extraction_outside_any_controller_is_not_flagged_by_this_rule():
+    source = "website = request.website\n"
+    errors, warnings = _dict_findings(source)
+    assert not any("MULTI-TENANT ISOLATION" in w for w in warnings)
+
+
+def test_rpc_mass_assignment_of_a_raw_kwargs_dict_into_create_is_warned_on():
+    source = (
+        "class MyController(http.Controller):\n"
+        "    @http.route('/api/v1/thing', type='json', auth='user')\n"
+        "    def make_thing(self, **kwargs):\n"
+        "        return request.env['ham.qso'].create(kwargs)\n"
+    )
+    errors, warnings = _dict_findings(source)
+    assert any("RPC MASS ASSIGNMENT" in w for w in warnings)
+
+
+def test_create_with_explicit_named_fields_is_not_flagged_as_mass_assignment():
+    source = (
+        "class MyController(http.Controller):\n"
+        "    @http.route('/api/v1/thing', type='json', auth='user')\n"
+        "    def make_thing(self, callsign=None, **kwargs):\n"
+        "        return request.env['ham.qso'].create({'callsign': callsign})\n"
+    )
+    errors, warnings = _dict_findings(source)
+    assert not any("RPC MASS ASSIGNMENT" in w for w in warnings)
+
+
 def test_get_service_uid_wrapped_in_try_except_is_not_flagged_without_ham_base_present():
     # The inverse of the test above -- no ham_base/__manifest__.py anywhere up the tree, so
     # has_ham_base must stay False and this specific rule must not fire (a plain repo with no
