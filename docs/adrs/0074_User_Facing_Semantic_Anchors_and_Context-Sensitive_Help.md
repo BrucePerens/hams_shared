@@ -1,5 +1,8 @@
 # ADR 0074: User-Facing Semantic Anchors and Context-Sensitive Help
 
+## Status
+Accepted
+
 ## Context
 
 We need a standardized methodology to bind frontend interactive elements to our centralized system help documentation manuals across different modules. This architecture ensures that contextual help links remain completely unbreakable and highly traceable even when view layouts or route endpoints shift.

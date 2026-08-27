@@ -1,5 +1,8 @@
 # ADR 0082: Strict Daemon Integration Testing
 
+## Status
+Accepted
+
 ## Context
 Historically, Odoo integration tests for external daemons (like `cache_manager` and `backup_worker`) relied heavily on `unittest.mock` and `patch` to simulate subprocess execution, RabbitMQ message consumption, or Redis caching. This resulted in tests that verified the *mocks* rather than the actual robustness of the deployed services, masking configuration drifts and failing to capture race conditions in inter-process communication.
 
