@@ -1212,10 +1212,24 @@ def test_sudo_with_the_tag_but_not_one_of_the_three_allowed_shapes_is_still_exem
     # substring "burn-ignore" (see add_error()'s own generic tag check), regardless of which
     # specific rule or shape matched. That blanket suppression fires first, so in practice the
     # three-shape check on .sudo() never actually narrows anything -- any burn-ignore-sudo
-    # comment exempts the line no matter the call shape.
+    # comment exempts the line no matter the call shape. add_warning() carries the identical
+    # bare "burn-ignore" substring check (its own first OR-branch, alongside the narrower
+    # audit-ignore-* + message-text pairs after it) -- see
+    # test_an_unrelated_burn_ignore_tag_also_blanket_suppresses_an_unrelated_warning below.
     source = "self.env['ham.qso'].sudo().write(vals)  # burn-ignore-sudo\n"
     errors, _warnings = _dict_findings(source)
     assert not any(".sudo()" in e for e in errors)
+
+
+def test_an_unrelated_burn_ignore_tag_also_blanket_suppresses_an_unrelated_warning():
+    # add_warning()'s own first OR-branch is the identical bare "burn-ignore" substring check
+    # add_error() has -- a tag with no relation to the warning's own subject matter still
+    # suppresses it. Here a burn-ignore-sudo comment (nothing to do with time.sleep()) still
+    # kills the unrelated THREAD BLOCKING audit warning, confirming the same blanket-
+    # suppression finding applies to warnings, not just errors.
+    source = "time.sleep(5)  # burn-ignore-sudo (unrelated tag)\n"
+    _errors, warnings = _dict_findings(source)
+    assert not any("THREAD BLOCKING" in w for w in warnings)
 
 
 def test_probing_current_thread_testing_is_forbidden_test_evasion():

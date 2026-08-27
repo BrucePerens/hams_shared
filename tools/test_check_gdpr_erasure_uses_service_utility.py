@@ -127,11 +127,17 @@ class CheckGdprErasureUsesServiceUtilityTests(unittest.TestCase):
         self.assertEqual(violations, [])
 
     def test_a_method_that_both_delegates_and_hand_rolls_unlink_is_not_flagged(self):
-        # _calls_method_named() only actually runs when there's an unignored unlink() to
-        # weigh against it (short-circuited otherwise) -- this is the real mixed shape that
-        # exercises it: some cleanup already routes through the blessed utility, and a
-        # further hand-rolled unlink() in the same method is treated as accompanying that
-        # delegation, not a bypass of it.
+        # Documents real, possibly-unintended behavior, not an endorsed design: the rule's
+        # own message names a specific, narrow escape hatch ("# audit-ignore-gdpr-hand-
+        # rolled-unlink" with a comment explaining why), but the actual guard --
+        # `if unignored and not _calls_method_named(node, "_erase_via_service_account")` --
+        # is whole-method, not per-call. ANY call to _erase_via_service_account anywhere in
+        # _execute_gdpr_erasure suppresses EVERY unignored unlink() in that same method, even
+        # one on a wholly unrelated model with no relation to the delegated call. This is the
+        # same shape as the .sudo()/burn-ignore finding elsewhere this session: a coarser
+        # guard preempting the rule's own narrower stated intent. Not fixed here -- whether
+        # this should be scoped per-call is a real design question, not this test's call to
+        # make; flagged in night_shift_todo.md for review.
         self._write(
             "some_module/models/res_users.py",
             "class ResUsers(models.Model):\n"
