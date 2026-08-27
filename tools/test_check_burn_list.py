@@ -1267,3 +1267,100 @@ def test_get_service_uid_wrapped_in_try_except_is_not_flagged_without_ham_base_p
         )
         errors, _warnings = _dict_findings(source, filepath=str(target_dir / "res_users.py"))
     assert not any("_get_service_uid MUST NOT be wrapped" in e for e in errors)
+
+
+# _check_forbidden_functions() -- the rest of the bare-function-call ban cluster: hash(),
+# eval(), exec() (ungated by is_odoo_module), then the is_odoo_module-gated group:
+# get_module_resource(), _sign_token(), clear_caches(), _check_recursion(), getattr()'s two
+# rules, and setattr()'s group_ids-mutation ban.
+
+
+def test_hash_call_is_forbidden_non_determinism():
+    source = "x = hash(record.id)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("NON-DETERMINISM" in e for e in errors)
+
+
+def test_eval_call_is_forbidden_rce():
+    source = "x = eval(user_input)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("eval()" in e for e in errors)
+
+
+def test_exec_call_is_forbidden_rce():
+    source = "exec(user_input)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("exec()" in e for e in errors)
+
+
+def test_get_module_resource_call_is_a_removed_deprecated_api():
+    source = "path = get_module_resource('ham_base', 'static', 'thing.png')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("get_module_resource" in e and "removed" in e for e in errors)
+
+
+def test_bare_sign_token_call_warns_about_access_token_field():
+    # This is the bare-Name-call rule (fid == "_sign_token" under
+    # _check_forbidden_functions, which only matches ast.Name calls). The far more common
+    # attribute-call shape `record._sign_token(...)` hits a *different* rule entirely (attr ==
+    # "_sign_token" under _check_forbidden_attributes), which uses a shorter message.
+    source = "token = _sign_token(partner_id)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("_sign_token" in e and "access_token" in e for e in errors)
+
+
+def test_attribute_form_sign_token_call_uses_the_other_shorter_message():
+    source = "token = record._sign_token(partner_id)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any(e == "Verify '_sign_token' context..." for e in errors)
+
+
+def test_clear_caches_call_is_forbidden_global_cache_invalidation():
+    source = "self.env.registry.clear_caches()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("clear_cache" in e for e in errors)
+
+
+def test_check_recursion_call_is_a_deprecated_hierarchy_api():
+    source = "self._check_recursion()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("_has_cycle" in e for e in errors)
+
+
+def test_getattr_probing_for_sudo_is_forbidden_obfuscation():
+    source = "method = getattr(record, 'sudo')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Obfuscated use of sudo" in e for e in errors)
+
+
+def test_three_argument_getattr_is_forbidden_ai_laziness():
+    source = "value = getattr(record, field_name, None)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("3-argument getattr()" in e for e in errors)
+
+
+def test_three_argument_getattr_with_the_real_burn_ignore_tag_is_exempt():
+    source = "value = getattr(record, field_name, None)  # burn-ignore-introspection\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("3-argument getattr()" in e for e in errors)
+
+
+def test_two_argument_getattr_is_not_flagged_by_the_three_argument_rule():
+    source = "value = getattr(record, field_name)\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("3-argument getattr()" in e for e in errors)
+
+
+def test_setattr_mutating_group_ids_outside_tests_is_forbidden():
+    source = "setattr(user, 'group_ids', [(6, 0, [group.id])])\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Mutating 'group_ids' via setattr" in e for e in errors)
+
+
+def test_setattr_mutating_group_ids_inside_a_test_file_is_allowed():
+    # The rule's own real exemption: self.filename (not filepath) starting with "test_".
+    source = "setattr(user, 'group_ids', [(6, 0, [group.id])])\n"
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_res_users.py"
+    )
+    assert not any("Mutating 'group_ids' via setattr" in e for e in errors)
