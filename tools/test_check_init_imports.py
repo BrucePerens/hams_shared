@@ -166,6 +166,20 @@ class MainIntegrationTests(unittest.TestCase):
         code, out = self._run()
         self.assertEqual(code, 0, out)
 
+    def test_an_unrelated_dir_named_odoo_type_stubs_is_not_exempted(self):
+        # The exclusion matches the exact generated path (hams_shared/tools/odoo_type_stubs), not
+        # just the bare directory name -- a directory that happens to share that name somewhere
+        # else in the repo must still be checked normally.
+        _write(
+            os.path.join(self.tmp, "some_module", "odoo_type_stubs", "__init__.py"), "\n"
+        )
+        _write(
+            os.path.join(self.tmp, "some_module", "odoo_type_stubs", "orphan.py"), "\n"
+        )
+        code, out = self._run()
+        self.assertEqual(code, 1)
+        self.assertIn("never imported", out)
+
 
 if __name__ == "__main__":
     unittest.main()
