@@ -126,6 +126,52 @@ class CheckGdprErasureUsesServiceUtilityTests(unittest.TestCase):
         violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
         self.assertEqual(violations, [])
 
+    def test_a_method_that_both_delegates_and_hand_rolls_unlink_is_not_flagged(self):
+        # _calls_method_named() only actually runs when there's an unignored unlink() to
+        # weigh against it (short-circuited otherwise) -- this is the real mixed shape that
+        # exercises it: some cleanup already routes through the blessed utility, and a
+        # further hand-rolled unlink() in the same method is treated as accompanying that
+        # delegation, not a bypass of it.
+        self._write(
+            "some_module/models/res_users.py",
+            "class ResUsers(models.Model):\n"
+            "    def _execute_gdpr_erasure(self):\n"
+            "        self.env['zero_sudo.security.utils']._erase_via_service_account(\n"
+            "            'model.a', [('user_id', '=', self.id)], 'x.y'\n"
+            "        )\n"
+            "        self.env['model.b'].search([('user_id', '=', self.id)]).unlink()\n",
+        )
+        violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
+        self.assertEqual(violations, [])
+
+    def test_a_file_with_invalid_utf8_bytes_is_skipped_with_a_warning_not_a_crash(self):
+        path = self._write("some_module/models/broken_encoding.py", "")
+        with open(path, "wb") as f:
+            f.write(b"# -*- coding: utf-8 -*-\nx = '\xff\xfe broken bytes'\n")
+        violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
+        self.assertEqual(violations, [])
+
+    def test_a_syntax_broken_file_is_skipped_without_crashing(self):
+        self._write(
+            "some_module/models/broken_syntax.py",
+            "class ResUsers(models.Model:\n"
+            "    def _execute_gdpr_erasure(self):\n"
+            "        self.env['model.a'].search([]).unlink()\n",
+        )
+        violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
+        self.assertEqual(violations, [])
+
+    def test_a_non_python_file_alongside_a_real_violation_is_skipped_not_crashed_on(self):
+        self._write("some_module/models/README.md", "# notes\n")
+        self._write(
+            "some_module/models/res_users.py",
+            "class ResUsers(models.Model):\n"
+            "    def _execute_gdpr_erasure(self):\n"
+            "        self.env['model.a'].search([]).unlink()\n",
+        )
+        violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
+        self.assertEqual(len(violations), 1)
+
 
 class ResolveRepoRootTests(unittest.TestCase):
     def test_a_hams_shared_path_redirects_to_its_parent_repo(self):
