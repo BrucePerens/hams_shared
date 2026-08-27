@@ -1834,6 +1834,28 @@ def test_symlinking_to_a_real_module_directory_is_forbidden():
     assert any("symbolic links to resolve modules" in e for e in errors)
 
 
+def test_bare_symlink_call_form_is_also_checked_not_just_os_dot_symlink():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = Path(tmpdir) / "models" / "res_users.py"
+        module_dir = Path(tmpdir) / "models" / "zero_sudo"
+        module_dir.mkdir(parents=True)
+        (module_dir / "__manifest__.py").write_text("{}", encoding="utf-8")
+        source = "from os import symlink\nsymlink('zero_sudo', 'zero_sudo_link')\n"
+        errors, _warnings = _dict_findings(source, filepath=str(filepath))
+    assert any("symbolic links to resolve modules" in e for e in errors)
+
+
+def test_symlink_source_resolved_through_an_intermediate_variable_assignment_is_checked():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = Path(tmpdir) / "models" / "res_users.py"
+        module_dir = Path(tmpdir) / "models" / "zero_sudo"
+        module_dir.mkdir(parents=True)
+        (module_dir / "__manifest__.py").write_text("{}", encoding="utf-8")
+        source = "src = 'zero_sudo'\nos.symlink(src, 'zero_sudo_link')\n"
+        errors, _warnings = _dict_findings(source, filepath=str(filepath))
+    assert any("symbolic links to resolve modules" in e for e in errors)
+
+
 def test_symlinking_to_a_directory_that_is_not_a_real_module_is_not_flagged():
     with tempfile.TemporaryDirectory() as tmpdir:
         filepath = Path(tmpdir) / "models" / "res_users.py"
@@ -3050,3 +3072,15 @@ def test_js_tour_without_any_of_the_flagged_crash_patterns_is_clean():
     )
     errors, _warnings = _scan_file(content, "my_tour.js")
     assert not any("JS TOUR" in e for e in errors)
+
+
+def test_environment_instantiation_with_uid_as_a_keyword_argument_of_1_is_a_sudo_cheat():
+    source = "env = api.Environment(cr, uid=1, context={})\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Instantiating an Environment" in e and "ZERO-SUDO" in e for e in errors)
+
+
+def test_environment_instantiation_with_a_dotted_superuser_id_attribute_is_a_sudo_cheat():
+    source = "env = api.Environment(cr, odoo.SUPERUSER_ID, {})\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Instantiating an Environment" in e and "ZERO-SUDO" in e for e in errors)
