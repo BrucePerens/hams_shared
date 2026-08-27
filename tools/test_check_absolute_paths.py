@@ -104,6 +104,39 @@ class CheckAbsolutePathsTests(unittest.TestCase):
         )
         self.assertEqual(chk.check_absolute_paths(self.tmp), [])
 
+    def test_ham_auxcomm_training_directory_is_specifically_excluded(self):
+        # Documented rationale: ham_auxcomm_training/ has no
+        # __manifest__.py -- it holds a single human-review draft
+        # artifact from the same ingestion pipeline family as
+        # ics_training/, never meant to be served.
+        _write(
+            os.path.join(self.tmp, "ham_auxcomm_training", "data", "review_draft.html"),
+            f'<img src="{_HOME}/.gemini/antigravity/brain/x/y.jpg">\n',
+        )
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+
+    def test_course_json_files_are_skipped_by_name_even_inside_a_real_module(self):
+        # Documented rationale: course_*.json is the ingestion pipeline's
+        # own naming convention, not tied to any one directory -- it can
+        # land inside a real Odoo module's data/ directory (e.g.
+        # ham_training/data/course_HAM_TECH.json) without being
+        # referenced by that module's own __manifest__.py, so it's
+        # skipped by filename rather than by directory.
+        _write(
+            os.path.join(self.tmp, "ham_training", "data", "course_HAM_TECH.json"),
+            f'{{"reference_sheets_used": ["{_HOME}/tmp/ham_ingestion/visual_assets/x.jpg"]}}',
+        )
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+        # A same-directory sibling that ISN'T named course_*.json must
+        # still be checked -- this isn't a blanket ham_training/ pass.
+        _write(
+            os.path.join(self.tmp, "ham_training", "data", "other_data.json"),
+            f'"{_HOME}"\n',
+        )
+        violations = chk.check_absolute_paths(self.tmp)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("other_data.json:1", violations[0])
+
     def test_a_binary_file_with_invalid_utf8_is_skipped_without_crashing(self):
         p = os.path.join(self.tmp, "data.json")
         os.makedirs(os.path.dirname(p), exist_ok=True)

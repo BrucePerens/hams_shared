@@ -33,6 +33,23 @@ naming convention (e.g. course_ICS_20260814_194206.json here becomes
 archive/ics_ingestion_20260814_194206/ -- same timestamp, same
 pipeline, just the next stage of the same lifecycle archive/ already
 covers).
+
+ham_auxcomm_training/ is excluded for the same reason as ics_training/
+(no __manifest__.py anywhere under it either -- confirmed, not
+assumed): it holds a single review_draft.html, a human-review preview
+artifact from the same ingestion pipeline family, whose rendered
+<img src> can legitimately point at a real local path (e.g. a Gemini
+cache directory) since it's a draft never meant to be served.
+
+course_*.json files are skipped by name (not by directory) wherever
+they appear, including inside REAL Odoo modules like ham_training/ --
+confirmed directly that ham_training/data/course_HAM_TECH.json is not
+referenced anywhere in ham_training/__manifest__.py's own data list,
+unlike every file actually shipped from that same data/ directory, so
+it's the identical pipeline-provenance artifact as ics_training/'s
+course_ICS.json, just generated into a real module's directory instead
+of a staging-only one. A directory-level exclusion doesn't fit here --
+ham_training/ is a real module and its other files must stay checked.
 """
 
 import os
@@ -59,6 +76,7 @@ def check_absolute_paths(repo_dir):
         "archive",
         ".claude",
         "ics_training",
+        "ham_auxcomm_training",
     }
     # Only check text-based files
     valid_exts = {
@@ -81,6 +99,14 @@ def check_absolute_paths(repo_dir):
         for file in files:
             ext = os.path.splitext(file)[1]
             if ext not in valid_exts and file != "Makefile":
+                continue
+
+            # Ingestion-pipeline course data, wherever it lands (including
+            # inside a real Odoo module's data/ directory, e.g.
+            # ham_training/data/course_HAM_TECH.json) -- same rationale as
+            # ics_training/'s directory-level exclusion above, applied by
+            # filename since the enclosing directory here is real source.
+            if file.startswith("course_") and file.endswith(".json"):
                 continue
 
             file_path = os.path.join(root, file)
