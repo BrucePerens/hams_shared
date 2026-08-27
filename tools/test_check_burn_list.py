@@ -1541,6 +1541,87 @@ def test_probing_config_test_file_is_forbidden_test_evasion():
     assert any("config['test_enable']" in e for e in errors)
 
 
+# More of visit_Call()'s own direct rule cluster (distinct from _check_forbidden_functions /
+# _check_forbidden_attributes, which it calls into): safe_patch_object() cursor-mocking ban,
+# getattr()-based current_thread().testing probing, registry.get()/models.get()
+# soft-dependency ban, search()/search_count() on env['ir.module.module'], config.get()
+# probing, and Environment(..., uid=1/SUPERUSER_ID) instantiation ban.
+
+
+def test_safe_patch_object_mocking_the_cursor_is_forbidden():
+    source = "safe_patch_object(self.cr, 'execute', mock_fn)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Mocking the database cursor" in e for e in errors)
+
+
+def test_safe_patch_object_mocking_something_else_is_not_flagged():
+    source = "safe_patch_object(self.env['ham.qso'], 'create', mock_fn)\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Mocking the database cursor" in e for e in errors)
+
+
+def test_getattr_probing_current_thread_testing_is_forbidden_test_evasion():
+    source = "flag = getattr(threading.current_thread(), 'testing')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any(
+        "Probing" in e and "current_thread" in e and "getattr" in e for e in errors
+    )
+
+
+def test_registry_dot_get_is_forbidden_soft_dependency_checking():
+    source = "mod = registry.get('optional_module')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Soft-dependency checking" in e for e in errors)
+
+
+def test_models_dot_get_is_forbidden_soft_dependency_checking():
+    source = "mod = models.get('optional_module')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Soft-dependency checking" in e for e in errors)
+
+
+def test_searching_ir_module_module_outside_a_test_file_is_forbidden():
+    source = "mods = self.env['ir.module.module'].search([('name', '=', 'foo')])\n"
+    errors, _warnings = _dict_findings(source)
+    assert any(
+        "ir.module.module" in e and "Declare dependencies" in e for e in errors
+    )
+
+
+def test_searching_ir_module_module_inside_a_real_test_file_is_allowed():
+    # The rule's own real exemption: conditionally exercising an optional module's behavior
+    # in a test has no manifest-level way to be expressed otherwise.
+    source = "mods = self.env['ir.module.module'].search([('name', '=', 'foo')])\n"
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_res_users.py"
+    )
+    assert not any("ir.module.module" in e for e in errors)
+
+
+def test_config_dot_get_probing_test_enable_is_forbidden_test_evasion():
+    source = "flag = config.get('test_enable')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("config.get('test_enable')" in e for e in errors)
+
+
+def test_environment_instantiation_with_uid_1_is_a_sudo_cheat():
+    source = "env = api.Environment(cr, 1, {})\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Instantiating an Environment" in e and "ZERO-SUDO" in e for e in errors)
+
+
+def test_environment_instantiation_with_superuser_id_is_a_sudo_cheat():
+    source = "env = api.Environment(cr, SUPERUSER_ID, {})\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Instantiating an Environment" in e and "ZERO-SUDO" in e for e in errors)
+
+
+def test_environment_instantiation_with_a_service_account_uid_is_not_flagged():
+    source = "env = api.Environment(cr, service_uid, {})\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Instantiating an Environment" in e for e in errors)
+
+
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
     source = "self.env.registry.clear_caches()\n"
     errors, _warnings = _dict_findings(source)
