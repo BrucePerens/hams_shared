@@ -1167,6 +1167,90 @@ def test_related_ending_in_dot_users_is_a_legacy_security_relation():
     assert any("user_ids" in e for e in errors)
 
 
+# visit_Attribute() -- the .sudo() privilege-escalation ban (with its real, narrow escape
+# hatch), threading.current_thread().testing probing (test-evasion detection), and two more
+# legacy-attribute-access bans.
+
+
+def test_sudo_call_is_forbidden_privilege_escalation():
+    source = "record = self.env['ham.qso'].sudo().browse(1)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any(".sudo()" in e and "forbidden" in e for e in errors)
+
+
+def test_sudo_generate_with_the_real_burn_ignore_tag_is_exempt():
+    # The real, narrow exemption: the burn-ignore-sudo tag alone isn't enough -- it must be
+    # paired with one of three specific, allow-listed call shapes on the same line.
+    source = "self.env['ir.attachment'].sudo()._generate(vals)  # burn-ignore-sudo\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any(".sudo()" in e for e in errors)
+
+
+def test_sudo_unlink_with_the_real_burn_ignore_tag_is_exempt():
+    source = "self.env['ham.qso'].sudo().unlink()  # burn-ignore-sudo\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any(".sudo()" in e for e in errors)
+
+
+def test_sudo_with_the_tag_but_not_one_of_the_three_allowed_shapes_is_still_exempt():
+    # Documents real (likely unintended) behavior: the rule's own inner check requires the
+    # burn-ignore-sudo tag to be paired with one of three specific call shapes, but
+    # add_error() itself unconditionally suppresses ANY error on a line containing the bare
+    # substring "burn-ignore" (see add_error()'s own generic tag check), regardless of which
+    # specific rule or shape matched. That blanket suppression fires first, so in practice the
+    # three-shape check on .sudo() never actually narrows anything -- any burn-ignore-sudo
+    # comment exempts the line no matter the call shape.
+    source = "self.env['ham.qso'].sudo().write(vals)  # burn-ignore-sudo\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any(".sudo()" in e for e in errors)
+
+
+def test_probing_current_thread_testing_is_forbidden_test_evasion():
+    source = "if threading.current_thread().testing:\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("current_thread" in e and "test evasion" in e for e in errors)
+
+
+def test_self_underscore_context_is_a_legacy_access_pattern():
+    source = "ctx = self._context\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("self.env.context" in e for e in errors)
+
+
+def test_self_underscore_uid_is_a_legacy_access_pattern():
+    source = "uid = self._uid\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("self.env.uid" in e for e in errors)
+
+
+def test_group_dot_users_is_a_legacy_security_relation():
+    source = "members = group.users\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("user_ids" in e for e in errors)
+
+
+# _check_forbidden_functions() -- the hasattr() introspection ban, with its real
+# super()-cooperative-mixin exemption and its real burn-ignore-introspection escape hatch.
+
+
+def test_hasattr_is_forbidden_introspection():
+    source = "if hasattr(self, 'some_attr'):\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("hasattr" in e for e in errors)
+
+
+def test_hasattr_on_super_is_exempted_for_cooperative_mixins():
+    source = "if hasattr(super(), 'some_attr'):\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("hasattr" in e for e in errors)
+
+
+def test_hasattr_with_the_real_burn_ignore_tag_is_exempt():
+    source = "if hasattr(self, 'some_attr'):  # burn-ignore-introspection\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("hasattr" in e for e in errors)
+
+
 def test_get_service_uid_wrapped_in_try_except_is_not_flagged_without_ham_base_present():
     # The inverse of the test above -- no ham_base/__manifest__.py anywhere up the tree, so
     # has_ham_base must stay False and this specific rule must not fire (a plain repo with no
