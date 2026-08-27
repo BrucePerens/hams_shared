@@ -1833,6 +1833,120 @@ def test_symlinking_to_a_directory_that_is_not_a_real_module_is_not_flagged():
     assert not any("symbolic links to resolve modules" in e for e in errors)
 
 
+# visit_Assign() -- direct self.env.context mutation, _sql_constraints as an assignment
+# target, group_ids mutation via plain attribute assignment and via dict-subscript
+# assignment (both with the real test_*.py exemption), and I18N on a dict-key assignment.
+
+
+def test_directly_assigning_to_self_env_context_is_forbidden():
+    source = "self.env.context = {'lang': 'en_US'}\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Never modify" in e and "self.env.context" in e for e in errors)
+
+
+def test_sql_constraints_as_an_assignment_target_is_flagged():
+    source = "_sql_constraints = [('uniq_name', 'unique(name)', 'Name must be unique.')]\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("models.Constraint" in e for e in errors)
+
+
+def test_attribute_assignment_to_group_ids_outside_tests_is_forbidden():
+    source = "user.group_ids = [(6, 0, [group.id])]\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Mutating 'group_ids' in Python" in e for e in errors)
+
+
+def test_attribute_assignment_to_group_ids_inside_a_test_file_is_allowed():
+    source = "user.group_ids = [(6, 0, [group.id])]\n"
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_res_users.py"
+    )
+    assert not any("Mutating 'group_ids' in Python" in e for e in errors)
+
+
+def test_subscript_assignment_to_group_ids_outside_tests_is_forbidden():
+    source = "vals['group_ids'] = [(6, 0, [group.id])]\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Mutating 'group_ids' in Python" in e for e in errors)
+
+
+def test_subscript_assignment_to_group_ids_inside_a_test_file_is_allowed():
+    source = "vals['group_ids'] = [(6, 0, [group.id])]\n"
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_res_users.py"
+    )
+    assert not any("Mutating 'group_ids' in Python" in e for e in errors)
+
+
+def test_untranslated_string_assigned_to_an_error_dict_key_is_an_i18n_warning():
+    source = "vals['error'] = 'Something went wrong'\n"
+    _errors, warnings = _dict_findings(source)
+    assert any("I18N" in w and "dict key" in w for w in warnings)
+
+
+def test_translated_string_assigned_to_an_error_dict_key_is_not_flagged():
+    source = "vals['error'] = _('Something went wrong')\n"
+    _errors, warnings = _dict_findings(source)
+    assert not any("dict key" in w for w in warnings)
+
+
+# visit_Import() -- local (in-function) `import x` (distinct from the already-covered
+# `from x import y` form), `import pickle`, `import random` (with its real
+# audit-ignore-weak-random exemption for deterministic seeding).
+
+
+def test_a_local_import_statement_inside_a_method_is_forbidden():
+    source = "def some_method(self):\n    import json\n    return json.dumps({})\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("LOCAL IMPORT" in e for e in errors)
+
+
+def test_import_pickle_statement_form_is_banned_the_same_as_from_pickle_import():
+    source = "import pickle\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("pickle module is vulnerable" in e for e in errors)
+
+
+def test_import_random_statement_form_is_weak_crypto():
+    source = "import random\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("WEAK CRYPTO" in e for e in errors)
+
+
+def test_import_random_statement_form_with_the_audit_tag_is_allowed():
+    source = "import random  # audit-ignore-weak-random: deterministic exam generation\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("WEAK CRYPTO" in e for e in errors)
+
+
+# visit_Expr() -- bare Ellipsis (...) as a statement -- and visit_Tuple() -- the
+# ('id', '=', int) / ('id', 'in', [int, ...]) hardcoded-ID-lookup ban.
+
+
+def test_bare_ellipsis_statement_is_forbidden_elision():
+    source = "def stub(self):\n    ...\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Elision" in e for e in errors)
+
+
+def test_hardcoded_id_equals_lookup_is_forbidden():
+    source = "domain = [('id', '=', 42)]\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Hardcoded ID lookup" in e and "'=', int" in e for e in errors)
+
+
+def test_hardcoded_id_in_list_lookup_is_forbidden():
+    source = "domain = [('id', 'in', [42, 43])]\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Hardcoded ID lookup" in e and "'in', [int" in e for e in errors)
+
+
+def test_id_equals_string_key_lookup_is_not_a_hardcoded_id():
+    source = "domain = [('id', '=', 'xml_id_string')]\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Hardcoded ID lookup" in e for e in errors)
+
+
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
     source = "self.env.registry.clear_caches()\n"
     errors, _warnings = _dict_findings(source)
