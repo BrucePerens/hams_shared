@@ -2979,3 +2979,74 @@ def test_setattr_mutating_group_ids_inside_a_test_file_is_allowed():
         source, filepath="/tmp/some_module/tests/test_res_users.py"
     )
     assert not any("Mutating 'group_ids' via setattr" in e for e in errors)
+
+
+# The last of scan_file()'s XML/HTML walk: the XPATH RENDERING audit reminder (with its real
+# audit-ignore-xpath exemption) and the XML AST parse-error catch, plus a sample of the JS
+# tour crash-prevention regex cluster (window.confirm/alert freezing the headless browser).
+
+
+def test_xpath_without_audit_ignore_xpath_gets_a_rendering_audit_reminder():
+    xml = (
+        "<odoo>\n"
+        '    <record id="view1" model="ir.ui.view">\n'
+        '        <field name="name">View</field>\n'
+        '        <field name="model">ham.qso</field>\n'
+        '        <field name="arch" type="xml">\n'
+        "            <!-- [@ANCHOR: COMM_test] -->\n"
+        '            <xpath expr="//div" position="inside"/>\n'
+        "        </field>\n"
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    _errors, warnings = _scan_file(xml, "my_view.xml")
+    assert any("XPATH RENDERING" in w for w in warnings)
+
+
+def test_xpath_with_audit_ignore_xpath_is_not_flagged():
+    xml = (
+        "<odoo>\n"
+        '    <record id="view1" model="ir.ui.view">\n'
+        '        <field name="name">View</field>\n'
+        '        <field name="model">ham.qso</field>\n'
+        '        <field name="arch" type="xml">\n'
+        "            <!-- [@ANCHOR: COMM_test] audit-ignore-xpath: manually verified -->\n"
+        '            <xpath expr="//div" position="inside"/>\n'
+        "        </field>\n"
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    _errors, warnings = _scan_file(xml, "my_view.xml")
+    assert not any("XPATH RENDERING" in w for w in warnings)
+
+
+def test_malformed_xml_is_a_critical_xml_ast_error_not_a_crash():
+    xml = "<odoo>\n    <record id=\"thing\" model=\"some.model\">\n"  # unclosed tags
+    errors, _warnings = _scan_file(xml, "broken.xml")
+    assert any("CRITICAL XML AST ERROR" in e for e in errors)
+
+
+def test_js_tour_using_window_confirm_freezes_the_headless_browser():
+    content = (
+        "import { registry } from '@web/core/registry';\n"
+        "registry.category('web_tour.tours').add('my_tour', {\n"
+        "    steps: () => [\n"
+        "        { trigger: '.o_thing', run: function() { window.confirm('Are you sure?'); } },\n"
+        "    ],\n"
+        "});\n"
+    )
+    errors, _warnings = _scan_file(content, "my_tour.js")
+    assert any("JS TOUR DIALOG" in e and "window.confirm" in e for e in errors)
+
+
+def test_js_tour_without_any_of_the_flagged_crash_patterns_is_clean():
+    content = (
+        "import { registry } from '@web/core/registry';\n"
+        "registry.category('web_tour.tours').add('my_tour', {\n"
+        "    steps: () => [\n"
+        "        { trigger: '.o_thing', run: 'click' },\n"
+        "    ],\n"
+        "});\n"
+    )
+    errors, _warnings = _scan_file(content, "my_tour.js")
+    assert not any("JS TOUR" in e for e in errors)

@@ -2852,7 +2852,7 @@ def scan_file(filepath, is_odoo_module=False):
                         warnings_found.append(
                             f"Line {node.lineno}: [%AUDIT] XPATH RENDERING: All \x3cxpath\x3e injections must be proven to render correctly."
                         )
-        except (SyntaxError, OSError) as e:
+        except (SyntaxError, OSError, xml.parsers.expat.ExpatError) as e:
             errors_found.append(f"CRITICAL XML AST ERROR: {e}")
 
     if filename.endswith(".js") and ("tour" in filename or "tours" in filepath):
