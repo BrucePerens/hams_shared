@@ -253,6 +253,68 @@ class ScanIntegrationTests(unittest.TestCase):
         name_owners, _claiming_owners, _auto_false, _inherit_only = chk._scan([self.tmp])
         self.assertEqual(name_owners, {})
 
+    def test_a_file_not_under_any_manifest_is_skipped(self):
+        _write(os.path.join(self.tmp, "orphan.py"), 'class Foo(models.Model):\n    _name = "ham.qso"\n')
+        name_owners, _claiming_owners, _auto_false, _inherit_only = chk._scan([self.tmp])
+        self.assertEqual(name_owners, {})
+
+    def test_a_malformed_auto_value_does_not_crash_the_scan(self):
+        # The _auto = ... literal_eval() has its own ValueError/SyntaxError guard --
+        # a non-literal RHS (a name reference, not a constant) must not crash the scan.
+        self._module(
+            "mod_a",
+            'class Foo(models.Model):\n'
+            '    _name = "ham.qso"\n'
+            '    _auto = some_computed_flag\n',
+        )
+        name_owners, _claiming_owners, auto_false, _inherit_only = chk._scan([self.tmp])
+        self.assertIn("ham.qso", name_owners)
+        self.assertNotIn("ham.qso", auto_false)
+
+
+class ModuleOfTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_finds_the_nearest_ancestor_manifest_directory(self):
+        _write(os.path.join(self.tmp, "ham_qso", "__manifest__.py"), "{}\n")
+        fpath = os.path.join(self.tmp, "ham_qso", "models", "res_users.py")
+        _write(fpath, "")
+        cache = {}
+        self.assertEqual(chk._module_of(fpath, cache), "ham_qso")
+
+    def test_a_file_with_no_manifest_anywhere_up_the_tree_returns_none(self):
+        fpath = os.path.join(self.tmp, "scripts", "helper.py")
+        _write(fpath, "")
+        cache = {}
+        self.assertIsNone(chk._module_of(fpath, cache))
+
+    def test_the_cache_is_populated_and_reused_for_a_second_lookup(self):
+        _write(os.path.join(self.tmp, "ham_qso", "__manifest__.py"), "{}\n")
+        first = os.path.join(self.tmp, "ham_qso", "models", "res_users.py")
+        second = os.path.join(self.tmp, "ham_qso", "models", "res_partner.py")
+        _write(first, "")
+        _write(second, "")
+        cache = {}
+        result1 = chk._module_of(first, cache)
+        # The intermediate "models" directory must now be a cache key, populated by the
+        # walked-list backfill loop after the first lookup found the real manifest.
+        self.assertIn(os.path.join(self.tmp, "ham_qso", "models"), cache)
+        result2 = chk._module_of(second, cache)
+        self.assertEqual(result1, result2)
+        self.assertEqual(result2, "ham_qso")
+
+    def test_a_cache_hit_short_circuits_without_touching_the_filesystem_again(self):
+        _write(os.path.join(self.tmp, "ham_qso", "__manifest__.py"), "{}\n")
+        models_dir = os.path.join(self.tmp, "ham_qso", "models")
+        cache = {models_dir: "ham_qso_cached_value"}
+        fpath = os.path.join(models_dir, "res_users.py")
+        _write(fpath, "")
+        self.assertEqual(chk._module_of(fpath, cache), "ham_qso_cached_value")
+
 
 if __name__ == "__main__":
     unittest.main()
