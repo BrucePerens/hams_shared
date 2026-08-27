@@ -2357,6 +2357,204 @@ def test_a_daemon_file_importing_odoo_is_forbidden_daemon_decoupling():
     assert any("DAEMON DECOUPLING" in e for e in errors)
 
 
+# More of scan_file()'s XML/HTML walk: ir.rule's publish_to_public + write/unlink combo,
+# mandatory-fields-per-model data integrity, res.users-inside-noupdate warning, ir.rule's
+# required 'groups' field and financial-model ban, xpath position validation, field-without-
+# name, t-raw/t-esc/attrs deprecations, kanban-box deprecation, and dynamic-snippet crash
+# prevention.
+
+
+def test_ir_rule_granting_public_read_plus_write_is_a_critical_security_error():
+    xml = (
+        "<odoo>\n"
+        '    <data noupdate="1">\n'
+        '        <record id="rule1" model="ir.rule">\n'
+        '            <field name="name">Rule</field>\n'
+        '            <field name="model_id" ref="model_website_page"/>\n'
+        '            <field name="groups" eval="[(4, ref(\'base.group_user\'))]"/>\n'
+        "            <field name=\"domain_force\">[('publish_to_public','=',True)]</field>\n"
+        '            <field name="perm_write" eval="1"/>\n'
+        "        </record>\n"
+        "    </data>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "security_data.xml")
+    assert any(
+        "publish_to_public" in e and "Split into separate read and write rules" in e
+        for e in errors
+    )
+
+
+def test_record_missing_a_mandatory_field_for_its_model_is_a_data_integrity_error():
+    xml = (
+        "<odoo>\n"
+        '    <data noupdate="1">\n'
+        '        <record id="group1" model="res.groups">\n'
+        '            <field name="category_id" ref="base.module_category_hidden"/>\n'
+        "        </record>\n"
+        "    </data>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "security_data.xml")
+    assert any(
+        "DATA INTEGRITY" in e and "missing mandatory fields" in e and ": name." in e
+        for e in errors
+    )
+
+
+def test_record_with_all_its_mandatory_fields_is_not_a_data_integrity_error():
+    xml = (
+        "<odoo>\n"
+        '    <data noupdate="1">\n'
+        '        <record id="group1" model="res.groups">\n'
+        '            <field name="name">My Group</field>\n'
+        "        </record>\n"
+        "    </data>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "security_data.xml")
+    assert not any("DATA INTEGRITY" in e for e in errors)
+
+
+def test_res_users_record_inside_a_noupdate_block_is_a_record_update_warning():
+    xml = (
+        "<odoo>\n"
+        '    <data noupdate="1">\n'
+        '        <record id="svc_user" model="res.users">\n'
+        '            <field name="name">Service Account</field>\n'
+        '            <field name="login">svc_account</field>\n'
+        '            <field name="company_id" ref="base.main_company"/>\n'
+        '            <field name="company_ids" eval="[(6, 0, [ref(\'base.main_company\')])]"/>\n'
+        '            <field name="notification_type">email</field>\n'
+        "        </record>\n"
+        "    </data>\n"
+        "</odoo>\n"
+    )
+    _errors, warnings = _scan_file(xml, "security_data.xml")
+    assert any("RECORD UPDATE" in w and "noupdate" in w for w in warnings)
+
+
+def test_ir_rule_without_a_groups_field_is_forbidden_as_a_deprecated_global_rule():
+    xml = (
+        "<odoo>\n"
+        '    <data noupdate="1">\n'
+        '        <record id="rule2" model="ir.rule">\n'
+        '            <field name="name">Rule</field>\n'
+        '            <field name="model_id" ref="model_ham_qso"/>\n'
+        "        </record>\n"
+        "    </data>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "security_data.xml")
+    assert any("must specify a 'groups' field" in e for e in errors)
+
+
+def test_ir_rule_for_a_financial_model_is_forbidden():
+    xml = (
+        "<odoo>\n"
+        '    <data noupdate="1">\n'
+        '        <record id="rule3" model="ir.rule">\n'
+        '            <field name="name">Rule</field>\n'
+        '            <field name="model_id" ref="model_res_partner_bank"/>\n'
+        '            <field name="groups" eval="[(4, ref(\'base.group_user\'))]"/>\n'
+        "        </record>\n"
+        "    </data>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "security_data.xml")
+    assert any(
+        "FINANCIAL EXPOSURE" in e and "model_res_partner_bank" in e for e in errors
+    )
+
+
+def test_xpath_with_an_invalid_position_value_is_forbidden():
+    xml = (
+        "<odoo>\n"
+        '    <record id="view1" model="ir.ui.view">\n'
+        '        <field name="name">View</field>\n'
+        '        <field name="model">ham.qso</field>\n'
+        '        <field name="arch" type="xml">\n'
+        "            <!-- [@ANCHOR: COMM_test] -->\n"
+        '            <xpath expr="//div" position="magic"/>\n'
+        "        </field>\n"
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_view.xml")
+    assert any("INVALID XPATH position" in e for e in errors)
+
+
+def test_a_field_element_without_a_name_attribute_is_forbidden():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        "        <field>NoNameHere</field>\n"
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("CRITICAL XML missing name" in e for e in errors)
+
+
+def test_t_raw_attribute_is_a_critical_xss_vulnerability():
+    xml = (
+        "<odoo>\n"
+        '    <t t-name="my.template">\n'
+        '        <span t-raw="user_input"/>\n'
+        "    </t>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_template.xml")
+    assert any("CRITICAL XSS" in e and "t-out" in e for e in errors)
+
+
+def test_t_esc_attribute_is_a_banned_deprecated_directive():
+    xml = (
+        "<odoo>\n"
+        '    <t t-name="my.template">\n'
+        '        <span t-esc="user_input"/>\n'
+        "    </t>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_template.xml")
+    assert any("t-esc is banned" in e for e in errors)
+
+
+def test_attrs_attribute_is_a_removed_deprecated_view_syntax():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        "        <field name=\"x\" attrs=\"{'invisible': [('state', '=', 'draft')]}\"/>\n"
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("'attrs' attribute was removed" in e for e in errors)
+
+
+def test_kanban_box_template_name_is_banned_in_odoo_19():
+    xml = '<odoo>\n    <t t-name="kanban-box">\n        <div/>\n    </t>\n</odoo>\n'
+    errors, _warnings = _scan_file(xml, "my_template.xml")
+    assert any('t-name="kanban-box" is banned' in e for e in errors)
+
+
+def test_dynamic_snippet_missing_required_data_attributes_is_a_crash_risk():
+    xml = '<odoo>\n    <div data-snippet="s_dynamic_snippet_products"/>\n</odoo>\n'
+    errors, _warnings = _scan_file(xml, "my_snippet.xml")
+    assert any("OWL 2 CRASH" in e and "data-filter-id" in e for e in errors)
+
+
+def test_dynamic_snippet_with_both_required_data_attributes_is_not_flagged():
+    xml = (
+        "<odoo>\n"
+        '    <div data-snippet="s_dynamic_snippet_products" data-filter-id="1"'
+        ' data-template-key="product_card"/>\n'
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_snippet.xml")
+    assert not any("OWL 2 CRASH" in e for e in errors)
+
+
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
     source = "self.env.registry.clear_caches()\n"
     errors, _warnings = _dict_findings(source)
