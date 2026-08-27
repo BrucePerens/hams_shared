@@ -432,5 +432,122 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("not found in registry", out)
 
 
+class ManifestDependsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_reads_the_depends_list_out_of_a_real_manifest(self):
+        path = os.path.join(self.tmp, "__manifest__.py")
+        _write(path, "{'name': 'Thing', 'depends': ['base', 'website']}\n")
+        self.assertEqual(orb._manifest_depends(path), ['base', 'website'])
+
+    def test_a_missing_manifest_file_returns_an_empty_list(self):
+        path = os.path.join(self.tmp, "does_not_exist", "__manifest__.py")
+        self.assertEqual(orb._manifest_depends(path), [])
+
+    def test_a_syntax_broken_manifest_returns_an_empty_list(self):
+        path = os.path.join(self.tmp, "__manifest__.py")
+        _write(path, "{'name': 'Thing', 'depends': [\n")
+        self.assertEqual(orb._manifest_depends(path), [])
+
+    def test_a_manifest_with_no_depends_key_returns_an_empty_list(self):
+        path = os.path.join(self.tmp, "__manifest__.py")
+        _write(path, "{'name': 'Thing'}\n")
+        self.assertEqual(orb._manifest_depends(path), [])
+
+
+class FindOdooCoreAddonsPathTests(unittest.TestCase):
+    def test_returns_a_real_existing_directory_on_this_dev_box(self):
+        # This function's whole job is locating the real installed Odoo core addons tree --
+        # a real dev box with Odoo installed is exactly what it's meant to run against, so
+        # asserting against real environment state (not a mock) is the honest test here,
+        # matching this codebase's own established convention for filesystem-walk rules
+        # (e.g. check_burn_list.py's has_ham_base detection).
+        path = orb.find_odoo_core_addons_path()
+        self.assertIsNotNone(path)
+        self.assertTrue(os.path.isdir(path))
+
+
+class FindNeededCoreModulesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.hams_root = os.path.join(self.tmp, "hams_open")
+        self.core_addons = os.path.join(self.tmp, "core_addons")
+        os.makedirs(self.hams_root)
+        os.makedirs(self.core_addons)
+
+    def test_transitive_closure_pulls_in_indirect_core_dependencies(self):
+        # ham_qso depends on the core 'website' module; website itself (a real core manifest,
+        # read the same way) depends on 'portal' -- portal must be pulled in too even though
+        # no hams_open manifest names it directly. ham_events depends on ham_qso, a hams-
+        # internal module, which must NOT be treated as a core module needing its own lookup.
+        _write(
+            os.path.join(self.hams_root, "ham_qso", "__manifest__.py"),
+            "{'depends': ['base', 'website']}\n",
+        )
+        _write(
+            os.path.join(self.hams_root, "ham_events", "__manifest__.py"),
+            "{'depends': ['ham_qso']}\n",
+        )
+        _write(
+            os.path.join(self.core_addons, "base", "__manifest__.py"),
+            "{'depends': []}\n",
+        )
+        _write(
+            os.path.join(self.core_addons, "website", "__manifest__.py"),
+            "{'depends': ['portal']}\n",
+        )
+        _write(
+            os.path.join(self.core_addons, "portal", "__manifest__.py"),
+            "{'depends': []}\n",
+        )
+        needed = orb.find_needed_core_modules([self.hams_root], self.core_addons)
+        self.assertEqual(needed, {"base", "website", "portal"})
+
+    def test_a_hams_module_named_in_depends_is_never_treated_as_a_core_module(self):
+        _write(
+            os.path.join(self.hams_root, "ham_events", "__manifest__.py"),
+            "{'depends': ['ham_qso']}\n",
+        )
+        _write(
+            os.path.join(self.hams_root, "ham_qso", "__manifest__.py"),
+            "{'depends': []}\n",
+        )
+        needed = orb.find_needed_core_modules([self.hams_root], self.core_addons)
+        self.assertEqual(needed, set())
+
+
+class RegistryBuilderFindSiblingRepoTests(unittest.TestCase):
+    # Mirrors the standard sibling-repo-scan regression coverage this session added across
+    # every other checker sharing this exact _find_sibling_repo() shape.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.workspace = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.workspace)
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def _make_repo(self, name, module_names=()):
+        repo = os.path.join(self.workspace, name)
+        for module_name in module_names:
+            _write(os.path.join(repo, module_name, "__manifest__.py"), "{}")
+        return repo
+
+    def test_hams_open_finds_a_real_hams_com_sibling(self):
+        hams_open = self._make_repo("hams_open", module_names=["zero_sudo"])
+        hams_com = self._make_repo("hams_com", module_names=["ham_base"])
+        self.assertEqual(orb._find_sibling_repo(hams_open), hams_com)
+
+    def test_no_sibling_directory_present_returns_none(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        self.assertIsNone(orb._find_sibling_repo(repo))
+
+    def test_a_sibling_directory_with_no_real_module_in_it_returns_none(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        os.makedirs(os.path.join(self.workspace, "hams_com", "not_a_module"))
+        self.assertIsNone(orb._find_sibling_repo(repo))
+
+
 if __name__ == "__main__":
     unittest.main()
