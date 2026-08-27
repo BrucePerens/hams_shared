@@ -1,19 +1,19 @@
 {
   "kopia": {
-    "url": "https://github.com/kopia/kopia/releases/download/v0.18.2/kopia-0.18.2-linux-x64.tar.gz",
-    "checksum": "6eb5cc175ccf2b38038bf34710184b251ce7c77f013bd33816650db8182742dd",
+    "url": "https://github.com/kopia/kopia/releases/download/v0.23.1/kopia-0.23.1-linux-x64.tar.gz",
+    "checksum": "416d0f84a3dbb321a8b2d8f0997b1a0a6e915babe79ee76fa6e4d2bd1e1c5178",
     "type": "tar.gz",
     "extract_member": "kopia"
   },
   "etcd": {
-    "url": "https://github.com/etcd-io/etcd/releases/download/v3.5.12/etcd-v3.5.12-linux-amd64.tar.gz",
-    "checksum": "84f1837ff7a107ba6e1b6f0dd51bb8db6e5bc24dbd2a8ec862ffbe4db1d996b5",
+    "url": "https://github.com/etcd-io/etcd/releases/download/v3.7.1/etcd-v3.7.1-linux-amd64.tar.gz",
+    "checksum": "e8cd3fa8064c98137c5dbd78b76f969417ace84efb83c481041d7a52ffdd8fb9",
     "type": "tar.gz",
     "extract_member": "etcd"
   },
   "cloudflared": {
-    "url": "https://github.com/cloudflare/cloudflared/releases/download/2025.9.0/cloudflared-linux-amd64",
-    "checksum": "4f48c9fc205ed7d200a35f24170e795171189b77a696e3f8b5704d07a6801957",
+    "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.8.2/cloudflared-linux-amd64",
+    "checksum": "fcfb02b575a52ca1af2e3267af4e1517bcdeb30ac48c834c69abaed3c0576ad2",
     "type": "binary"
   }
 }

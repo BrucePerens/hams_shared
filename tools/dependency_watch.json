@@ -3,20 +3,23 @@
   "kopia": {
     "repo": "kopia/kopia",
     "mode": "release",
-    "pinned": "v0.18.2",
-    "pinned_via": "hams_shared/tools/binary_manifest.json"
+    "pinned": "v0.23.1",
+    "pinned_via": "hams_shared/tools/binary_manifest.json",
+    "notes": "Bumped 2026-08-27 (Bruce: bump all three before deployment). Verified by downloading the real v0.23.1 release tarball, computing its sha256 directly, confirming the archive's internal layout (kopia-0.23.1-linux-x64/kopia) still matches extract_member='kopia', and running the extracted binary (`kopia --version` reports 0.23.1 correctly). No live network-download test exists in this codebase for kopia -- binary_downloader's own test suite mocks urlopen with a self-built tarball -- so this direct download+checksum+run is the real verification pass."
   },
   "etcd": {
     "repo": "etcd-io/etcd",
     "mode": "release",
-    "pinned": "v3.5.12",
-    "pinned_via": "hams_shared/tools/binary_manifest.json"
+    "pinned": "v3.7.1",
+    "pinned_via": "hams_shared/tools/binary_manifest.json",
+    "notes": "Bumped 2026-08-27 (Bruce: bump all three before deployment). Verified by downloading the real v3.7.1 release tarball, computing its sha256 directly, confirming etcd-v3.7.1-linux-amd64/etcd still exists in the archive matching extract_member='etcd', and running the extracted binary (`etcd --version` reports 3.7.1 correctly). Same caveat as kopia: no live network-download test exists for etcd in this codebase, so this direct download+checksum+run is the real verification pass."
   },
   "cloudflared": {
     "repo": "cloudflare/cloudflared",
     "mode": "release",
-    "pinned": "2025.9.0",
-    "pinned_via": "hams_shared/tools/binary_manifest.json"
+    "pinned": "2026.8.2",
+    "pinned_via": "hams_shared/tools/binary_manifest.json",
+    "notes": "Bumped 2026-08-27 (Bruce: bump all three before deployment). Verified by downloading the real 2026.8.2 raw binary release asset, computing its sha256 directly, and running it (`cloudflared --version` reports 2026.8.2 correctly). Same caveat as kopia/etcd: no live network-download test exists for cloudflared in this codebase, so this direct download+checksum+run is the real verification pass."
   },
   "pat": {
     "repo": "la5nta/pat",
