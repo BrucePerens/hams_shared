@@ -33,6 +33,27 @@ def _resolve_repo_root(given_path):
     return given_path
 
 
+def _resolve_repo_roots(given_path):
+    """The fix above only ever redirects to ONE repo (hams_open) -- but all four daemon crates
+    this docstring's own findings came from (hams_local_relay, hams_relay_bridge,
+    hams_data_relay, hams_simulated_band) live under hams_com/daemons/, not hams_open. Unlike
+    check_cargo_deny.py this one isn't a vacuous pass (hams_open's own ham_digital_modes crate
+    is real and does get checked), but it was still silently never checking the four crates this
+    gate's own docstring cites findings from. Same sibling-repo shape as the other fixed
+    checkers."""
+    repo_root = _resolve_repo_root(given_path)
+    roots = [repo_root]
+    sibling_name = "hams_open" if os.path.basename(repo_root) != "hams_open" else "hams_com"
+    sibling = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
+    if os.path.isdir(sibling) and any(
+        os.path.isfile(os.path.join(sibling, d, "__manifest__.py"))
+        for d in os.listdir(sibling)
+        if os.path.isdir(os.path.join(sibling, d))
+    ):
+        roots.append(sibling)
+    return roots
+
+
 def find_cargo_crates(repo_root):
     """Top-level crate directories only (a Cargo.toml with a [package] table) -- workspace-member
     sub-crates (e.g. hams_local_relay/ham_digital_modes) are checked automatically as part of
@@ -54,8 +75,11 @@ def main():
         print("Usage: check_cargo_clippy.py <repo_root>")
         sys.exit(1)
 
-    repo_root = _resolve_repo_root(sys.argv[1])
-    crate_dirs = find_cargo_crates(repo_root)
+    crate_dirs = [
+        (repo_root, crate_dir)
+        for repo_root in _resolve_repo_roots(sys.argv[1])
+        for crate_dir in find_cargo_crates(repo_root)
+    ]
     if not crate_dirs:
         sys.exit(0)
 
@@ -68,7 +92,7 @@ def main():
         sys.exit(1)
 
     any_failed = False
-    for crate_dir in crate_dirs:
+    for repo_root, crate_dir in crate_dirs:
         rel_path = os.path.relpath(crate_dir, repo_root)
         res = subprocess.run(
             ["cargo", "clippy", "--", "-W", "clippy::all"],

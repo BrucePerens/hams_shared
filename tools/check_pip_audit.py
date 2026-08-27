@@ -38,6 +38,25 @@ def _resolve_repo_root(given_path):
     return given_path
 
 
+def _resolve_repo_roots(given_path):
+    """The fix above only ever redirects to ONE repo (hams_open) -- but real requirements.txt
+    files exist in both: hams_open's own root, and two under hams_com/daemons/
+    (gdpr_csv_export, hams_simulated_bots). run_linters.py's own actual invocation was catching
+    hams_open's but silently missing both hams_com ones. Same sibling-repo shape as the other
+    fixed checkers."""
+    repo_root = _resolve_repo_root(given_path)
+    roots = [repo_root]
+    sibling_name = "hams_open" if os.path.basename(repo_root) != "hams_open" else "hams_com"
+    sibling = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
+    if os.path.isdir(sibling) and any(
+        os.path.isfile(os.path.join(sibling, d, "__manifest__.py"))
+        for d in os.listdir(sibling)
+        if os.path.isdir(os.path.join(sibling, d))
+    ):
+        roots.append(sibling)
+    return roots
+
+
 def find_requirements_files(repo_root):
     found = []
     for root, dirs, filenames in os.walk(repo_root):
@@ -53,8 +72,11 @@ def main():
         print("Usage: check_pip_audit.py <repo_root>")
         sys.exit(1)
 
-    repo_root = _resolve_repo_root(sys.argv[1])
-    requirements_files = find_requirements_files(repo_root)
+    requirements_files = [
+        (repo_root, req_file)
+        for repo_root in _resolve_repo_roots(sys.argv[1])
+        for req_file in find_requirements_files(repo_root)
+    ]
     if not requirements_files:
         sys.exit(0)
 
@@ -72,7 +94,7 @@ def main():
         sys.exit(1)
 
     any_failed = False
-    for req_file in requirements_files:
+    for repo_root, req_file in requirements_files:
         rel_path = os.path.relpath(req_file, repo_root)
         res = subprocess.run(
             [

@@ -41,6 +41,25 @@ def _resolve_repo_root(given_path):
     return given_path
 
 
+def _resolve_repo_roots(given_path):
+    """run_linters.py's own dir_path is hams_shared, and _resolve_repo_root above only ever
+    redirects that to ONE repo (hams_open, its parent) -- but this checker's real XML targets
+    span both hams_open and hams_com (real Odoo modules with real XML data/view files exist in
+    both). Scan both, the same sibling-repo shape check_self_writeable_field_tests.py and the
+    fixed check_untyped_utility_files.py already use for the identical two-repos problem."""
+    repo_root = _resolve_repo_root(given_path)
+    roots = [repo_root]
+    sibling_name = "hams_open" if os.path.basename(repo_root) != "hams_open" else "hams_com"
+    sibling = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
+    if os.path.isdir(sibling) and any(
+        os.path.isfile(os.path.join(sibling, d, "__manifest__.py"))
+        for d in os.listdir(sibling)
+        if os.path.isdir(os.path.join(sibling, d))
+    ):
+        roots.append(sibling)
+    return roots
+
+
 def _line_of_offset(text, offset):
     return text.count("\n", 0, offset) + 1
 
@@ -80,8 +99,9 @@ if __name__ == "__main__":
         print("Usage: check_xml_comment_double_hyphen.py <repo_root>")
         sys.exit(1)
 
-    repo_root = _resolve_repo_root(sys.argv[1])
-    violations = check_xml_comment_double_hyphen(repo_root)
+    violations = []
+    for repo_root in _resolve_repo_roots(sys.argv[1]):
+        violations.extend(check_xml_comment_double_hyphen(repo_root))
 
     if violations:
         print("❌ XML comment double-hyphen violations:")

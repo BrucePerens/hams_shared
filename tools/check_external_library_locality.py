@@ -67,6 +67,25 @@ def _resolve_repo_root(given_path):
     return given_path
 
 
+def _resolve_repo_roots(given_path):
+    """The fix above only ever redirects to ONE repo (hams_open, hams_shared's parent) -- but
+    EXCLUDED_FILES above names real hams_com paths (ham_satellite/...), meaning this checker's
+    real scope always spanned both repos and the single-repo redirect left hams_com entirely
+    unscanned via run_linters.py's actual invocation, not just theoretically at risk as the
+    comment above predicted. Same sibling-repo shape as the other fixed checkers."""
+    repo_root = _resolve_repo_root(given_path)
+    roots = [repo_root]
+    sibling_name = "hams_open" if os.path.basename(repo_root) != "hams_open" else "hams_com"
+    sibling = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
+    if os.path.isdir(sibling) and any(
+        os.path.isfile(os.path.join(sibling, d, "__manifest__.py"))
+        for d in os.listdir(sibling)
+        if os.path.isdir(os.path.join(sibling, d))
+    ):
+        roots.append(sibling)
+    return roots
+
+
 def find_violations(repo_root):
     violations = []
     for root, dirs, files in os.walk(repo_root):
@@ -98,8 +117,9 @@ def main():
         print("Usage: check_external_library_locality.py <repo_root>")
         sys.exit(1)
 
-    repo_root = _resolve_repo_root(sys.argv[1])
-    violations = find_violations(repo_root)
+    violations = []
+    for repo_root in _resolve_repo_roots(sys.argv[1]):
+        violations.extend(find_violations(repo_root))
 
     if violations:
         print("🚨 VENDORED LIBRARY OUTSIDE \"external\" MODULE")
