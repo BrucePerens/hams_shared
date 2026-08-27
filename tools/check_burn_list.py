@@ -1431,6 +1431,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             "sudo()._generate(" in line_content
                             or ".sudo().unlink()" in line_content
                             or ".sudo().with_company(" in line_content
+                            or ".sudo().create(" in line_content
                         )
                     ):
                         self.add_error(

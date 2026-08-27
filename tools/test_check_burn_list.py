@@ -1205,13 +1205,27 @@ def test_sudo_unlink_with_the_real_burn_ignore_tag_is_exempt():
     assert not any(".sudo()" in e for e in errors)
 
 
-def test_sudo_with_the_tag_but_not_one_of_the_three_allowed_shapes_is_still_exempt():
+def test_sudo_create_with_the_real_burn_ignore_tag_is_exempt():
+    # Fourth allowed shape, added 2026-08-27 per Bruce's decision (ham_logbook's
+    # gamification badge-grant cron): gamification.badge.user.create() unconditionally calls
+    # core Odoo's own check_granting(), which only permits an admin/superuser env or a badge
+    # with rule_auth != "nobody" -- and ham_logbook's badges are deliberately "nobody" so a
+    # human can't manually send one via the UI. The cron's own narrowly-scoped service
+    # account fails the identical check a real (non-admin) user would, with no bypass core
+    # Odoo exposes other than .sudo(). See night_shift_todo.md's TL;DR decision item 5 for
+    # the full options considered before this was picked.
+    source = "self.env['gamification.badge.user'].sudo().create(vals)  # burn-ignore-sudo\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any(".sudo()" in e for e in errors)
+
+
+def test_sudo_with_the_tag_but_not_one_of_the_four_allowed_shapes_is_still_exempt():
     # Documents real (likely unintended) behavior: the rule's own inner check requires the
-    # burn-ignore-sudo tag to be paired with one of three specific call shapes, but
+    # burn-ignore-sudo tag to be paired with one of four specific call shapes, but
     # add_error() itself unconditionally suppresses ANY error on a line containing the bare
     # substring "burn-ignore" (see add_error()'s own generic tag check), regardless of which
     # specific rule or shape matched. That blanket suppression fires first, so in practice the
-    # three-shape check on .sudo() never actually narrows anything -- any burn-ignore-sudo
+    # four-shape check on .sudo() never actually narrows anything -- any burn-ignore-sudo
     # comment exempts the line no matter the call shape. add_warning() carries the identical
     # bare "burn-ignore" substring check (its own first OR-branch, alongside the narrower
     # audit-ignore-* + message-text pairs after it) -- see
