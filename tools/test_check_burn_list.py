@@ -44,6 +44,16 @@ def _tour_mandate_errors(xml, filename="test_view.xml"):
     return [e for e in errors if "UI TOUR MANDATE VIOLATION" in e]
 
 
+def _scan_file(content, filename, is_odoo_module=True):
+    # scan_file reads from a real path -- same real-disk-hit rationale as
+    # _tour_mandate_errors above.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = str(Path(tmpdir) / filename)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        return scan_file(filepath, is_odoo_module=is_odoo_module)
+
+
 def _domain_sandbox_warnings(source, filepath="/tmp/some_module/tests/test_foo.py"):
     # DOMAIN SANDBOX (like the .sudo() ban above it in the same
     # visit_Attribute method) only runs when is_odoo_module=True --
@@ -2047,6 +2057,102 @@ def test_search_inside_a_chunk_size_stepped_range_loop_is_exempt_from_n_plus_one
     )
     errors, _warnings = _dict_findings(source)
     assert not any("N+1 locking" in e for e in errors)
+
+
+# scan_file()'s own non-AST-visitor checks: __manifest__.py license/description validation,
+# and the ir.model.access.csv blank-line/comment/financial-model-access bans.
+
+
+def test_manifest_missing_license_key_is_a_critical_manifest_error():
+    content = "{\n    'name': 'Test Module',\n    'depends': ['base'],\n}\n"
+    errors, _warnings = _scan_file(content, "__manifest__.py")
+    assert any("'license' key is missing" in e for e in errors)
+
+
+def test_manifest_with_an_invalid_license_value_is_a_critical_manifest_error():
+    content = (
+        "{\n"
+        "    'name': 'Test Module',\n"
+        "    'depends': ['base'],\n"
+        "    'license': 'MIT',\n"
+        "    'description': 'A real description.',\n"
+        "}\n"
+    )
+    errors, _warnings = _scan_file(content, "__manifest__.py")
+    assert any("Invalid 'license' value" in e for e in errors)
+
+
+def test_manifest_with_a_valid_license_is_not_flagged_for_license():
+    content = (
+        "{\n"
+        "    'name': 'Test Module',\n"
+        "    'depends': ['base'],\n"
+        "    'license': 'AGPL-3',\n"
+        "    'description': 'A real description.',\n"
+        "}\n"
+    )
+    errors, _warnings = _scan_file(content, "__manifest__.py")
+    assert not any("license" in e for e in errors)
+
+
+def test_manifest_missing_description_is_a_critical_manifest_error():
+    content = (
+        "{\n"
+        "    'name': 'Test Module',\n"
+        "    'depends': ['base'],\n"
+        "    'license': 'AGPL-3',\n"
+        "}\n"
+    )
+    errors, _warnings = _scan_file(content, "__manifest__.py")
+    assert any("'description' key is missing or empty" in e for e in errors)
+
+
+def test_scan_file_exempts_check_burn_list_dot_py_itself():
+    # The linter's own file is skipped by filename check before any content is even read.
+    errors, warnings = _scan_file("this is not valid python at all {{{\n", "check_burn_list.py")
+    assert errors == []
+    assert warnings == []
+
+
+def test_access_csv_blank_line_is_forbidden():
+    content = (
+        "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink\n"
+        "access_thing,thing,model_thing,base.group_user,1,1,1,1\n"
+        "\n"
+        "access_other,other,model_other,base.group_user,1,1,1,1\n"
+    )
+    errors, _warnings = _scan_file(content, "ir.model.access.csv")
+    assert any("Blank lines are forbidden" in e for e in errors)
+
+
+def test_access_csv_comment_line_is_forbidden():
+    content = (
+        "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink\n"
+        "# a comment explaining the next line\n"
+        "access_thing,thing,model_thing,base.group_user,1,1,1,1\n"
+    )
+    errors, _warnings = _scan_file(content, "ir.model.access.csv")
+    assert any("Comments (#) are forbidden" in e for e in errors)
+
+
+def test_access_csv_granting_a_financial_model_is_forbidden():
+    content = (
+        "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink\n"
+        "access_thing,thing,model_res_partner_bank,base.group_user,1,1,1,1\n"
+    )
+    errors, _warnings = _scan_file(content, "ir.model.access.csv")
+    assert any(
+        "FINANCIAL EXPOSURE" in e and "model_res_partner_bank" in e for e in errors
+    )
+
+
+def test_access_csv_granting_a_normal_non_financial_model_is_not_flagged():
+    content = (
+        "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink\n"
+        "access_thing,thing,model_ham_qso,base.group_user,1,1,1,1\n"
+    )
+    errors, _warnings = _scan_file(content, "ir.model.access.csv")
+    assert not any("FINANCIAL EXPOSURE" in e for e in errors)
 
 
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
