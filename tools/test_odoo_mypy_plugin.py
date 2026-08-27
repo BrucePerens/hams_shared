@@ -164,6 +164,41 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
             "    def probe_nonexistent_method(self) -> None:\n"
             "        self._this_method_genuinely_does_not_exist_anywhere()\n",
         )
+        # Phase 2 step 2 (comodel resolution): a Many2one targeting the real, multi-contributor
+        # res.users model. probe_real_cross_module_via_relational only resolves if the returned
+        # type is the FULL merged res.users, not just whatever a single file declares.
+        _write(
+            os.path.join(_SCRATCH_DIR, "models", "relational_probe.py"),
+            "from odoo import models, fields\n"
+            "\n"
+            "\n"
+            "class RelationalProbe(models.Model):\n"
+            "    _name = 'scratch.relational.probe'\n"
+            "\n"
+            "    user_id = fields.Many2one('res.users', string='User')\n"
+            "\n"
+            "    def probe_real_cross_module_via_relational(self) -> None:\n"
+            "        self.user_id._provision_personal_dns_zone()\n"
+            "\n"
+            "    def probe_nonexistent_via_relational(self) -> None:\n"
+            "        self.user_id._this_method_genuinely_does_not_exist_anywhere()\n",
+        )
+        # Phase 2 step 4 (env['some.model'] resolution): same real cross-module method, reached
+        # via self.env['res.users'] instead of a Many2one field.
+        _write(
+            os.path.join(_SCRATCH_DIR, "models", "env_probe.py"),
+            "from odoo import models\n"
+            "\n"
+            "\n"
+            "class EnvProbe(models.Model):\n"
+            "    _name = 'scratch.env.probe'\n"
+            "\n"
+            "    def probe_real_cross_module_via_env(self) -> None:\n"
+            "        self.env['res.users']._provision_personal_dns_zone()\n"
+            "\n"
+            "    def probe_nonexistent_via_env(self) -> None:\n"
+            "        self.env['res.users']._this_method_genuinely_does_not_exist_anywhere()\n",
+        )
 
     def tearDown(self):
         if os.path.isdir(_SCRATCH_DIR):
@@ -214,6 +249,155 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         probe = os.path.join(_SCRATCH_DIR, "models", "res_users_probe.py")
         output = self._run_mypy(probe)
         self.assertNotIn("_provision_personal_dns_zone", output, output)
+
+    # --- Phase 2 step 2: fields.Many2one/One2many/Many2many comodel resolution ---
+
+    def test_many2one_comodel_resolves_to_the_full_merged_model_without_the_sibling_passed(self):
+        # The discriminating case for the get_additional_deps extension this step needed: pass
+        # ONLY the probe file. A real Many2one comodel reference is a string literal, not an
+        # import, so ham_dns/models/res_users.py is never in the build unless
+        # _file_comodel_targets/get_additional_deps forces it in -- confirmed empirically this
+        # session that without that extension, named_generic_type/lookup_qualified fails even
+        # when the target module genuinely is in the build (see odoo_mypy_plugin.py's own
+        # _resolve_model_instance docstring for the deeper reason: the officially-declared
+        # named_generic_type path assumes an import chain that Odoo's string-based model
+        # references never create).
+        probe = os.path.join(_SCRATCH_DIR, "models", "relational_probe.py")
+        output = self._run_mypy(probe)
+        self.assertNotIn("_provision_personal_dns_zone", output, output)
+
+    def test_a_genuinely_nonexistent_method_via_a_relational_field_is_still_flagged(self):
+        probe = os.path.join(_SCRATCH_DIR, "models", "relational_probe.py")
+        output = self._run_mypy(probe)
+        self.assertIn("_this_method_genuinely_does_not_exist_anywhere", output, output)
+
+    # --- Phase 2 step 4: env['some.model'] resolution ---
+
+    def test_env_getitem_resolves_to_the_full_merged_model_without_the_sibling_passed(self):
+        probe = os.path.join(_SCRATCH_DIR, "models", "env_probe.py")
+        output = self._run_mypy(probe)
+        self.assertNotIn("_provision_personal_dns_zone", output, output)
+
+    def test_a_genuinely_nonexistent_method_via_env_getitem_is_still_flagged(self):
+        probe = os.path.join(_SCRATCH_DIR, "models", "env_probe.py")
+        output = self._run_mypy(probe)
+        self.assertIn("_this_method_genuinely_does_not_exist_anywhere", output, output)
+
+
+_SCRATCH_DIR_SIBLINGS = os.path.join(_HAMS_COM_DIR, "_test_scratch_mypy_plugin_class_siblings") if _HAMS_COM_DIR else None
+
+
+@unittest.skipUnless(_HAMS_COM_DIR, "hams_com sibling repo not found -- plugin needs both repos")
+class OdooMypyPluginClassSiblingsRegressionTests(unittest.TestCase):
+    """Regression coverage for the real bug found and fixed this session in
+    OdooPlugin._compute_sibling_map: `_class_siblings[fn] = [...]` (assignment) silently
+    OVERWROTE, rather than accumulated, a contributor class's sibling list whenever that same
+    class fullname contributed to more than one model -- exactly the mixin self-reference idiom
+    (`_inherit = ["model.a", "model.b"]`, no `_name`) already covered elsewhere in this file as
+    correctly registry-merged. The registry side was always correct; this class regression-tests
+    the plugin's own MRO-injection side, which silently lost one of the two sibling lists
+    whenever the OTHER model happened to be processed later in registry-iteration order --
+    confirmed as a real bug via a minimal reproduction against real production code
+    (user_websites/models/res_users.py's own dual-target _inherit) before being fixed; see
+    ODOO_AWARE_TYPE_CHECKING.md's dated section for this session for that real-code trace."""
+
+    def setUp(self):
+        self._cache_dir = tempfile.mkdtemp(prefix="odoo_mypy_plugin_siblings_test_cache_")
+        self._ini_path = os.path.join(_HAMS_COM_DIR, "_test_scratch_mypy_siblings.ini")
+        _write(
+            self._ini_path,
+            "[mypy]\n"
+            "ignore_missing_imports = True\n"
+            "check_untyped_defs = True\n"
+            "follow_imports = silent\n"
+            "mypy_path = hams_shared/tools/odoo_type_stubs\n"
+            "plugins = hams_shared/tools/odoo_mypy_plugin.py\n",
+        )
+        _write(os.path.join(_SCRATCH_DIR_SIBLINGS, "__init__.py"), "from . import models\n")
+        _write(
+            os.path.join(_SCRATCH_DIR_SIBLINGS, "__manifest__.py"),
+            "{'name': 'mypy plugin class-siblings regression scratch', 'depends': []}\n",
+        )
+        _write(
+            os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "__init__.py"),
+            "from . import primary_model, mixin_model, combiner\n",
+        )
+        _write(
+            os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "primary_model.py"),
+            "from odoo import models\n"
+            "\n"
+            "\n"
+            "class PrimaryModel(models.Model):\n"
+            "    _name = 'scratch.regress.model'\n"
+            "\n"
+            "    def real_only_here(self) -> int:\n"
+            "        return 1\n",
+        )
+        _write(
+            os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "mixin_model.py"),
+            "from odoo import models\n"
+            "\n"
+            "\n"
+            "class MixinModel(models.Model):\n"
+            "    _name = 'scratch.regress.mixin'\n"
+            "\n"
+            "    def mixin_only_here(self) -> int:\n"
+            "        return 2\n",
+        )
+        _write(
+            os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "combiner.py"),
+            "from odoo import models\n"
+            "\n"
+            "\n"
+            "class Combiner(models.Model):\n"
+            "    # No _name -- the mixin self-reference idiom's bare form. This single class is\n"
+            "    # a real contributor to BOTH scratch.regress.model and scratch.regress.mixin,\n"
+            "    # exactly the shape that triggered the _class_siblings overwrite bug.\n"
+            "    _inherit = ['scratch.regress.model', 'scratch.regress.mixin']\n"
+            "\n"
+            "    def probe(self) -> None:\n"
+            "        self.real_only_here()\n"
+            "        self.mixin_only_here()\n"
+            "\n"
+            "    def probe_nonexistent(self) -> None:\n"
+            "        self._this_method_genuinely_does_not_exist_anywhere()\n",
+        )
+
+    def tearDown(self):
+        if os.path.isdir(_SCRATCH_DIR_SIBLINGS):
+            shutil.rmtree(_SCRATCH_DIR_SIBLINGS)
+        if os.path.exists(self._ini_path):
+            os.remove(self._ini_path)
+        shutil.rmtree(self._cache_dir, ignore_errors=True)
+
+    def _run_mypy(self, *files):
+        result = subprocess.run(
+            [sys.executable, "-m", "mypy", *files, "--config-file", self._ini_path, "--cache-dir", self._cache_dir],
+            cwd=_HAMS_COM_DIR,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return result.stdout
+
+    def test_a_class_contributing_via_list_inherit_to_two_models_gets_both_siblings(self):
+        combiner = os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "combiner.py")
+        primary = os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "primary_model.py")
+        mixin = os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "mixin_model.py")
+        output = self._run_mypy(combiner, primary, mixin)
+        self.assertNotIn("real_only_here", output, output)
+        self.assertNotIn("mixin_only_here", output, output)
+
+    def test_get_additional_deps_pulls_in_both_targets_without_either_sibling_passed(self):
+        combiner = os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "combiner.py")
+        output = self._run_mypy(combiner)
+        self.assertNotIn("real_only_here", output, output)
+        self.assertNotIn("mixin_only_here", output, output)
+
+    def test_a_genuinely_nonexistent_method_on_the_dual_contributor_is_still_flagged(self):
+        combiner = os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "combiner.py")
+        output = self._run_mypy(combiner)
+        self.assertIn("_this_method_genuinely_does_not_exist_anywhere", output, output)
 
 
 if __name__ == "__main__":

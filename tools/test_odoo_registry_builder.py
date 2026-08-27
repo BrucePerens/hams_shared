@@ -330,6 +330,64 @@ class BuildRegistryTests(unittest.TestCase):
         self.assertEqual(orb.build_registry([self.tmp]), {})
 
 
+class FindEnvGetitemTargetsTests(unittest.TestCase):
+    """odoo_registry_builder.find_env_getitem_targets (ODOO_AWARE_TYPE_CHECKING.md Phase 2
+    step 4's own foundation, added alongside the mypy plugin's get_method_hook)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_self_env_getitem_with_a_literal_is_found(self):
+        fpath = os.path.join(self.tmp, "mod_a", "models", "foo.py")
+        _write(fpath, "class Foo(models.Model):\n    def bar(self):\n        return self.env['res.users']\n")
+        targets = orb.find_env_getitem_targets([self.tmp])
+        self.assertEqual(targets.get(fpath), ["res.users"])
+
+    def test_a_non_self_expression_env_getitem_is_also_found(self):
+        # Odoo's real attribute is always named `env` regardless of what it hangs off --
+        # confirmed as the deliberate scope of this AST match, not just a `self.env` special case.
+        fpath = os.path.join(self.tmp, "mod_a", "models", "foo.py")
+        _write(fpath, "class Foo(models.Model):\n    def bar(self, record):\n        return record.env['res.partner']\n")
+        targets = orb.find_env_getitem_targets([self.tmp])
+        self.assertEqual(targets.get(fpath), ["res.partner"])
+
+    def test_multiple_distinct_literals_in_one_file_are_all_found_and_deduped(self):
+        fpath = os.path.join(self.tmp, "mod_a", "models", "foo.py")
+        _write(
+            fpath,
+            "class Foo(models.Model):\n"
+            "    def bar(self):\n"
+            "        a = self.env['res.users']\n"
+            "        b = self.env['res.partner']\n"
+            "        c = self.env['res.users']\n",
+        )
+        targets = orb.find_env_getitem_targets([self.tmp])
+        self.assertEqual(targets.get(fpath), ["res.partner", "res.users"])
+
+    def test_a_non_string_subscript_on_env_is_ignored(self):
+        # A dynamically computed model name can't be resolved statically -- confirmed not
+        # guessed at, same limitation _field_call_info already documents for comodel strings.
+        fpath = os.path.join(self.tmp, "mod_a", "models", "foo.py")
+        _write(fpath, "class Foo(models.Model):\n    def bar(self, name):\n        return self.env[name]\n")
+        targets = orb.find_env_getitem_targets([self.tmp])
+        self.assertNotIn(fpath, targets)
+
+    def test_a_subscript_on_something_not_named_env_is_ignored(self):
+        fpath = os.path.join(self.tmp, "mod_a", "models", "foo.py")
+        _write(fpath, "class Foo(models.Model):\n    def bar(self):\n        return self.other['res.users']\n")
+        targets = orb.find_env_getitem_targets([self.tmp])
+        self.assertNotIn(fpath, targets)
+
+    def test_a_file_with_no_env_getitem_at_all_is_omitted(self):
+        fpath = os.path.join(self.tmp, "mod_a", "models", "foo.py")
+        _write(fpath, "class Foo(models.Model):\n    def bar(self):\n        return 1\n")
+        targets = orb.find_env_getitem_targets([self.tmp])
+        self.assertEqual(targets, {})
+
+
 class MainIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

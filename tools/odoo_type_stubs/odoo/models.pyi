@@ -29,9 +29,16 @@
 # stubbing BaseModel at all.
 from typing import Any, Iterator
 
+from .api import Environment
+
 
 class BaseModel:
-    env: Any
+    # Environment, not Any, as of Phase 2 step 4 (ODOO_AWARE_TYPE_CHECKING.md) -- needed so
+    # `self.env['some.model']` has a concrete `Environment.__getitem__` fullname for
+    # odoo_mypy_plugin.py's get_method_hook to match; see api.pyi's own comment for why every
+    # other Environment attribute stays unmodeled (falls through Environment.__getattr__) rather
+    # than this being a step toward a complete Environment stub.
+    env: Environment
     id: Any
     ids: list
     pool: Any

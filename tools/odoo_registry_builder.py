@@ -236,6 +236,56 @@ def find_needed_core_modules(hams_roots, core_addons_path):
     return needed
 
 
+def find_env_getitem_targets(roots) -> Dict[str, List[str]]:
+    """AST-scans every .py file under each root for `<expr>.env['some.model']` /
+    `<expr>.env["some.model"]` subscript literals -- foundation for
+    ODOO_AWARE_TYPE_CHECKING.md Phase 2 step 4 (`env['some.model']` resolution). Odoo's real
+    runtime attribute is always named `env` regardless of what object it hangs off (`self.env`,
+    `record.env`, a bare local `env` from `api.Environment(...)`), so this is deliberately a
+    name-based AST match (`Subscript` whose `.value` is an `Attribute` with `.attr == "env"`), the
+    same exact-match-on-the-literal shortcut check_model_extension_collisions.py (ADR 0086) already
+    takes for a different resolution job, not a new invented technique. It can't be fooled by a
+    completely unrelated variable that also happens to be named `env` and isn't a real Odoo
+    Environment, but that's a vanishingly rare naming collision to accept for a static, no-type-
+    inference scan -- not a claim of soundness in general, the same honest limitation this whole
+    tool family already carries for its other AST-only checks.
+
+    Returns {file_path: [model_name, ...]} (deduped, sorted) for every file with at least one such
+    literal; omitted entirely for files with none. Callers turn file_path into a dotted module
+    fullname themselves (odoo_mypy_plugin.py's own _module_fullname_for_file) -- this function
+    doesn't own that mapping, same division of labor build_registry() already has with its own
+    callers.
+    """
+    targets: Dict[str, List[str]] = {}
+    for repo_root in roots:
+        for root, dirs, files in os.walk(repo_root):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+            for fname in files:
+                if not fname.endswith(".py"):
+                    continue
+                fpath = os.path.join(root, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        tree = ast.parse(f.read(), filename=fpath)
+                except (SyntaxError, OSError):
+                    continue
+                found = []
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Subscript):
+                        continue
+                    if not isinstance(node.value, ast.Attribute) or node.value.attr != "env":
+                        continue
+                    # Python 3.9+ AST: node.slice is the index expression itself, no ast.Index
+                    # wrapper (removed in 3.9) -- this repo's own installed Python (3.13,
+                    # confirmed via odoo_registry_builder's own test suite) postdates that.
+                    idx = node.slice
+                    if isinstance(idx, ast.Constant) and isinstance(idx.value, str):
+                        found.append(idx.value)
+                if found:
+                    targets[fpath] = sorted(set(found))
+    return targets
+
+
 def _find_sibling_repo(repo_root):
     """Mirrors check_model_extension_collisions.py's sibling-repo resolution."""
     repo_root = os.path.abspath(repo_root)
