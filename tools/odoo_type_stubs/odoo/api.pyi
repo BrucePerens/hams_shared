@@ -28,6 +28,17 @@ class Environment:
     # site as "Too many arguments for Environment".
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
     def __getitem__(self, model_name: str) -> Any: ...
+    # Real code checks whether an optional OCA dependency is installed via
+    # `'storage.backend' in self.env` (this codebase even has a dedicated
+    # `# burn-ignore-optional-oca-dep` tag in check_burn_list.py for exactly this idiom).
+    # `in` is dunder-dispatched (type(obj).__contains__), which bypasses the __getattr__
+    # fallback below the same way subscripting does -- confirmed via a real mypy sweep
+    # beyond res.users (hams_s3/models/res_config_settings.py) where every use of this
+    # idiom false-positived as "Environment has no attribute __iter__ (not iterable)"
+    # before this line existed. Without an explicit __contains__, mypy falls back to
+    # __iter__ (also unmodeled) rather than __getattr__, so this needs its own entry
+    # exactly like __getitem__ above.
+    def __contains__(self, model_name: str) -> bool: ...
     def __getattr__(self, name: str) -> Any: ...
 
 
