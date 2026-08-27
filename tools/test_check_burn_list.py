@@ -1315,6 +1315,138 @@ def test_attribute_form_sign_token_call_uses_the_other_shorter_message():
     assert any(e == "Verify '_sign_token' context..." for e in errors)
 
 
+# _check_forbidden_attributes() -- the module.attr()-shaped ban cluster: weak crypto
+# (hashlib.md5/sha1, random.*), send_mail, clear_caches(), ambiguous ORM calls off bare
+# self, the with_user()/with_context() sub-cluster, message_post/message_subscribe on
+# res.users, threading.Thread, and time.sleep().
+
+
+def test_hashlib_md5_is_weak_crypto():
+    source = "digest = hashlib.md5(data).hexdigest()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("WEAK CRYPTO" in e and "MD5" in e for e in errors)
+
+
+def test_hashlib_sha1_is_weak_crypto():
+    source = "digest = hashlib.sha1(data).hexdigest()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("WEAK CRYPTO" in e for e in errors)
+
+
+def test_random_choice_is_weak_crypto():
+    source = "picked = random.choice(candidates)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("WEAK CRYPTO" in e and "random" in e for e in errors)
+
+
+def test_random_randint_is_weak_crypto():
+    source = "n = random.randint(1, 10)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("WEAK CRYPTO" in e for e in errors)
+
+
+def test_send_mail_gets_an_audit_warning_not_an_error():
+    source = "template.send_mail(record.id)\n"
+    errors, warnings = _dict_findings(source)
+    assert errors == []
+    assert any("Mail Templates" in w for w in warnings)
+
+
+def test_attribute_form_clear_caches_is_a_removed_deprecated_api():
+    source = "self.env.registry.clear_caches()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("clear_caches()" in e and "removed" in e for e in errors)
+
+
+def test_bare_self_dot_search_is_ambiguous_orm_usage():
+    source = "results = self.search([('active', '=', True)])\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Ambiguous ORM call" in e for e in errors)
+
+
+def test_bare_self_dot_create_is_ambiguous_orm_usage():
+    source = "record = self.create({'name': 'x'})\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Ambiguous ORM call" in e for e in errors)
+
+
+def test_with_user_of_literal_one_is_a_sudo_bypass_cheat():
+    source = "record = self.env['ham.qso'].with_user(1)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("with_user(1)" in e and "ZERO-SUDO" in e for e in errors)
+
+
+def test_with_user_of_superuser_id_name_is_a_sudo_bypass_cheat():
+    source = "record = self.env['ham.qso'].with_user(SUPERUSER_ID)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("with_user(SUPERUSER_ID)" in e and "ZERO-SUDO" in e for e in errors)
+
+
+def test_with_user_called_directly_on_bare_env_name_is_an_orm_error():
+    source = "record = env.with_user(service_uid)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Cannot call `.with_user()` directly on the Environment" in e for e in errors)
+
+
+def test_with_user_called_directly_on_self_dot_env_is_an_orm_error():
+    source = "record = self.env.with_user(service_uid)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Cannot call `.with_user()` directly on the Environment" in e for e in errors)
+
+
+def test_with_context_on_a_recordset_is_not_an_orm_error():
+    # with_context is in the same attr-tuple as with_user, but only the Environment-direct-
+    # call shape is banned -- a normal recordset call is fine.
+    source = "record = self.env['ham.qso'].with_context(active_test=False)\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Environment" in e for e in errors)
+
+
+def test_message_post_on_res_users_typed_recordset_is_forbidden():
+    source = "self.env['res.users'].browse(uid).message_post(body='hi')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Messaging & Followers" in e for e in errors)
+
+
+def test_message_post_on_a_user_id_field_is_forbidden():
+    source = "record.user_id.message_post(body='hi')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Messaging & Followers" in e for e in errors)
+
+
+def test_message_post_on_an_unrelated_recordset_is_not_flagged():
+    source = "record.message_post(body='hi')\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Messaging & Followers" in e for e in errors)
+
+
+def test_threading_thread_is_an_unbounded_dos_vector():
+    source = "t = threading.Thread(target=worker)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Unbounded Thread" in e for e in errors)
+
+
+def test_time_sleep_in_a_normal_module_file_gets_a_thread_blocking_warning():
+    source = "time.sleep(5)\n"
+    errors, warnings = _dict_findings(source)
+    assert errors == []
+    assert any("THREAD BLOCKING" in w for w in warnings)
+
+
+def test_time_sleep_in_a_tools_file_is_exempt():
+    source = "time.sleep(5)\n"
+    _errors, warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tools/some_tool.py"
+    )
+    assert not any("THREAD BLOCKING" in w for w in warnings)
+
+
+def test_time_sleep_with_the_real_audit_ignore_tag_is_exempt():
+    source = "time.sleep(5)  # audit-ignore-sleep: deliberate backoff\n"
+    _errors, warnings = _dict_findings(source)
+    assert not any("THREAD BLOCKING" in w for w in warnings)
+
+
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
     source = "self.env.registry.clear_caches()\n"
     errors, _warnings = _dict_findings(source)
