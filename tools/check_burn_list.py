@@ -2714,71 +2714,71 @@ def scan_file(filepath, is_odoo_module=False):
                                 f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Using 'ref' on primitive/boolean/integer field '{field_name}'. Use 'eval' or node text instead."
                             )
 
-                        if model == "ir.cron" and field_name == "user_id":
-                            if (
-                                "base.user_root" in ref_val
-                                or "base.user_admin" in ref_val
-                                or "base.user_root" in eval_val
-                                or "base.user_admin" in eval_val
-                            ):
-                                errors_found.append(
-                                    f"Line {node.lineno}: CRITICAL ZERO-SUDO VIOLATION: ir.cron cannot be assigned to base.user_root or base.user_admin. You MUST use a dedicated service account."
-                                )
-
-                        if field_name.endswith("_ids") and eval_val:
-                            eval_stripped = eval_val.replace(" ", "")
-                            if (
-                                eval_stripped.startswith("[")
-                                and not eval_stripped.startswith("[(6,")
-                                and not eval_stripped.startswith("[(4,")
-                                and not eval_stripped.startswith("[(5,")
-                            ):
-                                errors_found.append(
-                                    f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a raw list to an x2many field '{field_name}'. You MUST use Odoo ORM commands (e.g., [(6, 0, [...])])."
-                                )
-
-                        if ref_val and ref_val.isdigit():
-                            errors_found.append(
-                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: 'ref' attribute must be an XML ID string, not a hardcoded numeric ID '{ref_val}'."
-                            )
-
-                        if eval_val and any(
-                            bad in eval_val for bad in ("__import__", "exec(", "eval(")
+                    if model == "ir.cron" and field_name == "user_id":
+                        if (
+                            "base.user_root" in ref_val
+                            or "base.user_admin" in ref_val
+                            or "base.user_root" in eval_val
+                            or "base.user_admin" in eval_val
                         ):
                             errors_found.append(
-                                f"Line {node.lineno}: CRITICAL SECURITY: Dangerous built-in execution detected in 'eval' expression."
+                                f"Line {node.lineno}: CRITICAL ZERO-SUDO VIOLATION: ir.cron cannot be assigned to base.user_root or base.user_admin. You MUST use a dedicated service account."
                             )
 
-                        if model == "ir.actions.act_window" and field_name == "type":
-                            node_text = node.text.strip() if node.text else ""
-                            if node_text and node_text != "ir.actions.act_window":
-                                errors_found.append(
-                                    f"Line {node.lineno}: CRITICAL TYPE MISMATCH: 'type' for ir.actions.act_window must be 'ir.actions.act_window'."
-                                )
+                    if field_name and field_name.endswith("_ids") and eval_val:
+                        eval_stripped = eval_val.replace(" ", "")
+                        if (
+                            eval_stripped.startswith("[")
+                            and not eval_stripped.startswith("[(6,")
+                            and not eval_stripped.startswith("[(4,")
+                            and not eval_stripped.startswith("[(5,")
+                        ):
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a raw list to an x2many field '{field_name}'. You MUST use Odoo ORM commands (e.g., [(6, 0, [...])])."
+                            )
 
-                        if field_name in ("employee_id", "employee_ids"):
-                            if "base.user_" in ref_val or "base.user_" in eval_val:
-                                errors_found.append(
-                                    f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a user to an employee field '{field_name}'."
-                                )
+                    if ref_val and ref_val.isdigit():
+                        errors_found.append(
+                            f"Line {node.lineno}: CRITICAL TYPE MISMATCH: 'ref' attribute must be an XML ID string, not a hardcoded numeric ID '{ref_val}'."
+                        )
 
-                    if node.tag == "record":
-                        model_name = node.attrs.get("model", "")
-                        if "_" in model_name and "." not in model_name:
-                            if model_name.startswith(
-                                (
-                                    "res_",
-                                    "ir_",
-                                    "account_",
-                                    "mail_",
-                                    "website_",
-                                    "crm_",
-                                    "sale_",
-                                )
-                            ):
-                                errors_found.append(
-                                    f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Odoo models use dots, not underscores. Found '{model_name}'. Did you mean '{model_name.replace('_', '.', 1)}'?"
-                                )
+                    if eval_val and any(
+                        bad in eval_val for bad in ("__import__", "exec(", "eval(")
+                    ):
+                        errors_found.append(
+                            f"Line {node.lineno}: CRITICAL SECURITY: Dangerous built-in execution detected in 'eval' expression."
+                        )
+
+                    if model == "ir.actions.act_window" and field_name == "type":
+                        node_text = node.text.strip() if node.text else ""
+                        if node_text and node_text != "ir.actions.act_window":
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: 'type' for ir.actions.act_window must be 'ir.actions.act_window'."
+                            )
+
+                    if field_name in ("employee_id", "employee_ids"):
+                        if "base.user_" in ref_val or "base.user_" in eval_val:
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Assigning a user to an employee field '{field_name}'."
+                            )
+
+                if node.tag == "record":
+                    model_name = node.attrs.get("model", "")
+                    if "_" in model_name and "." not in model_name:
+                        if model_name.startswith(
+                            (
+                                "res_",
+                                "ir_",
+                                "account_",
+                                "mail_",
+                                "website_",
+                                "crm_",
+                                "sale_",
+                            )
+                        ):
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Odoo models use dots, not underscores. Found '{model_name}'. Did you mean '{model_name.replace('_', '.', 1)}'?"
+                            )
 
                 for k, v in node.attrs.items():
                     v_str = str(v)

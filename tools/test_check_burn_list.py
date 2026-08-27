@@ -2732,6 +2732,204 @@ def test_using_ref_on_a_primitive_field_is_a_type_mismatch():
     )
 
 
+# The rest of the field-value trap cluster: ir.cron's zero-sudo user_id ban, the raw-list-
+# on-an-x2many-field ban, hardcoded-numeric-ref ban, dangerous-eval-expression detection,
+# ir.actions.act_window's type-field check, employee-field type mismatch, the model-name
+# underscore-vs-dot typo detector, QWeb SSTI (request.env in an attribute or in text), the
+# removed survey.survey 'state' field, and the ir.cron CRON ARCHITECTURE audit reminder.
+
+
+def test_ir_cron_assigned_to_base_user_root_is_a_zero_sudo_violation():
+    xml = (
+        "<odoo>\n"
+        '    <record id="cron1" model="ir.cron">\n'
+        '        <field name="user_id" ref="base.user_root"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("ZERO-SUDO VIOLATION" in e and "ir.cron" in e for e in errors)
+
+
+def test_raw_list_assigned_to_an_x2many_field_is_a_type_mismatch():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="tag_ids" eval="[1, 2, 3]"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("TYPE MISMATCH" in e and "Odoo ORM commands" in e for e in errors)
+
+
+def test_a_proper_orm_command_on_an_x2many_field_is_not_flagged():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="tag_ids" eval="[(6, 0, [1, 2, 3])]"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert not any("Odoo ORM commands" in e for e in errors)
+
+
+def test_a_hardcoded_numeric_ref_is_a_type_mismatch():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="partner_id" ref="42"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("hardcoded numeric ID" in e for e in errors)
+
+
+def test_dangerous_builtin_in_an_eval_expression_is_a_critical_security_finding():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        "        <field name=\"domain\" eval=\"__import__('os').system('id')\"/>\n"
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("Dangerous built-in execution" in e for e in errors)
+
+
+def test_act_window_type_field_with_the_wrong_value_is_a_type_mismatch():
+    xml = (
+        "<odoo>\n"
+        '    <record id="action1" model="ir.actions.act_window">\n'
+        '        <field name="type">ir.actions.server</field>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("ir.actions.act_window" in e and "TYPE MISMATCH" in e for e in errors)
+
+
+def test_assigning_a_user_ref_to_an_employee_field_is_a_type_mismatch():
+    xml = (
+        "<odoo>\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="employee_id" ref="base.user_admin"/>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any("TYPE MISMATCH" in e and "employee field" in e for e in errors)
+
+
+def test_model_name_with_underscore_instead_of_dot_is_a_type_mismatch_typo():
+    xml = '<odoo>\n    <record id="thing" model="res_partner">\n    </record>\n</odoo>\n'
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert any(
+        "Odoo models use dots, not underscores" in e and "res.partner" in e
+        for e in errors
+    )
+
+
+def test_request_env_inside_an_xml_attribute_is_a_critical_ssti_vulnerability():
+    xml = (
+        "<odoo>\n"
+        '    <t t-name="my.template">\n'
+        '        <span t-att-value="request.env.user.name"/>\n'
+        "    </t>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_template.xml")
+    assert any("CRITICAL SSTI" in e for e in errors)
+
+
+def test_request_env_inside_element_text_is_also_a_critical_ssti_vulnerability():
+    xml = (
+        "<odoo>\n"
+        '    <t t-name="my.template">\n'
+        "        <span>request.env.user.name</span>\n"
+        "    </t>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_template.xml")
+    assert any("CRITICAL SSTI" in e for e in errors)
+
+
+def test_survey_state_field_comparison_is_a_removed_deprecated_field():
+    xml = (
+        "<odoo>\n"
+        '    <t t-name="my.template">\n'
+        "        <span>record.state == 'open'</span>\n"
+        "    </t>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_template.xml")
+    assert any("survey.survey" in e and "removed in Odoo 19" in e for e in errors)
+
+
+def test_ir_cron_record_without_audit_ignore_cron_gets_a_cron_architecture_reminder():
+    xml = (
+        "<odoo>\n"
+        '    <record id="cron1" model="ir.cron">\n'
+        '        <field name="name">My Cron</field>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    _errors, warnings = _scan_file(xml, "my_data.xml")
+    assert any("CRON ARCHITECTURE" in w and "_trigger()" in w for w in warnings)
+
+
+def test_static_js_file_missing_the_odoo_module_pragma_is_forbidden():
+    content = "export const thing = () => 1;\n"
+    errors, _warnings = _scan_file(content, "static/src/js/thing.js")
+    assert any("ASSET BUNDLER" in e and "@odoo-module" in e for e in errors)
+
+
+def test_static_js_file_with_the_odoo_module_pragma_is_allowed():
+    content = "/** @odoo-module **/\nexport const thing = () => 1;\n"
+    errors, _warnings = _scan_file(content, "static/src/js/thing.js")
+    assert not any("ASSET BUNDLER" in e for e in errors)
+
+
+def test_a_js_file_outside_static_is_not_checked_for_the_pragma():
+    # A tool config file (eslint.config.js, webpack.config.js) living outside a module's
+    # static/ directory is never picked up by Odoo's asset bundler and can't carry the
+    # pragma at all -- the real hams_shared/eslint.config.js false positive this exempts.
+    content = "export default { rules: {} };\n"
+    errors, _warnings = _scan_file(content, "eslint.config.js")
+    assert not any("ASSET BUNDLER" in e for e in errors)
+
+
+def test_llm_linter_guide_missing_its_required_sentinel_is_a_summarization_bias_trap():
+    content = "# LLM Linter Guide\n\nSome guidance that got summarized down.\n"
+    errors, _warnings = _scan_file(content, "LLM_LINTER_GUIDE.md")
+    assert any("AI SUMMARIZATION BIAS TRAP" in e for e in errors)
+
+
+def test_llm_linter_guide_with_its_required_sentinel_present_is_not_flagged():
+    content = (
+        "# LLM Linter Guide\n\n"
+        "CRITICAL BIAS TRAP: Odoo 18+ normalized the res.users groups relation to "
+        "'group_ids'.\n"
+    )
+    errors, _warnings = _scan_file(content, "LLM_LINTER_GUIDE.md")
+    assert not any("AI SUMMARIZATION BIAS TRAP" in e for e in errors)
+
+
+def test_ir_cron_record_with_audit_ignore_cron_is_not_flagged():
+    xml = (
+        "<odoo>\n"
+        "    <!-- audit-ignore-cron: this cron is a one-shot bootstrap task -->\n"
+        '    <record id="cron1" model="ir.cron">\n'
+        '        <field name="name">My Cron</field>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    _errors, warnings = _scan_file(xml, "my_data.xml")
+    assert not any("CRON ARCHITECTURE" in w for w in warnings)
+
+
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
     source = "self.env.registry.clear_caches()\n"
     errors, _warnings = _dict_findings(source)
