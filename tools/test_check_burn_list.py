@@ -1751,6 +1751,88 @@ def test_commit_on_env_cr_outside_any_test_file_is_not_flagged_by_this_rule():
     assert not any("TEST CURSOR CORRUPTION" in e for e in errors)
 
 
+# The last stretch of visit_Call(): N+1 loop-query detection, start_tour()'s debug=1
+# requirement, the JSON-RPC-kwargs-as-positional-dict ban, and the symlink-to-a-real-module
+# ban (which walks the real filesystem, like the has_ham_base rule earlier in this file).
+
+
+def test_search_inside_a_loop_is_an_n_plus_one_error():
+    source = (
+        "for record in records:\n"
+        "    self.env['ham.qso'].search([('active', '=', True)], limit=1)\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("N+1 locking" in e for e in errors)
+
+
+def test_search_outside_any_loop_is_not_an_n_plus_one_error():
+    source = "self.env['ham.qso'].search([('active', '=', True)], limit=1)\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("N+1 locking" in e for e in errors)
+
+
+def test_a_regex_named_objects_search_inside_a_loop_is_exempt_from_n_plus_one():
+    source = "for line in lines:\n    some_regex.search(line)\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("N+1 locking" in e for e in errors)
+
+
+def test_ir_module_module_search_count_inside_a_loop_in_a_test_file_is_exempt():
+    source = (
+        "for _i in range(2):\n"
+        "    self.env['ir.module.module'].search_count([('name', '=', 'foo')])\n"
+    )
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_res_users.py"
+    )
+    assert not any("N+1 locking" in e for e in errors)
+
+
+def test_start_tour_without_debug_1_is_forbidden():
+    source = "start_tour('/odoo', 'my_tour')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("start_tour()" in e and "debug=1" in e for e in errors)
+
+
+def test_start_tour_with_debug_1_in_the_url_is_allowed():
+    source = "start_tour('/odoo?debug=1', 'my_tour')\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("start_tour()" in e for e in errors)
+
+
+def test_execute_with_a_kwargs_dict_passed_positionally_to_search_is_forbidden():
+    source = "proxy.execute(uid, 'search', {'limit': 10})\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("JSON-RPC KWARGS" in e for e in errors)
+
+
+def test_execute_with_a_domain_only_dict_is_not_flagged_by_the_kwargs_rule():
+    source = "proxy.execute(uid, 'search', {'domain': [('active', '=', True)]})\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("JSON-RPC KWARGS" in e for e in errors)
+
+
+def test_symlinking_to_a_real_module_directory_is_forbidden():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = Path(tmpdir) / "models" / "res_users.py"
+        module_dir = Path(tmpdir) / "models" / "zero_sudo"
+        module_dir.mkdir(parents=True)
+        (module_dir / "__manifest__.py").write_text("{}", encoding="utf-8")
+        source = "os.symlink('zero_sudo', 'zero_sudo_link')\n"
+        errors, _warnings = _dict_findings(source, filepath=str(filepath))
+    assert any("symbolic links to resolve modules" in e for e in errors)
+
+
+def test_symlinking_to_a_directory_that_is_not_a_real_module_is_not_flagged():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = Path(tmpdir) / "models" / "res_users.py"
+        plain_dir = Path(tmpdir) / "models" / "not_a_module"
+        plain_dir.mkdir(parents=True)
+        source = "os.symlink('not_a_module', 'not_a_module_link')\n"
+        errors, _warnings = _dict_findings(source, filepath=str(filepath))
+    assert not any("symbolic links to resolve modules" in e for e in errors)
+
+
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
     source = "self.env.registry.clear_caches()\n"
     errors, _warnings = _dict_findings(source)
