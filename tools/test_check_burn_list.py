@@ -1045,6 +1045,128 @@ def test_create_with_explicit_named_fields_is_not_flagged_as_mass_assignment():
     assert not any("RPC MASS ASSIGNMENT" in w for w in warnings)
 
 
+# visit_Constant()/visit_Name()/visit_keyword() -- a large, independently readable cluster of
+# small, self-contained deprecation/security bans, each keyed on a specific literal/identifier/
+# keyword-argument name.
+
+
+def test_numbercall_string_literal_is_flagged():
+    # The real rule regex requires a space on both sides (r" numbercall "), so the literal
+    # can't be the very first/last word of the string -- confirmed directly after this test's
+    # first draft (a leading-word fixture) silently didn't match.
+    source = "domain = 'x numbercall y'\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("numbercall" in e for e in errors)
+
+
+def test_res_users_apikeys_string_literal_is_flagged_outside_key_registry():
+    source = "model_name = 'res.users.apikeys'\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/models/other.py")
+    assert any("res.users.apikeys" in e for e in errors)
+
+
+def test_res_users_apikeys_string_literal_is_exempt_inside_key_registry_py():
+    source = "model_name = 'res.users.apikeys'\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/models/key_registry.py")
+    assert not any("res.users.apikeys" in e for e in errors)
+
+
+def test_bare_numbercall_identifier_is_flagged():
+    source = "x = numbercall\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("numbercall" in e for e in errors)
+
+
+def test_sql_constraints_identifier_is_flagged():
+    source = "x = _sql_constraints\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("models.Constraint" in e for e in errors)
+
+
+def test_bare_superuser_id_identifier_is_flagged():
+    source = "uid = SUPERUSER_ID\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("SUPERUSER_ID" in e and "privilege escalation" in e for e in errors)
+
+
+def test_shell_true_keyword_is_a_critical_shell_injection_risk():
+    source = "subprocess.run(cmd, shell=True)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("shell=True" in e for e in errors)
+
+
+def test_shell_true_is_flagged_even_outside_an_odoo_module():
+    # Unlike most of this cluster, the shell=True check isn't gated on is_odoo_module -- a
+    # real shell-injection risk regardless of what kind of file it's in.
+    source = "subprocess.run(cmd, shell=True)\n"
+    errors, _warnings = _dict_findings(source, is_odoo_module=False)
+    assert any("shell=True" in e for e in errors)
+
+
+def test_groups_id_keyword_argument_is_flagged():
+    source = "self.write({'x': 1}, groups_id=[(6, 0, [1])])\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("group_ids" in e for e in errors)
+
+
+def test_group_ids_keyword_argument_outside_tests_is_flagged():
+    source = "some_call(group_ids=[(6, 0, [1])])\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/models/res_users.py")
+    assert any("Mutating 'group_ids'" in e for e in errors)
+
+
+def test_oldname_keyword_argument_is_a_legacy_deprecation():
+    source = "field = fields.Char(oldname='old_field_name')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("'oldname'" in e and "legacy" in e for e in errors)
+
+
+def test_select_keyword_argument_is_a_legacy_deprecation():
+    source = "field = fields.Char(select=True)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("'select'" in e and "legacy" in e for e in errors)
+
+
+def test_type_json_keyword_argument_is_deprecated_in_favor_of_jsonrpc():
+    # A bare decorator with no decorated statement is a real Python SyntaxError -- this test's
+    # first draft used a decorator alone (no function below it) and correctly failed, since
+    # check_ast_vulnerabilities() returns a syntax-error finding instead of ever reaching this
+    # rule. A real function body is required, not just the decorator line.
+    source = "@http.route('/x', type='json')\ndef get_thing(self):\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("jsonrpc" in e for e in errors)
+
+
+def test_type_jsonrpc_keyword_argument_is_not_flagged():
+    source = "@http.route('/x', type='jsonrpc')\ndef get_thing(self):\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("jsonrpc" in e for e in errors)
+
+
+def test_index_trgm_keyword_argument_should_be_trigram():
+    source = "name = fields.Char(index='trgm')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("trigram" in e for e in errors)
+
+
+def test_csrf_false_outside_an_api_file_is_a_security_alert():
+    source = "@http.route('/x', csrf=False)\ndef get_thing(self):\n    pass\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/controllers/main.py")
+    assert any("csrf=False" in e for e in errors)
+
+
+def test_csrf_false_inside_an_api_py_file_is_exempt():
+    source = "@http.route('/x', csrf=False)\ndef get_thing(self):\n    pass\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/controllers/webhook_api.py")
+    assert not any("csrf=False" in e for e in errors)
+
+
+def test_related_ending_in_dot_users_is_a_legacy_security_relation():
+    source = "field = fields.Many2many(related='partner_id.users')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("user_ids" in e for e in errors)
+
+
 def test_get_service_uid_wrapped_in_try_except_is_not_flagged_without_ham_base_present():
     # The inverse of the test above -- no ham_base/__manifest__.py anywhere up the tree, so
     # has_ham_base must stay False and this specific rule must not fire (a plain repo with no
