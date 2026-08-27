@@ -159,6 +159,29 @@ class MainIntegrationTests(unittest.TestCase):
         code, out = self._run()
         self.assertEqual(code, 0, out)
 
+    def test_a_vendored_venv_site_packages_tests_directory_is_never_scanned(self):
+        # A daemon's own .venv can ship a third-party library's real test
+        # suite (e.g. pyarrow) inside site-packages/pyarrow/tests/ -- an
+        # untagged class there is that library's own business, not an
+        # Odoo test-tagging violation in this repo.
+        _write(
+            os.path.join(
+                self.tmp,
+                "daemons",
+                "some_daemon",
+                ".venv",
+                "lib",
+                "python3.13",
+                "site-packages",
+                "pyarrow",
+                "tests",
+                "test_json.py",
+            ),
+            "class TestParallelJSONRead(TransactionCase):\n    pass\n",
+        )
+        code, out = self._run()
+        self.assertEqual(code, 0, out)
+
 
 if __name__ == "__main__":
     unittest.main()

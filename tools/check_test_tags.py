@@ -75,9 +75,28 @@ def main():
     repo_root = sys.argv[1]
     all_passed = True
 
+    # Vendored/environment directories that can legitimately contain their
+    # own "tests" subdirectories full of test_*.py files that are not this
+    # repo's own Odoo tests -- e.g. a daemon's .venv/lib/.../site-packages/
+    # pyarrow/tests/ ships pyarrow's own test suite, which has nothing to
+    # do with @tagged('post_install', '-at_install'). Matches the ignore
+    # set check_absolute_paths.py already uses for the same reason.
+    ignore_dirs = {
+        ".git",
+        "node_modules",
+        "venv",
+        "env",
+        ".venv",
+        "__pycache__",
+        ".agents",
+        "agents",
+        "target",
+        "radae",
+        "site-packages",
+    }
+
     for root, dirs, files in os.walk(repo_root):
-        if "radae" in dirs:
-            dirs.remove("radae")
+        dirs[:] = [d for d in dirs if d not in ignore_dirs]
         # Only process files inside a 'tests' directory
         if "tests" not in Path(root).parts:
             continue
