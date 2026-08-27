@@ -1622,6 +1622,135 @@ def test_environment_instantiation_with_a_service_account_uid_is_not_flagged():
     assert not any("Instantiating an Environment" in e for e in errors)
 
 
+# Still more of visit_Call()'s own direct rule cluster: print() ban, PATH TRAVERSAL warning
+# for filesystem ops in controllers/models, hollow-assertion bans (assertTrue/assertFalse on
+# a literal or a multi-condition `and`, assertEqual of identical literals or a variable to
+# itself), Markup() XSS ban, env(su=True) privilege escalation, and TEST CURSOR CORRUPTION
+# (commit()/rollback() on env.cr inside a test file without RealTransactionCase).
+
+
+def test_print_is_banned_ai_laziness():
+    source = "print('debug value:', value)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("print()" in e and "logging" in e for e in errors)
+
+
+def test_print_inside_a_tools_file_is_exempt():
+    source = "print('debug value:', value)\n"
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tools/some_script.py"
+    )
+    assert not any("print()" in e for e in errors)
+
+
+def test_open_call_inside_an_http_controller_is_a_path_traversal_warning():
+    source = (
+        "@http.route('/api/v1/thing', type='jsonrpc', auth='user')\n"
+        "def get_thing(self, filename):\n"
+        "    return open(filename).read()\n"
+    )
+    _errors, warnings = _dict_findings(source)
+    assert any("PATH TRAVERSAL" in w for w in warnings)
+
+
+def test_open_call_outside_any_controller_or_model_method_is_not_flagged():
+    source = "def helper(filename):\n    return open(filename).read()\n"
+    _errors, warnings = _dict_findings(source)
+    assert not any("PATH TRAVERSAL" in w for w in warnings)
+
+
+def test_assert_true_of_literal_true_is_a_hollow_assertion():
+    source = "self.assertTrue(True)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Hollow assertion" in e and "assertTrue(True)" in e for e in errors)
+
+
+def test_assert_false_of_literal_false_is_a_hollow_assertion():
+    source = "self.assertFalse(False)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Hollow assertion" in e and "assertFalse(False)" in e for e in errors)
+
+
+def test_assert_true_of_a_real_variable_is_not_a_hollow_assertion():
+    source = "self.assertTrue(record.active)\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Hollow assertion" in e for e in errors)
+
+
+def test_assert_true_with_an_and_boolop_is_a_test_anti_pattern():
+    source = "self.assertTrue(record.active and record.confirmed)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("multiple conditions" in e for e in errors)
+
+
+def test_markup_of_an_fstring_is_an_xss_vulnerability():
+    source = "html = Markup(f'<b>{user_input}</b>')\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("XSS VULNERABILITY" in e for e in errors)
+
+
+def test_markup_of_a_percent_interpolation_is_an_xss_vulnerability():
+    source = "html = Markup('<b>%s</b>' % user_input)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("XSS VULNERABILITY" in e for e in errors)
+
+
+def test_markup_of_a_plain_string_literal_is_not_flagged():
+    source = "html = Markup('<b>static text</b>')\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("XSS VULNERABILITY" in e for e in errors)
+
+
+def test_assert_equal_of_two_identical_literals_is_a_hollow_assertion():
+    source = "self.assertEqual(5, 5)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any(
+        "Hollow assertion" in e and "identical literals" in e for e in errors
+    )
+
+
+def test_assert_equal_of_a_variable_to_itself_is_a_hollow_assertion():
+    source = "self.assertEqual(value, value)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any(
+        "Hollow assertion" in e and "variable to itself" in e for e in errors
+    )
+
+
+def test_assert_equal_of_two_different_variables_is_not_flagged():
+    source = "self.assertEqual(record.name, expected_name)\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Hollow assertion" in e for e in errors)
+
+
+def test_env_call_with_su_true_is_forbidden_privilege_escalation():
+    source = "scoped_env = self.env(su=True)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("su=True" in e and "PRIVILEGE ESCALATION" in e for e in errors)
+
+
+def test_commit_on_env_cr_inside_a_test_file_is_test_cursor_corruption():
+    source = "self.env.cr.commit()\n"
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_res_users.py"
+    )
+    assert any("TEST CURSOR CORRUPTION" in e for e in errors)
+
+
+def test_rollback_on_env_cr_inside_a_test_file_is_test_cursor_corruption():
+    source = "self.env.cr.rollback()\n"
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_res_users.py"
+    )
+    assert any("TEST CURSOR CORRUPTION" in e for e in errors)
+
+
+def test_commit_on_env_cr_outside_any_test_file_is_not_flagged_by_this_rule():
+    source = "self.env.cr.commit()\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("TEST CURSOR CORRUPTION" in e for e in errors)
+
+
 def test_clear_caches_call_is_forbidden_global_cache_invalidation():
     source = "self.env.registry.clear_caches()\n"
     errors, _warnings = _dict_findings(source)
