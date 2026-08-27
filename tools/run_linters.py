@@ -872,6 +872,29 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 37. check_binary_manifest_consistency -- catches a real drift class found 2026-08-27
+    # bumping kopia/etcd/cloudflared: hams_shared/tools/binary_manifest.json (what
+    # dependency_watch.json / check_dependency_releases.py track) and
+    # binary_downloader/data/binary_manifest_data.xml (the actual runtime seed data
+    # binary_downloader.mixin._download_and_extract() reads via the ORM) hold the same
+    # url/checksum data in two different formats with nothing keeping them in sync -- a bump
+    # that updates only the tracked JSON copy leaves production silently downloading the old
+    # binary forever. Always scans the full repo, not a possibly-scoped `targets` list, for
+    # the same reason as step 19/etc: the two files' relationship is a repo-wide property.
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_binary_manifest_consistency.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

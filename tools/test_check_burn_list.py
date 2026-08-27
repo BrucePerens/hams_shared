@@ -429,6 +429,23 @@ def test_a_real_deprecated_web_path_is_still_flagged():
     assert len(errors) == 1
 
 
+def test_web_database_route_is_not_flagged_as_deprecated_routing():
+    # Real false positive found 2026-08-27: /web/database/manager (and the rest of
+    # odoo.addons.web.controllers.database.Database's routes -- selector, create, duplicate,
+    # drop, backup, restore, change_password, list) are real, current, non-deprecated routes in
+    # this Odoo version -- confirmed both by introspecting the installed controller's own
+    # original_routing directly and by a real browser reaching /web/database/manager in the
+    # 2026-08-26 usability-audit run. cloudflare's DEFAULT_WAF_RULES intentionally references
+    # "/web/database/" (fixing a real WAF gap that had been guarding the wrong,
+    # nonexistent /odoo/database/* paths instead) and this check flagged that literal string as
+    # deprecated routing, which it is not.
+    source = (
+        '"expression": \'(http.request.uri.path contains "/web/database/") or '
+        '(http.request.uri.path eq "/odoo/database/manager")\',\n'
+    )
+    assert _routing_deprecation_errors(source) == []
+
+
 # parse_odoo_html()/OdooHTMLParser had zero coverage despite being a real, independent
 # structural parser (not part of the AST security-rule visitor above) -- other rule functions
 # in this file walk the XMLNode tree it builds, so a bug here would silently corrupt every one

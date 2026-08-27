@@ -128,7 +128,6 @@ def _stub_path_for(real_file, core_addons_path):
 
 def _render_method_params(method):
     params = []
-    n_positional = len(method.arg_names)
     n_required = method.posonly_count  # see MethodInfo.min_args's own comment
     for i, arg in enumerate(method.arg_names):
         if i < n_required:

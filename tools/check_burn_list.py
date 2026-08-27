@@ -567,7 +567,7 @@ ODOO_ERROR_RULES = [
     ),
     (
         r"\.(py|js)$",
-        re.compile(r"['\"]/web/(?!login\b|signup\b|assets\b|static\b|tests\b)[^'\"]*['\"]"),
+        re.compile(r"['\"]/web/(?!login\b|signup\b|assets\b|static\b|tests\b|database\b)[^'\"]*['\"]"),
         "CRITICAL ROUTING DEPRECATION: /web is deprecated and forcefully redirected to /odoo in Odoo 19, losing the query parameters! Use /odoo instead.",
     ),
     (
