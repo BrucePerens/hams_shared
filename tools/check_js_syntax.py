@@ -28,6 +28,39 @@ def is_ignored(path, patterns):
     return False
 
 
+# Jest/Chai-style matcher names an LLM (or a human who's used those
+# frameworks) commonly reaches for out of habit, but @odoo/hoot's real
+# expect() API (odoo/addons/web/static/lib/hoot/core/expect.js) doesn't
+# implement -- confirmed by reading that file's complete list of `to*`
+# methods directly, not assumed. Calling one of these throws
+# "expect(...).toXxx is not a function" at test-run time; 10 real instances
+# of this exact mistake were found and fixed across 7 modules in both
+# hams_com and hams_open on 2026-08-27 (see hams_com/night_shift_todo.md's
+# Twenty-second through Twenty-fourth addenda), several of which had been
+# silently masked by an unrelated asset-bundle bug and had never actually
+# run before that session. This check exists so the same mistake fails
+# fast (a syntax-adjacent lint error) instead of silently shipping a test
+# that can never pass.
+_INVALID_HOOT_MATCHERS = {
+    "toBeUndefined": "toBe(undefined)",
+    "toBeNull": "toBe(null)",
+    "toBeDefined": "not.toBe(undefined)",
+    "toBeTruthy": "toBe(true), or a more specific real matcher",
+    "toBeFalsy": "toBe(false), or a more specific real matcher",
+    "toBeNaN": "no direct hoot equivalent -- check with a plain if/throw",
+    "toContain": "toInclude(...)",
+    "toContainEqual": "toInclude(...)",
+    "toStrictEqual": "toEqual(...)",
+    "toBeGreaterThanOrEqual": "not.toBeLessThan(...)",
+    "toBeLessThanOrEqual": "not.toBeGreaterThan(...)",
+    "toHaveBeenCalled": "no hoot equivalent -- track calls in a counter/flag and assert with toBe()",
+    "toHaveBeenCalledWith": "no hoot equivalent -- capture call args manually and assert with toEqual()",
+    "toHaveBeenCalledTimes": "no hoot equivalent -- track a counter manually and assert with toBe()",
+    "toMatchSnapshot": "no hoot equivalent -- hoot has no snapshot testing",
+    "toThrowError": "toThrow(...)",
+}
+
+
 def check_file(file_path):
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -37,6 +70,18 @@ def check_file(file_path):
         return None
 
     # --- Custom Odoo Architecture Checks ---
+    if file_path.endswith(".test.js"):
+        for lineno, line in enumerate(code.splitlines(), start=1):
+            for bad_name, real_equivalent in _INVALID_HOOT_MATCHERS.items():
+                if f".{bad_name}(" in line:
+                    err_msg = (
+                        f"🚨 [AUDIT] INVALID HOOT MATCHER: `.{bad_name}(` (line {lineno}) is not "
+                        f"a real @odoo/hoot expect() method -- it's a Jest-ism. Use "
+                        f"`.{real_equivalent}` instead.\n"
+                        f"Code: `{line.strip()}`"
+                    )
+                    return file_path, err_msg
+
     if "extends Interaction" in code and "mountComponent(" in code:
         err_msg = (
             "🚨 [AUDIT] ARCHITECTURE TRAP: Do not manually call `mountComponent(`\n"

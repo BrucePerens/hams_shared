@@ -78,6 +78,11 @@ class CheckFileTests(unittest.TestCase):
         _write(p, content)
         return p
 
+    def _test_js_path(self, content):
+        p = os.path.join(self.tmp, "widget.test.js")
+        _write(p, content)
+        return p
+
     def test_valid_syntax_returns_none(self):
         p = self._path("const x = 1;\nfunction f() { return x + 1; }\n")
         self.assertIsNone(chk.check_file(p))
@@ -111,6 +116,34 @@ class CheckFileTests(unittest.TestCase):
     def test_an_unreadable_file_returns_none_without_crashing(self):
         with self.assertLogs(level="WARNING"):
             self.assertIsNone(chk.check_file(os.path.join(self.tmp, "does_not_exist.js")))
+
+    def test_an_invalid_hoot_matcher_is_flagged_in_a_test_js_file(self):
+        p = self._test_js_path("test('x', () => {\n    expect(foo).toBeUndefined();\n});\n")
+        result = chk.check_file(p)
+        self.assertIsNotNone(result)
+        _file_path, err_msg = result
+        self.assertIn("INVALID HOOT MATCHER", err_msg)
+        self.assertIn("toBeUndefined", err_msg)
+        self.assertIn("toBe(undefined)", err_msg)
+
+    def test_a_real_hoot_matcher_is_not_flagged(self):
+        p = self._test_js_path("test('x', () => {\n    expect(foo).toBe(undefined);\n});\n")
+        self.assertIsNone(chk.check_file(p))
+
+    def test_the_invalid_matcher_check_is_scoped_to_test_js_files_only(self):
+        # A plain .js file (not a test file) calling a same-named method on
+        # some other object entirely shouldn't be flagged -- the check only
+        # applies to files that actually use hoot's expect().
+        p = self._path("foo.toBeUndefined();\n")
+        self.assertIsNone(chk.check_file(p))
+
+    def test_toContain_is_flagged_with_toInclude_as_the_real_equivalent(self):
+        p = self._test_js_path("test('x', () => {\n    expect(s).toContain('a');\n});\n")
+        result = chk.check_file(p)
+        self.assertIsNotNone(result)
+        _file_path, err_msg = result
+        self.assertIn("toContain", err_msg)
+        self.assertIn("toInclude", err_msg)
 
 
 class MainIntegrationTests(unittest.TestCase):
