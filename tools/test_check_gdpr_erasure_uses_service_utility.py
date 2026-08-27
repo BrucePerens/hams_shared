@@ -126,18 +126,17 @@ class CheckGdprErasureUsesServiceUtilityTests(unittest.TestCase):
         violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
         self.assertEqual(violations, [])
 
-    def test_a_method_that_both_delegates_and_hand_rolls_unlink_is_not_flagged(self):
-        # Documents real, possibly-unintended behavior, not an endorsed design: the rule's
-        # own message names a specific, narrow escape hatch ("# audit-ignore-gdpr-hand-
-        # rolled-unlink" with a comment explaining why), but the actual guard --
-        # `if unignored and not _calls_method_named(node, "_erase_via_service_account")` --
-        # is whole-method, not per-call. ANY call to _erase_via_service_account anywhere in
-        # _execute_gdpr_erasure suppresses EVERY unignored unlink() in that same method, even
-        # one on a wholly unrelated model with no relation to the delegated call. This is the
-        # same shape as the .sudo()/burn-ignore finding elsewhere this session: a coarser
-        # guard preempting the rule's own narrower stated intent. Not fixed here -- whether
-        # this should be scoped per-call is a real design question, not this test's call to
-        # make; flagged in night_shift_todo.md for review.
+    def test_a_method_that_both_delegates_and_hand_rolls_unlink_is_flagged_for_the_hand_rolled_call(
+        self,
+    ):
+        # Bruce's explicit decision, 2026-08-27: the guard is now per-call, not whole-method.
+        # Before this, `if unignored and not _calls_method_named(node,
+        # "_erase_via_service_account")` meant ANY call to _erase_via_service_account
+        # anywhere in _execute_gdpr_erasure suppressed EVERY unignored unlink() in that same
+        # method, even one on a wholly unrelated model with no relation to the delegated
+        # call -- a real gap, since the rule's own escape-hatch design already implied
+        # per-call scoping was the intent. Delegating model.a correctly no longer has any
+        # suppressing effect on the unrelated, still-hand-rolled model.b unlink().
         self._write(
             "some_module/models/res_users.py",
             "class ResUsers(models.Model):\n"
@@ -146,6 +145,23 @@ class CheckGdprErasureUsesServiceUtilityTests(unittest.TestCase):
             "            'model.a', [('user_id', '=', self.id)], 'x.y'\n"
             "        )\n"
             "        self.env['model.b'].search([('user_id', '=', self.id)]).unlink()\n",
+        )
+        violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("res_users.py:6", violations[0])
+
+    def test_a_method_that_delegates_and_also_uses_the_ignore_marker_is_not_flagged(self):
+        # The escape hatch is the only remaining way to exempt a hand-rolled call now that
+        # delegating an unrelated model no longer suppresses anything.
+        self._write(
+            "some_module/models/res_users.py",
+            "class ResUsers(models.Model):\n"
+            "    def _execute_gdpr_erasure(self):\n"
+            "        self.env['zero_sudo.security.utils']._erase_via_service_account(\n"
+            "            'model.a', [('user_id', '=', self.id)], 'x.y'\n"
+            "        )\n"
+            "        self.env['model.b'].search([('user_id', '=', self.id)]).unlink()"
+            "  # audit-ignore-gdpr-hand-rolled-unlink: batched, see docstring\n",
         )
         violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
         self.assertEqual(violations, [])

@@ -21,14 +21,18 @@ happened to check the actual outcome. `_erase_via_service_account` exists specif
 this loudly instead (see its own docstring for the mechanism) -- using it instead of hand-rolling
 the same operation is how every future erasure implementation inherits that protection for free.
 
-Detection: any `_execute_gdpr_erasure` method (the established name every one of the ~13 current
-overrides uses) that calls `.unlink()` anywhere in its body without also calling
-`_erase_via_service_account` anywhere in that same body. AST-based, not text/regex, so it isn't
-fooled by formatting -- deliberately does NOT try to detect the with_user()/search() shape
-precisely (real call sites vary: some assign to a variable first, some access a relational field
-directly instead of calling .search()) since ANY .unlink() inside this specific, well-known
-method that isn't routed through the blessed utility is the pattern to flag, regardless of its
-exact shape.
+Detection: any `.unlink()` call inside an `_execute_gdpr_erasure` method (the established name
+every one of the ~13 current overrides uses) is flagged individually, per call site -- calling
+`_erase_via_service_account` elsewhere in the same method for a different model does NOT suppress
+it. (Before 2026-08-27 this was whole-method: any call to `_erase_via_service_account` anywhere in
+the method suppressed every unignored `.unlink()` in it, even one on a wholly unrelated model with
+no connection to the delegated call -- a real gap Bruce asked to close, since the rule's own
+escape-hatch design already implies per-call scoping was always the intent.) AST-based, not
+text/regex, so it isn't fooled by formatting -- deliberately does NOT try to detect the
+with_user()/search() shape precisely (real call sites vary: some assign to a variable first, some
+access a relational field directly instead of calling .search()) since ANY .unlink() inside this
+specific, well-known method that isn't routed through the blessed utility is the pattern to flag,
+regardless of its exact shape.
 
 Escape hatch: a `.unlink()` call line carrying `# audit-ignore-gdpr-hand-rolled-unlink` is
 exempted -- for the one legitimate case found so far (user_websites' website.page/blog.post/
@@ -38,7 +42,9 @@ records across users. `_erase_via_service_account` deliberately doesn't replicat
 (it's built for the common case: a single user's own small, personal-scale dataset), so forcing
 that one caller onto it would be a regression, not a fix. Use the same marker (with a comment
 explaining why) for any other genuinely-batched exception found later -- don't loosen the check
-itself for a plain, unbatched hand-rolled unlink() that has no such reason.
+itself for a plain, unbatched hand-rolled unlink() that has no such reason. This is now the ONLY
+way to exempt a hand-rolled unlink() call -- delegating some other model to the service utility
+elsewhere in the same method no longer has any suppressing effect.
 
 Usage: check_gdpr_erasure_uses_service_utility.py <repo_root>
 """
@@ -74,17 +80,6 @@ def _resolve_repo_roots(given_path):
     ):
         roots.append(sibling)
     return roots
-
-
-def _calls_method_named(node, name):
-    for child in ast.walk(node):
-        if (
-            isinstance(child, ast.Call)
-            and isinstance(child.func, ast.Attribute)
-            and child.func.attr == name
-        ):
-            return True
-    return False
 
 
 def _unignored_unlink_calls(node, source_lines):
@@ -123,7 +118,7 @@ def _check_file(path, repo_root):
         if node.name != "_execute_gdpr_erasure":
             continue
         unignored = _unignored_unlink_calls(node, source_lines)
-        if unignored and not _calls_method_named(node, "_erase_via_service_account"):
+        if unignored:
             for call in unignored:
                 violations.append(
                     f"{os.path.relpath(path, repo_root)}:{call.lineno} "
