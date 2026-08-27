@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from check_burn_list import (  # noqa: E402
     parse_odoo_xml,
+    parse_odoo_html,
     _xml_audit_lookback_start,
     check_ast_vulnerabilities,
     scan_file,
@@ -413,3 +414,80 @@ def test_a_real_deprecated_web_path_is_still_flagged():
     source = 'response = self.url_open("/web/some_backend_action")\n'
     errors = _routing_deprecation_errors(source)
     assert len(errors) == 1
+
+
+# parse_odoo_html()/OdooHTMLParser had zero coverage despite being a real, independent
+# structural parser (not part of the AST security-rule visitor above) -- other rule functions
+# in this file walk the XMLNode tree it builds, so a bug here would silently corrupt every one
+# of them rather than fail loudly on its own.
+
+
+def test_a_single_element_becomes_one_child_node_of_root():
+    root = parse_odoo_html("<div>hello</div>")
+    assert root.tag == "root_wrapper"
+    assert len(root.children) == 1
+    div = root.children[0]
+    assert div.tag == "div"
+    assert div.text == "hello"
+    assert div.parent is root
+
+
+def test_nested_elements_form_a_real_parent_child_chain():
+    root = parse_odoo_html("<div><span>inner</span></div>")
+    div = _find_first(root, "div")
+    span = _find_first(root, "span")
+    assert span is not None
+    assert span.parent is div
+    assert span in div.children
+    assert span.text == "inner"
+
+
+def test_a_void_element_is_never_pushed_onto_the_open_element_stack():
+    # A void element (br, img, ...) has no closing tag and must not become the parent of
+    # whatever comes after it in the markup -- confirmed against the real void_elements set
+    # this parser declares, not just the ones this test happens to try.
+    root = parse_odoo_html("<div><br/><span>after</span></div>")
+    div = _find_first(root, "div")
+    span = _find_first(root, "span")
+    assert span.parent is div, "span must be a sibling of br, not br's child"
+    assert [c.tag for c in div.children] == ["br", "span"]
+
+
+def test_handle_endtag_closes_the_matching_open_tag_even_with_unbalanced_markup_between():
+    # A stray, unmatched closing tag between the real open/close pair must not corrupt the
+    # stack -- handle_endtag() only pops down to the first matching tag it finds walking the
+    # stack from the top, exactly like a real browser's own lenient HTML parsing.
+    root = parse_odoo_html("<div><p>text</notatag></p></div>")
+    div = _find_first(root, "div")
+    p = _find_first(root, "p")
+    assert p.parent is div
+    assert p.end_lineno >= p.lineno
+
+
+def test_comments_become_real_comment_nodes_not_lost_or_merged_into_text():
+    root = parse_odoo_html("<div><!-- a real comment --><span>x</span></div>")
+    div = _find_first(root, "div")
+    tags = [c.tag for c in div.children]
+    assert "#comment" in tags
+    comment_node = [c for c in div.children if c.tag == "#comment"][0]
+    assert comment_node.attrs["text"] == " a real comment "
+
+
+def test_attributes_are_captured_as_a_real_dict():
+    root = parse_odoo_html('<input type="text" name="callsign"/>')
+    node = root.children[0]
+    assert node.attrs == {"type": "text", "name": "callsign"}
+
+
+def test_walk_visits_every_node_depth_first_including_root():
+    root = parse_odoo_html("<div><span>a</span><p>b</p></div>")
+    tags = [n.tag for n in root.walk()]
+    assert tags == ["root_wrapper", "div", "span", "p"]
+
+
+def test_get_ancestors_returns_every_parent_up_to_root_not_including_self():
+    root = parse_odoo_html("<div><span>x</span></div>")
+    span = _find_first(root, "span")
+    ancestors = span.get_ancestors()
+    assert [a.tag for a in ancestors] == ["div", "root_wrapper"]
+    assert span not in ancestors
