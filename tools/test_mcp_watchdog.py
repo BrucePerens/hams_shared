@@ -264,7 +264,7 @@ class GetQueueTests(unittest.TestCase):
         self.assertEqual(q2.get_nowait(), "hello")
 
 
-class SendIpcMessageAndQueueStatusAreAsyncTests(unittest.IsolatedAsyncioTestCase):
+class SendIpcMessageAndQueueStatusAreAsyncTests(_SafePatchTestCase, unittest.IsolatedAsyncioTestCase):
     # Regression coverage for docs/MCP_WATCHDOG_REPORT.md (Gemini-authored
     # incident report, 2026-08-28): Gemini's local MCP proxy crashed calling
     # send_ipc_message/queue_status back when they were plain `def` tools,
@@ -281,9 +281,7 @@ class SendIpcMessageAndQueueStatusAreAsyncTests(unittest.IsolatedAsyncioTestCase
         # _is_shared_instance) -- exactly like wait_for_inbox already did.
         # Force the "I am the shared instance" branch so this test exercises
         # the real local-queue logic instead of trying a real network call.
-        patcher = patch("mcp_watchdog._is_shared_instance", return_value=True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.safe_patch("mcp_watchdog._is_shared_instance", return_value=True)
 
     def test_both_tools_are_coroutine_functions(self):
         self.assertTrue(asyncio.iscoroutinefunction(wd.send_ipc_message))
@@ -299,12 +297,13 @@ class SendIpcMessageAndQueueStatusAreAsyncTests(unittest.IsolatedAsyncioTestCase
         self.assertFalse(status["receiver_currently_waiting"])
 
     async def test_a_stdio_instance_proxies_instead_of_touching_its_own_queue(self):
-        with patch("mcp_watchdog._is_shared_instance", return_value=False), patch(
+        self.safe_patch("mcp_watchdog._is_shared_instance", return_value=False)
+        mock_proxy = self.safe_patch(
             "mcp_watchdog._proxy_to_shared",
             new_callable=AsyncMock,
             return_value="Message sent successfully.",
-        ) as mock_proxy:
-            result = await wd.send_ipc_message("night-shift-queue", "hello")
+        )
+        result = await wd.send_ipc_message("night-shift-queue", "hello")
         mock_proxy.assert_awaited_once_with(
             "send_ipc_message", queue_name="night-shift-queue", content="hello"
         )
@@ -335,9 +334,13 @@ class AllToolsHaveRealDocstringsTests(unittest.TestCase):
             wd.wait_for_fatal_events, wd.spawn_managed_daemons, wd.wait_for_inbox,
         ]
         for tool in tools:
-            self.assertTrue(
-                tool.__doc__ and tool.__doc__.strip(),
+            self.assertIsNotNone(
+                tool.__doc__,
                 f"{tool.__name__} has no docstring -- FastMCP would show callers an empty description",
+            )
+            self.assertTrue(
+                tool.__doc__.strip(),
+                f"{tool.__name__}'s docstring is blank -- FastMCP would show callers an empty description",
             )
 
 

@@ -4,6 +4,7 @@
 
 import os
 import glob
+import sys
 import time
 import asyncio
 import json
@@ -15,6 +16,8 @@ import functools
 import pyinotify
 import logging
 from mcp.server.fastmcp import FastMCP
+from mcp.client.session import ClientSession
+from mcp.client.sse import sse_client
 
 logger = logging.getLogger("mcp_watchdog")
 
@@ -129,7 +132,6 @@ _SHARED_SSE_URL = f"http://127.0.0.1:{_SHARED_SSE_PORT}/sse"
 
 
 def _is_shared_instance() -> bool:
-    import sys
     return "--transport" in sys.argv
 
 
@@ -139,9 +141,6 @@ async def _proxy_to_shared(tool_name: str, **kwargs) -> str:
     process's own local _QUEUES. Only meaningful when _is_shared_instance()
     is False; callers must check that first.
     """
-    import os
-    from mcp.client.sse import sse_client
-    from mcp.client.session import ClientSession
     for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
         if k in os.environ:
             del os.environ[k]
@@ -151,7 +150,13 @@ async def _proxy_to_shared(tool_name: str, **kwargs) -> str:
                 await session.initialize()
                 res = await session.call_tool(tool_name, arguments=kwargs)
                 return res.content[0].text if res.content else str(res)
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: this is a best-effort
+        # proxy to a separate process over the network -- it must survive
+        # whatever an SSE/MCP client call can raise (connection refused, the
+        # shared instance not running yet, protocol errors) and hand the
+        # caller a readable diagnostic string, not crash the caller's own
+        # tool invocation.
+        logger.warning("Failed to proxy %s to the shared SSE instance: %s", tool_name, e)
         return f"PROXY ERROR: Failed to reach central SSE server: {e}"
 
 

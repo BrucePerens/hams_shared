@@ -24,8 +24,15 @@ genuine client-side failure to reach the server at all is an exit 1).
 """
 import argparse
 import asyncio
+import logging
 import os
 import sys
+import threading
+
+from mcp.client.session import ClientSession
+from mcp.client.sse import sse_client
+
+_logger = logging.getLogger("mcp_watchdog_client")
 
 
 def _default_sse_url():
@@ -33,9 +40,6 @@ def _default_sse_url():
 
 
 async def _call_tool(tool_name, arguments, sse_url):
-    from mcp.client.session import ClientSession
-    from mcp.client.sse import sse_client
-
     for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
         os.environ.pop(k, None)
     async with sse_client(sse_url) as (read, write):
@@ -49,14 +53,17 @@ def _run_in_own_thread(coro):
     """Same reasoning as usability_audit_daemon.py's own _send_ipc_message: a bare asyncio.run()
     breaks if the calling thread already has a running event loop (e.g. this script invoked from
     inside another asyncio-driven tool). A dedicated thread sidesteps that regardless of caller."""
-    import threading
-
     result = {}
 
     def _run():
         try:
             result["value"] = asyncio.run(coro)
-        except Exception as e:
+        except Exception as e:  # audit-ignore-catch-all: captured here only to
+            # cross the thread boundary -- fully re-raised in the calling
+            # thread below, not swallowed. Must be unconditional: the caller
+            # needs whatever the coroutine actually raised, not a guess at
+            # which exception types an arbitrary awaited coroutine can produce.
+            _logger.warning("Worker thread caught %s, re-raising in caller: %s", type(e).__name__, e)
             result["error"] = e
 
     t = threading.Thread(target=_run, daemon=True)
@@ -102,7 +109,12 @@ def main():
 
     try:
         result = _run_in_own_thread(coro)
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: this is the CLI's own
+        # top-level error boundary -- it must report whatever the SSE/MCP
+        # client call actually raised (connection, timeout, or protocol
+        # errors alike) as a clean CLIENT ERROR message and a nonzero exit
+        # code, not let a raw traceback escape to the caller's shell.
+        _logger.warning("Failed to reach %s: %s", sse_url, e)
         print(f"CLIENT ERROR: could not reach {sse_url}: {e}", file=sys.stderr)
         sys.exit(1)
 

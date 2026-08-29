@@ -17,13 +17,17 @@ up answering the prompt itself in the absence of one; see ask_executor()'s own d
 .claude/skills/avoiding-api-costs/SKILL.md for that real, disclosed tradeoff.
 """
 import argparse
+import asyncio
 import io
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
 
+from mcp.client.session import ClientSession
+from mcp.client.sse import sse_client
 from PIL import Image
 from playwright.sync_api import sync_playwright
 
@@ -118,11 +122,6 @@ def _send_ipc_message(queue_name, content):
     bug that report was filed about, just triggered by Playwright instead of
     Gemini's own MCP proxy. A dedicated thread sidesteps the question of
     whether the calling thread has a loop running at all."""
-    import asyncio
-    import threading
-
-    from mcp.client.session import ClientSession
-    from mcp.client.sse import sse_client
 
     async def _send():
         for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
@@ -139,7 +138,13 @@ def _send_ipc_message(queue_name, content):
     def _run():
         try:
             asyncio.run(_send())
-        except Exception as e:
+        except Exception as e:  # audit-ignore-catch-all: captured here only
+            # to cross the thread boundary -- fully re-raised in the calling
+            # thread below via `raise errors[0]`, never swallowed. Must be
+            # unconditional: the caller needs whatever the SSE/MCP call
+            # actually raised (connection, timeout, or protocol errors
+            # alike), not a guess at which specific exception types apply.
+            _logger.warning("IPC send thread caught %s, re-raising in caller: %s", type(e).__name__, e)
             errors.append(e)
 
     t = threading.Thread(target=_run, daemon=True)
@@ -265,8 +270,13 @@ def extract_page_state(page):
                         label_loc = page.locator(f'label[for="{el_id}"]').first
                         if label_loc.count() > 0:
                             label = (label_loc.inner_text() or "").strip()
-                    except Exception:
-                        pass
+                    except Exception as e:  # audit-ignore-catch-all: a failed
+                        # label-for lookup (detached element, navigation
+                        # mid-lookup) must fall through to the next fallback
+                        # below, not abort extracting this element entirely --
+                        # the specific Playwright exception types here aren't
+                        # worth enumerating for a lookup this disposable.
+                        _logger.info("label[for] lookup failed for #%s, falling through: %s", el_id, e)
                 if not label:
                     # The other real-world label-association pattern: a wrapping
                     # <label> with no `for`/`id` at all (e.g. <label><input .../>
@@ -277,8 +287,11 @@ def extract_page_state(page):
                     # ever got a chance to run.
                     try:
                         label = (el.evaluate("e => e.closest('label')?.innerText || ''") or "").strip()
-                    except Exception:
-                        pass
+                    except Exception as e:  # audit-ignore-catch-all: same
+                        # reasoning as the label-for lookup above -- fall
+                        # through to the next fallback, don't abort this
+                        # element's extraction over a disposable lookup.
+                        _logger.info("closest('label') lookup failed, falling through: %s", e)
             if not label:
                 label = (
                     el.get_attribute("placeholder")

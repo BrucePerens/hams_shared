@@ -9,6 +9,8 @@ import sys
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from playwright.sync_api import sync_playwright
+
 sys.path.insert(0, __import__("os").path.dirname(__file__))
 import usability_audit_daemon as uad
 
@@ -45,7 +47,19 @@ def _fake_client_session_factory(sent_calls):
     return _FakeSession
 
 
-class SendIpcMessageFromARunningEventLoopTests(unittest.TestCase):
+class _SafePatchTestCase(unittest.TestCase):
+    """Matches test_mcp_watchdog.py's / test_provision.py's own convention: a
+    self.safe_patch() wrapper instead of a bare `with patch(...)` context
+    manager or `@patch` decorator at each call site."""
+
+    def safe_patch(self, target, *args, **kwargs):
+        patcher = patch(target, *args, **kwargs)
+        mock_obj = patcher.start()
+        self.addCleanup(patcher.stop)
+        return mock_obj
+
+
+class SendIpcMessageFromARunningEventLoopTests(_SafePatchTestCase):
     # Found live: usability_audit_daemon.py runs inside Playwright's *sync*
     # API, which already has a running asyncio event loop in the calling
     # thread -- a bare `asyncio.run()` inside _send_ipc_message crashed with
@@ -55,19 +69,28 @@ class SendIpcMessageFromARunningEventLoopTests(unittest.TestCase):
     # that exact condition (calling the sync _send_ipc_message from a thread
     # that already has a running loop) without needing a real server, by
     # calling it from inside an async function driven by asyncio.run().
+    #
+    # Patches uad.sse_client/uad.ClientSession (the names bound in this
+    # module's own namespace by its now-module-level imports), not
+    # mcp.client.sse.sse_client/mcp.client.session.ClientSession directly --
+    # a `from X import Y` binds a local reference at import time, so
+    # patching X.Y afterward doesn't reach a call site that already holds
+    # its own reference. This only worked before because the import was
+    # local to the function and re-evaluated on every call.
 
     def test_send_succeeds_when_called_from_a_thread_with_a_running_loop(self):
         sent_calls = []
+        self.safe_patch("usability_audit_daemon.sse_client", side_effect=_fake_sse_client)
+        self.safe_patch(
+            "usability_audit_daemon.ClientSession",
+            new=_fake_client_session_factory(sent_calls),
+        )
 
         async def call_from_within_a_running_loop():
             # At this point asyncio.get_running_loop() succeeds in this
             # thread -- the exact condition that broke the old
             # bare-asyncio.run() implementation.
-            with patch("mcp.client.sse.sse_client", side_effect=_fake_sse_client), patch(
-                "mcp.client.session.ClientSession",
-                new=_fake_client_session_factory(sent_calls),
-            ):
-                uad._send_ipc_message("some_queue", "some content")
+            uad._send_ipc_message("some_queue", "some content")
 
         # Must not raise "asyncio.run() cannot be called from a running event loop".
         asyncio.run(call_from_within_a_running_loop())
@@ -78,9 +101,12 @@ class SendIpcMessageFromARunningEventLoopTests(unittest.TestCase):
         self.assertEqual(arguments, {"queue_name": "some_queue", "content": "some content"})
 
     def test_a_real_send_failure_propagates_instead_of_being_swallowed(self):
+        self.safe_patch(
+            "usability_audit_daemon.sse_client", side_effect=RuntimeError("connection refused")
+        )
+
         async def call_from_within_a_running_loop():
-            with patch("mcp.client.sse.sse_client", side_effect=RuntimeError("connection refused")):
-                uad._send_ipc_message("some_queue", "some content")
+            uad._send_ipc_message("some_queue", "some content")
 
         with self.assertRaises(RuntimeError):
             asyncio.run(call_from_within_a_running_loop())
@@ -99,8 +125,6 @@ class ExtractPageStateAccessibleNameTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from playwright.sync_api import sync_playwright
-
         cls._pw = sync_playwright().start()
         cls._browser = cls._pw.chromium.launch(headless=True, args=["--no-sandbox"])
 
