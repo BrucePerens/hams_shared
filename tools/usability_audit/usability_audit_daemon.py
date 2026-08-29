@@ -104,16 +104,16 @@ _WATCHDOG_SSE_URL = "http://127.0.0.1:8767/sse"
 
 
 _SEND_IPC_MESSAGE_TIMEOUT_SECS = 30
-# ^ Found live, 2026-08-29, running this daemon for real (twice, reproducibly): the send call
-# below can hang indefinitely with no exception and no log line, even though the shared
-# mcp_watchdog.py instance itself was confirmed healthy throughout both hangs (queue_status and a
-# fresh, isolated, non-threaded, non-Playwright send_ipc_message call both completed in well under
-# 50ms during the exact window this daemon's own call sat silent for 60+ seconds). The remaining
-# difference is this call running inside a background thread that itself runs asyncio.run() while
-# Playwright's *sync* API's own internal event-loop thread is concurrently active in the same
-# process -- a real, reproducible interaction this investigation didn't fully root-cause, but a
-# clear timeout here converts a silent, unbounded hang into a loud, actionable failure regardless
-# of the exact cause, matching this codebase's own fail-fast standard elsewhere.
+# ^ Added 2026-08-29 as defense-in-depth, not as the fix for a confirmed bug. What looked at the
+# time like two reproducible live hangs in this send call turned out, on closer inspection right
+# after this was added, to be a plain off-by-one mistake in the *manual verification* process, not
+# a bug here: run_leg()'s own step counter starts at 1 (`for step in range(1, max_steps + 1)`), so
+# a step's real queue name is `..._leg1_1`, not `..._leg1_0` -- both live investigations had waited
+# on the wrong (nonexistent) queue and concluded the send was stuck, when the message was actually
+# sitting in the correctly-numbered queue the whole time (confirmed via queue_status: nonzero
+# pending_messages, a real seconds_since_last_send). The shared mcp_watchdog.py instance was never
+# actually unhealthy. Kept anyway as cheap, reasonable protection against a real future hang this
+# call has no other way to recover from -- see _send_ipc_message()'s own docstring.
 
 
 def _send_ipc_message(queue_name, content):
@@ -137,10 +137,11 @@ def _send_ipc_message(queue_name, content):
     whether the calling thread has a loop running at all.
 
     Raises TimeoutError if the send hasn't completed within
-    _SEND_IPC_MESSAGE_TIMEOUT_SECS -- see that constant's own comment for
-    why this exists. The background thread is a daemon thread and is left
-    to die on its own rather than force-killed (Python has no clean thread
-    -kill primitive); the caller gets unblocked either way."""
+    _SEND_IPC_MESSAGE_TIMEOUT_SECS -- precautionary, not a fix for a
+    confirmed bug; see that constant's own comment. The background thread
+    is a daemon thread and is left to die on its own rather than
+    force-killed (Python has no clean thread-kill primitive); the caller
+    gets unblocked either way."""
 
     async def _send():
         for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
