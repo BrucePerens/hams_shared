@@ -210,6 +210,22 @@ def ask_executor(model, prompt_text, timeout=60, image_bytes=None, out_dir=None,
     raise TimeoutError(f"No response written to {output_file} within {timeout}s (queue: {queue_name})")
 
 
+def log_and_dismiss_dialog(dialog):
+    """Playwright `page.on("dialog", ...)` handler. Found live 2026-08-29
+    (gdpr_privacy_dashboard run): a native confirm()/alert()/prompt() dialog is
+    invisible to extract_page_state()'s text-only DOM extraction -- Playwright
+    auto-dismisses these by default with no signal anywhere, so a persona
+    clicking a button that triggers one (e.g. "ERASE MY ACCOUNT", gated by
+    onsubmit="return confirm(...)") sees no visible change at all and may
+    misjudge the page as broken, when a real user's own browser would show
+    the dialog fine. Dismissing is still the right default here (accepting
+    one blind could confirm a real destructive action against the live site
+    under test), but logging it means a human reviewing the run afterward
+    can tell the two apart instead of silence either way."""
+    _logger.info("Native %s dialog dismissed: %r", dialog.type, dialog.message)
+    dialog.dismiss()
+
+
 def extract_page_state(page):
     """Returns (visible_text, elements) where elements is a list of dicts the persona can act on.
     Deliberately reads only what a sighted user would see: visible text content and the
@@ -450,6 +466,7 @@ def main():
     with sync_playwright() as p, open(log_path, "w") as log_fh:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        page.on("dialog", log_and_dismiss_dialog)
 
         for leg_num, goal in enumerate(legs, start=1):
             # Found live 2026-08-28/29: base_url was only navigated to once,

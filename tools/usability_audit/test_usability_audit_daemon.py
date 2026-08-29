@@ -191,5 +191,49 @@ class ExtractPageStateAccessibleNameTests(unittest.TestCase):
         self.assertNotIn("Should Not Win", labels)
 
 
+class LogAndDismissDialogTests(unittest.TestCase):
+    # Found live, 2026-08-29, running a real gdpr_privacy_dashboard persona audit:
+    # a native confirm() dialog (gating an "ERASE MY ACCOUNT" button) is invisible
+    # to extract_page_state()'s text-only DOM extraction, and Playwright silently
+    # auto-dismisses dialogs by default with zero signal anywhere -- a persona
+    # hitting one sees no visible change at all and may misjudge the page as
+    # broken. log_and_dismiss_dialog() is the page.on("dialog", ...) handler that
+    # fixes the silence (still dismissing, since accepting one blind could
+    # confirm a real destructive action against the live site under test).
+
+    @classmethod
+    def setUpClass(cls):
+        cls._pw = sync_playwright().start()
+        cls._browser = cls._pw.chromium.launch(headless=True, args=["--no-sandbox"])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._browser.close()
+        cls._pw.stop()
+
+    def test_a_real_confirm_dialog_is_dismissed_and_logged(self):
+        page = self._browser.new_page()
+        try:
+            page.on("dialog", uad.log_and_dismiss_dialog)
+            page.set_content(
+                """
+                <html><body>
+                  <button id="erase" onclick="window.__result = confirm('Erase everything?')">Erase</button>
+                </body></html>
+                """
+            )
+            with self.assertLogs("usability_audit_daemon", level="INFO") as captured:
+                page.click("#erase")
+            self.assertTrue(
+                any("dismissed" in line and "Erase everything?" in line for line in captured.output),
+                captured.output,
+            )
+            # confirm() returns false when dismissed -- proves the dialog was
+            # actually resolved, not left hanging.
+            self.assertEqual(page.evaluate("() => window.__result"), False)
+        finally:
+            page.close()
+
+
 if __name__ == "__main__":
     unittest.main()
