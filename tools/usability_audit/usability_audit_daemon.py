@@ -107,8 +107,19 @@ def _send_ipc_message(queue_name, content):
     comments and commit 827a705) -- the legacy bridge is simply never listening anymore. Matches
     ingest/daemon_utils.py's own send_ipc_message(), which hit and fixed the identical problem the
     same day. Deliberately reimplemented inline here rather than importing ingest/daemon_utils.py,
-    to avoid a hams_shared -> hams_com cross-repo import for a few lines of client code."""
+    to avoid a hams_shared -> hams_com cross-repo import for a few lines of client code.
+
+    Runs the send in its own thread with a fresh event loop rather than a
+    bare asyncio.run() in the calling thread: found live (2026-08-28,
+    running this daemon for real) that Playwright's *sync* API already has
+    a running event loop in the calling thread, so a bare asyncio.run() here
+    raised the exact "asyncio.run() cannot be called from a running event
+    loop" error docs/MCP_WATCHDOG_REPORT.md describes -- the same class of
+    bug that report was filed about, just triggered by Playwright instead of
+    Gemini's own MCP proxy. A dedicated thread sidesteps the question of
+    whether the calling thread has a loop running at all."""
     import asyncio
+    import threading
 
     from mcp.client.session import ClientSession
     from mcp.client.sse import sse_client
@@ -123,7 +134,19 @@ def _send_ipc_message(queue_name, content):
                     "send_ipc_message", arguments={"queue_name": queue_name, "content": content}
                 )
 
-    asyncio.run(_send())
+    errors = []
+
+    def _run():
+        try:
+            asyncio.run(_send())
+        except Exception as e:
+            errors.append(e)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join()
+    if errors:
+        raise errors[0]
 
 
 def ask_executor(model, prompt_text, timeout=60, image_bytes=None, out_dir=None, step_id=None):
