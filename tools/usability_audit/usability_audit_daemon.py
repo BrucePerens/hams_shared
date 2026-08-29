@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from PIL import Image
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 _logger = logging.getLogger("usability_audit_daemon")
@@ -476,10 +477,29 @@ def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_
                 history.append("Went back to the previous page.")
             else:
                 history.append(f"Unrecognized/unsupported action '{action}', stayed put.")
-            page.wait_for_load_state("networkidle", timeout=5000)
         except Exception as e:
             _logger.warning("Action execution failed at step %d: %s", step, e)
             history.append(f"Tried to {action} but it didn't work ({e}).")
+            continue
+
+        try:
+            # Found live 2026-08-29: this settle-wait used to be inside the same
+            # try/except as the click/fill/go_back call above, so a page with any
+            # continuing background network traffic (a live spot feed poll, a
+            # presence heartbeat, a space-weather ticker -- exactly what a real-time
+            # ham console like /shack has running constantly) NEVER reaches
+            # "networkidle" within 5s, and the resulting TimeoutError got
+            # misattributed to the action itself. Every click/type on such a page
+            # was logged as "didn't work" -- a false negative in the audit tool,
+            # not a site bug -- even when the action had already succeeded a line
+            # above. Confirmed directly: the exception's own attached Playwright
+            # call log showed "domcontentloaded" and "load" already fired, i.e.
+            # the page loaded fine; only the idle-network wait timed out. Give the
+            # DOM a moment to settle, but never let this alone mark the action
+            # as failed.
+            page.wait_for_load_state("networkidle", timeout=2000)
+        except PlaywrightTimeoutError:
+            pass
     return history
 
 
