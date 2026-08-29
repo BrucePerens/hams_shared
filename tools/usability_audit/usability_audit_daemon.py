@@ -339,8 +339,16 @@ def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_
             color_vision_note = COLOR_VISION_NOTE
         prompt = build_prompt(persona_desc, goal, history, visible_text, elements, page.url, color_vision_note)
         try:
+            # Found live 2026-08-28: a flat 600s timeout lost two consecutive legs of a
+            # real colorblind-persona run to timeouts an image-free (text-only) run never
+            # hit -- viewing and reasoning about an attached screenshot genuinely takes an
+            # executor longer than reading a text-only prompt, and a redirect-to-the-right-
+            # queue message (needed when a prior leg was lost) eats further into whatever's
+            # left of the window. Give image-based steps real headroom instead of the same
+            # budget as text-only ones.
+            step_timeout = 900 if color_vision_simulation else 600
             decision = ask_executor(
-                model, prompt, timeout=600, image_bytes=image_bytes, out_dir=out_dir, step_id=f"{leg_id}_{step}"
+                model, prompt, timeout=step_timeout, image_bytes=image_bytes, out_dir=out_dir, step_id=f"{leg_id}_{step}"
             )
         except (TimeoutError, OSError, json.JSONDecodeError, IndexError) as e:
             _logger.error("Executor call failed at step %d: %s", step, e)
