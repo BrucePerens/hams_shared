@@ -254,6 +254,65 @@ class ExtractPageStateAccessibleNameTests(unittest.TestCase):
         self.assertEqual(labels, ["QSL card layout"])
 
 
+class SelectImageNoteTests(unittest.TestCase):
+    # Found live 2026-08-29 running the screen_reader_user persona for real
+    # against a canvas-containing page (the Web Shack console): run_leg()
+    # attached a real screenshot and told the persona to "View it directly
+    # before answering" even though that persona is explicitly blind --
+    # impossible to follow and the opposite of what a canvas page actually
+    # means for a blind user. no_visual_access is the fix; these tests pin
+    # its precedence over color_vision_simulation and its exact notes.
+    def test_no_visual_access_with_no_canvas_captures_nothing_and_has_no_note(self):
+        should_capture, note = uad.select_image_note(
+            has_canvas=False, color_vision_simulation=False, no_visual_access=True
+        )
+        self.assertFalse(should_capture)
+        self.assertIsNone(note)
+
+    def test_no_visual_access_with_a_canvas_gets_the_blind_specific_note_and_no_screenshot(self):
+        should_capture, note = uad.select_image_note(
+            has_canvas=True, color_vision_simulation=False, no_visual_access=True
+        )
+        self.assertFalse(should_capture)
+        self.assertEqual(note, uad.CANVAS_NO_VISUAL_ACCESS_NOTE)
+
+    def test_no_visual_access_wins_over_color_vision_simulation_regardless_of_persona_file_ordering(self):
+        should_capture, note = uad.select_image_note(
+            has_canvas=True, color_vision_simulation=True, no_visual_access=True
+        )
+        self.assertFalse(should_capture)
+        self.assertEqual(note, uad.CANVAS_NO_VISUAL_ACCESS_NOTE)
+
+    def test_color_vision_simulation_alone_captures_a_screenshot_with_the_color_note(self):
+        should_capture, note = uad.select_image_note(
+            has_canvas=False, color_vision_simulation=True, no_visual_access=False
+        )
+        self.assertTrue(should_capture)
+        self.assertEqual(note, uad.COLOR_VISION_NOTE)
+
+    def test_color_vision_simulation_with_a_canvas_concatenates_both_notes(self):
+        should_capture, note = uad.select_image_note(
+            has_canvas=True, color_vision_simulation=True, no_visual_access=False
+        )
+        self.assertTrue(should_capture)
+        self.assertIn(uad.COLOR_VISION_NOTE, note)
+        self.assertIn(uad.CANVAS_SCREENSHOT_NOTE, note)
+
+    def test_plain_canvas_with_no_persona_flags_captures_a_screenshot_with_the_canvas_note(self):
+        should_capture, note = uad.select_image_note(
+            has_canvas=True, color_vision_simulation=False, no_visual_access=False
+        )
+        self.assertTrue(should_capture)
+        self.assertEqual(note, uad.CANVAS_SCREENSHOT_NOTE)
+
+    def test_no_canvas_and_no_persona_flags_captures_nothing(self):
+        should_capture, note = uad.select_image_note(
+            has_canvas=False, color_vision_simulation=False, no_visual_access=False
+        )
+        self.assertFalse(should_capture)
+        self.assertIsNone(note)
+
+
 class LogAndDismissDialogTests(unittest.TestCase):
     # Found live, 2026-08-29, running a real gdpr_privacy_dashboard persona audit:
     # a native confirm() dialog (gating an "ERASE MY ACCOUNT" button) is invisible

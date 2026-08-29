@@ -442,30 +442,65 @@ element you can click or drag). The attached screenshot shows what's actually dr
 now -- the page's visible TEXT above cannot show canvas contents at all, so use the image, not the
 text, to judge whether your last action actually changed anything on the canvas."""
 
+# Found live 2026-08-29 running the screen_reader_user persona for the first
+# time against a canvas-containing page (the Web Shack console): run_leg()
+# attached a real screenshot and told the persona to "View it directly
+# before answering" even though that persona is explicitly blind -- an
+# instruction that breaks character and is simply impossible to follow, the
+# opposite of what a canvas page actually means for this persona (a real
+# blind screen-reader user cannot use an unlabeled canvas control at all).
+# no_visual_access opts a persona file out of every screenshot this daemon
+# would otherwise attach (colorblind simulation included -- a blind persona
+# gets no use out of a deuteranopia-simulated image either), matching the
+# same "colorblind_coded_daemon.log"/"colorblind" opt-in-per-persona-file
+# pattern color_vision_simulation and mobile_device already establish.
+CANVAS_NO_VISUAL_ACCESS_NOTE = """This page has a drawing/editing canvas on it (listed above as an
+element you can click or drag). You are blind and cannot see it at all -- there is no screenshot
+for you, and the page's visible TEXT cannot describe canvas contents either. If this canvas has no
+real text alternative (an aria-live status region, a text description of what's drawn), treat it as
+effectively unusable to you and say so as a real point of confusion, not something to guess at."""
 
-def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_vision_simulation=False, out_dir="/tmp", leg_id="leg"):
+
+def select_image_note(has_canvas, color_vision_simulation, no_visual_access):
+    """Pure decision of whether a step should capture a screenshot at all, and
+    which textual image_note (if any) accompanies the prompt. Kept
+    side-effect-free (no real Playwright screenshot call here) specifically
+    so this is real-unit-testable without a live page -- matches the
+    "pure function specifically so this is real-unit-testable" pattern
+    already established for is_local_network_ip in the Rust relay daemon.
+    Returns (should_capture_screenshot: bool, image_note: str | None)."""
+    if no_visual_access:
+        # A blind persona gets no use out of any screenshot, deuteranopia-
+        # simulated or otherwise -- checked first so it always wins over
+        # color_vision_simulation regardless of persona-file ordering.
+        return False, (CANVAS_NO_VISUAL_ACCESS_NOTE if has_canvas else None)
+    if color_vision_simulation:
+        note = COLOR_VISION_NOTE
+        if has_canvas:
+            # A deuteranopia-simulated screenshot is still an accurate
+            # picture of what's on the canvas (only the colors are
+            # altered, not the shapes/positions), so the colorblind
+            # persona needs the same "the text can't show this" warning
+            # a sighted persona gets on a canvas page -- without this,
+            # this persona on the QSL Designer would get an image but
+            # never be told the visible text can't reflect canvas state.
+            note = f"{COLOR_VISION_NOTE}\n\n{CANVAS_SCREENSHOT_NOTE}"
+        return True, note
+    if has_canvas:
+        return True, CANVAS_SCREENSHOT_NOTE
+    return False, None
+
+
+def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_vision_simulation=False, out_dir="/tmp", leg_id="leg", no_visual_access=False):
     history = []
     consecutive_confused = 0
     for step in range(1, max_steps + 1):
         visible_text, elements = extract_page_state(page)
         has_canvas = any(el["tag"] == "canvas" for el in elements)
+        should_capture, image_note = select_image_note(has_canvas, color_vision_simulation, no_visual_access)
         image_bytes = None
-        image_note = None
-        if color_vision_simulation:
-            image_bytes = simulate_deuteranopia(page.screenshot())
-            image_note = COLOR_VISION_NOTE
-            if has_canvas:
-                # A deuteranopia-simulated screenshot is still an accurate
-                # picture of what's on the canvas (only the colors are
-                # altered, not the shapes/positions), so the colorblind
-                # persona needs the same "the text can't show this" warning
-                # a sighted persona gets on a canvas page -- without this,
-                # this persona on the QSL Designer would get an image but
-                # never be told the visible text can't reflect canvas state.
-                image_note = f"{COLOR_VISION_NOTE}\n\n{CANVAS_SCREENSHOT_NOTE}"
-        elif has_canvas:
-            image_bytes = page.screenshot()
-            image_note = CANVAS_SCREENSHOT_NOTE
+        if should_capture:
+            image_bytes = simulate_deuteranopia(page.screenshot()) if color_vision_simulation else page.screenshot()
         prompt = build_prompt(persona_desc, goal, history, visible_text, elements, page.url, image_note)
         try:
             # Found live 2026-08-28: a flat 600s timeout lost two consecutive legs of a
@@ -628,6 +663,7 @@ def main():
     legs = persona_spec["legs"]
     color_vision_simulation = bool(persona_spec.get("color_vision_simulation"))
     mobile_device = persona_spec.get("mobile_device")
+    no_visual_access = bool(persona_spec.get("no_visual_access"))
 
     os.makedirs(args.out_dir, exist_ok=True)
     run_id = datetime.now().strftime("%Y%m%dT%H%M%S")
@@ -677,6 +713,7 @@ def main():
                 color_vision_simulation=color_vision_simulation,
                 out_dir=args.out_dir,
                 leg_id=f"run{run_id}_leg{leg_num}",
+                no_visual_access=no_visual_access,
             )
 
         browser.close()
