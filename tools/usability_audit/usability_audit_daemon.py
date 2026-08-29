@@ -41,6 +41,16 @@ MAX_INTERACTIVE_ELEMENTS = 60
 MAX_HISTORY_ENTRIES_IN_PROMPT = 8
 CONSECUTIVE_CONFUSION_LIMIT = 3  # give up a leg after this many confused steps in a row
 
+# Found live 2026-08-29 testing the Operator Directory Map: theme_hams's
+# s_ham_map.xml uses a native <details>/<summary> disclosure ("View operator
+# list") as a real, always-in-the-DOM accessible fallback to the map -- but
+# <summary> wasn't in this selector, so no persona could ever find or click
+# it, even though it's a fully native, keyboard-accessible control. Used in
+# three places below (element extraction and both action-execution
+# re-queries); they must stay identical to each other since click/type index
+# into the list this selector produces.
+INTERACTIVE_ELEMENTS_SELECTOR = "a, button, input, textarea, select, summary, [role=button], [onclick]"
+
 PERSONA_SYSTEM_PREAMBLE = """You are role-playing a real, non-technical newcomer to a website, for
 a usability audit. Stay completely in character. You have NEVER seen this website's source code,
 admin panel, or internal documentation -- you only know what is visibly on the current page, plus
@@ -284,7 +294,7 @@ def extract_page_state(page):
     visible_text = (visible_text or "").strip()[:MAX_PAGE_TEXT_CHARS]
 
     elements = []
-    locator = page.locator("a, button, input, textarea, select, [role=button], [onclick]")
+    locator = page.locator(INTERACTIVE_ELEMENTS_SELECTOR)
     count = min(locator.count(), MAX_INTERACTIVE_ELEMENTS * 3)
     for i in range(count):
         if len(elements) >= MAX_INTERACTIVE_ELEMENTS:
@@ -461,13 +471,13 @@ def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_
         idx = decision.get("target_index")
         try:
             if action == "click" and idx is not None:
-                locator = page.locator("a, button, input, textarea, select, [role=button], [onclick]").nth(
+                locator = page.locator(INTERACTIVE_ELEMENTS_SELECTOR).nth(
                     elements[idx]["_locator_index"]
                 )
                 locator.click(timeout=5000)
                 history.append(f"Clicked '{elements[idx]['label']}': {decision.get('thought')}")
             elif action == "type" and idx is not None:
-                locator = page.locator("a, button, input, textarea, select, [role=button], [onclick]").nth(
+                locator = page.locator(INTERACTIVE_ELEMENTS_SELECTOR).nth(
                     elements[idx]["_locator_index"]
                 )
                 locator.fill(decision.get("type_value") or "", timeout=5000)
