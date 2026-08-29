@@ -117,6 +117,43 @@ def start_legacy_bridge():
 
 mcp = FastMCP("Watchdog")
 
+# The one shared server instance (this box's real deployment: `--transport
+# sse --port 8767`) that every process-local `_QUEUES` dict must actually
+# defer to when THIS process is a per-client stdio spawn rather than that
+# shared instance itself. Centralized here (rather than duplicated per tool,
+# which is how wait_for_inbox alone got this and send_ipc_message/
+# queue_status silently didn't -- found 2026-08-28) so all three IPC tools
+# stay consistent by construction.
+_SHARED_SSE_PORT = 8767
+_SHARED_SSE_URL = f"http://127.0.0.1:{_SHARED_SSE_PORT}/sse"
+
+
+def _is_shared_instance() -> bool:
+    import sys
+    return "--transport" in sys.argv
+
+
+async def _proxy_to_shared(tool_name: str, **kwargs) -> str:
+    """
+    Call `tool_name` on the one shared SSE instance instead of touching this
+    process's own local _QUEUES. Only meaningful when _is_shared_instance()
+    is False; callers must check that first.
+    """
+    import os
+    from mcp.client.sse import sse_client
+    from mcp.client.session import ClientSession
+    for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+        if k in os.environ:
+            del os.environ[k]
+    try:
+        async with sse_client(_SHARED_SSE_URL) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                res = await session.call_tool(tool_name, arguments=kwargs)
+                return res.content[0].text if res.content else str(res)
+    except Exception as e:
+        return f"PROXY ERROR: Failed to reach central SSE server: {e}"
+
 
 def get_state_file(self_agent_id):
     prefix = f"_{self_agent_id}" if self_agent_id else ""
@@ -696,8 +733,14 @@ async def send_ipc_message(queue_name: str, content: str) -> str:
     socket involved and no need to retry waiting for a listener to appear: if
     nobody is receiving yet, the message just waits in order until they do.
     Use queue_status(queue_name) to check whether anyone is actually
-    receiving.
+    receiving. Proxies to the one shared instance over SSE when this process
+    is itself a per-client stdio spawn rather than the shared instance (see
+    _proxy_to_shared) -- otherwise a message sent here would land in this
+    process's own private queue, invisible to a wait_for_inbox call on the
+    shared instance actually being awaited elsewhere.
     """
+    if not _is_shared_instance():
+        return await _proxy_to_shared("send_ipc_message", queue_name=queue_name, content=content)
     if queue_name.startswith('/'):
         queue_name = queue_name[1:]
     q = _get_queue(queue_name)
@@ -721,8 +764,13 @@ async def queue_status(queue_name: str) -> str:
     "a receiver is waiting but the sender is idle/dead" from "messages are
     piling up because nobody is receiving" -- from either side alone, both
     look identical (silence), and this pipeline has been bitten by exactly
-    that ambiguity before.
+    that ambiguity before. Proxies to the shared instance in stdio mode, same
+    reasoning as send_ipc_message above -- this process's own local
+    _QUEUE_META would otherwise always report "exists": false for a queue
+    the shared instance actually holds.
     """
+    if not _is_shared_instance():
+        return await _proxy_to_shared("queue_status", queue_name=queue_name)
     if queue_name.startswith('/'):
         queue_name = queue_name[1:]
     if queue_name not in _QUEUE_META:
@@ -850,47 +898,44 @@ async def spawn_managed_daemons(session_id: str, commands_json: str) -> str:
 
 @mcp.tool()
 async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id: str | None = None, writer_agent_id: str | None = None, writer_pid: int | None = None, session_id: str | None = None, reconnect_after_secs: int | None = None) -> str:
-    import sys
-    if "--transport" not in sys.argv:
-        import os
-        from mcp.client.sse import sse_client
-        from mcp.client.session import ClientSession
-        for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
-            if k in os.environ:
-                del os.environ[k]
-        try:
-            async with sse_client("http://127.0.0.1:8767/sse") as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    args = {"queue_name": queue_name, "timeout_mins": timeout_mins}
-                    if self_agent_id is not None: args["self_agent_id"] = self_agent_id
-                    if writer_agent_id is not None: args["writer_agent_id"] = writer_agent_id
-                    if writer_pid is not None: args["writer_pid"] = writer_pid
-                    if session_id is not None: args["session_id"] = session_id
-                    if reconnect_after_secs is not None: args["reconnect_after_secs"] = reconnect_after_secs
-                    res = await session.call_tool("wait_for_inbox", arguments=args)
-                    return res.content[0].text if res.content else str(res)
-        except Exception as e:
-            return f"PROXY ERROR: Failed to reach central SSE server: {e}"
-
     """
     Wait for the specified inbox message on an in-process queue. Returns
     immediately if a message is already pending (sent before this call
     started). If writer_pid or session_id identifies a dead writer, returns
     WRITER_DEAD so the agent can stop polling instead of waiting out the full
-    timeout for a sender that will never come.
+    timeout for a sender that will never come. Proxies to the one shared
+    instance over SSE when this process is itself a per-client stdio spawn
+    (see _proxy_to_shared) -- otherwise this call would only ever see this
+    process's own private, empty queue, never a message a real sender put on
+    the shared instance's queue of the same name.
 
     reconnect_after_secs is an opt-in safety net for MCP clients known to
-    silently kill a long-idle tool call on their own (confirmed on Claude
-    Code's own client: it aborts a call after ~400s of server silence
-    regardless of timeout_mins, and a message arriving right at that
-    boundary can be consumed by the dying call before the client ever sees
-    the result -- lost, not just delayed). When set, this call returns a
-    RECONNECT_HINT well before that risk window instead of continuing to
-    block toward the full timeout, so the caller can voluntarily re-issue
-    the call and stay ahead of an involuntary kill. Leave unset for clients
-    without this constraint (no evidence Antigravity's own client needs it).
+    silently kill a long-idle tool call on their own. Two confirmed cases so
+    far, with very different budgets -- pass a value safely under whichever
+    applies to your own client, not a one-size-fits-all default:
+    - Claude Code's own client aborts a call after ~400s of server silence
+      regardless of timeout_mins (use e.g. 350).
+    - Gemini/Antigravity's engine has a much tighter ~3-minute (180s) hard
+      timeout on tool calls (see docs/MCP_WATCHDOG_REPORT.md's "Zombie
+      Connection Stall" -- a call left blocking past this point becomes an
+      orphaned listener that can silently consume a message the caller's own
+      next turn never sees) -- use e.g. 150, not 350.
+    A message arriving right at either boundary can be consumed by the dying
+    call before the client ever sees the result -- lost, not just delayed.
+    When set, this call returns a RECONNECT_HINT well before that risk
+    window instead of continuing to block toward the full timeout, so the
+    caller can voluntarily re-issue the call and stay ahead of an involuntary
+    kill or an orphaned listener.
     """
+    if not _is_shared_instance():
+        kwargs = {"queue_name": queue_name, "timeout_mins": timeout_mins}
+        if self_agent_id is not None: kwargs["self_agent_id"] = self_agent_id
+        if writer_agent_id is not None: kwargs["writer_agent_id"] = writer_agent_id
+        if writer_pid is not None: kwargs["writer_pid"] = writer_pid
+        if session_id is not None: kwargs["session_id"] = session_id
+        if reconnect_after_secs is not None: kwargs["reconnect_after_secs"] = reconnect_after_secs
+        return await _proxy_to_shared("wait_for_inbox", **kwargs)
+
     if queue_name.startswith('/'):
         queue_name = queue_name[1:]
 
@@ -933,7 +978,12 @@ async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id:
                                 "timeout": exp.get("timeout_mins", 60),
                                 "deadline": time.time() + exp.get("timeout_mins", 60) * 60
                             })
-                        return raw_str
+                        # Prefer the clean "prompt" text over the raw
+                        # envelope: every known consumer (an LLM subagent
+                        # reading this directly, usability_audit_daemon.py's
+                        # ask_executor()) wants readable instructions, not a
+                        # JSON blob it has to parse itself to find them.
+                        return payload.get("prompt", raw_str)
                 except Exception:
                     pass
 

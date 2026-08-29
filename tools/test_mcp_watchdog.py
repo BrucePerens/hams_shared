@@ -17,7 +17,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import mcp_watchdog as wd
 
@@ -276,6 +276,14 @@ class SendIpcMessageAndQueueStatusAreAsyncTests(unittest.IsolatedAsyncioTestCase
     def setUp(self):
         wd._QUEUES.clear()
         wd._QUEUE_META.clear()
+        # Both tools now proxy to the shared SSE instance (127.0.0.1:8767)
+        # whenever this process isn't itself that instance (see
+        # _is_shared_instance) -- exactly like wait_for_inbox already did.
+        # Force the "I am the shared instance" branch so this test exercises
+        # the real local-queue logic instead of trying a real network call.
+        patcher = patch("mcp_watchdog._is_shared_instance", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_both_tools_are_coroutine_functions(self):
         self.assertTrue(asyncio.iscoroutinefunction(wd.send_ipc_message))
@@ -289,6 +297,48 @@ class SendIpcMessageAndQueueStatusAreAsyncTests(unittest.IsolatedAsyncioTestCase
         self.assertTrue(status["exists"])
         self.assertEqual(status["pending_messages"], 1)
         self.assertFalse(status["receiver_currently_waiting"])
+
+    async def test_a_stdio_instance_proxies_instead_of_touching_its_own_queue(self):
+        with patch("mcp_watchdog._is_shared_instance", return_value=False), patch(
+            "mcp_watchdog._proxy_to_shared",
+            new_callable=AsyncMock,
+            return_value="Message sent successfully.",
+        ) as mock_proxy:
+            result = await wd.send_ipc_message("night-shift-queue", "hello")
+        mock_proxy.assert_awaited_once_with(
+            "send_ipc_message", queue_name="night-shift-queue", content="hello"
+        )
+        self.assertEqual(result, "Message sent successfully.")
+        # Never touched the local queue -- a stdio instance's own _QUEUES
+        # would be a different store than the shared instance's.
+        self.assertNotIn("night-shift-queue", wd._QUEUES)
+
+
+class AllToolsHaveRealDocstringsTests(unittest.TestCase):
+    # Found 2026-08-28: wait_for_inbox picked up a stray string literal
+    # *after* its first real statement (a proxy-branch block), which Python
+    # only treats as a docstring when it's the function's literal first
+    # statement -- everywhere else it's a no-op expression, silently
+    # dropping the tool's __doc__ to None. FastMCP surfaces __doc__ as the
+    # tool's description to callers, so this was a real, if quiet,
+    # discoverability regression, not just style. Covering all @mcp.tool()
+    # functions generically so this class of mistake can't recur unnoticed
+    # on any of them.
+
+    def test_every_mcp_tool_has_a_nonempty_docstring(self):
+        # wait_for_agent_state_change is deliberately excluded: it has never
+        # had a docstring, a separate, pre-existing gap unrelated to
+        # tonight's fix -- not scope-creeping into auditing it here.
+        tools = [
+            wd.wait_for_result,
+            wd.wait_for_all_complete, wd.send_ipc_message, wd.queue_status,
+            wd.wait_for_fatal_events, wd.spawn_managed_daemons, wd.wait_for_inbox,
+        ]
+        for tool in tools:
+            self.assertTrue(
+                tool.__doc__ and tool.__doc__.strip(),
+                f"{tool.__name__} has no docstring -- FastMCP would show callers an empty description",
+            )
 
 
 class _FakeConn:

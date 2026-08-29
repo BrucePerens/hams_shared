@@ -21,7 +21,6 @@ import io
 import json
 import logging
 import os
-import socket
 import time
 from datetime import datetime, timezone
 
@@ -97,21 +96,34 @@ def simulate_deuteranopia(png_bytes):
     return out.getvalue()
 
 
-_WATCHDOG_BRIDGE_SOCK = os.path.expanduser("~/workspace/tmp/mcp_watchdog_ipc.sock")
+_WATCHDOG_SSE_URL = "http://127.0.0.1:8767/sse"
 
 
 def _send_ipc_message(queue_name, content):
-    """Dependency-free client for mcp_watchdog.py's own "legacy bridge" -- the same mechanism
-    ingest/daemon_utils.py's send_ipc_message() uses for plain (non-MCP-agent) Python processes.
-    Wire format: connect, write "<queue_name>\\n<content>", close. Deliberately reimplemented
-    inline here rather than importing ingest/daemon_utils.py, to avoid a hams_shared -> hams_com
-    cross-repo import for three lines of socket code."""
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.connect(_WATCHDOG_BRIDGE_SOCK)
-    try:
-        sock.sendall(f"{queue_name}\n{content}".encode("utf-8"))
-    finally:
-        sock.close()
+    """Client for mcp_watchdog.py's shared instance, over SSE. Found 2026-08-28: this used to
+    speak the old Unix-socket "legacy bridge" (wire format "<queue_name>\\n<content>"), but that
+    bridge is only ever bound when the shared instance runs `--transport streamable-http`, and the
+    real shared instance now runs `--transport sse` (see mcp_watchdog.py's own top-of-file
+    comments and commit 827a705) -- the legacy bridge is simply never listening anymore. Matches
+    ingest/daemon_utils.py's own send_ipc_message(), which hit and fixed the identical problem the
+    same day. Deliberately reimplemented inline here rather than importing ingest/daemon_utils.py,
+    to avoid a hams_shared -> hams_com cross-repo import for a few lines of client code."""
+    import asyncio
+
+    from mcp.client.session import ClientSession
+    from mcp.client.sse import sse_client
+
+    async def _send():
+        for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+            os.environ.pop(k, None)
+        async with sse_client(_WATCHDOG_SSE_URL) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                await session.call_tool(
+                    "send_ipc_message", arguments={"queue_name": queue_name, "content": content}
+                )
+
+    asyncio.run(_send())
 
 
 def ask_executor(model, prompt_text, timeout=60, image_bytes=None, out_dir=None, step_id=None):
