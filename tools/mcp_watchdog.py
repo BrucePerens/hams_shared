@@ -688,7 +688,7 @@ async def wait_for_all_complete(
     return json.dumps(results, indent=2)
 
 @mcp.tool()
-def send_ipc_message(queue_name: str, content: str) -> str:
+async def send_ipc_message(queue_name: str, content: str) -> str:
     """
     Deliver a message to whatever wait_for_inbox(queue_name=...) call is, or
     later will be, blocked on this queue name. Delivery is immediate and
@@ -705,8 +705,15 @@ def send_ipc_message(queue_name: str, content: str) -> str:
     _QUEUE_META[queue_name]["last_put_at"] = time.time()
     return "Message sent successfully."
 
+# send_ipc_message and queue_status are async def (2026-08-28, per
+# docs/MCP_WATCHDOG_REPORT.md, a Gemini-authored incident report) even
+# though neither does any blocking I/O: Gemini's local MCP proxy crashed
+# calling these when they were plain `def` tools, consistent with every
+# other tool in this file already being async def -- matching that pattern
+# is the fix the report itself recommends, and there's no downside since
+# an async function with no `await` is still perfectly legal.
 @mcp.tool()
-def queue_status(queue_name: str) -> str:
+async def queue_status(queue_name: str) -> str:
     """
     Diagnose a queue without consuming from it: how many messages are
     pending, whether a receiver is currently blocked inside wait_for_inbox,
@@ -842,7 +849,30 @@ async def spawn_managed_daemons(session_id: str, commands_json: str) -> str:
         return SESSION_REGISTRY[session_id]["error"]
 
 @mcp.tool()
-async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id: str = None, writer_agent_id: str = None, writer_pid: int = None, session_id: str = None, reconnect_after_secs: int = None) -> str:
+async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id: str | None = None, writer_agent_id: str | None = None, writer_pid: int | None = None, session_id: str | None = None, reconnect_after_secs: int | None = None) -> str:
+    import sys
+    if "--transport" not in sys.argv:
+        import os
+        from mcp.client.sse import sse_client
+        from mcp.client.session import ClientSession
+        for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+            if k in os.environ:
+                del os.environ[k]
+        try:
+            async with sse_client("http://127.0.0.1:8767/sse") as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    args = {"queue_name": queue_name, "timeout_mins": timeout_mins}
+                    if self_agent_id is not None: args["self_agent_id"] = self_agent_id
+                    if writer_agent_id is not None: args["writer_agent_id"] = writer_agent_id
+                    if writer_pid is not None: args["writer_pid"] = writer_pid
+                    if session_id is not None: args["session_id"] = session_id
+                    if reconnect_after_secs is not None: args["reconnect_after_secs"] = reconnect_after_secs
+                    res = await session.call_tool("wait_for_inbox", arguments=args)
+                    return res.content[0].text if res.content else str(res)
+        except Exception as e:
+            return f"PROXY ERROR: Failed to reach central SSE server: {e}"
+
     """
     Wait for the specified inbox message on an in-process queue. Returns
     immediately if a message is already pending (sent before this call
@@ -903,7 +933,7 @@ async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id:
                                 "timeout": exp.get("timeout_mins", 60),
                                 "deadline": time.time() + exp.get("timeout_mins", 60) * 60
                             })
-                        return payload.get("prompt", raw_str)
+                        return raw_str
                 except Exception:
                     pass
 

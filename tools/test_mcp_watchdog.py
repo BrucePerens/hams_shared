@@ -11,6 +11,7 @@ and are out of scope here -- this covers the functions those tools are
 built on, which is where a parsing bug would actually hide.
 """
 
+import asyncio
 import json
 import os
 import shutil
@@ -261,6 +262,33 @@ class GetQueueTests(unittest.TestCase):
         q2 = wd._get_queue("shared")
         self.assertIs(q1, q2)
         self.assertEqual(q2.get_nowait(), "hello")
+
+
+class SendIpcMessageAndQueueStatusAreAsyncTests(unittest.IsolatedAsyncioTestCase):
+    # Regression coverage for docs/MCP_WATCHDOG_REPORT.md (Gemini-authored
+    # incident report, 2026-08-28): Gemini's local MCP proxy crashed calling
+    # send_ipc_message/queue_status back when they were plain `def` tools,
+    # while every other tool in this file was already `async def` and never
+    # hit the crash. Asserting these are awaitable coroutines (not just
+    # exercising their behavior via a synchronous call) is the part that
+    # would have caught a regression back to plain `def`.
+
+    def setUp(self):
+        wd._QUEUES.clear()
+        wd._QUEUE_META.clear()
+
+    def test_both_tools_are_coroutine_functions(self):
+        self.assertTrue(asyncio.iscoroutinefunction(wd.send_ipc_message))
+        self.assertTrue(asyncio.iscoroutinefunction(wd.queue_status))
+
+    async def test_send_then_status_works_when_awaited(self):
+        result = await wd.send_ipc_message("night-shift-queue", "hello")
+        self.assertEqual(result, "Message sent successfully.")
+
+        status = json.loads(await wd.queue_status("night-shift-queue"))
+        self.assertTrue(status["exists"])
+        self.assertEqual(status["pending_messages"], 1)
+        self.assertFalse(status["receiver_currently_waiting"])
 
 
 class _FakeConn:
