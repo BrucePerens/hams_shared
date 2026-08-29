@@ -235,5 +235,44 @@ class LogAndDismissDialogTests(unittest.TestCase):
             page.close()
 
 
+class NewPageForRunTests(unittest.TestCase):
+    # Found the gap while adding the "mobile_device" persona-file setting
+    # (2026-08-29): every persona run tonight had used Chromium's default
+    # desktop viewport, and no persona had ever exercised the site's mobile/
+    # responsive layout at all. new_page_for_run() is the extracted helper
+    # main() now calls, tested directly here against a real browser rather
+    # than only indirectly through main()'s own CLI/file-I/O path.
+
+    @classmethod
+    def setUpClass(cls):
+        cls._pw = sync_playwright().start()
+        cls._browser = cls._pw.chromium.launch(headless=True, args=["--no-sandbox"])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._browser.close()
+        cls._pw.stop()
+
+    def test_no_mobile_device_gives_the_plain_desktop_default(self):
+        page = uad.new_page_for_run(self._pw, self._browser, None)
+        try:
+            size = page.viewport_size
+            self.assertGreater(size["width"], 1000, size)
+        finally:
+            page.close()
+
+    def test_a_mobile_device_name_applies_its_real_viewport_and_user_agent(self):
+        page = uad.new_page_for_run(self._pw, self._browser, "Pixel 5")
+        try:
+            expected = self._pw.devices["Pixel 5"]
+            self.assertEqual(page.viewport_size, expected["viewport"])
+            self.assertEqual(
+                page.evaluate("() => navigator.userAgent"), expected["user_agent"]
+            )
+            self.assertGreater(page.evaluate("() => navigator.maxTouchPoints"), 0)
+        finally:
+            page.close()
+
+
 if __name__ == "__main__":
     unittest.main()

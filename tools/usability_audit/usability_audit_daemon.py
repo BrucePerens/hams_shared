@@ -226,6 +226,18 @@ def log_and_dismiss_dialog(dialog):
     dialog.dismiss()
 
 
+def new_page_for_run(playwright, browser, mobile_device):
+    """Creates the single page a run drives, honoring an optional
+    "mobile_device" persona-file setting (see main()'s own comment for the
+    full rationale). Extracted as its own function so the device-emulation
+    wiring itself has direct test coverage without needing to drive main()'s
+    whole CLI/argparse/file-I/O path end to end."""
+    if mobile_device:
+        context = browser.new_context(**playwright.devices[mobile_device])
+        return context.new_page()
+    return browser.new_page()
+
+
 def extract_page_state(page):
     """Returns (visible_text, elements) where elements is a list of dicts the persona can act on.
     Deliberately reads only what a sighted user would see: visible text content and the
@@ -458,6 +470,7 @@ def main():
     persona_desc = persona_spec["persona"]
     legs = persona_spec["legs"]
     color_vision_simulation = bool(persona_spec.get("color_vision_simulation"))
+    mobile_device = persona_spec.get("mobile_device")
 
     os.makedirs(args.out_dir, exist_ok=True)
     run_id = datetime.now().strftime("%Y%m%dT%H%M%S")
@@ -465,7 +478,21 @@ def main():
 
     with sync_playwright() as p, open(log_path, "w") as log_fh:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        # A persona file may set "mobile_device" to a real Playwright device
+        # name (e.g. "Pixel 5" -- see playwright.devices for the full list)
+        # to emulate a real phone's viewport, user agent, and touch input,
+        # rather than always running at Chromium's desktop default. Same
+        # opt-in-per-persona-file pattern as color_vision_simulation above.
+        # new_context(**p.devices[name]) is Playwright's own documented
+        # device-emulation idiom -- it works with any device descriptor
+        # regardless of that device's own "default_browser_type" (this
+        # daemon always launches Chromium above; a device whose real-world
+        # counterpart Playwright maps to WebKit, e.g. any iPhone, still gets
+        # its viewport/UA/touch metadata applied faithfully here, just
+        # rendered by Chromium's engine rather than WebKit's -- pick a
+        # Chromium-mapped device, e.g. an Android one, for full engine
+        # fidelity too).
+        page = new_page_for_run(p, browser, mobile_device)
         page.on("dialog", log_and_dismiss_dialog)
 
         for leg_num, goal in enumerate(legs, start=1):
