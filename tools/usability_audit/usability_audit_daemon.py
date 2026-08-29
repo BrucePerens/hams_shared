@@ -483,7 +483,19 @@ def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_
                 locator = page.locator(INTERACTIVE_ELEMENTS_SELECTOR).nth(
                     elements[idx]["_locator_index"]
                 )
-                locator.fill(decision.get("type_value") or "", timeout=5000)
+                # Found live 2026-08-29 running the club_membership persona: a real
+                # <select> dropdown (choosing a club to apply to) is a genuine,
+                # fillable-in-spirit form control, but Playwright's .fill() only
+                # works on <input>/<textarea>/[contenteditable] and raises for a
+                # <select> ("Element is not an <input>, <textarea> or
+                # [contenteditable] element") -- the daemon reported this as the
+                # persona's own action failing, when it was really this dispatch
+                # code never having a path for dropdowns at all.
+                tag = locator.evaluate("e => e.tagName.toLowerCase()")
+                if tag == "select":
+                    locator.select_option(label=decision.get("type_value") or "", timeout=5000)
+                else:
+                    locator.fill(decision.get("type_value") or "", timeout=5000)
                 history.append(f"Typed into '{elements[idx]['label']}': {decision.get('thought')}")
             elif action == "navigate_back":
                 page.go_back(timeout=5000)
