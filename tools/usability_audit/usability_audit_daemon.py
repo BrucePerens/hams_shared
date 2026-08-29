@@ -67,7 +67,10 @@ At each step you will be shown the current page's visible text and a list of cli
 elements. Decide what YOU, the persona, would do next given your goal, and report your genuine
 reaction. Respond with ONLY a JSON object, no other text, with these fields:
 - "thought": one sentence, in character, about what you're looking at and why you're choosing your action
-- "action": one of "click", "type", "navigate_back", "give_up_on_leg", "goal_complete"
+- "action": one of "click", "type", "navigate_back", "wait", "give_up_on_leg", "goal_complete"
+  ("wait" means the page looks like it's still loading/thinking and you want to give it a few more
+  seconds before deciding what to do next -- use this instead of re-clicking the same thing over
+  and over)
 - "target_index": integer index into the numbered element list (for "click" or "type"), or null
 - "type_value": string to type (only for "type"), or null
 - "confused": boolean -- true if this step felt confusing, unclear, or harder than it should be
@@ -485,6 +488,16 @@ def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_
             elif action == "navigate_back":
                 page.go_back(timeout=5000)
                 history.append("Went back to the previous page.")
+            elif action == "wait":
+                # Found live 2026-08-29: an executor answering steps by hand (no live
+                # Gemini Conductor) has real response latency that can land right inside
+                # a page's own slow-init window, so re-clicking the same nav link out of
+                # impatience restarts that page's init before it ever finishes -- turning
+                # a genuine, bounded ~3.5s load into an apparent infinite hang across
+                # several steps. Giving the executor an explicit way to just wait removes
+                # the incentive to re-click.
+                page.wait_for_timeout(3000)
+                history.append("Waited a few seconds for the page to finish loading.")
             else:
                 history.append(f"Unrecognized/unsupported action '{action}', stayed put.")
         except Exception as e:
