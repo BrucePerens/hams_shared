@@ -225,6 +225,34 @@ class ExtractPageStateAccessibleNameTests(unittest.TestCase):
         self.assertIn("Explicit ARIA Name", labels)
         self.assertNotIn("Should Not Win", labels)
 
+    def test_an_unlabeled_canvas_gets_a_synthetic_label_instead_of_being_dropped(self):
+        # Found live 2026-08-29 fixing the QSL Card Designer bug: a <canvas> almost
+        # never has an accessible name (it's a bitmap, not text), so it fell through
+        # every real label source and hit "if not label: continue" -- silently
+        # invisible to every persona, on a page whose entire interaction surface is
+        # that one element. Every other unlabeled tag is legitimately skipped (a
+        # real screen-reader user can't act on it either); a canvas is the one
+        # exception, since a sighted persona can still see and click/drag it.
+        html = """
+        <html><body>
+          <canvas id="qslCanvas" width="800" height="500"></canvas>
+        </body></html>
+        """
+        elements = self._elements_for(html)
+        canvases = [e for e in elements if e["tag"] == "canvas"]
+        self.assertEqual(len(canvases), 1)
+        self.assertTrue(canvases[0]["label"])
+
+    def test_a_canvas_with_a_real_aria_label_keeps_it(self):
+        html = """
+        <html><body>
+          <canvas id="qslCanvas" width="800" height="500" aria-label="QSL card layout"></canvas>
+        </body></html>
+        """
+        elements = self._elements_for(html)
+        labels = [e["label"] for e in elements if e["tag"] == "canvas"]
+        self.assertEqual(labels, ["QSL card layout"])
+
 
 class LogAndDismissDialogTests(unittest.TestCase):
     # Found live, 2026-08-29, running a real gdpr_privacy_dashboard persona audit:

@@ -49,7 +49,18 @@ CONSECUTIVE_CONFUSION_LIMIT = 3  # give up a leg after this many confused steps 
 # three places below (element extraction and both action-execution
 # re-queries); they must stay identical to each other since click/type index
 # into the list this selector produces.
-INTERACTIVE_ELEMENTS_SELECTOR = "a, button, input, textarea, select, summary, [role=button], [onclick]"
+#
+# `canvas` added the same night, for a different reason: the QSL Card
+# Designer renders entirely to a <canvas>, which this DOM-text-based tool
+# cannot see into at all -- a persona reported "nothing visibly changed"
+# after clicking a real, working "Add Field" button, indistinguishable from
+# the page being genuinely broken (it happened to also be broken, but this
+# tool couldn't tell the difference). Listing the canvas itself as an
+# addressable element (with a screenshot attached, and a real "drag" action
+# below) closes that blind spot -- it doesn't let the persona see individual
+# canvas-drawn shapes, but it lets it see the canvas's overall visual state
+# change, and actually attempt a drag instead of silently being unable to.
+INTERACTIVE_ELEMENTS_SELECTOR = "a, button, input, textarea, select, summary, canvas, [role=button], [onclick]"
 
 PERSONA_SYSTEM_PREAMBLE = """You are role-playing a real, non-technical newcomer to a website, for
 a usability audit. Stay completely in character. You have NEVER seen this website's source code,
@@ -67,12 +78,14 @@ At each step you will be shown the current page's visible text and a list of cli
 elements. Decide what YOU, the persona, would do next given your goal, and report your genuine
 reaction. Respond with ONLY a JSON object, no other text, with these fields:
 - "thought": one sentence, in character, about what you're looking at and why you're choosing your action
-- "action": one of "click", "type", "navigate_back", "wait", "give_up_on_leg", "goal_complete"
+- "action": one of "click", "type", "drag", "navigate_back", "wait", "give_up_on_leg", "goal_complete"
   ("wait" means the page looks like it's still loading/thinking and you want to give it a few more
   seconds before deciding what to do next -- use this instead of re-clicking the same thing over
-  and over)
-- "target_index": integer index into the numbered element list (for "click" or "type"), or null
-- "type_value": string to type (only for "type"), or null
+  and over. "drag" is for a canvas/drawing element you'd naturally try to click-and-drag, like moving
+  something on a design tool -- see below for how to aim it)
+- "target_index": integer index into the numbered element list (for "click", "type", or "drag"), or null
+- "type_value": string to type (only for "type"); for "drag", one of "up", "down", "left", "right" --
+  the rough direction you'd drag toward, since you can't see exact pixel coordinates, only null otherwise
 - "confused": boolean -- true if this step felt confusing, unclear, or harder than it should be
 - "confusion_reason": string explaining why, in the persona's own words, or null if not confused
 - "suggestion": string -- a concrete "this would be easier if X" suggestion, or null if none
@@ -368,6 +381,16 @@ def extract_page_state(page):
                     or el.get_attribute("title")
                     or ""
                 ).strip()
+            if not label and tag == "canvas":
+                # A <canvas> almost never has an accessible name of its own --
+                # it's a bitmap, not text -- but it can still be a real,
+                # meaningful interactive target (drag-to-move, drag-to-draw).
+                # Every other tag with no label is legitimately invisible to
+                # a real screen reader user and gets skipped below; a canvas
+                # is different; the visual persona can still see and click it
+                # even with no name, so give it a real label instead of
+                # dropping it silently.
+                label = "drawing/editing canvas area"
             if not label:
                 continue
             elements.append({"tag": tag, "label": label[:120], "_locator_index": i})
@@ -376,10 +399,10 @@ def extract_page_state(page):
     return visible_text, elements
 
 
-def build_prompt(persona_desc, goal, history, visible_text, elements, current_url, color_vision_note=None):
+def build_prompt(persona_desc, goal, history, visible_text, elements, current_url, image_note=None):
     lines = [PERSONA_SYSTEM_PREAMBLE, "", f"YOUR PERSONA: {persona_desc}", "", f"YOUR GOAL RIGHT NOW: {goal}", ""]
-    if color_vision_note:
-        lines.append(color_vision_note)
+    if image_note:
+        lines.append(image_note)
         lines.append("")
     if history:
         lines.append("WHAT YOU'VE DONE SO FAR THIS SESSION:")
@@ -408,18 +431,33 @@ same or nearly the same to you in this image, that IS a real confusion/finding: 
 not just "make it a different color a colorblind person can also tell apart," which restates the
 problem instead of solving it)."""
 
+# Found live 2026-08-29: a persona clicking a real, working button on a page that draws to a
+# <canvas> (the QSL Card Designer's "Add Field") reported "nothing visibly changed," because the
+# visible-text extraction genuinely can't see into canvas-drawn pixels -- indistinguishable from
+# the button being silently broken (it also, separately, happened to be). Attaching a real
+# screenshot whenever the page has a canvas on it -- not just for the deuteranopia persona -- lets
+# the executor actually see whether an action changed anything.
+CANVAS_SCREENSHOT_NOTE = """This page has a drawing/editing canvas on it (listed above as an
+element you can click or drag). The attached screenshot shows what's actually drawn there right
+now -- the page's visible TEXT above cannot show canvas contents at all, so use the image, not the
+text, to judge whether your last action actually changed anything on the canvas."""
+
 
 def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_vision_simulation=False, out_dir="/tmp", leg_id="leg"):
     history = []
     consecutive_confused = 0
     for step in range(1, max_steps + 1):
         visible_text, elements = extract_page_state(page)
+        has_canvas = any(el["tag"] == "canvas" for el in elements)
         image_bytes = None
-        color_vision_note = None
+        image_note = None
         if color_vision_simulation:
             image_bytes = simulate_deuteranopia(page.screenshot())
-            color_vision_note = COLOR_VISION_NOTE
-        prompt = build_prompt(persona_desc, goal, history, visible_text, elements, page.url, color_vision_note)
+            image_note = COLOR_VISION_NOTE
+        elif has_canvas:
+            image_bytes = page.screenshot()
+            image_note = CANVAS_SCREENSHOT_NOTE
+        prompt = build_prompt(persona_desc, goal, history, visible_text, elements, page.url, image_note)
         try:
             # Found live 2026-08-28: a flat 600s timeout lost two consecutive legs of a
             # real colorblind-persona run to timeouts an image-free (text-only) run never
@@ -427,8 +465,9 @@ def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_
             # executor longer than reading a text-only prompt, and a redirect-to-the-right-
             # queue message (needed when a prior leg was lost) eats further into whatever's
             # left of the window. Give image-based steps real headroom instead of the same
-            # budget as text-only ones.
-            step_timeout = 900 if color_vision_simulation else 600
+            # budget as text-only ones. Applies equally to the canvas-screenshot case added
+            # later the same night -- same image-reasoning cost, same fix.
+            step_timeout = 900 if (color_vision_simulation or has_canvas) else 600
             decision = ask_executor(
                 model, prompt, timeout=step_timeout, image_bytes=image_bytes, out_dir=out_dir, step_id=f"{leg_id}_{step}"
             )
@@ -497,6 +536,32 @@ def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_
                 else:
                     locator.fill(decision.get("type_value") or "", timeout=5000)
                 history.append(f"Typed into '{elements[idx]['label']}': {decision.get('thought')}")
+            elif action == "drag" and idx is not None:
+                # Coarse by design: the persona has no way to see or specify exact
+                # pixel coordinates (extract_page_state() reports only text/labels,
+                # never positions), so this can't reproduce precise placement --
+                # but it can genuinely answer "is this thing draggable at all,"
+                # which is the actual audit-relevant question for a page like the
+                # QSL Card Designer that this action exists to finally test.
+                locator = page.locator(INTERACTIVE_ELEMENTS_SELECTOR).nth(
+                    elements[idx]["_locator_index"]
+                )
+                box = locator.bounding_box()
+                if not box:
+                    raise PlaywrightTimeoutError(f"'{elements[idx]['label']}' has no visible position to drag from")
+                start_x = box["x"] + box["width"] / 2
+                start_y = box["y"] + box["height"] / 2
+                direction = (decision.get("type_value") or "").strip().lower()
+                dx, dy = {"up": (0, -80), "down": (0, 80), "left": (-80, 0), "right": (80, 0)}.get(
+                    direction, (80, 80)
+                )
+                page.mouse.move(start_x, start_y)
+                page.mouse.down()
+                page.mouse.move(start_x + dx, start_y + dy, steps=10)
+                page.mouse.up()
+                history.append(
+                    f"Dragged within '{elements[idx]['label']}' toward {direction or 'a nearby spot'}: {decision.get('thought')}"
+                )
             elif action == "navigate_back":
                 page.go_back(timeout=5000)
                 history.append("Went back to the previous page.")
