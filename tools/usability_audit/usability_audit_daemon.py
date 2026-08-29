@@ -454,6 +454,15 @@ def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_
         if color_vision_simulation:
             image_bytes = simulate_deuteranopia(page.screenshot())
             image_note = COLOR_VISION_NOTE
+            if has_canvas:
+                # A deuteranopia-simulated screenshot is still an accurate
+                # picture of what's on the canvas (only the colors are
+                # altered, not the shapes/positions), so the colorblind
+                # persona needs the same "the text can't show this" warning
+                # a sighted persona gets on a canvas page -- without this,
+                # this persona on the QSL Designer would get an image but
+                # never be told the visible text can't reflect canvas state.
+                image_note = f"{COLOR_VISION_NOTE}\n\n{CANVAS_SCREENSHOT_NOTE}"
         elif has_canvas:
             image_bytes = page.screenshot()
             image_note = CANVAS_SCREENSHOT_NOTE
@@ -548,7 +557,8 @@ def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_
                 )
                 box = locator.bounding_box()
                 if not box:
-                    raise PlaywrightTimeoutError(f"'{elements[idx]['label']}' has no visible position to drag from")
+                    history.append(f"Tried to drag '{elements[idx]['label']}' but it has no visible position.")
+                    continue
                 start_x = box["x"] + box["width"] / 2
                 start_y = box["y"] + box["height"] / 2
                 direction = (decision.get("type_value") or "").strip().lower()
