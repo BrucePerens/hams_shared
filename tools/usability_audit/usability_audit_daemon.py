@@ -242,23 +242,23 @@ def extract_page_state(page):
             tag = el.evaluate("e => e.tagName.toLowerCase()")
             label = (el.inner_text() or "").strip()
             if not label:
-                label = (
-                    el.get_attribute("aria-label")
-                    or el.get_attribute("placeholder")
-                    or el.get_attribute("value")
-                    or el.get_attribute("title")
-                    or ""
-                ).strip()
+                label = (el.get_attribute("aria-label") or "").strip()
             if not label:
-                # A real, previously-undetected gap: a properly-accessible input with a
-                # real <label for="id">text</label> (exactly the pattern a real sighted
-                # user actually reads) but no aria-label/placeholder/value/title of its
-                # own -- e.g. hams.com's own real signup form's password fields -- fell
-                # through every fallback above and was silently dropped, making the
-                # persona unable to see a field a real user can see fine. Found live,
-                # 2026-08-26: a real audit run reported "no password box" against a page
-                # that genuinely has one, traced to exactly this gap. Mirrors how a
-                # sighted user actually resolves an unlabeled input's name.
+                # <label for="id">text</label> comes before placeholder/value/title,
+                # matching the real W3C accessible-name computation a real screen
+                # reader follows: an explicit label association always wins over
+                # guessing from other attributes. Found live, 2026-08-28: this used
+                # to be checked LAST, after `value` -- so a radio/checkbox with both a
+                # real <label for> AND a value attribute (e.g. <input type="radio"
+                # value="ham"> paired with <label for="type_ham">Licensed
+                # Operator</label>, hams.com's own real signup form) reported the raw
+                # `value` ("ham") as its accessible name instead of the real label
+                # ("Licensed Operator") -- a false-positive accessibility finding
+                # against markup that was already correct, not a real site bug. `value`
+                # is never part of the accessible name for radio/checkbox/text inputs
+                # per spec; it only matters for submit/button/reset inputs, where it IS
+                # the visible label -- which is exactly why it stays in the fallback
+                # chain below, just after label-for instead of before it.
                 el_id = (el.get_attribute("id") or "").strip()
                 if el_id:
                     try:
@@ -267,6 +267,25 @@ def extract_page_state(page):
                             label = (label_loc.inner_text() or "").strip()
                     except Exception:
                         pass
+                if not label:
+                    # The other real-world label-association pattern: a wrapping
+                    # <label> with no `for`/`id` at all (e.g. <label><input .../>
+                    # text</label>). Must be checked here, alongside label-for and
+                    # before the placeholder/value/title fallback below -- found via
+                    # this fix's own regression test failing when this lived after
+                    # the value fallback instead: `value` won every time before this
+                    # ever got a chance to run.
+                    try:
+                        label = (el.evaluate("e => e.closest('label')?.innerText || ''") or "").strip()
+                    except Exception:
+                        pass
+            if not label:
+                label = (
+                    el.get_attribute("placeholder")
+                    or el.get_attribute("value")
+                    or el.get_attribute("title")
+                    or ""
+                ).strip()
             if not label:
                 continue
             elements.append({"tag": tag, "label": label[:120], "_locator_index": i})

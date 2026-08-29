@@ -86,5 +86,86 @@ class SendIpcMessageFromARunningEventLoopTests(unittest.TestCase):
             asyncio.run(call_from_within_a_running_loop())
 
 
+class ExtractPageStateAccessibleNameTests(unittest.TestCase):
+    # Found live, 2026-08-28, running a real screen-reader-persona audit against hams.com's
+    # real signup form: extract_page_state() reported a radio input's accessible name as the
+    # raw `value` attribute ("ham") instead of its real, correctly-`for`-associated <label>
+    # text ("Licensed Operator") -- a false-positive accessibility finding against markup
+    # that was already correct. Per the real W3C accessible-name computation a screen reader
+    # follows, `value` is never part of a radio/checkbox/text input's accessible name; only an
+    # explicit <label> association is. These tests exercise the real function against a real
+    # (headless, local, no network) page, not a mock -- the whole point is proving the
+    # extraction logic itself, not just that some function returns some string.
+
+    @classmethod
+    def setUpClass(cls):
+        from playwright.sync_api import sync_playwright
+
+        cls._pw = sync_playwright().start()
+        cls._browser = cls._pw.chromium.launch(headless=True, args=["--no-sandbox"])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._browser.close()
+        cls._pw.stop()
+
+    def _elements_for(self, html):
+        page = self._browser.new_page()
+        try:
+            page.set_content(html)
+            _, elements = uad.extract_page_state(page)
+            return elements
+        finally:
+            page.close()
+
+    def test_a_label_for_association_wins_over_the_inputs_own_value_attribute(self):
+        html = """
+        <html><body>
+          <input type="radio" name="operator_type" id="type_ham" value="ham" checked="checked"/>
+          <label for="type_ham">Licensed Operator</label>
+        </body></html>
+        """
+        elements = self._elements_for(html)
+        labels = [e["label"] for e in elements]
+        self.assertIn("Licensed Operator", labels)
+        self.assertNotIn("ham", labels)
+
+    def test_a_wrapping_label_also_wins_over_value(self):
+        html = """
+        <html><body>
+          <label>
+            <input type="radio" name="operator_type" value="swl"/>
+            Prospective Ham / Short Wave Listener (SWL)
+          </label>
+        </body></html>
+        """
+        elements = self._elements_for(html)
+        labels = [e["label"] for e in elements]
+        self.assertTrue(any("Short Wave Listener" in l for l in labels))
+        self.assertNotIn("swl", labels)
+
+    def test_value_is_still_used_when_there_really_is_no_label(self):
+        html = """
+        <html><body>
+          <input type="submit" value="Submit Order"/>
+        </body></html>
+        """
+        elements = self._elements_for(html)
+        labels = [e["label"] for e in elements]
+        self.assertIn("Submit Order", labels)
+
+    def test_aria_label_still_wins_over_a_real_label_for(self):
+        html = """
+        <html><body>
+          <input type="radio" id="x" value="v" aria-label="Explicit ARIA Name"/>
+          <label for="x">Should Not Win</label>
+        </body></html>
+        """
+        elements = self._elements_for(html)
+        labels = [e["label"] for e in elements]
+        self.assertIn("Explicit ARIA Name", labels)
+        self.assertNotIn("Should Not Win", labels)
+
+
 if __name__ == "__main__":
     unittest.main()
