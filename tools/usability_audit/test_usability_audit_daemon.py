@@ -6,6 +6,7 @@ Regression coverage for usability_audit_daemon.py's own IPC client, found live
 """
 import asyncio
 import sys
+import threading
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -109,6 +110,40 @@ class SendIpcMessageFromARunningEventLoopTests(_SafePatchTestCase):
             uad._send_ipc_message("some_queue", "some content")
 
         with self.assertRaises(RuntimeError):
+            asyncio.run(call_from_within_a_running_loop())
+
+    def test_a_hung_send_raises_timeout_error_instead_of_blocking_forever(self):
+        # Found live, 2026-08-29, running this daemon for real (twice,
+        # reproducibly): the send thread can hang indefinitely with no
+        # exception at all, even though a fresh, isolated, non-threaded call
+        # against the real shared server completed in well under 50ms during
+        # the same window -- see _SEND_IPC_MESSAGE_TIMEOUT_SECS's own module-
+        # level comment for the full account. This reproduces a hang directly
+        # (an sse_client whose __aenter__ never returns) rather than trying to
+        # reproduce the exact Playwright/thread interaction, and confirms the
+        # timeout actually unblocks the caller instead of hanging the test too.
+        def _hanging_sse_client(url):
+            class _Ctx:
+                async def __aenter__(self_inner):
+                    # Never resolves within the test's own real-world patience --
+                    # blocks past _SEND_IPC_MESSAGE_TIMEOUT_SECS via a real
+                    # threading.Event with no timeout, the same "genuinely never
+                    # returns" shape the live hang had, not a long asyncio.sleep()
+                    # that would just make this test itself slow.
+                    threading.Event().wait()
+
+                async def __aexit__(self_inner, *exc):
+                    return False
+
+            return _Ctx()
+
+        self.safe_patch("usability_audit_daemon.sse_client", side_effect=_hanging_sse_client)
+        self.safe_patch("usability_audit_daemon._SEND_IPC_MESSAGE_TIMEOUT_SECS", 0.2)
+
+        async def call_from_within_a_running_loop():
+            uad._send_ipc_message("some_queue", "some content")
+
+        with self.assertRaises(TimeoutError):
             asyncio.run(call_from_within_a_running_loop())
 
 

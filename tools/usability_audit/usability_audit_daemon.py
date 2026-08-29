@@ -103,6 +103,19 @@ def simulate_deuteranopia(png_bytes):
 _WATCHDOG_SSE_URL = "http://127.0.0.1:8767/sse"
 
 
+_SEND_IPC_MESSAGE_TIMEOUT_SECS = 30
+# ^ Found live, 2026-08-29, running this daemon for real (twice, reproducibly): the send call
+# below can hang indefinitely with no exception and no log line, even though the shared
+# mcp_watchdog.py instance itself was confirmed healthy throughout both hangs (queue_status and a
+# fresh, isolated, non-threaded, non-Playwright send_ipc_message call both completed in well under
+# 50ms during the exact window this daemon's own call sat silent for 60+ seconds). The remaining
+# difference is this call running inside a background thread that itself runs asyncio.run() while
+# Playwright's *sync* API's own internal event-loop thread is concurrently active in the same
+# process -- a real, reproducible interaction this investigation didn't fully root-cause, but a
+# clear timeout here converts a silent, unbounded hang into a loud, actionable failure regardless
+# of the exact cause, matching this codebase's own fail-fast standard elsewhere.
+
+
 def _send_ipc_message(queue_name, content):
     """Client for mcp_watchdog.py's shared instance, over SSE. Found 2026-08-28: this used to
     speak the old Unix-socket "legacy bridge" (wire format "<queue_name>\\n<content>"), but that
@@ -121,7 +134,13 @@ def _send_ipc_message(queue_name, content):
     loop" error docs/MCP_WATCHDOG_REPORT.md describes -- the same class of
     bug that report was filed about, just triggered by Playwright instead of
     Gemini's own MCP proxy. A dedicated thread sidesteps the question of
-    whether the calling thread has a loop running at all."""
+    whether the calling thread has a loop running at all.
+
+    Raises TimeoutError if the send hasn't completed within
+    _SEND_IPC_MESSAGE_TIMEOUT_SECS -- see that constant's own comment for
+    why this exists. The background thread is a daemon thread and is left
+    to die on its own rather than force-killed (Python has no clean thread
+    -kill primitive); the caller gets unblocked either way."""
 
     async def _send():
         for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
@@ -149,7 +168,14 @@ def _send_ipc_message(queue_name, content):
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    t.join()
+    t.join(timeout=_SEND_IPC_MESSAGE_TIMEOUT_SECS)
+    if t.is_alive():
+        raise TimeoutError(
+            f"_send_ipc_message('{queue_name}', ...) did not complete within "
+            f"{_SEND_IPC_MESSAGE_TIMEOUT_SECS}s -- the shared mcp_watchdog.py instance may be "
+            f"unreachable, or this daemon's own background-thread/Playwright interaction hung "
+            f"again (see this function's docstring). The send thread is abandoned, not killed."
+        )
     if errors:
         raise errors[0]
 
