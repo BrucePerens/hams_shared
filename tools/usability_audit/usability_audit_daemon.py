@@ -450,9 +450,18 @@ def main():
     with sync_playwright() as p, open(log_path, "w") as log_fh:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto(args.base_url, timeout=30000)
 
         for leg_num, goal in enumerate(legs, start=1):
+            # Found live 2026-08-28/29: base_url was only navigated to once,
+            # before the loop. A leg that ended via give_up_on_leg (or any
+            # leg at all, really) leaves the page wherever that leg's last
+            # step happened to land -- so every subsequent leg silently
+            # started from a stale, unrelated page instead of a fresh
+            # starting point a real user would actually have (reloading the
+            # site, or at least the homepage) for a brand-new task. Confirmed
+            # as the cause of a real run where legs 2-4 all "gave up" within
+            # 1-2 steps, still logged against leg 1's own dead-end URL.
+            page.goto(args.base_url, timeout=30000)
             _logger.info("=== Leg %d/%d: %s ===", leg_num, len(legs), goal)
             log_fh.write(json.dumps({"ts": now_iso(), "leg_start": leg_num, "goal": goal}) + "\n")
             log_fh.flush()
