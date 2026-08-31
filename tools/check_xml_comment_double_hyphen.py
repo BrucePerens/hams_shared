@@ -82,7 +82,18 @@ def check_xml_comment_double_hyphen(repo_root):
             for match in _COMMENT_RE.finditer(content):
                 inner = match.group(1)
                 if "--" in inner:
-                    lineno = _line_of_offset(content, match.start() + inner.index("--"))
+                    # match.start(1), not match.start(): the latter is the
+                    # start of the WHOLE match (including the 4-char "<!--"
+                    # delimiter), so adding inner.index("--") to it landed 4
+                    # characters too early -- usually harmless (same line
+                    # either way), but a real off-by-one-line bug when "--"
+                    # is the very first thing on a line inside the comment,
+                    # since the 4-character undershoot can cross back over
+                    # the preceding newline. Found via a Hypothesis property
+                    # test, not by inspection -- see
+                    # test_check_xml_comment_double_hyphen.py's
+                    # CheckXmlCommentDoubleHyphenPropertyTests.
+                    lineno = _line_of_offset(content, match.start(1) + inner.index("--"))
                     violations.append(
                         f"{os.path.relpath(path, repo_root)}:{lineno} "
                         f"Literal '--' inside an XML comment -- illegal per the XML spec "
