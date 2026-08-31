@@ -2095,6 +2095,128 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
+            "path": "/opt/hams/systemd/pota.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio POTA Park Reference Data Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/pota_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=activator_data_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/activator_data_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/pota_sync/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pota.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/pota.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio POTA Park Reference Data Sync Weekly
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/sota.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio SOTA Summit Reference Data Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/sota_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=activator_data_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/activator_data_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/sota_sync/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sota.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/sota.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio SOTA Summit Reference Data Sync Weekly
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/systemd/aprs.is.sync.service",
             "content": """\
 [Unit]
