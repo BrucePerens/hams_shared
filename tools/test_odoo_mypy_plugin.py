@@ -163,7 +163,7 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
             "plugins = hams_shared/tools/odoo_mypy_plugin.py\n",
         )
         _write(os.path.join(_SCRATCH_DIR, "__init__.py"), "from . import models\n")
-        _write(os.path.join(_SCRATCH_DIR, "__manifest__.py"), "{'name': 'mypy plugin test scratch', 'depends': []}\n")
+        _write(os.path.join(_SCRATCH_DIR, "__manifest__.py"), "{'name': 'mypy plugin test scratch', 'description': 'Scratch fixture for test_odoo_mypy_plugin.py, not a real module.', 'depends': []}\n")
         _write(os.path.join(_SCRATCH_DIR, "models", "__init__.py"), "from . import res_users_probe\n")
         _write(
             os.path.join(_SCRATCH_DIR, "models", "res_users_probe.py"),
@@ -391,7 +391,7 @@ class OdooMypyPluginClassSiblingsRegressionTests(unittest.TestCase):
         _write(os.path.join(_SCRATCH_DIR_SIBLINGS, "__init__.py"), "from . import models\n")
         _write(
             os.path.join(_SCRATCH_DIR_SIBLINGS, "__manifest__.py"),
-            "{'name': 'mypy plugin class-siblings regression scratch', 'depends': []}\n",
+            "{'name': 'mypy plugin class-siblings regression scratch', 'description': 'Scratch fixture for test_odoo_mypy_plugin.py, not a real module.', 'depends': []}\n",
         )
         _write(
             os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "__init__.py"),
