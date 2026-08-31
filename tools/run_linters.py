@@ -161,7 +161,12 @@ def main():
             [
                 flake8_cmd,
                 *targets,
-                "--exclude=venv,env,.venv,__pycache__,node_modules,target,daemons",
+                # archive/: frozen, historical snapshots of past pipeline runs, not live
+                # source (same exclusion, same reasoning, already established in
+                # check_absolute_paths.py's own docstring) -- rewriting a real developer's
+                # already-committed one-shot script to satisfy a linter would make the
+                # archive inaccurate, not correct.
+                "--exclude=venv,env,.venv,__pycache__,node_modules,target,daemons,archive",
                 "--select=E9,F,E402",
                 "--per-file-ignores=__init__.py:F401",
             ],
