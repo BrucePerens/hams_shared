@@ -57,12 +57,29 @@ one-off report.
 
 ## Personas
 
-Three personas exist so far. Each persona file is
+This README originally said "three personas exist so far" -- stale; there are now 18 covering a
+wide range of member-side journeys plus accessibility variants (screen reader, colorblindness,
+mobile). Each persona file is
 `{"persona": "<description>", "legs": ["<goal 1>", "<goal 2>", ...]}` (optionally
-`"color_vision_simulation": true`, see below); add more files here for the other personas
-`USABILITY_AUDIT_SIMULATED_HAM.md` suggests (an Extra-class ham with decades of RF experience but
-low recent computer literacy; someone attempting the whole flow from a tablet/Chromebook) rather
-than assuming one persona covers the range.
+`"color_vision_simulation": true`, `"no_visual_access": true`, or `"mobile_device": "<Playwright
+device name>"`, see below). Notably, every one of those 18 personas is either already an existing
+member or creates an account as its own first leg -- none of them represent a purely anonymous
+visitor who never authenticates at all, which is its own real, distinct persona (see
+`anonymous_external_visitor.json` below, added specifically to close that gap).
+
+- `personas/anonymous_external_visitor.json` -- a first-time visitor who deliberately never signs
+  up or logs in for the whole run, evaluating what's actually visible/usable to the public: whether
+  the homepage explains the site's value with no account, what's genuinely browsable without
+  authentication (callsign lookup, directory/map, repeater directory, events, forum, classifieds),
+  what happens when they try account-specific pages anyway (a clean login prompt vs. a confusing
+  wall vs. accidentally-exposed real data), and whether anything during the anonymous visit would
+  make them hesitate before ever reaching sign-up. The daemon needs no special code for this --
+  Playwright's `browser.new_context()` is already a fresh, cookie-free context per run by default,
+  and no persona (including this one) has ever needed a daemon-level login step; "never sign up"
+  is enforced purely through this persona's own natural-language instructions, the same way every
+  other persona's goals (including "sign up for an account") already are. The `anonymous_visitor`
+  key in its JSON file is documentary only, matching this codebase's existing incremental pattern
+  for persona-specific flags -- it isn't read by any code path yet.
 
 - `personas/newcomer_technician.json` -- a brand-new Technician-class licensee with heavy
   smartphone/social-media fluency but zero radio or networking background.
