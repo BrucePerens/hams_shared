@@ -171,6 +171,7 @@ def _process_file_for_anchors(
     tests_links,
     tests_links_set,
     verified_by_links,
+    audit_ignore_links,
     cross_references,
     duplicates,
     code_anchor_lines,
@@ -216,6 +217,21 @@ def _process_file_for_anchors(
                 # Used in source files to point to the test that verifies it.
                 verified_by_links.setdefault(anchor, []).append(loc_str)
 
+                # LLM NOTE: Matches the narrower `audit-ignore-view: Verified by
+                # [@ANCHOR: some-test-name]` escape hatch specifically -- the comment
+                # that exempts an ir.ui.view from the UI Tour Mandate check. Tracked
+                # separately from the general verified_by_links above so the claim can
+                # be truth-checked against a real test without also flagging every
+                # ordinary "# # Verified by [@ANCHOR: ...]" cross-reference elsewhere
+                # in source/model/controller code, which is a different, already-
+                # covered usage (see the orphaned_tests check). Restricted to .xml
+                # files: the escape hatch is only ever a real ir.ui.view comment
+                # there -- a .py docstring quoting the same syntax as illustrative
+                # documentation (e.g. a test file's own module docstring) is not a
+                # real claim site and must not be treated as one.
+                if "audit-ignore-view" in first_prefix and full_path.endswith(".xml"):
+                    audit_ignore_links.setdefault(anchor, []).append(loc_str)
+
             elif first_prefix.endswith("Triggers") or first_prefix.endswith(
                 "Triggered by"
             ):
@@ -249,6 +265,7 @@ def find_anchors_in_code(root_dir, repo_root):
     code_anchors, anchor_locations = {}, {}
     tests_links, tests_links_set = {}, {}
     verified_by_links, cross_references = {}, {}
+    audit_ignore_links = {}
     code_anchor_lines = {}
     duplicates = []
     pattern = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
@@ -283,6 +300,7 @@ def find_anchors_in_code(root_dir, repo_root):
                             tests_links,
                             tests_links_set,
                             verified_by_links,
+                            audit_ignore_links,
                             cross_references,
                             duplicates,
                             code_anchor_lines,
@@ -297,6 +315,7 @@ def find_anchors_in_code(root_dir, repo_root):
         tests_links,
         tests_links_set,
         verified_by_links,
+        audit_ignore_links,
         cross_references,
         duplicates,
         code_anchor_lines,
@@ -565,6 +584,112 @@ def _report_bidirectional_orphans(
     return has_errors, source_anchors
 
 
+# ADR-0054's "audit-ignore-view: Verified by [@ANCHOR: name]" escape hatch on ir.ui.view
+# records claims a named test already covers that view. Nothing previously checked that
+# the claimed name was real -- see docs/proposals/AUDIT_IGNORE_VIEW_UNVERIFIED_CLAIMS.md,
+# which found 39 such claims pointing nowhere and closed 38 of them. This allowlist is the
+# 39th: a genuinely real, currently-failing test blocked on real local-relay-daemon
+# hardware this sandbox doesn't have (web_map/tests/test_tour.py's test_01_web_map_tour),
+# not an unexamined claim.
+UNVERIFIED_AUDIT_IGNORE_ALLOWLIST = {
+    # Genuinely real, currently-failing test blocked on real local-relay-daemon
+    # hardware this sandbox doesn't have -- see the doc above.
+    "ham_satellite:test_web_map_tour",
+    # 2026-08-31: this check was rescoped from a general verified_by_links sweep
+    # (which false-positived on ordinary source "# # Verified by" cross-references
+    # and even a docstring's illustrative example text) to a narrower one reading
+    # only real audit-ignore-view XML comments. That correction also revealed the
+    # ORIGINAL doc's own full-repo sweep (`grep "Verified by \[@ANCHOR:"`) never
+    # matched the "Tested by [@ANCHOR: ...]" phrasing variant at all -- so these 23
+    # claims, spanning 7 modules, were never counted among the original 39 and were
+    # never triaged. Temporarily allowlisted so the corrected check can land and
+    # enforce going forward without an un-triaged mass CI break; queued here for
+    # the same cluster-by-cluster triage AUDIT_IGNORE_VIEW_UNVERIFIED_CLAIMS.md
+    # already did for the original 39. Remove each entry as its cluster closes.
+    "content_security_policy:test_view_csp_directive_form",
+    "content_security_policy:test_view_csp_directive_search",
+    "content_security_policy:test_view_csp_directive_tree",
+    "content_security_policy:test_view_csp_violation_form",
+    "content_security_policy:test_view_csp_violation_search",
+    "content_security_policy:test_view_csp_violation_tree",
+    "ham_callbook:COMM_test_callbook_form_view",
+    "ham_callbook:COMM_test_callbook_list_view",
+    "ham_callbook:COMM_test_callbook_map_view",
+    "ham_callbook:COMM_test_callbook_search_view",
+    "ham_dns:view_ham_dns_record_map_test",
+    "ham_dns:view_ham_dns_zone_list_test",
+    "ham_propagation:ham_logbook_unique_view_render",
+    "ham_sk_workflow:test_helpdesk_ticket_sk_view",
+    "ham_sk_workflow:test_sk_policy_template",
+    "ham_sk_workflow:test_sk_processor_wizard_view",
+    "ham_training:test_view_auxcomm_glossary_form",
+    "ham_training:test_view_auxcomm_glossary_tree",
+    "ham_training:test_view_ham_training_course_form",
+    "ham_training:test_view_ham_training_scenario_map",
+    "ics_forms:test_ics_editor_template",
+    "ics_forms:test_view_ics_form_record_form",
+    "ics_forms:test_view_ics_form_record_list",
+    "ics_forms:test_view_ics_form_record_map",
+}
+
+
+def _report_unverified_audit_ignore_claims(
+    audit_ignore_links,
+    tests_links_set,
+    code_anchors,
+    contract_anchors,
+    primary_dirs,
+    repo_root,
+    explicit_non_primary=None,
+):
+    has_errors = False
+    all_contracts = set(contract_anchors.keys())
+
+    unverified = {
+        a: locs
+        for a, locs in audit_ignore_links.items()
+        if a not in tests_links_set
+        and a not in code_anchors
+        and a not in all_contracts
+        and a not in UNVERIFIED_AUDIT_IGNORE_ALLOWLIST
+    }
+
+    if unverified:
+        reported = False
+        for anchor, locs in unverified.items():
+            primary_locs = [
+                loc
+                for loc in locs
+                if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)
+            ]
+            if not primary_locs:
+                continue
+            if not reported:
+                print(
+                    "\n[!] CI/CD FAILURE: ADR-0054 Unverified 'audit-ignore-view' Claim:"
+                )
+                reported = True
+            print(
+                f"    - View claims '{anchor}' verifies it, but that anchor has no matching test."
+            )
+            print("      Claim Locations:")
+            for loc in primary_locs:
+                print(f"        -> {loc}")
+            print(
+                "      [!] DIAGNOSTIC FOR AI: A 'Verified by'/'Tested by [@ANCHOR: ...]' comment "
+                "names a test that doesn't exist anywhere in the test suite."
+            )
+            print(
+                f"          ACTION: Either add a real `# Tests [@ANCHOR: {anchor.split(':')[1]}]` "
+                "test that renders/exercises this view, or correct the anchor name in the "
+                "audit-ignore-view comment to point at a test that actually exists."
+            )
+        if reported:
+            has_errors = True
+
+    return has_errors
+
+
 def _report_documentation_gaps(
     source_anchors,
     docs_anchors,
@@ -778,6 +903,7 @@ def main():
     code_anchors, anchor_locations = {}, {}
     tests_links, tests_links_set = {}, {}
     verified_by_links, cross_references = {}, {}
+    audit_ignore_links = {}
     user_manual_anchors = set()
     duplicates = []
     all_anchor_lines = {}
@@ -791,9 +917,17 @@ def main():
         for k, v in dal.items():
             all_anchor_lines.setdefault(k, set()).update(v)
 
-        (c_anchors, a_locs, t_links, t_links_set, v_by_links, c_refs, dups, cal) = (
-            find_anchors_in_code(target_dir, repo_root)
-        )
+        (
+            c_anchors,
+            a_locs,
+            t_links,
+            t_links_set,
+            v_by_links,
+            a_ignore_links,
+            c_refs,
+            dups,
+            cal,
+        ) = find_anchors_in_code(target_dir, repo_root)
 
         for k, v in c_anchors.items():
             code_anchors.setdefault(k, []).extend(v)
@@ -805,6 +939,8 @@ def main():
             tests_links_set.setdefault(k, []).extend(v)
         for k, v in v_by_links.items():
             verified_by_links.setdefault(k, []).extend(v)
+        for k, v in a_ignore_links.items():
+            audit_ignore_links.setdefault(k, []).extend(v)
         for k, v in c_refs.items():
             cross_references.setdefault(k, []).extend(v)
         for k, v in cal.items():
@@ -889,6 +1025,17 @@ def main():
         explicit_non_primary,
     )
     errs.append(bidi_err)
+    errs.append(
+        _report_unverified_audit_ignore_claims(
+            audit_ignore_links,
+            tests_links_set,
+            code_anchors,
+            contract_anchors,
+            primary_dirs,
+            repo_root,
+            explicit_non_primary,
+        )
+    )
     errs.append(
         _report_documentation_gaps(
             source_anchors,
