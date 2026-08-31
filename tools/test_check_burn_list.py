@@ -1902,6 +1902,25 @@ def test_print_inside_a_tools_file_is_exempt():
     assert not any("print()" in e for e in errors)
 
 
+def test_print_inside_a_non_addon_standalone_script_is_exempt():
+    # Real false positive found running the LINT_DEBT_INVENTORY sweep:
+    # docs/proposals/.../_pipeline/build_spec.py's stderr warning and
+    # ingest/extract_pdf_batch.py's stdout-as-data-contract output are
+    # genuine CLI tool output for a standalone, non-addon script -- not
+    # daemon/service log noise, the actual thing this rule guards against.
+    source = "print('WARNING: something', file=sys.stderr)\n"
+    errors, _warnings = _dict_findings(source, is_odoo_module=False)
+    assert not any("print()" in e for e in errors)
+
+
+def test_print_inside_a_real_odoo_module_is_still_banned_regardless():
+    # Guards against the false-positive fix above becoming so broad it
+    # stops catching the real thing this rule exists for.
+    source = "print('debug value:', value)\n"
+    errors, _warnings = _dict_findings(source, is_odoo_module=True)
+    assert any("print()" in e and "logging" in e for e in errors)
+
+
 def test_open_call_inside_an_http_controller_is_a_path_traversal_warning():
     source = (
         "@http.route('/api/v1/thing', type='jsonrpc', auth='user')\n"

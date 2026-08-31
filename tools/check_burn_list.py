@@ -2019,6 +2019,19 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     or "scripts/"
                     in getattr(self, "filepath", self.filename).replace("\\", "/")
                     or self.filename == "check_burn_list.py"
+                    # This rule exists to stop daemon/service code from
+                    # using print() where structured logging belongs, not
+                    # to force standalone, non-addon CLI tools to route
+                    # their actual program output (a batch tool's stdout
+                    # meant to be piped/parsed by a caller, a pipeline
+                    # script's own stderr warning for the human running it
+                    # directly) through logging instead. Confirmed
+                    # repo-wide: every non-addon print() finding as of
+                    # 2026-08-31 (build_spec.py's stderr warning,
+                    # extract_pdf_batch.py's --count-only/batch-index JSON
+                    # output, a scratch-like ingest/ debug script) is
+                    # exactly this legitimate case, not log noise.
+                    or not self.is_odoo_module
                 ):
                     self.add_error(
                         node.lineno,
@@ -3638,6 +3651,7 @@ def main():
                                 filepath_forward = filepath.replace("\\", "/")
                                 if (
                                     first_line.startswith("#!")
+                                    and is_odoo
                                     and not "daemons/" in filepath_forward
                                     and not "daemon/" in filepath_forward
                                     and not "tools/" in filepath_forward
