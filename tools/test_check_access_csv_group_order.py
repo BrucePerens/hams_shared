@@ -17,9 +17,14 @@ import sys
 import tempfile
 import unittest
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_access_csv_group_order as chk  # noqa: E402
+
+_SETTINGS = settings(max_examples=200, deadline=None)
 
 
 def _write(path, content):
@@ -235,6 +240,141 @@ class MainIntegrationTests(unittest.TestCase):
             self.assertEqual(chk.main(), 0)
         finally:
             sys.argv = old_argv
+
+
+def _write_group_xml(path, group_ids):
+    """Writes one res.groups <record> per id in group_ids (possibly zero)."""
+    records = "\n".join(
+        f'        <record id="{g}" model="res.groups">\n'
+        f'            <field name="name">{g}</field>\n'
+        f"        </record>"
+        for g in group_ids
+    )
+    _write(
+        path,
+        f'<?xml version="1.0" encoding="utf-8"?>\n<odoo>\n    <data>\n{records}\n    </data>\n</odoo>\n',
+    )
+
+
+def _write_access_csv(path, module_name, referenced_groups, include_cross_module_ref):
+    rows = ["id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink"]
+    for i, g in enumerate(referenced_groups):
+        rows.append(f"access_{i},thing_{i},model_thing,{module_name}.{g},1,1,1,1")
+    if include_cross_module_ref:
+        rows.append("access_cross,thing_cross,model_thing,base.group_system,1,1,1,1")
+    _write(path, "\n".join(rows) + "\n")
+
+
+_SAFE_NAME = st.text(alphabet="abcdefghijklmnopqrstuvwxyz", min_size=3, max_size=8)
+
+
+@st.composite
+def _module_layout(draw):
+    # docs/proposals/CODE_REVIEW_PROCESS.md's standing Hypothesis invitation, applied to a
+    # second checker in the same "small, pure, structured-input" family as
+    # check_xml_comment_double_hyphen.py -- this one exercises the full pipeline (AST manifest
+    # parsing, regex XML group extraction, CSV parsing, and the before/anywhere ordering logic
+    # together), not just one offset computation. Builds a random module: a pool of groups, zero
+    # or more XML files each defining a random subset of them, one access CSV referencing a
+    # random subset of same-module groups (optionally plus one cross-module reference), and a
+    # random interleaving of the XML files and the CSV in the manifest's own 'data' list -- then
+    # independently (outside the checker) works out which referenced groups are actually defined
+    # in a data-list position before the CSV, so the property test's expectation is computed from
+    # the generated layout directly, not by re-deriving the checker's own algorithm.
+    module_name = draw(_SAFE_NAME)
+    num_groups = draw(st.integers(min_value=1, max_value=4))
+    group_ids = [f"group_{i}" for i in range(num_groups)]
+    num_xml = draw(st.integers(min_value=0, max_value=3))
+    xml_names = [f"data_{i}.xml" for i in range(num_xml)]
+
+    group_to_xml = {}
+    for g in group_ids:
+        if num_xml:
+            choice = draw(st.integers(min_value=-1, max_value=num_xml - 1))
+            if choice >= 0:
+                group_to_xml[g] = xml_names[choice]
+
+    order = draw(st.permutations(xml_names))
+    csv_pos = draw(st.integers(min_value=0, max_value=len(order)))
+    data_list = list(order[:csv_pos]) + ["security/ir.model.access.csv"] + list(order[csv_pos:])
+
+    referenced = draw(st.lists(st.sampled_from(group_ids), unique=True, max_size=num_groups))
+    include_cross_module_ref = draw(st.booleans())
+
+    return module_name, group_ids, group_to_xml, xml_names, data_list, referenced, include_cross_module_ref
+
+
+class CheckModulePropertyTests(unittest.TestCase):
+    @given(_module_layout())
+    @_SETTINGS
+    def test_flags_exactly_the_groups_not_defined_before_the_csv(self, generated):
+        (
+            module_name,
+            group_ids,
+            group_to_xml,
+            xml_names,
+            data_list,
+            referenced,
+            include_cross_module_ref,
+        ) = generated
+
+        tmpdir = tempfile.mkdtemp()
+        try:
+            module_dir = os.path.join(tmpdir, module_name)
+            _write(
+                os.path.join(module_dir, "__manifest__.py"),
+                _MANIFEST_TEMPLATE.format(
+                    data_entries=", ".join(f'"{d}"' for d in data_list)
+                ),
+            )
+            for xml_name in xml_names:
+                groups_here = [g for g, x in group_to_xml.items() if x == xml_name]
+                _write_group_xml(os.path.join(module_dir, xml_name), groups_here)
+            _write_access_csv(
+                os.path.join(module_dir, "security", "ir.model.access.csv"),
+                module_name,
+                referenced,
+                include_cross_module_ref,
+            )
+
+            errors = chk._check_module(
+                module_name, module_dir, os.path.join(module_dir, "__manifest__.py")
+            )
+
+            csv_idx = data_list.index("security/ir.model.access.csv")
+            defined_before = {
+                g for g, xml_name in group_to_xml.items() if xml_name in data_list[:csv_idx]
+            }
+            defined_anywhere = set(group_to_xml.keys())
+
+            expected_later = {
+                g for g in referenced if g not in defined_before and g in defined_anywhere
+            }
+            expected_missing = {g for g in referenced if g not in defined_anywhere}
+
+            self.assertEqual(
+                len(errors),
+                len(expected_later) + len(expected_missing),
+                f"[!] DIAGNOSTIC FOR AI: module={module_name} data_list={data_list} "
+                f"group_to_xml={group_to_xml} referenced={referenced} errors={errors!r}",
+            )
+            for g in expected_later:
+                self.assertTrue(
+                    any(f"{module_name}.{g}" in e and "listed LATER" in e for e in errors),
+                    f"expected a 'listed LATER' error for {module_name}.{g}, got {errors!r}",
+                )
+            for g in expected_missing:
+                self.assertTrue(
+                    any(
+                        f"{module_name}.{g}" in e and "not defined by any XML file" in e
+                        for e in errors
+                    ),
+                    f"expected a 'not defined' error for {module_name}.{g}, got {errors!r}",
+                )
+            if include_cross_module_ref:
+                self.assertTrue(all("base.group_system" not in e for e in errors))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":
