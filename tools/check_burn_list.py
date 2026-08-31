@@ -2558,6 +2558,20 @@ def scan_file(filepath, is_odoo_module=False):
                             and child.attrs.get("name") == "view_ids"
                             for child in node.children
                         )
+                        # Older Odoo pattern, found for real in
+                        # ham_logbook/views/ham_qso_views.xml's
+                        # action_ham_qso_qsl_dashboard: a "views" field
+                        # (not "view_ids") holding an eval'd list of
+                        # (view_id_ref, view_type) tuples, e.g.
+                        # eval="[(ref('view_x_tree'), 'list'),
+                        # (ref('view_x_form'), 'form')]". A third real,
+                        # explicit way to pin views, alongside view_id and
+                        # view_ids -- must not be flagged as unpinned.
+                        has_views = any(
+                            child.tag == "field"
+                            and child.attrs.get("name") == "views"
+                            for child in node.children
+                        )
                         # The escape hatch this rule advertises is an XML
                         # comment (<!-- audit-ignore-view-resolution -->),
                         # not a same-line Python-style '#' comment -- XML's
@@ -2580,7 +2594,7 @@ def scan_file(filepath, is_odoo_module=False):
                         )
                         if (
                             action_xml_id
-                            and not (has_view_id or has_view_ids)
+                            and not (has_view_id or has_view_ids or has_views)
                             and not is_ignored
                         ):
                             # Keyed on (filepath, id), not the bare id --

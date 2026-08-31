@@ -932,6 +932,33 @@ def test_act_window_with_inline_view_id_is_not_recorded():
     )
 
 
+def test_act_window_with_older_views_field_is_not_recorded():
+    # Real false positive found by the sweep fork, 2026-08-31:
+    # ham_logbook/views/ham_qso_views.xml's action_ham_qso_qsl_dashboard
+    # pins its views via the older "views" field (an eval'd list of
+    # (view_id_ref, view_type) tuples), not "view_id"/"view_ids" -- a
+    # third real, explicit pinning pattern this check must recognize.
+    check_burn_list.ACT_WINDOW_ACTIONS.clear()
+    check_burn_list.ACT_WINDOW_VIEW_REFS.clear()
+    xml = (
+        '<?xml version="1.0"?>\n'
+        "<odoo>\n"
+        '  <record id="action_qsl_dashboard" model="ir.actions.act_window">\n'
+        '    <field name="name">QSL Dashboard</field>\n'
+        '    <field name="res_model">ham.qso</field>\n'
+        '    <field name="view_mode">list,form</field>\n'
+        '    <field name="views" eval="[(ref(\'view_ham_qso_qsl_tree\'), \'list\'), '
+        "(ref('view_ham_qso_form'), 'form')]\"/>\n"
+        "  </record>\n"
+        "</odoo>\n"
+    )
+    _scan_file(xml, "some_module/views/qso_views.xml")
+    assert not any(
+        v["xml_id"] == "action_qsl_dashboard"
+        for v in check_burn_list.ACT_WINDOW_ACTIONS.values()
+    )
+
+
 def test_act_window_with_xml_comment_escape_hatch_is_not_recorded():
     # The escape hatch this rule advertises is an XML comment
     # (<!-- audit-ignore-view-resolution -->), not a same-line Python-style
