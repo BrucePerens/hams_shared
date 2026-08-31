@@ -3234,6 +3234,19 @@ def scan_file(filepath, is_odoo_module=False):
                 # zero_sudo.security.utils._resolve_dependency_cycle("ham_testing")
                 # check the production signup page itself uses.
                 "burn-ignore-skiptest-soft-dependency",
+                # A one-shot, personal local-dev CLI/debug script (not a
+                # daemon, not shipped, not reachable in any deployed
+                # environment) connecting to a service already confirmed
+                # to run on the same physical machine as whoever runs the
+                # script by hand -- no docker-compose network boundary
+                # between them the way there is for odoo/redis/rabbitmq
+                # (the CRITICAL NETWORK HARDCODING rule's actual concern).
+                # Distinct from burn-ignore-relay-loopback above, which is
+                # specifically about validating a browser-supplied
+                # redirect URL, not a script's own outbound connection.
+                # First used by scratch/fetch_forms.py, an ad-hoc tool for
+                # manually polling an mcp_watchdog IPC queue.
+                "burn-ignore-local-debug-script",
             ]
         ):
             errors_found.append(

@@ -2828,6 +2828,18 @@ def test_burn_ignore_skiptest_soft_dependency_is_not_an_unauthorized_bypass():
     assert not any("AI LAZINESS" in e for e in errors)
 
 
+def test_burn_ignore_local_debug_script_is_not_an_unauthorized_bypass():
+    # scratch/fetch_forms.py: a personal, one-shot local-dev CLI polling an
+    # mcp_watchdog IPC queue on the same physical machine -- no docker
+    # boundary the CRITICAL NETWORK HARDCODING rule actually guards
+    # against, distinct from burn-ignore-relay-loopback (which is
+    # specifically about validating a browser-supplied redirect URL).
+    content = 'x = "http://127.0.0.1:8767/sse"  # burn-ignore-local-debug-script\n'
+    errors, _warnings = _scan_file(content, "some_script.py")
+    assert not any("UNAUTHORIZED BYPASS" in e for e in errors)
+    assert not any("NETWORK HARDCODING" in e for e in errors)
+
+
 def test_todo_comment_is_a_forbidden_placeholder_via_general_error_rules():
     content = "def helper():\n    pass  # TODO: implement this properly\n"
     errors, _warnings = _scan_file(content, "some_module.py")
