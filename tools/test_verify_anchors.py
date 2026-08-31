@@ -188,7 +188,7 @@ class FindAnchorsInCodeTests(unittest.TestCase):
 
     def test_a_verified_by_link_is_captured(self):
         _write(os.path.join(self.tmp, "mod_a", "models", "foo.py"), "# # Verified by [@ANCHOR: COMM_x]\n")
-        *_rest, verified_by_links, _cross_refs, _dups, _lines = self._scan()
+        *_rest, verified_by_links, _audit_ignore, _cross_refs, _dups, _lines = self._scan()
         self.assertIn("mod_a:COMM_x", verified_by_links)
 
     def test_a_triggers_link_is_captured_as_a_cross_reference(self):
@@ -434,7 +434,7 @@ class ReportDummyBlocksTests(unittest.TestCase):
             "# # Verified by [@ANCHOR: COMM_test_my_feature]\n"
             "class Foo:\n    pass\n",
         )
-        _code_anchors, _locs, _tests, _tests_set, _verified, _cross, _dups, code_anchor_lines = (
+        _code_anchors, _locs, _tests, _tests_set, _verified, _audit_ignore, _cross, _dups, code_anchor_lines = (
             va.find_anchors_in_code(self.tmp, self.tmp)
         )
         self.assertTrue(va._report_dummy_blocks(code_anchor_lines, [], self.tmp))

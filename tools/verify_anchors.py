@@ -606,30 +606,6 @@ UNVERIFIED_AUDIT_IGNORE_ALLOWLIST = {
     # enforce going forward without an un-triaged mass CI break; queued here for
     # the same cluster-by-cluster triage AUDIT_IGNORE_VIEW_UNVERIFIED_CLAIMS.md
     # already did for the original 39. Remove each entry as its cluster closes.
-    "content_security_policy:test_view_csp_directive_form",
-    "content_security_policy:test_view_csp_directive_search",
-    "content_security_policy:test_view_csp_directive_tree",
-    "content_security_policy:test_view_csp_violation_form",
-    "content_security_policy:test_view_csp_violation_search",
-    "content_security_policy:test_view_csp_violation_tree",
-    "ham_callbook:COMM_test_callbook_form_view",
-    "ham_callbook:COMM_test_callbook_list_view",
-    "ham_callbook:COMM_test_callbook_map_view",
-    "ham_callbook:COMM_test_callbook_search_view",
-    "ham_dns:view_ham_dns_record_map_test",
-    "ham_dns:view_ham_dns_zone_list_test",
-    "ham_propagation:ham_logbook_unique_view_render",
-    "ham_sk_workflow:test_helpdesk_ticket_sk_view",
-    "ham_sk_workflow:test_sk_policy_template",
-    "ham_sk_workflow:test_sk_processor_wizard_view",
-    "ham_training:test_view_auxcomm_glossary_form",
-    "ham_training:test_view_auxcomm_glossary_tree",
-    "ham_training:test_view_ham_training_course_form",
-    "ham_training:test_view_ham_training_scenario_map",
-    "ics_forms:test_ics_editor_template",
-    "ics_forms:test_view_ics_form_record_form",
-    "ics_forms:test_view_ics_form_record_list",
-    "ics_forms:test_view_ics_form_record_map",
 }
 
 

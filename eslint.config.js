@@ -97,6 +97,27 @@ module.exports = tseslint.config(
     },
   },
   {
+    // rx_noise_gate_processor.js is an AudioWorkletProcessor, loaded via
+    // audioContext.audioWorklet.addModule() into the browser's dedicated
+    // AudioWorkletGlobalScope -- a real, standard Web Audio execution
+    // context, not window/document (globals.browser above), and not
+    // covered by any set in the `globals` npm package. AudioWorkletProcessor
+    // and registerProcessor are the class/registration primitives that
+    // scope provides; sampleRate is a real ambient read-only global there
+    // (the audio context's sample rate), same category as `self` in a
+    // ServiceWorker.
+    files: ["**/ham_shack/static/src/js/rx_noise_gate_processor.js"],
+    languageOptions: {
+      globals: {
+        AudioWorkletProcessor: "readonly",
+        registerProcessor: "readonly",
+        sampleRate: "readonly",
+        currentTime: "readonly",
+        currentFrame: "readonly",
+      },
+    },
+  },
+  {
     // Type-aware layer: only the two rules that actually justify the
     // extra weight of type-checking plain JS, not the full
     // recommendedTypeChecked preset (which assumes a codebase designed
