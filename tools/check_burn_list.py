@@ -642,6 +642,12 @@ REQUIRE_TEST_VERIFICATION = []
 FOUND_TEST_CONTENTS = {}
 FOUND_TOURS = []
 FOUND_MANIFESTS = {}
+# ir.actions.act_window records with no explicit view_id/view_ids: xml id ->
+# {"file", "line"}. Cross-referenced at the end of main() against
+# ACT_WINDOW_VIEW_REFS (the old-style satellite ir.actions.act_window.view
+# pattern) before being reported -- see that check for why.
+ACT_WINDOW_ACTIONS = {}
+ACT_WINDOW_VIEW_REFS = set()
 
 
 # -------------------------------------------------------------------------
@@ -1249,10 +1255,15 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         and isinstance(getattr(child, "func", None), ast.Attribute)
                         and child.func.attr == "_get_service_uid"
                     ):
-                        self.add_error(
-                            getattr(child, "lineno", node.lineno),
-                            "CRITICAL FAST FAIL: _get_service_uid MUST NOT be wrapped in a try/except block. It must fail fast if the service account is missing.",
+                        lineno = getattr(child, "lineno", node.lineno)
+                        line_content = (
+                            self.lines[lineno - 1] if lineno <= len(self.lines) else ""
                         )
+                        if "audit-ignore-service-uid-cursorless" not in line_content:
+                            self.add_error(
+                                lineno,
+                                "CRITICAL FAST FAIL: _get_service_uid MUST NOT be wrapped in a try/except block. It must fail fast if the service account is missing. If this call site is a response-middleware hook that may legitimately run on a cursor-less/database-free route, add '# audit-ignore-service-uid-cursorless' with a comment citing the evidence, plus a tracing anchor.",
+                            )
             for handler in node.handlers:
                 if (
                     isinstance(handler.type, ast.Name)
@@ -2505,6 +2516,83 @@ def scan_file(filepath, is_odoo_module=False):
                             f"Line {node.lineno}: [%AUDIT] RECORD UPDATE: \x3crecord model='res.users'\x3e is inside a noupdate='1' block. If this service account requires updates in the future, Odoo will ignore them."
                         )
 
+                    # Odoo silently falls back to auto-resolving the default
+                    # view by model+view_type when an ir.actions.act_window
+                    # has no explicit view_id/view_ids, which means the live
+                    # view's id can legitimately appear nowhere else in the
+                    # repo as text -- a real, undressed blind spot in
+                    # hams_shared/tools/check_dead_code.py (confirmed on
+                    # ham_aprs's 3 station views). Bruce's own instruction,
+                    # 2026-08-31: catch this instead of trying to model
+                    # Odoo's resolution algorithm as a heuristic, so every
+                    # action can be filled in explicitly and the dead-code
+                    # checker no longer needs to guess. Old-style actions
+                    # that pin each view via a satellite
+                    # ir.actions.act_window.view record (act_window_id ref)
+                    # rather than an inline view_id/view_ids field are
+                    # legitimate too -- cross-referenced against
+                    # ACT_WINDOW_VIEW_REFS at the end of main(), since that
+                    # satellite record can live in a different file or
+                    # appear later in file-walk order than the action
+                    # itself.
+                    if model_name == "ir.actions.act_window":
+                        action_xml_id = node.attrs.get("id")
+                        has_view_id = any(
+                            child.tag == "field"
+                            and child.attrs.get("name") == "view_id"
+                            for child in node.children
+                        )
+                        has_view_ids = any(
+                            child.tag == "field"
+                            and child.attrs.get("name") == "view_ids"
+                            for child in node.children
+                        )
+                        # The escape hatch this rule advertises is an XML
+                        # comment (<!-- audit-ignore-view-resolution -->),
+                        # not a same-line Python-style '#' comment -- XML's
+                        # own record tags can't carry a trailing '#'
+                        # comment, so it has to be a sibling comment node,
+                        # found the same way every other audit-ignore-*
+                        # lookback in this file finds one (see
+                        # _xml_audit_lookback_start's own docstring).
+                        lookback_start = _xml_audit_lookback_start(node)
+                        raw_text = "\n".join(
+                            lines[
+                                max(0, lookback_start) : min(
+                                    len(lines), node.end_lineno + 1
+                                )
+                            ]
+                        )
+                        is_ignored = (
+                            "audit-ignore-view-resolution" in raw_text
+                            or "burn-ignore" in raw_text
+                        )
+                        if (
+                            action_xml_id
+                            and not (has_view_id or has_view_ids)
+                            and not is_ignored
+                        ):
+                            # Keyed on (filepath, id), not the bare id --
+                            # two modules can legitimately both define an
+                            # action with the same short xml id (e.g.
+                            # "action_settings"), and a bare-id key would
+                            # silently drop one finding when the second
+                            # overwrites the first.
+                            ACT_WINDOW_ACTIONS[(filepath, action_xml_id)] = {
+                                "file": filepath,
+                                "line": node.lineno,
+                                "xml_id": action_xml_id,
+                            }
+                    if model_name == "ir.actions.act_window.view":
+                        for child in node.children:
+                            if (
+                                child.tag == "field"
+                                and child.attrs.get("name") == "act_window_id"
+                            ):
+                                ref = child.attrs.get("ref")
+                                if ref:
+                                    ACT_WINDOW_VIEW_REFS.add(ref)
+
                 if node.tag == "record" and node.attrs.get("model") == "ir.rule":
                     has_group = any(
                         child.tag == "field" and child.attrs.get("name") == "groups"
@@ -3158,6 +3246,27 @@ def scan_file(filepath, is_odoo_module=False):
                 # user_websites/models/res_users.py's
                 # _execute_gdpr_erasure().
                 "audit-ignore-gdpr-hand-rolled-unlink",
+                # `_get_service_uid()`'s narrow, single-call-site escape hatch
+                # from the "CRITICAL FAST FAIL" try/except ban above
+                # (visit_Try, has_ham_base branch). Bruce's own decision,
+                # 2026-08-31, after reviewing
+                # docs/proposals/CSP_FAIL_FAST_VS_RESPONSE_MIDDLEWARE_SAFETY.md's
+                # option 3: the existing broad-catch-with-safe-fallback design
+                # in content_security_policy/models/ir_http.py's
+                # _post_dispatch is fine as-is -- it's a response-middleware
+                # hook that can legitimately run on a cursor-less/
+                # database-free route (empirically: /web/database/manager
+                # raises psycopg2.InterfaceError there), and the except
+                # clause is already narrowed to the specific, evidence-backed
+                # exception types rather than a bare catch-all. This tag must
+                # go on the exact line calling `_get_service_uid(...)`, not
+                # merely somewhere inside the try block, so
+                # visit_Try's own line-scoped check (not this generic
+                # allow-list) is what actually silences the CRITICAL FAST
+                # FAIL error. First and only used by
+                # content_security_policy/models/ir_http.py's
+                # _post_dispatch.
+                "audit-ignore-service-uid-cursorless",
             ]
             if not any(tag in line for tag in valid_audits):
                 errors_found.append(
@@ -3602,6 +3711,35 @@ def main():
                 f"  ❌ ERROR: Tour Asset Registration Trap. Tour file '{os.path.relpath(tour_path, target_dir)}' is not matched by any glob pattern in 'assets' of its __manifest__.py."
             )
             total_errors += 1
+
+    # ir.actions.act_window with no explicit view pinning (see ACT_WINDOW_ACTIONS'
+    # own comment above scan_file for why this matters). The audit-ignore-view-
+    # resolution/burn-ignore escape hatch is already resolved inside scan_file
+    # (via _xml_audit_lookback_start, the same real sibling-comment lookback
+    # every other audit-ignore-* check in this file uses) -- an entry only
+    # reaches ACT_WINDOW_ACTIONS at all if it wasn't ignored there, so no
+    # second same-line re-check is needed or possible here (XML's escape
+    # hatch is a sibling comment node, not a same-line '#' comment, so a
+    # naive re-read of just the <record> line could never find it anyway).
+    # [%AUDIT]-level, not a hard error: this is a large, pre-existing surface
+    # across many modules that needs individual triage (does the action need
+    # view_id, view_ids, or a satellite ir.actions.act_window.view per mode?),
+    # not a mass blind edit.
+    for (act_file, action_xml_id), info in ACT_WINDOW_ACTIONS.items():
+        if action_xml_id in ACT_WINDOW_VIEW_REFS:
+            continue
+        print(f" 📄 {os.path.relpath(act_file, target_dir)}")
+        print(
+            f"  ⚠️  WARNING: Line {info['line']}: [%AUDIT] IMPLICIT VIEW RESOLUTION: "
+            f"\x3crecord id='{action_xml_id}' model='ir.actions.act_window'\x3e has no explicit "
+            f"'view_id' or 'view_ids' field, and no ir.actions.act_window.view satellite record "
+            f"references it. Odoo will silently auto-resolve the default view by model+type at "
+            f"runtime, which also means this view's id can never be found by searching the repo's "
+            f"own text (a real blind spot in hams_shared/tools/check_dead_code.py). Pin the view(s) "
+            f"explicitly, or add '\x3c!-- audit-ignore-view-resolution --\x3e' with a comment "
+            f"explaining why implicit resolution is intentional here."
+        )
+        total_warnings += 1
 
     # Audit Orphaned o_tour_ classes and Dangling Tour Targets (Bidirectional Audit)
     xml_tour_classes = set()

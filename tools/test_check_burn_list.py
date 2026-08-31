@@ -22,6 +22,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import check_burn_list  # noqa: E402
 from check_burn_list import (  # noqa: E402
     parse_odoo_xml,
     parse_odoo_html,
@@ -840,6 +841,160 @@ def test_get_service_uid_wrapped_in_try_except_fails_fast_check_when_ham_base_pr
         )
         errors, _warnings = _dict_findings(source, filepath=str(target_dir / "res_users.py"))
     assert any("_get_service_uid MUST NOT be wrapped" in e for e in errors)
+
+
+def test_get_service_uid_wrapped_in_try_except_is_not_flagged_with_scoped_escape_hatch():
+    # ADR: content_security_policy/models/ir_http.py's _post_dispatch is a response-middleware
+    # hook that may legitimately run on a cursor-less/database-free route (e.g.
+    # /web/database/manager), where _get_service_uid() itself raises before reaching any
+    # fallback. The '# audit-ignore-service-uid-cursorless' tag on the call's own line is the
+    # deliberate, narrowly-scoped escape hatch for that one documented case -- it must NOT
+    # silence the check for any other call site that lacks the tag.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = Path(tmpdir) / "some_repo"
+        (repo / "ham_base").mkdir(parents=True)
+        (repo / "ham_base" / "__manifest__.py").write_text("{}")
+        target_dir = repo / "content_security_policy" / "models"
+        target_dir.mkdir(parents=True)
+        source = (
+            "try:\n"
+            "    uid = utils._get_service_uid('some.service')  # audit-ignore-service-uid-cursorless: see ADR\n"
+            "except (TypeError, AttributeError, psycopg2.Error):\n"
+            "    logger.exception('failed')\n"
+        )
+        errors, _warnings = _dict_findings(source, filepath=str(target_dir / "ir_http.py"))
+    assert not any("_get_service_uid MUST NOT be wrapped" in e for e in errors)
+
+
+def test_act_window_without_view_id_or_view_ids_is_recorded_for_cross_reference():
+    # ir.actions.act_window with no explicit view field: Odoo silently
+    # auto-resolves the default view by model+type, which is exactly the
+    # blind spot check_dead_code.py's own README documents (confirmed on
+    # ham_aprs's 3 station views). Bruce's own instruction, 2026-08-31: catch
+    # this at the source instead of the dead-code checker trying to model
+    # Odoo's resolution algorithm as a heuristic.
+    check_burn_list.ACT_WINDOW_ACTIONS.clear()
+    check_burn_list.ACT_WINDOW_VIEW_REFS.clear()
+    xml = (
+        '<?xml version="1.0"?>\n'
+        "<odoo>\n"
+        '  <record id="action_no_view_pinned" model="ir.actions.act_window">\n'
+        '    <field name="name">Stations</field>\n'
+        '    <field name="res_model">ham.aprs.station</field>\n'
+        '    <field name="view_mode">map,list,form</field>\n'
+        "  </record>\n"
+        "</odoo>\n"
+    )
+    _scan_file(xml, "some_module/views/station_views.xml")
+    assert any(
+        v["xml_id"] == "action_no_view_pinned"
+        for v in check_burn_list.ACT_WINDOW_ACTIONS.values()
+    )
+
+
+def test_act_window_with_inline_view_id_is_not_recorded():
+    check_burn_list.ACT_WINDOW_ACTIONS.clear()
+    check_burn_list.ACT_WINDOW_VIEW_REFS.clear()
+    xml = (
+        '<?xml version="1.0"?>\n'
+        "<odoo>\n"
+        '  <record id="action_view_pinned" model="ir.actions.act_window">\n'
+        '    <field name="name">Verification Queue</field>\n'
+        '    <field name="res_model">res.users</field>\n'
+        '    <field name="view_mode">list,form</field>\n'
+        '    <field name="view_id" ref="view_users_tree_verification"/>\n'
+        "  </record>\n"
+        "</odoo>\n"
+    )
+    _scan_file(xml, "some_module/views/users_views.xml")
+    assert not any(
+        v["xml_id"] == "action_view_pinned"
+        for v in check_burn_list.ACT_WINDOW_ACTIONS.values()
+    )
+
+
+def test_act_window_with_xml_comment_escape_hatch_is_not_recorded():
+    # The escape hatch this rule advertises is an XML comment
+    # (<!-- audit-ignore-view-resolution -->), not a same-line Python-style
+    # '#' comment -- XML's own <record> tag can't carry a trailing '#'
+    # comment. Uses the same real sibling-comment lookback
+    # (_xml_audit_lookback_start) every other audit-ignore-* check in this
+    # file already relies on to find a comment sitting just above a
+    # <record>.
+    check_burn_list.ACT_WINDOW_ACTIONS.clear()
+    check_burn_list.ACT_WINDOW_VIEW_REFS.clear()
+    xml = (
+        '<?xml version="1.0"?>\n'
+        "<odoo>\n"
+        "  <!-- audit-ignore-view-resolution: wizard action, target=new,\n"
+        "       has no persistent view worth pinning. -->\n"
+        '  <record id="action_deliberately_unpinned" model="ir.actions.act_window">\n'
+        '    <field name="name">Quick Wizard</field>\n'
+        '    <field name="res_model">some.wizard</field>\n'
+        '    <field name="view_mode">form</field>\n'
+        '    <field name="target">new</field>\n'
+        "  </record>\n"
+        "</odoo>\n"
+    )
+    _scan_file(xml, "some_module/views/wizard_views.xml")
+    assert not any(
+        v["xml_id"] == "action_deliberately_unpinned"
+        for v in check_burn_list.ACT_WINDOW_ACTIONS.values()
+    )
+
+
+def test_act_window_same_bare_id_in_two_modules_both_recorded():
+    # Keyed on (filepath, id), not the bare id -- two modules can
+    # legitimately both define an action with the same short xml id. A
+    # bare-id key would silently drop one finding when the second
+    # overwrites the first in the dict.
+    check_burn_list.ACT_WINDOW_ACTIONS.clear()
+    check_burn_list.ACT_WINDOW_VIEW_REFS.clear()
+    xml = (
+        '<?xml version="1.0"?>\n'
+        "<odoo>\n"
+        '  <record id="action_settings" model="ir.actions.act_window">\n'
+        '    <field name="name">Settings</field>\n'
+        '    <field name="res_model">res.config.settings</field>\n'
+        '    <field name="view_mode">form</field>\n'
+        "  </record>\n"
+        "</odoo>\n"
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for mod in ("module_a", "module_b"):
+            path = Path(tmpdir) / mod / "views" / "settings_views.xml"
+            path.parent.mkdir(parents=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(xml)
+            scan_file(str(path), is_odoo_module=True)
+    matches = [
+        k for k in check_burn_list.ACT_WINDOW_ACTIONS if k[1] == "action_settings"
+    ]
+    assert len(matches) == 2
+
+
+def test_act_window_view_satellite_record_is_tracked_in_view_refs():
+    # The old-style per-mode ir.actions.act_window.view pattern (act_window_id
+    # ref back to the action) is a legitimate way to pin views too -- e.g.
+    # ham_events/views/ham_net_roster_views.xml's
+    # action_ham_net_roster_tracking_view_kanban/_map/_tree. This satellite
+    # record can appear in a different file than the action itself, so
+    # ACT_WINDOW_VIEW_REFS is cross-referenced only at the end of main(),
+    # not immediately here.
+    check_burn_list.ACT_WINDOW_ACTIONS.clear()
+    check_burn_list.ACT_WINDOW_VIEW_REFS.clear()
+    xml = (
+        '<?xml version="1.0"?>\n'
+        "<odoo>\n"
+        '  <record id="action_tracking_view_kanban" model="ir.actions.act_window.view">\n'
+        '    <field name="view_mode">kanban</field>\n'
+        '    <field name="view_id" ref="event_registration_kanban_ham_net"/>\n'
+        '    <field name="act_window_id" ref="action_ham_net_roster_tracking"/>\n'
+        "  </record>\n"
+        "</odoo>\n"
+    )
+    _scan_file(xml, "some_module/views/roster_views.xml")
+    assert "action_ham_net_roster_tracking" in check_burn_list.ACT_WINDOW_VIEW_REFS
 
 
 def test_two_adjacent_string_literals_concatenated_with_plus_is_forbidden():
