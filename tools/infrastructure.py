@@ -2217,6 +2217,74 @@ WantedBy=timers.target
             "environments": ["prod", "test"],
         },
         {
+            "path": "/opt/hams/systemd/code.review.sweep.service",
+            "content": """\
+[Unit]
+Description=Hams.com Code Review Sweep -- Gemini leg (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction. Unlike pota.sync/sota.sync above,
+# this unit's own execution costs real, recurring Gemini API spend on
+# every run once a key is configured -- see docs/proposals/
+# CODE_REVIEW_PROCESS.md's own Status section before enabling the timer
+# below. ReadWritePaths only covers the report output directory: the rest
+# of the repo tree stays read-only, which is all this daemon needs to
+# read source files and run `git diff`/`git ls-files`.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/hams_com/docs/code_review_reports
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/code_review_sweep
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=code_review_sweep_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/code_review_sweep_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+# CODE_REVIEW_REPO_ROOT: the live box's real checkout path hasn't been
+# confirmed yet -- set this to wherever hams_com/ and hams_open/ actually
+# live as siblings before this unit is ever enabled. Left unset here
+# deliberately rather than guessed at.
+Environment="DAEMON_ARGS=--mode=incremental"
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/code_review_sweep/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=code.review.sweep
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/code.review.sweep.timer",
+            "content": """\
+[Unit]
+Description=Hams.com Code Review Sweep Quarterly (incremental mode)
+
+[Timer]
+OnCalendar=quarterly
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/systemd/aprs.is.sync.service",
             "content": """\
 [Unit]
