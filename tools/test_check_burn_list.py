@@ -447,6 +447,25 @@ def test_web_database_route_is_not_flagged_as_deprecated_routing():
     assert _routing_deprecation_errors(source) == []
 
 
+def test_web_image_route_is_not_flagged_as_deprecated_routing():
+    # Real false positive found 2026-08-31: /web/image/<model>/<id>/<field>
+    # is Odoo's own standard binary-field image-serving route (site logos,
+    # avatars, attachments), unrelated to the deprecated backend
+    # web-client entrypoint this rule targets -- confirmed as the only
+    # /web/image usage anywhere in the repo, in
+    # ham_init/tests/test_ham_init_tour.py's website.logo fallback test.
+    source = 'self.url_open(f"/web/image/website/{website.id}/logo/Hams.com?unique=test123")\n'
+    assert _routing_deprecation_errors(source) == []
+
+
+def test_web_session_route_is_not_flagged_as_deprecated_routing():
+    # Real false positive found 2026-08-31: /web/session/get_session_info
+    # is Odoo's standard session/auth API, unrelated to the deprecated
+    # backend web-client entrypoint this rule targets.
+    source = 'app.router.add_get("/web/session/get_session_info", handler)\n'
+    assert _routing_deprecation_errors(source) == []
+
+
 # parse_odoo_html()/OdooHTMLParser had zero coverage despite being a real, independent
 # structural parser (not part of the AST security-rule visitor above) -- other rule functions
 # in this file walk the XMLNode tree it builds, so a bug here would silently corrupt every one

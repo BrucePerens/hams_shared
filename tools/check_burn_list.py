@@ -567,7 +567,18 @@ ODOO_ERROR_RULES = [
     ),
     (
         r"\.(py|js)$",
-        re.compile(r"['\"]/web/(?!login\b|signup\b|assets\b|static\b|tests\b|database\b)[^'\"]*['\"]"),
+        # This rule targets the deprecated backend web-client entrypoint
+        # (bare /web or /web#..., forcefully redirected to /odoo in Odoo
+        # 19). It must not flag Odoo's other, unrelated /web/* data and
+        # asset routes -- those aren't part of that redirect and have no
+        # /odoo equivalent to move to. image/session were missing from
+        # this allowlist: both are real, standard Odoo routes (binary-field
+        # image serving -- ham_init/tests/test_ham_init_tour.py's own
+        # website.logo test hits /web/image/website/<id>/logo/...; session
+        # auth API -- /web/session/get_session_info) confirmed as the only
+        # actual repo-wide usages of either prefix, distinct from every
+        # other /web/* string literal in the codebase.
+        re.compile(r"['\"]/web/(?!login\b|signup\b|assets\b|static\b|tests\b|database\b|image\b|session\b)[^'\"]*['\"]"),
         "CRITICAL ROUTING DEPRECATION: /web is deprecated and forcefully redirected to /odoo in Odoo 19, losing the query parameters! Use /odoo instead.",
     ),
     (
