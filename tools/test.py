@@ -971,9 +971,8 @@ def check_linters(
         print(res_anchor.stderr)
         print("🛑 Halting due to anchor violations.")
         if extractor:
-            # extractor.aborted = True
-            pass
-        # sys.exit(1)
+            extractor.aborted = True
+        sys.exit(1)
     else:
         print(res_anchor.stdout)
 
