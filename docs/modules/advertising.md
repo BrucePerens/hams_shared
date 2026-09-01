@@ -9,12 +9,19 @@ yet approved for launch** -- several real product/legal questions the proposal i
 open by this module, not decided unilaterally. This is scaffolding landed for review, not a
 launched feature.
 
+**Updated 2026-09-01** per Bruce's own direct instruction ("I think a sidebar and footer per page
+would be a good start. Can we also fit an ad in ham_shack?"): a second, fixed-position sidebar slot
+was added, and the footer slot's earlier `/shack` exclusion was removed -- both placements now
+render identically on `/shack` and everywhere else.
+
 ## 1. Overview
 
-Adds two `website`-level fields (`google_adsense_client_id`, `google_adsense_footer_slot_id`) and a
-`website.layout` inheritance that renders the AdSense loader script and a single footer ad slot --
-but only once **both** fields are configured in Website > Configuration > Settings. Either field
-left empty renders zero ad-related markup or script at all; there is no default "on" state.
+Adds three `website`-level fields (`google_adsense_client_id`, `google_adsense_footer_slot_id`,
+`google_adsense_sidebar_slot_id`) and a `website.layout` inheritance that renders the AdSense loader
+script plus a footer ad slot and a fixed-position sidebar ad slot -- each ad slot only once **both**
+the publisher ID and that slot's own ID are configured in Website > Configuration > Settings. Any
+field left empty renders zero ad-related markup or script for that slot; there is no default "on"
+state.
 
 ## 2. Consent gating
 
@@ -28,10 +35,17 @@ wiring only exists when GA itself is configured, so AdSense needed its own, acti
 
 ## 3. Placement
 
-Single footer banner, `//footer` position `after`, matching `user_websites`'s own
+Footer banner, `//footer` position `after`, matching `user_websites`'s own
 `layout_inherit_report_violation` placement precedent -- the proposal's own "least intrusive
-starting point" recommendation. Explicitly excluded on any `/shack`-prefixed path (a real-time
-operating console, not a content/reference page) [@ANCHOR: xpath_rendering_advertising_footer].
+starting point" recommendation. Renders on every page including `/shack`, per Bruce's 2026-09-01
+instruction overriding the earlier `/shack` exclusion
+[@ANCHOR: xpath_rendering_advertising_footer].
+
+A fixed-position ("skyscraper") sidebar unit, CSS-`position:fixed` to the page's right edge rather
+than injected into a per-page sidebar region (no such region exists generically across every page
+type this site has), hidden below the Bootstrap `xl` breakpoint so it never competes with content
+on narrower viewports. Renders on every page including `/shack`
+[@ANCHOR: xpath_rendering_advertising_sidebar].
 
 ## 4. Settings
 
@@ -49,9 +63,10 @@ Exposed under Website Settings' existing "Tracking & SEO" block via a new "Adver
 ## 6. Testing
 
 `tests/test_advertising_layout.py` covers: no markup when unconfigured, partial-configuration
-still renders nothing in the footer, full configuration renders the footer slot with the right
-IDs, `/shack` is excluded even when fully configured, and the consent-default-denied wiring is
-present independent of GA [@ANCHOR: test_xpath_rendering_advertising].
+still renders nothing in either slot, full configuration renders the footer and sidebar slots with
+the right IDs, `/shack` shows both slots identically to any other page, and the
+consent-default-denied wiring is present independent of GA
+[@ANCHOR: test_xpath_rendering_advertising].
 
 The settings-view injection covered above (section 4) is verified separately by its own test
 [@ANCHOR: test_xpath_rendering_advertising_settings].
