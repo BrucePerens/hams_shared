@@ -48,6 +48,43 @@ import multiprocessing
 import psutil
 
 
+def measure_process_tree_memory(runner_pid, exclude_pid):
+    """Sums resident memory across every descendant of runner_pid, except
+    exclude_pid (the watchdog itself, when called from OOMWatchdog.run()).
+
+    Uses PSS (proportional set size) rather than plain RSS. RSS
+    double-counts memory shared across a process tree -- e.g. a
+    browser-tour test's renderer/GPU/zygote subprocesses sharing one large
+    mapping each report the full mapping as their own RSS, inflating the
+    total by roughly N-per-mapping and producing false OOM kills on an
+    otherwise-idle box. PSS apportions shared pages across the processes
+    that map them, so the sum matches real host memory consumed. Falls back
+    to plain RSS per-process if PSS is unavailable (permission denied, or a
+    platform without smaps-based accounting) rather than dropping the
+    process from the total -- an over-cautious watchdog is safer than a
+    blind one.
+
+    Extracted as a standalone, importable function (rather than left
+    inline in OOMWatchdog.run()'s infinite loop) so it can be exercised
+    directly by test_test_oom_watchdog.py without needing to spawn and
+    kill a real multiprocessing.Process.
+    """
+    runner = psutil.Process(runner_pid)
+    procs = runner.children(recursive=True)
+    total = 0
+    for p in procs:
+        if p.pid == exclude_pid:
+            continue
+        try:
+            try:
+                total += p.memory_full_info().pss
+            except (psutil.AccessDenied, AttributeError):
+                total += p.memory_info().rss
+        except psutil.NoSuchProcess:
+            pass
+    return total
+
+
 class OOMWatchdog(multiprocessing.Process):
     def __init__(self, target_pid, runner_pid, rss_limit_gb=3.5):
         super().__init__(daemon=True)
@@ -72,17 +109,9 @@ class OOMWatchdog(multiprocessing.Process):
             pass
         while True:
             try:
-                runner = psutil.Process(self.runner_pid)
-                procs = runner.children(recursive=True)
-                total_rss = 0
-                for p in procs:
-                    if p.pid == os.getpid():
-                        continue
-                    try:
-                        mem = p.memory_info()
-                        total_rss += mem.rss
-                    except psutil.NoSuchProcess:
-                        pass
+                total_rss = measure_process_tree_memory(
+                    self.runner_pid, exclude_pid=os.getpid()
+                )
 
                 total_rss_gb = total_rss / (1024**3)
 
@@ -107,6 +136,11 @@ class OOMWatchdog(multiprocessing.Process):
                         f"\n[🚨 OOM WATCHDOG] Aggregate memory exceeded limits! ({reason}). Terminating children...\n",
                         flush=True,
                     )
+                    try:
+                        runner = psutil.Process(self.runner_pid)
+                        procs = runner.children(recursive=True)
+                    except psutil.NoSuchProcess:
+                        procs = []
                     for p in procs:
                         if p.pid == os.getpid():
                             continue
