@@ -86,7 +86,7 @@ def measure_process_tree_memory(runner_pid, exclude_pid):
 
 
 class OOMWatchdog(multiprocessing.Process):
-    def __init__(self, target_pid, runner_pid, rss_limit_gb=3.5):
+    def __init__(self, target_pid, runner_pid, rss_limit_gb=8.0):
         super().__init__(daemon=True)
         self.target_pid = target_pid
         self.runner_pid = runner_pid
@@ -1733,14 +1733,14 @@ def main():
 
         if os.geteuid() != 0:
             print(
-                "[*] Elevating privileges and applying 4G memory limit via systemd-run..."
+                "[*] Elevating privileges and applying 9G memory limit via systemd-run..."
             )
             systemd_run_args = [
                 "systemd-run",
                 "--scope",
                 "-q",
                 "-p",
-                "MemoryMax=4G",
+                "MemoryMax=9G",
                 "-p",
                 "TasksMax=infinity",
             ]
