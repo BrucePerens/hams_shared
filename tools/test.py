@@ -961,8 +961,16 @@ def check_linters(
         print(res_init.stdout)
 
     print("[*] Scanning for Semantic Anchors...")
+    other_repo_name = {"hams_open": "hams_com", "hams_com": "hams_open"}.get(
+        os.path.basename(os.path.normpath(base_dir))
+    )
+    anchor_scan_dirs = [base_dir]
+    if other_repo_name:
+        sibling_dir = os.path.abspath(os.path.join(base_dir, "..", other_repo_name))
+        if os.path.isdir(sibling_dir):
+            anchor_scan_dirs.append(sibling_dir)
     res_anchor = subprocess.run(
-        [python_exec, os.path.join(shared_dir, "tools", "verify_anchors.py"), base_dir, os.path.abspath(os.path.join(base_dir, "..", "hams_com"))],
+        [python_exec, os.path.join(shared_dir, "tools", "verify_anchors.py")] + anchor_scan_dirs,
         capture_output=True,
         text=True,
     )
