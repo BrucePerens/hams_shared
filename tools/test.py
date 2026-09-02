@@ -23,6 +23,19 @@ never `--logfile`):
    `while kill -0 $PID 2>/dev/null; do sleep N; done` misreads that EPERM as "process exited" and
    returns immediately even though the process is still running. Use `[ -d /proc/$PID ]` instead,
    which only checks existence and needs no permission.
+
+AI DIRECTIVE: any ad-hoc scoped-test database you create by hand (e.g.
+`sudo -u postgres createdb <name>` for a one-off `odoo --test-tags ...` run outside this runner)
+MUST be named with a `tmp_` prefix (e.g. `tmp_night_verify8`), not a free-form name. Found
+2026-09-02: 87 leaked scoped-test databases had accumulated from interrupted runs (a killed tool
+call, a crashed process, an abandoned session all skip the manual `dropdb` cleanup step),
+consuming several GB of a nearly-full /var partition. `hams_shared/tools/
+reap_stale_test_databases.py` runs on a systemd timer every 2 hours and automatically drops any
+`tmp_`-prefixed database that is both closed (no active connection) and older than 6 hours --
+but it only ever considers databases carrying that prefix, by design, so a database you create
+without it will never be auto-cleaned and will leak exactly like the 87 did. Still `dropdb` it
+yourself when your test run finishes if you can -- the reaper is the safety net for when you
+can't, not a replacement for cleaning up after yourself.
 """
 
 import builtins

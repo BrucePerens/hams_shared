@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the stale tmp_ scoped-test database reaper every 2 hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=2h
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

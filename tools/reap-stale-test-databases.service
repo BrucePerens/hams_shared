@@ -1,0 +1,9 @@
+[Unit]
+Description=Reap stale tmp_-prefixed scoped-test PostgreSQL databases (dev box only)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/home/bruce/workspace/hams_open/hams_shared/tools
+ExecStart=/usr/bin/env python3 reap_stale_test_databases.py
