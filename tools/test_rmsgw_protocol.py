@@ -31,9 +31,11 @@ and password "password", the values `rmsgw_mock_cms.py` and this dev box's insta
 
 **Real, non-obvious finding while re-deriving the algorithm**: `ChallengedPassword()`
 in `sglchallenge.c` branches on `#ifdef __BIG_ENDIAN`, apparently intending a runtime
-host-endianness check -- but `<endian.h>` (pulled in via `#include <sys/time.h>` on
-glibc) always defines `__BIG_ENDIAN` as a numeric constant (`4321`), regardless of the
-actual host's byte order, so `#ifdef __BIG_ENDIAN` is unconditionally true on any glibc
+host-endianness check -- but `sglchallenge.c` itself directly `#include`s `<endian.h>`,
+and on glibc that header always defines `__BIG_ENDIAN` as a numeric constant (`4321`),
+regardless of the actual host's byte order (confirmed directly: `echo '#include
+<endian.h>' | gcc -E -dM - | grep BIG_ENDIAN` on this box prints `#define __BIG_ENDIAN
+4321` unconditionally), so `#ifdef __BIG_ENDIAN` is unconditionally true on any glibc
 Linux build, including this x86_64 (little-endian) box. The code therefore always
 takes the "big endian" branch in practice: `byteArr = [digest[0], digest[1], digest[2],
 digest[3] & 0x3f]`, then reinterpreted as a native `uint32_t` on this little-endian
@@ -68,13 +70,25 @@ CMS host list file (`/usr/local/etc/rmsgw/hosts`) is a single compiled-in path w
 per-invocation override (`CMSHOSTFILE` is baked in via `pathnames.h` at configure time;
 confirmed by reading `lib/getcms.c` -- `setcmsfile()` exists but nothing calls it from
 config loading, unlike `CHANNELFILE`, which `session.c` does override via
-`setchanfile()`), so this test must temporarily point that real, root-owned, shared
-system file at a local mock CMS (via `sudo`) and restore it in a `finally` block. That's
-appropriate for a deliberate, opt-in dev-box run -- not something an unattended `pytest`/
-`test.py` sweep of every `tools/test_*.py` file should do to a shared system file
-without being asked. Requires passwordless (or already-cached) `sudo` for that one
-`cp`/write; `unittest.skipUnless` also requires `shutil.which("rmsgw")` and the real
-`/usr/local/etc/rmsgw/channels.xml` to exist, so this is inert on any machine that
+`setchanfile()`), so this test must temporarily point that real, shared system file at
+a local mock CMS and restore it in a cleanup handler. That's appropriate for a
+deliberate, opt-in dev-box run -- not something an unattended `pytest`/`test.py` sweep
+of every `tools/test_*.py` file should do to a shared system file without being asked.
+
+**Deliberately contains no `sudo` call anywhere in this file**, per this codebase's own
+zero-sudo policy (`hams_shared/docs/adrs/`'s standing "no `sudo`/privilege escalation in
+committed code, use a narrowly-scoped account instead" rule) -- that rule is about
+committed, repo-tracked code specifically, distinct from an operator's own interactive
+`sudo` use setting up their own dev box, which this test deliberately doesn't attempt to
+do on its own behalf. Instead, `setUp()` checks `os.access(HOSTS_FILE, os.W_OK)` and
+calls `self.skipTest(...)` if this user can't write it. **One-time operator setup step,
+not part of this test and not automated by it**: `sudo chown "$(whoami)" /usr/local/etc/
+rmsgw/hosts` (or an equivalent group-write grant) once, on a box that already has
+`rmsgw` installed and where this integration test is wanted -- the file holds only
+synthetic test values (a CMS hostname/port/password triple) already meant to be hand-
+edited per `rmsgw`'s own README, so ordinary-user ownership of it is not a real
+privilege change. `unittest.skipUnless` also requires `shutil.which("rmsgw")` and the
+real `/usr/local/etc/rmsgw/channels.xml` to exist, so this is inert on any machine that
 doesn't already have rmsgw built and installed (matching this document family's other
 opt-in dev-box-only tests).
 """
@@ -90,6 +104,7 @@ import threading
 import time
 import unittest
 import xml.etree.ElementTree as ET
+from typing import IO
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 MOCK_CMS_SCRIPT = os.path.join(TOOLS_DIR, "rmsgw_mock_cms.py")
@@ -150,7 +165,12 @@ def _read_channel_password(channel_name: str) -> str:
     root = ET.parse(CHANNELS_FILE).getroot()
     for chan in root.findall("c:channel", ns):
         if chan.get("name") == channel_name:
-            return chan.findtext("c:password", namespaces=ns)
+            password = chan.findtext("c:password", namespaces=ns)
+            if password is None:
+                raise AssertionError(
+                    f"channel {channel_name!r} in {CHANNELS_FILE} has no <password>"
+                )
+            return password
     raise AssertionError(f"no channel named {channel_name!r} in {CHANNELS_FILE}")
 
 
@@ -182,13 +202,13 @@ class _LineCapture:
     instead of a plain `for line in stream: ...` loop.
     """
 
-    def __init__(self, stream):
+    def __init__(self, stream: "IO[bytes]") -> None:
         self._buf = ""
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, args=(stream,), daemon=True)
         self._thread.start()
 
-    def _run(self, stream):
+    def _run(self, stream: "IO[bytes]") -> None:
         fd = stream.fileno()
         while True:
             try:
@@ -217,8 +237,8 @@ class _LineCapture:
 @unittest.skipUnless(os.path.exists(CHANNELS_FILE), f"{CHANNELS_FILE} not installed")
 @unittest.skipUnless(os.environ.get("RMSGW_INTEGRATION_TEST") == "1",
                       "opt-in only -- set RMSGW_INTEGRATION_TEST=1 (see module docstring: "
-                      "this temporarily rewrites the real, shared, root-owned "
-                      "/usr/local/etc/rmsgw/hosts file via sudo)")
+                      "this temporarily rewrites the real, shared "
+                      "/usr/local/etc/rmsgw/hosts file, restored afterward)")
 class RmsgwProtocolIntegrationTest(unittest.TestCase):
     """Spawns the real rmsgw binary and the real rmsgw_mock_cms.py script as real
     subprocesses, drives one full session between them, and asserts the protocol-level
@@ -230,6 +250,11 @@ class RmsgwProtocolIntegrationTest(unittest.TestCase):
     USERCALL = "N0CALL2"
 
     def setUp(self):
+        if not os.access(HOSTS_FILE, os.W_OK):
+            self.skipTest(
+                f"{HOSTS_FILE} is not writable by this user -- see module docstring's "
+                "one-time operator setup step"
+            )
         self.password = _read_channel_password(self.CHANNEL_NAME)
         self.port = _pick_free_loopback_port()
         with open(HOSTS_FILE, "r") as f:
@@ -238,10 +263,8 @@ class RmsgwProtocolIntegrationTest(unittest.TestCase):
         self._write_hosts_file(f"127.0.0.1:{self.port}:unused\n")
 
     def _write_hosts_file(self, content: str):
-        subprocess.run(
-            ["sudo", "tee", HOSTS_FILE], input=content, capture_output=True,
-            text=True, check=True,
-        )
+        with open(HOSTS_FILE, "w") as f:
+            f.write(content)
 
     def _restore_hosts_file(self):
         self._write_hosts_file(self._original_hosts)
@@ -268,6 +291,7 @@ class RmsgwProtocolIntegrationTest(unittest.TestCase):
             proc.stdout.close()
 
         self.addCleanup(_reap, mock)
+        assert mock.stdout is not None  # guaranteed by stdout=subprocess.PIPE above
         mock_out = _LineCapture(mock.stdout)
         self.assertTrue(mock_out.wait_for(r"mock CMS listening on", timeout=5),
                          f"mock CMS never came up:\n{mock_out.snapshot()}")
@@ -278,7 +302,10 @@ class RmsgwProtocolIntegrationTest(unittest.TestCase):
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
         self.addCleanup(_reap, rmsgw)
+        assert rmsgw.stdout is not None  # guaranteed by stdout=subprocess.PIPE above
         rmsgw_out = _LineCapture(rmsgw.stdout)
+        assert rmsgw.stdin is not None  # guaranteed by stdin=subprocess.PIPE above
+        rmsgw_stdin = rmsgw.stdin
 
         # 1. rmsgw sends its version/greeting banner to the RF client (stdout)
         #    unconditionally at startup, before any CMS interaction at all -- proven
@@ -296,7 +323,9 @@ class RmsgwProtocolIntegrationTest(unittest.TestCase):
             mock_out.wait_for(r";SR: \d+ 25000001 20", timeout=10),
             f"rmsgw never sent an SGL challenge response:\n{mock_out.snapshot()}",
         )
-        sent_response = re.search(r";SR: (\d+) 25000001 20", mock_out.snapshot()).group(1)
+        response_match = re.search(r";SR: (\d+) 25000001 20", mock_out.snapshot())
+        assert response_match is not None  # just proved above via wait_for()
+        sent_response = response_match.group(1)
         self.assertEqual(sent_response, expected_response,
                           "rmsgw's real SGL challenge response did not match the "
                           "independently-computed expected value for this channel's "
@@ -313,8 +342,8 @@ class RmsgwProtocolIntegrationTest(unittest.TestCase):
         # 4. ...and a reply typed by the "RF client" (this test, writing to rmsgw's
         #    stdin) arrives back at the mock CMS's socket through the same relay,
         #    proving the relay really is bidirectional and not a one-way echo.
-        rmsgw.stdin.write((rf_marker + "\r").encode())
-        rmsgw.stdin.flush()
+        rmsgw_stdin.write((rf_marker + "\r").encode())
+        rmsgw_stdin.flush()
         self.assertTrue(mock_out.wait_for(re.escape(rf_marker), timeout=5),
                          f"RF->CMS relay marker never reached the mock CMS:\n"
                          f"{mock_out.snapshot()}")
@@ -330,8 +359,8 @@ class RmsgwProtocolIntegrationTest(unittest.TestCase):
         #     strict FF/FQ state-machine match on rmsgw's own side).
         self.assertTrue(mock_out.wait_for(r"SEND: 'FF", timeout=5),
                          f"mock CMS log:\n{mock_out.snapshot()}")
-        rmsgw.stdin.write(b"FQ\r")
-        rmsgw.stdin.flush()
+        rmsgw_stdin.write(b"FQ\r")
+        rmsgw_stdin.flush()
 
         # 5. Clean FF/FQ session teardown (gateway.c's turnaround sequence) and a
         #    clean process exit -- not a hang, crash, or timeout-driven kill.
