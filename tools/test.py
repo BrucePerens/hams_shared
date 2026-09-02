@@ -10,6 +10,19 @@ Strictly prohibits Bash wrapper scripts and CPU polling loops.
 AI DIRECTIVE: If UI Tours are failing with [watchdog alarm] or timeouts,
 you MUST read `hams_shared/docs/adrs/0081_ui_testability_and_tour_friendly_design.md`. The environment is heavily constrained
 and prone to race conditions if native macros are ignored.
+
+AI DIRECTIVE: two environment gotchas found 2026-09-01 that cost real time diagnosing, relevant
+whenever you invoke odoo by hand (e.g. `sudo -n -u odoo env ... odoo ...`) outside this runner --
+this module's own run_cmd() above is already unaffected (it captures stdout via subprocess.PIPE,
+never `--logfile`):
+1. `odoo --logfile=<path>` run under `sudo -n -u odoo ...` silently produces NO log file at all,
+   even though the process runs and does real work (confirmed via `ps`/CPU time advancing). Use a
+   plain stdout redirect (`>> file.log 2>&1`) instead of `--logfile`.
+2. `kill -0 <pid>` against a process owned by a different user (e.g. checking on an `odoo`-owned
+   PID from a `bruce` shell) returns EPERM, not "no such process" -- a wait loop written as
+   `while kill -0 $PID 2>/dev/null; do sleep N; done` misreads that EPERM as "process exited" and
+   returns immediately even though the process is still running. Use `[ -d /proc/$PID ]` instead,
+   which only checks existence and needs no permission.
 """
 
 import builtins
