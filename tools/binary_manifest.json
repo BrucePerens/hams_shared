@@ -12,8 +12,8 @@
     "extract_member": "etcd"
   },
   "cloudflared": {
-    "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.8.2/cloudflared-linux-amd64",
-    "checksum": "fcfb02b575a52ca1af2e3267af4e1517bcdeb30ac48c834c69abaed3c0576ad2",
+    "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.8.3/cloudflared-linux-amd64",
+    "checksum": "f29324fe934d1e100617484c78deef803c4dc2cd351d645bbde42e96b4fccc5e",
     "type": "binary"
   }
 }

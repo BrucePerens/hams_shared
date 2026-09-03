@@ -17,9 +17,9 @@
   "cloudflared": {
     "repo": "cloudflare/cloudflared",
     "mode": "release",
-    "pinned": "2026.8.2",
+    "pinned": "2026.8.3",
     "pinned_via": "hams_shared/tools/binary_manifest.json",
-    "notes": "Bumped 2026-08-27 (Bruce: bump all three before deployment). Verified by downloading the real 2026.8.2 raw binary release asset, computing its sha256 directly, and running it (`cloudflared --version` reports 2026.8.2 correctly). Same caveat as kopia/etcd: no live network-download test exists for cloudflared in this codebase, so this direct download+checksum+run is the real verification pass."
+    "notes": "Bumped 2026-09-03: dependency-watch.yml surfaced this pin as stale once its own real submodule-checkout bug was fixed (see night_shift_todo.md). 2026.8.3 is a small, low-risk single-version bump whose real changelog (checked via `gh api .../compare`, not assumed) is mostly internal cleanup plus one real security fix: `chore: bump gorilla/websocket for GO-2026-6278` (GHSA-w67g-5rqw-f597, High severity -- a cryptographically weak PRNG in gorilla/websocket's own WebSocket frame-masking, fixed upstream in gorilla/websocket v1.5.3). Verified the same way as the prior bump: downloaded the real 2026.8.3 raw binary release asset, computed its sha256 directly (f29324fe934d1e100617484c78deef803c4dc2cd351d645bbde42e96b4fccc5e, matching the checksum GitHub's own release page publishes for this asset), and ran it (`cloudflared --version` reports `2026.8.3 (built 2026-08-31-10:04 UTC)` correctly). Same caveat as kopia/etcd: no live network-download test exists for cloudflared in this codebase, so this direct download+checksum+run is the real verification pass. binary_manifest.json and binary_manifest_data.xml both updated and re-verified in sync via check_binary_manifest_consistency.py (see that script's own doc comment for the real bug this guards against)."
   },
   "pat": {
     "repo": "la5nta/pat",
