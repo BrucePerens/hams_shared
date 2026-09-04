@@ -653,6 +653,106 @@ REQUIRE_TEST_VERIFICATION = []
 FOUND_TEST_CONTENTS = {}
 FOUND_TOURS = []
 FOUND_MANIFESTS = {}
+
+# Bruce's own direct request, 2026-09-04: the single-line `[@ANCHOR: name]`
+# form (still fully supported, unchanged -- see ANCHOR_REGEX below) ties an
+# anchor to whatever function happens to contain that one exact comment
+# line. That's fine for a short test, but it can't express "this anchor
+# covers this whole documented/tested body of code" the way a multi-line
+# explanation or a multi-statement test sometimes needs -- and unlike the
+# node.lineno/node.end_lineno fix applied to the bypass-declaration side
+# (visit_Try etc., see that code's own comments), there's no AST node here
+# to fall back on: an anchor comment on the test/documentation side isn't
+# necessarily inside any single expression a checker already has a handle
+# on. `[@ANCHOR-BEGIN: name]` / `[@ANCHOR-END: name]` is the explicit,
+# human-placed equivalent -- immune to reformatting for the same reason
+# BEGIN/END comments always are (a formatter never rewrites comment text
+# or merges a standalone comment line into surrounding code), at the real,
+# named cost of being uglier than a single tag. Both forms are recognized
+# everywhere an anchor is searched for; a bare `[@ANCHOR: name]` remains
+# valid and is not being deprecated.
+ANCHOR_REGEX = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_]+)\s*\]")
+ANCHOR_BEGIN_REGEX = re.compile(r"\[@ANCHOR-BEGIN:\s*([a-zA-Z0-9_]+)\s*\]")
+ANCHOR_END_REGEX = re.compile(r"\[@ANCHOR-END:\s*([a-zA-Z0-9_]+)\s*\]")
+
+
+def _find_anchor_line(content, anchor_name):
+    """The line number where `[@ANCHOR: anchor_name]` or
+    `[@ANCHOR-BEGIN: anchor_name]` first appears in `content`, or -1 if
+    neither does. Used everywhere an anchor's own line is needed (e.g. to
+    find its enclosing function) -- the BEGIN line is what "the anchor's
+    line" means for a multi-line anchor, matching the existing single-line
+    anchor's own semantics exactly (both mark where the anchor's scope
+    starts; only the multi-line form also marks, separately, where it
+    ends -- see anchor_covers() below for why END matters too).
+    """
+    for i, line_text in enumerate(content.splitlines(), 1):
+        if ANCHOR_REGEX.search(line_text) and ANCHOR_REGEX.search(
+            line_text
+        ).group(1) == anchor_name:
+            return i
+        if ANCHOR_BEGIN_REGEX.search(line_text) and ANCHOR_BEGIN_REGEX.search(
+            line_text
+        ).group(1) == anchor_name:
+            return i
+    return -1
+
+
+def _anchor_citation_present(content, anchor_name):
+    """Whether `anchor_name` is cited anywhere in `content`, either as a
+    single-line `[@ANCHOR: name]` or the BEGIN half of a multi-line pair --
+    the orphan-bypass check's own "does this anchor exist anywhere in a
+    test file" question, which doesn't care where the anchor's body ends.
+    """
+    return f"[@ANCHOR: {anchor_name}]" in content or f"[@ANCHOR-BEGIN: {anchor_name}]" in content
+
+
+def check_anchor_pairing(content):
+    """Every `[@ANCHOR-BEGIN: X]` needs exactly one `[@ANCHOR-END: X]`
+    later in the same file, and vice versa -- an unpaired marker is a real
+    authoring mistake (a forgotten END, a typo'd name, a copy-pasted BEGIN
+    never closed), not a style nit, since a stray BEGIN with no END makes
+    the anchor's own claimed scope silently unbounded rather than an error.
+    Checked per-file, not per-anchor-name-globally: nothing requires a
+    BEGIN/END pair to live in the same file as the code it documents, but
+    a pair that spans files can't be validated as a real pairing at all
+    (which file's copy of "the end" is authoritative?), so this only ever
+    validates markers found together in one file, same as `_find_anchor_line`
+    and `_anchor_citation_present` already only ever look within one file's
+    own content.
+
+    Returns a list of `"Line N: ..."` strings, matching `scan_file`'s own
+    `errors_found` convention -- the caller appends these into the same
+    list, so a pairing mistake counts toward the real pass/fail exit code
+    like any other finding, not a side print nobody's told to check.
+    """
+    errors = []
+    begins = {}
+    for i, line_text in enumerate(content.splitlines(), 1):
+        m = ANCHOR_BEGIN_REGEX.search(line_text)
+        if m:
+            name = m.group(1)
+            if name in begins:
+                errors.append(
+                    f"Line {i}: ORPHANED ANCHOR MARKER: [@ANCHOR-BEGIN: {name}] appears twice in "
+                    f"this file (first at line {begins[name]}) with no [@ANCHOR-END: {name}] between them."
+                )
+            begins[name] = i
+        m = ANCHOR_END_REGEX.search(line_text)
+        if m:
+            name = m.group(1)
+            if name not in begins:
+                errors.append(
+                    f"Line {i}: ORPHANED ANCHOR MARKER: [@ANCHOR-END: {name}] has no preceding "
+                    f"[@ANCHOR-BEGIN: {name}] in this file."
+                )
+            else:
+                del begins[name]
+    for name, line in begins.items():
+        errors.append(
+            f"Line {line}: ORPHANED ANCHOR MARKER: [@ANCHOR-BEGIN: {name}] has no [@ANCHOR-END: {name}] in this file."
+        )
+    return errors
 # ir.actions.act_window records with no explicit view_id/view_ids: xml id ->
 # {"file", "line"}. Cross-referenced at the end of main() against
 # ACT_WINDOW_VIEW_REFS (the old-style satellite ir.actions.act_window.view
@@ -710,6 +810,35 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         self.has_ham_base = True
                         break
                     current = os.path.dirname(current)
+
+        def node_span_text(self, node):
+            """The joined text of every physical line `node` itself spans
+            (`node.lineno` through `node.end_lineno`, both from Python's
+            own AST -- available since 3.8, not re-derived here), for
+            checkers that need to find an ignore-tag comment anywhere on
+            a call/handler/statement that a formatter may have wrapped
+            across multiple lines. Bruce's own request, 2026-09-04, after
+            a real confirmed case: reformatting long-line-wrapping a call
+            like `self._get_service_uid(...)` moves its own trailing
+            `# audit-ignore-service-uid-cursorless` comment onto the
+            closing-paren line, while `node.lineno` (Python AST's own
+            convention) stays pinned to the line the call *opens* on --
+            a single-line `self.lines[node.lineno - 1]` check goes blind
+            to a tag it used to see, a false positive on already-justified
+            code, not a real new violation.
+
+            Falls back to the single line at `node.lineno` when `node`
+            has no `end_lineno` (only possible for a node type Python's
+            parser doesn't attach one to -- not expected for anything
+            this is actually called on, but a graceful floor rather than
+            an IndexError if that assumption is ever wrong).
+            """
+            start = getattr(node, "lineno", None)
+            if start is None or start > len(self.lines):
+                return ""
+            end = getattr(node, "end_lineno", start)
+            end = min(end, len(self.lines))
+            return "\n".join(self.lines[start - 1 : end])
 
         def add_error(self, lineno, msg):
             if lineno <= len(self.lines) and "burn-ignore" in self.lines[lineno - 1]:
@@ -1191,11 +1320,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         node.lineno, "CRITICAL RCE: The pickle module is vulnerable."
                     )
                 elif alias.name == "random":
-                    line_content = (
-                        self.lines[node.lineno - 1]
-                        if node.lineno <= len(self.lines)
-                        else ""
-                    )
+                    line_content = self.node_span_text(node)
                     # `random` is genuinely insecure for anything
                     # security-sensitive (tokens, passwords, secrets) --
                     # this rule should keep flagging that. It's also the
@@ -1267,9 +1392,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         and child.func.attr == "_get_service_uid"
                     ):
                         lineno = getattr(child, "lineno", node.lineno)
-                        line_content = (
-                            self.lines[lineno - 1] if lineno <= len(self.lines) else ""
-                        )
+                        line_content = self.node_span_text(child)
                         if "audit-ignore-service-uid-cursorless" not in line_content:
                             self.add_error(
                                 lineno,
@@ -1290,11 +1413,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 )
                 if is_catch_all:
                     handler_line = getattr(handler, "lineno", node.lineno)
-                    line_content = (
-                        self.lines[handler_line - 1]
-                        if handler_line <= len(self.lines)
-                        else ""
-                    )
+                    line_content = self.node_span_text(handler)
                     if "audit-ignore-catch-all" not in line_content:
                         self.add_error(
                             handler_line,
@@ -1327,11 +1446,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     node.lineno, "CRITICAL RCE: The pickle module is vulnerable."
                 )
             elif node.module == "random":
-                line_content = (
-                    self.lines[node.lineno - 1]
-                    if node.lineno <= len(self.lines)
-                    else ""
-                )
+                line_content = self.node_span_text(node)
                 if "audit-ignore-weak-random" not in line_content:
                     self.add_error(
                         node.lineno,
@@ -1442,6 +1557,21 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
         def visit_Attribute(self, node):
             if self.is_odoo_module:
                 if node.attr == "sudo":
+                    # Deliberately NOT `self.node_span_text(node)` here, unlike
+                    # every other site this fix touched (2026-09-04) --
+                    # `node` is the `Attribute` for `.sudo` alone (e.g. the
+                    # `.sudo` in `record.sudo()._generate(vals)`), whose own
+                    # `end_lineno` never extends into the outer `()._generate(
+                    # vals)` call chain this check's own substring match
+                    # (`"sudo()._generate("` etc.) actually needs to see --
+                    # widening to `node.end_lineno` here would be a no-op,
+                    # not a real fix. A real fix needs the enclosing
+                    # statement's own span, which this visitor doesn't
+                    # currently track (no parent/statement stack exists to
+                    # walk up to from here) -- left as single-line, a real,
+                    # known, narrower version of the same reflow gap the
+                    # other checks in this class no longer have, not silently
+                    # assumed fixed alongside them.
                     line_content = (
                         self.lines[node.lineno - 1]
                         if node.lineno <= len(self.lines)
@@ -1497,7 +1627,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 ):
                     is_super = True
                 if not is_super:
-                    line_content = self.lines[node.lineno - 1] if node.lineno <= len(self.lines) else ""
+                    line_content = self.node_span_text(node)
                     if "burn-ignore-introspection" not in line_content:
                         self.add_error(
                             node.lineno,
@@ -1545,7 +1675,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             "[!] DIAGNOSTIC FOR AI: Obfuscated use of sudo via getattr() detected and blocked.",
                         )
                     if len(node.args) >= 3 or node.keywords:
-                        line_content = self.lines[node.lineno - 1] if node.lineno <= len(self.lines) else ""
+                        line_content = self.node_span_text(node)
                         # Identity-gated, not tag-gated, and deliberately so: a
                         # `# burn-ignore-...` comment can be copy-pasted to any
                         # new 3-arg getattr() call with zero review friction,
@@ -3393,6 +3523,8 @@ def scan_file(filepath, is_odoo_module=False):
                         f"Line {line_num}: {msg}\n      Code: `{stripped}`"
                     )
 
+    errors_found.extend(check_anchor_pairing(content))
+
     return errors_found, warnings_found
 
 
@@ -3422,11 +3554,15 @@ def _verify_test_ast(
         print(f"  ❌ ERROR: Syntax error in test file {target_file}: {e}")
         return verification_errors + 1, total_errors + 1
 
-    anchor_line = -1
-    for i, line_text in enumerate(target_content.splitlines(), 1):
-        if f"[@ANCHOR: COMM_{anchor}]" in line_text:
-            anchor_line = i
-            break
+    # `_find_anchor_line` recognizes both the single-line `[@ANCHOR: ...]`
+    # form and the BEGIN half of a multi-line `[@ANCHOR-BEGIN: ...]` /
+    # `[@ANCHOR-END: ...]` pair (2026-09-04, Bruce's own request) -- either
+    # way, the anchor's own line is what "does this test function's line
+    # range contain the anchor" below needs; the END marker (if present)
+    # exists for the reformatting-robustness/documentation reasons named
+    # where `[@ANCHOR-BEGIN:`/`[@ANCHOR-END:` are defined, not because this
+    # specific check needs the closing line too.
+    anchor_line = _find_anchor_line(target_content, f"COMM_{anchor}")
 
     target_func = None
     for node in ast.walk(tree):
@@ -3705,8 +3841,13 @@ def main():
         # _verify_test_ast to run on it -- so a bypass that used to resolve
         # still resolves, and nothing that used to be flagged as orphaned
         # can newly resolve through a DIFFERENT anchor's citation.
+        # `_anchor_citation_present` also accepts the BEGIN half of a
+        # multi-line `[@ANCHOR-BEGIN: ...]`/`[@ANCHOR-END: ...]` pair
+        # (2026-09-04) -- same widening in kind as the COMM_-prefix
+        # tolerance above, same reason (a real citation, written either
+        # supported way, must still resolve).
         for f, c in FOUND_TEST_CONTENTS.items():
-            if f"[@ANCHOR: COMM_{anchor}]" in c or f"[@ANCHOR: {anchor}]" in c:
+            if _anchor_citation_present(c, f"COMM_{anchor}") or _anchor_citation_present(c, anchor):
                 if req_mod and get_mod_dir(f) == req_mod:
                     best_match = (c, f)
                     break
@@ -3717,7 +3858,7 @@ def main():
 
         if not target_content:
             print(
-                f"  ❌ ERROR: Orphaned Bypass. {req['type']} in {req['file']}:{req['line']} cites anchor '{anchor}', but no [@ANCHOR: {anchor}] or [@ANCHOR: COMM_{anchor}] citation was found in any test file. "
+                f"  ❌ ERROR: Orphaned Bypass. {req['type']} in {req['file']}:{req['line']} cites anchor '{anchor}', but no [@ANCHOR: {anchor}], [@ANCHOR: COMM_{anchor}], [@ANCHOR-BEGIN: {anchor}], or [@ANCHOR-BEGIN: COMM_{anchor}] citation was found in any test file. "
                 f"Note: the citation must be on the SAME source line as the {req['type']} tag itself -- one on a comment line just above/before it will not register."
             )
             verification_errors += 1

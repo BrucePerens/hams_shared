@@ -31,6 +31,9 @@ from check_burn_list import (  # noqa: E402
     scan_file,
     _verify_test_ast,
     _is_odoo_module,
+    _find_anchor_line,
+    _anchor_citation_present,
+    check_anchor_pairing,
 )
 
 
@@ -883,6 +886,63 @@ def test_get_service_uid_wrapped_in_try_except_is_not_flagged_with_scoped_escape
         )
         errors, _warnings = _dict_findings(source, filepath=str(target_dir / "ir_http.py"))
     assert not any("_get_service_uid MUST NOT be wrapped" in e for e in errors)
+
+
+def test_get_service_uid_escape_hatch_still_recognized_when_the_call_is_line_wrapped():
+    # The real regression this session's own node.lineno/node.end_lineno fix
+    # (2026-09-04) closes: a formatter wrapping a long call moves its own
+    # trailing tag comment onto the closing-paren line, which is NOT
+    # `node.lineno` (Python's AST always pins that to the line the call
+    # *opens* on). Before the fix, this exact shape produced a false
+    # positive on already-justified code -- the tag was right there, just
+    # not on the one line the old single-line check happened to read.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = Path(tmpdir) / "some_repo"
+        (repo / "ham_base").mkdir(parents=True)
+        (repo / "ham_base" / "__manifest__.py").write_text("{}")
+        target_dir = repo / "content_security_policy" / "models"
+        target_dir.mkdir(parents=True)
+        source = (
+            "try:\n"
+            "    uid = utils._get_service_uid(\n"
+            "        'some.service'\n"
+            "    )  # audit-ignore-service-uid-cursorless: see ADR\n"
+            "except (TypeError, AttributeError, psycopg2.Error):\n"
+            "    logger.exception('failed')\n"
+        )
+        errors, _warnings = _dict_findings(source, filepath=str(target_dir / "ir_http.py"))
+    assert not any("_get_service_uid MUST NOT be wrapped" in e for e in errors)
+
+
+def test_catch_all_with_the_audit_tag_placed_inside_the_handler_body_is_still_recognized():
+    # Same reflow-robustness fix, the ExceptHandler case: the tag doesn't
+    # have to sit on the `except Exception:` line itself any more, just
+    # somewhere within the handler's own body -- consistent with the
+    # adjacent has_logging check, which already treats the whole handler
+    # body as its own scope for finding a logging call, and with a real
+    # ExceptHandler node's own end_lineno spanning its whole body, not
+    # just its header line.
+    source = (
+        "try:\n"
+        "    risky()\n"
+        "except Exception:\n"
+        "    # audit-ignore-catch-all\n"
+        "    logger.warning('failed')\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("Catch-all exceptions" in e for e in errors)
+
+
+def test_hasattr_escape_hatch_recognized_when_the_call_is_line_wrapped():
+    source = (
+        "if hasattr(\n"
+        "    some_object_with_a_long_name,\n"
+        "    'some_long_attribute_name',\n"
+        "):  # burn-ignore-introspection: legacy plugin shim, see ADR-0099\n"
+        "    pass\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("hasattr()" in e for e in errors)
 
 
 def test_act_window_without_view_id_or_view_ids_is_recorded_for_cross_reference():
@@ -2232,6 +2292,125 @@ def test_verify_test_ast_anchor_not_inside_any_function_is_invalid():
     req = {"anchor": "orphan", "type": "audit-ignore-view"}
     result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
     assert result == (1, 1)
+
+
+# Multi-line anchors (Bruce's own request, 2026-09-04): a `[@ANCHOR-BEGIN:
+# name]` line found anywhere inside a test function resolves the anchor
+# exactly the same way a single-line `[@ANCHOR: name]` already does -- the
+# whole point is that a formatter reflowing the lines between BEGIN and
+# END can never break the resolution, since BOTH markers are just
+# freestanding comment lines a formatter never rewrites or merges.
+def test_verify_test_ast_resolves_a_multi_line_anchor_via_its_begin_marker():
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_financial_blocked(self):\n"
+        "        # [@ANCHOR-BEGIN: COMM_test_financial_blocked]\n"
+        "        with self.assertRaises(AccessError):\n"
+        "            record.action_do_thing()\n"
+        "        # [@ANCHOR-END: COMM_test_financial_blocked]\n"
+    )
+    req = {"anchor": "test_financial_blocked", "type": "burn-ignore-financial"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (0, 0)
+
+
+def test_verify_test_ast_multi_line_anchor_not_inside_any_function_is_invalid():
+    target_content = (
+        "# [@ANCHOR-BEGIN: COMM_orphan]\n"
+        "x = 1\n"
+        "# [@ANCHOR-END: COMM_orphan]\n"
+    )
+    req = {"anchor": "orphan", "type": "audit-ignore-view"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (1, 1)
+
+
+def test_find_anchor_line_recognizes_the_single_line_form():
+    content = "x = 1\n# [@ANCHOR: COMM_foo]\ny = 2\n"
+    assert _find_anchor_line(content, "COMM_foo") == 2
+
+
+def test_find_anchor_line_recognizes_the_begin_marker_of_a_multi_line_pair():
+    content = "x = 1\n# [@ANCHOR-BEGIN: COMM_foo]\ny = 2\n# [@ANCHOR-END: COMM_foo]\n"
+    assert _find_anchor_line(content, "COMM_foo") == 2
+
+
+def test_find_anchor_line_returns_negative_one_when_absent():
+    assert _find_anchor_line("x = 1\ny = 2\n", "COMM_foo") == -1
+
+
+def test_anchor_citation_present_recognizes_both_forms():
+    assert _anchor_citation_present("# [@ANCHOR: COMM_foo]\n", "COMM_foo")
+    assert _anchor_citation_present("# [@ANCHOR-BEGIN: COMM_foo]\n", "COMM_foo")
+    assert not _anchor_citation_present("# [@ANCHOR: COMM_bar]\n", "COMM_foo")
+
+
+def test_orphaned_bypass_resolves_via_a_multi_line_anchor_end_to_end():
+    # The real end-to-end path: a burn-ignore-financial tag citing an
+    # anchor that only exists as a [@ANCHOR-BEGIN:]/[@ANCHOR-END:] pair in
+    # a real test_*.py file -- exercises the orphan-bypass resolution
+    # logic in main(), not just _verify_test_ast in isolation.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        module_dir = Path(tmpdir) / "some_module"
+        models_dir = module_dir / "models"
+        tests_dir = module_dir / "tests"
+        models_dir.mkdir(parents=True)
+        tests_dir.mkdir(parents=True)
+        (models_dir / "res_users.py").write_text(
+            "amount = get_balance()  # burn-ignore-financial [@ANCHOR: COMM_test_balance_is_checked]\n"
+        )
+        (tests_dir / "test_balance.py").write_text(
+            "class BalanceTests(TestCase):\n"
+            "    def test_balance_is_checked(self):\n"
+            "        # [@ANCHOR-BEGIN: COMM_test_balance_is_checked]\n"
+            "        with self.assertRaises(AccessError):\n"
+            "            do_the_risky_thing()\n"
+            "        # [@ANCHOR-END: COMM_test_balance_is_checked]\n"
+        )
+        errors, _warnings = scan_file(str(models_dir / "res_users.py"), is_odoo_module=True)
+    assert not any("UNAUTHORIZED BYPASS" in e for e in errors)
+
+
+def test_check_anchor_pairing_accepts_a_correctly_paired_multi_line_anchor():
+    content = "# [@ANCHOR-BEGIN: foo]\nx = 1\n# [@ANCHOR-END: foo]\n"
+    assert check_anchor_pairing(content) == []
+
+
+def test_check_anchor_pairing_flags_a_begin_with_no_end():
+    content = "# [@ANCHOR-BEGIN: foo]\nx = 1\n"
+    errors = check_anchor_pairing(content)
+    assert len(errors) == 1
+    assert "ORPHANED ANCHOR MARKER" in errors[0]
+    assert "foo" in errors[0]
+
+
+def test_check_anchor_pairing_flags_an_end_with_no_begin():
+    content = "x = 1\n# [@ANCHOR-END: foo]\n"
+    errors = check_anchor_pairing(content)
+    assert len(errors) == 1
+    assert "ORPHANED ANCHOR MARKER" in errors[0]
+
+
+def test_check_anchor_pairing_flags_a_second_begin_before_the_first_end():
+    content = "# [@ANCHOR-BEGIN: foo]\nx = 1\n# [@ANCHOR-BEGIN: foo]\ny = 2\n# [@ANCHOR-END: foo]\n"
+    errors = check_anchor_pairing(content)
+    assert len(errors) == 1
+    assert "appears twice" in errors[0]
+
+
+def test_check_anchor_pairing_allows_independent_anchors_in_the_same_file():
+    content = (
+        "# [@ANCHOR-BEGIN: foo]\nx = 1\n# [@ANCHOR-END: foo]\n"
+        "# [@ANCHOR-BEGIN: bar]\ny = 2\n# [@ANCHOR-END: bar]\n"
+    )
+    assert check_anchor_pairing(content) == []
+
+
+def test_scan_file_surfaces_an_orphaned_anchor_marker_as_a_real_error():
+    errors, _warnings = _scan_file(
+        "# [@ANCHOR-BEGIN: foo]\nx = 1\n", "some_module/models/res_users.py"
+    )
+    assert any("ORPHANED ANCHOR MARKER" in e for e in errors)
 
 
 def test_verify_test_ast_object_patch_of_send_mail_string_counts_as_mail_evidence():
