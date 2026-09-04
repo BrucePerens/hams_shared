@@ -24,6 +24,21 @@ import os
 import re
 import sys
 
+# Recognizes the plain `[@ANCHOR: name]` form and both halves of the
+# multi-line `[@ANCHOR-BEGIN: name]` / `[@ANCHOR-END: name]` pair
+# (check_burn_list.py's sibling tool -- see ADR 0089 -- added BEGIN/END
+# 2026-09-04, Bruce's own request, so a test/documentation anchor can
+# claim an arbitrary multi-statement body). This tool's own anchor
+# classification (Tests/Verified by/Triggers/base declaration, see
+# _process_file_for_anchors) is already purely per-line, text-prefix
+# based -- not tied to any AST node's own line span -- so it was never
+# vulnerable to the reformatting fragility check_burn_list.py's own
+# node.lineno-based checks had. This widening exists so BEGIN/END
+# anchors are recognized at all here, not silently invisible to this
+# tool while check_burn_list.py sees them -- group(1) always captures
+# just the anchor name, identically for all three forms.
+ANCHOR_PATTERN = re.compile(r"\[@ANCHOR(?:-BEGIN|-END)?:\s*([a-zA-Z0-9_:]+)\s*\]")
+
 
 def _clean(name):
     return name.replace("COMM_", "").replace("PRI_", "")
@@ -105,7 +120,7 @@ def find_anchors_in_docs(root_dir, repo_root):
     doc_anchors = {}
     contract_anchors = {}
     doc_anchor_lines = {}
-    pattern = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
+    pattern = ANCHOR_PATTERN
     exclude_dirs = {
         "tools",
         "scripts",
@@ -268,7 +283,7 @@ def find_anchors_in_code(root_dir, repo_root):
     audit_ignore_links = {}
     code_anchor_lines = {}
     duplicates = []
-    pattern = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
+    pattern = ANCHOR_PATTERN
     exclude_dirs = {
         "docs",
         ".git",
@@ -943,9 +958,7 @@ def main():
                 try:
                     with open(full_doc_path, "r", encoding="utf-8") as f:
                         for line in f:
-                            for match in re.finditer(
-                                r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]", line
-                            ):
+                            for match in ANCHOR_PATTERN.finditer(line):
                                 mod = get_module(full_doc_path)
                                 anchor_name = match.group(1)
                                 if ":" in anchor_name:

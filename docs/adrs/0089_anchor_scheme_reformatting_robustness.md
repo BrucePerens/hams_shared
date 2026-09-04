@@ -50,9 +50,13 @@ possible today without any new formatter:
    `end_lineno` through every one of those call sites, a much larger, unbounded-scope change not
    taken on here.
 
-2. **Test/documentation-anchor side: add an explicit multi-line `[@ANCHOR-BEGIN: name]` /
-   `[@ANCHOR-END: name]` pair, alongside the existing single-line `[@ANCHOR: name]` form, which
-   remains fully supported and is not being deprecated.** BEGIN/END markers are immune to
+2. **Test/documentation-anchor side: add an explicit multi-line BEGIN/END marker pair (open with
+   `ANCHOR-BEGIN`, close with `ANCHOR-END`, same `name`), alongside the existing single-line
+   `[@ANCHOR: name]` form, which remains fully supported and is not being deprecated.** (Written
+   without their own literal brackets here on purpose -- two of them on adjacent lines is exactly
+   the "stacked anchors" shape `verify_anchors.py`'s own dummy-test check looks for, a real false
+   positive this ADR tripped on itself the first time it was drafted; see `check_burn_list.py`'s
+   own source for the real, literal syntax.) BEGIN/END markers are immune to
    reformatting for the same reason any pair of standalone comment lines always is: a formatter
    never rewrites comment text or merges a freestanding comment into the code around it, no matter
    how many lines end up between the two markers. `_find_anchor_line` and

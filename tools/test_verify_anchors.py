@@ -179,6 +179,23 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         self.assertIn("mod_a:COMM_x", code_anchors)
         self.assertIn("mod_a:COMM_x", anchor_locations)
 
+    def test_a_begin_marker_base_declaration_is_captured_the_same_as_plain(self):
+        # 2026-09-04 (ADR 0089, Bruce's own request): [@ANCHOR-BEGIN: name] /
+        # [@ANCHOR-END: name] must resolve identically to a plain
+        # [@ANCHOR: name] everywhere this tool looks for one -- otherwise a
+        # multi-line anchor written per check_burn_list.py's own syntax
+        # would be silently invisible here.
+        _write(os.path.join(self.tmp, "mod_a", "models", "foo.py"), "# [@ANCHOR-BEGIN: COMM_x]\nbody\n# [@ANCHOR-END: COMM_x]\n")
+        code_anchors, anchor_locations, *_rest = self._scan()
+        self.assertIn("mod_a:COMM_x", code_anchors)
+        self.assertIn("mod_a:COMM_x", anchor_locations)
+
+    def test_a_begin_marker_tests_link_is_captured_the_same_as_plain(self):
+        _write(os.path.join(self.tmp, "mod_a", "tests", "test_foo.py"), "# Tests [@ANCHOR-BEGIN: COMM_x]\nbody\n# [@ANCHOR-END: COMM_x]\n")
+        code_anchors, _locs, tests_links, tests_links_set, *_rest = self._scan()
+        self.assertIn("mod_a:COMM_x", code_anchors)
+        self.assertIn("mod_a:COMM_x", tests_links_set)
+
     def test_a_tests_link_is_captured_separately_from_a_base_declaration(self):
         _write(os.path.join(self.tmp, "mod_a", "tests", "test_foo.py"), "# Tests [@ANCHOR: COMM_x]\n")
         code_anchors, _locs, tests_links, tests_links_set, *_rest = self._scan()
@@ -211,6 +228,21 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         )
         *_rest, duplicates, _lines = self._scan()
         self.assertEqual(duplicates, [])
+
+    def test_a_real_begin_end_pair_with_body_between_does_not_produce_adjacent_anchor_lines(self):
+        # The real practical question this widening raises: does a normal
+        # multi-line anchor (content between BEGIN and END, the whole
+        # point of the syntax) accidentally look like the "stacked/dummy"
+        # shape _report_dummy_blocks flags? It shouldn't -- BEGIN and END
+        # land on lines 1 and 3 here, not adjacent, so code_anchor_lines
+        # for this file must not contain two consecutive line numbers.
+        _write(
+            os.path.join(self.tmp, "mod_a", "tests", "test_foo.py"),
+            "# Tests [@ANCHOR-BEGIN: COMM_x]\nreal_test_body_here()\n# [@ANCHOR-END: COMM_x]\n",
+        )
+        *_rest, code_anchor_lines = self._scan()
+        lines = sorted(next(iter(code_anchor_lines.values())))
+        self.assertEqual(lines, [1, 3])
 
     def test_a_doc_prefixed_anchor_is_not_treated_as_a_base_code_anchor(self):
         _write(os.path.join(self.tmp, "mod_a", "models", "foo.py"), "# [@ANCHOR: COMM_story_x]\n")
