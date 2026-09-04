@@ -106,6 +106,42 @@ class ScanFileTests(unittest.TestCase):
         self.assertFalse(results["foo.py::bar"])
         self.assertTrue(results["foo.py::baz"])
 
+    def test_an_anchor_above_a_decorator_counts_as_anchored(self):
+        # The real bug found sweeping compliance/controllers/main.py: a
+        # decorated function's own node.lineno is the `def` line, NOT the
+        # decorator -- an anchor comment placed above the decorator (this
+        # codebase's own established convention) must still count.
+        path = os.path.join(self.tmp, "foo.py")
+        _write(
+            path,
+            "class C:\n"
+            "    # [@ANCHOR: COMM_bar]\n"
+            "    @http.route('/x')\n"
+            "    def bar(self):\n"
+            "        pass\n",
+        )
+        results = dict(cfta.scan_file(path, self.tmp))
+        self.assertTrue(results["foo.py::C.bar"])
+
+    def test_the_decorator_lookback_does_not_cross_a_blank_line_into_the_prior_function(self):
+        # The real, named risk of the fix above: an unrelated trailing
+        # comment on the PREVIOUS function, separated by the ordinary
+        # blank line between two defs, must not be absorbed as if it
+        # anchored this one.
+        path = os.path.join(self.tmp, "foo.py")
+        _write(
+            path,
+            "def bar():\n"
+            "    pass\n"
+            "    # [@ANCHOR: COMM_bar]\n"
+            "\n"
+            "@http.route('/x')\n"
+            "def baz():\n"
+            "    pass\n",
+        )
+        results = dict(cfta.scan_file(path, self.tmp))
+        self.assertFalse(results["foo.py::baz"])
+
 
 class ScanTreeAndBaselineTests(unittest.TestCase):
     def setUp(self):

@@ -119,8 +119,33 @@ def scan_file(filepath, repo_root):
     rel_path = os.path.relpath(filepath, repo_root)
     results = []
     for qualname, node in _direct_functions(tree.body, []):
-        start = node.lineno
-        end = getattr(node, "end_lineno", start)
+        # `node.lineno` is the `def` line itself -- Python's AST does NOT
+        # include decorator lines in it (confirmed directly: a real
+        # @http.route-decorated method's own FunctionDef.lineno pointed
+        # one line past its decorator). The anchor comment for a decorated
+        # function idiomatically sits above the decorator, not between it
+        # and `def` -- this codebase's own established convention, used
+        # throughout this session -- so start from the EARLIEST decorator
+        # (if any), then walk back further past any run of comment/blank
+        # lines immediately preceding that, the same real structural
+        # lookback check_burn_list.py's own _xml_audit_lookback_start uses
+        # for an analogous reason. Without this, every decorated function
+        # whose anchor sits above its decorator (the common case: @api.model,
+        # @http.route, @api.depends, etc.) reads as a false-positive gap.
+        start = min([node.lineno] + [d.lineno for d in node.decorator_list])
+        while start > 1:
+            prev = lines[start - 2].strip()
+            # Comment lines only -- deliberately NOT crossing a blank line,
+            # which would risk absorbing an unrelated trailing comment
+            # (e.g. a "# Verified by [@ANCHOR: ...]" belonging to the
+            # PREVIOUS function/method, separated from this one by the
+            # ordinary blank line between two defs) as if it were this
+            # function's own anchor -- a false credit, not just a missed one.
+            if prev.startswith("#"):
+                start -= 1
+            else:
+                break
+        end = getattr(node, "end_lineno", node.lineno)
         span = "\n".join(lines[start - 1 : min(end, len(lines))])
         has_anchor = bool(va.ANCHOR_PATTERN.search(span))
         identity = f"{rel_path}::{qualname}"
