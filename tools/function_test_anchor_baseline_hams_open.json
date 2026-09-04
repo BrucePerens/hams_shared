@@ -241,8 +241,6 @@
   "hams_helpdesk/models/calendar_event.py::CalendarEvent.get_upcoming_duty_shifts",
   "hams_helpdesk/models/helpdesk_ticket.py::HelpdeskTicket._automated_routing_and_notification",
   "hams_helpdesk/models/helpdesk_ticket.py::HelpdeskTicket._onchange_partner_id",
-  "hams_rabbitmq/models/rabbitmq_pool.py::RabbitMQPool._get_channel",
-  "hams_rabbitmq/models/rabbitmq_pool.py::RabbitMQPool.publish",
   "hams_s3/hooks.py::post_init_hook",
   "hams_s3/models/res_config_settings.py::ResConfigSettings._compute_hams_s3_oca_installed",
   "hams_s3/models/res_config_settings.py::ResConfigSettings._get_s3_service_env",
