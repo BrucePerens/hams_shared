@@ -1040,6 +1040,59 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
+            "path": "/opt/hams/systemd/clublog.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio ClubLog Upload Sync Daemon
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/clublog_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+EnvironmentFile=-/opt/hams/etc/clublog.env
+Environment="ODOO_USER=logbook_api_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/logbook_api_service_internal.key"
+Environment="POLL_INTERVAL=86400"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Smoketest Resource Verification
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/clublog_sync/main.py --start-test
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/clublog_sync/main.py $DAEMON_ARGS
+
+Restart=always
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=clublog.sync
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/systemd/amsat.tle.sync.service",
             "content": """\
 [Unit]
