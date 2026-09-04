@@ -18,6 +18,13 @@ RULES OF TRACEABILITY:
 4. DOC LINK: The base anchor MUST exist in a Markdown file in `docs/stories/` or `docs/journeys/`.
 5. UX LINK: If the anchor starts with `UX_`, it MUST exist in the module's `data/documentation.html`.
 6. CROSS-REF: If code triggers another module's anchor, use: `# Triggers [@ANCHOR: COMM_target_module:feature_name]`
+7. INFRASTRUCTURE ROUTING (ADR 0090): every function needs a real doc citation, but WHERE depends
+   on audience, not whether one is required at all. An infrastructure/plumbing anchor a real user
+   never directly interacts with should be cited in the module's own `README.md` (already
+   recognized as a "contract" location, exempting it from the `docs/stories/`/`docs/journeys/`
+   requirement); a user-visible feature still belongs in `docs/stories/`/`docs/journeys/` (or
+   `data/documentation.html` for a `UX_`-prefixed anchor, per rule 5). Both are real documentation,
+   just routed to the audience that actually reads each one.
 """
 
 import os

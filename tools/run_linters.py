@@ -900,6 +900,37 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 38. check_function_test_anchors -- ADR 0090's ratchet: Bruce's own
+    # direct decision, 2026-09-04, "institute the CI requirement for new
+    # code now, we will do the sweep when we get to that proposal."
+    # Doesn't scan `targets` (a possibly-scoped module list) -- the
+    # baseline is repo-wide, keyed by `repo_root`'s own basename, matching
+    # the `function_test_anchor_baseline_<repo>.json` files this session
+    # generated for both real repos.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_function_test_anchors.py"),
+            repo_root,
+            "--baseline",
+            os.path.join(
+                dir_path,
+                "tools",
+                f"function_test_anchor_baseline_{os.path.basename(repo_root)}.json",
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

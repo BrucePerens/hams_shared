@@ -395,6 +395,23 @@ class ReportDocumentationGapsTests(unittest.TestCase):
             va._report_documentation_gaps(source_anchors, {}, {}, {}, [], self.tmp)
         )
 
+    def test_a_source_anchor_cited_in_the_modules_own_readme_is_not_flagged(self):
+        # ADR 0090, Bruce's own direct decision, 2026-09-04: every function
+        # should get a real doc citation, but WHERE depends on audience --
+        # an infrastructure anchor a real user never sees can be cited in
+        # the module's own README.md (already a recognized "contract"
+        # location, see all_contracts above) rather than docs/stories/,
+        # without being exempt from documentation altogether. Verified
+        # directly, not assumed: README.md citations already flow into
+        # contract_anchors via find_anchors_in_docs's own is_readme check.
+        source_anchors = {"mod_a:COMM_infra_helper": ["./mod_a/models/foo.py:1"]}
+        contract_anchors = {"mod_a:COMM_infra_helper": ["./mod_a/README.md:3"]}
+        self.assertFalse(
+            va._report_documentation_gaps(
+                source_anchors, {}, {}, contract_anchors, [], self.tmp
+            )
+        )
+
     def test_a_source_anchor_present_in_docs_is_not_flagged(self):
         # code_anchors must also contain the anchor here: the function
         # separately checks the inverse direction (a docs_anchors entry
