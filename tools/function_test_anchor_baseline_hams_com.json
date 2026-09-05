@@ -1,5 +1,4 @@
 [
-  "agents/skills/pipeline-collab-chat/watchdog_chat_send.py::send",
   "content_security_policy/controllers/csp_api.py::_truncate",
   "content_security_policy/models/csp_directive.py::CspDirective.action_validate_csp",
   "content_security_policy/models/csp_directive.py::CspDirective.create",
