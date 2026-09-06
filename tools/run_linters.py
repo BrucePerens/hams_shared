@@ -647,6 +647,13 @@ def main():
         + glob.glob(os.path.join(dir_path, "daemons", "*", "test_*.py"))
         + glob.glob(os.path.join(dir_path, "daemons", "*", "tools", "test_*.py"))
         + glob.glob(os.path.join(dir_path, "daemons", "*", "tests", "test_*.py"))
+        # hams_simulated_bots/fine_tuning/ is a daemon SUBDIRECTORY with its
+        # own separate .venv (torch/transformers/peft -- deliberately not
+        # installed alongside the bot's own aiortc/whisper/piper deps), one
+        # level deeper than any pattern above reaches. The literal "tests"
+        # segment (as opposed to a bare wildcard) keeps this from ever
+        # double-matching the existing "tools" pattern above.
+        + glob.glob(os.path.join(dir_path, "daemons", "*", "*", "tests", "test_*.py"))
     )
     daemon_test_dirs = sorted({os.path.dirname(f) for f in daemon_test_files})
     daemons_root = os.path.join(dir_path, "daemons")
