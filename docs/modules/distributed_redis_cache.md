@@ -85,6 +85,28 @@ Provides a management form to check Redis status and manually invalidate model c
 Configurable via environment variables or `.env` file at `/opt/hams/etc/keys/cache_manager.env`.
 </config>
 
+<stage1_sweep>
+## 7. Stage 1 Anchor-Coverage Sweep Additions
+
+Every cache payload written to Redis is HMAC-signed before storage and verified before
+deserialization -- `_pickle.loads()` is never called on a payload whose signature doesn't verify,
+since a compromised/misconfigured Redis instance is otherwise a remote-code-execution vector.
+
+* **Crypto Secret Resolution:** `[@ANCHOR: distributed_redis_cache:COMM_raw_crypto_secret]` -- mirrors `zero_sudo.security.utils._get_crypto_secret()`'s own env-var/file/`admin_passwd` fallback chain independently, to avoid a circular `@distributed_cache()` dependency.
+
+* **HMAC Key Derivation:** `[@ANCHOR: distributed_redis_cache:COMM_cache_hmac_key]` -- returns `None` (never a guessable default) when no real secret is configured.
+
+* **Payload Signing:** `[@ANCHOR: distributed_redis_cache:COMM_sign_payload]`
+
+* **Payload Verification:** `[@ANCHOR: distributed_redis_cache:COMM_verify_and_unwrap_payload]` -- rejects any payload whose HMAC doesn't match before it ever reaches `_pickle.loads()`.
+
+* **Daemon Key Registration:** `[@ANCHOR: distributed_redis_cache:COMM_post_init_hook]`
+
+* **Redis Connection Resolution:** `[@ANCHOR: distributed_redis_cache:COMM_get_redis_connection]`
+
+* **Postgres NOTIFY Callback:** `[@ANCHOR: distributed_redis_cache:COMM_postgres_notify_handler]` -- schedules the Redis broadcast task on the asyncio event loop when a NOTIFY arrives.
+</stage1_sweep>
+
 <stories_and_journeys>
 ## 6. Architectural Stories & Journeys
 
