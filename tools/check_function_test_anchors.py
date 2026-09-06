@@ -55,6 +55,14 @@ EXCLUDE_DIRS = {
     "node_modules",
     "hams_community",
     "hams_com",
+    # daemons/cloudflared: genuinely vendored upstream Cloudflare client
+    # source (its own README says so directly: "This directory contains
+    # the upstream `cloudflared` client source"), not code this project
+    # authored -- same category as node_modules/hams_community above.
+    # Found live: check_function_test_anchors.py daemons flagged all 95
+    # of daemons/'s own gaps inside this one vendored subtree, none of
+    # them real first-party code needing Stage 1 coverage.
+    "cloudflared",
 }
 
 DEFAULT_BASELINE_FILENAME = "function_test_anchor_baseline.json"

@@ -3875,6 +3875,16 @@ def main():
                 "hams_local_relay",
                 "hams_community",
                 "hams_com",
+                # Genuinely vendored upstream Cloudflare client source
+                # (daemons/cloudflared/README.md says so directly) --
+                # found live: scanning `daemons` directly as this
+                # function's own target_dir doesn't trigger the
+                # sibling "daemons" exclusion above (that only prunes
+                # it as a *subdirectory* encountered during the walk,
+                # not when it's the root itself), so cloudflared's own
+                # component-tests/ tripped 36 errors against this
+                # project's conventions it was never written to follow.
+                "cloudflared",
             )
             and not is_ignored(os.path.relpath(os.path.join(root, d), target_dir))
         ]
