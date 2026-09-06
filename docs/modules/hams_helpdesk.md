@@ -57,6 +57,26 @@ This module operates within strict DevSecOps parameters, ensuring all actions ar
 
     - Verified by [@ANCHOR: test_05_portal_write_restrictions]
 
+### Stage 1 Anchor-Coverage Sweep Additions
+
+* **On-Duty Admin Resolution:** `[@ANCHOR: hams_helpdesk:COMM_get_current_on_duty_admin]` -- base implementation returning `False`; overridden by `pager_duty` when installed.
+
+* **Upcoming Duty Shift Resolution:** `[@ANCHOR: hams_helpdesk:COMM_get_upcoming_duty_shifts]` -- base implementation returning an empty recordset; used for pre-shift-awareness notifications.
+
+* **Callsign Auto-Population:** `[@ANCHOR: hams_helpdesk:COMM_onchange_partner_id]` -- onchange handler copying the reporting partner's callsign onto the ticket.
+
+* **Automated Routing and Notification:** `[@ANCHOR: hams_helpdesk:COMM_automated_routing_and_notification]` -- post-create hook sending the assignment email and bus toast under a dedicated service account.
+
+* **Portal Home Ticket Counter:** `[@ANCHOR: hams_helpdesk:COMM_prepare_home_portal_values]` -- computes the portal's own "Helpdesk Tickets" card counter, scoped to the visiting partner and website.
+
+* **Portal Ticket Detail Route:** `[@ANCHOR: hams_helpdesk:COMM_portal_ticket_detail]` -- `/my/ticket/<id>`, renders a ticket only to its own reporting partner.
+
+* **Portal Ticket Close Route:** `[@ANCHOR: hams_helpdesk:COMM_portal_ticket_close]` -- `/my/ticket/<id>/close`, lets a portal user close their own ticket.
+
+* **Portal New Ticket Form Route:** `[@ANCHOR: hams_helpdesk:COMM_portal_ticket_new]` -- `/my/tickets/new`, renders the submission form, tolerating a reporter with no callsign yet.
+
+    - Tested by [@ANCHOR: hams_helpdesk:COMM_portal_ticket_new]
+
 ## Stories and Journeys
 
 ### Ticket Lifecycle Management ([@ANCHOR: helpdesk_ticket_lifecycle])
