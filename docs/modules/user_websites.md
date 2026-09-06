@@ -200,3 +200,89 @@ For detailed narratives and end-to-end workflows, refer to the following:
 
 * **High-Speed Simulation Tests:** The full operational load of the module is end-to-end verified via the High-Speed Simulation Environment `[@ANCHOR: simulation_environment]`.
 </crons_and_subscriptions>
+
+<stage1_sweep>
+## 6. Stage 1 Anchor-Coverage Sweep Additions (2026-09-06)
+
+### Controllers
+* **User Blog Index Route:** `[@ANCHOR: user_websites:COMM_user_blog_index]` -- `/<slug>/blog`.
+
+* **Create Site Route:** `[@ANCHOR: user_websites:COMM_create_site]`.
+
+* **Create Blog Route:** `[@ANCHOR: user_websites:COMM_create_blog]`.
+
+* **Privacy Dashboard Route:** `[@ANCHOR: user_websites:COMM_privacy_dashboard]` -- `/my/privacy`.
+
+* **Privacy Delete Content Route:** `[@ANCHOR: user_websites:COMM_privacy_delete_content]` -- `/my/privacy/delete_content`.
+
+* **Pending Reports API Route:** `[@ANCHOR: user_websites:COMM_pending_reports]`.
+
+### Blog Ownership, Quota, and Access
+* **Blog Create/Check-Access/Write/Unlink:** `[@ANCHOR: user_websites:COMM_blog_blog_create]`, `[@ANCHOR: user_websites:COMM_blog_blog_check_access]`, `[@ANCHOR: user_websites:COMM_blog_blog_write]`, `[@ANCHOR: user_websites:COMM_blog_blog_unlink]`.
+
+* **Blog Post URL Helper:** `[@ANCHOR: user_websites:COMM_get_blog_urls]` -- constructs the blog-index URLs invalidated on any post mutation.
+
+* **Blog Post Check-Access/Write/Unlink:** `[@ANCHOR: user_websites:COMM_blog_post_check_access]`, `[@ANCHOR: user_websites:COMM_blog_post_write]`, `[@ANCHOR: user_websites:COMM_blog_post_unlink]`.
+
+### Content Moderation and Appeals
+* **Appeal Target Constraint:** `[@ANCHOR: user_websites:COMM_check_appeal_target]` -- an appeal must be tied to exactly one of a user or a group.
+
+* **Reject Appeal:** `[@ANCHOR: user_websites:COMM_appeal_action_reject]`.
+
+* **Strike Count Increment:** `[@ANCHOR: user_websites:COMM_increment_strike_count]` -- the atomic stored-procedure call backing the 3-strike rule.
+
+* **Mark Report Under Review:** `[@ANCHOR: user_websites:COMM_action_mark_under_review]`.
+
+* **Dismiss Report:** `[@ANCHOR: user_websites:COMM_report_action_dismiss]`.
+
+* **Suspend/Pardon a Group:** `[@ANCHOR: user_websites:COMM_action_suspend_group_websites]`, `[@ANCHOR: user_websites:COMM_action_pardon_group_websites]`.
+
+* **Suspend/Pardon a User:** `[@ANCHOR: user_websites:COMM_action_suspend_user_websites]`, `[@ANCHOR: user_websites:COMM_action_pardon_user_websites]`.
+
+* **Suspended-Group Membership Compute:** `[@ANCHOR: user_websites:COMM_compute_suspended_group_ids]` -- which of a user's groups are currently suspended.
+
+### GDPR Export
+* **Export Token Name Compute:** `[@ANCHOR: user_websites:COMM_gdpr_token_compute_name]`.
+
+* **Mint Export Token For Current User:** `[@ANCHOR: user_websites:COMM_create_for_current_user]`.
+
+* **Streamed GDPR Export Keys:** `[@ANCHOR: user_websites:COMM_get_gdpr_streamed_keys]` -- generator-based streaming to avoid OOM on large exports.
+
+### Settings
+* **Settings Read/Write:** `[@ANCHOR: user_websites:COMM_settings_get_values]`, `[@ANCHOR: user_websites:COMM_settings_set_values]`.
+
+### SQL Views and Functions (`_auto=False`, proven live by any test that successfully queries the resulting view -- a broken `init()` would fail module installation before any such test could run)
+* **Public Directory View:** `[@ANCHOR: user_websites:COMM_public_directory_view_init]`.
+
+* **Content Routing View:** `[@ANCHOR: user_websites:COMM_content_routing_view_init]`.
+
+* **Weekly Digest View:** `[@ANCHOR: user_websites:COMM_weekly_digest_view_init]`.
+
+* **DB Functions (`increment_strike_count`):** `[@ANCHOR: user_websites:COMM_db_functions_init]`.
+
+### res.users Extensions
+* **Background Content Unpublish:** `[@ANCHOR: user_websites:COMM_async_unpublish_content]` -- module-level helper run on a background thread when a user is suspended or archived.
+
+* **Registry Hook:** `[@ANCHOR: user_websites:COMM_register_hook]` -- provisions the `sys_provisioner` service account at registry build time.
+
+* **Reserved Slug Checks:** `[@ANCHOR: user_websites:COMM_res_users_check_reserved_slugs]` (users), `[@ANCHOR: user_websites:COMM_group_check_reserved_slugs]` (groups).
+
+* **Admin Check:** `[@ANCHOR: user_websites:COMM_is_admin]`.
+
+* **Slug-to-User-ID Resolver:** `[@ANCHOR: user_websites:COMM_get_user_id_by_slug]` -- direct raw-SQL resolver against the content routing view. Confirmed (grepped both repositories) that nothing currently calls this method; the generic `edge.routing.mixin.get_record_by_slug()` dispatch this module also relies on elsewhere does its own separate ORM search instead. Left in place and tested directly as a genuinely reachable unit; flagged for a deliberate follow-up decision on whether to wire it up or remove it.
+
+* **User Create/Write:** `[@ANCHOR: user_websites:COMM_res_users_create]`, `[@ANCHOR: user_websites:COMM_res_users_write]` -- the latter includes the 301-redirect-on-slug-change automation.
+
+* **Group Write:** `[@ANCHOR: user_websites:COMM_group_write]` -- the same slug-redirect automation for `user.websites.group`.
+
+* **Quota Helpers:** `[@ANCHOR: user_websites:COMM_get_page_limit]`, `[@ANCHOR: user_websites:COMM_get_blog_limit]`, `[@ANCHOR: user_websites:COMM_get_blog_post_limit]`.
+
+### website.page Extensions
+* **Cloudflare Cache Invalidation:** `[@ANCHOR: user_websites:COMM_page_invalidate_cloudflare_cache]`.
+
+* **Automated Malicious-Arch Violation Report:** `[@ANCHOR: user_websites:COMM_trigger_malicious_arch_violation]` -- files a `content.violation.report` against the page's owner whenever the arch sanitizer actually strips something.
+
+* **URL-to-Page-ID Resolver:** `[@ANCHOR: user_websites:COMM_get_page_id_by_url]` -- direct URL lookup respecting suspension state. Confirmed (grepped both repositories) that nothing currently calls this method either, the same situation as `_get_user_id_by_slug()` above. Tested directly; flagged for the same follow-up decision.
+
+* **Page Unlink:** `[@ANCHOR: user_websites:COMM_website_page_unlink]`.
+</stage1_sweep>
