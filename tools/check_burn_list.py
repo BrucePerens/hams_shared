@@ -3517,6 +3517,21 @@ def scan_file(filepath, is_odoo_module=False):
                 # ham_dns/tests/test_dns_record_edge_cases.py's
                 # test_09_a_record_rejects_a_private_ip.
                 "burn-ignore-ssrf-test-value",
+                # A real threading.Thread(...) spun up inside a test
+                # specifically to exercise a genuine infinite-loop daemon
+                # function (a real polling/tailing thread meant to run
+                # forever in production) end to end -- the "Unbounded
+                # Thread" rule's own DOS concern is about *production*
+                # code spawning threads with no lifecycle bound; a test
+                # thread constructed with daemon=True is bounded by the
+                # test process's own exit (the interpreter reaps daemon
+                # threads on exit, unlike a non-daemon thread, which would
+                # actually hang the test runner) rather than an explicit
+                # join()/cancellation, which the function under test has
+                # no hook for in the first place. First used by
+                # pager_duty/tests/test_pager_log_analyzer.py's own
+                # tail_file() coverage.
+                "burn-ignore-test-daemon-thread",
             ]
         ):
             errors_found.append(
