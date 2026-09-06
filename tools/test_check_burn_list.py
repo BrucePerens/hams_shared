@@ -467,6 +467,89 @@ def test_csrf_form_check_does_not_scan_html_data_assets():
     assert errors == []
 
 
+def _real_txn_stale_read_errors(content, filename="test_thing.py"):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = str(Path(tmpdir) / filename)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        errors, _warnings = scan_file(filepath, is_odoo_module=True)
+    return [e for e in errors if "RealTransactionCase read" in e]
+
+
+def test_real_transaction_case_flags_a_read_after_url_open_with_no_commit():
+    # The real bug this session found live, twice, in
+    # test_adif_api.py's own new test: RealTransactionCase uses a real,
+    # separately-committing cursor, so a record created by url_open()'s
+    # own HTTP connection isn't visible to this test's self.env until a
+    # fresh transaction starts.
+    code = '''
+from odoo.addons.zero_sudo.tests.real_transaction import RealTransactionCase
+
+class TestThing(RealTransactionCase):
+    def test_creates_then_reads(self):
+        response = self.url_open("/api/thing", data=b"{}")
+        result = response.json()["result"]
+        qso = self.env["ham.qso"].browse(result["qso_id"])
+        self.assertEqual(qso.callsign, "K6BP")
+'''
+    errors = _real_txn_stale_read_errors(code)
+    assert len(errors) == 1, f"expected the stale-read check to fire, got: {errors}"
+
+
+def test_real_transaction_case_is_satisfied_by_a_commit_in_between():
+    code = '''
+from odoo.addons.zero_sudo.tests.real_transaction import RealTransactionCase
+
+class TestThing(RealTransactionCase):
+    def test_creates_then_reads(self):
+        response = self.url_open("/api/thing", data=b"{}")
+        result = response.json()["result"]
+        self.env.cr.commit()
+        qso = self.env["ham.qso"].browse(result["qso_id"])
+        self.assertEqual(qso.callsign, "K6BP")
+'''
+    errors = _real_txn_stale_read_errors(code)
+    assert errors == []
+
+
+def test_real_transaction_case_check_ignores_ordinary_httpcase():
+    # A real false positive this session found and fixed: HamsHttpCase
+    # (unlike RealTransactionCase) shares its test cursor with the HTTP
+    # dispatch, so reading self.env[...] straight after url_open() with
+    # no commit() is the normal, working pattern -- confirmed directly
+    # by many passing tests written this same session. The broader
+    # in_real_transaction_case flag (used by the commit()/rollback()
+    # "TEST CURSOR CORRUPTION" check) deliberately also covers
+    # HamsHttpCase/HttpCase; this check must use the narrower,
+    # RealTransactionCase-only flag instead.
+    code = '''
+from odoo.addons.zero_sudo.tests.common import HamsHttpCase
+
+class TestThing(HamsHttpCase):
+    def test_creates_then_reads(self):
+        response = self.url_open("/api/thing", data=b"{}")
+        result = response.json()["result"]
+        qso = self.env["ham.qso"].browse(result["qso_id"])
+        self.assertEqual(qso.callsign, "K6BP")
+'''
+    errors = _real_txn_stale_read_errors(code)
+    assert errors == []
+
+
+def test_real_transaction_case_flags_a_read_after_make_jsonrpc_request():
+    code = '''
+from odoo.addons.zero_sudo.tests.real_transaction import RealTransactionCase
+
+class TestThing(RealTransactionCase):
+    def test_creates_then_reads(self):
+        result = self.make_jsonrpc_request("/api/thing", {})
+        issued = self.env["ham.award.issued"].browse(result.get("issued_id"))
+        self.assertTrue(issued.exists())
+'''
+    errors = _real_txn_stale_read_errors(code)
+    assert len(errors) == 1, f"expected the stale-read check to fire, got: {errors}"
+
+
 def test_tour_mandate_is_satisfied_when_both_tags_present_side_by_side():
     # The explicitly-allowed ADR 0076 case: bypassing both the tour
     # mandate AND the view-rendering-test requirement at once needs both

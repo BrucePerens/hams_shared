@@ -784,6 +784,17 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             self.loop_depth = 0
             self.in_http_controller = False
             self.in_real_transaction_case = False
+            # Narrower than in_real_transaction_case above (which also
+            # covers HamsHttpCase/HttpCase, deliberately, for the
+            # commit()/rollback() "TEST CURSOR CORRUPTION" check's own
+            # purpose): true ONLY for a real RealTransactionCase subclass,
+            # since HamsHttpCase/HttpCase tests do NOT have the
+            # cross-connection stale-read problem
+            # _check_real_transaction_case_stale_read() checks for --
+            # confirmed directly this session by many passing HamsHttpCase
+            # tests reading self.env[...] right after url_open() with no
+            # commit() at all.
+            self.in_strict_real_transaction_case = False
             self.filename = filename
             self.filepath = filepath
             self.lines = lines
@@ -1137,10 +1148,18 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 or getattr(base, "attr", "") in ("HamsHttpCase", "HttpCase")
                 for base in node.bases
             )
+            is_strict_real_txn = any(
+                getattr(base, "id", "") == "RealTransactionCase"
+                or getattr(base, "attr", "") == "RealTransactionCase"
+                for base in node.bases
+            )
             old_val = self.in_real_transaction_case
+            old_strict_val = self.in_strict_real_transaction_case
             self.in_real_transaction_case = old_val or is_real_txn
+            self.in_strict_real_transaction_case = old_strict_val or is_strict_real_txn
             self.generic_visit(node)
             self.in_real_transaction_case = old_val
+            self.in_strict_real_transaction_case = old_strict_val
 
         def _check_test_empty(self, node):
             """Blocks dead-code testing evasion tactics."""
@@ -1168,6 +1187,74 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             stmt.lineno,
                             f"[!] DIAGNOSTIC FOR AI: AST Evasion Detected. Unreachable code detected after return/raise/break/continue in '{node.name}'. Tests must execute fully.",
                         )
+
+        def _check_real_transaction_case_stale_read(self, node):
+            """RealTransactionCase uses a real, separately-committing cursor
+            (that's its whole point -- see its own docstring), unlike
+            ordinary TransactionCase/HttpCase tests where Odoo's test
+            framework shares one cursor between the test and any HTTP
+            request it makes. A url_open()/make_jsonrpc_request() call in a
+            RealTransactionCase test runs the actual route on ITS OWN
+            connection; if that route creates/writes a record, this test's
+            own self.env.cr won't see it until self.env.cr.commit() starts
+            a fresh transaction. Reading such a record straight after the
+            HTTP call (no intervening commit) either raises a real
+            MissingError or, worse, silently reads stale data -- a real bug
+            found live in ham_logbook/tests/test_adif_api.py this session.
+            """
+            if not (
+                self.in_strict_real_transaction_case and node.name.startswith("test_")
+            ):
+                return
+
+            events = []  # (lineno, "http" | "commit" | "read")
+            for child in ast.walk(node):
+                if not isinstance(child, ast.Call) or not isinstance(
+                    child.func, ast.Attribute
+                ):
+                    continue
+                attr = child.func.attr
+                value = child.func.value
+                if (
+                    attr in ("url_open", "make_jsonrpc_request")
+                    and getattr(value, "id", "") == "self"
+                ):
+                    events.append((child.lineno, "http"))
+                elif (
+                    attr in ("commit", "rollback")
+                    and isinstance(value, ast.Attribute)
+                    and value.attr == "cr"
+                    and getattr(value.value, "id", getattr(value.value, "attr", ""))
+                    == "env"
+                ):
+                    events.append((child.lineno, "commit"))
+                elif (
+                    attr in ("browse", "search", "search_read", "search_count", "read")
+                    and isinstance(value, ast.Subscript)
+                    and isinstance(value.value, ast.Attribute)
+                    and value.value.attr == "env"
+                    and getattr(value.value.value, "id", "") == "self"
+                ):
+                    events.append((child.lineno, "read"))
+
+            events.sort(key=lambda e: e[0])
+            seen_http_since_commit = False
+            for lineno, kind in events:
+                if kind == "http":
+                    seen_http_since_commit = True
+                elif kind == "commit":
+                    seen_http_since_commit = False
+                elif kind == "read" and seen_http_since_commit:
+                    self.add_error(
+                        lineno,
+                        "[!] DIAGNOSTIC FOR AI: RealTransactionCase read of "
+                        "self.env[...] after url_open()/make_jsonrpc_request() "
+                        "with no self.env.cr.commit() in between -- the HTTP "
+                        "call committed on its own connection; this cursor "
+                        "won't see it until commit() starts a fresh "
+                        "transaction. Add self.env.cr.commit() before this "
+                        "read (see test_awards.py's own established pattern).",
+                    )
 
         def visit_FunctionDef(self, node):
             if node.name.startswith("_patched_") or node.name.startswith("patched_"):
@@ -1214,6 +1301,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         self.add_error(node.lineno, "@api.returns is deprecated.")
 
             self._check_test_empty(node)
+            self._check_real_transaction_case_stale_read(node)
 
             old_assignments, old_http, old_method, old_decorators, old_kwarg = (
                 self.assignments.copy(),
