@@ -78,6 +78,19 @@ Detailed architectural narratives and process flows are documented in the `hams_
 
 * [Manual Invalidation](hams_shared/docs/journeys/manual_invalidation.md) ([@ANCHOR: test_caching_sudo_params])
 
+## 4b. Stage 1 Anchor-Coverage Sweep Additions
+* **PWA Manifest Route:** `[@ANCHOR: caching:COMM_pwa_manifest]` -- `/manifest.json`, reflects the current website's name/theme colors.
+
+* **PWA Offline Fallback Route:** `[@ANCHOR: caching:COMM_pwa_offline_route]` -- `/offline`.
+
+* **Manual Cache-Model Invalidation:** `[@ANCHOR: caching:COMM_force_invalidate_cache]` -- `caching.mixin.force_invalidate_cache()`, drops the distributed Redis cache entry for the calling model.
+
+* **Settings Read:** `[@ANCHOR: caching:COMM_settings_get_values]` -- `res.config.settings.get_values()`, reads the quota/invalidation-version fields from the current website.
+
+* **Settings Write:** `[@ANCHOR: caching:COMM_settings_set_values]` -- `res.config.settings.set_values()`, writes the quota back to the website.
+
+* **Force Cache Invalidation Action:** `[@ANCHOR: caching:COMM_settings_force_cache_invalidation]` -- increments the website's cache invalidation version.
+
 ## 5. Testing
 Tests are located in the `tests/` directory and cover:
 - Service Worker delivery and headers [@ANCHOR: caching_sw_serve_route].
