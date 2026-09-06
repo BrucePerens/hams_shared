@@ -24,6 +24,23 @@ import sys
 
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git"}
 
+# Real gap found 2026-09-06 running this gate end to end via run_linters.py:
+# this standalone `#![no_std]` codegen-inspection crate (see its own README)
+# is deliberately never buildable for the host triple at all -- it only ever
+# builds cross-compiled for a real embedded target (`--target
+# xtensa-esp32-none-elf -Z build-std=core` or `--target thumbv7em-none-
+# eabihf`), which this gate's own blanket `cargo clippy` (no `--target`) can
+# never supply. That's not a real code defect ("unwinding panics are not
+# supported without std" is expected and correct for a no_std crate built
+# for a std-having host target), just this generic host-target sweep
+# reaching a crate it was never meant to build. Excluded by its exact
+# relative path, not a blanket dirname, since nothing about "docs/
+# references" in general implies "not host-buildable" -- this one crate's
+# own README is what establishes that.
+EXCLUDE_CRATE_RELPATHS = {
+    "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check",
+}
+
 
 def _resolve_repo_root(given_path):
     """Same hams_shared-redirect fix as check_pip_audit.py/check_cargo_deny.py."""
@@ -64,6 +81,8 @@ def find_cargo_crates(repo_root):
         dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES]
         if "Cargo.toml" not in filenames:
             continue
+        if os.path.relpath(root, repo_root) in EXCLUDE_CRATE_RELPATHS:
+            continue
         with open(os.path.join(root, "Cargo.toml")) as f:
             if "[package]" in f.read():
                 found.append(root)
@@ -103,7 +122,24 @@ def main():
         # clippy's own exit code is 0 even for warnings unless -D is passed; this gate treats
         # any "warning:" line in stderr as a real finding, matching how -W clippy::all is meant
         # to surface style/correctness issues without hard-denying the whole build on every one.
-        if "warning:" in res.stderr:
+        #
+        # Real gap found 2026-09-06: a naive "warning:" substring match also catches Cargo's own
+        # relay of a build script's `cargo:warning=...` output (printed as "warning: <pkg>@<ver>:
+        # <message>", e.g. hams_local_relay's build.rs announcing how many Hamlib rig/rotator
+        # models it baked in) -- a real, intentional, informational message, not a clippy
+        # finding, and this gate was silently "failing" on it every single run. A genuine
+        # clippy/rustc diagnostic always follows its own "warning: ..." line with a "  --> " source
+        # pointer; a build-script relay line never does. Distinguishing on that, rather than
+        # matching the pkg-name-prefix convention build.rs output happens to use today, since nothing
+        # stops a real clippy warning from also mentioning a package name and version in its text.
+        stderr_lines = res.stderr.splitlines()
+        has_real_clippy_warning = any(
+            line.startswith("warning:")
+            and i + 1 < len(stderr_lines)
+            and stderr_lines[i + 1].lstrip().startswith("-->")
+            for i, line in enumerate(stderr_lines)
+        )
+        if has_real_clippy_warning:
             if not any_failed:
                 print("❌ cargo-clippy findings:")
             any_failed = True
