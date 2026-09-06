@@ -46,6 +46,23 @@ import sys
 # just the anchor name, identically for all three forms.
 ANCHOR_PATTERN = re.compile(r"\[@ANCHOR(?:-BEGIN|-END)?:\s*([a-zA-Z0-9_:]+)\s*\]")
 
+# Real, first-party, tested Python source that happens to live under a
+# `docs/` subtree -- `docs/` itself is excluded from find_anchors_in_code
+# below because it is overwhelmingly documentation, but this one directory
+# (a real PDF-generation pipeline: build_spec.py/build_drawings.py/
+# make_pdf.py, with a real test_pipeline.py exercising pandoc/chromium for
+# real) is genuine operational code, not documentation. Found live: its own
+# correctly-formed [@ANCHOR: ...]/`Verified by`/`Tests` comments were being
+# silently classified as doc-only references by find_anchors_in_docs
+# (never matched against real code), producing false "missing from
+# operational source code" reports for legitimately-anchored,
+# legitimately-tested functions. Excluded from find_anchors_in_docs' own
+# walk (see its `exclude_dirs`) so it's scanned exactly once, as code, not
+# double-counted as both code and doc content.
+CODE_ISLANDS_UNDER_DOCS = [
+    "docs/proposals/patent_disclosures/filed_applications/_pipeline",
+]
+
 
 def _clean(name):
     return name.replace("COMM_", "").replace("PRI_", "")
@@ -136,18 +153,27 @@ def find_anchors_in_docs(root_dir, repo_root):
         ".git",
         "__pycache__",
     }
+    code_island_paths = {os.path.join(root_dir, island) for island in CODE_ISLANDS_UNDER_DOCS}
 
     for root, dirs, files in os.walk(root_dir):
         if "radae" in dirs: dirs.remove("radae")
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
         is_docs_dir = "docs" in root.split(os.sep)
+        # A code island's own .py files are real code (scanned separately,
+        # as code, by find_anchors_in_code) -- only its README.md (if any)
+        # should still be found here, as a normal doc/contract reference,
+        # so its anchors aren't silently invisible to the "cited in docs"
+        # check just because the directory happens to sit under docs/.
+        in_code_island = root in code_island_paths
 
         for file in files:
             if file == "LLM_LINTER_GUIDE.md":
                 continue
 
             is_readme = file.lower() == "readme.md"
-            is_doc_file = is_docs_dir and file.endswith((".md", ".html", ".py"))
+            is_doc_file = is_docs_dir and file.endswith((".md", ".html", ".py")) and not (
+                in_code_island and file.endswith(".py")
+            )
 
             if is_readme or is_doc_file:
                 full_path = os.path.join(root, file)
@@ -330,6 +356,34 @@ def find_anchors_in_code(root_dir, repo_root):
                         )
                 except UnicodeDecodeError:
                     continue
+
+    for island in CODE_ISLANDS_UNDER_DOCS:
+        island_path = os.path.join(root_dir, island)
+        if not os.path.isdir(island_path):
+            continue
+        for root, _dirs, files in os.walk(island_path):
+            for file in files:
+                if file.endswith((".py", ".js", ".xml", ".html")):
+                    full_path = os.path.join(root, file)
+                    try:
+                        with open(full_path, "r", encoding="utf-8") as f:
+                            _process_file_for_anchors(
+                                full_path,
+                                f.read(),
+                                pattern,
+                                code_anchors,
+                                anchor_locations,
+                                tests_links,
+                                tests_links_set,
+                                verified_by_links,
+                                audit_ignore_links,
+                                cross_references,
+                                duplicates,
+                                code_anchor_lines,
+                                repo_root,
+                            )
+                    except UnicodeDecodeError:
+                        continue
 
     return (
         code_anchors,

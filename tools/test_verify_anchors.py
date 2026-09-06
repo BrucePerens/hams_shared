@@ -162,6 +162,24 @@ class FindAnchorsInDocsTests(unittest.TestCase):
         self.assertEqual(docs, {})
         self.assertEqual(contracts, {})
 
+    def test_a_code_islands_py_file_is_not_double_counted_as_a_doc_anchor(self):
+        # Real bug found live, 2026-09-06: a genuine PDF-generation pipeline
+        # (build_spec.py/build_drawings.py/make_pdf.py) lives under
+        # docs/proposals/.../_pipeline -- this scanner used to treat every
+        # .py file under any docs/ subtree as documentation, so its real,
+        # correctly-anchored-and-tested functions were silently classified
+        # as doc-only references, producing false "missing from operational
+        # source code" reports. CODE_ISLANDS_UNDER_DOCS carves this one
+        # directory out so its .py files are only ever code (see the
+        # matching FindAnchorsInCodeTests case below), while its own
+        # README.md (if any) still counts here, as a normal contract anchor.
+        island = va.CODE_ISLANDS_UNDER_DOCS[0]
+        _write(os.path.join(self.tmp, island, "build_spec.py"), "[@ANCHOR: patent_pipeline:x]\n")
+        _write(os.path.join(self.tmp, island, "README.md"), "[@ANCHOR: patent_pipeline:x]\n")
+        docs, contracts, _lines = va.find_anchors_in_docs(self.tmp, self.tmp)
+        self.assertNotIn("patent_pipeline:x", docs, "the .py file itself must not be treated as doc content")
+        self.assertIn("patent_pipeline:x", contracts, "the island's own README.md is still a real contract anchor")
+
 
 class FindAnchorsInCodeTests(unittest.TestCase):
     def setUp(self):
@@ -178,6 +196,20 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         code_anchors, anchor_locations, *_rest = self._scan()
         self.assertIn("mod_a:COMM_x", code_anchors)
         self.assertIn("mod_a:COMM_x", anchor_locations)
+
+    def test_a_code_islands_py_file_under_docs_is_scanned_as_real_code(self):
+        # Companion to FindAnchorsInDocsTests' matching case above -- the
+        # same fixture must resolve as real code here, not just "not doc
+        # content" there. A plain .py file elsewhere under docs/ (NOT one
+        # of CODE_ISLANDS_UNDER_DOCS) must still be invisible to this scan,
+        # confirming the carve-out is narrow, not a blanket "docs/ is code
+        # after all" reversal.
+        island = va.CODE_ISLANDS_UNDER_DOCS[0]
+        _write(os.path.join(self.tmp, island, "build_spec.py"), "# [@ANCHOR: patent_pipeline:x]\n")
+        _write(os.path.join(self.tmp, "docs", "proposals", "unrelated.py"), "# [@ANCHOR: should_never_appear:y]\n")
+        code_anchors, *_rest = self._scan()
+        self.assertIn("patent_pipeline:x", code_anchors)
+        self.assertNotIn("should_never_appear:y", code_anchors)
 
     def test_a_begin_marker_base_declaration_is_captured_the_same_as_plain(self):
         # 2026-09-04 (ADR 0089, Bruce's own request): [@ANCHOR-BEGIN: name] /
