@@ -1238,23 +1238,58 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     events.append((child.lineno, "read"))
 
             events.sort(key=lambda e: e[0])
-            seen_http_since_commit = False
+            # A read right after commit()-then-http() is actually SAFE and
+            # must not be flagged: PostgreSQL's REPEATABLE READ (confirmed
+            # in real_transaction.py's own teardown comment) only fixes a
+            # snapshot at the FIRST statement of a NEW transaction. If the
+            # cursor's own transaction was already closed by an earlier
+            # commit() and nothing has queried it since, the read after the
+            # http call is what opens the fresh transaction -- its snapshot
+            # is taken at THAT moment, after the http call's own (separate
+            # connection) commit already landed. Confirmed empirically,
+            # 2026-09-06: two real, previously-flagged instances
+            # (ham_training test_api_exam_success, user_websites
+            # TestLifecycleAndGroups test_03/test_07) both follow exactly
+            # this commit-then-http-then-read shape and pass cleanly on a
+            # real run -- they were false positives of the original,
+            # cruder "any commit since the http call" check. The real risk
+            # is only when a transaction is STILL OPEN (a query already ran
+            # since the last commit) at the moment an http call lands --
+            # that transaction's snapshot predates the http call and stays
+            # stale for every read until the next commit.
+            #
+            # transaction_open defaults to True (not False): this AST walk
+            # only sees one test method's own body, not setUp()'s -- if
+            # setUp() left an uncommitted transaction open (e.g. its own
+            # create() calls with no trailing commit()), that transaction
+            # is still live when the test method starts. Only an explicit
+            # commit() visible IN THIS METHOD can prove it's actually
+            # closed; absent that, the conservative assumption is that it's
+            # open, matching this check's original (still correct) test
+            # case of a bare http-then-read with no commit anywhere.
+            transaction_open = True
+            snapshot_stale = False
             for lineno, kind in events:
-                if kind == "http":
-                    seen_http_since_commit = True
-                elif kind == "commit":
-                    seen_http_since_commit = False
-                elif kind == "read" and seen_http_since_commit:
-                    self.add_error(
-                        lineno,
-                        "[!] DIAGNOSTIC FOR AI: RealTransactionCase read of "
-                        "self.env[...] after url_open()/make_jsonrpc_request() "
-                        "with no self.env.cr.commit() in between -- the HTTP "
-                        "call committed on its own connection; this cursor "
-                        "won't see it until commit() starts a fresh "
-                        "transaction. Add self.env.cr.commit() before this "
-                        "read (see test_awards.py's own established pattern).",
-                    )
+                if kind == "commit":
+                    transaction_open = False
+                    snapshot_stale = False
+                elif kind == "http":
+                    if transaction_open:
+                        snapshot_stale = True
+                elif kind == "read":
+                    if transaction_open and snapshot_stale:
+                        self.add_error(
+                            lineno,
+                            "[!] DIAGNOSTIC FOR AI: RealTransactionCase read of "
+                            "self.env[...] reuses a transaction that was already "
+                            "open before an intervening url_open()/"
+                            "make_jsonrpc_request() call -- that transaction's "
+                            "REPEATABLE READ snapshot predates the HTTP call's own "
+                            "commit on its separate connection, so this read won't "
+                            "see it. Add self.env.cr.commit() right before this "
+                            "read (see test_awards.py's own established pattern).",
+                        )
+                    transaction_open = True
 
         def visit_FunctionDef(self, node):
             if node.name.startswith("_patched_") or node.name.startswith("patched_"):

@@ -536,6 +536,55 @@ class TestThing(HamsHttpCase):
     assert errors == []
 
 
+def test_real_transaction_case_commit_before_http_makes_a_later_read_safe():
+    # A real false positive found and fixed this session: if the cursor's
+    # own transaction was already closed by a commit() BEFORE the http
+    # call (with nothing querying it since), the read after the http call
+    # is the one that opens a fresh transaction -- its REPEATABLE READ
+    # snapshot is taken at that moment, after the http call's own separate
+    # connection has already committed, so it's safe with no further
+    # commit needed. Confirmed empirically against two real, previously-
+    # flagged instances (ham_training test_api_exam_success, user_websites
+    # TestLifecycleAndGroups test_03/test_07) that both pass cleanly on a
+    # real Odoo test run.
+    code = '''
+from odoo.addons.zero_sudo.tests.real_transaction import RealTransactionCase
+
+class TestThing(RealTransactionCase):
+    def test_creates_then_reads(self):
+        self.env["ham.qso"].create({"callsign": "K6BP"})
+        self.env.cr.commit()
+        response = self.url_open("/api/thing", data=b"{}")
+        result = response.json()["result"]
+        qso = self.env["ham.qso"].browse(result["qso_id"])
+        self.assertEqual(qso.callsign, "K6BP")
+'''
+    errors = _real_txn_stale_read_errors(code)
+    assert errors == []
+
+
+def test_real_transaction_case_flags_a_second_read_after_a_second_http_call():
+    # The refined check must still catch the real risk shape: a read
+    # opens a transaction, THEN an http call runs (making that already-
+    # fixed snapshot stale), THEN a second read reuses the same still-open
+    # transaction -- even though the first read (before the http call)
+    # was itself perfectly safe.
+    code = '''
+from odoo.addons.zero_sudo.tests.real_transaction import RealTransactionCase
+
+class TestThing(RealTransactionCase):
+    def test_creates_then_reads(self):
+        self.env.cr.commit()
+        first = self.env["ham.qso"].browse(1)
+        response = self.url_open("/api/thing", data=b"{}")
+        result = response.json()["result"]
+        qso = self.env["ham.qso"].browse(result["qso_id"])
+        self.assertEqual(qso.callsign, "K6BP")
+'''
+    errors = _real_txn_stale_read_errors(code)
+    assert len(errors) == 1, f"expected the stale-read check to fire, got: {errors}"
+
+
 def test_real_transaction_case_flags_a_read_after_make_jsonrpc_request():
     code = '''
 from odoo.addons.zero_sudo.tests.real_transaction import RealTransactionCase
