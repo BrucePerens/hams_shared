@@ -50,6 +50,15 @@ def _tour_mandate_errors(xml, filename="test_view.xml"):
     return [e for e in errors if "UI TOUR MANDATE VIOLATION" in e]
 
 
+def _csrf_form_errors(content, filename="test_view.xml"):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = str(Path(tmpdir) / filename)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        errors, _warnings = scan_file(filepath, is_odoo_module=True)
+    return [e for e in errors if "CRITICAL CSRF" in e]
+
+
 def _scan_file(content, filename, is_odoo_module=True):
     # scan_file reads from a real path -- same real-disk-hit rationale as
     # _tour_mandate_errors above.
@@ -382,6 +391,79 @@ def test_tour_mandate_is_satisfied_by_a_real_tour_anchor():
     </record>
 </odoo>"""
     errors = _tour_mandate_errors(xml)
+    assert errors == []
+
+
+def test_csrf_form_check_flags_a_post_form_with_no_token():
+    # A real bug this session found live: two new ham_onboarding test
+    # files called a `_get_csrf_token()` helper that was never defined on
+    # that test class (copy-pasted from a sibling file that DOES define
+    # it locally rather than inheriting it) -- an AttributeError, not a
+    # missing-token bug in the page itself. This check instead catches
+    # the production-template version of the same class of mistake:
+    # a real <form method="post"> Odoo will reject on every submission
+    # because it never renders the hidden csrf_token input at all.
+    xml = """<odoo>
+    <template id="test_template">
+        <form method="post" action="/my/thing">
+            <input type="text" name="foo"/>
+        </form>
+    </template>
+</odoo>"""
+    errors = _csrf_form_errors(xml)
+    assert len(errors) == 1, f"expected the CSRF check to fire, got: {errors}"
+
+
+def test_csrf_form_check_is_satisfied_by_a_real_csrf_token_input():
+    xml = """<odoo>
+    <template id="test_template">
+        <form method="post" action="/my/thing">
+            <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+            <input type="text" name="foo"/>
+        </form>
+    </template>
+</odoo>"""
+    errors = _csrf_form_errors(xml)
+    assert errors == []
+
+
+def test_csrf_form_check_is_satisfied_by_burn_ignore_csrf_token():
+    xml = """<odoo>
+    <template id="test_template">
+        <form method="post" action="/my/thing">
+            <!-- burn-ignore-csrf-token: submitted via fetch() with an X-CSRF-Token header, see thing.js -->
+            <input type="text" name="foo"/>
+        </form>
+    </template>
+</odoo>"""
+    errors = _csrf_form_errors(xml)
+    assert errors == []
+
+
+def test_csrf_form_check_ignores_a_get_form():
+    xml = """<odoo>
+    <template id="test_template">
+        <form method="get" action="/my/search">
+            <input type="text" name="q"/>
+        </form>
+    </template>
+</odoo>"""
+    errors = _csrf_form_errors(xml)
+    assert errors == []
+
+
+def test_csrf_form_check_does_not_scan_html_data_assets():
+    # ics_forms/data/*.html and winlink_templates/**/*.html are raw
+    # PDF-to-HTML converted paper form scans bundled as module data --
+    # not live Odoo routes -- and several genuinely contain a bare
+    # <form method="post"> left over from the original document. The
+    # check must be scoped to real .xml QWeb templates only.
+    html = """<html><body>
+        <form method="post" action="somewhere">
+            <input type="text" name="foo"/>
+        </form>
+    </body></html>"""
+    errors = _csrf_form_errors(html, filename="test_data.html")
     assert errors == []
 
 

@@ -2598,6 +2598,30 @@ def scan_file(filepath, is_odoo_module=False):
                             f"Line {node.lineno}: CRITICAL DEPRECATION: snippet_options inheritance is highly volatile/removed in Odoo 19. Do not use it."
                         )
                 if (
+                    filename.endswith(".xml")
+                    and node.tag == "form"
+                    and str(node.attrs.get("method", "")).lower() == "post"
+                ):
+                    has_csrf_token = any(
+                        child.tag == "input" and child.attrs.get("name") == "csrf_token"
+                        for child in node.walk()
+                    )
+                    if not has_csrf_token:
+                        raw_text = "\n".join(
+                            lines[max(0, node.lineno - 1) : node.end_lineno]
+                        )
+                        if "burn-ignore-csrf-token" not in raw_text:
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL CSRF: \x3cform method=\"post\"\x3e has no "
+                                "\x3cinput type=\"hidden\" name=\"csrf_token\" t-att-value=\"request.csrf_token()\"/\x3e "
+                                "-- every real submission of this form will be rejected by Odoo's own "
+                                "CSRF protection (a route with website=True defaults to csrf enforcement "
+                                "on POST). If this form is submitted purely via JS with its own "
+                                "X-CSRF-Token header instead of a hidden input, add "
+                                "'\x3c!-- burn-ignore-csrf-token --\x3e' inside the \x3cform\x3e with a comment "
+                                "citing where that header is set."
+                            )
+                if (
                     node.tag == "record"
                     and node.attrs.get("model") in ("ir.rule", "res.groups")
                     and not any(
@@ -3274,6 +3298,7 @@ def scan_file(filepath, is_odoo_module=False):
             for allowed in [
                 "burn-ignore-financial",
                 "burn-ignore-tour",
+                "burn-ignore-csrf-token",
                 "burn-ignore-sudo",
                 "burn-ignore-route",
                 "burn-ignore-env",
