@@ -3390,6 +3390,20 @@ def scan_file(filepath, is_odoo_module=False):
                 # First used by scratch/fetch_forms.py, an ad-hoc tool for
                 # manually polling an mcp_watchdog IPC queue.
                 "burn-ignore-local-debug-script",
+                # A literal loopback/link-local/private-range IP address
+                # used as the *value under test* for an SSRF-rejection
+                # check (e.g. asserting that writing "127.0.0.1" or
+                # "169.254.169.254" as DNS record content is refused by
+                # is_ssrf_safe_public_ip()) -- the string is test data
+                # describing an attack payload, not a service address this
+                # test itself connects to, so the CRITICAL NETWORK
+                # HARDCODING rule's container-DNS concern doesn't apply.
+                # Distinct from burn-ignore-relay-loopback above, which
+                # covers the same category specifically for browser
+                # redirect-URL validation. First used by
+                # ham_dns/tests/test_dns_record_edge_cases.py's
+                # test_09_a_record_rejects_a_private_ip.
+                "burn-ignore-ssrf-test-value",
             ]
         ):
             errors_found.append(
