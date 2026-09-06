@@ -77,3 +77,34 @@ The module includes an exhaustive test suite covering standard and integration s
 *   `[@ANCHOR: bloat_alert_synergy]`: PagerDuty integration logic.
 
 *   `[@ANCHOR: db_doc_injection]`: Documentation bootstrap verification.
+
+### Stage 1 Anchor-Coverage Sweep Additions
+
+The `init()` hooks below are Odoo's own `_auto=False` view-model convention: each creates a real
+PostgreSQL view at module install/update time, and every one is proven live by a test that
+successfully queries or renders the resulting model (a broken `init()` would make module
+installation itself fail before any such test could run).
+
+*   `[@ANCHOR: COMM_db_table_stat_init]`: Creates the `database_table_stat` view (bloat/vacuum stats).
+
+*   `[@ANCHOR: COMM_db_table_stat_get_executable]`: Resolves the `vacuumdb` binary via the service
+    account for `action_vacuum_analyze()`.
+
+*   `[@ANCHOR: COMM_db_activity_init]`: Creates the `database_activity` view (active sessions).
+
+*   `[@ANCHOR: COMM_db_index_stat_init]`: Creates the `database_index_stat` view.
+
+*   `[@ANCHOR: COMM_db_replication_stat_init]`: Creates the `database_replication_stat` view.
+
+*   `[@ANCHOR: COMM_db_index_advisor_init]`: Creates the `database_index_advisor` view.
+
+*   `[@ANCHOR: COMM_pg_explain_wizard_close]`: Closes the `pg.explain.wizard` transient form.
+
+*   `[@ANCHOR: COMM_db_pg_setting_init]`: Creates the `database_pg_setting` view (`pg_settings`
+    audit).
+
+*   `[@ANCHOR: COMM_pg_ha_wizard_get_executable]`: Resolves `patroni`/`pgbouncer`/`etcd` binaries
+    (deferring to `binary_downloader` when missing) for the HA Failover Wizard.
+
+*   `[@ANCHOR: COMM_pg_ha_wizard_validate_inputs]`: Validates IP addresses, replication password
+    strength, and alphanumeric-only cluster/user names before generating Patroni/PgBouncer configs.
