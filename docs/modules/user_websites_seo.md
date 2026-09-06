@@ -61,5 +61,19 @@ For detailed narratives and end-to-end workflows, refer to the following:
 
 | `[@ANCHOR: COMM_test_xpath_rendering_user_websites_group]` | Backend view rendering for groups. | `test_xpath_rendering_user_websites_group` |
 
+### Stage 1 Anchor-Coverage Sweep Additions (page/post/blog SEO metadata mixin)
+
+* **SEO Field Set:** `[@ANCHOR: user_websites_seo:COMM_get_seo_fields]` -- the fields the mixin treats as SEO metadata (title/description/keywords/og-image/seo-name). Verified by `test_page_seo_write`.
+
+* **Mixin Write Split:** `[@ANCHOR: user_websites_seo:COMM_mixin_write]` -- splits a write into SEO vs. non-SEO fields, escalating only the SEO half through the service account after a permission check. Verified by `test_page_seo_write`.
+
+* **Abstract Permission Check:** `[@ANCHOR: user_websites_seo:COMM_mixin_check_seo_write_permission]` -- the base every concrete model overrides; must refuse (raise `NotImplementedError`), never silently allow. Verified by `test_mixin_base_check_seo_write_permission_is_abstract`.
+
+* **Page Permission Override:** `[@ANCHOR: user_websites_seo:COMM_page_check_seo_write_permission]` -- `website.page`'s own override, delegating to its real ACL/record-rule check. Verified by `test_page_seo_write`.
+
+* **Post Permission Override:** `[@ANCHOR: user_websites_seo:COMM_post_check_seo_write_permission]` -- `blog.post`'s own override. Verified by `test_post_seo_write`.
+
+* **Blog Permission Override:** `[@ANCHOR: user_websites_seo:COMM_blog_check_seo_write_permission]` -- `blog.blog`'s own override. Verified by `test_blog_seo_write`.
+
 ## 5. Multi-Website Support
 This module is fully multi-website aware. It respects the `website_id` field on `website.page` records and uses Odoo's native website-switching logic to ensure that SEO metadata is correctly associated with the active website context. All controller logic uses `request.website` to filter relevant records.
