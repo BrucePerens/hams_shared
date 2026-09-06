@@ -81,22 +81,6 @@ module.exports = tseslint.config(
     },
   },
   {
-    // ics_forms's ics-form.js is genuinely dual-context: a normal browser
-    // component, but its `process.argv[1].endsWith('ics-form.js')`-guarded
-    // block is a real Node CLI validator, actually invoked via
-    // `subprocess.run(["node", node_script, ...])` in
-    // ingest/validate_forms.py -- confirmed before carving this out.
-    // (story-components.js had the identical-looking pattern but no
-    // real caller anywhere in the repo; that was dead scaffolding, since
-    // removed, not a second legitimate case of this.) Scoped to this one
-    // file rather than weakening no-undef's ability to catch an
-    // *accidental* Node-global reference anywhere else.
-    files: ["**/ics_forms/static/src/js/components/ics-form.js"],
-    languageOptions: {
-      globals: { ...globals.node },
-    },
-  },
-  {
     // rx_noise_gate_processor.js is an AudioWorkletProcessor, loaded via
     // audioContext.audioWorklet.addModule() into the browser's dedicated
     // AudioWorkletGlobalScope -- a real, standard Web Audio execution
