@@ -57,6 +57,92 @@ Strictly adheres to Zero-Sudo architecture using dedicated service accounts:
 
 ---
 
+## 4b. Stage 1 Anchor-Coverage Sweep Additions
+
+**Installation and configuration:**
+* **Daemon/Install Hook:** `[@ANCHOR: cloudflare:COMM_post_init_hook]` -- initializes WAF state and bootstraps documentation on module install.
+
+* **Edge State Initialization:** `[@ANCHOR: cloudflare:COMM_initialize_cloudflare_state]` -- pulls existing WAF rulesets or pushes the default set, per website.
+
+* **WAF Caller Authorization:** `[@ANCHOR: cloudflare:COMM_check_waf_caller_authorized]` -- gates `action_pull_waf_rules`/`action_push_waf_rules` on every call, regardless of `@distributed_cache()` state.
+
+**Custom domain (`edge.routing.domain`) Cloudflare integration:**
+* **Domain Create:** `[@ANCHOR: cloudflare:COMM_domain_create]` -- provisions a Cloudflare custom hostname for the matching website.
+
+* **Website-Domain Mapping:** `[@ANCHOR: cloudflare:COMM_get_website_mapping]`
+
+* **Custom Hostname Provisioning (Batch):** `[@ANCHOR: cloudflare:COMM_create_custom_hostname_batch]`
+
+* **Custom Hostname Deletion (Batch):** `[@ANCHOR: cloudflare:COMM_delete_custom_hostname_batch]`
+
+* **SSL Status Sync:** `[@ANCHOR: cloudflare:COMM_action_sync_ssl_status]`
+
+**Edge context and purge dispatch:**
+* **Current Website ID Resolution:** `[@ANCHOR: cloudflare:COMM_get_current_website_id]` -- unifies HTTP and cron contexts.
+
+* **IP Ban Lift Sync:** `[@ANCHOR: cloudflare:COMM_action_lift_ban_sync]`
+
+* **Purge Enqueue (URL/Tag):** `[@ANCHOR: cloudflare:COMM_enqueue_cloudflare_purge]`
+
+* **Purge Menus:** `[@ANCHOR: cloudflare:COMM_purge_cloudflare_menus]` -- website.menu changes purge everything, not a single URL.
+
+* **Purge Queue Batch Enqueue:** `[@ANCHOR: cloudflare:COMM_enqueue_urls_batch]`
+
+* **Manual Purge Wizard Action:** `[@ANCHOR: cloudflare:COMM_purge_wizard_action_purge]`
+
+* **Static Asset mtime-Triggered Purge:** `[@ANCHOR: cloudflare:COMM_trigger_edge_purge_static_assets]`
+
+**Content bridge hooks (`bridge.py`):**
+* **Page Write/Unlink:** `[@ANCHOR: cloudflare:COMM_page_write]`, `[@ANCHOR: cloudflare:COMM_page_unlink]`
+
+* **Blog Post Write:** `[@ANCHOR: cloudflare:COMM_blog_post_write]`
+
+* **Menu Write/Unlink:** `[@ANCHOR: cloudflare:COMM_menu_write]`, `[@ANCHOR: cloudflare:COMM_menu_unlink]`
+
+* **Product Template Write:** `[@ANCHOR: cloudflare:COMM_product_write]`
+
+**Settings shortcuts:**
+* **Deploy/Pull WAF from Settings:** `[@ANCHOR: cloudflare:COMM_action_deploy_cf_waf]`, `[@ANCHOR: cloudflare:COMM_action_pull_cf_waf]`
+
+**Encrypted credential storage (`website.py`):**
+* **Fernet Key Resolution:** `[@ANCHOR: cloudflare:COMM_get_fernet]` -- reads from the daemon key registry, never an environment variable, to preserve multi-tenant isolation.
+
+* **Symmetric Encrypt/Decrypt Primitive:** `[@ANCHOR: cloudflare:COMM_crypt_field]`
+
+* **Generic Encrypted-Field Compute/Inverse:** `[@ANCHOR: cloudflare:COMM_compute_encrypted_field]`, `[@ANCHOR: cloudflare:COMM_inverse_encrypted_field]`
+
+* **API Token Compute/Inverse:** `[@ANCHOR: cloudflare:COMM_compute_cf_api_token]`, `[@ANCHOR: cloudflare:COMM_inverse_cf_api_token]`
+
+* **Turnstile Secret Compute/Inverse:** `[@ANCHOR: cloudflare:COMM_compute_cf_turnstile_secret]`, `[@ANCHOR: cloudflare:COMM_inverse_cf_turnstile_secret]`
+
+* **Credential Resolution (Cached):** `[@ANCHOR: cloudflare:COMM_get_cloudflare_credentials]`
+
+**Zone settings and tunnels:**
+* **Zone Settings Wizard Defaults/Apply:** `[@ANCHOR: cloudflare:COMM_zone_settings_default_get]`, `[@ANCHOR: cloudflare:COMM_zone_settings_action_apply]`
+
+* **Tunnel Route Display Name:** `[@ANCHOR: cloudflare:COMM_tunnel_route_compute_name]`
+
+* **Tunnel Push Configuration:** `[@ANCHOR: cloudflare:COMM_tunnel_action_push_configuration]`
+
+* **Tunnel Sync for Website:** `[@ANCHOR: cloudflare:COMM_sync_tunnels_for_website]`
+
+**Low-level HTTP/native daemon layer:**
+* **Generic API Error Handling:** `[@ANCHOR: cloudflare:COMM_handle_api_error]`
+
+* **Generic HTTP Request Wrapper:** `[@ANCHOR: cloudflare:COMM_make_request]`
+
+* **Cache-Tag Purge API:** `[@ANCHOR: cloudflare:COMM_purge_tags]`
+
+* **Tunnel Configuration Update API:** `[@ANCHOR: cloudflare:COMM_update_cfd_tunnel_configuration]`
+
+* **Native Library Resolution:** `[@ANCHOR: cloudflare:COMM_get_lib]`
+
+* **Tunnel Simulator Start/Stop:** `[@ANCHOR: cloudflare:COMM_start_tunnel_simulator]`, `[@ANCHOR: cloudflare:COMM_stop_tunnel_simulator]`
+
+* **Real Tunnel Daemon Stop:** `[@ANCHOR: cloudflare:COMM_stop_tunnel_daemon]`
+
+* **Test Simulator Mixin Setup/Teardown/Request:** `[@ANCHOR: cloudflare:COMM_simulator_setup]`, `[@ANCHOR: cloudflare:COMM_simulator_teardown]`, `[@ANCHOR: cloudflare:COMM_simulate_edge_request]`
+
 <stories_and_journeys>
 ## 5. Architectural Stories & Journeys
 
