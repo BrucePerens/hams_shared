@@ -1023,6 +1023,27 @@ def main():
         elif res.stdout and res.stdout.strip():
             print(res.stdout, end="")
 
+    # 42. check_owl_templates -- real, standalone Owl QWeb template compile verification via a
+    # real headless Chrome. Built 2026-09-07 after a live-instrumented investigation
+    # (OFFLINE_HAM_OPERATION.md) found ham_shack.WebShackTemplate had a genuine compile error (a
+    # JS numeric separator inside a t-directive expression) that had cost multiple prior sessions
+    # real time to root-cause, precisely because Odoo's own runtime error for this failure mode
+    # is real but practically undiagnosable (a truncation-prone message with no line/column info).
+    # Always scans the full repo, same reasoning as steps 19/20/22/23/30-34/etc.
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_owl_templates.py"), repo_root],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
