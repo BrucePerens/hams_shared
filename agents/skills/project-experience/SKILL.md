@@ -213,3 +213,58 @@ session.
 ## 41. The `safe_eval` Context Manager Trap (BEFORE_WITH Opcode)
 * **The Trap:** Executing `with env.cr.savepoint():` directly inside an XML `<field name="code">` (server action) fails because the `safe_eval` sandboxed environment completely blocks the `BEFORE_WITH` (and `WITH_EXCEPT_START`) Python bytecode opcodes.
 * **The Solution:** Move any logic requiring `with` context managers (like SQL execution blocks) out of XML and into a standard Python file, such as `hooks.py` (`post_init_hook`). In regular Python, the bytecode is unrestricted and `env.cr.savepoint()` works natively.
+
+## 42. The Real-Hardware Test Exposure Trap (ALSA/Audio Devices)
+**The Trap:** Mirroring an existing pattern that wires real hardware detection into a daemon call
+site (e.g. copying `winlink.rs`'s `detect_radio_audio_device()` into `ardop.rs`'s `spawn_ardopcf`
+call, replacing a hardcoded `"null"` device) can make an *already-existing* integration test that
+exercises that exact call path open the dev box's real speaker/microphone and play a real, audible
+signal — confirmed directly on this project (`ardopcf`'s ARDOP handshake tones), with PipeWire's own
+sink list dropping to a synthetic "Dummy Output" for a while afterward because the raw `plughw:`
+access bypassed PipeWire and grabbed the device exclusively.
+**The Solution:** Before wiring real ALSA/audio-device (or any real-hardware) detection into a
+function, grep for what tests actually call it. If a test exercises the call path directly, either
+keep the test path forced to `"null"`/a fake device (an explicit parameter override or test-only env
+var) or affirmatively confirm no test will trigger real hardware I/O before running anything. When
+in doubt, run nothing and ask rather than finding out from a human's own ears that the test suite
+made noise.
+
+## 43. The Odoo Test-Runner Privilege Trap (polkit prompts, key-directory permissions, root false-negatives)
+**The Trap:** Running the real Odoo test harness as an unprivileged dev-box user hits two distinct
+failures: (1) `rebuild_db()`-style helpers that unconditionally call `systemctl start
+postgresql/redis-server/rabbitmq-server/...` trigger a disruptive polkit GUI authorization dialog on
+the developer's own desktop every single run, even when the unit is already active; (2) the real
+`odoo` server process needs to write/chmod/chown files under a directory owned by the `odoo` system
+user (e.g. `/opt/hams/etc/keys`, mode 700) that the plain dev user can't even traverse into, crashing
+with `PermissionError` the moment a module test-installs a daemon that registers a key there.
+Reaching for bare `sudo` (root, no `-u`) "solves" problem 2 but introduces a different, silent
+false-negative: root bypasses ordinary Unix DAC permission checks entirely, so a test that
+deliberately creates a `0o000`-permission directory to prove a real `PermissionError` path is raised
+will fail with `AssertionError: PermissionError not raised` under root — looking exactly like a real
+regression in freshly-changed code when it's purely an artifact of testing as root.
+**The Solution:** Start the required services yourself first with `sudo systemctl start ...` (sudo
+bypasses the polkit prompt since the request then comes from root) and set `HAMS_ISOLATED_NS=1`
+before invoking the test runner, which causes it to skip the whole "start core daemons" block that
+issues the unprivileged `systemctl start` calls. For the actual `odoo` binary invocation itself, run
+it as `sudo -H -u odoo env VAR=val ... /usr/bin/python3 /usr/bin/odoo ...` — never bare root — since
+the `odoo` system user already has the group membership needed to satisfy real permission
+requirements without disabling DAC checks (the `-H` flag matters too, giving `odoo` its own `$HOME`
+rather than inheriting the invoking user's, which otherwise causes a further `PermissionError`
+trying to create directories under the wrong home).
+
+## 44. The Stale-Install Silent No-Test Trap & the Detached Background-Test-Run Trap
+**The Trap:** Re-running an Odoo test suite with `-i <module>` against a database where that module
+is *already installed* from a previous run is a silent no-op that does not reload changed Python
+source or re-register new/renamed tests (only a genuine install/upgrade transition does) — editing
+test code and re-running shows "0 post-tests" with no error, looking like nothing ran rather than
+like a real signal that the DB needs rebuilding. Separately, a long test run launched as a
+background tool call can be killed mid-run by something entirely outside the invoking session's
+control (e.g. an unrelated `KeyboardInterrupt` delivered partway through module loading) — assuming
+this means the run itself failed for a real reason wastes time chasing a phantom regression.
+**The Solution:** Rebuild the test database fresh before each real re-run once source has changed,
+not just once at the very start of a session. If a background test run appears to have died
+unexpectedly, check `ps aux | grep odoo` for a stale orphaned process before concluding anything
+about the code under test, rebuild the DB again, and relaunch fully detached (`nohup ... &
+disown`, redirecting stdin/stdout/stderr) so the process survives independently of the tool call
+that started it — then poll the log file for the real `odoo.tests.result` line rather than trusting
+the launching tool call's own exit status.

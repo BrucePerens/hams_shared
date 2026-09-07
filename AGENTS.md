@@ -134,6 +134,14 @@ The `mcp-test-runner` skill explains how to use the MCP test server to rapidly i
 ## Fast Test Iteration
 When debugging tests, especially UI tours, you can use the MCP test server instead of running `test.py` normally. This saves significant time (avoids the 60+ second boot time). See `hams_shared/agents/skills/mcp-test-runner/SKILL.md` for instructions.
 
+## Standing Conventions & Institutional Knowledge
+Durable, project-specific conventions, standing authorizations, and architectural philosophy
+(legal/licensing calls, repository/persistence conventions, autonomy and night-shift session
+conventions, architecture philosophy like fail-fast/zero-sudo/no-bricking, and dev-box environment
+quirks) accumulated across many sessions are consolidated in
+`hams_shared/docs/CLAUDE_STANDING_CONVENTIONS.md`. Check there before re-deriving or re-asking about
+a standing project convention.
+
 ## 5. TOOL AND SCRIPT CHANGE VERIFICATION
 Whenever you modify a tool, script (Python, JavaScript, bash), CSS, or HTML file, you MUST follow this strict verification protocol before finalizing the change:
 1. **Linter Compliance:** Run the appropriate linter for the modified language (e.g., `flake8` for Python, `eslint` for JavaScript, `stylelint` for CSS) on the specific file you modified.
