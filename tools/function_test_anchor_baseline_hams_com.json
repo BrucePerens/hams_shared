@@ -73,15 +73,5 @@
   "ingest/narrative_daemon.py::seed_prior_class_facts",
   "ingest/narrative_daemon.py::spawn_narrative",
   "ingest/narrative_daemon.py::validate_accessories",
-  "ingest/narrative_daemon.py::wait_for_validation_files",
-  "ingest/validate_forms.py::_clean_key",
-  "ingest/validate_forms.py::_global_exception_handler",
-  "ingest/validate_forms.py::_js_str",
-  "ingest/validate_forms.py::_resolve_template_path",
-  "ingest/validate_forms.py::_strip_leading_number",
-  "ingest/validate_forms.py::build_fields_data",
-  "ingest/validate_forms.py::extract_schema_from_template",
-  "ingest/validate_forms.py::ics_form_validate",
-  "ingest/validate_forms.py::validate_forms_in_payload",
-  "ingest/validate_forms.py::validate_single_form"
+  "ingest/narrative_daemon.py::wait_for_validation_files"
 ]
