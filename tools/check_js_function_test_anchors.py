@@ -40,6 +40,7 @@ conventions allow:
 """
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -97,6 +98,63 @@ def _is_tour_registration_file(content):
     return bool(TOUR_REGISTRATION_PATTERN.search(content))
 
 
+def _web_assets_tests_files(repo_root):
+    """Every real file path any module's own `__manifest__.py` declares under the
+    `web.assets_tests` bundle -- Odoo's own built-in, authoritative "this asset loads only during
+    test/tour execution, never on a real production page" declaration. Found live: a first attempt
+    at this exclusion used an import-graph heuristic (does any non-tour file ever import this one)
+    and correctly caught `tour_utils.js` (imported via a real `@module/path` ES import) but MISSED
+    `tour_failure_dump.js` entirely -- that file is never `import`ed by anything at all; it's loaded
+    as a raw script directly from the `web.assets_tests` bundle (confirmed directly,
+    `zero_sudo/__manifest__.py`), a loading mechanism no import-graph search can see. The manifest
+    itself is the real, authoritative, and simpler signal -- the same `ast.literal_eval` parse
+    `check_manifest_dependencies.py` already uses for its own `assets` bundle walk, reused here
+    rather than re-derived.
+
+    Real scope note: `web.assets_tests` genuinely means "test-only" in Odoo's own asset-bundle
+    convention (as opposed to `web.assets_backend`/`web.assets_frontend`, real production bundles),
+    so a file listed *only* under this bundle is production-code-adjacent test infrastructure, the
+    same category `*.test.js`/a tour registration file already get exempted as."""
+    test_files = set()
+    for manifest_rel in _git_tracked_manifest_files(repo_root):
+        manifest_path = os.path.join(repo_root, manifest_rel)
+        module_dir = os.path.dirname(manifest_path)
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=manifest_path)
+        except (OSError, SyntaxError):
+            continue
+        for node in tree.body:
+            if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Dict)):
+                continue
+            try:
+                manifest_dict = ast.literal_eval(node.value)
+            except ValueError:
+                continue
+            assets = manifest_dict.get("assets", {})
+            if not isinstance(assets, dict):
+                continue
+            for asset_path in assets.get("web.assets_tests", []):
+                # Manifest asset paths are module-relative ("zero_sudo/static/src/js/foo.js"),
+                # not manifest-relative -- module_dir's own parent is the real repo-relative base.
+                test_files.add(os.path.normpath(os.path.join(module_dir, "..", asset_path)))
+    return test_files
+
+
+def _git_tracked_manifest_files(repo_root):
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "*__manifest__.py"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+    return [line for line in out.splitlines() if line]
+
+
 def _extend_span_backward_over_comments(start, lines):
     """acorn's own `loc.start` for a function node points at the `function`
     keyword (or the property key, or the `class`/method name) itself -- it
@@ -149,15 +207,22 @@ def scan_tree(repo_root):
     `{relpath}::{qualname}`, the same key shape check_function_test_anchors.py
     uses for Python, so the two baselines never collide even though they
     share no filenames."""
-    candidate_files = []
-    file_contents = {}
-    for filepath in _git_tracked_js_files(repo_root):
+    all_js_files = _git_tracked_js_files(repo_root)
+    all_contents = {}
+    for filepath in all_js_files:
         try:
             with open(filepath, "r", encoding="utf-8") as f:
-                content = f.read()
+                all_contents[filepath] = f.read()
         except (OSError, UnicodeDecodeError):
             continue
-        if _is_tour_registration_file(content):
+
+    tour_files = {fp for fp, content in all_contents.items() if _is_tour_registration_file(content)}
+    test_asset_files = _web_assets_tests_files(repo_root)
+
+    candidate_files = []
+    file_contents = {}
+    for filepath, content in all_contents.items():
+        if filepath in tour_files or filepath in test_asset_files:
             continue
         file_contents[filepath] = content
         candidate_files.append(filepath)

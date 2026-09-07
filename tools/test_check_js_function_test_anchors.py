@@ -119,6 +119,55 @@ class ScanTreeTests(unittest.TestCase):
         gaps = cjfta.scan_tree(self.tmp)
         self.assertIn("onboarding_tour_utils.js::helperUsedByTours", gaps)
 
+    def test_a_file_declared_under_web_assets_tests_in_the_manifest_is_excluded(self):
+        # Real, found-live case: zero_sudo/static/src/js/tour_failure_dump.js is loaded as a raw
+        # script directly from the "web.assets_tests" bundle -- never `import`ed by anything at
+        # all, so an import-graph-based exclusion (this fix's own first, wrong draft) can't see it.
+        # The manifest's own "web.assets_tests" bundle is Odoo's real, authoritative "test-only,
+        # never a real production page" declaration -- the same category test_*.py/*.test.js/a
+        # tour registration itself already get exempted as.
+        _write(
+            os.path.join(self.tmp, "zero_sudo", "static", "src", "js", "tour_failure_dump.js"),
+            "function isBenign(message) {\n    return message.includes('benign');\n}\n",
+        )
+        _write(
+            os.path.join(self.tmp, "zero_sudo", "__manifest__.py"),
+            "{\n"
+            "    'name': 'Zero Sudo',\n"
+            "    'assets': {\n"
+            "        'web.assets_tests': [\n"
+            "            'zero_sudo/static/src/js/tour_failure_dump.js',\n"
+            "        ],\n"
+            "    },\n"
+            "}\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = cjfta.scan_tree(self.tmp)
+        self.assertEqual(gaps, {})
+
+    def test_a_file_declared_under_a_real_production_bundle_is_still_scanned(self):
+        # The real generalizable check is the "web.assets_tests" bundle specifically -- a file
+        # declared under a real production bundle (web.assets_backend/web.assets_frontend) stays
+        # in scope even if some other module's manifest also happens to exist.
+        _write(
+            os.path.join(self.tmp, "zero_sudo", "static", "src", "js", "real_component.js"),
+            "function realFeature() {\n    return 1;\n}\n",
+        )
+        _write(
+            os.path.join(self.tmp, "zero_sudo", "__manifest__.py"),
+            "{\n"
+            "    'name': 'Zero Sudo',\n"
+            "    'assets': {\n"
+            "        'web.assets_backend': [\n"
+            "            'zero_sudo/static/src/js/real_component.js',\n"
+            "        ],\n"
+            "    },\n"
+            "}\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = cjfta.scan_tree(self.tmp)
+        self.assertIn("zero_sudo/static/src/js/real_component.js::realFeature", gaps)
+
     def test_a_vendored_lib_directory_is_excluded(self):
         _write(
             os.path.join(self.tmp, "static", "lib", "vendor.js"),

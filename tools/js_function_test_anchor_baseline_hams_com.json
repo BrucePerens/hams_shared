@@ -69,7 +69,6 @@
   "ham_onboarding/static/src/js/morse_challenge.js::MorseChallengeInteraction._resetState",
   "ham_onboarding/static/src/js/morse_challenge.js::MorseChallengeInteraction.destroy",
   "ham_onboarding/static/src/js/morse_challenge.js::MorseChallengeInteraction.setup",
-  "ham_onboarding/static/src/js/onboarding_tour_utils.js::exterminateOverlays",
   "ham_onboarding/static/src/js/qrz_verification.js::QrzVerification._onNotification",
   "ham_onboarding/static/src/js/qrz_verification.js::QrzVerification.setup",
   "ham_profile/static/src/js/s_member_badges.js::MemberBadgesInteraction._loadBadges",
