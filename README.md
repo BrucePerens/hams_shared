@@ -49,10 +49,16 @@ root and, where relevant, the sibling repo, from whichever one it's given.
   cross-cutting standing policy for both parent repos lives here, not in either repo's own
   `docs/proposals/`.
 * **`agents/skills/`** (17 skill packages): reusable Claude Code skills shared by both repos'
-  sessions -- covering the night-shift workflow, Odoo development/testing/UI-tour conventions,
-  linter compliance, headless-browser testing, code review, and more. (`mcp_watchdog.py` above is
-  the coordination layer behind the API-cost-avoidance pattern described in `hams_com`'s own
-  `.claude/skills/avoiding-api-costs/` skill, which is not itself shared here.)
+  sessions, activated on demand rather than loaded unconditionally into every session. Three of
+  these are where this repo's own former `docs/LLM_*.md` instruction files ended up when they were
+  split out of always-loaded context: `linter-compliance` (ex-`LLM_LINTER_GUIDE.md`, the Burn
+  List/anti-evasion reference), `odoo-development` (ex-`LLM_ODOO_REQUIREMENTS.md`, Odoo 19+
+  architectural mandates), and `project-experience` (ex-`LLM_EXPERIENCE.md`, the AI's own
+  cross-session lessons-learned log). The rest cover the night-shift workflow, Odoo
+  testing/UI-tour conventions, headless-browser testing, multi-agent code review, and more.
+  (`mcp_watchdog.py` above is the coordination layer behind the API-cost-avoidance pattern
+  described in `hams_com`'s own `.claude/skills/avoiding-api-costs/` skill, which is not itself
+  shared here.)
 * **`scripts/`**: `run_headless_chrome.py`, a shared real-Chrome-plus-CDP harness used for
   JS-coverage and live DOM instrumentation work by both repos.
 * **`eslint.config.js` / `package.json` / `package-lock.json`**: the shared ESLint configuration
