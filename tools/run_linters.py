@@ -966,6 +966,34 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 40. hams_com/ingest/ standalone-script unit test suites -- same
+    # reasoning as steps 27/28/29 for the one other directory of test_*.py
+    # files nothing runs automatically. Confirmed directly, not assumed:
+    # ingest/ has no conftest.py, no CI workflow collects it, and steps
+    # 27-29 only reach hams_shared/tools, hams_shared/scripts, and
+    # daemons/ -- ingest/ is none of those, so its ~170 real tests (built
+    # across the ADR 0090 FUNCTION_TEST_ANCHOR_SWEEP.md batches) were
+    # guarding nothing until this step existed. ingest/ only exists in
+    # hams_com, not hams_open, so this step is a no-op there.
+    ingest_dir = os.path.join(repo_root, "ingest")
+    ingest_test_files = sorted(glob.glob(os.path.join(ingest_dir, "test_*.py")))
+    if ingest_test_files:
+        res = subprocess.run(
+            [python_exec, "-m", "pytest", "-q"] + ingest_test_files,
+            capture_output=True,
+            text=True,
+            cwd=ingest_dir,
+        )
+        if res.returncode != 0:
+            print("❌ ingest/ unit test failures:")
+            if res.stdout:
+                print(res.stdout, end="")
+            if res.stderr:
+                print(res.stderr, end="")
+            linters_failed = True
+        elif res.stdout and res.stdout.strip():
+            print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
