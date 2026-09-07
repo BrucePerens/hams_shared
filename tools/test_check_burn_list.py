@@ -17,6 +17,7 @@ hams_s3/views/res_config_settings_views.xml) -- as fixtures, so a
 future change that reintroduces either bug fails a real test instead of
 requiring another manual before/after diff.
 """
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -352,6 +353,17 @@ def test_patch_ban_exempts_hams_com_ingest():
     # files were already using native patch.object() before this exclusion
     # existed.
     errors = _patch_ban_errors("ingest/test_daemon_utils.py")
+    assert errors == []
+
+
+def test_patch_ban_exempts_hams_shared_tools():
+    # hams_shared/tools/ is a third instance of the same case as daemons/
+    # and ingest/ (LINTER_POLICY_REVISIT.md, 2026-09-07): standalone
+    # test_*.py files with no Odoo TestCase base class to redirect to.
+    # Found live: 114 of the 471 findings from a real
+    # --scan-daemons-and-tools run against hams_open were this exact rule
+    # firing across tools/, the single largest category.
+    errors = _patch_ban_errors("hams_shared/tools/test_check_burn_list.py")
     assert errors == []
 
 
@@ -3987,3 +3999,57 @@ def test_environment_instantiation_with_a_dotted_superuser_id_attribute_is_a_sud
     source = "env = api.Environment(cr, odoo.SUPERUSER_ID, {})\n"
     errors, _warnings = _dict_findings(source)
     assert any("Instantiating an Environment" in e and "ZERO-SUDO" in e for e in errors)
+
+
+# main()'s own directory-walk pruning -- LINTER_POLICY_REVISIT.md, 2026-09-07: `target/` (Cargo
+# build output) and `odoo_type_stubs/` (ODOO_AWARE_TYPE_CHECKING.md's generated stubs, every body a
+# bare `...`) must always be pruned regardless of any flag, since neither is real source; `tools/`
+# and `daemons/` are pruned by default but included when `--scan-daemons-and-tools` is passed.
+#
+# Run via subprocess, not an in-process main() call: REQUIRE_TEST_VERIFICATION/
+# FOUND_TEST_CONTENTS/FOUND_MANIFESTS/FOUND_TOURS are module-level accumulators main() never
+# resets (harmless for its real, once-per-process script invocation, but it means a second
+# in-process main() call in the same test run sees state left over from the first).
+
+
+def _run_main(tmp_path, extra_args=()):
+    script = str(Path(__file__).parent / "check_burn_list.py")
+    result = subprocess.run(
+        [sys.executable, script, str(tmp_path), *extra_args],
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
+
+
+def test_target_directory_is_always_pruned(tmp_path):
+    target_file = tmp_path / "some_crate" / "target" / "doc" / "bad.js"
+    target_file.parent.mkdir(parents=True)
+    target_file.write_text("el.innerHTML = `${x}`;\n", encoding="utf-8")
+    out = _run_main(tmp_path, extra_args=["--scan-daemons-and-tools"])
+    assert "bad.js" not in out
+
+
+def test_odoo_type_stubs_directory_is_always_pruned(tmp_path):
+    stub_file = tmp_path / "hams_shared" / "tools" / "odoo_type_stubs" / "odoo" / "models.py"
+    stub_file.parent.mkdir(parents=True)
+    stub_file.write_text("def method(self):\n    ...\n", encoding="utf-8")
+    out = _run_main(tmp_path, extra_args=["--scan-daemons-and-tools"])
+    assert "models.py" not in out
+
+
+def test_tools_directory_is_pruned_by_default_but_scanned_with_the_flag(tmp_path):
+    # The AttributeError-catch-all ban (GENERAL_ERROR_RULES, ext_pattern
+    # r"\.py$" unconditionally) is used here specifically because it is
+    # NOT one of the test_.*\.py$-scoped, Odoo-test-convention rules this
+    # same session found and excluded for tools/ (the native-patch ban) --
+    # this asserts the flag genuinely unprunes the directory for scanning,
+    # not that every rule now fires there regardless of fit.
+    tools_file = tmp_path / "hams_shared" / "tools" / "some_checker.py"
+    tools_file.parent.mkdir(parents=True)
+    tools_file.write_text("try:\n    x.y\nexcept AttributeError:\n    pass\n", encoding="utf-8")
+    out_default = _run_main(tmp_path)
+    assert "some_checker.py" not in out_default
+    out_flagged = _run_main(tmp_path, extra_args=["--scan-daemons-and-tools"])
+    assert "some_checker.py" in out_flagged
+    assert "Catch-all AttributeError is forbidden" in out_flagged

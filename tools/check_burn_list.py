@@ -291,7 +291,15 @@ GENERAL_ERROR_RULES = [
         # assumed clean because the sweep's own dedicated anchor tooling
         # (verify_anchors.py/check_function_test_anchors.py) had separately
         # already passed.
-        r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/).*test_.*\.py$",
+        #
+        # Also excludes hams_shared/tools/ (LINTER_POLICY_REVISIT.md,
+        # 2026-09-07): the same third case, none of these ~200 test_*.py
+        # files import or inherit from zero_sudo's Odoo TestCase-derived
+        # classes either, so `self.safe_patch()` is not an available
+        # method to redirect to. Found live, not assumed: 114 of the 471
+        # findings from a real --scan-daemons-and-tools run were this
+        # exact rule firing across tools/, the single largest category.
+        r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/)(?!.*(?:^|/)tools/).*test_.*\.py$",
         re.compile(r"(?:@(?:mock\.)?patch\b|\b(?:mock\.)?patch(?:\.object)?\s*\()"),
         "CRITICAL ARCHITECTURE: Native patch decorators and context managers are forbidden. Use self.safe_patch() or self.safe_patch_object().",
     ),
@@ -3896,6 +3904,21 @@ def main():
     parser.add_argument(
         "--ignore-file", default="ignore_list.txt", help="Path to ignore config file"
     )
+    parser.add_argument(
+        "--scan-daemons-and-tools",
+        action="store_true",
+        help=(
+            "Also walk into tools/, daemons/, hams_local_relay/, and hams_community/ "
+            "directories, which are pruned from every scan by default (LINTER_POLICY_REVISIT.md, "
+            "'Discovered, not acted on'). _is_odoo_module() already returns False for any file "
+            "under a daemons/daemon/tools path, so ODOO_ERROR_RULES and the AST checks gated on "
+            "is_odoo_module already skip these files automatically once they're walked at all -- "
+            "this flag only stops pruning the directories, it does not change which rules apply. "
+            "Per Bruce's own decision (night_shift_todo.md, 2026-09-07): apply the existing "
+            "generic (model-agnostic) rules to these directories too, without inferring which of "
+            "the ~90 rules count as 'generic enough' beyond what is_odoo_module already encodes."
+        ),
+    )
     args = parser.parse_args()
     target_dir = os.path.abspath(args.directory)
     total_errors, total_warnings, scanned_files = 0, 0, 0
@@ -3925,30 +3948,46 @@ def main():
         dirs[:] = [d for d in dirs if "env" not in d]
         if "venv" in root or "site-packages" in root:
             continue
+        always_pruned_dirs = [
+            "__pycache__",
+            "node_modules",
+            "hams_com",
+            # Genuinely vendored upstream Cloudflare client source
+            # (daemons/cloudflared/README.md says so directly) --
+            # found live: scanning `daemons` directly as this
+            # function's own target_dir doesn't trigger the
+            # sibling "daemons" exclusion above (that only prunes
+            # it as a *subdirectory* encountered during the walk,
+            # not when it's the root itself), so cloudflared's own
+            # component-tests/ tripped 36 errors against this
+            # project's conventions it was never written to follow.
+            "cloudflared",
+            # Cargo build output (rustdoc HTML/JS, compiled artifacts) --
+            # generated, gitignored, not source; scanning it produces
+            # bogus findings (e.g. rustdoc's own bundled JS tripping the
+            # DOM-XSS rule) that have nothing to do with this codebase.
+            "target",
+            # ODOO_AWARE_TYPE_CHECKING.md's own generated Odoo core type
+            # stubs (odoo_type_stubs/odoo/...), used only to give
+            # odoo_mypy_plugin.py's MRO-merging something to attach to --
+            # every stub method body is a bare `...`, its own file header
+            # says "AUTO-GENERATED -- do not hand-edit". Found live: with
+            # tools/ unpruned this one 725-file generated tree alone
+            # produced thousands of bogus "Elision (...) is strictly
+            # forbidden" findings, drowning any real finding elsewhere.
+            "odoo_type_stubs",
+        ]
+        non_odoo_source_dirs = (
+            []
+            if args.scan_daemons_and_tools
+            else ["tools", "daemons", "hams_local_relay", "hams_community"]
+        )
         dirs[:] = [
             d
             for d in dirs
             if not d.startswith(".")
-            and d
-            not in (
-                "__pycache__",
-                "node_modules",
-                "tools",
-                "daemons",
-                "hams_local_relay",
-                "hams_community",
-                "hams_com",
-                # Genuinely vendored upstream Cloudflare client source
-                # (daemons/cloudflared/README.md says so directly) --
-                # found live: scanning `daemons` directly as this
-                # function's own target_dir doesn't trigger the
-                # sibling "daemons" exclusion above (that only prunes
-                # it as a *subdirectory* encountered during the walk,
-                # not when it's the root itself), so cloudflared's own
-                # component-tests/ tripped 36 errors against this
-                # project's conventions it was never written to follow.
-                "cloudflared",
-            )
+            and d not in always_pruned_dirs
+            and d not in non_odoo_source_dirs
             and not is_ignored(os.path.relpath(os.path.join(root, d), target_dir))
         ]
         for file in files:
