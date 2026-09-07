@@ -175,6 +175,26 @@ GENERAL_ERROR_RULES = [
         "CRITICAL AI LAZINESS: Placeholders, TODOs, and elisions (...) are strictly forbidden. You must write complete, functional code.",
     ),
     (
+        # Fast, cheap, targeted companion to check_owl_templates.py's own full-Owl-compile
+        # checker (real headless-Chrome verification, slower, catches any compile error) --
+        # this one regex catches the exact bug class that made ham_shack.WebShackTemplate
+        # silently fail to compile for what several prior debugging sessions couldn't
+        # root-cause (see OFFLINE_HAM_OPERATION.md, 2026-09-07): a JS numeric separator
+        # (`1_000_000`) inside a QWeb t-directive expression attribute. Owl's own expression
+        # compiler doesn't understand this ES2021 syntax and mangles it into invalid generated
+        # JS (`1ctx['_000_000']`) rather than rejecting it up front -- the resulting error
+        # ("Invalid or unexpected token", no line/column, the full generated JS embedded in the
+        # message) is real but effectively undiagnosable from Odoo's own runtime alone, per
+        # check_owl_templates.py's own module docstring. `\d_\d{3}\b` matches a real
+        # thousands-grouped numeric separator specifically (not an arbitrary identifier that
+        # happens to contain a digit-underscore-digit shape, e.g. a hypothetical
+        # `band_2_4ghz`-style name), scoped to only the actual t-directive attributes that
+        # become JS expressions, not free text content.
+        r"\.xml$",
+        re.compile(r'\bt-(?:esc|out|if|elif|att[-\w]*|on-[\w-]+|value)="[^"]*\d_\d{3}[^"]*"'),
+        "CRITICAL QWEB EXPRESSION SYNTAX: JS numeric separators (e.g. 1_000_000) inside a t-directive expression are not understood by Owl's own compiler and silently produce invalid generated JS ('Invalid or unexpected token' with no line number, only discoverable by running check_owl_templates.py or reading the full generated code by hand). Write the literal without underscores (1000000).",
+    ),
+    (
         # No ".." in the matched call: this is specifically the "just
         # re-adding my own directory" shape, which is genuinely always
         # redundant (Python auto-adds the main script's own directory to

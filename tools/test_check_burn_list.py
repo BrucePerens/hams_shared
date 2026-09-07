@@ -367,6 +367,50 @@ def test_patch_ban_exempts_hams_shared_tools():
     assert errors == []
 
 
+def _qweb_numeric_separator_errors(source):
+    # GENERAL_ERROR_RULES is only exercised via scan_file()'s own line-by-line regex pass, not
+    # check_ast_vulnerabilities()/_dict_findings() -- matching _patch_ban_errors's own pattern
+    # above for the same reason.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        full_path = Path(tmpdir) / "foo.xml"
+        full_path.write_text(source, encoding="utf-8")
+        errors, _warnings = scan_file(str(full_path), is_odoo_module=True)
+    return [e for e in errors if "CRITICAL QWEB EXPRESSION SYNTAX" in e]
+
+
+def test_qweb_numeric_separator_in_t_out_is_flagged():
+    # The exact real bug found and fixed in ham_shack.WebShackTemplate, 2026-09-07
+    # (OFFLINE_HAM_OPERATION.md): Owl's own expression compiler doesn't understand JS numeric
+    # separators and silently produces invalid generated JS.
+    source = '<t t-out="(state.autoTuneStatus.new_freq / 1_000_000).toFixed(6)"/>\n'
+    assert len(_qweb_numeric_separator_errors(source)) == 1
+
+
+def test_qweb_numeric_separator_without_underscore_is_not_flagged():
+    source = '<t t-out="(state.autoTuneStatus.new_freq / 1000000).toFixed(6)"/>\n'
+    assert _qweb_numeric_separator_errors(source) == []
+
+
+def test_qweb_numeric_separator_in_t_if_is_flagged():
+    source = '<div t-if="state.count &gt; 1_000_000">Big</div>\n'
+    assert len(_qweb_numeric_separator_errors(source)) == 1
+
+
+def test_a_real_identifier_shaped_like_digit_underscore_digit_is_not_flagged():
+    # Real false-positive risk this rule's own regex is scoped to avoid: an identifier that
+    # happens to contain a single digit-underscore-digit pair (not a genuine 3-digit
+    # thousands-grouped numeric separator) must not be flagged.
+    source = '<div t-att-class="band_2_4ghz"/>\n'
+    assert _qweb_numeric_separator_errors(source) == []
+
+
+def test_qweb_numeric_separator_outside_a_t_directive_is_not_flagged():
+    # Free text content (not a t-directive expression attribute) is never compiled as JS by
+    # Owl, so a literal "1_000_000" appearing as plain text must not be flagged.
+    source = "<div>Some text mentioning 1_000_000 as plain content</div>\n"
+    assert _qweb_numeric_separator_errors(source) == []
+
+
 def test_tour_mandate_is_not_satisfied_by_audit_ignore_view_alone():
     # The real bug found and fixed this session (pager_check_views.xml):
     # ADR 0076 section 3 says audit-ignore-view and burn-ignore-tour are
