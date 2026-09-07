@@ -93,16 +93,27 @@ def run_llvm_cov_lcov(crate_dir, release=True):
 def parse_lcov(lcov_text):
     """Real LCOV `SF:`/`DA:`/`end_of_record` parsing -- returns
     {crate_relative_path: {"executed_lines": [...], "missing_lines": [...]}}, sorted ascending.
-    A `DA:` count of 0 is missing; anything else (including instrumentation-only negative counts
-    llvm-cov sometimes emits for unreachable code) is treated as executed, matching `coverage.py`'s
-    own "count > 0 is covered" convention so the two languages' reports stay comparable."""
+    A `DA:` count > 0 is executed; 0 or negative is missing, matching `coverage.py`'s own
+    "count > 0 is covered" convention so the two languages' reports stay comparable. (An earlier
+    version of this doc comment speculated `cargo llvm-cov` "sometimes emits" negative counts for
+    unreachable code -- checked directly against a real report from this repo's own
+    `ham_digital_modes` crate and found zero negative `DA:` records anywhere; that claim was never
+    actually verified and is dropped here rather than repeated as if it were.)
+
+    Tracks the highest count seen per line rather than the first/last, so a real line appearing in
+    more than one `DA:` record for the same file (never observed from a real `cargo llvm-cov` run
+    against this repo, but not something the LCOV format itself forbids) can't land in both
+    `executed_lines` and `missing_lines` at once -- caught by
+    `test_a_repeated_da_record_for_the_same_line_never_lands_in_both_buckets`
+    (`test_run_rust_coverage.py`), matching real LCOV merge semantics (`lcov --add-tracefile` sums
+    repeated records for the same line -- any positive contribution makes it covered)."""
     files = {}
     current_file = None
     for line in lcov_text.splitlines():
         sf_match = SF_RE.match(line)
         if sf_match:
             current_file = sf_match.group(1)
-            files.setdefault(current_file, {"executed": set(), "missing": set()})
+            files.setdefault(current_file, {})
             continue
         if line == "end_of_record":
             current_file = None
@@ -110,17 +121,15 @@ def parse_lcov(lcov_text):
         da_match = DA_RE.match(line)
         if da_match and current_file is not None:
             line_no, count = int(da_match.group(1)), int(da_match.group(2))
-            if count > 0:
-                files[current_file]["executed"].add(line_no)
-            else:
-                files[current_file]["missing"].add(line_no)
+            file_lines = files[current_file]
+            file_lines[line_no] = max(count, file_lines.get(line_no, count))
 
     return {
         path: {
-            "executed_lines": sorted(data["executed"]),
-            "missing_lines": sorted(data["missing"]),
+            "executed_lines": sorted(ln for ln, count in line_counts.items() if count > 0),
+            "missing_lines": sorted(ln for ln, count in line_counts.items() if count <= 0),
         }
-        for path, data in files.items()
+        for path, line_counts in files.items()
     }
 
 

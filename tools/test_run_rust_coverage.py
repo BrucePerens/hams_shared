@@ -23,11 +23,190 @@ import sys
 import tempfile
 import unittest
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import run_rust_coverage as rrc  # noqa: E402
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 HAM_DIGITAL_MODES = os.path.join(REPO_ROOT, "daemons", "ham_digital_modes")
+
+_SETTINGS = settings(max_examples=200, deadline=None)
+
+# Real LCOV filenames never contain a literal newline or the two-character
+# sequences this module's own line-oriented parser keys off of ("SF:" at
+# line-start, the bare "end_of_record" line) -- kept out of the generated
+# filename alphabet entirely so a generated fixture can never accidentally
+# forge a second SF:/end_of_record boundary the property doesn't expect.
+_LCOV_FILENAME = st.text(
+    alphabet=st.characters(whitelist_categories=("Ll", "Lu", "Nd"), max_codepoint=127),
+    min_size=1,
+    max_size=12,
+).map(lambda s: f"src/{s}.rs")
+
+# A real DA count of 0 is "missing"; any other value (including LCOV's own
+# real negative-count convention for some unreachable-code cases) is
+# "executed" -- parse_lcov's own documented convention, exercised here
+# across the full real range rather than just the hand-picked positive
+# counts the non-property tests above already cover.
+_DA_COUNT = st.integers(min_value=-1000, max_value=1000)
+
+
+def _build_lcov_text(files):
+    """The exact inverse of what `parse_lcov` consumes: `files` is
+    `{filename: {line_number: count}}` -- builds real `SF:`/`DA:`/
+    `end_of_record` LCOV text from it."""
+    lines = []
+    for filename, line_counts in files.items():
+        lines.append(f"SF:{filename}")
+        for line_no, count in line_counts.items():
+            lines.append(f"DA:{line_no},{count}")
+        lines.append("end_of_record")
+    return "\n".join(lines) + "\n"
+
+
+class ParseLcovPropertiesTests(unittest.TestCase):
+    """Property tests for `parse_lcov`, per CODE_REVIEW_PROCESS.md's own
+    "Hypothesis property-test scoping" guidance -- a small, pure, well-typed
+    text parser, exactly the kind of target that section names, freshly
+    written this same session rather than long-since-battle-tested."""
+
+    @_SETTINGS
+    @given(
+        st.dictionaries(
+            _LCOV_FILENAME,
+            st.dictionaries(
+                st.integers(min_value=1, max_value=100000),
+                _DA_COUNT,
+                min_size=0,
+                max_size=15,
+            ),
+            min_size=1,
+            max_size=5,
+        )
+    )
+    def test_every_line_lands_in_exactly_the_bucket_its_own_count_predicts(self, files):
+        lcov_text = _build_lcov_text(files)
+        result = rrc.parse_lcov(lcov_text)
+
+        for filename, line_counts in files.items():
+            self.assertIn(filename, result)
+            expected_executed = sorted(ln for ln, c in line_counts.items() if c > 0)
+            expected_missing = sorted(ln for ln, c in line_counts.items() if c <= 0)
+            self.assertEqual(result[filename]["executed_lines"], expected_executed)
+            self.assertEqual(result[filename]["missing_lines"], expected_missing)
+
+    @_SETTINGS
+    @given(
+        st.dictionaries(
+            _LCOV_FILENAME,
+            st.dictionaries(
+                st.integers(min_value=1, max_value=100000),
+                _DA_COUNT,
+                min_size=0,
+                max_size=15,
+            ),
+            min_size=1,
+            max_size=5,
+        )
+    )
+    def test_executed_and_missing_never_share_a_line_number(self, files):
+        lcov_text = _build_lcov_text(files)
+        result = rrc.parse_lcov(lcov_text)
+        for data in result.values():
+            self.assertEqual(
+                set(data["executed_lines"]) & set(data["missing_lines"]),
+                set(),
+                "the same line number must never be reported as both executed and missing",
+            )
+
+    @_SETTINGS
+    @given(
+        st.dictionaries(
+            _LCOV_FILENAME,
+            st.dictionaries(
+                st.integers(min_value=1, max_value=100000),
+                _DA_COUNT,
+                min_size=0,
+                max_size=15,
+            ),
+            min_size=1,
+            max_size=5,
+        )
+    )
+    def test_both_line_lists_are_always_sorted_ascending(self, files):
+        lcov_text = _build_lcov_text(files)
+        result = rrc.parse_lcov(lcov_text)
+        for data in result.values():
+            self.assertEqual(data["executed_lines"], sorted(data["executed_lines"]))
+            self.assertEqual(data["missing_lines"], sorted(data["missing_lines"]))
+
+    @_SETTINGS
+    @given(
+        _LCOV_FILENAME,
+        st.integers(min_value=1, max_value=100000),
+        st.lists(_DA_COUNT, min_size=2, max_size=5),
+    )
+    def test_a_repeated_da_record_for_the_same_line_never_lands_in_both_buckets(
+        self, filename, line_no, counts
+    ):
+        # Real bug this test was written to catch, found by the sibling property test above with
+        # a hand-constructed duplicate-DA fixture, not by this test itself (Hypothesis's own
+        # dictionary strategy naturally deduplicates same-key line numbers, so it could never
+        # generate this shape on its own): real `cargo llvm-cov` output was checked directly and
+        # never emits two DA: records for the same line in one SF: block, so this is a defensive
+        # correctness property, not a reproduction of an observed real-world input.
+        lcov_text = "SF:" + filename + "\n"
+        for count in counts:
+            lcov_text += f"DA:{line_no},{count}\n"
+        lcov_text += "end_of_record\n"
+
+        result = rrc.parse_lcov(lcov_text)
+        executed = set(result[filename]["executed_lines"])
+        missing = set(result[filename]["missing_lines"])
+        self.assertEqual(
+            executed & missing,
+            set(),
+            f"line {line_no} landed in both buckets from repeated DA records {counts}",
+        )
+        # Matching real LCOV merge semantics (lcov --add-tracefile sums counts across repeated
+        # records for the same line): covered if ANY repeated record reports a positive count.
+        expected_executed = any(c > 0 for c in counts)
+        self.assertEqual(line_no in executed, expected_executed)
+        self.assertEqual(line_no in missing, not expected_executed)
+
+
+class ToRepoRelativeStaysUnderRepoRootPropertyTest(unittest.TestCase):
+    """`to_repo_relative`'s own real invariant: whatever repo-relative key it produces, joining
+    `repo_root` back onto it must reconstruct the same absolute path `crate_dir`/`path` names --
+    the join it does is a real inverse of `os.path.relpath`, not just "looks about right" on the
+    hand-picked example the non-property test above already checks."""
+
+    @_SETTINGS
+    @given(
+        st.lists(
+            st.text(alphabet=st.characters(whitelist_categories=("Ll", "Nd")), min_size=1, max_size=8),
+            min_size=1,
+            max_size=4,
+        ),
+        st.text(alphabet=st.characters(whitelist_categories=("Ll",)), min_size=1, max_size=10).map(
+            lambda s: f"{s}.rs"
+        ),
+    )
+    def test_repo_relative_path_reconstructs_the_real_absolute_source_path(self, crate_subdirs, leaf_filename):
+        repo_root = "/repo"
+        crate_dir = os.path.join(repo_root, *crate_subdirs)
+        crate_relative_path = f"src/{leaf_filename}"
+        per_file = {crate_relative_path: {"executed_lines": [1], "missing_lines": []}}
+
+        result = rrc.to_repo_relative(per_file, crate_dir=crate_dir, repo_root=repo_root)
+
+        self.assertEqual(len(result), 1)
+        (repo_relative_key,) = result.keys()
+        reconstructed = os.path.normpath(os.path.join(repo_root, repo_relative_key))
+        expected = os.path.normpath(os.path.join(crate_dir, crate_relative_path))
+        self.assertEqual(reconstructed, expected)
 
 
 class ParseLcovTests(unittest.TestCase):
