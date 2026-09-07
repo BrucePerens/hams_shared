@@ -144,7 +144,7 @@ async def check_templates_via_cdp(xml_file_contents, port):
         return results
 
 
-def _launch_headless_chrome(port, user_data_dir):
+def _launch_headless_chrome(port, user_data_dir, log_file):
     chrome_bin = None
     for candidate in ("google-chrome", "chromium", "chromium-browser"):
         from shutil import which
@@ -160,12 +160,25 @@ def _launch_headless_chrome(port, user_data_dir):
             "--headless=new",
             "--disable-gpu",
             "--no-sandbox",
+            # This tool never plays or captures real audio (it only compiles Owl
+            # templates), but headless Chrome's audio service still probes the
+            # real system output device on launch unless muted -- confirmed
+            # directly on this box: without --mute-audio, launching headless
+            # Chrome here pushed PipeWire's real audio sinks aside in favor of
+            # a "dummy" device, exactly the failure this codebase's test.py
+            # already guards against at every one of its own Chrome launch
+            # sites. Match that established, working convention rather than
+            # reinventing a narrower flag set.
+            "--mute-audio",
+            "--use-fake-device-for-media-stream",
+            "--use-fake-ui-for-media-stream",
+            "--disable-background-networking",
             f"--remote-debugging-port={port}",
             f"--user-data-dir={user_data_dir}",
             "about:blank",
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=log_file,
     )
 
 
@@ -196,8 +209,10 @@ def main():
     import tempfile
 
     user_data_dir = tempfile.mkdtemp(prefix="owl_template_check_")
+    log_path = os.path.join(user_data_dir, "chrome.log")
+    log_file = open(log_path, "wb")
     try:
-        proc = _launch_headless_chrome(args.port, user_data_dir)
+        proc = _launch_headless_chrome(args.port, user_data_dir, log_file)
     except RuntimeError as e:
         print(f"[!] ERROR: {e} -- cannot verify Owl templates without a real browser.")
         return 1
@@ -209,11 +224,17 @@ def main():
             except requests.exceptions.ConnectionError:
                 time.sleep(0.1)
         else:
+            log_file.flush()
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                chrome_log = f.read()
             print("[!] ERROR: headless Chrome never exposed its devtools port")
+            if chrome_log.strip():
+                print(f"    Chrome's own stdout/stderr:\n{chrome_log}")
             return 1
 
         results = asyncio.run(check_templates_via_cdp(xml_file_contents, args.port))
     finally:
+        log_file.close()
         proc.terminate()
         try:
             proc.wait(timeout=5)

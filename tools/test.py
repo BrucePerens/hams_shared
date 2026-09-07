@@ -703,7 +703,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
             _logger.debug("Ignored OSError: %s", e)
     env.setdefault(
         "ODOO_TEST_CHROME_ARGS",
-        "--headless=new --ignore-certificate-errors --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
+        "--headless=new --ignore-certificate-errors --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --use-fake-device-for-media-stream --use-fake-ui-for-media-stream --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
     )
     env.setdefault("DBUS_SESSION_BUS_ADDRESS", "autolaunch:")
 
@@ -1493,7 +1493,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     # Inside the namespace, host tmp dir is perfectly bound to the real log dir.
     host_tmp_dir = os.path.expanduser("~/tmp")
     os.environ["ODOO_TEST_CHROME_ARGS"] = (
-        "--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,dbus,OptimizationGuideModelDownloading"
+        "--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --use-fake-device-for-media-stream --use-fake-ui-for-media-stream --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,dbus,OptimizationGuideModelDownloading"
     )
     os.environ["HAMS_REAL_LOG_DIRECTORY"] = real_log_dir
     os.environ["HOME"] = "/var/lib/odoo"
@@ -1638,11 +1638,59 @@ def check_host_apt_packages():
         sys.exit(1)
 
 
+def get_default_audio_sink_name(timeout=5.0):
+    """Returns the name of the developer's current default PipeWire audio sink
+    (e.g. "Raptor Lake-P/U/H cAVS Speaker"), or None if `wpctl` isn't available
+    or no default sink is marked -- both treated as "unknown", not "broken",
+    since plenty of test environments (CI, a headless server) have no PipeWire
+    user session at all. Used to guard against a real, previously-observed
+    regression: a test-environment browser or subprocess grabbing the real
+    ALSA device (bypassing PipeWire's shared access) leaves WirePlumber stuck
+    on its silent "Dummy Output" fallback even after the offending process
+    exits, breaking the developer's actual system audio until they notice by
+    ear and someone restarts wireplumber by hand.
+    """
+    try:
+        result = subprocess.run(
+            ["wpctl", "status"], capture_output=True, text=True, timeout=timeout
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    # wpctl's tree-drawing prefix uses box-drawing characters (│, ├, └, ─),
+    # not plain ASCII -- strip those (plus leading whitespace) before matching
+    # section headers/entries, rather than the plain-ASCII `.strip(" │")` a
+    # first draft of this function used, which never matched anything.
+    in_sinks_section = False
+    for line in result.stdout.splitlines():
+        clean = re.sub(r"^[\s│├└─]+", "", line).rstrip()
+        if not in_sinks_section:
+            if clean == "Sinks:":
+                in_sinks_section = True
+            continue
+        if not clean:
+            continue
+        if clean.endswith(":"):
+            break
+        if clean.startswith("*"):
+            # e.g. "*   62. Raptor Lake-P/U/H cAVS Speaker      [vol: 0.41]"
+            name = re.sub(r"^\*\s*\d+\.\s*", "", clean)
+            name = re.sub(r"\s*\[vol:.*\]\s*$", "", name).strip()
+            return name or None
+    return None
+
+
 _single_instance_lock = None
 
 
 def main():
     global _single_instance_lock
+    audio_sink_before = (
+        get_default_audio_sink_name()
+        if os.environ.get("HAMS_ISOLATED_NS") != "1"
+        else None
+    )
     if os.environ.get("HAMS_ISOLATED_NS") != "1":
         lock_file_path = f"{os.path.expanduser('~/tmp')}/odoo_test_runner.lock"
         try:
@@ -1808,7 +1856,7 @@ def main():
             _logger.debug("Ignored OSError: %s", e)
     os.environ.setdefault(
         "ODOO_TEST_CHROME_ARGS",
-        "--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
+        "--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --use-fake-device-for-media-stream --use-fake-ui-for-media-stream --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
     )
     os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", "autolaunch:")
 
@@ -2153,6 +2201,54 @@ def main():
             ["sh", "-c", "rm -rf /tmp/*_chrome_odoo /var/tmp/*_chrome_odoo"],
             capture_output=True,
         )
+
+    if audio_sink_before and "dummy" not in audio_sink_before.lower():
+        audio_sink_after = get_default_audio_sink_name()
+        if not audio_sink_after or "dummy" in audio_sink_after.lower():
+            print(
+                "================================================================================"
+            )
+            print("🚨 CRITICAL: TEST RUN BROKE THE HOST'S REAL AUDIO DEVICE 🚨")
+            print(f"    Default sink before this run: {audio_sink_before!r}")
+            print(f"    Default sink after this run:  {audio_sink_after!r}")
+            print(
+                "    Something spawned during this test run opened the real ALSA "
+                "device directly (bypassing PipeWire's shared access) or otherwise "
+                "knocked the host's real speaker/microphone offline. This breaks "
+                "audio for every other application on this machine, not just tests."
+            )
+            try:
+                subprocess.run(
+                    [
+                        "systemctl",
+                        "--user",
+                        "restart",
+                        "wireplumber",
+                        "pipewire",
+                        "pipewire-pulse",
+                    ],
+                    capture_output=True,
+                    timeout=15,
+                )
+                time.sleep(2)
+                audio_sink_recovered = get_default_audio_sink_name()
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                audio_sink_recovered = None
+            if audio_sink_recovered and "dummy" not in audio_sink_recovered.lower():
+                print(
+                    f"    Auto-recovered by restarting the PipeWire session "
+                    f"(now: {audio_sink_recovered!r}), but the test run that caused "
+                    f"this must still be found and fixed -- it will keep recurring."
+                )
+            else:
+                print(
+                    "    Automatic recovery (restarting wireplumber/pipewire) did NOT "
+                    "restore a real sink -- the developer's audio needs manual attention."
+                )
+            print(
+                "================================================================================"
+            )
+            final_rc = final_rc or 1
 
     sys.exit(final_rc)
 

@@ -252,6 +252,37 @@ requirements without disabling DAC checks (the `-H` flag matters too, giving `od
 rather than inheriting the invoking user's, which otherwise causes a further `PermissionError`
 trying to create directories under the wrong home).
 
+## 45. The Headless Chrome Real-Audio-Device Seizure Trap
+**The Trap:** Launching a real headless Chrome instance for any purpose (not just a UI tour --
+even a throwaway `about:blank` page used purely to drive its JS engine over CDP, as a template
+compile-checker does) still starts Chrome's own audio service, which probes and can grab the host's
+real PipeWire/ALSA output device unless explicitly told not to. Confirmed directly: a new Chrome-
+launching tool built without the `--mute-audio` flag pushed the dev box's real speaker/microphone
+aside in favor of a synthetic "Dummy Output" device -- exactly the failure this codebase's own
+`test.py` already guards against at every one of *its* Chrome launch sites, which a new tool
+silently didn't inherit by not copying that flag set.
+**The Solution:** Every headless (or headed) Chrome/Chromium launch in this codebase MUST include
+`--mute-audio`, and if the page it loads could ever call `getUserMedia` (any real UI page, as
+opposed to a blank compile-check page), MUST also include `--use-fake-device-for-media-stream
+--use-fake-ui-for-media-stream` so a real microphone/camera grant is never possible in a test
+environment. Don't assume a "it just parses/compiles, it doesn't render a real page" launch is
+exempt -- Chrome's audio service starts regardless of what page is loaded.
+
+## 46. The WirePlumber Stuck-on-Dummy-Output Trap (No Self-Recovery)
+**The Trap:** Once something (a test run, a misbehaving subprocess) opens the host's real ALSA
+device exclusively and conflicts with PipeWire's own shared access to it, WirePlumber can mark that
+device's sink node unavailable and permanently fall back to a synthetic "Dummy Output" -- and it
+does NOT automatically retry/reclaim the real device once the offending process exits, even hours
+or a day later. `aplay -l`/`arecov -l` will still correctly list the real hardware (the ALSA layer
+itself is fine), which can mislead you into thinking the audio subsystem is healthy when the user-
+facing PipeWire session is actually still stuck.
+**The Solution:** `systemctl --user restart wireplumber pipewire pipewire-pulse` forces WirePlumber
+to re-probe the ALSA card cleanly and reclaim the real device (confirmed: real speaker + both
+microphones reappeared immediately, replacing the dummy fallback). `test.py`'s `main()` now runs
+this automatically (`get_default_audio_sink_name()`, checked before and after a real test run) and
+raises a loud, exit-code-affecting error if a real default sink degraded to dummy/unknown during the
+run -- see that function's own doc comment.
+
 ## 44. The Stale-Install Silent No-Test Trap & the Detached Background-Test-Run Trap
 **The Trap:** Re-running an Odoo test suite with `-i <module>` against a database where that module
 is *already installed* from a previous run is a silent no-op that does not reload changed Python
