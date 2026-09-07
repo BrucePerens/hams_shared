@@ -57,5 +57,3 @@ root and, where relevant, the sibling repo, from whichever one it's given.
   JS-coverage and live DOM instrumentation work by both repos.
 * **`eslint.config.js` / `package.json` / `package-lock.json`**: the shared ESLint configuration
   `run_linters.py` runs as a required (fail, not warn) CI gate against both repos' JS.
-* **`FILES`**: a flat manifest of this repo's own doc/skill files, kept for tooling that needs a
-  plain list rather than a directory walk.
