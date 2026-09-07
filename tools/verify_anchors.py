@@ -152,6 +152,12 @@ def find_anchors_in_docs(root_dir, repo_root):
         "hams_com",
         ".git",
         "__pycache__",
+        # Cargo build output (rustdoc HTML mirrors every .rs source file's own
+        # comments verbatim, including anchor tags) -- generated, gitignored,
+        # not source. Found live: scanning it duplicated a real anchor's
+        # "stacked Tests-anchor lines" finding under a second, bogus path
+        # (target/doc/src/.../decode.rs.html) alongside the real one.
+        "target",
     }
     code_island_paths = {os.path.join(root_dir, island) for island in CODE_ISLANDS_UNDER_DOCS}
 
@@ -325,6 +331,13 @@ def find_anchors_in_code(root_dir, repo_root):
         "scripts",
         "hams_community",
         "hams_com",
+        # Cargo build output (rustdoc HTML mirrors every .rs source file's own
+        # comments verbatim, including anchor tags) -- generated, gitignored,
+        # not source. Found live: this walk's own file.endswith((..., ".html"))
+        # branch was scanning target/doc/src/.../*.rs.html as if it were real
+        # code, duplicating a real anchor's "stacked Tests-anchor lines"
+        # finding under a second, bogus path.
+        "target",
     }
 
     for root, dirs, files in os.walk(root_dir):
@@ -1012,6 +1025,7 @@ def main():
                     "hams_com",
                     ".git",
                     "__pycache__",
+                    "target",
                 }
             ]
             if "documentation.html" in files:
