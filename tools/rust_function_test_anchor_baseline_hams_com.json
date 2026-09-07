@@ -278,7 +278,6 @@
   "daemons/hams_local_relay/src/ssb_auto_tune.rs::spectral_tilt_db_per_octave",
   "daemons/hams_local_relay/src/tls.rs::fetch_and_persist_wildcard_cert_at",
   "daemons/hams_local_relay/src/tls.rs::load_or_generate_rustls_config_at",
-  "daemons/hams_local_relay/src/tool_install.rs::extract_full_bundle",
   "daemons/hams_local_relay/src/tool_install.rs::extract_mac_dmg_binary",
   "daemons/hams_local_relay/src/tool_install.rs::extract_mac_pkg_binary",
   "daemons/hams_local_relay/src/tool_install.rs::extract_single_binary",
