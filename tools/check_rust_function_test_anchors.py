@@ -197,7 +197,14 @@ def main():
     parser.add_argument(
         "--generate-baseline",
         action="store_true",
-        help="Regenerate the baseline from the current tree's real state instead of checking it",
+        help=(
+            "Regenerate the baseline from the current tree's real state instead of checking it. "
+            "ALWAYS pass --baseline with the repo-suffixed filename (e.g. "
+            "rust_function_test_anchor_baseline_hams_open.json) -- run_linters.py's own step "
+            "always does. Omitting it silently targets the unqualified default file, which is "
+            "not what any real per-repo baseline is named; this has bitten manual invocations "
+            "more than once."
+        ),
     )
     args = parser.parse_args()
 
