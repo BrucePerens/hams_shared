@@ -278,7 +278,20 @@ GENERAL_ERROR_RULES = [
         # already tripping this rule whenever check_burn_list.py was run
         # against a real directory (its own filepath argument, not a bare
         # filename, is what the selector regex is matched against).
-        r"^(?!.*daemons?/).*test_.*\.py$",
+        #
+        # Also excludes hams_com/ingest/ for the identical reason: it is
+        # this codebase's OTHER directory of entirely standalone, non-Odoo
+        # daemon scripts (FUNCTION_TEST_ANCHOR_SWEEP.md's own ~170-test
+        # sweep), just one that happens to live at the top level rather
+        # than nested under a literal daemons/ directory -- confirmed this
+        # was already silently violated too, the same way au_callsign_sync
+        # was: 23 of ingest/'s own real test_*.py files use plain
+        # unittest.mock.patch()/patch.object(), found only once this rule
+        # was actually run against a real directory argument rather than
+        # assumed clean because the sweep's own dedicated anchor tooling
+        # (verify_anchors.py/check_function_test_anchors.py) had separately
+        # already passed.
+        r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/).*test_.*\.py$",
         re.compile(r"(?:@(?:mock\.)?patch\b|\b(?:mock\.)?patch(?:\.object)?\s*\()"),
         "CRITICAL ARCHITECTURE: Native patch decorators and context managers are forbidden. Use self.safe_patch() or self.safe_patch_object().",
     ),

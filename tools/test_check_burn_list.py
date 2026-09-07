@@ -343,6 +343,18 @@ def test_patch_ban_still_flags_a_genuine_non_daemon_test():
     assert len(errors) == 1
 
 
+def test_patch_ban_exempts_hams_com_ingest():
+    # ingest/ is this codebase's OTHER directory of entirely standalone,
+    # non-Odoo daemon scripts (FUNCTION_TEST_ANCHOR_SWEEP.md's own sweep) --
+    # it just lives at the top level instead of nested under a literal
+    # daemons/ directory, so it needs the identical exemption for the
+    # identical reason. Found live: 23 of ingest/'s own real test_*.py
+    # files were already using native patch.object() before this exclusion
+    # existed.
+    errors = _patch_ban_errors("ingest/test_daemon_utils.py")
+    assert errors == []
+
+
 def test_tour_mandate_is_not_satisfied_by_audit_ignore_view_alone():
     # The real bug found and fixed this session (pager_check_views.xml):
     # ADR 0076 section 3 says audit-ignore-view and burn-ignore-tour are
