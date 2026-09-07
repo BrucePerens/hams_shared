@@ -14,6 +14,9 @@ import sys
 import tempfile
 import unittest
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from run_js_coverage import parse_bundle_module_offsets, resolve_addon_static_path  # noqa: E402
@@ -76,6 +79,81 @@ class ParseBundleModuleOffsetsTests(unittest.TestCase):
         )
         modules = parse_bundle_module_offsets(bundle)
         self.assertEqual(len(modules), 1)
+
+
+# Filepath alphabet restricted to what a real Odoo addon-relative static path actually looks
+# like (letters, digits, /, _, ., -) -- deliberately excludes whitespace/backslash/'*' so
+# Hypothesis can't accidentally generate a filepath string that itself looks like part of the
+# fixed header shape (which would change how many headers the regex matches, a different
+# property than the one under test here).
+_FILEPATH_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/_.-"
+_filepaths = st.text(alphabet=_FILEPATH_ALPHABET, min_size=1, max_size=40)
+# Body lines restricted to plain alphanumeric text -- real module bodies can contain almost
+# anything, but this property is about offset/line-count arithmetic, not about every possible
+# body content; the "body contains the literal word Filepath" robustness case is already covered
+# separately, by example, above.
+_body_lines = st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789 ", min_size=0, max_size=20)
+
+
+@st.composite
+def _bundle_with_known_modules(draw):
+    """Builds a real-shaped bundle (an optional random noise prefix, then 1-5 modules each with a
+    real header and a body of exactly its declared line count) and returns
+    `(bundle_text, expected)` where `expected` is the list of `(line_count, filepath)` pairs the
+    parser should recover, in order."""
+    prefix_lines = draw(st.lists(_body_lines, min_size=0, max_size=5))
+    bundle = "".join(line + "\n" for line in prefix_lines)
+    expected = []
+    num_modules = draw(st.integers(min_value=1, max_value=5))
+    for _ in range(num_modules):
+        filepath = "/" + draw(_filepaths)
+        body = draw(st.lists(_body_lines, min_size=1, max_size=15))
+        bundle += _module_header(filepath, len(body))
+        bundle += "".join(line + "\n" for line in body)
+        expected.append((len(body), filepath))
+    return bundle, expected
+
+
+class ParseBundleModuleOffsetsPropertyTests(unittest.TestCase):
+    """Hypothesis property tests, added per CODE_REVIEW_PROCESS.md's own standing "more Hypothesis
+    property-test scoping" guidance -- this parser is exactly the kind of small, pure, well-typed
+    target that section calls out, and shares its regex-header-parsing shape with
+    `run_rust_coverage.py`'s `parse_lcov`, where the same kind of property test already caught a
+    real bug (counts landing in both executed/missing buckets for a duplicate DA: record)."""
+
+    @given(_bundle_with_known_modules())
+    @settings(max_examples=200)
+    def test_recovers_exactly_the_declared_modules_with_correct_line_counts_and_no_overlap(
+        self, bundle_and_expected
+    ):
+        bundle, expected = bundle_and_expected
+        modules = parse_bundle_module_offsets(bundle)
+        self.assertEqual(len(modules), len(expected))
+        prev_end = None
+        for (start, end, filepath), (expected_line_count, expected_filepath) in zip(
+            modules, expected
+        ):
+            self.assertEqual(filepath, expected_filepath)
+            # The real invariant this parser exists to guarantee: a module's reported range has
+            # exactly as many lines as its own header declared, regardless of what other modules,
+            # or how much noise, precede it in the bundle.
+            self.assertEqual(end - start + 1, expected_line_count)
+            if prev_end is not None:
+                self.assertGreater(start, prev_end)
+            prev_end = end
+
+    @given(st.integers(min_value=1, max_value=200))
+    @settings(max_examples=50)
+    def test_a_single_modules_range_never_includes_its_own_header_lines(self, line_count):
+        filepath = "/web/static/src/js/some_module.js"
+        header = _module_header(filepath, line_count)
+        header_line_count = header.count("\n")
+        body = "".join(f"line {i}\n" for i in range(line_count))
+        modules = parse_bundle_module_offsets(header + body)
+        self.assertEqual(len(modules), 1)
+        start, end, _ = modules[0]
+        self.assertEqual(start, header_line_count + 1)
+        self.assertEqual(end, header_line_count + line_count)
 
 
 class ResolveAddonStaticPathTests(unittest.TestCase):
