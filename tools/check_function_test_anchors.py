@@ -109,6 +109,45 @@ def _direct_functions(body, class_stack):
             yield from _direct_functions(node.body, class_stack + [node.name])
 
 
+def _function_span(node, lines):
+    """Returns (start, end) 1-indexed line numbers covering `node` (a
+    FunctionDef/AsyncFunctionDef), including its decorators and any
+    comment lines directly preceding them -- the same span scan_file
+    itself checks for an anchor, reused as-is by check_anchor_coverage.py
+    (ADR 0090 / ANCHOR_COVERAGE_AND_REMEDIATION_PLAN.md Stage 3) so that
+    stage's "which lines belong to this function" agrees with Stage 1's,
+    rather than a second, subtly different span computation drifting out
+    of sync with this one over time."""
+    # `node.lineno` is the `def` line itself -- Python's AST does NOT
+    # include decorator lines in it (confirmed directly: a real
+    # @http.route-decorated method's own FunctionDef.lineno pointed
+    # one line past its decorator). The anchor comment for a decorated
+    # function idiomatically sits above the decorator, not between it
+    # and `def` -- this codebase's own established convention, used
+    # throughout this session -- so start from the EARLIEST decorator
+    # (if any), then walk back further past any run of comment/blank
+    # lines immediately preceding that, the same real structural
+    # lookback check_burn_list.py's own _xml_audit_lookback_start uses
+    # for an analogous reason. Without this, every decorated function
+    # whose anchor sits above its decorator (the common case: @api.model,
+    # @http.route, @api.depends, etc.) reads as a false-positive gap.
+    start = min([node.lineno] + [d.lineno for d in node.decorator_list])
+    while start > 1:
+        prev = lines[start - 2].strip()
+        # Comment lines only -- deliberately NOT crossing a blank line,
+        # which would risk absorbing an unrelated trailing comment
+        # (e.g. a "# Verified by [@ANCHOR: ...]" belonging to the
+        # PREVIOUS function/method, separated from this one by the
+        # ordinary blank line between two defs) as if it were this
+        # function's own anchor -- a false credit, not just a missed one.
+        if prev.startswith("#"):
+            start -= 1
+        else:
+            break
+    end = getattr(node, "end_lineno", node.lineno)
+    return start, end
+
+
 def scan_file(filepath, repo_root):
     """Returns a list of (identity, has_anchor) for every in-scope
     function in `filepath`. `identity` is a stable string (relative path
@@ -127,33 +166,7 @@ def scan_file(filepath, repo_root):
     rel_path = os.path.relpath(filepath, repo_root)
     results = []
     for qualname, node in _direct_functions(tree.body, []):
-        # `node.lineno` is the `def` line itself -- Python's AST does NOT
-        # include decorator lines in it (confirmed directly: a real
-        # @http.route-decorated method's own FunctionDef.lineno pointed
-        # one line past its decorator). The anchor comment for a decorated
-        # function idiomatically sits above the decorator, not between it
-        # and `def` -- this codebase's own established convention, used
-        # throughout this session -- so start from the EARLIEST decorator
-        # (if any), then walk back further past any run of comment/blank
-        # lines immediately preceding that, the same real structural
-        # lookback check_burn_list.py's own _xml_audit_lookback_start uses
-        # for an analogous reason. Without this, every decorated function
-        # whose anchor sits above its decorator (the common case: @api.model,
-        # @http.route, @api.depends, etc.) reads as a false-positive gap.
-        start = min([node.lineno] + [d.lineno for d in node.decorator_list])
-        while start > 1:
-            prev = lines[start - 2].strip()
-            # Comment lines only -- deliberately NOT crossing a blank line,
-            # which would risk absorbing an unrelated trailing comment
-            # (e.g. a "# Verified by [@ANCHOR: ...]" belonging to the
-            # PREVIOUS function/method, separated from this one by the
-            # ordinary blank line between two defs) as if it were this
-            # function's own anchor -- a false credit, not just a missed one.
-            if prev.startswith("#"):
-                start -= 1
-            else:
-                break
-        end = getattr(node, "end_lineno", node.lineno)
+        start, end = _function_span(node, lines)
         span = "\n".join(lines[start - 1 : min(end, len(lines))])
         has_anchor = bool(va.ANCHOR_PATTERN.search(span))
         identity = f"{rel_path}::{qualname}"
