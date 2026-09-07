@@ -966,7 +966,36 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
-    # 40. hams_com/ingest/ standalone-script unit test suites -- same
+    # 40. check_rust_function_test_anchors -- ADR 0090 decision 2's Rust
+    # sub-track: the same ratchet as steps 38/39, extended to Rust via a
+    # real `syn` AST parse (rust_function_scan), not a regex
+    # approximation. Same repo-wide, `targets`-independent baseline
+    # convention as steps 38/39.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_rust_function_test_anchors.py"),
+            repo_root,
+            "--baseline",
+            os.path.join(
+                dir_path,
+                "tools",
+                f"rust_function_test_anchor_baseline_{os.path.basename(repo_root)}.json",
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
+    # 41. hams_com/ingest/ standalone-script unit test suites -- same
     # reasoning as steps 27/28/29 for the one other directory of test_*.py
     # files nothing runs automatically. Confirmed directly, not assumed:
     # ingest/ has no conftest.py, no CI workflow collects it, and steps
