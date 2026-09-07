@@ -938,6 +938,34 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 39. check_js_function_test_anchors -- ADR 0090 decision 2's JS
+    # sub-track: the same ratchet as step 38, extended to JS via a real
+    # acorn AST parse (js_function_scan.cjs), not a regex approximation.
+    # Same repo-wide, `targets`-independent baseline convention as step 38.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_js_function_test_anchors.py"),
+            repo_root,
+            "--baseline",
+            os.path.join(
+                dir_path,
+                "tools",
+                f"js_function_test_anchor_baseline_{os.path.basename(repo_root)}.json",
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

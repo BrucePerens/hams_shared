@@ -137,6 +137,16 @@ module.exports = tseslint.config(
       // scope, and not meant to follow the app-code ruleset (browser
       // globals, promise rules aimed at Odoo JS) at all.
       "**/eslint.config.js",
+      // Same reasoning, generalized: any `.js`/`.cjs` script living
+      // directly under a `tools/` directory is Node/CommonJS build/CI
+      // tooling (the same category the Python-side `EXCLUDE_DIRS`/
+      // `exclude_dirs` conventions in check_function_test_anchors.py,
+      // verify_anchors.py, and check_burn_list.py already treat "tools"
+      // as, for the exact same reason), not browser-run application code
+      // -- `require`/`module`/`process` are real Node globals there, not
+      // undeclared identifiers this config's browser-only globals list
+      // should be expected to know about.
+      "**/tools/**",
     ],
   }
 );
