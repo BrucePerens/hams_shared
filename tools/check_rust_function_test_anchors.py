@@ -21,13 +21,18 @@ excluded; nested/closure functions not independently walked).
 
 File-level scope, mirroring the other two scanners' own vendored/tooling exclusions: git-tracked
 `.rs` files only, excluding `vendor/` (this codebase's own real vendored-C-and-Rust convention --
-confirmed real directories exist at this exact path shape, `daemons/*/vendor/`), `target/` (build
-artifacts, though git wouldn't track these anyway), `examples/` and `benches/` (cargo's own
-reserved demo/benchmark directories -- the same "not core product code" reasoning
-`check_function_test_anchors.py` gives for excluding `tools`/`scripts`), and `tests/` (a crate's
-own top-level integration-test directory -- these ARE the tests, the Rust analogue of Python's
-`test_*.py` and JS's `*.test.js` exclusions, applied by directory name since Rust's own convention
-places integration tests in a dedicated directory rather than a filename pattern).
+confirmed real directories exist at this exact path shape, `daemons/*/vendor/`), `reference/`
+(a second, real vendored-code convention this codebase also uses -- `reference/ambe/imbe.rs/` is
+a full third-party MIT-licensed crate, kchmck/imbe.rs, vendored read-only for cross-checking this
+codebase's own from-scratch AMBE port against, not code we own or maintain; confirmed directly
+that `reference/`'s entire tree contains nothing else, no in-house code mixed in, before excluding
+the whole directory), `target/` (build artifacts, though git wouldn't track these anyway),
+`examples/` and `benches/` (cargo's own reserved demo/benchmark directories -- the same "not core
+product code" reasoning `check_function_test_anchors.py` gives for excluding `tools`/`scripts`),
+and `tests/` (a crate's own top-level integration-test directory -- these ARE the tests, the Rust
+analogue of Python's `test_*.py` and JS's `*.test.js` exclusions, applied by directory name since
+Rust's own convention places integration tests in a dedicated directory rather than a filename
+pattern).
 """
 
 import argparse
@@ -43,6 +48,7 @@ EXCLUDE_DIRS = {
     ".git",
     "target",
     "vendor",
+    "reference",
     "examples",
     "benches",
     "tests",
