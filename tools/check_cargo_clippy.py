@@ -37,8 +37,18 @@ IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".
 # relative path, not a blanket dirname, since nothing about "docs/
 # references" in general implies "not host-buildable" -- this one crate's
 # own README is what establishes that.
+# Real gap found 2026-09-07 running this gate after vendoring kchmck/imbe.rs as a read-only
+# AMBE cross-check reference (see reference/ambe/imbe.rs's own commit message): it's a
+# third-party crate frozen at whatever Rust edition it was written for, and its
+# `#![feature(inclusive_range_syntax)]` (stable since 1.26.0, now a hard `E0554` error on
+# any non-nightly toolchain) fails this gate's blanket `cargo clippy` outright. We don't own
+# or maintain this crate's source -- it exists purely to diff our own from-scratch AMBE port
+# against, matching `check_rust_function_test_anchors.py`'s own `reference/` exclusion for the
+# exact same reason -- so it's excluded from the build/lint gate rather than patched to track
+# a toolchain it was never written against.
 EXCLUDE_CRATE_RELPATHS = {
     "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check",
+    "reference/ambe/imbe.rs",
 }
 
 

@@ -118,9 +118,14 @@ class MainTests(unittest.TestCase):
     def test_a_warning_in_stderr_exits_1_even_with_returncode_0(self):
         # clippy's own exit code stays 0 for plain warnings (no -D passed) --
         # this gate must catch that case by scanning stderr, not just returncode.
+        # A real clippy warning always follows "warning: ..." with a " --> " source
+        # pointer line -- that's what distinguishes it from a build script's own
+        # "cargo:warning=..." relay, which never has one.
         self._make_crate()
         version_check = MagicMock(returncode=0)
-        clippy_result = MagicMock(returncode=0, stdout="", stderr="warning: unused variable")
+        clippy_result = MagicMock(
+            returncode=0, stdout="", stderr="warning: unused variable\n --> src/lib.rs:1:1"
+        )
         with patch.object(sys, "argv", self._argv()), patch(
             "check_cargo_clippy.subprocess.run", side_effect=[version_check, clippy_result]
         ):
@@ -147,7 +152,9 @@ class MainTests(unittest.TestCase):
         for crate in (crate_a, crate_b):
             _write(os.path.join(crate, "Cargo.toml"), "[package]\nname = \"x\"\n")
         version_check = MagicMock(returncode=0)
-        finding = MagicMock(returncode=0, stdout="", stderr="warning: unused variable")
+        finding = MagicMock(
+            returncode=0, stdout="", stderr="warning: unused variable\n --> src/lib.rs:1:1"
+        )
         clean = MagicMock(returncode=0, stdout="", stderr="")
         with patch.object(sys, "argv", self._argv()), patch(
             "check_cargo_clippy.subprocess.run",
