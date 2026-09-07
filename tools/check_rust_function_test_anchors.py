@@ -101,9 +101,10 @@ def _ensure_scan_binary_built():
 def _run_rust_scan(filepaths):
     """Batches every file into one real `rust_function_scan` invocation
     (not one process per file), the same batching `_run_js_scan` already
-    does for Node/acorn. Returns {filepath: [(name, start, end)]},
-    silently omitting any file the real `syn` parser itself failed to
-    parse (matching `_run_js_scan`'s own SyntaxError-skip behavior)."""
+    does for Node/acorn. Returns {filepath: [(name, start, end,
+    is_trivial)]}, silently omitting any file the real `syn` parser
+    itself failed to parse (matching `_run_js_scan`'s own SyntaxError-skip
+    behavior)."""
     if not filepaths or not _ensure_scan_binary_built():
         return {}
     proc = subprocess.run(
@@ -119,7 +120,9 @@ def _run_rust_scan(filepaths):
     except json.JSONDecodeError:
         return {}
     return {
-        entry["file"]: [(f["name"], f["start"], f["end"]) for f in entry["functions"]]
+        entry["file"]: [
+            (f["name"], f["start"], f["end"], f["is_trivial"]) for f in entry["functions"]
+        ]
         for entry in results
     }
 
@@ -130,7 +133,14 @@ def scan_tree(repo_root):
     `identity` is `{relpath}::{qualname}`, the same key shape the other
     two scanners use, so all three baselines can coexist without
     collision even where a Python/JS/Rust file happen to share a
-    relative path stem."""
+    relative path stem.
+
+    Skips any function `rust_function_scan` marks `is_trivial` -- Bruce's
+    own direct answer to Stage 1's real anchor-scope question (`ANCHOR_
+    COVERAGE_AND_REMEDIATION_PLAN.md`, 2026-09-07): "Exclude small
+    helpers by a size/shape rule." A trivial function is never a real gap
+    to report, not merely a low-priority one -- it's out of scope for the
+    anchor requirement entirely."""
     candidate_files = []
     file_contents = {}
     for filepath in _git_tracked_rust_files(repo_root):
@@ -152,7 +162,9 @@ def scan_tree(repo_root):
         content = file_contents[filepath]
         lines = content.splitlines()
         rel_path = os.path.relpath(filepath, repo_root)
-        for qualname, start, end in functions:
+        for qualname, start, end, is_trivial in functions:
+            if is_trivial:
+                continue
             span = "\n".join(lines[start - 1 : min(end, len(lines))])
             has_anchor = bool(va.ANCHOR_PATTERN.search(span))
             identity = f"{rel_path}::{qualname}"

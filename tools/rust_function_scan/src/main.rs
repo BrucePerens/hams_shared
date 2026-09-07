@@ -8,11 +8,17 @@
 //! of a regex/text-scan approximation.
 //!
 //! Reads a JSON array of absolute file paths from stdin, writes a JSON
-//! array of `{file, functions: [{name, start, end}]}` to stdout -- one
-//! process invocation for the whole batch, matching `js_function_scan.cjs`'s
-//! own batching (confirmed there to handle hundreds of files in well under
-//! a second; the same reasoning applies here, and per-process `cargo`
-//! startup cost makes batching even more worth it for Rust than for Node).
+//! array of `{file, functions: [{name, start, end, is_trivial}]}` to
+//! stdout -- one process invocation for the whole batch, matching
+//! `js_function_scan.cjs`'s own batching (confirmed there to handle
+//! hundreds of files in well under a second; the same reasoning applies
+//! here, and per-process `cargo` startup cost makes batching even more
+//! worth it for Rust than for Node). `is_trivial` is Stage 1's own
+//! size/shape anchor-exclusion rule (see `FunctionEntry`'s own doc
+//! comment) -- `check_rust_function_test_anchors.py` uses it to skip
+//! bare, branchless, single-expression functions from the anchor
+//! requirement entirely, not just report them as gaps a human then has
+//! to triage by hand.
 //!
 //! Scope, matching `check_function_test_anchors.py`'s Python scope and
 //! `check_js_function_test_anchors.py`'s JS scope as closely as Rust's own
@@ -47,6 +53,87 @@ struct FunctionEntry {
     name: String,
     start: usize,
     end: usize,
+    /// Bruce's own direct answer on Stage 1's real anchor-scope question
+    /// (`ANCHOR_COVERAGE_AND_REMEDIATION_PLAN.md`, 2026-09-07): "Exclude
+    /// small helpers by a size/shape rule" -- skip bare, branchless,
+    /// single-expression functions from the anchor requirement; anything
+    /// with real logic still needs one. `is_trivial` implements that
+    /// rule precisely: true when the body contains no control-flow
+    /// expression anywhere (`if`/`match`/`for`/`while`/`loop`, checked
+    /// recursively, not just at the top level) AND has at most two real
+    /// statements -- an `assert!`/`debug_assert!`/`assert_eq!`/
+    /// `assert_ne!` macro-invocation statement doesn't count toward that
+    /// limit, since it's a contract check compiled out in release builds,
+    /// not real logic (this is exactly why `rshift_round_i128` -- one of
+    /// Bruce's own cited examples, a `let` binding, a `debug_assert!`,
+    /// and a tail expression -- reads as trivial under this rule despite
+    /// having three source-level statements).
+    is_trivial: bool,
+}
+
+/// Recursively checks whether `expr` contains a control-flow construct
+/// anywhere in its own sub-expressions -- `if`/`match`/`for`/`while`/
+/// `loop`, at any nesting depth, not just as the expression's own
+/// top-level shape (`a + if x { 1 } else { 2 }` must count as having
+/// control flow even though the outer expression is a plain `Binary`).
+fn expr_has_control_flow(expr: &syn::Expr) -> bool {
+    use syn::visit::Visit;
+    struct Finder(bool);
+    impl<'ast> Visit<'ast> for Finder {
+        fn visit_expr(&mut self, e: &'ast syn::Expr) {
+            match e {
+                syn::Expr::If(_)
+                | syn::Expr::Match(_)
+                | syn::Expr::ForLoop(_)
+                | syn::Expr::While(_)
+                | syn::Expr::Loop(_) => {
+                    self.0 = true;
+                }
+                _ => {}
+            }
+            syn::visit::visit_expr(self, e);
+        }
+    }
+    let mut finder = Finder(false);
+    finder.visit_expr(expr);
+    finder.0
+}
+
+/// True when `stmt` is a bare `assert!`/`debug_assert!`/`assert_eq!`/
+/// `assert_ne!` macro-invocation statement -- excluded from the trivial
+/// rule's own statement count (see `FunctionEntry::is_trivial`'s own doc
+/// comment for why).
+fn is_assert_stmt(stmt: &syn::Stmt) -> bool {
+    let syn::Stmt::Macro(m) = stmt else {
+        return false;
+    };
+    m.mac.path.segments.last().is_some_and(|s| {
+        matches!(
+            s.ident.to_string().as_str(),
+            "assert" | "debug_assert" | "assert_eq" | "assert_ne"
+        )
+    })
+}
+
+fn block_is_trivial(block: &syn::Block) -> bool {
+    let real_stmts: Vec<&syn::Stmt> = block.stmts.iter().filter(|s| !is_assert_stmt(s)).collect();
+    if real_stmts.len() > 2 {
+        return false;
+    }
+    for stmt in &real_stmts {
+        let has_cf = match stmt {
+            syn::Stmt::Expr(e, _) => expr_has_control_flow(e),
+            syn::Stmt::Local(local) => local
+                .init
+                .as_ref()
+                .is_some_and(|init| expr_has_control_flow(&init.expr)),
+            syn::Stmt::Macro(_) | syn::Stmt::Item(_) => false,
+        };
+        if has_cf {
+            return false;
+        }
+    }
+    true
 }
 
 #[derive(Serialize)]
@@ -142,6 +229,7 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
                     name: qualify(prefix, &f.sig.ident.to_string()),
                     start,
                     end,
+                    is_trivial: block_is_trivial(&f.block),
                 });
             }
             syn::Item::Mod(m) => {
@@ -167,6 +255,7 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
                             name: qualify(&new_prefix, &m.sig.ident.to_string()),
                             start,
                             end,
+                            is_trivial: block_is_trivial(&m.block),
                         });
                     }
                 }
@@ -186,6 +275,7 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
                             name: qualify(&new_prefix, &m.sig.ident.to_string()),
                             start,
                             end,
+                            is_trivial: block_is_trivial(block),
                         });
                     }
                 }
@@ -201,7 +291,10 @@ fn scan_file(path: &str) -> Option<FileResult> {
     let lines: Vec<&str> = content.lines().collect();
     let mut functions = Vec::new();
     walk_items(&file.items, "", &lines, &mut functions);
-    Some(FileResult { file: path.to_string(), functions })
+    Some(FileResult {
+        file: path.to_string(),
+        functions,
+    })
 }
 
 fn main() {
@@ -242,7 +335,8 @@ mod tests {
 
     #[test]
     fn qualifies_impl_methods_with_the_type_name() {
-        let entries = scan_source("struct S;\nimpl S {\n    fn bar(&self) {\n        1;\n    }\n}\n");
+        let entries =
+            scan_source("struct S;\nimpl S {\n    fn bar(&self) {\n        1;\n    }\n}\n");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "S::bar");
     }
@@ -287,9 +381,8 @@ mod tests {
 
     #[test]
     fn does_not_descend_into_a_nested_inner_function() {
-        let entries = scan_source(
-            "fn outer() {\n    fn inner() {\n        1;\n    }\n    inner();\n}\n",
-        );
+        let entries =
+            scan_source("fn outer() {\n    fn inner() {\n        1;\n    }\n    inner();\n}\n");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "outer");
     }
@@ -313,5 +406,91 @@ mod tests {
         let entries = scan_source("// belongs to nothing\n\nfn foo() {\n    1;\n}\n");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].start, 3);
+    }
+
+    /// Real examples Bruce's own answer named as trivial (`ANCHOR_COVERAGE_AND_REMEDIATION_
+    /// PLAN.md`, 2026-09-07): `Complex::add`, `rshift_round_i128`, `f0_to_wo`.
+    #[test]
+    fn a_bare_tail_expression_constructor_call_is_trivial() {
+        let entries = scan_source(
+            "struct S;\nimpl S {\n    fn add(self, other: Self) -> Self {\n        Self::new(self.re + other.re, self.im + other.im)\n    }\n}\n",
+        );
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_trivial);
+    }
+
+    #[test]
+    fn a_single_arithmetic_tail_expression_is_trivial() {
+        let entries = scan_source(
+            "fn f0_to_wo(f0: f32) -> f32 {\n    std::f32::consts::TAU * f0 / SAMPLE_RATE as f32\n}\n",
+        );
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_trivial);
+    }
+
+    #[test]
+    fn a_let_binding_plus_debug_assert_plus_tail_expression_is_trivial() {
+        // rshift_round_i128's own real shape: a let binding, a debug_assert! (excluded from
+        // the statement count), and a tail expression -- 3 source-level statements, but only
+        // 2 real ones under this rule.
+        let entries = scan_source(
+            "fn rshift_round_i128(x: i128, n: u32) -> i64 {\n    let shifted = (x + (1i128 << (n - 1))) >> n;\n    debug_assert!(shifted >= i64::MIN as i128, \"doesn't fit\");\n    shifted as i64\n}\n",
+        );
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_trivial);
+    }
+
+    #[test]
+    fn a_function_containing_an_if_expression_is_not_trivial() {
+        let entries = scan_source(
+            "fn clamp(x: f32) -> f32 {\n    if x > 1.0 {\n        1.0\n    } else {\n        x\n    }\n}\n",
+        );
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].is_trivial);
+    }
+
+    #[test]
+    fn an_if_nested_inside_an_arithmetic_expression_is_still_not_trivial() {
+        // Real property the recursive check exists for: a + if x { 1 } else { 2 } is a
+        // top-level Binary expression, not an If expression, but still contains control flow.
+        let entries =
+            scan_source("fn f(x: bool, a: i32) -> i32 {\n    a + if x { 1 } else { 2 }\n}\n");
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].is_trivial);
+    }
+
+    #[test]
+    fn a_function_containing_a_for_loop_is_not_trivial() {
+        let entries = scan_source(
+            "fn sum(xs: &[i32]) -> i32 {\n    let mut total = 0;\n    for x in xs {\n        total += x;\n    }\n    total\n}\n",
+        );
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].is_trivial);
+    }
+
+    #[test]
+    fn a_function_with_more_than_two_real_statements_is_not_trivial() {
+        let entries = scan_source(
+            "fn f() -> i32 {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    a + b + c\n}\n",
+        );
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].is_trivial);
+    }
+
+    #[test]
+    fn a_control_flow_expression_inside_a_let_initializer_is_not_trivial() {
+        let entries =
+            scan_source("fn f(x: bool) -> i32 {\n    let y = if x { 1 } else { 2 };\n    y\n}\n");
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].is_trivial);
+    }
+
+    #[test]
+    fn a_match_expression_is_not_trivial() {
+        let entries = scan_source(
+            "fn f(x: Option<i32>) -> i32 {\n    match x {\n        Some(v) => v,\n        None => 0,\n    }\n}\n",
+        );
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].is_trivial);
     }
 }

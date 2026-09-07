@@ -41,8 +41,19 @@ class ScanTreeTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    # A single bare-literal-statement body (`fn bar() { 1; }`) is exactly
+    # what the Stage 1 size/shape rule (`is_trivial`, see rust_function_
+    # scan's own doc comment) is designed to exclude -- these fixtures
+    # deliberately use a real `if` so the anchor-detection logic under
+    # test isn't confounded by the separate trivial-exclusion rule,
+    # which has its own dedicated tests below.
+    _NONTRIVIAL_BODY = "if x > 0 {\n        x\n    } else {\n        -x\n    }"
+
     def test_a_free_function_with_no_anchor_is_a_gap(self):
-        _write(os.path.join(self.tmp, "foo.rs"), "fn bar() {\n    1;\n}\n")
+        _write(
+            os.path.join(self.tmp, "foo.rs"),
+            f"fn bar(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
+        )
         _init_git_repo(self.tmp)
         gaps = crfta.scan_tree(self.tmp)
         self.assertIn("foo.rs::bar", gaps)
@@ -50,7 +61,7 @@ class ScanTreeTests(unittest.TestCase):
     def test_a_free_function_with_a_real_anchor_is_not_a_gap(self):
         _write(
             os.path.join(self.tmp, "foo.rs"),
-            "// [@ANCHOR: COMM_bar]\nfn bar() {\n    1;\n}\n",
+            f"// [@ANCHOR: COMM_bar]\nfn bar(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
         )
         _init_git_repo(self.tmp)
         gaps = crfta.scan_tree(self.tmp)
@@ -59,7 +70,8 @@ class ScanTreeTests(unittest.TestCase):
     def test_an_impl_method_gets_a_qualified_type_colon_colon_method_identity(self):
         _write(
             os.path.join(self.tmp, "foo.rs"),
-            "struct Foo;\nimpl Foo {\n    fn bar(&self) {\n        1;\n    }\n}\n",
+            "struct Foo;\nimpl Foo {\n"
+            f"    fn bar(&self, x: i32) -> i32 {{\n        {self._NONTRIVIAL_BODY}\n    }}\n}}\n",
         )
         _init_git_repo(self.tmp)
         gaps = crfta.scan_tree(self.tmp)
@@ -68,7 +80,8 @@ class ScanTreeTests(unittest.TestCase):
     def test_a_trait_default_method_is_a_gap_but_a_bodyless_signature_is_not_scanned(self):
         _write(
             os.path.join(self.tmp, "foo.rs"),
-            "trait T {\n    fn required(&self);\n    fn provided(&self) {\n        1;\n    }\n}\n",
+            "trait T {\n    fn required(&self);\n"
+            f"    fn provided(&self, x: i32) -> i32 {{\n        {self._NONTRIVIAL_BODY}\n    }}\n}}\n",
         )
         _init_git_repo(self.tmp)
         gaps = crfta.scan_tree(self.tmp)
@@ -76,9 +89,24 @@ class ScanTreeTests(unittest.TestCase):
         self.assertNotIn("foo.rs::T::required", gaps)
 
     def test_a_nested_inner_function_is_not_independently_counted(self):
+        # `outer`'s own top-level body must have real control flow of its
+        # own, not just delegate to `inner` -- a bare "define a helper,
+        # call it" body has no branching at its own level and would
+        # (correctly) read as trivial under the size/shape rule, which
+        # isn't what this test means to exercise (nested-function
+        # counting, not trivial-exclusion).
         _write(
             os.path.join(self.tmp, "foo.rs"),
-            "fn outer() {\n    fn inner() {\n        1;\n    }\n    inner();\n}\n",
+            "fn outer(x: i32) -> i32 {\n"
+            "    fn inner(y: i32) -> i32 {\n"
+            f"        {self._NONTRIVIAL_BODY}\n"
+            "    }\n"
+            "    if x > 0 {\n"
+            "        inner(x)\n"
+            "    } else {\n"
+            "        inner(-x)\n"
+            "    }\n"
+            "}\n",
         )
         _init_git_repo(self.tmp)
         gaps = crfta.scan_tree(self.tmp)
@@ -88,7 +116,7 @@ class ScanTreeTests(unittest.TestCase):
     def test_a_cfg_test_module_is_excluded_entirely(self):
         _write(
             os.path.join(self.tmp, "foo.rs"),
-            "fn real() {\n    1;\n}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn it_works() {\n        assert!(true);\n    }\n}\n",
+            f"fn real(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n#[cfg(test)]\nmod tests {{\n    #[test]\n    fn it_works() {{\n        assert!(true);\n    }}\n}}\n",
         )
         _init_git_repo(self.tmp)
         gaps = crfta.scan_tree(self.tmp)
@@ -98,7 +126,7 @@ class ScanTreeTests(unittest.TestCase):
     def test_a_top_level_tests_directory_is_excluded_by_directory_name(self):
         _write(
             os.path.join(self.tmp, "tests", "integration.rs"),
-            "fn helper() {\n    1;\n}\n",
+            f"fn helper(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
         )
         _init_git_repo(self.tmp)
         gaps = crfta.scan_tree(self.tmp)
@@ -107,14 +135,17 @@ class ScanTreeTests(unittest.TestCase):
     def test_a_vendor_directory_is_excluded(self):
         _write(
             os.path.join(self.tmp, "vendor", "thirdparty", "src", "lib.rs"),
-            "fn third_party() {\n    1;\n}\n",
+            f"fn third_party(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
         )
         _init_git_repo(self.tmp)
         gaps = crfta.scan_tree(self.tmp)
         self.assertEqual(gaps, {})
 
     def test_an_examples_directory_is_excluded(self):
-        _write(os.path.join(self.tmp, "examples", "demo.rs"), "fn main() {\n    1;\n}\n")
+        _write(
+            os.path.join(self.tmp, "examples", "demo.rs"),
+            f"fn main() {{\n    let x = 1;\n    {self._NONTRIVIAL_BODY};\n}}\n",
+        )
         _init_git_repo(self.tmp)
         gaps = crfta.scan_tree(self.tmp)
         self.assertEqual(gaps, {})
@@ -128,15 +159,53 @@ class ScanTreeTests(unittest.TestCase):
     def test_a_begin_end_anchor_counts_as_anchored(self):
         _write(
             os.path.join(self.tmp, "foo.rs"),
-            "fn bar() {\n"
+            f"fn bar(x: i32) -> i32 {{\n"
             "    // [@ANCHOR-BEGIN: COMM_bar]\n"
-            "    1;\n"
+            f"    {self._NONTRIVIAL_BODY}\n"
             "    // [@ANCHOR-END: COMM_bar]\n"
             "}\n",
         )
         _init_git_repo(self.tmp)
         gaps = crfta.scan_tree(self.tmp)
         self.assertNotIn("foo.rs::bar", gaps)
+
+    def test_a_trivial_single_expression_function_is_never_a_gap_even_unanchored(self):
+        # The Stage 1 size/shape rule's own real-world calibration case
+        # (rust_function_scan's own test suite): a bare tail-expression
+        # function, no anchor at all -- must never show up as a gap,
+        # not just "a low-priority one."
+        _write(
+            os.path.join(self.tmp, "foo.rs"),
+            "fn f0_to_wo(f0: f32) -> f32 {\n    std::f32::consts::TAU * f0 / 8000.0\n}\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = crfta.scan_tree(self.tmp)
+        self.assertEqual(gaps, {})
+
+    def test_a_let_plus_debug_assert_plus_tail_expression_is_still_trivial(self):
+        _write(
+            os.path.join(self.tmp, "foo.rs"),
+            "fn rshift_round(x: i64, n: u32) -> i64 {\n"
+            "    let shifted = x >> n;\n"
+            '    debug_assert!(shifted >= 0, "must be non-negative");\n'
+            "    shifted\n"
+            "}\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = crfta.scan_tree(self.tmp)
+        self.assertEqual(gaps, {})
+
+    def test_a_function_with_real_control_flow_is_a_gap_even_though_its_short(self):
+        # Real property: trivial-exclusion is about control-flow/statement
+        # SHAPE, not raw line count -- a short function with a real `if`
+        # still needs a real anchor.
+        _write(
+            os.path.join(self.tmp, "foo.rs"),
+            "fn clamp(x: f32) -> f32 {\n    if x > 1.0 { 1.0 } else { x }\n}\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = crfta.scan_tree(self.tmp)
+        self.assertIn("foo.rs::clamp", gaps)
 
 
 class BaselineRatchetTests(unittest.TestCase):
@@ -147,11 +216,17 @@ class BaselineRatchetTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    _NONTRIVIAL_BODY = "if x > 0 {\n        x\n    } else {\n        -x\n    }"
+
     def test_a_pre_existing_gap_in_the_baseline_does_not_fail(self):
         repo = os.path.join(self.tmp, "repo")
-        _write(os.path.join(repo, "foo.rs"), "fn bar() {\n    1;\n}\n")
+        _write(
+            os.path.join(repo, "foo.rs"),
+            f"fn bar(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
+        )
         _init_git_repo(repo)
         gaps = crfta.scan_tree(repo)
+        self.assertIn("foo.rs::bar", gaps, "fixture must produce a real gap for this test to mean anything")
         crfta.save_baseline(self.baseline_path, gaps)
 
         baseline = crfta.load_baseline(self.baseline_path)
@@ -161,13 +236,17 @@ class BaselineRatchetTests(unittest.TestCase):
 
     def test_a_newly_added_unanchored_function_is_a_real_new_gap(self):
         repo = os.path.join(self.tmp, "repo")
-        _write(os.path.join(repo, "foo.rs"), "fn bar() {\n    1;\n}\n")
+        _write(
+            os.path.join(repo, "foo.rs"),
+            f"fn bar(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
+        )
         _init_git_repo(repo)
         crfta.save_baseline(self.baseline_path, crfta.scan_tree(repo))
 
         _write(
             os.path.join(repo, "foo.rs"),
-            "fn bar() {\n    1;\n}\nfn baz() {\n    2;\n}\n",
+            f"fn bar(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n"
+            f"fn baz(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
         )
         baseline = crfta.load_baseline(self.baseline_path)
         current_gaps = crfta.scan_tree(repo)
