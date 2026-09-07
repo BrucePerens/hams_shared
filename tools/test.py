@@ -1842,6 +1842,14 @@ def main():
     parser.add_argument("--daemon")
     parser.add_argument("--profile", action="store_true")
     parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help="Wrap the odoo test process(es) in coverage.py (ADR 0090 / "
+        "ANCHOR_COVERAGE_AND_REMEDIATION_PLAN.md Stage 2, Python sub-track). "
+        "Writes coverage_report/coverage.json (repo-relative file paths, "
+        "matching check_function_test_anchors.py's own keying) after the run.",
+    )
+    parser.add_argument(
         "--mcp",
         action="store_true",
         help="Launch the MCP server instead of running tests and shutting down.",
@@ -1885,6 +1893,36 @@ def main():
     mod_string = "base," + ",".join(install_modules)
     test_tags = ",".join([f"/{m}" for m in target_modules])
 
+    # Not under base_dir: a real test run found setup_namespace_and_run_tests()
+    # mounts the repo checkout read-only inside the isolated sandbox. And not
+    # plain ~/tmp either -- a real run also found that resolves to
+    # /var/lib/odoo/tmp once HOME is reassigned for the odoo-user child
+    # process (preexec_odoo(), above), which is a path *inside* the ephemeral
+    # per-run overlay of /var, not the persistent host directory the
+    # /mnt/real_tmp bind-mount anchors before that overlay is even applied --
+    # written there, it silently vanished when the sandbox tore down.
+    # FailureExtractor (above) already established the correct fix for this
+    # exact trap: use /mnt/real_tmp directly when inside the isolated
+    # namespace, matching its own self.output_path convention exactly.
+    coverage_data_dir = (
+        "/mnt/real_tmp/coverage_report"
+        if os.environ.get("HAMS_ISOLATED_NS") == "1"
+        else os.path.join(os.path.expanduser("~/tmp"), "coverage_report")
+    )
+    coverage_data_file = os.path.join(coverage_data_dir, ".coverage")
+    coverage_rcfile = os.path.join(coverage_data_dir, "coveragerc")
+    if args.coverage:
+        os.makedirs(coverage_data_dir, exist_ok=True)
+        # relative_files=True is what lets Stage 3 later join this report
+        # against check_function_test_anchors.py's own
+        # os.path.relpath(filepath, repo_root) keys -- verify empirically
+        # against a real run (see coverage_report/coverage.json's own
+        # "files" keys) rather than trusting this comment; odoo-bin may
+        # change directory internally in ways that affect what "relative"
+        # resolves against.
+        with open(coverage_rcfile, "w") as f:
+            f.write("[run]\nrelative_files = True\n")
+
     def get_odoo_test_cmd(suffix=""):
         cmd = [python_exec]
         if args.profile:
@@ -1894,6 +1932,32 @@ def main():
                     "cProfile",
                     "-o",
                     f"{os.path.expanduser('~/tmp')}/odoo_test{suffix}.pro",
+                ]
+            )
+        elif args.coverage:
+            # --parallel-mode always (even for "standard" mode's single
+            # process): it suffixes the data file with a unique id instead
+            # of overwriting COVERAGE_FILE outright, so the same
+            # combine_coverage_data() step below works identically whether
+            # this ran once (standard) or once per module in a loop
+            # (individual) -- no special-casing which mode produced the
+            # data on disk. `--source=base_dir` (not `--include`) so
+            # coverage's own branch/statement analysis walks the real repo
+            # tree looking for importable-but-never-executed files too,
+            # not just files a test happened to import -- otherwise a
+            # function nobody's test suite touches at all would silently
+            # never appear in the report, rather than appearing as 0%
+            # covered (a real gap Stage 3 needs to see, not a blind spot).
+            cmd.extend(
+                [
+                    "-m",
+                    "coverage",
+                    "run",
+                    f"--rcfile={coverage_rcfile}",
+                    "--parallel-mode",
+                    f"--source={base_dir}",
+                    "--data-file",
+                    coverage_data_file,
                 ]
             )
         return cmd
@@ -2035,6 +2099,48 @@ def main():
             rc = run_cmd(cmd, extractor)
             if rc != 0:
                 final_rc = 1
+
+    if args.coverage and args.mode in ("standard", "individual"):
+        combine_cmd = [
+            python_exec,
+            "-m",
+            "coverage",
+            "combine",
+            f"--rcfile={coverage_rcfile}",
+            f"--data-file={coverage_data_file}",
+            coverage_data_dir,
+        ]
+        rc_combine = subprocess.run(combine_cmd, capture_output=True, text=True)
+        if rc_combine.returncode != 0 or not os.path.exists(coverage_data_file) or os.path.getsize(coverage_data_file) == 0:
+            # A wrong exit code alone isn't trusted here -- `combine`'s own
+            # exit code has been 0 in the past for "no data files found at
+            # all," which would otherwise look like a real, empty-but-valid
+            # coverage run rather than the real failure it is.
+            print("[!] ERROR: coverage combine failed or produced an empty data file:")
+            print(rc_combine.stdout)
+            print(rc_combine.stderr)
+            final_rc = final_rc or 1
+        else:
+            coverage_json_path = os.path.join(coverage_data_dir, "coverage.json")
+            json_cmd = [
+                python_exec,
+                "-m",
+                "coverage",
+                "json",
+                f"--rcfile={coverage_rcfile}",
+                f"--data-file={coverage_data_file}",
+                "-o",
+                coverage_json_path,
+                "--ignore-errors",
+            ]
+            rc_json = subprocess.run(json_cmd, capture_output=True, text=True)
+            if rc_json.returncode != 0:
+                print("[!] ERROR: coverage json report generation failed:")
+                print(rc_json.stdout)
+                print(rc_json.stderr)
+                final_rc = final_rc or 1
+            else:
+                print(f"[+] Coverage report written to {coverage_json_path}")
 
     print("[*] Cleaning up Chrome temporary directories...")
     if is_jules:
