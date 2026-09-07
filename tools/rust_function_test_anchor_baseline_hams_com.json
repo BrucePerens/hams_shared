@@ -106,8 +106,6 @@
   "daemons/hams_local_relay/src/digital_encoder.rs::VocoderEncoder::compute_features",
   "daemons/hams_local_relay/src/digital_encoder.rs::start_encoder_pipeline",
   "daemons/hams_local_relay/src/digital_encoder.rs::upconvert_to_48k_passband",
-  "daemons/hams_local_relay/src/direwolf.rs::find_direwolf_binary",
-  "daemons/hams_local_relay/src/direwolf.rs::probe_direwolf_version",
   "daemons/hams_local_relay/src/discovery.rs::collect_ntp_responses",
   "daemons/hams_local_relay/src/discovery.rs::deep_scan_hardware",
   "daemons/hams_local_relay/src/discovery.rs::discover_ntp_servers",
