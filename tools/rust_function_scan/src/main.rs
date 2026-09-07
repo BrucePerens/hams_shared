@@ -132,7 +132,7 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
     for item in items {
         match item {
             syn::Item::Fn(f) => {
-                if has_test_attr(&f.attrs) {
+                if has_test_attr(&f.attrs) || has_cfg_test(&f.attrs) {
                     continue;
                 }
                 let start = attrs_or_span_start_line(&f.attrs, f.sig.fn_token.span());
@@ -157,7 +157,7 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
                 let new_prefix = qualify(prefix, &type_name(&imp.self_ty));
                 for ii in &imp.items {
                     if let syn::ImplItem::Fn(m) = ii {
-                        if has_test_attr(&m.attrs) {
+                        if has_test_attr(&m.attrs) || has_cfg_test(&m.attrs) {
                             continue;
                         }
                         let start = attrs_or_span_start_line(&m.attrs, m.sig.fn_token.span());
@@ -176,7 +176,7 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
                 for ti in &tr.items {
                     if let syn::TraitItem::Fn(m) = ti {
                         let Some(block) = &m.default else { continue };
-                        if has_test_attr(&m.attrs) {
+                        if has_test_attr(&m.attrs) || has_cfg_test(&m.attrs) {
                             continue;
                         }
                         let start = attrs_or_span_start_line(&m.attrs, m.sig.fn_token.span());
@@ -268,6 +268,20 @@ mod tests {
     #[test]
     fn skips_test_attributed_functions_even_outside_a_cfg_test_module() {
         let entries = scan_source("#[test]\nfn it_works() {\n    assert!(true);\n}\n");
+        assert!(entries.is_empty());
+    }
+
+    /// Regression test for a real bug this session's own AI-agent code
+    /// review caught: a bare `#[cfg(test)] fn helper() {...}` (a test-only
+    /// helper NOT wrapped in a `#[cfg(test)] mod` -- a real, existing
+    /// pattern in this codebase, e.g. `fixed_fft.rs`'s own `f32_to_q23`/
+    /// `build_twiddles_q23`) was only excluded when the *module* carried
+    /// `#[cfg(test)]`, not when the function attribute itself did --
+    /// falsely flagging real test-only helpers as needing a production
+    /// anchor.
+    #[test]
+    fn skips_a_bare_cfg_test_function_not_wrapped_in_a_cfg_test_module() {
+        let entries = scan_source("#[cfg(test)]\nfn helper() {\n    1;\n}\n");
         assert!(entries.is_empty());
     }
 
