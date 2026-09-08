@@ -17,7 +17,6 @@
   "daemons/hams_local_relay/src/cert_enrollment.rs::build_windows_certutil_import_command",
   "daemons/hams_local_relay/src/cert_enrollment.rs::enroll_firefox_on_linux",
   "daemons/hams_local_relay/src/checkin.rs::start_checkin_loop",
-  "daemons/hams_local_relay/src/civ_bridge.rs::build_frequency_push",
   "daemons/hams_local_relay/src/civ_bridge.rs::forward_pushes",
   "daemons/hams_local_relay/src/civ_bridge.rs::handle_connection",
   "daemons/hams_local_relay/src/civ_bridge.rs::read_one_frame",
