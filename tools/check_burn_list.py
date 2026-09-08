@@ -1959,7 +1959,13 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 elif (
                     attr in ("search", "create", "browse")
                     and getattr(node.func.value, "id", "") == "self"
+                    and "model" not in self.current_decorators
                 ):
+                    # Real false positive found 2026-09-08: inside an @api.model method, `self`
+                    # is always the model's own empty recordset -- `self.search(...)` there is
+                    # the standard, idiomatic Odoo pattern (Odoo core itself does this
+                    # constantly), not an ambiguous call discarding some other recordset's real
+                    # content the way it would be in a plain instance method.
                     self.add_error(
                         node.lineno,
                         "Ambiguous ORM call: Use `self.env['your.model']...`",
