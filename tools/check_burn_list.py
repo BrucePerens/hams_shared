@@ -3119,7 +3119,15 @@ def scan_file(filepath, is_odoo_module=False):
                             )
 
                 if node.tag == "img":
-                    if "alt" not in node.attrs:
+                    # Real false positive found 2026-09-08: QWeb's own dynamic-attribute
+                    # syntax (t-att-alt="expr" / t-attf-alt="...#{...}") genuinely sets the
+                    # real HTML alt attribute at render time -- ham_profile/views/
+                    # member_profile_templates.xml's own badge <img> already had a real,
+                    # meaningful t-att-alt (the badge's own name) and was flagged anyway,
+                    # since this check only ever looked for the literal static "alt" key.
+                    if not any(
+                        k in node.attrs for k in ("alt", "t-att-alt", "t-attf-alt")
+                    ):
                         errors_found.append(
                             f"Line {node.lineno}: CRITICAL ACCESSIBILITY (WCAG): \x3cimg\x3e tags must have an 'alt' attribute."
                         )
@@ -4309,8 +4317,20 @@ def main():
         total_warnings += 1
 
     # Audit Orphaned o_tour_ classes and Dangling Tour Targets (Bidirectional Audit)
-    xml_tour_classes = set()
-    js_tour_targets = set()
+    #
+    # Real bug found and fixed 2026-09-08: this check is inherently repo-wide (a class
+    # is "orphaned" only if it's absent from *every* JS tour file, not any single one),
+    # but its own findings used to print with no "📄 <file>" header of their own at
+    # all -- the console output just inherited whichever file header the *previous*,
+    # unrelated section (the ACT_WINDOW_ACTIONS loop just above) had last printed,
+    # making every orphaned/dangling finding LOOK like it belonged to that other
+    # file. Confirmed live: 'o_tour_event_card'/'o_tour_event_card_title' printed
+    # under ham_repeater_dir/views/ham_repeater_import_candidate_views.xml (that
+    # section's own last-printed file), when both classes only actually exist in
+    # ham_club_management/views/events_directory_templates.xml. Now tracks and
+    # prints each class's own real defining file(s)/target file(s) explicitly.
+    xml_tour_classes = {}  # class name -> set of relative file paths where it appears
+    js_tour_targets = {}  # class name -> set of relative file paths where it appears
     xml_content_all = ""
     js_content_all = ""
     for root, dirs, files in os.walk(target_dir):
@@ -4323,13 +4343,13 @@ def main():
             continue
         for file in files:
             filepath = os.path.join(root, file)
+            rel_path = os.path.relpath(filepath, target_dir)
             if file.endswith(".xml"):
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:
                         content = f.read()
-                    xml_tour_classes.update(
-                        re.findall(r"o_tour_[a-zA-Z0-9_-]+", content)
-                    )
+                    for cls in re.findall(r"o_tour_[a-zA-Z0-9_-]+", content):
+                        xml_tour_classes.setdefault(cls, set()).add(rel_path)
                     xml_content_all += content
                 except (SyntaxError, OSError):
                     pass
@@ -4337,22 +4357,23 @@ def main():
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:
                         content = f.read()
-                    js_tour_targets.update(
-                        re.findall(r"o_tour_[a-zA-Z0-9_-]+", content)
-                    )
+                    for cls in re.findall(r"o_tour_[a-zA-Z0-9_-]+", content):
+                        js_tour_targets.setdefault(cls, set()).add(rel_path)
                     js_content_all += content
                 except (SyntaxError, OSError):
                     pass
 
-    for cls in xml_tour_classes:
+    for cls, found_in in sorted(xml_tour_classes.items()):
         if cls not in js_content_all:
+            print(f" 📄 {', '.join(sorted(found_in))}")
             print(
                 f"  ❌ ERROR: Orphaned Tour Class: '{cls}' found in XML but never targeted in any JS tour. Remove dead code."
             )
             total_errors += 1
 
-    for target in js_tour_targets:
+    for target, found_in in sorted(js_tour_targets.items()):
         if target not in xml_content_all:
+            print(f" 📄 {', '.join(sorted(found_in))}")
             print(
                 f"  ❌ ERROR: Dangling Tour Target: '{target}' found in a JS tour but missing from all backend XML views. Tour will fatally timeout."
             )
