@@ -324,7 +324,19 @@ GENERAL_ERROR_RULES = [
         "CRITICAL ARCHITECTURE: Native patch decorators and context managers are forbidden. Use self.safe_patch() or self.safe_patch_object().",
     ),
     (
-        r"\.py$",
+        # Real false positives found 2026-09-08, a full-repo sweep: 5 hits, all in standalone,
+        # single-tenant ops/infra scripts (pager_duty/daemon/*.py, distributed_redis_cache/
+        # scripts/*.py) -- a Postgres-admin provisioning CLI reading its own password via
+        # os.environ.get()-or-getpass(), and monitoring daemons reading REDIS_PASSWORD /
+        # HAMS_CLOUDFLARE_ACCOUNT_ID from the environment (the standard, correct systemd
+        # EnvironmentFile= pattern for a non-Odoo Linux daemon). None of these have any concept
+        # of "tenant" at all -- the rule's own stated rationale ("multi-tenant systems... breaks
+        # isolation") doesn't describe what they do. Excluded the same two path shapes
+        # (daemons?/, scripts/) already carved out for the sibling mock.patch rule immediately
+        # above, for the identical reason: real, single-tenant, non-Odoo code living alongside
+        # actual multi-tenant Odoo models this rule still correctly covers (confirmed zero
+        # TENANT LEAK hits inside any models/ file in this same sweep).
+        r"^(?!.*(?:^|/)daemons?/)(?!.*(?:^|/)scripts/).*\.py$",
         re.compile(
             r"os\.(?:environ\.get|getenv)\s*\(\s*['\"][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASS|API|CRED)[A-Za-z0-9_]*['\"]",
             re.IGNORECASE,
