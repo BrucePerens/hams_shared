@@ -1068,21 +1068,38 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     if isinstance(item.context_expr, ast.Call) and getattr(
                         item.context_expr.func, "attr", ""
                     ) in ("assertRaises", "assertRaisesRegex"):
-                        has_create_write = False
-                        has_flush = False
-                        for child in ast.walk(node):
-                            if isinstance(child, ast.Call) and isinstance(
-                                child.func, ast.Attribute
-                            ):
-                                if child.func.attr in ("create", "write"):
-                                    has_create_write = True
-                                elif child.func.attr == "flush_all":
-                                    has_flush = True
-                        if has_create_write and not has_flush:
-                            self.add_error(
-                                node.lineno,
-                                "[!] DIAGNOSTIC FOR AI: ORM create/write inside assertRaises requires self.env.flush_all() before the context manager exits to trigger @api.constrains.",
+                        # Real false positive found 2026-09-08: this check's own message says
+                        # "to trigger @api.constrains" -- it exists because @api.constrains
+                        # validation can be deferred until flush, so ValidationError from a
+                        # constrains method genuinely needs flush_all() to fire inside the
+                        # assertRaises block. But the ORM's own permission checks (AccessError)
+                        # raise synchronously, immediately, during create()/write() itself, with
+                        # no dependency on flush timing at all -- flagging
+                        # `assertRaises(AccessError): ...write(...)` here is a false positive.
+                        # Only the exception class this rule's own docstring is actually about
+                        # (ValidationError, what @api.constrains raises) needs this check.
+                        asserted_exc = None
+                        if item.context_expr.args:
+                            first_arg = item.context_expr.args[0]
+                            asserted_exc = getattr(
+                                first_arg, "id", getattr(first_arg, "attr", None)
                             )
+                        if asserted_exc == "ValidationError":
+                            has_create_write = False
+                            has_flush = False
+                            for child in ast.walk(node):
+                                if isinstance(child, ast.Call) and isinstance(
+                                    child.func, ast.Attribute
+                                ):
+                                    if child.func.attr in ("create", "write"):
+                                        has_create_write = True
+                                    elif child.func.attr == "flush_all":
+                                        has_flush = True
+                            if has_create_write and not has_flush:
+                                self.add_error(
+                                    node.lineno,
+                                    "[!] DIAGNOSTIC FOR AI: ORM create/write inside assertRaises requires self.env.flush_all() before the context manager exits to trigger @api.constrains.",
+                                )
 
             self.generic_visit(node)
 
