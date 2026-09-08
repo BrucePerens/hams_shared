@@ -3225,12 +3225,47 @@ def scan_file(filepath, is_odoo_module=False):
                                 f"Line {node.lineno}: CRITICAL TYPE MISMATCH: Odoo models use dots, not underscores. Found '{model_name}'. Did you mean '{model_name.replace('_', '.', 1)}'?"
                             )
 
+                # A "#comment" node's own text lives under attrs["text"] in this parser's data
+                # model (see XMLNode's own doc/construction above) -- excluded here for the same
+                # reason line 2697's own `if node.tag != "#comment":` guard exists: a comment can
+                # never execute, so "request.env" appearing in one is prose discussing real code
+                # elsewhere (a real false positive found 2026-09-07 in
+                # ham_classifieds/security/security_rules.xml, an adversarial-review comment that
+                # happens to mention "request.env" while describing a Python controller), never a
+                # genuine SSTI vector -- no audit-ignore judgment call needed, just exclude it.
+                has_request_env = node.tag != "#comment" and (
+                    any("request.env" in str(v) for v in node.attrs.values())
+                    or ("request.env" in node.text if node.text else False)
+                )
+                if has_request_env:
+                    # `request.env` in a QWeb template attribute or text is only a real SSTI
+                    # vector when the expression itself is reachable by untrusted input (a
+                    # template string built from user/DB-editable content, then compiled and
+                    # evaluated) -- a static, developer-authored `t-set`/`t-att-*`/`t-out`
+                    # expression referencing `request.env` (e.g. a server-side computed value
+                    # like `_get_service_uid(...)`) is exactly as safe as any other Python
+                    # expression in this same, git-reviewed file, and this static AST pass has
+                    # no way to tell the two apart -- confirmed false positive found 2026-09-07 in
+                    # ham_club_management/views/website_club_ad_templates.xml's own
+                    # audit-ignore-view/audit-ignore-xpath-covered service-account pattern. Same
+                    # escape hatch shape as every other rule in this file that can have a
+                    # reviewed, legitimate exception (audit-ignore-weak-random,
+                    # audit-ignore-catch-all, audit-ignore-cron, etc.) rather than silently
+                    # deleting the check, which a genuine SSTI vector still needs.
+                    lookback_start = _xml_audit_lookback_start(node)
+                    raw_text = "\n".join(
+                        lines[
+                            max(0, lookback_start) : min(
+                                len(lines), node.end_lineno + 1
+                            )
+                        ]
+                    )
+                    if "audit-ignore-ssti" not in raw_text:
+                        errors_found.append(
+                            f"Line {node.lineno}: CRITICAL SSTI: Using 'request.env' inside QWeb templates exposes the database to Remote Code Execution. If this is a static, developer-authored expression with no reachable untrusted input (not a template string built from user/DB-editable content), add '# audit-ignore-ssti' with a comment citing the evidence, plus a tracing anchor."
+                        )
                 for k, v in node.attrs.items():
                     v_str = str(v)
-                    if "request.env" in v_str:
-                        errors_found.append(
-                            f"Line {node.lineno}: CRITICAL SSTI: Using 'request.env' inside QWeb templates exposes the database to Remote Code Execution."
-                        )
                     if (
                         ".state" in v_str
                         and ("open" in v_str or "closed" in v_str)
@@ -3240,10 +3275,6 @@ def scan_file(filepath, is_odoo_module=False):
                             f"Line {node.lineno}: CRITICAL DEPRECATION: survey.survey 'state' field was removed in Odoo 19. Use 'active' (Boolean)."
                         )
                 if node.text:
-                    if "request.env" in node.text:
-                        errors_found.append(
-                            f"Line {node.lineno}: CRITICAL SSTI: Using 'request.env' inside QWeb templates exposes the database to Remote Code Execution."
-                        )
                     if (
                         ".state" in node.text
                         and ("open" in node.text or "closed" in node.text)

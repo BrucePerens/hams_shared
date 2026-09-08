@@ -3837,6 +3837,64 @@ def test_request_env_inside_element_text_is_also_a_critical_ssti_vulnerability()
     assert any("CRITICAL SSTI" in e for e in errors)
 
 
+# Real false positive found 2026-09-07 in ham_club_management/views/website_club_ad_templates.xml:
+# a static, developer-authored `t-set`/`t-value` expression referencing `request.env` (a
+# server-side computed value like `_get_service_uid(...)`) is exactly as safe as any other Python
+# expression in the same git-reviewed file -- this static AST pass has no way to distinguish that
+# from a genuine SSTI vector (a template string built from user/DB-editable content, then compiled
+# and evaluated), so the rule now offers the same audit-ignore-* escape hatch every other
+# rule-with-a-legitimate-exception in this file already has.
+
+
+def test_audit_ignore_ssti_suppresses_the_finding_for_a_reviewed_static_expression():
+    xml = (
+        "<odoo>\n"
+        '    <template id="my_template" name="My Template">\n'
+        "        <!-- audit-ignore-ssti: static server-side computed value, no reachable "
+        "untrusted input -->\n"
+        '        <t t-set="_svc_uid" t-value="request.env[\'zero_sudo.security.utils\']'
+        "._get_service_uid('my_module.user_service')\"/>\n"
+        "    </template>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_template.xml")
+    assert not any("CRITICAL SSTI" in e for e in errors)
+
+
+def test_request_env_in_a_template_without_audit_ignore_ssti_still_fires():
+    xml = (
+        "<odoo>\n"
+        '    <template id="my_template" name="My Template">\n'
+        "        <t t-set=\"_svc_uid\" t-value=\"request.env['zero_sudo.security.utils']"
+        "._get_service_uid('my_module.user_service')\"/>\n"
+        "    </template>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_template.xml")
+    assert any("CRITICAL SSTI" in e and "audit-ignore-ssti" in e for e in errors)
+
+
+def test_request_env_mentioned_in_prose_inside_an_xml_comment_is_not_ssti():
+    # Real false positive found 2026-09-07 in
+    # ham_classifieds/security/security_rules.xml: an adversarial-review comment discussing a
+    # real Python controller happened to mention "request.env" as prose. This parser's own
+    # XMLNode stores a comment's content under attrs["text"] (see XMLNode's own construction),
+    # the same key name a real element's "text" attribute could coincidentally use -- a comment
+    # can never execute, so it must never be treated as a code-execution vector regardless of
+    # content.
+    xml = (
+        "<odoo>\n"
+        "    <!-- controllers/main.py reads product.template directly as request.env, no "
+        "service-account elevation -->\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="name">thing</field>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert not any("CRITICAL SSTI" in e for e in errors)
+
+
 def test_survey_state_field_comparison_is_a_removed_deprecated_field():
     xml = (
         "<odoo>\n"
