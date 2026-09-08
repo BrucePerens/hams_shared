@@ -1749,10 +1749,25 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     and getattr(node.value, "value", None) in (False, 0)
                     and not re.search(r".*_?api\.py$", self.filename)
                 ):
-                    self.add_error(
-                        getattr(node, "lineno", 1),
-                        "SECURITY ALERT: csrf=False found outside an API.",
-                    )
+                    # Real false positive found 2026-09-08: this "is it an API" check was
+                    # filename-only (must end in _api.py), never checking the same
+                    # @http.route(...) call's own type= kwarg -- a real, correctly-
+                    # authenticated (API-key, not cookie/session) type="jsonrpc" endpoint
+                    # in a file with any other name (ham_relay_bridge/controllers/
+                    # relay_repo_download.py, binary_download.py -- both real CI/updater
+                    # JSON-RPC endpoints) got flagged anyway. csrf and type= are both
+                    # keyword args of the same route() call, which can span several
+                    # source lines -- checking a small window of nearby lines for the
+                    # decorator's own type= value is simpler and safer here than
+                    # restructuring this per-keyword visitor to track full call context.
+                    window_start = max(0, getattr(node, "lineno", 1) - 6)
+                    window_end = min(len(self.lines), getattr(node, "lineno", 1) + 5)
+                    nearby = "\n".join(self.lines[window_start:window_end])
+                    if not re.search(r"""type\s*=\s*['"](jsonrpc|json)['"]""", nearby):
+                        self.add_error(
+                            getattr(node, "lineno", 1),
+                            "SECURITY ALERT: csrf=False found outside an API.",
+                        )
                 elif node.arg == "related" and getattr(
                     node.value, "value", ""
                 ).endswith(".users"):
