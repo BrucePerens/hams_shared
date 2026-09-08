@@ -68,7 +68,6 @@
   "daemons/hams_local_relay/src/main.rs::local_auth_middleware",
   "daemons/hams_local_relay/src/main.rs::local_network_only",
   "daemons/hams_local_relay/src/main.rs::main",
-  "daemons/hams_local_relay/src/multi_op_log.rs::fetch_peer_challenge",
   "daemons/hams_local_relay/src/multi_op_log.rs::start_multi_op_gossip_worker",
   "daemons/hams_local_relay/src/nat_traversal.rs::start_port_mapping",
   "daemons/hams_local_relay/src/noise_channel.rs::static_public_key",
