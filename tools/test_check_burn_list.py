@@ -22,6 +22,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 sys.path.insert(0, str(Path(__file__).parent))
 import check_burn_list  # noqa: E402
 from check_burn_list import (  # noqa: E402
@@ -205,6 +208,86 @@ def test_lookback_on_a_record_with_no_parent_uses_the_fallback():
 
     start = _xml_audit_lookback_start(record, fallback_lines=8)
     assert start == record.lineno - 8
+
+
+# Hypothesis property tests for _xml_audit_lookback_start, per CODE_REVIEW_PROCESS.md's own
+# standing "more Hypothesis property-test scoping" guidance -- a small, pure, well-typed target
+# sharing this session's own SSTI-fix work on this exact function's neighborhood. The four
+# example tests above cover: a multi-line COMMENT, jumping past an intermediate wrapper, no
+# preceding comment at all, and no parent at all. None of them cover several separate STACKED
+# `<!-- -->` comment siblings (as opposed to one multi-line comment node) -- the real scenario
+# _xml_audit_lookback_start's own docstring names explicitly ("an [@ANCHOR: ...] line and an
+# audit-ignore-view line" stacked together) -- which is what these properties target instead of
+# duplicating the example tests above.
+
+
+def _sibling_chain(tags):
+    """Builds a real parent/children/lineno-wired XMLNode chain for the given sequence of tags
+    (e.g. ["record", "#comment", "#comment", "record"]) with strictly increasing, non-overlapping
+    line ranges, and returns (parent, nodes) -- nodes[-1] is always the last tag in the list,
+    the one a test calls _xml_audit_lookback_start on."""
+    parent = check_burn_list.XMLNode("data", {}, 1)
+    nodes = []
+    line = 2
+    for tag in tags:
+        node = check_burn_list.XMLNode(tag, {"text": "a comment"} if tag == "#comment" else {}, line)
+        node.end_lineno = line + 2  # a real multi-line span, not just a single line
+        node.parent = parent
+        parent.children.append(node)
+        nodes.append(node)
+        line = node.end_lineno + 3  # a real gap between siblings, matching real documents
+    parent.end_lineno = line
+    return parent, nodes
+
+
+@given(
+    num_noise=st.integers(min_value=0, max_value=3),
+    num_comments=st.integers(min_value=0, max_value=4),
+)
+@settings(max_examples=200)
+def test_lookback_skips_any_number_of_stacked_comment_siblings_to_reach_the_real_boundary(
+    num_noise, num_comments
+):
+    # [noise real siblings...] [ONE marker real sibling] [comment siblings...] [scope]
+    # Regardless of how much noise precedes the marker, or how many separate comments (not one
+    # multi-line comment -- num_comments independent #comment nodes) sit between the marker and
+    # scope, the lookback must land exactly on the marker's own end_lineno -- the nearest real
+    # non-comment sibling, per this function's own documented contract.
+    tags = (
+        ["field"] * num_noise + ["field"] + ["#comment"] * num_comments + ["record"]
+    )
+    parent, nodes = _sibling_chain(tags)
+    marker = nodes[num_noise]  # the "ONE marker real sibling" -- last field before the comments
+    scope = nodes[-1]
+
+    start = _xml_audit_lookback_start(scope)
+    assert start == marker.end_lineno, (
+        f"expected the lookback to land on the marker sibling's own end_lineno "
+        f"({marker.end_lineno}) regardless of {num_noise} unrelated noise siblings before it or "
+        f"{num_comments} stacked comments after it, got {start}"
+    )
+
+
+@given(num_comments=st.integers(min_value=1, max_value=5))
+@settings(max_examples=100)
+def test_lookback_with_only_stacked_comments_before_scope_reaches_the_earliest_ones_own_start(
+    num_comments
+):
+    # No real sibling at all before scope -- just num_comments separate stacked comments, then
+    # scope, as the ONLY children of parent. Must reach the EARLIEST comment's own start line
+    # (comment.lineno - 1, matching the multiline-comment example test's own documented
+    # off-by-one convention), not the last comment, and not crash walking off the start of the
+    # sibling list.
+    tags = ["#comment"] * num_comments + ["template"]
+    parent, nodes = _sibling_chain(tags)
+    earliest_comment = nodes[0]
+    scope = nodes[-1]
+
+    start = _xml_audit_lookback_start(scope)
+    assert start == earliest_comment.lineno - 1, (
+        f"expected the lookback to reach the earliest of {num_comments} stacked comments' own "
+        f"start line ({earliest_comment.lineno - 1}), got {start}"
+    )
 
 
 def test_domain_sandbox_flags_a_direct_id_chained_grant():
