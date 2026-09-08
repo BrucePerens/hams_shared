@@ -450,6 +450,15 @@ def test_patch_ban_exempts_hams_shared_tools():
     assert errors == []
 
 
+def test_patch_ban_exempts_github_self_hosted_runner():
+    # .github/self-hosted-runner/ is a fifth instance of the same case as daemons/, ingest/,
+    # hams_shared/tools/, and */scripts/ above: standalone, non-Odoo test_*.py files (a GitHub
+    # Actions runner hook and a one-time sudo registration script) with no Odoo TestCase base
+    # class to redirect to.
+    errors = _patch_ban_errors(".github/self-hosted-runner/test_finish_registration.py")
+    assert errors == []
+
+
 def _qweb_numeric_separator_errors(source):
     # GENERAL_ERROR_RULES is only exercised via scan_file()'s own line-by-line regex pass, not
     # check_ast_vulnerabilities()/_dict_findings() -- matching _patch_ban_errors's own pattern

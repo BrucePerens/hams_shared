@@ -328,7 +328,13 @@ GENERAL_ERROR_RULES = [
         # this: no test_*.py file anywhere in either repo's scripts/ directories imports
         # TransactionCase/HamsTransactionCase/odoo.tests, so this can't silently exempt a real
         # Odoo test file.
-        r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/)(?!.*(?:^|/)tools/)(?!.*(?:^|/)scripts/).*test_.*\.py$",
+        #
+        # Also excludes .github/self-hosted-runner/ (2026-09-08): a fifth instance of the same
+        # case, found via test_cleanup_after_job.py/test_finish_registration.py -- both plain
+        # `unittest.TestCase`, no Odoo dependency at all (a GitHub Actions runner hook and a
+        # one-time sudo registration script), so `self.safe_patch()` is not available here
+        # either, the identical reasoning as daemons?/ingest/tools/scripts/ above.
+        r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/)(?!.*(?:^|/)tools/)(?!.*(?:^|/)scripts/)(?!.*(?:^|/)\.github/self-hosted-runner/).*test_.*\.py$",
         re.compile(r"(?:@(?:mock\.)?patch\b|\b(?:mock\.)?patch(?:\.object)?\s*\()"),
         "CRITICAL ARCHITECTURE: Native patch decorators and context managers are forbidden. Use self.safe_patch() or self.safe_patch_object().",
     ),
