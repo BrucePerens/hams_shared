@@ -3907,6 +3907,24 @@ def test_survey_state_field_comparison_is_a_removed_deprecated_field():
     assert any("survey.survey" in e and "removed in Odoo 19" in e for e in errors)
 
 
+def test_state_comparison_mentioned_in_an_xml_comment_attribute_is_not_a_deprecation_finding():
+    # Same class of bug as the SSTI comment-exclusion fix above, found in the same sweep: a
+    # comment's own text lives under attrs["text"] in this parser's data model, so the
+    # attrs-iterating half of this check would treat prose inside a comment as a real attribute
+    # value. A comment can never execute, so it can never actually compare against the removed
+    # field either.
+    xml = (
+        "<odoo>\n"
+        "    <!-- old code used to check record.state == 'open' here, now removed -->\n"
+        '    <record id="thing" model="some.model">\n'
+        '        <field name="name">thing</field>\n'
+        "    </record>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "my_data.xml")
+    assert not any("removed in Odoo 19" in e for e in errors)
+
+
 def test_ir_cron_record_without_audit_ignore_cron_gets_a_cron_architecture_reminder():
     xml = (
         "<odoo>\n"

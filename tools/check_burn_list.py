@@ -3264,16 +3264,21 @@ def scan_file(filepath, is_odoo_module=False):
                         errors_found.append(
                             f"Line {node.lineno}: CRITICAL SSTI: Using 'request.env' inside QWeb templates exposes the database to Remote Code Execution. If this is a static, developer-authored expression with no reachable untrusted input (not a template string built from user/DB-editable content), add '# audit-ignore-ssti' with a comment citing the evidence, plus a tracing anchor."
                         )
-                for k, v in node.attrs.items():
-                    v_str = str(v)
-                    if (
-                        ".state" in v_str
-                        and ("open" in v_str or "closed" in v_str)
-                        and ("==" in v_str or "!=" in v_str)
-                    ):
-                        errors_found.append(
-                            f"Line {node.lineno}: CRITICAL DEPRECATION: survey.survey 'state' field was removed in Odoo 19. Use 'active' (Boolean)."
-                        )
+                # Same "#comment" exclusion as the SSTI check above, and for the identical
+                # reason: a comment's own text lives under attrs["text"] in this parser's data
+                # model, so this loop would otherwise treat prose inside a comment (e.g. one
+                # discussing the very deprecation this rule flags) as a real attribute value.
+                if node.tag != "#comment":
+                    for k, v in node.attrs.items():
+                        v_str = str(v)
+                        if (
+                            ".state" in v_str
+                            and ("open" in v_str or "closed" in v_str)
+                            and ("==" in v_str or "!=" in v_str)
+                        ):
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL DEPRECATION: survey.survey 'state' field was removed in Odoo 19. Use 'active' (Boolean)."
+                            )
                 if node.text:
                     if (
                         ".state" in node.text
