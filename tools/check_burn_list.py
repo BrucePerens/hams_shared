@@ -319,7 +319,16 @@ GENERAL_ERROR_RULES = [
         # method to redirect to. Found live, not assumed: 114 of the 471
         # findings from a real --scan-daemons-and-tools run were this
         # exact rule firing across tools/, the single largest category.
-        r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/)(?!.*(?:^|/)tools/).*test_.*\.py$",
+        #
+        # Also excludes */scripts/ (2026-09-08): a fourth instance of the identical case, found
+        # via distributed_redis_cache/scripts/test_provision_cache_manager_db_role.py -- its own
+        # docstring says "Plain stdlib + psycopg2 script, no Odoo dependency," and confirmed
+        # directly, it's a bare `unittest.TestCase`, not a zero_sudo-derived one, so
+        # `self.safe_patch()` is genuinely not available here either. Checked before widening
+        # this: no test_*.py file anywhere in either repo's scripts/ directories imports
+        # TransactionCase/HamsTransactionCase/odoo.tests, so this can't silently exempt a real
+        # Odoo test file.
+        r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/)(?!.*(?:^|/)tools/)(?!.*(?:^|/)scripts/).*test_.*\.py$",
         re.compile(r"(?:@(?:mock\.)?patch\b|\b(?:mock\.)?patch(?:\.object)?\s*\()"),
         "CRITICAL ARCHITECTURE: Native patch decorators and context managers are forbidden. Use self.safe_patch() or self.safe_patch_object().",
     ),
