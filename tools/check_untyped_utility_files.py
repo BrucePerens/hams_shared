@@ -155,9 +155,15 @@ SCAN_ROOTS = [
 ]
 
 # Repo-relative directory prefixes to never scan, even under SCAN_ROOTS.
+# daemons/hams_local_relay/vendor/opusic-sys is a vendored Rust FFI crate (confirmed via its own
+# auto-generated Cargo.toml header and README.md/README.hams-patch.md, not assumed) -- its
+# meson/get-version.py build helper has 5 real mypy findings (str/int type confusion in a version-
+# string parser), same class of "not ours to fix, re-vendoring overwrites it" finding as
+# radae/cloudflared below.
 EXCLUDED_DIR_PREFIXES = [
     "daemons/hams_local_relay/radae",
     "daemons/cloudflared",
+    "daemons/hams_local_relay/vendor/opusic-sys",
 ]
 
 # As of 2026-08-20, every file this check can reach passes
