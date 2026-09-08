@@ -7,10 +7,12 @@ sessions on hams.com/hams_open/hams_shared. It exists because a dev box's own ho
 persistence conventions" below) — anything here is committed into `hams_shared` specifically so it
 survives a fresh clone on any machine, not just the box where it was first learned. It is a
 companion to `hams_shared/agents/skills/project-experience/SKILL.md` (which is a Trap/Solution log
-of narrow technical bugs and CI/CD gotchas) and to `hams_shared/docs/adrs/` (which holds formal,
-numbered Architecture Decision Records for structural mandates) — this file is for standing
-conventions and policy decisions that don't fit either of those shapes as neatly, along with a
-few pointers to fuller treatments that already live elsewhere.
+of narrow technical bugs and CI/CD gotchas), `hams_shared/agents/skills/claude-memory/` (the
+committed backup of Claude's own broader per-lesson cross-session memory files, one topic per
+file), and `hams_shared/docs/adrs/` (which holds formal, numbered Architecture Decision Records
+for structural mandates) — this file is for standing conventions and policy decisions that don't
+fit any of those shapes as neatly, along with a few pointers to fuller treatments that already
+live elsewhere.
 
 ## Legal & licensing
 
@@ -48,6 +50,25 @@ few pointers to fuller treatments that already live elsewhere.
   automation for a real, ongoing operational need, commit it into the appropriate repository (e.g.
   `hams_shared/tools/` for a general-purpose script) rather than leaving it to live only under
   `~bruce`. Secrets themselves can't be committed, but the *mechanism* that uses them should be.
+- **Claude Code's own cross-session memory files are `~bruce`-local too, and must be committed
+  the same way (policy set 2026-09-08).** Claude's persistent, file-based memory
+  (`~/.claude/projects/<encoded-cwd>/memory/*.md` — one Markdown file per durable lesson, with a
+  `name`/`description` frontmatter header) lives under the dev box's own home directory, exactly
+  the ephemeral location the bullet above already warns about; it does not migrate with the
+  server, is not visible to a session running against a fresh clone on another machine, and is not
+  backed up anywhere. Whenever a memory saved there records a durable fact about this project (as
+  opposed to a purely personal, cross-project preference of Bruce's that has nothing to do with
+  hams.com/hams_open/hams_shared), also commit a copy into
+  `hams_shared/agents/skills/claude-memory/` (indexed in that skill's own `SKILL.md`, one entry
+  per file) — it lives alongside the other skills, not under `docs/`, because it is AI-consumed
+  durable memory of the same kind as `hams_shared/agents/skills/project-experience/SKILL.md` (that
+  one stays narrowly scoped to mechanical technical traps/CI gotchas; `claude-memory` is the
+  broader set of standing conventions and behavioral preferences). This is the repository copy
+  that actually persists and travels with the codebase; the `~/.claude/` copy remains the one the
+  harness itself reads at the start of a session and is not replaced by this, only backed up. When
+  starting a session against a freshly cloned checkout with no local `~/.claude/` memory yet,
+  check `hams_shared/agents/skills/claude-memory/` for standing lessons the same way this file
+  itself is checked.
 - **Credentials live in `~/.secrets/`, outside any git repo.** Convention is `~/.secrets/<name>.env`
   (mode 400, `KEY=value` shape) — check there first before concluding a given service's credentials
   don't exist yet or need to be created.

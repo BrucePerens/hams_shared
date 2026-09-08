@@ -11,6 +11,8 @@ It is a place to record critical experiences, edge-cases, and hard-learned lesso
 The LLM is free to choose what to append and document here.*
 </system_role>
 
+**Scope note (added 2026-09-08):** this log stays narrow -- mechanical technical traps and CI/CD gotchas only. For broader standing conventions, workflow corrections, and Bruce's own behavioral preferences (a different, complementary kind of lesson), see `../claude-memory/SKILL.md` instead.
+
 <experience_log>
 ## 1. The Web UI Markdown Renderer Trap (XML Data Loss)
 ## **The Trap:** The conversational Web UI aggressively parses and strips out HTML/XML comments () from code blocks *before* the Python extraction script ever receives the payload.
