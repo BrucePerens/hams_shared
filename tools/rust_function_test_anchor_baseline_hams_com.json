@@ -7,7 +7,6 @@
   "daemons/hams_local_relay/src/audio.rs::start_audio_streams",
   "daemons/hams_local_relay/src/callbook.rs::handle_callbook_query",
   "daemons/hams_local_relay/src/callbook.rs::handle_callbook_sync_export",
-  "daemons/hams_local_relay/src/callbook.rs::has_adequate_space",
   "daemons/hams_local_relay/src/callbook.rs::start_sync_worker",
   "daemons/hams_local_relay/src/callbook.rs::sync_callbook_from_fcc_uls",
   "daemons/hams_local_relay/src/callbook.rs::try_peer_sync",
