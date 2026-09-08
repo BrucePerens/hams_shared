@@ -1044,6 +1044,32 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 43. check_minified_js_syntax_errors -- general backstop for the whole open-ended defect
+    # class check_minified_js_nested_templates.py's step 25 only partially covers: rather than
+    # pattern-matching source for one already-known-bad construct, this runs Odoo's own real
+    # rjsmin.jsmin() on every bundled JS asset and validates the actual minified output with a
+    # real `node --check`, so any future rjsmin miscompilation (not just nested template
+    # literals) fails loudly here instead of shipping silently to production. Same reasoning as
+    # step 25 for scope: always scans the full repo and the sibling repo root.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_minified_js_syntax_errors.py"),
+            dir_path,
+            sibling_dir,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
