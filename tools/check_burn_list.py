@@ -1977,6 +1977,14 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     attr in ("search", "create", "browse")
                     and getattr(node.func.value, "id", "") == "self"
                     and "model" not in self.current_decorators
+                    # Real false positive found 2026-09-08: `self.browse()` with NO arguments
+                    # always returns an empty recordset of self's own model -- by definition,
+                    # not ambiguously. This is the standard idiom for "start an empty recordset
+                    # of my own model to accumulate into" (Odoo core does this constantly), with
+                    # none of the "self already held real records of a possibly-different
+                    # context" concern a bare `self.browse(some_id)` or `self.search(domain)`
+                    # can raise.
+                    and not (attr == "browse" and not node.args and not node.keywords)
                 ):
                     # Real false positive found 2026-09-08: inside an @api.model method, `self`
                     # is always the model's own empty recordset -- `self.search(...)` there is
