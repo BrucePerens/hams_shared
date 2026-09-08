@@ -3746,6 +3746,41 @@ def scan_file(filepath, is_odoo_module=False):
                 # pager_duty/tests/test_pager_log_analyzer.py's own
                 # tail_file() coverage.
                 "burn-ignore-test-daemon-thread",
+                # A test spins up its OWN real HTTPServer bound to
+                # 127.0.0.1 as a hermetic stand-in for a real device that
+                # only ever exists on the operator's own LAN or loopback
+                # (e.g. hams_local_relay running on the same machine as
+                # the browser) -- there is no Docker-network boundary to
+                # cross here the way there is for odoo/redis/rabbitmq
+                # (the CRITICAL NETWORK HARDCODING rule's actual
+                # concern), because the real production topology being
+                # simulated genuinely is loopback/LAN, not a networked
+                # service with its own DNS name. Distinct from
+                # burn-ignore-local-debug-script above, which covers a
+                # one-shot personal CLI script rather than a test's own
+                # fixture server. First used by
+                # ham_shack/tests/test_shack_sw_behavior_tour.py's
+                # _FakeLocalRelayHandler/_FakeLocalRelayEmptyManifestHandler
+                # fixtures.
+                "burn-ignore-test-local-server",
+                # A loopback address paired with a reserved/guaranteed-
+                # closed port (e.g. 127.0.0.1:1 -- port 1 is reserved and
+                # essentially never has anything listening) used
+                # deliberately as an unreachable sentinel to force a real,
+                # hermetic connection failure, exercising an error/
+                # fallback code path for real rather than mocking the
+                # failure -- not an attempt to reach any real service, so
+                # the CRITICAL NETWORK HARDCODING rule's Docker-DNS
+                # concern doesn't apply. Distinct from
+                # burn-ignore-ssrf-test-value above, which covers a
+                # loopback address used as attack-payload test data, not
+                # a target this test's own code actually attempts to
+                # connect to. First used by
+                # ingest/test_daemon_utils.py's own
+                # test_send_ipc_message_over_sse_writes_a_real_dead_letter_when_unreachable
+                # and its sibling test, exercising
+                # _send_ipc_message_over_sse()'s dead-letter fallback.
+                "burn-ignore-unreachable-sentinel",
             ]
         ):
             errors_found.append(
