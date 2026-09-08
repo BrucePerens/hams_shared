@@ -24,8 +24,6 @@
   "daemons/hams_local_relay/src/civ_bridge.rs::start_civ_bridge",
   "daemons/hams_local_relay/src/cloud_link.rs::connect_to_cloud",
   "daemons/hams_local_relay/src/comb_squelch.rs::best_fit_lag_and_ratio",
-  "daemons/hams_local_relay/src/config.rs::load_config_from",
-  "daemons/hams_local_relay/src/config.rs::save_config_to",
   "daemons/hams_local_relay/src/cpu_governor.rs::start_cpu_governor",
   "daemons/hams_local_relay/src/cw_end_of_transmission.rs::EndOfTransmissionGate::is_quiet_timeout",
   "daemons/hams_local_relay/src/cw_end_of_transmission.rs::EndOfTransmissionGate::observe",
