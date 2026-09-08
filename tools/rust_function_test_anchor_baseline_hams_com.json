@@ -77,7 +77,6 @@
   "daemons/hams_local_relay/src/pty_bridge.rs::run_master_loop",
   "daemons/hams_local_relay/src/pty_bridge.rs::start_pty_bridge",
   "daemons/hams_local_relay/src/revocation.rs::check_once",
-  "daemons/hams_local_relay/src/revocation.rs::fetch_revocation_list",
   "daemons/hams_local_relay/src/revocation.rs::start_revocation_checker",
   "daemons/hams_local_relay/src/secure_enclave.rs::find_or_create_persisted_se_key",
   "daemons/hams_local_relay/src/secure_enclave.rs::find_persisted_se_key",
