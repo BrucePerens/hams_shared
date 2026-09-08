@@ -2686,6 +2686,27 @@ def scan_file(filepath, is_odoo_module=False):
                         f"Line {i}: CRITICAL FINANCIAL EXPOSURE: Granting access to '{model_id}' in custom ir.model.access.csv is strictly forbidden."
                     )
 
+    if filename.endswith(".xml"):
+        # Real, previously-undiscovered bug found 2026-09-08 the hard way: XML forbids "--"
+        # ANYWHERE inside a comment body (not just as the closing "-->"), a rule this codebase's
+        # own "--" comment-dash convention (used pervasively in Python/Rust prose comments) walks
+        # right into whenever it's copy-pasted into an XML <!-- --> comment. Two real instances
+        # found by a full-repo sweep after one of them silently aborted a real `-u all` Odoo
+        # module upgrade with a raw lxml.etree.XMLSyntaxError -- not a hypothetical. Checked via a
+        # DOTALL regex over the whole file (not the line-by-line loop below) since a comment, and
+        # the "--" inside it, can span multiple lines.
+        for comment_match in re.finditer(r"<!--(.*?)-->", content, re.DOTALL):
+            if "--" in comment_match.group(1):
+                bad_line = content[: comment_match.start()].count("\n") + 1
+                errors_found.append(
+                    f"Line {bad_line}: CRITICAL XML SYNTAX: A '<!-- -->' comment contains '--' "
+                    f"in its body -- XML forbids this anywhere inside a comment, not just as the "
+                    f"closing '-->'. This is not a style nitpick: it raises a real "
+                    f"lxml.etree.XMLSyntaxError that aborts Odoo module loading entirely. Rewrite "
+                    f"the comment to avoid '--' (e.g. a comma or single hyphen instead of a prose "
+                    f"dash)."
+                )
+
     if is_odoo_module and filename.endswith((".xml", ".html")):
         try:
             if filename.endswith(".html"):
