@@ -639,8 +639,14 @@ ODOO_ERROR_RULES = [
         # website.logo test hits /web/image/website/<id>/logo/...; session
         # auth API -- /web/session/get_session_info) confirmed as the only
         # actual repo-wide usages of either prefix, distinct from every
-        # other /web/* string literal in the codebase.
-        re.compile(r"['\"]/web/(?!login\b|signup\b|assets\b|static\b|tests\b|database\b|image\b|session\b)[^'\"]*['\"]"),
+        # other /web/* string literal in the codebase. dataset added
+        # 2026-09-08: /web/dataset/call_kw is Odoo 19 core's own real,
+        # current JSON-RPC model-method-call route (odoo/addons/web/
+        # controllers/dataset.py's own @http.route), unrelated to the bare
+        # /web backend-UI-entrypoint redirect this rule exists to catch --
+        # confirmed as the only real repo-wide usage of the /web/dataset
+        # prefix, ham_base/tests/test_impersonate.py's own real RPC call.
+        re.compile(r"['\"]/web/(?!login\b|signup\b|assets\b|static\b|tests\b|database\b|image\b|session\b|dataset\b)[^'\"]*['\"]"),
         "CRITICAL ROUTING DEPRECATION: /web is deprecated and forcefully redirected to /odoo in Odoo 19, losing the query parameters! Use /odoo instead.",
     ),
     (
