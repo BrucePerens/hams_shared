@@ -54,10 +54,11 @@ LLM pass to catch the same thing again.
    implied by the function's name, or asserted by a test -- or infer the intended behavior from
    context if nothing states one (you can't adversarially verify against nothing). If the function
    turns out to have real behavioral subtlety worth a durable record, write a claims file for it
-   before finishing the pass (same numbered-statement style as an existing one, or as this
-   portfolio's own patent claims; see the worked example at
-   `hams_com/ham_logbook/claims/compute_callsign_stripped.md`), with an accurate `code_hash` -- so
-   the next pass gets this step for free too.
+   before finishing the pass -- phrased in EARS, extended with the FOR-EACH pattern below, not
+   loose prose (see "Claim phrasing: EARS, extended," and the worked examples at
+   `hams_com/ham_logbook/claims/compute_callsign_stripped.md` and
+   `hams_open/user_websites/claims/`) -- with an accurate `code_hash` -- so the next pass gets this
+   step for free too.
 3. **Independently re-derive, don't trust the account.** Check the claim against the actual code, not
    against what a comment, docstring, spec, or prior review said about the code. Every real bug found
    tonight was found by someone re-deriving the fact from source rather than trusting an existing
@@ -85,6 +86,66 @@ LLM pass to catch the same thing again.
    linter rule, not just patch the instance.
 7. **Report findings concretely**: file, one-sentence summary, a concrete failure scenario (inputs/
    state that trigger it). Use the caller's `ReportFindings` tool if available.
+
+## Claim phrasing: EARS, extended
+
+A claim's body is written in **EARS** (Easy Approach to Requirements Syntax), not loose prose --
+tried 2026-09-09 as a comparison against the original numbered-patent-claim style and kept because
+its trigger/response structure, especially the unwanted-behavior pattern, forces exactly the
+question that found real bugs tonight: what happens on the branch nobody wrote down. The five
+standard patterns:
+
+- **Ubiquitous**: `THE <system> SHALL <response>` -- always true, no trigger.
+- **Event-driven**: `WHEN <trigger>, THE <system> SHALL <response>`.
+- **State-driven**: `WHILE <state>, THE <system> SHALL <response>`.
+- **Unwanted behavior**: `IF <condition>, THEN THE <system> SHALL <response>` -- use this for
+  every failure/fallback/absent-precondition branch a claim needs to cover, not just the happy
+  path. A claim that only has WHEN/WHILE statements and no IF/THEN for its own failure modes is
+  probably incomplete, not simple.
+- **Optional feature**: `WHERE <feature is present>, THE <system> SHALL <response>`.
+- Patterns compose: `WHILE <state>, WHEN <trigger>, THE <system> SHALL <response>`, etc.
+
+**Extension: FOR-EACH** (added 2026-09-09; standard EARS has no iteration pattern, and this
+codebase's business logic iterates constantly -- Odoo recordsets, per-company loops, per-item
+batch jobs). Syntax: `FOR-EACH <item> IN <collection>: <one of the five base patterns above,
+scoped to <item>>.` The for-each clause names the collection and binds a per-item variable; the
+rest of the statement is any base pattern, now scoped to one item rather than the whole system,
+so it composes with WHEN/IF/WHILE/WHERE exactly like the base patterns compose with each other.
+
+A FOR-EACH claim MUST also carry an explicit **ISOLATION** clause -- never silently omitted, since
+whether one item's processing can affect another is exactly the kind of assumption that needs
+adversarial checking, not silent trust (a multi-tenant per-company loop's own claim to not leak
+across companies was the concrete case that motivated this extension -- an assumption resting on
+`with_company()` scoping actually holding, not yet independently confirmed at the time this
+extension was written). Two valid forms, one of which is mandatory per FOR-EACH claim:
+
+- `ISOLATION: THE system SHALL NOT <cross-item effect> for any other <item> in <collection>.` --
+  when the isolation guarantee is real and has been independently verified against the code (not
+  assumed from a comment or a variable name).
+- `ISOLATION: not verified.` or `ISOLATION: not applicable -- <one-sentence reason>.` -- honest
+  and equally valid when the guarantee can't yet be confirmed or genuinely doesn't apply; do not
+  omit the field to avoid answering the question, and do not write a confident ISOLATION clause
+  you haven't actually checked.
+
+Worked examples: `hams_com/ham_logbook/claims/compute_callsign_stripped.md` (a simple FOR-EACH
+over an Odoo recordset) and `hams_open/user_websites/claims/` (a per-company FOR-EACH with a real
+ISOLATION question at stake).
+
+### Friction log -- observed gaps, growing
+
+EARS (even extended with FOR-EACH) will not phrase every real claim cleanly. When a bug-hunt pass
+finds a claim that doesn't fit -- forces an awkward workaround, loses precision, or needs a pattern
+that doesn't exist yet -- **do not silently write a bad-fit claim and move on**. Record the
+friction here, in the same spirit as "Growing this list" for bug classes below: what kind of claim
+didn't fit, what workaround was used (if any), and what a real extension might look like. If the
+same friction shows up twice, that's a strong signal the extension is worth designing properly
+(the way FOR-EACH itself started as one recognized gap, on one function, and was designed and
+adopted the same day). Edit this file directly to add an entry; don't leave it in a report only.
+
+- *(none logged yet as of this writing -- FOR-EACH itself was designed proactively, from a single
+  observed gap during a phrasing comparison, before any pass hit it as friction in the field. The
+  first real friction entry should come from an actual claim that still doesn't fit well even with
+  FOR-EACH available.)*
 
 ## Known bug classes
 
@@ -205,6 +266,41 @@ future pass has a concrete anchor, not just an abstract description).
     clobber the real source function's hash under the same key, since both scanned as "contains
     this anchor." Fixed by reimplementing `verify_anchors.py`'s own prefix-based declaration-vs-link
     classification rather than trusting a bare pattern match.
+
+17. **A loop's own iteration domain is broader than the caller's actual legitimate access scope, so
+    the loop must reach toward (or risk touching) data outside that scope just to find out whether
+    it's relevant.** The tell: a loop iterates over "every X that exists" (every company, every
+    tenant, every account) rather than "every X this specific caller is actually entitled to
+    operate on," discovering out-of-scope items reactively via a per-item access check (a context
+    switch, a permission probe) instead of never including them in the loop at all. This is a
+    correctness *and* privacy problem, not just a performance one (contrast bug class 4's N+1
+    territory, which is purely about query count): even a failed access attempt is itself a reach
+    toward data the caller should never have approached, and if the boundary doesn't fail cleanly
+    -- it throws instead of denying silently, or a stray, more-permissive rule elsewhere grants
+    access anyway -- the caller ends up crashing on, or actually exposed to, data outside its own
+    legitimate scope: exactly the outcome the boundary existed to prevent. **The fix is not "do
+    one ungrouped/grouped query instead of a per-item loop"** -- that can trade this problem for a
+    worse one if the single query ends up relying on an already-suspect, overly-permissive access
+    rule to see across the boundary at all (as it would have in the concrete case below). The real
+    fix is to derive the loop's own iteration domain FROM the caller's actual granted scope up
+    front -- e.g., iterate the service account's own `company_ids`, not an unfiltered
+    `res.company.search([])` -- so an out-of-scope item is never in the collection being iterated
+    over in the first place, not filtered out reactively per item. Where the architecture
+    legitimately requires cross-tenant context-switching for background/cron operations (this
+    codebase's own ADR-0083 mandates `.with_company()` for exactly this), that per-item context
+    switch is fine and expected -- the bug is iterating over more items than the caller has any
+    legitimate reason to touch, not the context-switching mechanism itself. *Found*: a per-company
+    cron loop iterated over every company in the whole database
+    (`res.company.search([], limit=10000)`) rather than the service account's own `company_ids`
+    (its real, provisioned scope), so it attempted `.with_company()` into every company that
+    exists, not just the ones it was actually meant to serve -- crashing (uncaught `AccessError`)
+    on the companies outside its own scope, and separately exposed to a cross-tenant count leak on
+    the one company that didn't crash, via an unrelated, over-permissive `ir.rule` that already
+    granted full visibility regardless of company. Found while checking why this codebase's own
+    deliberately-hardened multi-company data protection (`MASTER_16_FINANCIAL_DATA_PROTECTION.md`)
+    wasn't holding here -- a useful general prompt: when a privacy/isolation boundary appears not
+    to hold, check whether the code was ever scoped to touch only what it needs, or whether it
+    reaches broadly and depends on the boundary itself to push back.
 
 ### Growing this list
 
