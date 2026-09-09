@@ -2830,6 +2830,45 @@ def test_verify_test_ast_a_loop_wrapping_view_validation_is_ast_evasion():
     assert result == (1, 1)
 
 
+def test_verify_test_ast_a_loop_is_exempt_when_its_own_iterable_non_emptiness_is_asserted():
+    # 2026-09-09: the failure mode this rule guards against is a silently
+    # zero-iteration loop, not the loop construct itself -- a loop whose
+    # iterable is affirmatively shown non-empty first is real coverage, not
+    # a hole.
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_view_in_loop(self):\n"
+        "        # [@ANCHOR: COMM_test_view_in_loop]\n"
+        "        records = self.env['res.partner'].search([])\n"
+        "        self.assertGreater(len(records), 0)\n"
+        "        for r in records:\n"
+        "            self.url_open('/some/path/%s' % r.id)\n"
+    )
+    req = {"anchor": "test_view_in_loop", "type": "audit-ignore-view"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (0, 0)
+
+
+def test_verify_test_ast_a_loop_exemption_must_reference_the_same_iterable():
+    # An assertion about a *different* variable's non-emptiness must not
+    # exempt the loop -- the exemption is specifically about proving *this*
+    # loop's own iterable is non-empty, not about any assertion existing
+    # somewhere in the function.
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_view_in_loop(self):\n"
+        "        # [@ANCHOR: COMM_test_view_in_loop]\n"
+        "        other = self.env['res.users'].search([])\n"
+        "        self.assertGreater(len(other), 0)\n"
+        "        records = self.env['res.partner'].search([])\n"
+        "        for r in records:\n"
+        "            self.url_open('/some/path/%s' % r.id)\n"
+    )
+    req = {"anchor": "test_view_in_loop", "type": "audit-ignore-view"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (1, 1)
+
+
 # _is_odoo_module() -- the real filesystem-walk used by main() to classify each scanned file
 # as Odoo-module code or not: a /daemons//daemon//tools/ path segment short-circuits to False
 # regardless of manifest presence, otherwise it walks up looking for a real __manifest__.py,

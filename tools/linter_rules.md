@@ -16,7 +16,15 @@ You MUST consult this guide to understand the *intent* of the rules and format y
 **CRITICAL ANTI-EVASION MANDATE:** This document is a blueprint for *architectural alignment and secure design*, NOT a recipe book for bypassing security checks.
 You are strictly forbidden from using this guide to engineer semantic tricks, obfuscations, or workarounds that evade the AST linters without fixing the underlying architectural flaw.
 **DEAD CODE, LOOP, & MOCK EVASION IS BANNED:** You MUST NOT place required method calls (like `send_mail()`, `_trigger()`) inside unreachable execution blocks (e.g., `if False:` or after a `return`, `raise`, `break`, or `continue`) or use empty context managers.
-Additionally, wrapping assertions (like `get_view` or `url_open`) inside `for` or `while` loops is strictly forbidden.
+Additionally, wrapping assertions (like `get_view` or `url_open`) inside a `for` or `while` loop is
+forbidden UNLESS the test also explicitly asserts that the loop executed at least once (e.g., assert
+the iterated collection's own length is greater than zero before the loop, or assert a loop-entered
+flag is `True` after it). A loop over a collection that turns out to be empty silently skips every
+assertion inside it, making the "test" pass without ever actually checking anything -- this, not the
+loop construct itself, is the failure this rule exists to prevent. A loop that provably iterates (a
+literal, non-empty list; a collection whose non-zero size is itself asserted first) is legitimate and
+often better coverage than a single hand-picked assertion, since it checks the same property holds
+across every real item rather than one.
 You MUST NOT mock required functions (via `patch` or `patch.object`); the test must legitimately invoke the targeted logic sequentially.
 </system_role>
 

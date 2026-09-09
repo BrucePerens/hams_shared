@@ -3787,6 +3787,17 @@ def scan_file(filepath, is_odoo_module=False):
                 # and its sibling test, exercising
                 # _send_ipc_message_over_sse()'s dead-letter fallback.
                 "burn-ignore-unreachable-sentinel",
+                # A module's __manifest__.py registers *.test.js file(s) in
+                # web.assets_unit_tests without any tests/test_*.py runner
+                # that actually executes them via browser_js() -- a real,
+                # tracked gap (check_hoot_runner_coverage.py's own check),
+                # not an intentional design choice. Grandfathers the 13
+                # modules already in this state when the check was added
+                # 2026-09-09 (found while fixing a separate, widespread
+                # window.fetch hoot-mocking bug that this exact kind of gap
+                # let sit unnoticed); new modules should add a runner
+                # instead of reaching for this tag.
+                "burn-ignore-hoot-runner-coverage",
             ]
         ):
             errors_found.append(
@@ -3930,6 +3941,53 @@ def scan_file(filepath, is_odoo_module=False):
 # -------------------------------------------------------------------------
 
 
+_EMPTINESS_ASSERT_METHODS = (
+    "assertTrue",
+    "assertGreater",
+    "assertGreaterEqual",
+    "assertNotEqual",
+)
+
+
+def _loop_iteration_is_asserted(target_func, loop_node):
+    """True if `target_func` asserts, anywhere, that `loop_node`'s own
+    iterable is non-empty -- e.g. `self.assertTrue(len(records) > 0)`,
+    `self.assertGreater(len(records), 0)`, or `self.assertTrue(records)`,
+    where `records` (or the exact expression the loop iterates over, such
+    as `self.env['x'].search([])`) matches `loop_node.iter`'s own source.
+
+    Deliberately a source-text match (via `ast.unparse`), not a full
+    variable-flow analysis: this is a coarse, conservative check meant to
+    require the *same* thing the loop iterates over be shown non-empty, not
+    to prove it formally. A test that renames the iterable between the
+    assertion and the loop, or asserts non-emptiness of something merely
+    equivalent rather than textually identical, will still be rejected --
+    the fix in that case is to make the assertion reference the loop's own
+    iterable directly, not to weaken this check.
+    """
+    try:
+        iter_src = ast.unparse(loop_node.iter).strip()
+    except Exception:
+        return False
+    if not iter_src:
+        return False
+
+    for node in ast.walk(target_func):
+        if not isinstance(node, ast.Call):
+            continue
+        method = getattr(node.func, "attr", "")
+        if method not in _EMPTINESS_ASSERT_METHODS:
+            continue
+        for arg in node.args:
+            try:
+                arg_src = ast.unparse(arg).strip()
+            except Exception:
+                continue
+            if iter_src in arg_src:
+                return True
+    return False
+
+
 def _verify_test_ast(
     req, target_content, target_file, verification_errors, total_errors
 ):
@@ -4028,8 +4086,22 @@ def _verify_test_ast(
                     "get_view",
                     "url_open",
                 ):
+                    # Exception (2026-09-09): a loop is only a problem when it can
+                    # silently iterate zero times, making the assertion inside it
+                    # never run at all -- not because it's a loop. If the function
+                    # also asserts the loop's own iterable is non-empty (a
+                    # length/truthiness check referencing the same iterable
+                    # expression, anywhere in the function), the loop provably runs
+                    # and the assertion inside it is real coverage across every
+                    # item, not a hole. See hams_shared/tools/linter_rules.md's own
+                    # "Additionally, wrapping assertions..." paragraph for the
+                    # matching prose rule.
+                    if _loop_iteration_is_asserted(target_func, node):
+                        continue
                     print(
-                        f"  ❌ ERROR: AST Evasion Detected. Found loop wrapping view/URL validation in test anchor '{anchor}' in {target_file}."
+                        f"  ❌ ERROR: AST Evasion Detected. Found loop wrapping view/URL validation in test anchor '{anchor}' in {target_file}, "
+                        "with no assertion that the loop's own iterable is non-empty (e.g. assertTrue(len(x) > 0) or assertGreater(len(x), 0)) -- "
+                        "a silently empty collection would skip the assertion inside the loop entirely."
                     )
                     return verification_errors + 1, total_errors + 1
 
