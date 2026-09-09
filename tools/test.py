@@ -1691,18 +1691,37 @@ def main():
         if os.environ.get("HAMS_ISOLATED_NS") != "1"
         else None
     )
-    if os.environ.get("HAMS_ISOLATED_NS") != "1":
-        lock_file_path = f"{os.path.expanduser('~/tmp')}/odoo_test_runner.lock"
-        try:
-            _single_instance_lock = open(lock_file_path, "a")
-            os.chmod(lock_file_path, 0o777)
-        except Exception: # audit-ignore-catch-all
-            _single_instance_lock = open(lock_file_path, "r")
-        try:
-            fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except IOError:
-            print("🛑 ERROR: Another instance of test.py is already running. Exiting.")
-            sys.exit(1)
+    # Bug-hunt fix (2026-09-09): this single-instance lock used to be skipped
+    # entirely under HAMS_ISOLATED_NS=1 -- the project's OWN standing convention
+    # for how to invoke this script (see hams-odoo-test-runner-sudo-and-polkit).
+    # That made this lock dead in practice for every test run following that
+    # convention, on both this and every other concurrent session's box. Per
+    # Bruce's direct instruction: "I didn't really ask for tours to be
+    # concurrent or for you to run more than one test at a time. Impose a
+    # one-test-at-a-time rule and put a lock on test.py so that it is not
+    # violated." Real, confirmed damage from the lock being dead: two
+    # concurrent invocations under the same uid can spawn/kill each other's
+    # Chrome, contend for the same ports/sockets, and race on the same shared
+    # database -- root-caused this same day via a tour-hang investigation (see
+    # night_shift_todo.md). Kept fail-fast (LOCK_NB, immediate exit), matching
+    # this mechanism's own original design, rather than a blocking wait: a
+    # second invocation refusing immediately with a clear message is safer
+    # than queuing behind a first instance that might itself be hung (a real,
+    # not-yet-fully-fixed possibility on this box right now) -- a blocking
+    # wait behind a hung holder would just relocate that hang onto every
+    # other session's test run instead of containing it to the one that's
+    # actually stuck.
+    lock_file_path = f"{os.path.expanduser('~/tmp')}/odoo_test_runner.lock"
+    try:
+        _single_instance_lock = open(lock_file_path, "a")
+        os.chmod(lock_file_path, 0o777)
+    except Exception: # audit-ignore-catch-all
+        _single_instance_lock = open(lock_file_path, "r")
+    try:
+        fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except IOError:
+        print("🛑 ERROR: Another instance of test.py is already running. Exiting.")
+        sys.exit(1)
 
     cwd = os.getcwd()
     if not os.path.isdir(os.path.join(cwd, ".git")) or not (
