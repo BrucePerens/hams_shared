@@ -186,6 +186,19 @@ adopted the same day). Edit this file directly to add an entry; don't leave it i
   across the recordset -- state the claim as a plain WHEN/IF over "the recordset" in the latter
   case instead of forcing an iteration variable that was never really needed.
 
+- **FOR-EACH is defined over a collection this function itself iterates -- it doesn't fit a claim
+  about two *separate, concurrent invocations* of a function that iterates nothing at all.**
+  Reviewing `_increment_strike_count` (a single-row PL/pgSQL call, no loop, no recordset) still
+  needed to state an isolation-shaped guarantee -- what happens when two callers hit the same row
+  at once -- but FOR-EACH's own "item IN collection" framing had nothing to bind to. Worked around
+  by stretching FOR-EACH to mean "any pair of concurrent invocations," which produced a usable claim
+  but stretched the pattern's own definition past its natural fit. Not yet resolved into a rule;
+  candidate fix: a distinct `CONCURRENT-WITH` pattern (`CONCURRENT-WITH another invocation of THE
+  <system> on <same resource>: THE <system> SHALL/SHALL NOT <outcome>`) for claims about
+  same-resource concurrency safety on functions with no internal iteration, kept separate from
+  FOR-EACH's own collection-iteration isolation question -- add it if a third claim needs the same
+  shape.
+
 ## Known bug classes
 
 A living list. Each entry: a short name, what to look for, and where it was actually found (so a
@@ -353,11 +366,32 @@ future pass has a concrete anchor, not just an abstract description).
     live risk, not a theoretical one: find the method's own real callers (grep the whole codebase,
     not just this model) and check whether any of them look up an existing record without also
     filtering by `state` before acting on it -- that's the concrete path an already-processed
-    record gets reprocessed. *Found*: three sibling moderation-action methods on the same model
-    family, none guarded server-side; one of them was independently confirmed reachable in
-    production code (a report-deduplication lookup filtered only on `(url, reporter)`, not
-    `state`, so re-submitting the same violation re-triggered the strike-and-suspend action a
-    second and third time on a report already fully processed).
+    record gets reprocessed. *Found*: four sibling moderation-action methods across two model
+    families (two on `content.violation.report`, two on `content.violation.appeal`), none guarded
+    server-side; one was independently confirmed reachable in production code (a
+    report-deduplication lookup filtered only on `(url, reporter)`, not `state`, so re-submitting
+    the same violation re-triggered the strike-and-suspend action a second and third time on a
+    report already fully processed), and a second pair (`action_approve`/`action_reject` on the
+    appeal model) confirmed the same missing-guard shape from opposite directions on sibling
+    methods in the same file -- one re-executes idempotent side effects with duplicate audit
+    messages, the other actively overwrites a terminal `state` and posts a message that becomes
+    false the moment it's re-invoked.
+19. **An enumerated dispatch (an `IF`/`ELIF` chain, in application code or in a stored SQL/PL-pgSQL
+    procedure, matching against a small fixed set of string/enum values) has no terminal
+    `ELSE`/default-raise branch.** Any caller passing an unmatched value at the call boundary --
+    a typo, `None`, an empty string, a value from a future enum member the dispatch was never
+    updated for -- silently no-ops: no lock taken, no row touched, no exception, no log, nothing
+    distinguishable from a successful call that legitimately had nothing to do. Distinct from class
+    4 (an unenforced *schema* invariant) and class 5 (a silent-failure gate on a *dependency's own
+    init* failing) -- this is specifically a hand-written value-dispatch chain silently swallowing
+    an unrecognized input, in direct tension with this codebase's own fail-fast principle. A cheap
+    linter check: scan `CREATE OR REPLACE FUNCTION` bodies embedded in Python string literals (and
+    plain Python `if`/`elif` dispatches on a string/enum parameter) for a chain with no final
+    `ELSE raise`/`ELSE RAISE`. *Found*: `increment_strike_count()`, a PL/pgSQL stored procedure
+    (`user_websites/models/sql_views.py`) dispatching on a `tbl_name text` parameter across exactly
+    two `ELSIF` branches with no `ELSE` -- not reachable today only because both real call sites
+    pass hardcoded literal table names freshly read from FK-constrained fields in the same
+    transaction, but latent against any future caller that doesn't.
 
 ### Growing this list
 

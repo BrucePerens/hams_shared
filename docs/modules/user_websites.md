@@ -227,6 +227,8 @@ For detailed narratives and end-to-end workflows, refer to the following:
 ### Content Moderation and Appeals
 * **Appeal Target Constraint:** `[@ANCHOR: user_websites:COMM_check_appeal_target]` -- an appeal must be tied to exactly one of a user or a group.
 
+* **Approve Appeal:** `[@ANCHOR: user_websites:COMM_appeal_action_approve]` -- pardons the appeal's user or group and moves the appeal to `approved`; no server-side guard against re-invoking on an already-`approved`/`rejected` appeal (bug class 18).
+
 * **Reject Appeal:** `[@ANCHOR: user_websites:COMM_appeal_action_reject]`.
 
 * **Strike Count Increment:** `[@ANCHOR: user_websites:COMM_increment_strike_count]` -- the atomic stored-procedure call backing the 3-strike rule.
