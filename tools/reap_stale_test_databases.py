@@ -36,12 +36,17 @@ A candidate is only actually dropped once both of these hold:
      least --max-age-hours. A database still receiving real writes keeps advancing that mtime,
      so a long-running scratch database in genuine active use survives even if disconnected
      between queries.
+
+When a database is dropped, this reaper also removes its Odoo filestore directory
+(`ODOO_FILESTORE_BASE/<dbname>`) if present -- `dropdb` itself has no concept of the filestore
+and leaves it behind, which is what caused a separate ~8.2GB leak found 2026-09-08.
 """
 
 import argparse
 import datetime
 import logging
 import os
+import shutil
 import subprocess
 import sys
 
@@ -51,6 +56,17 @@ SCRATCH_DB_PREFIX = "tmp_"
 
 DEFAULT_MAX_AGE_HOURS = 6
 PG_DATA_BASE_DIR = "/var/lib/postgresql/17/main/base"
+
+# `dropdb` operates at the PostgreSQL level and has no concept of Odoo's filestore -- only
+# Odoo's own `/web/database/manager` "Drop" action (odoo.service.db.exp_drop()) removes the
+# matching `filestore/<dbname>` directory alongside the database. Every `dropdb` call bypasses
+# that entirely, including this reaper's own, so a dropped scratch database's filestore directory
+# was accumulating forever: found 2026-09-08, 149 orphaned directories totaling ~8.2GB on a
+# /var partition already at 89% (see hams-devbox-var-partition-small). Since this reaper only
+# ever drops SCRATCH_DB_PREFIX-named databases, removing the identically-named filestore
+# directory in the same step is safe by the same allowlist reasoning as the database drop itself
+# -- a real database's filestore directory can never match the prefix.
+ODOO_FILESTORE_BASE = "/var/lib/odoo/.local/share/Odoo/filestore"
 
 
 def _run_psql(sql: str) -> str:
@@ -147,14 +163,22 @@ def main():
         return
 
     for datname in reapable:
+        filestore_dir = os.path.join(ODOO_FILESTORE_BASE, datname)
         if args.dry_run:
             _logger.info("[dry-run] Would drop: %s", datname)
+            if os.path.isdir(filestore_dir):
+                _logger.info("[dry-run] Would also remove filestore dir: %s", filestore_dir)
             continue
         _logger.info("Dropping: %s", datname)
         subprocess.run(
             ["sudo", "-n", "-u", "postgres", "dropdb", "--if-exists", datname],
             check=False,
         )
+        # Only reached for a name already verified above to start with SCRATCH_DB_PREFIX --
+        # never removes a real database's filestore.
+        if os.path.isdir(filestore_dir):
+            _logger.info("Removing filestore dir: %s", filestore_dir)
+            shutil.rmtree(filestore_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
