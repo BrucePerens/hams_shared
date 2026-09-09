@@ -64,7 +64,11 @@ LLM pass to catch the same thing again.
    tonight was found by someone re-deriving the fact from source rather than trusting an existing
    description of it. Do this by reading -- tracing call sites, checking a comment's own factual claim
    against the file it cites, following a value from where it's set to where it's used -- not by
-   running anything.
+   running anything. If the unit touches Odoo's own multi-company access, record rules, or mail
+   sending, check `hams_shared/docs/odoo_orm_reference.md` first -- a process retrospective found
+   re-discovering these same core-Odoo facts from scratch was the single biggest source of wasted
+   tool calls in an early pass; add to that file, don't silently re-derive and discard, when a pass
+   verifies a new one.
 4. **Do not run the test suite as part of this method.** This project already has ample, separate
    test-running coverage (CI, the existing Odoo/Rust/JS test-runner conventions) -- re-running tests
    is not this skill's job, and a bug-hunt pass that reaches for a test runner first is doing someone
@@ -86,6 +90,15 @@ LLM pass to catch the same thing again.
    linter rule, not just patch the instance.
 7. **Report findings concretely**: file, one-sentence summary, a concrete failure scenario (inputs/
    state that trigger it). Use the caller's `ReportFindings` tool if available.
+8. **Do one more adversarial round before calling the pass done.** The point where a claim is
+   written and `check_claims_freshness.py` passes feels like the natural stopping point -- it is
+   exactly the point a real pass found a second, independent, severe bug it would otherwise have
+   missed (a mid-pass consult with a stronger reviewer, right after the claim seemed finished,
+   surfaced a cross-tenant data leak the first pass's own findings hadn't touched at all). Before
+   finishing, re-read the claim you just wrote as if it were someone else's, and ask once more
+   whether every SHALL is actually backed by something you traced, not assumed -- particularly any
+   ISOLATION clause, since that's the one most likely to have been asserted from a comment's own
+   framing rather than independently confirmed.
 
 ## Claim phrasing: EARS, extended
 
@@ -406,3 +419,20 @@ following the same format.
   symlinked sibling repo (e.g. `hams_shared`, symlinked into both `hams_com` and `hams_open`) is *not*
   isolated by a git worktree even though the rest of the checkout is -- any pass touching files there is
   touching the one real shared copy, no matter how many worktrees are running in parallel.
+- **Batch genuinely trivial, adjacent functions into one dispatch rather than one each.** Strict
+  one-function-per-dispatch is the default for real depth, but two one-line, nearly-identical
+  functions in the same file raising the same single question (e.g. two state-setter actions both
+  missing the same kind of guard) don't need two separate dispatches' worth of overhead to review
+  with full rigor -- batch them explicitly, and say so in the dispatch prompt, rather than either
+  skimping on depth per function or paying full dispatch cost twice for near-duplicate work.
+- **Write dispatch prompts to avoid rediscovering what's already known.** A process retrospective on
+  an early per-function pass found real, avoidable navigation overhead (~15-20% of that pass's own
+  tool calls): (a) a short worked-example claim file referenced only by path had to be
+  re-discovered when the agent guessed a plausible-but-wrong location for it -- point at the exact
+  repo the example lives in, or inline its content directly in the prompt if it's short; (b) hunting
+  for Odoo-core internals (which file defines `Environment.company`, how `ir.rule` domains combine)
+  cost roughly nine tool calls that a one-line pointer to `hams_shared/docs/odoo_orm_reference.md`
+  would have skipped entirely; (c) an unscoped filesystem search (`find /`) is slow and unnecessary
+  when the target is known to live under a specific root (`/usr/lib/python3/dist-packages/odoo/`
+  for Odoo core, the target repo for project code) -- tell dispatches to scope their own searches
+  to known roots rather than searching from `/`.
