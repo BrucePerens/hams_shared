@@ -25,6 +25,16 @@ RULES OF TRACEABILITY:
    requirement); a user-visible feature still belongs in `docs/stories/`/`docs/journeys/` (or
    `data/documentation.html` for a `UX_`-prefixed anchor, per rule 5). Both are real documentation,
    just routed to the audience that actually reads each one.
+8. CLAIM LINK (ADR 0091, optional): a base anchor MAY additionally have a claim at
+   `<module>/claims/<anchor_name>.md` -- a short, falsifiable statement of exactly what the
+   anchored function guarantees, in the same numbered-statement style this portfolio's own patent
+   claims use. Not mandatory the way rules 1-7 are for a real anchor; opt-in per function, mainly
+   added by a `hams_shared/agents/skills/bug-hunt/SKILL.md` review pass where a function's own
+   behavioral subtlety makes a durable claim worth having. If a claim exists, its own frontmatter
+   `code_hash` is checked against the anchored function's current source by
+   `check_claims_freshness.py`, not by this script -- a hash mismatch means the code changed since
+   the claim was last confirmed accurate, not that the claim itself is verified wrong; someone
+   still has to read both and decide.
 """
 
 import os

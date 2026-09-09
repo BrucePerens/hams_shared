@@ -44,10 +44,20 @@ LLM pass to catch the same thing again.
 1. **Pick one bounded unit.** One Odoo module, one daemon/crate, one JS component cluster, one file
    cluster around a single feature -- never "the whole codebase" in one pass. This is what let each
    patent-disclosure pass go deep instead of skimming.
-2. **State the claim.** For each function/component with a real behavioral claim -- stated in a
-   comment/docstring, implied by its name, or asserted by a test -- write down explicitly what it is
-   supposed to do. If nothing states a claim, infer the intended behavior from context before checking
-   it (you can't adversarially verify against nothing).
+2. **State the claim.** First check whether the function already has a durable one: if its own
+   base anchor (`# [@ANCHOR: name]`) has a file at `<module>/claims/<name>.md` (ADR 0091), read it
+   -- that's this step already done by an earlier pass, not something to re-derive. Check whether
+   `check_claims_freshness.py` flags it stale (the anchored function's source changed since the
+   claim's own `code_hash` was last confirmed) before trusting it uncritically; a stale claim still
+   tells you what the function *used to* guarantee, which is itself useful context for spotting
+   what changed. If no claims file exists, state the claim the old way -- from a comment/docstring,
+   implied by the function's name, or asserted by a test -- or infer the intended behavior from
+   context if nothing states one (you can't adversarially verify against nothing). If the function
+   turns out to have real behavioral subtlety worth a durable record, write a claims file for it
+   before finishing the pass (same numbered-statement style as an existing one, or as this
+   portfolio's own patent claims; see the worked example at
+   `hams_com/ham_logbook/claims/compute_callsign_stripped.md`), with an accurate `code_hash` -- so
+   the next pass gets this step for free too.
 3. **Independently re-derive, don't trust the account.** Check the claim against the actual code, not
    against what a comment, docstring, spec, or prior review said about the code. Every real bug found
    tonight was found by someone re-deriving the fact from source rather than trusting an existing
@@ -178,15 +188,28 @@ future pass has a concrete anchor, not just an abstract description).
     own claims about `check_burn_list.py`/`verify_anchors.py` as of this writing -- a good first target
     for a future pass using this skill.
 
+16. **A naive text/pattern match conflates a declaration with a reference to it.** A marker syntax
+    used for more than one purpose (a base declaration vs. a link/citation of that same marker
+    elsewhere) gets matched by a single pattern with no regard for which role it's playing in
+    context -- silently attributing a reference's own content to the thing it merely points at.
+    *Found*: prototyping `check_claims_freshness.py` (ADR 0091), a naive scan hashed *any* function
+    whose span contained `[@ANCHOR: name]` text, including a test file's own
+    `# Tests [@ANCHOR: name]` citation of that anchor -- letting the test function's body silently
+    clobber the real source function's hash under the same key, since both scanned as "contains
+    this anchor." Fixed by reimplementing `verify_anchors.py`'s own prefix-based declaration-vs-link
+    classification rather than trusting a bare pattern match.
+
 ### Growing this list
 
 When a bug-hunt pass using this skill finds a genuinely new bug class -- not a fresh instance of one
 already listed above -- **add it to this file before finishing the pass**, in the same format: a short
 name, what to look for in general terms, and the concrete instance that was actually found. Edit
-`.claude/skills/bug-hunt/SKILL.md` directly (this file). Don't just mention the new class in a report
-that nobody reads later -- the value of this list is that it compounds across passes and across
-sessions, which only works if it's actually kept current. If two entries turn out to describe the same
-underlying pattern, merge them rather than leaving near-duplicates.
+`hams_shared/agents/skills/bug-hunt/SKILL.md` directly (this file -- moved here from hams_com's own
+`.claude/skills/` in September 2026 since the method applies equally to hams_open). Don't just
+mention the new class in a report that nobody reads later -- the value of this list is that it
+compounds across passes and across sessions, which only works if it's actually kept current. If two
+entries turn out to describe the same underlying pattern, merge them rather than leaving
+near-duplicates.
 
 ## Linter-rule candidates
 
@@ -224,6 +247,15 @@ it again. Already implemented, from tonight's findings:
   `_loop_iteration_is_asserted()` helper, rather than leaving the overbroad ban in place or removing it
   outright. A worked example of bug class 14 itself, found by asking what concrete incident the
   existing rule was written to prevent rather than accepting its stated scope at face value.
+
+- **`check_claims_freshness.py`** (ADR 0091, supports bug class 6 and this skill's own claim-reuse
+  step 2): mechanically flags a function claim (`<module>/claims/<anchor_name>.md`) whose recorded
+  `code_hash` no longer matches its anchored function's current source -- the code changed since
+  the claim was last confirmed, so the claim needs a fresh read before being trusted. Not a
+  semantic check (it can't tell you the claim's prose is wrong, only that nobody's looked since the
+  code moved); not yet wired into `run_linters.py` as of this writing, since that file had live
+  concurrent edits from another session the same night this was built -- finish wiring it in as its
+  own numbered step, same pattern as `check_shebang.py`, when next touching that file.
 
 Candidates not yet implemented, evaluated and left as future work because a reliable low-false-positive
 mechanical check isn't obviously cheap:
