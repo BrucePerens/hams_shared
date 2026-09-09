@@ -31,8 +31,8 @@ advanced to "now" with no allowance for clock skew against the remote server it 
 
 Fable's own strength wasn't really the mechanism here. What found these bugs was: **state a precise,
 falsifiable claim about what the code does, then adversarially verify that claim against the actual
-code and the actual test suite, trusting neither the comments nor a linter's own clean verdict.**
-That loop runs fine on Sonnet. Running Fable over the whole codebase would burn the token budget for
+code, trusting neither the comments nor a linter's own clean verdict.** That loop runs fine on
+Sonnet. Running Fable over the whole codebase would burn the token budget for
 one pass; this skill exists to get comparable bug-finding power at Sonnet/Opus cost by (a) packaging
 the method itself, (b) carrying forward the specific bug-class checklist those passes already
 discovered so a cheaper model doesn't have to rediscover each pattern from scratch, and (c) pushing
@@ -61,27 +61,29 @@ LLM pass to catch the same thing again.
 3. **Independently re-derive, don't trust the account.** Check the claim against the actual code, not
    against what a comment, docstring, spec, or prior review said about the code. Every real bug found
    tonight was found by someone re-deriving the fact from source rather than trusting an existing
-   description of it.
-4. **Run the real tests. Not optional.** Reading a test and assuming it passes, or assuming it
-   actually covers what its name claims, was wrong every single time this was tried tonight instead of
-   executing it for real. If you touch or rely on a test, run it. If a test's assertion looks like it
-   might not actually distinguish the bug from its absence, prove it one way or the other by
-   temporarily breaking the guarded behavior and confirming the test then fails -- don't just eyeball
-   it.
-5. **Never make a test pass by weakening it.** If a test is failing, or if you find a test whose
-   assertion can't actually catch the defect it's nominally guarding, the fix is to strengthen the
-   test and fix the underlying code -- never to delete, skip, disable, or loosen the test itself, and
-   never to mock around logic that's supposed to be genuinely exercised. (This project has a real,
-   documented incident behind this rule -- see `hams_shared/tools/linter_rules.md`'s anti-test-avoidance
-   rules, added after a prior AI agent gamed a "make tests pass" instruction by deleting the failing
-   tests instead of fixing the code.)
-6. **Classify every mismatch found** against the Known Bug Classes list below. If it fits, cite the
+   description of it. Do this by reading -- tracing call sites, checking a comment's own factual claim
+   against the file it cites, following a value from where it's set to where it's used -- not by
+   running anything.
+4. **Do not run the test suite as part of this method.** This project already has ample, separate
+   test-running coverage (CI, the existing Odoo/Rust/JS test-runner conventions) -- re-running tests
+   is not this skill's job, and a bug-hunt pass that reaches for a test runner first is doing someone
+   else's already-covered work instead of its own. This skill's own value is the claim-then-verify
+   *reading*: stating a precise claim and checking it against the code. If a claim's own truth
+   genuinely can't be settled by reading alone, say so explicitly in the report and name what running
+   the existing test suite would need to confirm -- don't spend the pass's own effort standing up a
+   test environment to do it yourself. (If you do encounter a test directly, e.g. because a claim
+   review requires reading one, never make a failing test pass by weakening it -- deleting, skipping,
+   disabling, or mocking around logic that's supposed to be genuinely exercised. This project has a
+   real, documented incident behind that rule -- see `hams_shared/tools/linter_rules.md`'s
+   anti-test-avoidance rules, added after a prior AI agent gamed a "make tests pass" instruction by
+   deleting the failing tests instead of fixing the code.)
+5. **Classify every mismatch found** against the Known Bug Classes list below. If it fits, cite the
    class. If it's genuinely new, add a new entry (see "Growing this list").
-7. **For every mismatch, ask whether a cheap mechanical check could catch this class in the future.**
+6. **For every mismatch, ask whether a cheap mechanical check could catch this class in the future.**
    See "Linter-rule candidates" below. Propose or add the check rather than only fixing the one
    instance -- this project's own standing convention is to turn a found bug pattern into a durable
    linter rule, not just patch the instance.
-8. **Report findings concretely**: file, one-sentence summary, a concrete failure scenario (inputs/
+7. **Report findings concretely**: file, one-sentence summary, a concrete failure scenario (inputs/
    state that trigger it). Use the caller's `ReportFindings` tool if available.
 
 ## Known bug classes
@@ -99,10 +101,15 @@ future pass has a concrete anchor, not just an abstract description).
 2. **A test whose only assertion can't distinguish the bug from its absence.** The test "passes"
    whether the guarded behavior is present or the bug it's meant to catch is reintroduced -- usually
    because an error is silently swallowed (e.g., into `console.error`) and the assertion checks a side
-   effect that's identical either way. Always verify by deliberately breaking the guarded behavior and
-   confirming the test then fails. *Found*: `ham_world_map_view.test.js` -- a test asserting
-   `state.satellites.length === 0` passed identically whether an accessibility-gating check existed or
-   was deleted, since the fetch failure it triggered was caught and logged, not surfaced.
+   effect that's identical either way. Recognizable by reading alone in most cases: trace what the
+   assertion actually checks back to the code path it's meant to guard, and ask whether that value
+   would differ if the guard were deleted -- if not, the test can't be discriminating. Confirming it
+   for certain means running the test under both conditions, which is the existing test-running
+   infrastructure's job (see method step 4), not this skill's own -- name the suspicion and what
+   running it would need to show, rather than standing up a test run yourself. *Found*:
+   `ham_world_map_view.test.js` -- a test asserting `state.satellites.length === 0` passed identically
+   whether an accessibility-gating check existed or was deleted, since the fetch failure it triggered
+   was caught and logged, not surfaced.
 3. **Claimed test/verification coverage that doesn't actually exist.** A comment, docstring, or spec
    claims something is "tested," "verified," or "covered," for a code path no actual test exercises.
    Confirm by grepping the real test files for the referenced function/branch -- don't trust the claim.
