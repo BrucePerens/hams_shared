@@ -59,6 +59,21 @@ LLM pass to catch the same thing again.
    `hams_com/ham_logbook/claims/compute_callsign_stripped.md` and
    `hams_open/user_websites/claims/`) -- with an accurate `code_hash` -- so the next pass gets this
    step for free too.
+
+   **Opportunistic claims for related functions.** Verifying this unit's own claim often requires
+   tracing into a different function it calls or depends on (a sibling method, a helper, a stored
+   procedure) closely enough to independently confirm exactly what it does. When that happens, and
+   the traced function doesn't already have a claims file, write one for it too, in the same
+   dispatch, at the same rigor -- don't let that understanding evaporate once this unit's own
+   report is filed, only for a later pass to pay the full investigation cost again from scratch.
+   The guardrail: only do this when the investigation genuinely reached this skill's own bar for a
+   real claim (independently re-derived from source, adversarially checked) -- reading a
+   docstring and moving on is not that bar, and a shallow, under-verified claim is worse than no
+   claim at all, since a later pass's own step 2 will trust it. If in doubt whether the tracing was
+   thorough enough, don't write it -- leave the function for its own dedicated pass. Before
+   writing one, check it isn't the explicit assigned unit of another dispatch already running in
+   parallel (the caller/orchestrator should also check for an existing claim before dispatching a
+   new unit, so this doesn't need solving perfectly from inside a single dispatch).
 3. **Independently re-derive, don't trust the account.** Check the claim against the actual code, not
    against what a comment, docstring, spec, or prior review said about the code. Every real bug found
    tonight was found by someone re-deriving the fact from source rather than trusting an existing
@@ -155,10 +170,21 @@ same friction shows up twice, that's a strong signal the extension is worth desi
 (the way FOR-EACH itself started as one recognized gap, on one function, and was designed and
 adopted the same day). Edit this file directly to add an entry; don't leave it in a report only.
 
-- *(none logged yet as of this writing -- FOR-EACH itself was designed proactively, from a single
-  observed gap during a phrasing comparison, before any pass hit it as friction in the field. The
-  first real friction entry should come from an actual claim that still doesn't fit well even with
-  FOR-EACH available.)*
+- **FOR-EACH conflates "iterates with per-item Python logic" (a real isolation question) with
+  "operates uniformly across a batch via one ORM call" (no such question).** `self.write({...})`
+  on a recordset is a single SQL `UPDATE ... WHERE id IN (...)`, uniform across every row by
+  construction -- forcing a FOR-EACH clause onto a claim for a bare bulk `write()` manufactures a
+  hollow ISOLATION statement ("trivially maintained") rather than surfacing a real one, since there
+  was never a per-item code path that could have leaked between rows. *Found* reviewing
+  `action_mark_under_review`/`action_dismiss` (`self.write({"state": ...})`, no Python loop at
+  all) against the pattern's own worked example (`cron_notify_pending_reports`, a real
+  `for company in companies:` with per-company side effects) -- the two are shaped completely
+  differently and the pattern's own ISOLATION requirement only earns its keep on the second shape.
+  Not yet resolved into a rule; candidate fix: only require FOR-EACH (and its mandatory ISOLATION
+  clause) when the claim describes an actual per-item Python-level operation with its own side
+  effects or context, not a single ORM call whose own semantics already guarantee uniformity
+  across the recordset -- state the claim as a plain WHEN/IF over "the recordset" in the latter
+  case instead of forcing an iteration variable that was never really needed.
 
 ## Known bug classes
 
@@ -314,6 +340,24 @@ future pass has a concrete anchor, not just an abstract description).
     wasn't holding here -- a useful general prompt: when a privacy/isolation boundary appears not
     to hold, check whether the code was ever scoped to touch only what it needs, or whether it
     reaches broadly and depends on the boundary itself to push back.
+18. **A state-machine transition guard exists only in the client-rendered UI (a view's
+    `invisible`/domain condition), with no corresponding server-side enforcement.** Any caller
+    with ordinary model write access -- direct RPC, a stale concurrent form (two operators with
+    the same record open, one's write racing the other's stale read of `state`), an automated
+    server action, a future integration -- can invoke the transition method out of order or on an
+    already-terminal state, silently overwriting the record with no exception, constraint
+    violation, or audit signal, even when that terminal state already reflects irreversible side
+    effects applied elsewhere in the system. Check: does the model have an `@api.constrains` or
+    `models.Constraint` restricting valid `state` transitions, or is the *only* thing preventing an
+    out-of-order call a view's own `invisible="state in (...)"` attribute? The tell that this is a
+    live risk, not a theoretical one: find the method's own real callers (grep the whole codebase,
+    not just this model) and check whether any of them look up an existing record without also
+    filtering by `state` before acting on it -- that's the concrete path an already-processed
+    record gets reprocessed. *Found*: three sibling moderation-action methods on the same model
+    family, none guarded server-side; one of them was independently confirmed reachable in
+    production code (a report-deduplication lookup filtered only on `(url, reporter)`, not
+    `state`, so re-submitting the same violation re-triggered the strike-and-suspend action a
+    second and third time on a report already fully processed).
 
 ### Growing this list
 
@@ -419,6 +463,12 @@ following the same format.
   symlinked sibling repo (e.g. `hams_shared`, symlinked into both `hams_com` and `hams_open`) is *not*
   isolated by a git worktree even though the rest of the checkout is -- any pass touching files there is
   touching the one real shared copy, no matter how many worktrees are running in parallel.
+- **Check for an existing claims file before dispatching a new unit, not just inside the
+  dispatch.** A prior unit's own investigation sometimes already produced a genuine,
+  adversarially-verified claim for a function that would otherwise be the next dispatch's own
+  assigned unit (see the method's own "Opportunistic claims for related functions" note). Skip
+  dispatching a full review for a function that already has a real claim; spend that dispatch on
+  something still uncovered instead.
 - **Batch genuinely trivial, adjacent functions into one dispatch rather than one each.** Strict
   one-function-per-dispatch is the default for real depth, but two one-line, nearly-identical
   functions in the same file raising the same single question (e.g. two state-setter actions both
