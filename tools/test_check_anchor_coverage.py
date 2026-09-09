@@ -97,6 +97,19 @@ class CheckAnchorCoverageTests(unittest.TestCase):
         gaps = cac.check_anchor_coverage(self.tmp, coverage_files)
         self.assertEqual(gaps, [])
 
+    def test_a_verified_by_citation_with_no_real_base_anchor_is_not_reported(self):
+        # Same defect as the Python Stage 1 scanner's own real bug (see
+        # check_function_test_anchors.py's `_is_base_anchor_declaration`): a bare
+        # `ANCHOR_PATTERN.search` over the joined span would count a
+        # `# Verified by [@ANCHOR: ...]` citation as a real base declaration, wrongly pulling an
+        # actually-unanchored function into this stage's report instead of leaving it to Stage 1.
+        path = os.path.join(self.tmp, "foo.py")
+        _write(path, "def bar():\n    # Verified by [@ANCHOR: mod:test_bar]\n    return 1\n")
+        _init_git_repo(self.tmp)
+        coverage_files = {"foo.py": {"executed_lines": [], "missing_lines": [3]}}
+        gaps = cac.check_anchor_coverage(self.tmp, coverage_files)
+        self.assertEqual(gaps, [])
+
     def test_a_file_absent_from_coverage_json_is_silently_skipped(self):
         path = os.path.join(self.tmp, "foo.py")
         _write(path, "def bar():\n    # [@ANCHOR: COMM_bar]\n    return 1\n")

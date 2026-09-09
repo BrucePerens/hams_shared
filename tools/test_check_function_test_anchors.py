@@ -123,6 +123,65 @@ class ScanFileTests(unittest.TestCase):
         results = dict(cfta.scan_file(path, self.tmp))
         self.assertTrue(results["foo.py::C.bar"])
 
+    def test_a_verified_by_citation_with_no_real_base_anchor_is_reported_as_unanchored(self):
+        # Real bug found live: user_websites/models/content_violation_appeal.py's
+        # ContentViolationAppeal.action_approve has only a
+        # "# Verified by [@ANCHOR: user_websites:test_tour_moderation_appeal]" citation in its
+        # body -- a rule-3 VERIFICATION LINK per verify_anchors.py's own docstring, not a rule-1
+        # base declaration. A bare `ANCHOR_PATTERN.search` over the function's span (the old,
+        # naive check) matched this citation and silently counted the function as anchored,
+        # exempting it from the ADR 0090 gap check it should have failed.
+        path = os.path.join(self.tmp, "foo.py")
+        _write(
+            path,
+            "def bar():\n"
+            "    # Verified by [@ANCHOR: mod:test_bar]\n"
+            "    pass\n",
+        )
+        results = cfta.scan_file(path, self.tmp)
+        self.assertEqual(results, [("foo.py::bar", False)])
+
+    def test_a_tests_citation_with_no_real_base_anchor_is_reported_as_unanchored(self):
+        path = os.path.join(self.tmp, "foo.py")
+        _write(
+            path,
+            "def bar():\n"
+            "    # Tests [@ANCHOR: mod:something_else]\n"
+            "    pass\n",
+        )
+        results = cfta.scan_file(path, self.tmp)
+        self.assertEqual(results, [("foo.py::bar", False)])
+
+    def test_a_doc_prefixed_anchor_name_is_not_a_real_base_declaration(self):
+        # Mirrors verify_anchors.py's own `story_`/`journey_`/`doc_` documentation-only exclusion
+        # (_process_file_for_anchors: "Documentation-only anchors, ignored in code logic tracing").
+        # A function whose only anchor comment names a documentation anchor is never cited by a
+        # real test the way a genuine code anchor is -- it must not count as anchored here either.
+        for prefix in ("doc_", "story_", "journey_"):
+            with self.subTest(prefix=prefix):
+                path = os.path.join(self.tmp, "foo.py")
+                _write(path, f"def bar():\n    # [@ANCHOR: {prefix}something]\n    pass\n")
+                results = cfta.scan_file(path, self.tmp)
+                self.assertEqual(results, [("foo.py::bar", False)])
+
+    def test_a_module_qualified_doc_prefixed_anchor_name_is_not_a_real_base_declaration(self):
+        path = os.path.join(self.tmp, "foo.py")
+        _write(path, "def bar():\n    # [@ANCHOR: mymodule:doc_something]\n    pass\n")
+        results = cfta.scan_file(path, self.tmp)
+        self.assertEqual(results, [("foo.py::bar", False)])
+
+    def test_a_real_base_anchor_alongside_a_citation_still_counts_as_anchored(self):
+        path = os.path.join(self.tmp, "foo.py")
+        _write(
+            path,
+            "def bar():\n"
+            "    # [@ANCHOR: mod:bar]\n"
+            "    # Verified by [@ANCHOR: mod:test_bar]\n"
+            "    pass\n",
+        )
+        results = cfta.scan_file(path, self.tmp)
+        self.assertEqual(results, [("foo.py::bar", True)])
+
     def test_the_decorator_lookback_does_not_cross_a_blank_line_into_the_prior_function(self):
         # The real, named risk of the fix above: an unrelated trailing
         # comment on the PREVIOUS function, separated by the ordinary

@@ -45,7 +45,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import verify_anchors as va  # noqa: E402
-from check_function_test_anchors import _direct_functions, _function_span  # noqa: E402
+from check_function_test_anchors import (  # noqa: E402
+    _direct_functions,
+    _function_span,
+    _is_base_anchor_declaration,
+)
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 FIELD_RE = re.compile(r"^([a-zA-Z_]+):\s*(.+?)\s*$", re.MULTILINE)
@@ -79,27 +83,6 @@ def parse_claim_frontmatter(content):
     for fm in FIELD_RE.finditer(m.group(1)):
         fields[fm.group(1)] = fm.group(2).strip().strip('"').strip("'")
     return fields
-
-
-def _is_base_anchor_declaration(line, match):
-    """True if `match` (an ANCHOR_PATTERN match within `line`) is a base anchor declaration --
-    e.g. `# [@ANCHOR: name]` -- rather than a reference TO that anchor from elsewhere: a
-    `# Tests [@ANCHOR: name]` link, a `# Verified by [@ANCHOR: name]` link, a
-    `# Triggers [@ANCHOR: name]` cross-reference, or an inline conversational mention ("see
-    [@ANCHOR: name]"). Mirrors verify_anchors.py's own `_process_file_for_anchors` classification
-    exactly (same prefix checks), reimplemented rather than imported because that function is
-    bundled with several unrelated accumulator parameters this check has no use for -- if
-    verify_anchors.py's own classification rules change, this must change with them."""
-    first_prefix = line[: match.start()].strip()
-    if first_prefix.endswith("Tests"):
-        return False
-    if first_prefix.endswith("Verified by") or first_prefix.endswith("Tested by"):
-        return False
-    if first_prefix.endswith("Triggers") or first_prefix.endswith("Triggered by"):
-        return False
-    if re.search(r"\b(See|and|also|or|to)\b$", first_prefix, re.IGNORECASE):
-        return False
-    return True
 
 
 def compute_function_hash(filepath):

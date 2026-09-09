@@ -56,6 +56,20 @@ class ScanTreeTests(unittest.TestCase):
         gaps = cjfta.scan_tree(self.tmp)
         self.assertNotIn("foo.js::bar", gaps)
 
+    def test_a_verified_by_citation_with_no_real_base_anchor_is_still_a_gap(self):
+        # Same defect as the Python scanner's own real bug (see
+        # check_function_test_anchors.py's `_is_base_anchor_declaration`): a bare
+        # `ANCHOR_PATTERN.search` over the joined span would count a
+        # `// Verified by [@ANCHOR: ...]` citation as a real base declaration,
+        # silently exempting the function.
+        _write(
+            os.path.join(self.tmp, "foo.js"),
+            "// Verified by [@ANCHOR: mod:test_bar]\nfunction bar() {\n    return 1;\n}\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = cjfta.scan_tree(self.tmp)
+        self.assertIn("foo.js::bar", gaps)
+
     def test_a_class_method_gets_a_qualified_class_dot_method_identity(self):
         _write(
             os.path.join(self.tmp, "foo.js"),

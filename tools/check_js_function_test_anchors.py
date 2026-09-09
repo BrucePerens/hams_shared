@@ -49,6 +49,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import verify_anchors as va  # noqa: E402
+from check_function_test_anchors import _is_base_anchor_declaration  # noqa: E402
 
 EXCLUDE_DIRS = {
     ".git",
@@ -239,8 +240,15 @@ def scan_tree(repo_root):
         rel_path = os.path.relpath(filepath, repo_root)
         for qualname, start, end in functions:
             start = _extend_span_backward_over_comments(start, lines)
-            span = "\n".join(lines[start - 1 : min(end, len(lines))])
-            has_anchor = bool(va.ANCHOR_PATTERN.search(span))
+            span_lines = lines[start - 1 : min(end, len(lines))]
+            # A bare `ANCHOR_PATTERN.search` over the joined span would count a mere citation --
+            # `// Verified by [@ANCHOR: name]`, `// Tests [@ANCHOR: name]` -- as if it were a real
+            # base anchor declaration, silently exempting the function from the gap check below.
+            has_anchor = any(
+                _is_base_anchor_declaration(line, m)
+                for line in span_lines
+                for m in va.ANCHOR_PATTERN.finditer(line)
+            )
             identity = f"{rel_path}::{qualname}"
             if not has_anchor:
                 gaps[identity] = True

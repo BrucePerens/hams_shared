@@ -93,8 +93,17 @@ def check_anchor_coverage(repo_root, coverage_files):
         lines = content.splitlines()
         for qualname, node in cfta._direct_functions(tree.body, []):
             start, end = cfta._function_span(node, lines)
-            span_text = "\n".join(lines[start - 1 : min(end, len(lines))])
-            if not va.ANCHOR_PATTERN.search(span_text):
+            span_lines = lines[start - 1 : min(end, len(lines))]
+            # A bare `ANCHOR_PATTERN.search` over the joined span would count a mere citation --
+            # `# Verified by [@ANCHOR: name]`, `# Tests [@ANCHOR: name]` -- as if it were a real
+            # base anchor declaration, wrongly pulling an actually-unanchored function into this
+            # stage's "anchored but unexecuted" report instead of leaving it to Stage 1.
+            has_anchor = any(
+                cfta._is_base_anchor_declaration(line, m)
+                for line in span_lines
+                for m in va.ANCHOR_PATTERN.finditer(line)
+            )
+            if not has_anchor:
                 continue  # Stage 1's own job, not this stage's
             span_statements = {
                 ln for ln in range(start, end + 1) if ln in statement_lines

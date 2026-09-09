@@ -40,6 +40,7 @@ import argparse
 import ast
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -66,6 +67,51 @@ EXCLUDE_DIRS = {
 }
 
 DEFAULT_BASELINE_FILENAME = "function_test_anchor_baseline.json"
+
+
+def _is_base_anchor_declaration(line, match):
+    """True if `match` (an ANCHOR_PATTERN match within `line`) is a base anchor declaration --
+    e.g. `# [@ANCHOR: name]` -- rather than a reference TO that anchor from elsewhere: a
+    `# Tests [@ANCHOR: name]` link, a `# Verified by [@ANCHOR: name]` link, a
+    `# Triggers [@ANCHOR: name]` cross-reference, an inline conversational mention ("see
+    [@ANCHOR: name]"), or a `story_`/`journey_`/`doc_`-prefixed documentation-only anchor name.
+    Mirrors verify_anchors.py's own `_process_file_for_anchors` classification exactly (same
+    prefix checks, same anchor-name-prefix check), reimplemented rather than imported because that
+    function is bundled with several unrelated accumulator parameters this check has no use for --
+    if verify_anchors.py's own classification rules change, this must change with them. The single
+    source of truth for THIS project's own callers (this module; check_claims_freshness.py,
+    check_js_function_test_anchors.py, check_rust_function_test_anchors.py, and
+    check_anchor_coverage.py, all of which import it from here) -- a real bug found live: a bare
+    `ANCHOR_PATTERN.search(span)`/`.finditer(line)` scan (in this file's own `scan_file` and, until
+    the same session's follow-on fix, its JS/Rust/Stage-3 siblings) counted a function's
+    "# Verified by [@ANCHOR: ...]" citation comment as if it were a real base anchor declaration,
+    silently exempting the function from the ADR 0090 gap check it should have failed. A second,
+    narrower gap in the same family, found and closed the same session: the anchor-name-prefix
+    check below was originally missing from this reimplementation (verify_anchors.py's own
+    `story_`/`journey_`/`doc_` documentation-only exclusion was never ported over), so a function
+    whose only anchor comment was e.g. `# [@ANCHOR: doc_something]` -- never cited by a real test,
+    the same way a genuine `verify_anchors.py`-recognized documentation anchor never is -- would
+    have passed this check and been wrongly counted as anchored. Confirmed zero real instances of
+    this shape exist in either hams_open or hams_com's function bodies as of the fix (the real
+    `doc_inject_*` anchors found live in `ham_satellite`/`ham_testing`'s `__manifest__.py` sit in a
+    plain module-level dict, outside any function span `_direct_functions` ever walks) -- fixed
+    anyway, to close the gap before a function like that is ever written, not because a real gap
+    was found and left."""
+    first_prefix = line[: match.start()].strip()
+    if first_prefix.endswith("Tests"):
+        return False
+    if first_prefix.endswith("Verified by") or first_prefix.endswith("Tested by"):
+        return False
+    if first_prefix.endswith("Triggers") or first_prefix.endswith("Triggered by"):
+        return False
+    if re.search(r"\b(See|and|also|or|to)\b$", first_prefix, re.IGNORECASE):
+        return False
+    anchor_name = match.group(1)
+    if ":" in anchor_name:
+        anchor_name = anchor_name.split(":", 1)[1]
+    if va._clean(anchor_name).startswith(("story_", "journey_", "doc_")):
+        return False
+    return True
 
 
 def _git_tracked_python_files(repo_root):
@@ -136,7 +182,7 @@ def _function_span(node, lines):
         prev = lines[start - 2].strip()
         # Comment lines only -- deliberately NOT crossing a blank line,
         # which would risk absorbing an unrelated trailing comment
-        # (e.g. a "# Verified by [@ANCHOR: ...]" belonging to the
+        # (e.g. a "# [@ANCHOR: ...]" base declaration belonging to the
         # PREVIOUS function/method, separated from this one by the
         # ordinary blank line between two defs) as if it were this
         # function's own anchor -- a false credit, not just a missed one.
@@ -167,8 +213,16 @@ def scan_file(filepath, repo_root):
     results = []
     for qualname, node in _direct_functions(tree.body, []):
         start, end = _function_span(node, lines)
-        span = "\n".join(lines[start - 1 : min(end, len(lines))])
-        has_anchor = bool(va.ANCHOR_PATTERN.search(span))
+        span_lines = lines[start - 1 : min(end, len(lines))]
+        # A bare `ANCHOR_PATTERN.search` over the joined span would count a mere citation --
+        # `# Verified by [@ANCHOR: name]`, `# Tests [@ANCHOR: name]` -- as if it were a real base
+        # anchor declaration, silently exempting the function from the gap check below. Only a
+        # genuine base declaration (per `_is_base_anchor_declaration`) counts as "anchored."
+        has_anchor = any(
+            _is_base_anchor_declaration(line, m)
+            for line in span_lines
+            for m in va.ANCHOR_PATTERN.finditer(line)
+        )
         identity = f"{rel_path}::{qualname}"
         results.append((identity, has_anchor))
     return results
