@@ -1070,6 +1070,54 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 44. check_hoot_runner_coverage -- a module can register a *.test.js
+    # file in web.assets_unit_tests (syntactically valid, bundled, loadable
+    # by hoot) with nothing in the Python test suite ever actually
+    # executing it via browser_js(). That exact gap let a real, widespread
+    # hoot bug (window.fetch reassignment throwing before any assertion
+    # ran) sit unnoticed across 4 modules until 2026-09-09. Always scans
+    # the full repo and the sibling repo root, same reasoning as step 25.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_hoot_runner_coverage.py"),
+            dir_path,
+            sibling_dir,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
+    # 45. check_window_fetch_reassignment -- direct `window.fetch = ...`/
+    # `window['fetch'] = ...` reassignment in a *.test.js file throws under
+    # the real @odoo/hoot test harness (hoot's mocked window makes
+    # window.fetch read-only); the sanctioned pattern is this repo's own
+    # mockFetch() helper. Complementary to step 44 (check_hoot_runner_
+    # coverage): that one checks a hoot suite is ever actually run at all,
+    # this one checks the suite itself doesn't use a pattern that throws
+    # before any assertion runs. Takes a single repo_dir argument, so run
+    # once per repo rather than once for both like step 44.
+    for _repo in (dir_path, sibling_dir):
+        res = subprocess.run(
+            [python_exec, os.path.join(dir_path, "tools", "check_window_fetch_reassignment.py"), _repo],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            if res.stdout:
+                print(res.stdout, end="")
+            if res.stderr:
+                print(res.stderr, end="")
+            linters_failed = True
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

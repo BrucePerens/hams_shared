@@ -71,7 +71,34 @@ def check_file(file_path):
 
     # --- Custom Odoo Architecture Checks ---
     if file_path.endswith(".test.js"):
+        code_lines = [
+            (lineno, line)
+            for lineno, line in enumerate(code.splitlines(), start=1)
+            if not line.strip().startswith("//")
+        ]
+        # The UNTESTABLE URL MOCK check below only fires when a file
+        # combines window.history.pushState/replaceState(...) with a
+        # document.location/window.location reference -- that pairing is
+        # what's actually untestable (hoot mocks history but not
+        # location), not pushState alone. A file that only reads back via
+        # hoot's own mockLocation (the correct fix) never touches
+        # document.location/window.location at all, so it must stay
+        # clean of this rule rather than being forbidden from using the
+        # very fix it recommends.
+        references_real_location = any(
+            re.search(r"\b(document|window)\.location\b", line) for _, line in code_lines
+        )
+
         for lineno, line in enumerate(code.splitlines(), start=1):
+            # Skip full-line comments -- this codebase's block comments are
+            # consistently written as consecutive `// ...` lines (not
+            # `/* */` blocks), so this is enough to keep the checks below
+            # from tripping on prose that quotes the very patterns they
+            # forbid (e.g. a comment explaining *why* `window.fetch =` or
+            # `window.history.pushState(` is wrong).
+            if line.strip().startswith("//"):
+                continue
+
             for bad_name, real_equivalent in _INVALID_HOOT_MATCHERS.items():
                 if f".{bad_name}(" in line:
                     err_msg = (
@@ -81,6 +108,45 @@ def check_file(file_path):
                         f"Code: `{line.strip()}`"
                     )
                     return file_path, err_msg
+
+            # window.fetch/globalThis.fetch reassignment in *.test.js is
+            # covered by the standalone check_window_fetch_reassignment.py
+            # (wired into run_linters.py), not here -- kept as one rule in
+            # one place rather than duplicating it.
+
+            # Real bug pattern, found live 2026-09-09: hoot's mocked window
+            # only redirects `window.history` to a MockHistory/MockLocation
+            # pair (odoo/addons/web/static/lib/hoot/mock/window.js's
+            # WINDOW_MOCK_DESCRIPTORS -- `history: { value: mockHistory }`);
+            # `window.location`/`document.location` are never patched, so
+            # they stay the real, live location of the hoot test runner's
+            # own page. A test that calls `window.history.pushState(...)`
+            # to fake a URL query string, then asserts against
+            # `document.location`, is asserting against two disconnected
+            # objects -- verified to fail 100% of the time (confirmed
+            # `Object.defineProperty(location, "search", ...)` also can't
+            # patch around it: `configurable: false` in this Chrome).
+            # Use hoot's own `mockLocation`/`mockHistory` (from
+            # "@odoo/hoot") to read back what pushState/replaceState wrote,
+            # or -- if the code under test hardcodes real document.location
+            # with no injectable seam -- rely on a real Python browser tour
+            # instead (see user_websites/static/tests/
+            # toast_notifications.test.js's own precedent and comment).
+            if references_real_location and re.search(
+                r"window\.history\.(pushState|replaceState)\s*\(", line
+            ):
+                err_msg = (
+                    f"🚨 [AUDIT] UNTESTABLE URL MOCK: `window.history.pushState/replaceState(` "
+                    f"(line {lineno}) is combined with a document.location/window.location "
+                    f"reference elsewhere in this file -- hoot only mocks `window.history`, "
+                    f"never `document.location`/`window.location`, so pushState/replaceState "
+                    f"writes and any real-location read are two disconnected objects. Read "
+                    f"back via hoot's own `mockLocation` (from \"@odoo/hoot\") instead, or "
+                    f"test through a real Python browser tour if the code under test "
+                    f"hardcodes document.location with no injectable seam.\n"
+                    f"Code: `{line.strip()}`"
+                )
+                return file_path, err_msg
 
     if "extends Interaction" in code and "mountComponent(" in code:
         err_msg = (

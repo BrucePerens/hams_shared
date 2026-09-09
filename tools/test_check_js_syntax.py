@@ -145,6 +145,37 @@ class CheckFileTests(unittest.TestCase):
         self.assertIn("toContain", err_msg)
         self.assertIn("toInclude", err_msg)
 
+    def test_pushstate_combined_with_document_location_is_flagged(self):
+        p = self._test_js_path(
+            'window.history.pushState({}, "", "?x=1");\n'
+            "expect(document.location.search).toBe(\"?x=1\");\n"
+        )
+        result = chk.check_file(p)
+        self.assertIsNotNone(result)
+        _file_path, err_msg = result
+        self.assertIn("UNTESTABLE URL MOCK", err_msg)
+
+    def test_pushstate_alone_without_any_location_reference_is_not_flagged(self):
+        # pushState/replaceState by itself, read back only via hoot's own
+        # mockLocation (the correct fix), is exactly what this rule must
+        # allow -- it must not forbid the fix it recommends.
+        p = self._test_js_path(
+            'window.history.pushState({}, "", "?x=1");\n'
+            "expect(mockLocation.search).toBe(\"?x=1\");\n"
+        )
+        self.assertIsNone(chk.check_file(p))
+
+    def test_document_location_alone_without_pushstate_is_not_flagged(self):
+        p = self._test_js_path("expect(document.location.pathname).toBe(\"/foo\");\n")
+        self.assertIsNone(chk.check_file(p))
+
+    def test_pushstate_and_location_only_inside_comments_is_not_flagged(self):
+        p = self._test_js_path(
+            "// window.history.pushState(...) then document.location -- don't do this\n"
+            "expect(true).toBe(true);\n"
+        )
+        self.assertIsNone(chk.check_file(p))
+
 
 class MainIntegrationTests(unittest.TestCase):
     def setUp(self):

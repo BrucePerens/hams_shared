@@ -48,6 +48,18 @@ class CheckWindowFetchReassignmentTests(unittest.TestCase):
         self.assertEqual(len(violations), 1)
         self.assertIn("foo.test.js:1", violations[0])
 
+    def test_globalthis_dot_assignment_is_flagged(self):
+        # globalThis.fetch resolves to the same hoot-mocked, read-only
+        # window.fetch, so it throws the exact same way -- must be caught
+        # by the same rule, not just window.fetch.
+        _write(
+            os.path.join(self.tmp, "foo.test.js"),
+            "globalThis.fetch = () => Promise.resolve({});\n",
+        )
+        violations = chk.check_window_fetch_reassignment(self.tmp)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("foo.test.js:1", violations[0])
+
     def test_the_sanctioned_mockfetch_helper_is_not_flagged(self):
         _write(
             os.path.join(self.tmp, "foo.test.js"),
@@ -83,6 +95,17 @@ class CheckWindowFetchReassignmentTests(unittest.TestCase):
     def test_an_ignored_directory_is_never_walked(self):
         _write(
             os.path.join(self.tmp, "node_modules", "pkg", "bad.test.js"),
+            "window.fetch = x;\n",
+        )
+        self.assertEqual(chk.check_window_fetch_reassignment(self.tmp), [])
+
+    def test_a_stale_claude_worktree_checkout_is_never_walked(self):
+        # Found live wiring this check into run_linters.py: frozen,
+        # historical .claude/worktrees/<hash>/ copies of already-fixed
+        # test.js files still had the old, broken pattern, which used to
+        # get flagged even though the real source was clean.
+        _write(
+            os.path.join(self.tmp, ".claude", "worktrees", "agent-abc123", "foo.test.js"),
             "window.fetch = x;\n",
         )
         self.assertEqual(chk.check_window_fetch_reassignment(self.tmp), [])
