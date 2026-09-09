@@ -59,5 +59,13 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   Fixes `check_burn_list.py`'s single-line ignore-tag checks to scan the flagged AST node's full `lineno`..`end_lineno` span instead of one exact line, and adds an explicit multi-line `[@ANCHOR-BEGIN:]`/`[@ANCHOR-END:]` anchor form (alongside the still-supported single-line `[@ANCHOR:]`) so a test/documentation anchor can claim an arbitrary body of code, immune to reformatting.
 * [ADR 0090: Universal Function Test-Anchor Ratchet](0090_universal_function_test_anchor_ratchet.md)
   Every function must carry a real test anchor (documentation is routed by audience -- README.md for infrastructure, docs/stories or data/documentation.html for user-visible features -- never exempted); a CI-enforced ratchet (`check_function_test_anchors.py`, run_linters.py step 38) blocks new unanchored code starting now, with the real pre-existing backlog (1193 functions, both repos) grandfathered into a committed baseline pending the full sweep.
-* [ADR 0091: Function-Level Claims Directory and Bug-Hunt Integration](0091_function_level_claims_and_bug_hunt_integration.md)
-  An optional, per-function "claim" -- a short, falsifiable statement of what the function guarantees, in the same numbered style this portfolio's own patent claims use -- lives at `<module>/claims/<anchor_name>.md`, kept in phase with the code via a `code_hash` mechanically checked by `check_claims_freshness.py` (a hash mismatch means the code changed since the claim was last confirmed, not that the claim is wrong). The `hams_shared/agents/skills/bug-hunt/SKILL.md` review method now reads an existing claim before re-deriving one, and writes new claims for functions worth having one.
+* ADR 0091: Function-Level Claims Directory and Bug-Hunt Integration -- **relocated to
+  `hams_com/docs/adrs/0091_function_level_claims_and_bug_hunt_integration.md`** (2026-09-09).
+  `hams_shared` is a public repo; the bug-hunt review method itself (the claim-then-verify
+  technique, the accumulated bug-class checklist, the cost-tiered model-routing strategy) is a
+  competitive/trade-secret asset and doesn't belong here. What DOES stay in this public repo and
+  still applies to both `hams_com` and `hams_open`: the mechanical, content-free plumbing --
+  `check_claims_freshness.py` (hash-based freshness checking, no method narrative) and
+  `docs/odoo_orm_reference.md` (generic third-party Odoo-framework facts). A per-function claim
+  itself still lives at `<module>/claims/<anchor_name>.md`, inside whichever repo owns that
+  module -- that part of the design is unchanged, only the review method's own document moved.

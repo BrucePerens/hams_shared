@@ -1,7 +1,10 @@
 # Odoo ORM internals reference, for bug-hunt passes
 
 Built from real findings during the 2026-09-09 `user_websites` bug-hunt pilot
-(`hams_shared/agents/skills/bug-hunt/SKILL.md`), after a process retrospective found the single
+(`hams_com/agents/skills/bug-hunt/SKILL.md` -- the review method itself lives in `hams_com`, a
+private repo, since it's a competitive/trade-secret asset; this reference doc stays here in the
+public `hams_shared` because it's just generic, publicly-derivable facts about the third-party
+Odoo framework, not the method), after a process retrospective found the single
 biggest source of wasted tool calls in a per-function review was re-discovering the same handful
 of Odoo core facts from scratch each time (roughly 15-20% of one pass's own tool calls, per that
 retrospective). Every fact below was independently verified by reading the real source at the
