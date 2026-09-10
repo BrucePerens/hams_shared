@@ -80,3 +80,10 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   content. Governs a `hams_com`-only module (`hamcall_verify`) and daemon
   (`daemons/hamcall_idx_sync`) plus a Postgres-facts-only cross-reference back to ADR-0083 (still
   public, unaffected) -- nothing in this repo's own mechanical tooling needs to know HamCall exists.
+* [ADR 0093: Third-Party Data Sovereignty Against Vendor Cutoff](0093_third_party_data_sovereignty.md)
+  A commercial (non-government) third party may withdraw API access at any time, for reasons outside
+  our control -- splits these dependencies into data-source (ingest and persist locally, don't just
+  proxy live) and capability/verification (diversify across independent paths, never single-source a
+  trust decision) shapes, each needing a different defense. `ham_onboarding`'s existing multi-method
+  identity verification (LoTW, QRZ, official-email OTP, Morse challenge, AI/admin license review) is
+  a real, already-built instance of the capability-diversification half of this decision.
