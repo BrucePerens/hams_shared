@@ -69,3 +69,14 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   `docs/odoo_orm_reference.md` (generic third-party Odoo-framework facts). A per-function claim
   itself still lives at `<module>/claims/<anchor_name>.md`, inside whichever repo owns that
   module -- that part of the design is unchanged, only the review method's own document moved.
+* ADR 0092: HamCall Licensed Callsign Verify-Only Integration -- lives at
+  `hams_com/docs/adrs/0092_hamcall_licensed_verify_only_integration.md` (written there directly,
+  matching ADR 0091's relocation above, not moved after the fact). `hams_shared` is a public repo
+  under Bruce Perens' own name; this ADR names a specific commercial vendor (HamCall/hamcall.net),
+  documents an ongoing effort to reverse-engineer that vendor's proprietary file format
+  (`hamcall.dat`), and describes integrating that vendor's licensed, confidential data -- all of
+  which is real vendor/legal exposure regardless of whether the underlying DATA ever leaks, the
+  same reasoning ADR 0091's relocation note already establishes for a different kind of sensitive
+  content. Governs a `hams_com`-only module (`hamcall_verify`) and daemon
+  (`daemons/hamcall_idx_sync`) plus a Postgres-facts-only cross-reference back to ADR-0083 (still
+  public, unaffected) -- nothing in this repo's own mechanical tooling needs to know HamCall exists.

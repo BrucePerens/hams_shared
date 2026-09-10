@@ -3,8 +3,10 @@
 ## Technical Specification
 
 ### 1. Amazon SNS/SES Webhook Ingestion
-Receives Amazon SNS webhooks for incoming SES emails and event notifications (bounce/complaint), validating a per-domain secret token before doing anything else.
+Receives Amazon SNS webhooks for incoming SES emails and event notifications (bounce/complaint), validating a per-domain secret token AND a real AWS SNS message signature (two independent layers, both required) before doing anything else.
 * **SES Event Notification Handling (Bounce/Complaint Suppression):** `[@ANCHOR: ses_webhook:COMM_handle_ses_event_notification]`
+* **AWS SNS Signature Verification:** `[@ANCHOR: ses_webhook:COMM_verify_sns_signature]`
+* **Signing Certificate Fetch/Cache:** `[@ANCHOR: ses_webhook:COMM_fetch_sns_signing_cert]`
 
 ### 2. Multi-Tenant Domain Configuration
 `ses.webhook.domain` maps an inbound domain to a tenant company and a secret webhook token, keeping a dedicated cross-tenant service account's `company_ids` in sync so `with_company()` never raises for a newly-configured tenant.
