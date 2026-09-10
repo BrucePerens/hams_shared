@@ -1664,6 +1664,11 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         os.setresgid(odoo_user.pw_gid, odoo_user.pw_gid, odoo_user.pw_gid)
         os.setresuid(odoo_user.pw_uid, odoo_user.pw_uid, odoo_user.pw_uid)
 
+    # This process (Process B, per the lock-path comment in main()) already
+    # holds the real single-instance lock for the entire time the subprocess
+    # spawned below runs -- tell that child (Process C) not to attempt its
+    # own, now-redundant-and-otherwise-self-deadlocking acquisition.
+    os.environ["HAMS_TEST_LOCK_HELD"] = "1"
     ret = 1
     try:
         test_cmd = [sys.executable, os.path.abspath(__file__)] + sys_args
@@ -1835,6 +1840,62 @@ def get_default_audio_sink_name(timeout=5.0):
 _single_instance_lock = None
 
 
+def _test_runner_lock_path():
+    """
+    Fixed, HOME-independent path for the single-instance test-runner lock.
+
+    Bug-hunt finding (2026-09-09, see docs/bug_hunt_claims/hams_shared/tools/
+    claims/setup_namespace_and_run_tests.md's "ISOLATION" section, and
+    night_shift_todo.md's "the single-instance test.py lock may not actually
+    protect the real isolated-namespace pipeline" entry): the old
+    os.path.expanduser("~/tmp")-based lock path used to be recomputed
+    independently at each of three separate points across one logical test
+    run -- the initial invocation (Process A), the re-exec'd root
+    `--internal-ns-init` process (Process B), and the final odoo-uid test
+    subprocess (Process C) -- under three DIFFERENT values of HOME (Process
+    A's real HOME; Process B's, plausibly /root, since `systemd-run --scope`
+    does not forward HOME by default; and Process C's, /var/lib/odoo, a path
+    INSIDE that run's own private, ephemeral overlay filesystem, making
+    Process C's own lock attempt permanently inert). Real protection depended
+    entirely on Process B's HOME happening to resolve identically across two
+    genuinely separate, concurrent invocations -- plausible, but never
+    actually verified.
+
+    Fixed by anchoring the lock to ONE fixed, absolute path instead of
+    anything derived from HOME. Honors an explicit override via the
+    HAMS_TEST_LOCK_PATH env var -- which, unlike an open file descriptor,
+    survives os.execvpe/sudo/systemd-run/unshare -- so this can be (and, in
+    main(), is) computed once and passed through explicitly rather than
+    re-derived at each re-exec boundary. NOTE: `systemd-run --scope` does NOT
+    forward arbitrary env vars into the scope it creates (see the
+    HAMS_TEST_LOCK_PATH --setenv handling further down in main() where the
+    systemd-run invocation is built) -- setting os.environ alone is not
+    sufficient across that specific boundary.
+
+    Falls back to a hardcoded /tmp path (deliberately NOT ~/tmp) when no
+    override is set. /tmp is one of the seven trees
+    setup_namespace_and_run_tests() later overlays -- but the lock is always
+    acquired at the very top of main(), before ANY overlay mount ever runs,
+    so every acquirer up to that point still sees the real, shared host
+    /tmp, not the ephemeral per-run copy. This ordering (lock acquisition
+    strictly before the first overlay mount) is load-bearing for this
+    fallback path to mean what it says; if that ordering is ever changed,
+    re-verify this comment's assumption still holds.
+
+    This is also, deliberately, now a single SYSTEMWIDE path rather than a
+    per-user one (the old ~/tmp path differed per invoking user, so two
+    different real users on this box were never actually serialized against
+    each other even before this bug). Per this codebase's own coarse-lock
+    philosophy (one test at a time, box-wide, fail-fast rather than a
+    fine-grained per-context lock), that is believed to be the intended
+    semantics already, not a new behavior change worth gating -- but it IS a
+    real, observable difference from the pre-fix behavior, called out
+    explicitly here per Bruce's own request not to bury a design change like
+    this silently.
+    """
+    return os.environ.get("HAMS_TEST_LOCK_PATH") or "/tmp/hams_odoo_test_runner.lock"
+
+
 def main():
     global _single_instance_lock
     audio_sink_before = (
@@ -1862,17 +1923,78 @@ def main():
     # wait behind a hung holder would just relocate that hang onto every
     # other session's test run instead of containing it to the one that's
     # actually stuck.
-    lock_file_path = f"{os.path.expanduser('~/tmp')}/odoo_test_runner.lock"
-    try:
-        _single_instance_lock = open(lock_file_path, "a")
-        os.chmod(lock_file_path, 0o777)
-    except Exception: # audit-ignore-catch-all
-        _single_instance_lock = open(lock_file_path, "r")
-    try:
-        fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except IOError:
-        print("🛑 ERROR: Another instance of test.py is already running. Exiting.")
-        sys.exit(1)
+    #
+    # Second bug-hunt fix (2026-09-10, NOT yet Bruce-signed-off -- see
+    # night_shift_todo.md's "the single-instance test.py lock may not
+    # actually protect the real isolated-namespace pipeline" entry and this
+    # function's own claim file): the lock path itself used to be recomputed
+    # independently via os.path.expanduser("~/tmp") at each of three points
+    # in one logical run, under three different values of HOME, making real
+    # protection depend on an unverified assumption about how `systemd-run
+    # --scope` resolves HOME. Fixed by anchoring to one fixed path (see
+    # _test_runner_lock_path()'s own docstring for the full reasoning),
+    # computed once and passed through explicitly via HAMS_TEST_LOCK_PATH.
+    #
+    # Process C (the final odoo-uid subprocess spawned from
+    # setup_namespace_and_run_tests) is explicitly exempted here via
+    # HAMS_TEST_LOCK_HELD: its own parent, Process B, already holds this same
+    # lock for the ENTIRE duration Process C runs (Process B blocks on
+    # subprocess.run() rather than exec'ing itself away), so a fresh
+    # acquisition attempt in Process C would be redundant at best -- and,
+    # now that the path below is a fixed, shared value instead of one that
+    # happens to fall inside Process C's own private overlay, it would
+    # otherwise be a guaranteed self-deadlock against its own parent's
+    # still-held, non-blocking exclusive lock.
+    if os.environ.get("HAMS_TEST_LOCK_HELD") == "1":
+        _single_instance_lock = None
+    else:
+        lock_file_path = _test_runner_lock_path()
+        os.environ.setdefault("HAMS_TEST_LOCK_PATH", lock_file_path)
+        # Making this a single systemwide path (instead of the old per-user
+        # ~/tmp one) moves it into a world-writable, sticky directory
+        # (/tmp) that can be shared across UIDs -- e.g. this file may
+        # already be owned by `odoo` from a prior run when `bruce`'s own
+        # Process A tries to open it next, or vice versa. Two real risks
+        # that creates, both addressed explicitly here rather than left to
+        # this box's current sysctl defaults:
+        #   1. A malicious or stale symlink planted at this path in /tmp
+        #      could otherwise turn the os.chmod(0o777) below into "chmod
+        #      0o777 an arbitrary file elsewhere" when run as root -- opened
+        #      with O_NOFOLLOW so a symlink here is always rejected
+        #      (independent of this box's fs.protected_symlinks sysctl,
+        #      which happens to already be 1 -- the safe default -- but this
+        #      shouldn't depend on that).
+        #   2. fs.protected_regular (this box: 2, i.e. enforced even for
+        #      root) rejects opening an existing regular file for
+        #      writing/creation in a sticky world-writable directory when
+        #      the opener neither owns the file nor owns the directory --
+        #      e.g. `bruce` opening a lock file `odoo` created earlier. The
+        #      except-fallback below already existed for this before this
+        #      fix (it's not new), and still works: flock() locks are
+        #      independent of the fd's own read/write open mode, so a
+        #      read-only fd is just as capable of holding LOCK_EX.
+        try:
+            fd = os.open(
+                lock_file_path,
+                os.O_CREAT | os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW,
+                0o666,
+            )
+            _single_instance_lock = os.fdopen(fd, "a")
+            try:
+                os.chmod(lock_file_path, 0o777)
+            except OSError:
+                # Not the file's owner (e.g. a prior run by a different
+                # user already created it) -- fine, we only need to flock
+                # it, not own or widen its permissions.
+                pass
+        except OSError:  # audit-ignore-catch-all
+            fd = os.open(lock_file_path, os.O_RDONLY | os.O_NOFOLLOW)
+            _single_instance_lock = os.fdopen(fd, "r")
+        try:
+            fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except IOError:
+            print("🛑 ERROR: Another instance of test.py is already running. Exiting.")
+            sys.exit(1)
 
     cwd = os.getcwd()
     if not is_git_checkout_root(cwd) or not (
@@ -1988,6 +2110,18 @@ def main():
                 "-p",
                 "TasksMax=infinity",
             ]
+            # `systemd-run --scope` does not forward arbitrary env vars into
+            # the scope it creates (see the longer comment just below, about
+            # DISPLAY/XDG_SESSION_TYPE, for why) -- this specifically broke
+            # HOME-independence for the single-instance lock
+            # (night_shift_todo.md's "the single-instance test.py lock may
+            # not actually protect the real isolated-namespace pipeline"), so
+            # the fixed lock path computed in main() (see
+            # _test_runner_lock_path()) must be forwarded explicitly here,
+            # the same way, rather than left to rely on `sudo -E` alone.
+            systemd_run_args.append(
+                f"--setenv=HAMS_TEST_LOCK_PATH={_test_runner_lock_path()}"
+            )
             # `systemd-run --scope` does not forward the invoking shell's
             # environment into the new scope by itself -- `sudo -E` only
             # preserves env as far as systemd-run's own invocation, not
