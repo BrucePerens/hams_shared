@@ -50,9 +50,9 @@ Standard Odoo `@tools.ormcache` relies on a local worker registry cache, which c
 
 **The Invalidation Pipeline:**
 1. An Odoo worker mutates a cached model and fires a PostgreSQL `NOTIFY` on the `distributed_cache_invalidation` channel.
-2. The standalone `cache_manager.py` daemon receives the `NOTIFY`, validates the payload, and publishes to the Redis `odoo_cache_invalidation_bus` channel. [@ANCHOR: cache_manager_redis_publish]
+2. The standalone `cache_manager.py` daemon receives the `NOTIFY`, validates the payload, publishes it to the Redis `odoo_cache_invalidation_bus` channel, and `INCR`s a single global counter key in the same pipeline. [@ANCHOR: cache_manager_redis_publish]
 
-3. A background thread in every Odoo worker's `ir.http` middleware intercepts the broadcast and queues the model for local flushing. [@ANCHOR: redis_cache_interceptor]
+3. **Corrected 2026-09-09**: no Odoo worker actually subscribes to that Pub/Sub channel or runs a background listener thread -- confirmed by reading `ir.http._authenticate` and grepping the whole codebase for any production `pubsub()`/`subscribe()` call (there is none outside the daemon's own test suite). Each worker instead polls the global counter with a plain `GET` at the start of every HTTP request; on a change, it clears its ENTIRE local LRU cache (every model, not a per-model queue) before the request proceeds. [@ANCHOR: redis_cache_interceptor]
 </architecture>
 
 <resilience>
