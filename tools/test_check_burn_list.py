@@ -1085,6 +1085,20 @@ def test_an_fstring_passed_to_cr_execute_is_flagged():
     assert "f-string" in errors[0]
 
 
+def test_an_fstring_passed_to_underscore_cr_execute_is_also_flagged():
+    # Real SQL-injection false negative found and fixed via the bug-hunt campaign, 2026-09-10:
+    # `_check_forbidden_attributes()`'s own is_cr_execute detection used to require the exact
+    # attribute/variable name "cr", missing the identical, still-valid, still-idiomatic Odoo
+    # cursor alias `self._cr` (BaseModel's own underlying cursor attribute, predating the newer
+    # `self.env.cr` spelling but never removed). `self._cr.execute(f"...")` is exactly the same
+    # SQLi-shaped call this rule exists to catch and was completely invisible to it before this
+    # fix -- confirmed via a real repro producing zero findings.
+    source = 'self._cr.execute(f"SELECT * FROM ham_qso WHERE id={qso_id}")\n'
+    errors = _sqli_errors(source)
+    assert len(errors) == 1
+    assert "f-string" in errors[0]
+
+
 def test_percent_interpolation_passed_to_cr_execute_is_flagged():
     source = 'self.env.cr.execute("SELECT * FROM ham_qso WHERE id=%s" % qso_id)\n'
     errors = _sqli_errors(source)
@@ -1871,31 +1885,63 @@ def test_sudo_create_with_the_real_burn_ignore_tag_is_exempt():
     assert not any(".sudo()" in e for e in errors)
 
 
-def test_sudo_with_the_tag_but_not_one_of_the_four_allowed_shapes_is_still_exempt():
-    # Documents real (likely unintended) behavior: the rule's own inner check requires the
-    # burn-ignore-sudo tag to be paired with one of four specific call shapes, but
-    # add_error() itself unconditionally suppresses ANY error on a line containing the bare
-    # substring "burn-ignore" (see add_error()'s own generic tag check), regardless of which
-    # specific rule or shape matched. That blanket suppression fires first, so in practice the
-    # four-shape check on .sudo() never actually narrows anything -- any burn-ignore-sudo
-    # comment exempts the line no matter the call shape. add_warning() carries the identical
-    # bare "burn-ignore" substring check (its own first OR-branch, alongside the narrower
-    # audit-ignore-* + message-text pairs after it) -- see
-    # test_an_unrelated_burn_ignore_tag_also_blanket_suppresses_an_unrelated_warning below.
+def test_sudo_with_the_tag_but_not_one_of_the_four_allowed_shapes_is_still_flagged():
+    # Real bug found and fixed via the bug-hunt campaign, 2026-09-10 (this test used to document
+    # the bug itself, asserting the line was wrongly exempt -- see add_error()'s own
+    # _GENERIC_BURN_IGNORE_REGEX comment for the full story): the rule's own inner check requires
+    # the burn-ignore-sudo tag to be paired with one of four specific call shapes. Before the
+    # fix, add_error()'s own generic bypass unconditionally suppressed ANY error on a line
+    # containing the bare substring "burn-ignore", regardless of which specific rule or shape
+    # matched -- so the four-shape check on .sudo() never actually narrowed anything in practice.
+    # Now that add_error() requires a genuinely bare `burn-ignore` (not one immediately followed
+    # by "-", i.e. not a purpose-specific tag like burn-ignore-sudo) to trigger its own generic
+    # bypass, a burn-ignore-sudo tag on the wrong call shape no longer exempts the line -- the
+    # error correctly still fires.
     source = "self.env['ham.qso'].sudo().write(vals)  # burn-ignore-sudo\n"
     errors, _warnings = _dict_findings(source)
-    assert not any(".sudo()" in e for e in errors)
+    assert any(".sudo()" in e for e in errors)
 
 
-def test_an_unrelated_burn_ignore_tag_also_blanket_suppresses_an_unrelated_warning():
-    # add_warning()'s own first OR-branch is the identical bare "burn-ignore" substring check
-    # add_error() has -- a tag with no relation to the warning's own subject matter still
-    # suppresses it. Here a burn-ignore-sudo comment (nothing to do with time.sleep()) still
-    # kills the unrelated THREAD BLOCKING audit warning, confirming the same blanket-
-    # suppression finding applies to warnings, not just errors.
+def test_an_unrelated_burn_ignore_tag_no_longer_suppresses_an_unrelated_warning():
+    # Real bug found and fixed via the bug-hunt campaign, 2026-09-10 (this test used to document
+    # the bug itself): add_warning()'s own first OR-branch used to be the identical bare
+    # "burn-ignore" substring check add_error() had -- a tag with no relation to the warning's
+    # own subject matter still suppressed it. A burn-ignore-sudo comment (nothing to do with
+    # time.sleep()) used to kill the unrelated THREAD BLOCKING audit warning too. Now that both
+    # add_error() and add_warning() require a genuinely bare `burn-ignore` tag (see
+    # _GENERIC_BURN_IGNORE_REGEX) to trigger their own generic bypass, a purpose-specific tag for
+    # a DIFFERENT finding no longer suppresses this one.
     source = "time.sleep(5)  # burn-ignore-sudo (unrelated tag)\n"
     _errors, warnings = _dict_findings(source)
-    assert not any("THREAD BLOCKING" in w for w in warnings)
+    assert any("THREAD BLOCKING" in w for w in warnings)
+
+
+def test_a_genuinely_bare_burn_ignore_tag_still_suppresses_the_finding_it_sits_on():
+    # The generic bypass mechanism itself isn't gone -- only its ability to be satisfied by an
+    # unrelated PURPOSE-SPECIFIC tag (one with its own "-suffix", reserved for one particular
+    # call site elsewhere in this file) is. A genuinely bare `# burn-ignore` (no suffix at all)
+    # still works exactly as it always has, on any finding that routes through the generic
+    # add_error()/add_warning() gate.
+    source = "eval(x)  # burn-ignore: reviewed, static developer-authored input only\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("eval" in e for e in errors)
+
+
+def test_an_unrelated_purpose_specific_tag_does_not_suppress_a_critical_rce_finding():
+    # The concrete, most dangerous real-world shape of the bug this session fixed: a completely
+    # unrelated, legitimately-sanctioned tag (burn-ignore-tour, whose own allow-list entry is
+    # exclusively about the XML UI-tour mandate, nothing to do with Python RCE bans) used to
+    # blanket-suppress a CRITICAL RCE finding purely because both share the "burn-ignore" prefix.
+    source = "eval(x)  # burn-ignore-tour\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("CRITICAL RCE" in e and "eval" in e for e in errors)
+
+
+def test_an_unrelated_purpose_specific_tag_does_not_suppress_os_system_shell_injection():
+    # Same real bug, a second concrete repro against a different CRITICAL SECURITY finding.
+    source = "import os\nos.system(cmd)  # burn-ignore-tour\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("os.system" in e for e in errors)
 
 
 def test_probing_current_thread_testing_is_forbidden_test_evasion():
@@ -3202,6 +3248,77 @@ def test_scan_file_exempts_check_burn_list_dot_py_itself():
     assert warnings == []
 
 
+def test_manifest_with_a_non_literal_dict_value_does_not_crash_scan_file():
+    # Real bug found via the bug-hunt campaign, 2026-09-10: `ast.literal_eval()` is not limited
+    # to raising SyntaxError/OSError -- a manifest dict value that is syntactically valid Python
+    # but not a literal (e.g. referencing a module-level variable, a common real-world manifest
+    # pattern) makes it raise ValueError instead ("malformed node or string"). The old
+    # `except (SyntaxError, OSError): pass` around this exact call did not catch ValueError, so
+    # this uncaught exception propagated straight out of scan_file() -- and since main()'s own
+    # per-file loop has no try/except around its scan_file() call, one such manifest anywhere in
+    # a scanned tree crashed the ENTIRE linter process, silently abandoning every file not yet
+    # scanned (worse than "this one malformed file is skipped"). Confirmed via a real repro
+    # against the actual CLI before this fix (a manifest with `'version': VERSION`) crashing with
+    # `ValueError: malformed node or string` and exit code 1 with zero files ever reported on.
+    content = (
+        "VERSION = '1.0'\n"
+        "{\n"
+        "    'name': 'Test Module',\n"
+        "    'version': VERSION,\n"
+        "    'license': 'AGPL-3',\n"
+        "    'description': 'A real description.',\n"
+        "}\n"
+    )
+    # Must not raise.
+    errors, _warnings = _scan_file(content, "__manifest__.py")
+    # The manifest_dict couldn't be derived (non-literal value), so the license/description
+    # checks are simply skipped for this file rather than crashing -- consistent with the
+    # existing SyntaxError/OSError fallback behavior for an unparseable manifest.
+    assert not any("MANIFEST ERROR" in e for e in errors)
+
+
+def test_a_module_with_a_non_literal_manifest_value_does_not_abort_the_whole_scan(tmp_path):
+    # End-to-end version of the test above, run via the real subprocess CLI entry point (like
+    # test.py's own invocation) rather than calling scan_file() directly -- this is what actually
+    # broke before the fix: main() builds FOUND_MANIFESTS via its own separate
+    # ast.literal_eval() call (a second, independent occurrence of the identical bug), and a
+    # crash there happens BEFORE any file in the tree is ever scanned, so a real, unrelated
+    # violation in a sibling file must still be detected and reported once the manifest itself no
+    # longer crashes the process.
+    bad_module = tmp_path / "bad_module"
+    bad_module.mkdir()
+    (bad_module / "__manifest__.py").write_text(
+        "VERSION = '1.0'\n"
+        "{\n"
+        "    'name': 'Bad Module',\n"
+        "    'version': VERSION,\n"
+        "    'license': 'AGPL-3',\n"
+        "    'description': 'ok',\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (bad_module / "models.py").write_text(
+        "class Foo:\n    def bar(self):\n        eval('1+1')\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).parent / "check_burn_list.py"), str(tmp_path)],
+        capture_output=True,
+        text=True,
+    )
+    # A real violation exists in models.py (native eval()), so the process is expected to exit
+    # non-zero either way -- what distinguishes "crashed on the manifest before scanning
+    # anything" from "scanned everything and correctly flagged the real violation" is whether an
+    # uncaught-exception traceback appears on stderr, and whether the real finding actually made
+    # it into stdout at all (a crash during the __manifest__.py pass in main()'s own directory
+    # walk happens BEFORE models.py is ever reached, so stdout would be empty).
+    assert "Traceback" not in result.stderr, (
+        f"linter crashed instead of scanning past the non-literal manifest value: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "RCE" in result.stdout and "eval" in result.stdout
+
+
 def test_access_csv_blank_line_is_forbidden():
     content = (
         "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink\n"
@@ -4304,3 +4421,94 @@ def test_tools_directory_is_pruned_by_default_but_scanned_with_the_flag(tmp_path
     out_flagged = _run_main(tmp_path, extra_args=["--scan-daemons-and-tools"])
     assert "some_checker.py" in out_flagged
     assert "Catch-all AttributeError is forbidden" in out_flagged
+
+
+# "Tour Asset Registration Trap" (main()'s own tail-of-scan cross-check against FOUND_TOURS) --
+# real bug found via the bug-hunt campaign, 2026-09-10: FOUND_TOURS was declared at module scope
+# but nothing anywhere in the file ever appended to it (confirmed by grep: no
+# `FOUND_TOURS.append` existed), so this whole check permanently iterated an empty list and could
+# never fire, regardless of any real tour-not-registered-in-any-asset-bundle violation in the
+# scanned tree. Fixed by populating FOUND_TOURS from the same tour.js/*_tour.js naming convention
+# already used throughout ODOO_ERROR_RULES, gated on the file actually registering a tour under
+# the real 'web_tour.tours' category. A second, related crash-on-shape bug was fixed alongside it:
+# `manifest.get("assets", {}).items()` assumed the manifest's own 'assets' value is always a
+# dict -- a non-dict value (e.g. `None`) raised an uncaught AttributeError at the tail of main(),
+# after every per-file finding had already been printed but before the final summary/exit code.
+
+
+def _tour_module(tmp_path, manifest_assets_literal, tour_registers_correctly=True):
+    mod = tmp_path / "mymod"
+    (mod / "static" / "tests" / "tours").mkdir(parents=True)
+    (mod / "__manifest__.py").write_text(
+        "{\n"
+        "    'name': 'Test Module',\n"
+        "    'license': 'AGPL-3',\n"
+        "    'description': 'test',\n"
+        f"    'assets': {manifest_assets_literal},\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    add_call = (
+        "registry.category('web_tour.tours').add('my_tour', {\n"
+        "    steps: () => [{ trigger: '.o_thing' }],\n"
+        "});\n"
+        if tour_registers_correctly
+        # The deprecated category name -- ODOO_ERROR_RULES' own "CRITICAL JS TOUR
+        # REGISTRATION" rule already bans this shape separately; used here only to
+        # confirm FOUND_TOURS population requires the real category name, not just
+        # any registry.category(...).add(...) call.
+        else "registry.category('tours').add('my_tour', {\n    steps: () => [],\n});\n"
+    )
+    (mod / "static" / "tests" / "tours" / "my_tour.js").write_text(
+        f"/** @odoo-module **/\nimport {{ registry }} from '@web/core/registry';\n{add_call}",
+        encoding="utf-8",
+    )
+    return mod
+
+
+def test_tour_not_covered_by_any_asset_glob_is_a_registration_trap(tmp_path):
+    _tour_module(tmp_path, "{'web.assets_backend': ['mymod/static/src/js/main.js']}")
+    out = _run_main(tmp_path)
+    assert "Tour Asset Registration Trap" in out
+    assert "my_tour.js" in out
+
+
+def test_tour_covered_by_a_real_asset_glob_is_not_a_registration_trap(tmp_path):
+    _tour_module(
+        tmp_path,
+        "{'web.assets_backend': ['mymod/static/tests/tours/my_tour.js']}",
+    )
+    out = _run_main(tmp_path)
+    assert "Tour Asset Registration Trap" not in out
+
+
+def test_a_js_file_not_registering_under_web_tour_tours_does_not_populate_found_tours(tmp_path):
+    # A tour.js-named file that never actually calls
+    # registry.category('web_tour.tours').add(...) (e.g. the deprecated 'tours' category) must
+    # not be treated as a real, registered tour -- it has its own separate deprecation error
+    # (CRITICAL JS TOUR REGISTRATION), not a registration-trap finding.
+    _tour_module(
+        tmp_path,
+        "{'web.assets_backend': ['mymod/static/src/js/main.js']}",
+        tour_registers_correctly=False,
+    )
+    out = _run_main(tmp_path)
+    assert "Tour Asset Registration Trap" not in out
+    assert "CRITICAL JS TOUR REGISTRATION" in out
+
+
+def test_manifest_with_a_non_dict_assets_value_does_not_crash_the_tour_registration_check(
+    tmp_path,
+):
+    # Real repro: 'assets': None (or any non-dict shape) used to raise an uncaught
+    # AttributeError on `.items()` at the tail of main(), after every real per-file finding had
+    # already printed. Must not crash -- the tour-registration-trap check for this module is
+    # simply skipped (there is no glob list to check against), same fallback shape as every other
+    # malformed-input guard in this file.
+    _tour_module(tmp_path, "None")
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).parent / "check_burn_list.py"), str(tmp_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert "Traceback" not in result.stderr

@@ -1099,11 +1099,29 @@ def check_linters(
     if res_burn.returncode != 0:
         print(res_burn.stdout)
         print(res_burn.stderr)
-        print("🛑 Halting due to burn list violations.")
-        if extractor:
-            # extractor.aborted = True
-            pass
-        # sys.exit(1)
+        if os.environ.get("HAMS_SKIP_BURN_LIST") == "1":
+            # Narrow, explicit escape hatch, mirroring HAMS_SKIP_ANCHOR_SCAN
+            # below: this linter's own enforcement had been silently
+            # commented out here for an unknown period (found 2026-09-10 --
+            # see night_shift_todo.md), letting a real, dangerous bug
+            # (a _sql_constraints usage that is silently non-functional in
+            # this Odoo version) go uncaught. Re-enabled with a real
+            # backlog (35 errors/67 warnings across hams_com alone as of
+            # that date) already present, matching the anchor-scan gate's
+            # own accepted default of "enforce and block on the existing
+            # backlog" rather than silently staying disabled -- this
+            # opt-out is for verifying a specific, unrelated change without
+            # being blocked by that backlog, not a default and must never
+            # be set in CI.
+            print(
+                "🛑 Burn list violations found (HAMS_SKIP_BURN_LIST=1 -- "
+                "explicit opt-out, not a default; see this block's own comment)."
+            )
+        else:
+            print("🛑 Halting due to burn list violations.")
+            if extractor:
+                extractor.aborted = True
+            sys.exit(1)
     else:
         print(res_burn.stdout)
 

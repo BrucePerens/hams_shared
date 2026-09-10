@@ -749,6 +749,27 @@ ANCHOR_REGEX = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_]+)\s*\]")
 ANCHOR_BEGIN_REGEX = re.compile(r"\[@ANCHOR-BEGIN:\s*([a-zA-Z0-9_]+)\s*\]")
 ANCHOR_END_REGEX = re.compile(r"\[@ANCHOR-END:\s*([a-zA-Z0-9_]+)\s*\]")
 
+# Real bug found via the bug-hunt campaign, 2026-09-10 (already independently documented, but
+# not fixed, by test_check_burn_list.py's own
+# test_sudo_with_the_tag_but_not_one_of_the_four_allowed_shapes_is_still_exempt and
+# test_an_unrelated_burn_ignore_tag_also_blanket_suppresses_an_unrelated_warning): TaintVisitor's
+# own add_error()/add_warning() used to gate their generic bypass on a bare `"burn-ignore" in
+# line` substring check. Every purpose-specific tag this file documents (burn-ignore-sudo,
+# burn-ignore-introspection, burn-ignore-tour, burn-ignore-financial, ...) contains "burn-ignore"
+# as its own literal prefix, so ANY sanctioned tag -- regardless of which single call site it was
+# actually written to excuse -- silently suppressed EVERY OTHER finding on that same physical
+# line too. Confirmed live: `os.system(cmd)  # burn-ignore-tour` (a tag whose own allow-list
+# entry is exclusively about the XML UI-tour mandate) fully suppressed the unrelated "CRITICAL
+# SECURITY: os.system is banned" shell-injection finding. This regex requires the tag to be
+# genuinely bare (not immediately followed by a `-`) before the generic bypass fires -- a real
+# purpose-specific tag like "burn-ignore-sudo" no longer satisfies it, so it can only excuse a
+# finding whose own call site does its own separate, exact check for that specific tag (as the
+# `.sudo()` and `hasattr()` checks already do) rather than being caught by this generic fallback
+# at all. A genuinely bare `# burn-ignore` (no suffix) still works exactly as before -- no real
+# usage of the bare form exists anywhere in either repo as of this writing (grepped), so this
+# tightens closed a real hole without narrowing any actual sanctioned exception in use today.
+_GENERIC_BURN_IGNORE_REGEX = re.compile(r"burn-ignore(?!-)")
+
 
 def _find_anchor_line(content, anchor_name):
     """The line number where `[@ANCHOR: anchor_name]` or
@@ -926,7 +947,15 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             return "\n".join(self.lines[start - 1 : end])
 
         def add_error(self, lineno, msg):
-            if lineno <= len(self.lines) and "burn-ignore" in self.lines[lineno - 1]:
+            # See _GENERIC_BURN_IGNORE_REGEX's own module-level comment for why this is a
+            # negative-lookahead regex and not a bare `"burn-ignore" in line` substring check --
+            # the substring form let ANY sanctioned, purpose-specific tag (e.g.
+            # burn-ignore-tour) suppress a completely unrelated finding (e.g. a CRITICAL
+            # os.system() shell-injection error) on the same physical line, since every
+            # purpose-specific tag contains "burn-ignore" as its own literal prefix.
+            if lineno <= len(self.lines) and _GENERIC_BURN_IGNORE_REGEX.search(
+                self.lines[lineno - 1]
+            ):
                 return
             self.errors.append((lineno, msg))
 
@@ -934,7 +963,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             if lineno <= len(self.lines):
                 line_content = self.lines[lineno - 1]
                 if (
-                    "burn-ignore" in line_content
+                    _GENERIC_BURN_IGNORE_REGEX.search(line_content)
                     or ("audit-ignore-mail" in line_content and "Mail Templates" in msg)
                     or (
                         "audit-ignore-search" in line_content
@@ -1961,7 +1990,16 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             if (
                 attr == "execute"
                 and getattr(node.func.value, "attr", getattr(node.func.value, "id", ""))
-                == "cr"
+                # Real SQL-injection false negative found via the bug-hunt campaign,
+                # 2026-09-10: this used to require the exact attribute/variable name "cr",
+                # missing the identical, still-valid, still-idiomatic Odoo cursor alias
+                # `self._cr` (BaseModel's own underlying cursor attribute, predating the
+                # newer `self.env.cr` spelling but never removed) -- `self._cr.execute(f"...
+                # {name} ...")` is exactly the same SQLi-shaped call this rule exists to catch,
+                # via `is_tainted_sql()`, and was silently invisible to it. Confirmed via a real
+                # repro: an f-string interpolated straight into `self._cr.execute(...)` produced
+                # zero findings before this fix.
+                in ("cr", "_cr")
             ):
                 is_cr_execute = True
 
@@ -2728,7 +2766,21 @@ def scan_file(filepath, is_odoo_module=False):
                         errors_found.append(
                             f"Line {node.lineno}: CRITICAL MANIFEST ERROR: 'description' key is missing or empty. It MUST be present to prevent Odoo from falling back to README.md parsing."
                         )
-        except (SyntaxError, OSError):
+        except (SyntaxError, OSError, ValueError, TypeError, MemoryError, RecursionError):
+            # `ast.literal_eval()` does NOT limit itself to SyntaxError/OSError -- its own
+            # documented failure modes also include ValueError, TypeError, MemoryError, and
+            # RecursionError, depending on what the malformed/non-literal node looks like (e.g.
+            # a manifest dict value that references a module-level variable, like
+            # `"version": VERSION`, produces `ValueError: malformed node or string`). Before this
+            # fix, that ValueError propagated straight out of scan_file() uncaught: main()'s own
+            # per-file loop has no try/except around its scan_file() call, so ONE such manifest
+            # anywhere in the tree crashed the entire linter process with a traceback -- silently
+            # (from the caller's perspective) abandoning every file not yet scanned, on top of
+            # the already-known, separately-tracked issue that test.py's own sys.exit(1) after a
+            # non-zero returncode is currently commented out (that disablement is a distinct,
+            # already-logged decision -- this fix is about the crash itself, not about whether
+            # its exit code is enforced). Confirmed via a real repro: a `__manifest__.py`
+            # containing a `{...}` literal with one non-literal value.
             pass
 
     if is_odoo_module and filename.endswith(".csv"):
@@ -4279,7 +4331,13 @@ def main():
                         ):
                             manifest_dict = ast.literal_eval(node.value)
                             FOUND_MANIFESTS[os.path.abspath(root)] = manifest_dict
-                except (SyntaxError, OSError):
+                except (SyntaxError, OSError, ValueError, TypeError, MemoryError, RecursionError):
+                    # See the identical fix (and its full rationale) in scan_file()'s own
+                    # __manifest__.py handling above -- ast.literal_eval()'s real failure modes
+                    # aren't limited to SyntaxError/OSError, and this call sits in main()'s own
+                    # per-file loop with no surrounding try/except, so an uncaught ValueError here
+                    # crashes the whole scan (verified: a manifest referencing a module-level
+                    # variable as a dict value reproduces this).
                     pass
 
             if file.endswith((".py", ".xml", ".js", ".csv", ".html")):
@@ -4288,6 +4346,31 @@ def main():
                 scanned_files += 1
                 is_odoo = _is_odoo_module(filepath, target_dir)
                 errors, warnings = scan_file(filepath, is_odoo_module=is_odoo)
+                # Real bug found via the bug-hunt campaign, 2026-09-10: `FOUND_TOURS` (declared
+                # at module scope, consumed by the "Tour Asset Registration Trap" check at the
+                # tail of main()) was NEVER appended to anywhere in this file -- that whole check
+                # has been permanently dead code, always iterating an empty list, since whatever
+                # session originally wrote the consuming loop never wired up the producing side.
+                # Confirmed by grep: no `FOUND_TOURS.append` or reassignment existed anywhere.
+                # This populates it the same way every other "is this a real, registered JS
+                # tour" question in this file is answered: the same tour.js/*_tour.js filename
+                # convention ODOO_ERROR_RULES already uses throughout, actually registering under
+                # the real (non-deprecated) 'web_tour.tours' category.
+                if (
+                    is_odoo
+                    and file.endswith(".js")
+                    and re.search(r"(?:^|[/\\])(?:tour[^/\\]*|[^/\\]*_tour)\.js$", filepath)
+                ):
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            js_tour_content = f.read()
+                        if re.search(
+                            r"registry\.category\(\s*['\"]web_tour\.tours['\"]\s*\)\.add\(",
+                            js_tour_content,
+                        ):
+                            FOUND_TOURS.append(filepath)
+                    except OSError:
+                        pass
                 if file.endswith(".py"):
                     try:
                         with open(filepath, "r", encoding="utf-8") as f:
@@ -4393,11 +4476,26 @@ def main():
 
         manifest = FOUND_MANIFESTS[found_mod]
         assets = manifest.get("assets", {})
+        # Real bug found via the bug-hunt campaign, 2026-09-10: `assets` comes straight from
+        # ast.literal_eval() of the manifest dict with no shape validation -- a manifest with a
+        # non-dict `'assets'` value (e.g. `None`, or an old pre-bundle-dict-format list) would
+        # raise AttributeError on `.items()` here, uncaught, at the very tail of main() after
+        # every real per-file finding has already been printed. Not the same crash as the
+        # scan_file()/FOUND_MANIFESTS ast.literal_eval() ValueError fixed elsewhere in this same
+        # session (that one aborted the scan before a single file was checked); this one only
+        # loses the tour-asset-registration and orphan/dangling-tour checks and the final
+        # exit-code summary, but it's still a real, silent fail-closed for those two checks.
+        if not isinstance(assets, dict):
+            continue
 
         matched = False
         parent_dir = os.path.dirname(found_mod)
         for bundle_name, patterns in assets.items():
+            if not isinstance(patterns, (list, tuple)):
+                continue
             for pattern in patterns:
+                if not isinstance(pattern, str):
+                    continue
                 abs_glob_pattern = os.path.join(parent_dir, pattern)
                 matched_files = [
                     os.path.abspath(p)
