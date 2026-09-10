@@ -53,7 +53,6 @@ import infrastructure
 
 import argparse
 import atexit
-import contextlib
 import ctypes
 import fcntl
 import glob
@@ -192,30 +191,11 @@ class OOMWatchdog(multiprocessing.Process):
 print = functools.partial(print, flush=True)
 
 
-@contextlib.contextmanager
-def micro_privilege(username):
-    """
-    Temporarily drops Effective privileges to the specified user using setresuid/setresgid.
-    Restores Root privileges securely upon exiting the context block.
-    """
-    if os.geteuid() != 0:
-        yield
-        return
-
-    user_info = pwd.getpwnam(username)
-    target_uid = user_info.pw_uid
-    target_gid = user_info.pw_gid
-
-    orig_ruid, orig_euid, orig_suid = os.getresuid()
-    orig_rgid, orig_egid, orig_sgid = os.getresgid()
-
-    try:
-        os.setresgid(orig_rgid, target_gid, orig_sgid)
-        os.setresuid(orig_ruid, target_uid, orig_suid)
-        yield
-    finally:
-        os.setresuid(orig_ruid, orig_euid, orig_suid)
-        os.setresgid(orig_rgid, orig_egid, orig_sgid)
+# NOTE: `micro_privilege` used to be duplicated here byte-for-byte from `infrastructure.py`
+# (imported above) but was never called under its bare name anywhere in this file -- pure dead
+# code, removed 2026-09-09 during a bug-hunt pass. Use `infrastructure.micro_privilege` (the
+# fixed, canonical copy -- see hams_com/docs/bug_hunt_claims/hams_shared/tools/claims/
+# micro_privilege.md for the supplementary-groups bug that copy had too, now fixed there).
 
 
 # Local modules resolve natively without sys.path hacks.
@@ -232,17 +212,30 @@ class VirtualClockThread(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
         self.vtime = 0.0
-        self.last_real = time.time()
+        self.last_real = time.monotonic()
         self._lock = threading.Lock()
 
     def run(self):
+        # Every consumer (wait_for_port/wait_for_socket) computes an elapsed-time timeout as
+        # `global_vclock.time() - start_time < timeout`. If this loop's body ever raised (it
+        # didn't guard against anything before), the thread would die silently -- vtime freezes
+        # forever, that elapsed-time expression is permanently 0 < timeout, and every future
+        # caller hangs indefinitely instead of timing out. Never let one bad iteration end the
+        # thread.
         while True:
             time.sleep(0.1)
-            now = time.time()
-            delta = now - self.last_real
-            self.last_real = now
-            with self._lock:
-                self.vtime += min(delta, 0.5)
+            try:
+                # time.monotonic(), not time.time(): wall-clock time can also step *backward*
+                # (NTP correction), which would make `delta` negative and `vtime` regress --
+                # exactly the kind of clock instability this thread exists to insulate callers
+                # from. CLOCK_MONOTONIC never goes backward.
+                now = time.monotonic()
+                delta = now - self.last_real
+                self.last_real = now
+                with self._lock:
+                    self.vtime += min(delta, 0.5)
+            except Exception as e:  # audit-ignore-catch-all -- see run()'s own comment above
+                _logger.warning("VirtualClockThread iteration failed, continuing: %s", e)
 
     def time(self):
         with self._lock:
@@ -279,28 +272,39 @@ class ResourceMonitorThread(threading.Thread):
         return 0
 
     def run(self):
+        # get_available_memory_mb()/get_chrome_count() already guard their own bodies, but the
+        # alert-building and print() below were not guarded. A print() failure here is not
+        # hypothetical -- this thread's output interleaves with a piped subprocess's stdout that
+        # run_cmd() actively reads via a background thread, so a BrokenPipeError (the reader side
+        # going away, or the pipe closing during shutdown) is a realistic way for print() to
+        # raise. An uncaught exception here would kill this `while True` loop's thread silently:
+        # no more memory/chrome-leak alerts for the rest of the run, with nothing surfacing that
+        # the monitor itself died.
         while True:
             time.sleep(10)
-            mem_mb = self.get_available_memory_mb()
-            chrome_count = self.get_chrome_count()
+            try:
+                mem_mb = self.get_available_memory_mb()
+                chrome_count = self.get_chrome_count()
 
-            alerts = []
-            if mem_mb is not None and mem_mb < 512:
-                alerts.append(f"CRITICAL MEMORY: Only {mem_mb} MB available!")
-            elif mem_mb is not None and mem_mb < 2048:
-                alerts.append(f"LOW MEMORY: {mem_mb} MB available.")
+                alerts = []
+                if mem_mb is not None and mem_mb < 512:
+                    alerts.append(f"CRITICAL MEMORY: Only {mem_mb} MB available!")
+                elif mem_mb is not None and mem_mb < 2048:
+                    alerts.append(f"LOW MEMORY: {mem_mb} MB available.")
 
-            if chrome_count > 40:
-                alerts.append(
-                    f"POSSIBLE BROWSER LEAK: {chrome_count} active Chromium processes detected!"
-                )
+                if chrome_count > 40:
+                    alerts.append(
+                        f"POSSIBLE BROWSER LEAK: {chrome_count} active Chromium processes detected!"
+                    )
 
-            if alerts:
-                msg = f"\n\x1b[91m{'!' * 60}\n[!] RESOURCE MONITOR ALERT:\n"
-                for a in alerts:
-                    msg += f"  - {a}\n"
-                msg += f"{'!' * 60}\x1b[0m\n"
-                print(msg, flush=True)
+                if alerts:
+                    msg = f"\n\x1b[91m{'!' * 60}\n[!] RESOURCE MONITOR ALERT:\n"
+                    for a in alerts:
+                        msg += f"  - {a}\n"
+                    msg += f"{'!' * 60}\x1b[0m\n"
+                    print(msg, flush=True)
+            except Exception as e:  # audit-ignore-catch-all -- see run()'s own comment above
+                _logger.warning("ResourceMonitorThread iteration failed, continuing: %s", e)
 
 
 global_resource_monitor = ResourceMonitorThread()
@@ -338,7 +342,30 @@ class FailureExtractor:
         self.mcp_mode = mcp_mode
         self.display_path = os.path.join(base_dir, "filtered_test.txt")
 
-        if os.environ.get("HAMS_ISOLATED_NS") == "1":
+        # Bug-hunt fix (2026-09-09): HAMS_ISOLATED_NS=="1" alone does NOT prove
+        # /mnt/real_tmp is a real, bind-mounted directory pointing back to the
+        # host's real log dir -- it only means that when this process actually
+        # descends from setup_namespace_and_run_tests() (which creates the
+        # bind mount before ever setting this variable). The project's OWN
+        # standing convention (hams-odoo-test-runner-sudo-and-polkit) also
+        # sets this same variable by hand on a *direct* `test.py` invocation
+        # (`sudo -u odoo HAMS_ISOLATED_NS=1 test.py ...`) purely to skip
+        # rebuild_db()'s polkit-triggering `systemctl start` calls -- with
+        # none of setup_namespace_and_run_tests()'s mount namespace/overlay/
+        # bind-mount machinery ever having run. Under that real, documented
+        # invocation path, `/mnt/real_tmp` does not exist at all (it lives
+        # only inside the private mount namespace `unshare -m` creates), so
+        # trusting the bare env var here silently misdirects both the
+        # extracted-failures log and the live progress file to a location
+        # `finish_and_write()`'s own `display_path` (what actually gets
+        # printed to the user) never points at -- or crashes at exit trying
+        # to `os.makedirs()` a directory under root-owned `/mnt`. Checking
+        # the real, load-bearing OS fact (does the bind-mounted directory
+        # this code depends on actually exist) instead of the overloaded
+        # env var fixes this for the direct-invocation case while leaving
+        # the real isolated pipeline's behavior unchanged (there, this
+        # directory is always present by the time this constructor runs).
+        if os.environ.get("HAMS_ISOLATED_NS") == "1" and os.path.isdir("/mnt/real_tmp"):
             self.output_path = "/mnt/real_tmp/filtered_test.txt"
         else:
             self.output_path = self.display_path
@@ -376,7 +403,14 @@ class FailureExtractor:
         if not disable_atexit:
             atexit.register(self.finish_and_write)
 
-        if os.environ.get("HAMS_ISOLATED_NS") == "1":
+        # Bug-hunt fix (2026-09-09): same real-vs-assumed /mnt/real_tmp gap as
+        # self.output_path above -- see that comment for the full reasoning.
+        # This one is the more dangerous of the two: update_progress() wraps
+        # every write in a bare `except Exception: pass`, so under a direct
+        # `HAMS_ISOLATED_NS=1` invocation (no real bind mount) this used to
+        # silently no-op the entire live progress-tracking feature with
+        # zero signal to the user -- a textbook silent-failure gate.
+        if os.environ.get("HAMS_ISOLATED_NS") == "1" and os.path.isdir("/mnt/real_tmp"):
             self.progress_path = "/mnt/real_tmp/test_progress.txt"
         else:
             self.progress_path = os.path.expanduser("~/tmp/test_progress.txt")
@@ -639,6 +673,37 @@ class FailureExtractor:
         print("==========================================================\n")
 
 
+def _process_reaped(pid):
+    """True if `pid` is gone entirely, or has already exited but not yet been wait()ed on by its
+    parent (a zombie) -- the two cases in which sending it another signal accomplishes nothing.
+
+    Deliberately uses psutil's /proc-based status lookup rather than a raw `os.kill(pid, 0)`
+    probe: reading a process's status doesn't require permission to signal it, whereas kill(2)
+    does. A bare `except OSError` around `os.kill(pid, 0)` cannot distinguish "no such process"
+    (ESRCH) from "exists, but I lack permission to signal it" (EPERM, e.g. `pid` re-exec'd via
+    `sudo -u odoo` into a different uid than this reaper's own) -- the exact EPERM/ESRCH
+    conflation this file's own top-of-module AI DIRECTIVE already documents for the shell
+    equivalent (`kill -0`). It also cannot distinguish "alive" from "zombie": a zombie still
+    answers `os.kill(pid, 0)` successfully (it is a real, if inert, process-table entry), so that
+    check would spin for the full 30-second window against a process that has already exited.
+
+    Scope note: this assumes `/proc` is mounted without `hidepid` (confirmed on this box via
+    `grep hidepid /proc/mounts` returning nothing). Under `hidepid=2`, another uid's `/proc/<pid>`
+    entry is invisible even to read, so `psutil.Process(pid)` would raise `NoSuchProcess` for a
+    live, merely cross-uid process -- reproducing the same false-"dead" outcome as the original
+    `os.kill(pid, 0)`/EPERM bug this function replaces, just via a different exception. Not fixed
+    here (no such mount exists in this project's actual environment today); noted so a future
+    change to how this runner's processes are namespaced doesn't silently reopen this.
+    """
+    try:
+        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
+    except psutil.AccessDenied:
+        # Can't confirm either way -- assume still alive rather than reporting a false "dead".
+        return False
+
+
 def robust_reap(pid):
     """
     Process reaper that targets the process group with SIGTERM,
@@ -653,13 +718,22 @@ def robust_reap(pid):
 
         pgid = os.getpgid(pid)
         print(f"[*] [REAPER] Sending SIGTERM to Process Group {pgid}")
-        os.killpg(pgid, signal.SIGTERM)
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except OSError as e:
+            # Don't let a partial-permission failure (e.g. the group's leader now runs as a
+            # different uid than this reaper) abort the whole escalation -- keep polling and
+            # still attempt SIGKILL below; the pkill fallbacks reach chrome by name regardless.
+            print(
+                f"[*] [REAPER] SIGTERM to Process Group {pgid} failed ({e}); continuing to poll/escalate anyway."
+            )
 
-        start_time = time.time()
-        while time.time() - start_time < 30.0:
-            try:
-                os.kill(pid, 0)
-            except OSError:
+        # time.monotonic(), not time.time(): a backward wall-clock step (NTP correction) here
+        # would silently extend or shorten this 30s deadline, the same clock-instability class
+        # this review's own VirtualClockThread fix addresses (see virtual_clock_thread.md).
+        start_time = time.monotonic()
+        while time.monotonic() - start_time < 30.0:
+            if _process_reaped(pid):
                 print(f"[*] [REAPER] Process {pid} confirmed dead.")
                 return
             time.sleep(0.5)
@@ -667,7 +741,10 @@ def robust_reap(pid):
         print(
             f"[*] [REAPER] Process {pid} did not exit after SIGTERM. Sending SIGKILL to Process Group {pgid}"
         )
-        os.killpg(pgid, signal.SIGKILL)
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError as e:
+            print(f"[*] [REAPER] SIGKILL to Process Group {pgid} failed: {e}")
         subprocess.run(
             ["pkill", "-u", "odoo", "-KILL", "-f", "_chrome_odoo"], check=False, timeout=2
         )
@@ -2045,9 +2122,19 @@ def main():
     # FailureExtractor (above) already established the correct fix for this
     # exact trap: use /mnt/real_tmp directly when inside the isolated
     # namespace, matching its own self.output_path convention exactly.
+    # Bug-hunt fix (2026-09-09): same real-vs-assumed /mnt/real_tmp gap as
+    # FailureExtractor's self.output_path/self.progress_path above -- a
+    # direct `HAMS_ISOLATED_NS=1` invocation (this project's own standing
+    # convention for skipping rebuild_db()'s polkit-triggering `systemctl
+    # start` calls; see hams-odoo-test-runner-sudo-and-polkit) never runs
+    # setup_namespace_and_run_tests(), so /mnt/real_tmp is never bind-mounted
+    # and does not exist. Without this check, --coverage under that
+    # invocation would write coverage data somewhere under root-owned /mnt
+    # (or crash trying to create it) instead of the intended, persistent
+    # ~/tmp/coverage_report location.
     coverage_data_dir = (
         "/mnt/real_tmp/coverage_report"
-        if os.environ.get("HAMS_ISOLATED_NS") == "1"
+        if os.environ.get("HAMS_ISOLATED_NS") == "1" and os.path.isdir("/mnt/real_tmp")
         else os.path.join(os.path.expanduser("~/tmp"), "coverage_report")
     )
     coverage_data_file = os.path.join(coverage_data_dir, ".coverage")

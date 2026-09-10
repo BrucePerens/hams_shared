@@ -69,6 +69,15 @@ def micro_privilege(username):
     """
     Temporarily drops Effective privileges to the specified user using setresuid/setresgid.
     Restores Root privileges securely upon exiting the context block.
+
+    Also drops (and restores) the process's supplementary group list. setresuid/setresgid alone
+    only change the real/effective/saved uid and gid -- the separate supplementary-groups list
+    (os.getgroups()) is untouched by either call, so a naive uid/gid-only drop leaves the
+    "unprivileged" persona still carrying the original (root) process's group memberships for the
+    whole yield block, defeating containment for anything gated on group membership (e.g. a group
+    that owns sensitive files). Supplementary groups must be dropped *before* setresgid/setresuid
+    (dropping the real/effective uid away from 0 first would lose the CAP_SETGID needed to change
+    the group list at all) and restored only *after* both are set back to root.
     """
     if os.geteuid() != 0:
         yield
@@ -80,14 +89,18 @@ def micro_privilege(username):
 
     orig_ruid, orig_euid, orig_suid = os.getresuid()
     orig_rgid, orig_egid, orig_sgid = os.getresgid()
+    orig_groups = os.getgroups()
+    target_groups = os.getgrouplist(username, target_gid)
 
     try:
+        os.setgroups(target_groups)
         os.setresgid(orig_rgid, target_gid, orig_sgid)
         os.setresuid(orig_ruid, target_uid, orig_suid)
         yield
     finally:
         os.setresuid(orig_ruid, orig_euid, orig_suid)
         os.setresgid(orig_rgid, orig_egid, orig_sgid)
+        os.setgroups(orig_groups)
 
 
 def format_env(text, env_vars):

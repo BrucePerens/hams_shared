@@ -27,7 +27,6 @@ import infrastructure
 
 import argparse
 import atexit
-import contextlib
 import ctypes
 
 import glob
@@ -132,30 +131,11 @@ class OOMWatchdog(multiprocessing.Process):
 print = functools.partial(print, flush=True)
 
 
-@contextlib.contextmanager
-def micro_privilege(username):
-    """
-    Temporarily drops Effective privileges to the specified user using setresuid/setresgid.
-    Restores Root privileges securely upon exiting the context block.
-    """
-    if os.geteuid() != 0:
-        yield
-        return
-
-    user_info = pwd.getpwnam(username)
-    target_uid = user_info.pw_uid
-    target_gid = user_info.pw_gid
-
-    orig_ruid, orig_euid, orig_suid = os.getresuid()
-    orig_rgid, orig_egid, orig_sgid = os.getresgid()
-
-    try:
-        os.setresgid(orig_rgid, target_gid, orig_sgid)
-        os.setresuid(orig_ruid, target_uid, orig_suid)
-        yield
-    finally:
-        os.setresuid(orig_ruid, orig_euid, orig_suid)
-        os.setresgid(orig_rgid, orig_egid, orig_sgid)
+# NOTE: `micro_privilege` used to be duplicated here byte-for-byte from `infrastructure.py`
+# (imported above) but was never called under its bare name anywhere in this file -- pure dead
+# code, removed 2026-09-09 during a bug-hunt pass. Use `infrastructure.micro_privilege` (the
+# fixed, canonical copy -- see hams_com/docs/bug_hunt_claims/hams_shared/tools/claims/
+# micro_privilege.md for the supplementary-groups bug that copy had too, now fixed there).
 
 
 # Local modules resolve natively without sys.path hacks.
