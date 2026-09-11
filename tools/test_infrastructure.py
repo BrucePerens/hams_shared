@@ -62,6 +62,34 @@ def _write_os_release(path, id_line=None, codename_line=None):
             f.write(f'VERSION_CODENAME={codename_line}\n')
 
 
+class GetPgBinTests(_SafePatchTestCase):
+    def test_picks_the_highest_numeric_major_version_not_the_lexicographically_last_path(self):
+        # A bare `sorted(paths)[-1]` ranks "9.6" above "14" and "12" (string
+        # '9' > '1'), so a box with both an old 9.6 cluster and a newer 14
+        # installed side by side (e.g. mid-upgrade) would silently get the
+        # ancient binary. Real version-number ordering must win instead.
+        fake_paths = [
+            "/usr/lib/postgresql/9.6/bin/psql",
+            "/usr/lib/postgresql/12/bin/psql",
+            "/usr/lib/postgresql/14/bin/psql",
+        ]
+        self.safe_patch_object(infra.glob, "glob", return_value=fake_paths)
+        self.assertEqual(infra.get_pg_bin("psql"), "/usr/lib/postgresql/14/bin/psql")
+
+    def test_two_digit_and_one_digit_majors_still_sort_numerically(self):
+        fake_paths = [
+            "/usr/lib/postgresql/9/bin/psql",
+            "/usr/lib/postgresql/10/bin/psql",
+        ]
+        self.safe_patch_object(infra.glob, "glob", return_value=fake_paths)
+        self.assertEqual(infra.get_pg_bin("psql"), "/usr/lib/postgresql/10/bin/psql")
+
+    def test_falls_back_to_shutil_which_when_no_versioned_dir_exists(self):
+        self.safe_patch_object(infra.glob, "glob", return_value=[])
+        self.safe_patch_object(infra.shutil, "which", return_value="/usr/bin/psql")
+        self.assertEqual(infra.get_pg_bin("psql"), "/usr/bin/psql")
+
+
 class GetOsIdentifierTests(_TmpDirTestCase):
     def test_reads_the_real_id_field_from_os_release(self):
         path = os.path.join(self.tmp, "os-release")

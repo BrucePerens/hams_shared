@@ -28,11 +28,31 @@ from datetime import datetime
 _logger = logging.getLogger(__name__)
 
 
+def _pg_version_sort_key(path):
+    """
+    Extracts the numeric PostgreSQL major-version directory component from a
+    path like /usr/lib/postgresql/14/bin/psql (or the older X.Y form, e.g.
+    9.6/bin/psql) and returns it as a tuple of ints for correct numeric
+    ordering -- a bare lexicographic sort of these paths ranks "9.6" above
+    "14" (string '9' > '1'), so `sorted(paths)[-1]` would silently pick the
+    ancient 9.x binary over a genuinely newer major version whenever both
+    happen to be installed side by side (e.g. mid-upgrade, or a box that
+    accumulated packages across a distro upgrade without purging the old
+    cluster). A version segment that doesn't parse as dot-separated integers
+    sorts lowest, so it never wins over a well-formed version by accident.
+    """
+    version_str = path.split(os.sep)[-3]
+    try:
+        return tuple(int(part) for part in version_str.split("."))
+    except ValueError:
+        return (-1,)
+
+
 def get_pg_bin(name):
     """Locates PostgreSQL binaries dynamically across installed versions."""
     paths = glob.glob(f"/usr/lib/postgresql/*/bin/{name}")
     if paths:
-        return sorted(paths)[-1]
+        return sorted(paths, key=_pg_version_sort_key)[-1]
     res = shutil.which(name)
     if not res:
         for p in [f"/usr/bin/{name}", f"/usr/local/bin/{name}"]:
