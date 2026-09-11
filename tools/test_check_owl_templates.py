@@ -40,6 +40,25 @@ class FindOwlTemplateFilesTests(unittest.TestCase):
             found = list(find_owl_template_files(tmpdir))
         self.assertEqual(found, [])
 
+    def test_ignores_a_directory_whose_name_merely_contains_xml_as_a_substring(self):
+        """Real bug found reviewing this checker: the "cheap prefilter" computes
+        os.path.join(os.sep, "static", os.sep, "src", os.sep, "xml"), intending "/static/src/xml"
+        -- but os.path.join resets to the last absolute-path argument it sees, and every os.sep
+        argument here IS itself absolute, so the actual value is just "/xml" (confirmed directly:
+        `os.path.join(os.sep, "static", os.sep, "src", os.sep, "xml")` returns '/xml', not
+        '/static/src/xml'). Any directory whose path contains the substring "/xml" ANYWHERE (not
+        just as its own trailing 'static/src/xml' path component) makes the cheap check's `not in`
+        test False, short-circuiting the whole `and` before the real, precise `parts[-3:] ==
+        ["static", "src", "xml"]` check ever runs -- so a directory like
+        'some_module/static/src/xml_export/' (a plausible real name, NOT a genuine Owl-template
+        directory) has every .xml file under it wrongly yielded as an Owl template candidate."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "some_module" / "static" / "src" / "xml_export" / "foo.xml"
+            target.parent.mkdir(parents=True)
+            target.write_text("<odoo/>", encoding="utf-8")
+            found = list(find_owl_template_files(tmpdir))
+        self.assertEqual(found, [])
+
     def test_ignores_non_xml_files_under_static_src_xml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             target = Path(tmpdir) / "some_module" / "static" / "src" / "xml" / "readme.md"

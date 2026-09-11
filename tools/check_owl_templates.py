@@ -57,16 +57,21 @@ _OWL_JS_PATH = (
 
 def find_owl_template_files(target_dir):
     """Yields every `static/src/xml/*.xml` file under `target_dir` -- this codebase's own
-    convention for where Owl component templates (as opposed to Odoo view/data XML) live."""
+    convention for where Owl component templates (as opposed to Odoo view/data XML) live.
+
+    Matches on the directory's own trailing path COMPONENTS (["static", "src", "xml"]), never a
+    plain substring test -- a substring test on "/static/src/xml" would also match an unrelated
+    directory merely named e.g. "static/src/xml_export/" (this function's own pre-fix version had
+    exactly this bug: its "cheap prefilter" computed os.path.join(os.sep, "static", os.sep,
+    "src", os.sep, "xml"), intending "/static/src/xml", but os.path.join resets to the last
+    absolute-path argument it sees -- every os.sep argument here IS absolute -- so the real value
+    was just "/xml", making the substring check match almost any path and short-circuit past the
+    real, precise component check below it)."""
     for root, dirs, files in os.walk(target_dir):
         dirs[:] = [d for d in dirs if d not in ("node_modules", "__pycache__", ".git", "target")]
-        if os.path.join(os.sep, "static", os.sep, "src", os.sep, "xml") not in root.replace(
-            "/", os.sep
-        ) and not root.replace(os.sep, "/").endswith("/static/src/xml"):
-            # Cheap prefilter; the real, authoritative check is the path-component test below.
-            parts = root.replace("\\", "/").split("/")
-            if not (len(parts) >= 3 and parts[-3:] == ["static", "src", "xml"]):
-                continue
+        parts = root.replace("\\", "/").split("/")
+        if parts[-3:] != ["static", "src", "xml"]:
+            continue
         for f in files:
             if f.endswith(".xml"):
                 yield os.path.join(root, f)
