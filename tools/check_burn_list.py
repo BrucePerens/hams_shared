@@ -1646,10 +1646,13 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     isinstance(handler.type, ast.Name)
                     and handler.type.id == "ImportError"
                 ):
-                    self.add_error(
-                        node.lineno,
-                        "CRITICAL FAST FAIL: Soft dependencies (try/except ImportError) are forbidden. Modules and daemons must fast-fail on missing dependencies. If Odoo, use manifest external_dependencies.",
-                    )
+                    if "burn-ignore-skiptest-soft-dependency" not in self.node_span_text(
+                        node
+                    ):
+                        self.add_error(
+                            node.lineno,
+                            "CRITICAL FAST FAIL: Soft dependencies (try/except ImportError) are forbidden. Modules and daemons must fast-fail on missing dependencies. If Odoo, use manifest external_dependencies.",
+                        )
                 is_catch_all = handler.type is None or (
                     isinstance(handler.type, ast.Name)
                     and handler.type.id in ("Exception", "BaseException")
@@ -2214,9 +2217,14 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     attr == "Thread"
                     and getattr(node.func.value, "id", "") == "threading"
                 ):
-                    self.add_error(
-                        node.lineno, "CRITICAL DOS VECTOR: Unbounded Thread."
-                    )
+                    if not (
+                        node.lineno <= len(self.lines)
+                        and "burn-ignore-test-daemon-thread"
+                        in self.lines[node.lineno - 1]
+                    ):
+                        self.add_error(
+                            node.lineno, "CRITICAL DOS VECTOR: Unbounded Thread."
+                        )
 
             if self.in_http_controller and self.is_odoo_module:
                 if (
@@ -2505,6 +2513,46 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             elif func_name == "Markup":
                 if node.args:
                     arg0 = node.args[0]
+
+                    def _is_escape_call(n):
+                        # Bug-hunt fix, 2026-09-11: recognizes html.escape(...)/
+                        # markupsafe.escape(...)/bare escape(...) as a safe source, so a value
+                        # that was explicitly escaped before interpolation isn't flagged as if
+                        # it were raw, unescaped user input. See night_shift_todo.md's own
+                        # 2026-09-10 "check_burn_list.py's Markup(...) XSS check is overbroad"
+                        # entry -- this closes it via the exact "trace whether a specific
+                        # interpolated name's own most recent assignment was an escape() call"
+                        # approach that entry proposed as candidate (a), reusing the existing
+                        # self.assignments per-scope dataflow tracking (see is_tainted_sql's own
+                        # _resolve_str above for the same pattern).
+                        return isinstance(n, ast.Call) and (
+                            getattr(n.func, "attr", "") == "escape"
+                            or getattr(n.func, "id", "") == "escape"
+                        )
+
+                    def _is_safely_escaped(n):
+                        if isinstance(n, ast.Name):
+                            return _is_escape_call(self.assignments.get(n.id))
+                        return _is_escape_call(n)
+
+                    def _interpolated_exprs(n):
+                        if isinstance(n, ast.JoinedStr):
+                            return [
+                                v.value
+                                for v in n.values
+                                if isinstance(v, ast.FormattedValue)
+                            ]
+                        if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "format":
+                            return list(n.args) + [kw.value for kw in n.keywords]
+                        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Mod):
+                            rhs = n.right
+                            if isinstance(rhs, ast.Tuple):
+                                return list(rhs.elts)
+                            if isinstance(rhs, ast.Dict):
+                                return list(rhs.values)
+                            return [rhs]
+                        return []
+
                     if (
                         isinstance(arg0, ast.JoinedStr)
                         or (
@@ -2515,10 +2563,12 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             isinstance(arg0, ast.BinOp) and isinstance(arg0.op, ast.Mod)
                         )
                     ):
-                        self.add_error(
-                            node.lineno,
-                            "CRITICAL XSS VULNERABILITY: Do not interpolate variables directly into Markup(). Use odoo.tools.html_escape on user inputs first or use standard QWeb rendering.",
-                        )
+                        exprs = _interpolated_exprs(arg0)
+                        if not (exprs and all(_is_safely_escaped(e) for e in exprs)):
+                            self.add_error(
+                                node.lineno,
+                                "CRITICAL XSS VULNERABILITY: Do not interpolate variables directly into Markup(). Use odoo.tools.html_escape on user inputs first or use standard QWeb rendering.",
+                            )
             elif func_name == "assertEqual" and len(node.args) == 2:
                 arg1, arg2 = node.args[0], node.args[1]
                 if type(arg1) == type(arg2):

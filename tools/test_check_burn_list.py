@@ -1197,6 +1197,23 @@ def test_except_importerror_is_a_forbidden_soft_dependency():
     assert any("Soft dependencies" in e for e in errors)
 
 
+def test_except_importerror_with_skiptest_soft_dependency_tag_is_allowed():
+    # Bug-hunt fix, 2026-09-11: `burn-ignore-skiptest-soft-dependency` is documented (in the
+    # checker's own tag registry) and already used by real files (e.g.
+    # ham_shack/tests/test_verify_noise_xx_handshake_wrapper.py) specifically to exempt a
+    # try/except ImportError gate for a genuinely optional test-only dependency -- but the
+    # check never actually looked for the tag, so every file using it was silently still
+    # flagged, blocking those modules' entire test suite via the pre-flight linter gate.
+    source = (
+        "try:  # burn-ignore-skiptest-soft-dependency: optional test-only dependency\n"
+        "    import optional_thing\n"
+        "except ImportError:  # burn-ignore-skiptest-soft-dependency: see try: above\n"
+        "    optional_thing = None\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("Soft dependencies" in e for e in errors)
+
+
 def test_a_bare_catch_all_except_is_forbidden_without_the_audit_tag():
     source = "try:\n    risky()\nexcept:\n    handle_it()\n"
     errors, _warnings = _dict_findings(source)
@@ -2222,6 +2239,17 @@ def test_threading_thread_is_an_unbounded_dos_vector():
     assert any("Unbounded Thread" in e for e in errors)
 
 
+def test_threading_thread_with_test_daemon_thread_tag_is_allowed():
+    # Bug-hunt fix, 2026-09-11: `burn-ignore-test-daemon-thread` is documented (in the checker's
+    # own tag registry) and already used by a real file
+    # (ham_shack/tests/test_shack_sw_behavior_tour.py's hermetic fixture HTTP server) -- but the
+    # check never actually looked for the tag, so that file was silently still flagged, blocking
+    # ham_shack's entire test suite via the pre-flight linter gate.
+    source = "t = threading.Thread(target=worker, daemon=True)  # burn-ignore-test-daemon-thread: bounded by the test process's own exit\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Unbounded Thread" in e for e in errors)
+
+
 def test_time_sleep_in_a_normal_module_file_gets_a_thread_blocking_warning():
     source = "time.sleep(5)\n"
     errors, warnings = _dict_findings(source)
@@ -2514,6 +2542,46 @@ def test_markup_of_a_plain_string_literal_is_not_flagged():
     source = "html = Markup('<b>static text</b>')\n"
     errors, _warnings = _dict_findings(source)
     assert not any("XSS VULNERABILITY" in e for e in errors)
+
+
+def test_markup_percent_interpolation_of_an_html_escaped_value_is_not_flagged():
+    # Bug-hunt fix, 2026-09-11: closes the "Markup(...) XSS check is overbroad" gap tracked in
+    # night_shift_todo.md (found 2026-09-10) -- ham_onboarding/models/res_users.py and
+    # upgrade_request.py both explicitly html.escape() every interpolated value before
+    # Markup(...) % (...) specifically so real <br/>/<strong> markup renders instead of coming
+    # out literal-escaped, and this pattern was blocking their whole module's test suite via the
+    # pre-flight linter gate (confirmed empirically: check_burn_list.py has no baseline/
+    # grandfather mechanism, so ANY error anywhere in the module aborts the entire run).
+    source = (
+        "safe_name = html.escape(user.name)\n"
+        "body = Markup(_('Hello %s') % safe_name)\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("XSS VULNERABILITY" in e for e in errors)
+
+
+def test_markup_percent_interpolation_of_an_unescaped_value_is_still_flagged():
+    # The dataflow exemption above must not become a blanket pass for the whole Mod/JoinedStr/
+    # format() trigger shape -- an interpolated value with no html.escape()/escape() assignment
+    # at all is genuinely unescaped raw input and must still be flagged exactly as before.
+    source = (
+        "unsafe_name = user.name\n"
+        "body = Markup(_('Hello %s') % unsafe_name)\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("XSS VULNERABILITY" in e for e in errors)
+
+
+def test_markup_percent_interpolation_of_one_escaped_and_one_raw_value_is_still_flagged():
+    # Every interpolated value must be escaped, not just the first one -- a mixed tuple with
+    # even one unescaped name must still be flagged.
+    source = (
+        "safe_name = html.escape(user.name)\n"
+        "raw_notes = user.notes\n"
+        "body = Markup(_('Hello %s: %s') % (safe_name, raw_notes))\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("XSS VULNERABILITY" in e for e in errors)
 
 
 def test_assert_equal_of_two_identical_literals_is_a_hollow_assertion():
