@@ -90,8 +90,17 @@ def _unignored_unlink_calls(node, source_lines):
             and isinstance(child.func, ast.Attribute)
             and child.func.attr == "unlink"
         ):
-            line = source_lines[child.lineno - 1] if child.lineno <= len(source_lines) else ""
-            if IGNORE_MARKER not in line:
+            # A chained call's own `.lineno` is the line the WHOLE expression starts on, not
+            # necessarily the line `.unlink()` (and a marker comment placed next to it) actually
+            # appears on -- e.g. `self.env['x'].search(\n    domain\n).unlink()  # marker` has
+            # `.lineno` pointing at the `.search(` line, two lines above the marker. Scan every
+            # line the call's own span covers (lineno through end_lineno) so a marker placed
+            # anywhere in that span -- most naturally on the last line, where `.unlink()` is
+            # visually written, matching this checker's own error message's instruction -- is
+            # found, not just the call's starting line.
+            end_lineno = getattr(child, "end_lineno", None) or child.lineno
+            span = source_lines[child.lineno - 1 : min(end_lineno, len(source_lines))]
+            if not any(IGNORE_MARKER in line for line in span):
                 found.append(child)
     return found
 
@@ -101,8 +110,11 @@ def _check_file(path, repo_root):
     try:
         with open(path, "r", encoding="utf-8") as f:
             source = f.read()
-    except UnicodeDecodeError as e:
-        print(f"Warning: UnicodeDecodeError reading {path}: {e}")
+    except (OSError, UnicodeDecodeError) as e:
+        # OSError alongside UnicodeDecodeError: a file listed by os.walk() can still vanish (a
+        # concurrent delete) or be unreadable (permissions, a broken symlink) by the time this
+        # opens it -- every sibling checker in this tree pairs these two for exactly that reason.
+        print(f"Warning: could not read {path}: {e}")
         return violations
 
     try:

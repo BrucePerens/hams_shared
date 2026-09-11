@@ -103,6 +103,28 @@ class CheckGdprErasureUsesServiceUtilityTests(unittest.TestCase):
         violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
         self.assertEqual(violations, [])
 
+    def test_ignore_marker_exempts_a_multiline_chained_unlink_call(self):
+        """Real gap found reviewing this checker: ast.Call.lineno for a chained call like
+        `self.env['x'].search(\\n    domain\\n).unlink()` is the line the WHOLE expression
+        starts on (`self.env['x'].search(`), not the line `.unlink()` itself appears on. Before
+        this fix, `_unignored_unlink_calls` only ever looked at `source_lines[child.lineno - 1]`
+        -- a single line -- for the ignore marker. A developer who (naturally, since that's where
+        `.unlink()` visually is) puts the marker comment on the LAST line of a multi-line chained
+        call, as this checker's own error message instructs ("add '# audit-ignore-...' with a
+        comment"), would have it silently ignored: the checker looks at the wrong line entirely
+        and still flags the call as a violation despite the marker being present."""
+        self._write(
+            "some_module/models/res_users.py",
+            "class ResUsers(models.Model):\n"
+            "    def _execute_gdpr_erasure(self):\n"
+            "        svc_uid = self.env['zero_sudo.security.utils']._get_service_uid('x.y')\n"
+            "        self.env['some.model'].with_user(svc_uid).search(\n"
+            "            [('user_id', '=', self.id)]\n"
+            "        ).unlink()  # audit-ignore-gdpr-hand-rolled-unlink: batched, see doc\n",
+        )
+        violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
+        self.assertEqual(violations, [])
+
     def test_ignore_marker_on_one_call_does_not_exempt_an_unmarked_sibling_call(self):
         self._write(
             "some_module/models/res_users.py",
@@ -172,6 +194,21 @@ class CheckGdprErasureUsesServiceUtilityTests(unittest.TestCase):
             f.write(b"# -*- coding: utf-8 -*-\nx = '\xff\xfe broken bytes'\n")
         violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
         self.assertEqual(violations, [])
+
+    def test_an_unreadable_file_is_skipped_with_a_warning_not_a_crash(self):
+        """`_check_file`'s own open() only caught UnicodeDecodeError -- a file that os.walk()
+        lists but that becomes unreadable by the time it's opened (permissions, a broken symlink,
+        a concurrent delete) raises OSError instead, which was uncaught and would crash the whole
+        checker on one bad file."""
+        path = self._write("some_module/models/unreadable.py", "x = 1\n")
+        os.chmod(path, 0o000)
+        try:
+            violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
+            self.assertEqual(violations, [])
+        finally:
+            # Restore permissions before tearDown's shutil.rmtree runs -- an addCleanup callback
+            # would fire AFTER tearDown, too late (the path is already gone by then).
+            os.chmod(path, 0o644)
 
     def test_a_syntax_broken_file_is_skipped_without_crashing(self):
         self._write(
