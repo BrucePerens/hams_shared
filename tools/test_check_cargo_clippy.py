@@ -54,6 +54,28 @@ class FindCargoCratesTests(unittest.TestCase):
         _write(os.path.join(crate, "Cargo.toml"), "[package]\nname = \"pkg\"\n")
         self.assertEqual(chk.find_cargo_crates(self.tmp), [])
 
+    def test_a_concurrent_sessions_claude_worktree_is_never_walked(self):
+        """Real, live bug found reviewing this checker: IGNORE_DIR_NAMES has no ".claude" entry
+        and no generic dot-directory exclusion, unlike several sibling checkers in this same tree
+        (check_dead_code.py, check_minified_js_nested_templates.py, etc., which all prune `not
+        d.startswith(".")`). This project's own standing convention runs concurrent bug-hunt
+        dispatches in isolated git worktrees under `.claude/worktrees/<session>/` INSIDE the repo
+        root -- confirmed live while reviewing this exact file: running find_cargo_crates against
+        the real hams_com checkout during this session found the same daemon crates listed
+        THREE times over, once for the real repo and once each for two other, real, concurrently
+        running sessions' own worktrees. Beyond wasted work (cargo clippy is slow), a concurrent
+        session's in-progress, uncommitted Rust code failing to build or having real clippy
+        findings -- completely normal for work in progress -- would be reported as a finding
+        against the wrong repo entirely, a spurious CI failure with no relationship to the actual
+        code under review."""
+        real_crate = os.path.join(self.tmp, "daemons", "real_daemon")
+        _write(os.path.join(real_crate, "Cargo.toml"), "[package]\nname = \"real_daemon\"\n")
+        worktree_crate = os.path.join(
+            self.tmp, ".claude", "worktrees", "agent-other-session", "daemons", "real_daemon"
+        )
+        _write(os.path.join(worktree_crate, "Cargo.toml"), "[package]\nname = \"real_daemon\"\n")
+        self.assertEqual(chk.find_cargo_crates(self.tmp), [real_crate])
+
     def test_multiple_crates_are_all_found_and_sorted(self):
         crate_a = os.path.join(self.tmp, "daemons", "a_daemon")
         crate_b = os.path.join(self.tmp, "daemons", "b_daemon")
