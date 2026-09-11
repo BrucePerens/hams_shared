@@ -49,6 +49,7 @@ def _pg_version_sort_key(path):
         return (-1,)
 
 
+# [@ANCHOR: infrastructure:get_pg_bin]
 def get_pg_bin(name):
     """Locates PostgreSQL binaries dynamically across installed versions."""
     paths = glob.glob(f"/usr/lib/postgresql/*/bin/{name}")
@@ -3009,6 +3010,7 @@ def apply_production_directories(run_cmd_func=None, environment="prod", dest_dir
             apply_permissions(path, d.get("owner"), mode)
 
 
+# [@ANCHOR: infrastructure:write_env_files]
 def write_env_files(base_etc_dir, env_vars, run_cmd_func, dest_dir=""):
     if dest_dir:
         base_etc_dir = os.path.join(dest_dir, base_etc_dir.lstrip("/"))
@@ -3068,6 +3070,7 @@ def provision_custom_addons(run_cmd_func, env_vars, environment="prod", dest_dir
     apply_permissions(custom_addons_dir, "odoo:odoo", None)
 
 
+# [@ANCHOR: infrastructure:provision_static_files]
 def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=""):
     for file_spec in MANIFEST.get("static_files", []):
         if environment not in file_spec["environments"]:
@@ -3133,6 +3136,7 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
                 hook(env_vars or {}, dest_dir, path, run_cmd_func)
 
 
+# [@ANCHOR: infrastructure:provision_systemd_override]
 def provision_systemd_override(run_cmd_func, env_vars, environment="prod", dest_dir=""):
     if environment not in ["prod", "test"]:
         return
@@ -3177,6 +3181,7 @@ def provision_systemd_override(run_cmd_func, env_vars, environment="prod", dest_
             _logger.warning("Failed to reload systemd daemons: %s", e)
 
 
+# [@ANCHOR: infrastructure:initialize_odoo_database]
 def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
     _logger.info("[*] Initializing Odoo database with custom modules...")
     modules = set()
@@ -3534,6 +3539,7 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault("CLOUDFLARE_TUNNEL_TOKEN", "none")
 
 
+# [@ANCHOR: infrastructure:_create_odoo_role_cmd]
 def _create_odoo_role_cmd(db_pass):
     """
     Builds the argv for a `psql -c` call that creates the `odoo` PostgreSQL
@@ -3565,6 +3571,7 @@ def _create_odoo_role_cmd(db_pass):
     ]
 
 
+# [@ANCHOR: infrastructure:_database_exists]
 def _database_exists(db_name):
     """
     Checks (via a real, non-shell psql invocation) whether a PostgreSQL
@@ -3585,11 +3592,13 @@ def _database_exists(db_name):
     return res.returncode == 0 and res.stdout.strip() == "1"
 
 
+# [@ANCHOR: infrastructure:_create_database_if_missing]
 def _create_database_if_missing(run_cmd_func, db_name):
     if not _database_exists(db_name):
         run_cmd_func(["sudo", "-u", "postgres", "createdb", "-O", "odoo", db_name])
 
 
+# [@ANCHOR: infrastructure:_alter_database_owner_to_odoo]
 def _alter_database_owner_to_odoo(run_cmd_func, db_name):
     """
     Alters db_name's owner to `odoo`, using psql's `:"db_name"` identifier-
@@ -3610,6 +3619,7 @@ def _alter_database_owner_to_odoo(run_cmd_func, db_name):
     )
 
 
+# [@ANCHOR: infrastructure:_refuse_if_unsafe_test_db_drop]
 def _refuse_if_unsafe_test_db_drop(db_name):
     """
     Refuses to let test-mode provisioning drop a database named "hams_prod"
