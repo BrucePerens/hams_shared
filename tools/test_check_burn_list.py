@@ -2728,6 +2728,85 @@ def test_verify_test_ast_burn_ignore_financial_valid_with_assert_raises():
     assert result == (0, 0)
 
 
+def test_verify_test_ast_loop_evasion_still_caught_for_get_view():
+    # Bug-hunt regression test, 2026-09-11: pre-existing coverage for the loop-evasion check's
+    # original two names (get_view/url_open) -- confirms the widened call-name tuple didn't
+    # regress the names it already covered.
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_view_renders(self):\n"
+        "        # [@ANCHOR: COMM_test_view_renders]\n"
+        "        for rec in records:\n"
+        "            self.url_open(rec.path)\n"
+    )
+    req = {"anchor": "test_view_renders", "type": "audit-ignore-view"}
+    errors, total = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert errors == 1 and total == 1
+
+
+def test_verify_test_ast_loop_evasion_now_caught_for_get_combined_arch():
+    # Bug-hunt fix, 2026-09-11: the loop-evasion check only ever inspected get_view/url_open,
+    # missing _get_combined_arch even though it's an equally valid audit-ignore-view/-xpath
+    # call elsewhere in this same function -- a loop wrapping it with no non-empty-iterable
+    # assertion has the identical "silently empty collection skips the assertion" hole.
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_view_renders(self):\n"
+        "        # [@ANCHOR: COMM_test_view_renders]\n"
+        "        for view_id in view_ids:\n"
+        "            self.env['ir.ui.view']._get_combined_arch(view_id)\n"
+    )
+    req = {"anchor": "test_view_renders", "type": "audit-ignore-view"}
+    errors, total = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert errors == 1 and total == 1
+
+
+def test_verify_test_ast_loop_evasion_now_caught_for_trigger():
+    # Bug-hunt fix, 2026-09-11: same gap for _trigger() (audit-ignore-cron's own required call).
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_cron_runs(self):\n"
+        "        # [@ANCHOR: COMM_test_cron_runs]\n"
+        "        for cron in crons:\n"
+        "            cron._trigger()\n"
+    )
+    req = {"anchor": "test_cron_runs", "type": "audit-ignore-cron"}
+    errors, total = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert errors == 1 and total == 1
+
+
+def test_verify_test_ast_loop_evasion_now_caught_for_message_post():
+    # Bug-hunt fix, 2026-09-11: same gap for message_post()/send_mail() (audit-ignore-mail's
+    # own required calls).
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_mail_sent(self):\n"
+        "        # [@ANCHOR: COMM_test_mail_sent]\n"
+        "        for record in records:\n"
+        "            record.message_post(body='hi')\n"
+    )
+    req = {"anchor": "test_mail_sent", "type": "audit-ignore-mail"}
+    errors, total = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert errors == 1 and total == 1
+
+
+def test_verify_test_ast_loop_evasion_not_flagged_when_iteration_is_asserted():
+    # The exception this check itself documents must still hold for the newly-covered call
+    # names too: a loop whose own iterable is asserted non-empty is real per-item coverage,
+    # not a hole, and must not be flagged.
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_cron_runs(self):\n"
+        "        # [@ANCHOR: COMM_test_cron_runs]\n"
+        "        self.assertTrue(len(crons) > 0)\n"
+        "        for cron in crons:\n"
+        "            cron._trigger()\n"
+    )
+    req = {"anchor": "test_cron_runs", "type": "audit-ignore-cron"}
+    errors, total = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert errors == 0 and total == 0
+
+
 def test_verify_test_ast_audit_ignore_i18n_is_always_valid_regardless_of_function_content():
     target_content = (
         "class FooTests(TestCase):\n"

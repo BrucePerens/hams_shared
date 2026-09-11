@@ -4150,12 +4150,29 @@ def _verify_test_ast(
                     elif func_attr in ("assertRaises", "assertRaisesRegex"):
                         found_security_check = True
 
+    # Bug-hunt fix, 2026-09-11: this loop-evasion check only ever inspected `get_view`/
+    # `url_open` calls -- but the surrounding validity checks above (found_view/found_trigger/
+    # found_mail) also treat `_get_combined_arch`, `_trigger`, `send_mail`, and `message_post`
+    # as equally valid evidence for their own tag types (audit-ignore-view/-xpath,
+    # audit-ignore-cron, audit-ignore-mail respectively). A test wrapping any of THOSE calls in
+    # a loop with no non-empty-iterable assertion had the identical "silently empty collection
+    # skips the assertion" hole this check exists to catch, just via a different call name --
+    # confirmed live-reachable via a real test fixture for each of the 3 previously-missed
+    # names before this fix (see test_check_burn_list.py).
+    _LOOP_EVASION_CALL_NAMES = (
+        "get_view",
+        "url_open",
+        "_get_combined_arch",
+        "_trigger",
+        "send_mail",
+        "message_post",
+    )
     for node in ast.walk(target_func):
         if isinstance(node, (ast.For, ast.While)):
             for child in ast.walk(node):
-                if isinstance(child, ast.Call) and getattr(child.func, "attr", "") in (
-                    "get_view",
-                    "url_open",
+                if (
+                    isinstance(child, ast.Call)
+                    and getattr(child.func, "attr", "") in _LOOP_EVASION_CALL_NAMES
                 ):
                     # Exception (2026-09-09): a loop is only a problem when it can
                     # silently iterate zero times, making the assertion inside it
@@ -4170,7 +4187,7 @@ def _verify_test_ast(
                     if _loop_iteration_is_asserted(target_func, node):
                         continue
                     print(
-                        f"  ❌ ERROR: AST Evasion Detected. Found loop wrapping view/URL validation in test anchor '{anchor}' in {target_file}, "
+                        f"  ❌ ERROR: AST Evasion Detected. Found loop wrapping view/URL/cron/mail validation in test anchor '{anchor}' in {target_file}, "
                         "with no assertion that the loop's own iterable is non-empty (e.g. assertTrue(len(x) > 0) or assertGreater(len(x), 0)) -- "
                         "a silently empty collection would skip the assertion inside the loop entirely."
                     )
