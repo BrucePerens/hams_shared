@@ -14,10 +14,18 @@ def load_ignore_file(filepath):
     patterns = []
     if filepath and os.path.exists(filepath):
         with open(filepath, "r", encoding="utf-8") as f:
-            for line in f:
+            for lineno, line in enumerate(f, 1):
                 line = line.strip()
                 if line and not line.startswith("#"):
-                    patterns.append(re.compile(line))
+                    try:
+                        patterns.append(re.compile(line))
+                    except re.error as e:
+                        # One typo'd regex anywhere in the ignore file (an unbalanced '(' is
+                        # the classic case) must not crash the whole checker before it checks a
+                        # single JS file -- report it and keep the other, valid patterns.
+                        logging.warning(
+                            "%s:%d: invalid regex %r skipped: %s", filepath, lineno, line, e
+                        )
     return patterns
 
 

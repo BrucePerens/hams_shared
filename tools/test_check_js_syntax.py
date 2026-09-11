@@ -52,6 +52,21 @@ class LoadIgnoreFileTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_a_malformed_regex_line_is_reported_and_skipped_not_fatal(self):
+        """load_ignore_file's own re.compile(line) call had no exception handling -- a single
+        typo'd regex anywhere in the ignore file (an unbalanced '(' is the classic case) raises
+        an uncaught re.error, crashing the whole checker before it checks a single JS file. Not
+        reachable via run_linters.py's own invocation today (it never passes --ignore-file at
+        all), but a real crash risk for any future/manual invocation that does."""
+        tmp = tempfile.mkdtemp()
+        try:
+            p = os.path.join(tmp, "ignore.txt")
+            _write(p, "vendor/.*\nunbalanced(\nnode_modules/.*\n")
+            patterns = chk.load_ignore_file(p)
+            self.assertEqual(len(patterns), 2)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 class IsIgnoredTests(unittest.TestCase):
     def test_a_matching_path_is_ignored(self):
