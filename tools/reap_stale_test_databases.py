@@ -142,6 +142,52 @@ def find_reapable_databases(max_age_hours: float) -> list[str]:
     return reapable
 
 
+def _drop_one(datname: str, dry_run: bool = False) -> bool:
+    """Drop one scratch database and, only if the drop itself actually succeeded (or the
+    database was already gone), remove its Odoo filestore directory too. Returns True if the
+    filestore removal step was allowed to proceed, False if it was skipped because `dropdb`
+    itself failed.
+
+    Real bug found 2026-09-10: this used to remove the filestore directory unconditionally, with
+    no check on whether `dropdb` actually succeeded. `--if-exists` makes `dropdb` exit 0 both
+    when it genuinely dropped the database AND when the database was already gone -- but a
+    NONZERO exit means the drop was refused (e.g. a new connection raced in between the
+    open-connection check in `find_reapable_databases` and this call, or a transient
+    `sudo -n`/permission failure) and the database is very much still alive. In that case,
+    proceeding to delete its filestore directory anyway would corrupt a real, still-existing
+    database's attachments/binary data while leaving the database row itself intact -- strictly
+    worse than the leaked-filestore bug this whole filestore-removal step was added to fix (see
+    this file's own module docstring), since now the database is broken AND still around to be
+    used. This function skips the filestore removal entirely on a nonzero exit and logs it
+    clearly instead of silently proceeding."""
+    filestore_dir = os.path.join(ODOO_FILESTORE_BASE, datname)
+    if dry_run:
+        _logger.info("[dry-run] Would drop: %s", datname)
+        if os.path.isdir(filestore_dir):
+            _logger.info("[dry-run] Would also remove filestore dir: %s", filestore_dir)
+        return True
+
+    _logger.info("Dropping: %s", datname)
+    result = subprocess.run(
+        ["sudo", "-n", "-u", "postgres", "dropdb", "--if-exists", datname],
+        check=False,
+    )
+    if result.returncode != 0:
+        _logger.warning(
+            "dropdb failed for %s (exit %d) -- leaving its filestore dir alone.",
+            datname, result.returncode,
+        )
+        return False
+
+    # Only reached for a name already verified by the caller to start with SCRATCH_DB_PREFIX,
+    # AND only after dropdb itself reported success (or that the database was already gone) --
+    # never removes a real, still-existing database's filestore.
+    if os.path.isdir(filestore_dir):
+        _logger.info("Removing filestore dir: %s", filestore_dir)
+        shutil.rmtree(filestore_dir, ignore_errors=True)
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -163,22 +209,7 @@ def main():
         return
 
     for datname in reapable:
-        filestore_dir = os.path.join(ODOO_FILESTORE_BASE, datname)
-        if args.dry_run:
-            _logger.info("[dry-run] Would drop: %s", datname)
-            if os.path.isdir(filestore_dir):
-                _logger.info("[dry-run] Would also remove filestore dir: %s", filestore_dir)
-            continue
-        _logger.info("Dropping: %s", datname)
-        subprocess.run(
-            ["sudo", "-n", "-u", "postgres", "dropdb", "--if-exists", datname],
-            check=False,
-        )
-        # Only reached for a name already verified above to start with SCRATCH_DB_PREFIX --
-        # never removes a real database's filestore.
-        if os.path.isdir(filestore_dir):
-            _logger.info("Removing filestore dir: %s", filestore_dir)
-            shutil.rmtree(filestore_dir, ignore_errors=True)
+        _drop_one(datname, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

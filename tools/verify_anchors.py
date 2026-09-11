@@ -253,11 +253,34 @@ def _process_file_for_anchors(
         if not matches:
             continue
 
-        first_prefix = line[: matches[0].start()].strip()
         loc_str = f"./{rel_path}:{line_num}"
         code_anchor_lines.setdefault(full_path, set()).add(line_num)
 
+        # Real bug found 2026-09-10: classification used to be driven by a single
+        # `first_prefix = line[: matches[0].start()].strip()`, computed ONCE from the text before
+        # the FIRST anchor on the line, then reused unchanged for EVERY anchor on that line. A
+        # line with more than one `[@ANCHOR: ...]` tag (confirmed empirically, not just read) had
+        # every anchor after the first classified according to whatever preceded the FIRST one,
+        # not its own actual preceding text -- e.g. `# [@ANCHOR: COMM_feature] # Verified by
+        # [@ANCHOR: test_it]` silently dropped `test_it` from `verified_by_links` entirely
+        # (misclassified as a second BASE declaration instead, since the shared prefix was just
+        # "#"), which would make `_report_bidirectional_orphans` wrongly report a genuinely
+        # verified test as orphaned. The reverse direction is the more dangerous one: `# Tests
+        # [@ANCHOR: real_target] and [@ANCHOR: unrelated_feature]` would silently record
+        # `unrelated_feature` as test-covered too, purely because it shared a line with a real
+        # Tests-tag -- exactly the kind of false "tested" classification that could mask a real
+        # coverage gap. This also explains why the conversational-word regex just below
+        # (`\b(See|and|also|or|to)\b$`) could never actually fire for any anchor but the first on
+        # a line: text like " and " between two anchors was never checked against it, since only
+        # the text before the FIRST anchor was ever inspected. Fixed by classifying each anchor
+        # using the text between the END of the PREVIOUS anchor on the same line (or the start of
+        # the line, for the first one) and its OWN start -- each tag is now classified by what
+        # actually precedes IT, not by what preceded a different tag earlier on the line.
+        prev_end = 0
         for match in matches:
+            own_prefix = line[prev_end:match.start()].strip()
+            prev_end = match.end()
+
             anchor_name = match.group(1)
             explicit_mod = mod
 
@@ -267,14 +290,14 @@ def _process_file_for_anchors(
 
             anchor = f"{explicit_mod}:{anchor_name}"
 
-            if first_prefix.endswith("Tests"):
+            if own_prefix.endswith("Tests"):
                 # LLM NOTE: Matches `# Tests [@ANCHOR: COMM_target]`
                 # Used in test files to explicitly state what feature is being tested.
                 tests_links.setdefault(full_path, []).append((anchor, line_num))
                 tests_links_set.setdefault(anchor, []).append(loc_str)
                 code_anchors.setdefault(anchor, []).append(loc_str)
 
-            elif first_prefix.endswith("Verified by") or first_prefix.endswith(
+            elif own_prefix.endswith("Verified by") or own_prefix.endswith(
                 "Tested by"
             ):
                 # LLM NOTE: Matches `# # Verified by [@ANCHOR: COMM_test_method_name]`
@@ -293,10 +316,10 @@ def _process_file_for_anchors(
                 # there -- a .py docstring quoting the same syntax as illustrative
                 # documentation (e.g. a test file's own module docstring) is not a
                 # real claim site and must not be treated as one.
-                if "audit-ignore-view" in first_prefix and full_path.endswith(".xml"):
+                if "audit-ignore-view" in own_prefix and full_path.endswith(".xml"):
                     audit_ignore_links.setdefault(anchor, []).append(loc_str)
 
-            elif first_prefix.endswith("Triggers") or first_prefix.endswith(
+            elif own_prefix.endswith("Triggers") or own_prefix.endswith(
                 "Triggered by"
             ):
                 # LLM NOTE: Matches `# Triggers [@ANCHOR: COMM_target_feature]`
@@ -307,7 +330,7 @@ def _process_file_for_anchors(
                 # Documentation-only anchors, ignored in code logic tracing.
                 pass
 
-            elif re.search(r"\b(See|and|also|or|to)\b$", first_prefix, re.IGNORECASE):
+            elif re.search(r"\b(See|and|also|or|to)\b$", own_prefix, re.IGNORECASE):
                 # Conversational/Inline references, ignored in logic tracing.
                 pass
 
@@ -926,6 +949,77 @@ def _report_missing_ux_docs(
     return has_errors
 
 
+# The two real repo names this codebase actually uses (confirmed against AGENTS.md), matching
+# check_dependency_cycles.py's own already-fixed `_find_sibling_repo()` -- see
+# `_add_sibling_repo_target`'s own docstring for the real bug this replaces.
+_REAL_SIBLING_REPO_NAMES = ("hams_open", "hams_com")
+
+
+def _add_sibling_repo_target(repo_root, target_dirs):
+    """If `target_dirs` doesn't already include a real hams_open/hams_com repo root, find and
+    append whichever real sibling repo exists next to `repo_root` (preferring a proper sibling
+    location; falling back to a nested child location with a warning, matching
+    run_linters.py's own "Child Directory Mandate"). Returns `(new_target_dirs, warning_or_None)`.
+
+    Real bug found 2026-09-10: the old check tested for the literal substring "hams_community"
+    (a name no real directory in this codebase has ever used) or "hams_com" anywhere in a target
+    path. Since ANY path under the hams_com repo trivially contains the substring "hams_com",
+    invoking this script unscoped from hams_com (`sys.argv[1:]` empty, `target_dirs == [repo_root]`
+    where repo_root IS hams_com) made that check true purely by self-match -- confirmed
+    empirically -- so the sibling-detection block never ran at all. Even when it did run (e.g.
+    invoked from hams_open, where "hams_com" is not a substring of the path), the four candidate
+    directory names it probed were "hams_community"/"hams_com" only -- NEVER the literal name
+    "hams_open" -- so a hams_com-rooted invocation could never have found the real hams_open
+    directory as a sibling candidate either way. Net effect, confirmed against the real repo
+    tree: `verify_anchors.py` invoked unscoped from hams_com (a real, documented-valid invocation
+    root per AGENTS.md) never scanned hams_open at all, silently missing every cross-repo
+    Triggers/Tests/Verified-by anchor reference into it -- exactly the "does it actually cover
+    both hams_com and hams_open" scoping gap this review pass exists to catch. The reverse
+    direction (invoked from hams_open) happened to work by accident, since "hams_com" both isn't
+    a substring of "hams_open" and IS one of the (coincidentally correct) candidate names.
+    """
+    # The repo(s) we're actually looking FOR: whichever of the two real names is not
+    # `repo_root`'s own name (both, if `repo_root` is neither -- e.g. invoked directly against
+    # hams_shared, the third documented-valid root, which is its own separate case not otherwise
+    # touched by this fix). Checking "do we already have hams_com" when repo_root ITSELF already
+    # IS hams_com is the wrong question -- of course it's already there -- the real question is
+    # always about the OTHER repo.
+    own_name = os.path.basename(repo_root)
+    other_names = [n for n in _REAL_SIBLING_REPO_NAMES if n != own_name] or list(
+        _REAL_SIBLING_REPO_NAMES
+    )
+
+    has_sibling = any(
+        os.path.basename(os.path.normpath(d)) in other_names for d in target_dirs
+    )
+    if has_sibling:
+        return list(target_dirs), None
+
+    candidates = [
+        os.path.abspath(os.path.join(repo_root, "..", sibling_name))
+        for sibling_name in other_names
+    ] + [
+        os.path.abspath(os.path.join(repo_root, sibling_name))
+        for sibling_name in other_names
+    ]
+
+    new_target_dirs = list(target_dirs)
+    for possible_path in candidates:
+        if not os.path.isdir(possible_path):
+            continue
+        new_target_dirs.append(possible_path)
+        if os.path.dirname(possible_path) == repo_root:
+            warning = (
+                f"'{os.path.basename(possible_path)}' was found as a CHILD of the current "
+                "repository. This is an ANTI-PATTERN. It MUST be a SIBLING directory instead. "
+                f"Please move it to: {os.path.dirname(repo_root)}{os.sep}"
+                f"{os.path.basename(possible_path)}"
+            )
+            return new_target_dirs, warning
+        return new_target_dirs, None
+    return new_target_dirs, None
+
+
 def main():
     print("[*] Scanning documentation and codebase for Semantic Anchors...")
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -937,34 +1031,16 @@ def main():
     primary_dirs = [os.path.abspath(d) for d in args]
     target_dirs = list(primary_dirs)
 
-    has_community = any("hams_community" in d or "hams_com" in d for d in target_dirs)
-    if not has_community:
-        for possible_path in [
-            os.path.abspath(os.path.join(repo_root, "..", "hams_community")),
-            os.path.abspath(os.path.join(repo_root, "..", "hams_com")),
-            os.path.abspath(os.path.join(repo_root, "hams_community")),
-            os.path.abspath(os.path.join(repo_root, "hams_com")),
-        ]:
-            if os.path.isdir(possible_path):
-                target_dirs.append(possible_path)
-                if os.path.dirname(possible_path) == repo_root:
-                    print(
-                        "\n================================================================================"
-                    )
-                    print("🚨 CRITICAL REPOSITORY STRUCTURE WARNING 🚨")
-                    print(
-                        f"'{os.path.basename(possible_path)}' was found as a CHILD of the current repository."
-                    )
-                    print(
-                        "This is an ANTI-PATTERN. It MUST be a SIBLING directory instead."
-                    )
-                    print(
-                        f"Please move it to: {os.path.dirname(repo_root)}{os.sep}{os.path.basename(possible_path)}"
-                    )
-                    print(
-                        "================================================================================\n"
-                    )
-                break
+    target_dirs, sibling_warning = _add_sibling_repo_target(repo_root, target_dirs)
+    if sibling_warning:
+        print(
+            "\n================================================================================"
+        )
+        print("🚨 CRITICAL REPOSITORY STRUCTURE WARNING 🚨")
+        print(sibling_warning)
+        print(
+            "================================================================================\n"
+        )
 
     scanned_realpaths = set()
     final_targets = []

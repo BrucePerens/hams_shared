@@ -288,6 +288,42 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         self.assertEqual(code_anchors, {})
         self.assertEqual(anchor_locations, {})
 
+    def test_a_second_anchor_on_the_same_line_is_classified_by_its_own_preceding_text(self):
+        # Real bug found 2026-09-10: classification used to reuse the text before the FIRST
+        # anchor on a line for EVERY anchor on that line. A base declaration followed on the
+        # same physical line by a real "# Verified by [@ANCHOR: ...]" comment silently dropped
+        # the verification link entirely -- the second anchor was misclassified as a second base
+        # declaration (using the first anchor's own empty/"#" prefix) instead of being recorded
+        # in verified_by_links. Confirmed empirically against the pre-fix source before writing
+        # this test. Each anchor must now be classified using the text between the END of the
+        # previous anchor on the line (or the line start, for the first) and its OWN start.
+        _write(
+            os.path.join(self.tmp, "mod_a", "models", "foo.py"),
+            "# [@ANCHOR: COMM_feature] # Verified by [@ANCHOR: test_it]\n",
+        )
+        code_anchors, anchor_locations, _tl, _tls, verified_by_links, *_rest = self._scan()
+        self.assertIn("mod_a:COMM_feature", anchor_locations)
+        self.assertIn("mod_a:test_it", verified_by_links)
+        # The second anchor must NOT also have been recorded as a second base declaration.
+        self.assertNotIn("mod_a:test_it", anchor_locations)
+
+    def test_a_tests_tag_followed_by_a_conversational_second_anchor_is_not_double_counted(self):
+        # The other direction of the same bug: a real "# Tests [@ANCHOR: real_target]" comment
+        # followed on the same line by an incidental "and [@ANCHOR: mentioned_elsewhere]" mention
+        # used to silently record `mentioned_elsewhere` as test-covered too, purely because it
+        # shared a line with a real Tests-tag -- exactly the kind of false "tested" classification
+        # that could mask a real coverage gap for `mentioned_elsewhere`. The conversational-word
+        # regex (`\b(See|and|also|or|to)\b$`) exists precisely to catch this shape, but could never
+        # fire for anything but the first anchor on a line before this fix.
+        _write(
+            os.path.join(self.tmp, "mod_a", "tests", "test_foo.py"),
+            "# Tests [@ANCHOR: real_target] and [@ANCHOR: mentioned_elsewhere]\n",
+        )
+        code_anchors, _locs, _tl, tests_links_set, *_rest = self._scan()
+        self.assertIn("mod_a:real_target", tests_links_set)
+        self.assertNotIn("mod_a:mentioned_elsewhere", tests_links_set)
+        self.assertNotIn("mod_a:mentioned_elsewhere", code_anchors)
+
 
 class ReportDuplicatesTests(unittest.TestCase):
     def setUp(self):
@@ -541,6 +577,82 @@ class ReportMissingUxDocsTests(unittest.TestCase):
     def test_a_non_ux_anchor_is_never_considered(self):
         code_anchors = {"mod_a:COMM_x": ["./mod_a/models/foo.py:1"]}
         self.assertFalse(va._report_missing_ux_docs(code_anchors, set(), [], self.tmp))
+
+
+class AddSiblingRepoTargetTests(unittest.TestCase):
+    # Real bug found 2026-09-10: the old check in main() tested for the substring
+    # "hams_community" (a name no real directory in this codebase has ever used) or "hams_com"
+    # anywhere in a target path. Since ANY path under a repo named "hams_com" trivially contains
+    # the substring "hams_com", invoking verify_anchors.py unscoped from hams_com made that check
+    # true purely by SELF-match, skipping sibling detection entirely -- confirmed empirically
+    # against the real repo tree before writing this fix. Even when the check was false (e.g.
+    # invoked from hams_open), the four candidate directory names it probed were
+    # "hams_community"/"hams_com" only, never the real name "hams_open" -- so a hams_com-rooted
+    # invocation could never have found hams_open as a sibling either way. Net effect:
+    # verify_anchors.py invoked unscoped from hams_com never scanned hams_open at all, silently
+    # missing every cross-repo anchor reference into it.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_starting_from_hams_com_finds_the_real_hams_open_sibling(self):
+        # The exact case the real bug got wrong: repo_root IS hams_com, target_dirs is just
+        # [hams_com] -- hams_open must still be found and added as a sibling target.
+        hams_com = os.path.join(self.tmp, "hams_com")
+        hams_open = os.path.join(self.tmp, "hams_open")
+        os.makedirs(hams_com)
+        os.makedirs(hams_open)
+        new_targets, warning = va._add_sibling_repo_target(hams_com, [hams_com])
+        self.assertIn(hams_open, new_targets)
+        self.assertIsNone(warning)
+
+    def test_starting_from_hams_open_finds_the_real_hams_com_sibling(self):
+        hams_com = os.path.join(self.tmp, "hams_com")
+        hams_open = os.path.join(self.tmp, "hams_open")
+        os.makedirs(hams_com)
+        os.makedirs(hams_open)
+        new_targets, warning = va._add_sibling_repo_target(hams_open, [hams_open])
+        self.assertIn(hams_com, new_targets)
+        self.assertIsNone(warning)
+
+    def test_a_module_scoped_target_under_hams_com_still_finds_hams_open(self):
+        # target_dirs need not literally be the repo root -- a module-scoped invocation
+        # (run_linters.py's own `targets` list) passes a deeper path whose basename is the
+        # module name, not "hams_com". The sibling must still be found.
+        hams_com = os.path.join(self.tmp, "hams_com")
+        hams_open = os.path.join(self.tmp, "hams_open")
+        scoped_module = os.path.join(hams_com, "some_module")
+        os.makedirs(scoped_module)
+        os.makedirs(hams_open)
+        new_targets, warning = va._add_sibling_repo_target(hams_com, [scoped_module])
+        self.assertIn(hams_open, new_targets)
+
+    def test_the_sibling_is_not_re_added_when_already_present(self):
+        hams_com = os.path.join(self.tmp, "hams_com")
+        hams_open = os.path.join(self.tmp, "hams_open")
+        os.makedirs(hams_com)
+        os.makedirs(hams_open)
+        new_targets, warning = va._add_sibling_repo_target(hams_com, [hams_com, hams_open])
+        self.assertEqual(new_targets, [hams_com, hams_open])
+        self.assertIsNone(warning)
+
+    def test_a_missing_sibling_directory_is_simply_not_added(self):
+        hams_com = os.path.join(self.tmp, "hams_com")
+        os.makedirs(hams_com)
+        new_targets, warning = va._add_sibling_repo_target(hams_com, [hams_com])
+        self.assertEqual(new_targets, [hams_com])
+        self.assertIsNone(warning)
+
+    def test_a_sibling_nested_as_a_child_is_still_found_but_warns(self):
+        hams_com = os.path.join(self.tmp, "hams_com")
+        nested_hams_open = os.path.join(hams_com, "hams_open")
+        os.makedirs(nested_hams_open)
+        new_targets, warning = va._add_sibling_repo_target(hams_com, [hams_com])
+        self.assertIn(nested_hams_open, new_targets)
+        self.assertIsNotNone(warning)
+        self.assertIn("ANTI-PATTERN", warning)
 
 
 class MainIntegrationTests(unittest.TestCase):

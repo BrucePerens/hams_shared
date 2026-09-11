@@ -101,8 +101,21 @@ def publish(odoo_url: str, publish_key: str, tool: str, platform: str, tag: str,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        result = json.loads(resp.read())
+    # Real bug found 2026-09-10: find_release_assets() above already wraps its own real network
+    # call's HTTPError into a clear, actionable SystemExit (a bad tag name, a renamed repo), but
+    # this publish call -- an equally real, equally likely failure point (a wrong/expired
+    # --publish-key, the endpoint temporarily down, a server-side 500) -- had no such handling at
+    # all, so any non-2xx response here crashed with a raw, unhandled urllib traceback instead of
+    # the same clear "Publish failed for X/Y: ..." message this file's own error-reporting style
+    # already establishes for the sibling failure case one function up.
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            result = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:500]
+        raise SystemExit(
+            f"Publish failed for {tool}/{platform}: HTTP {e.code} from {odoo_url} -- {body}"
+        ) from e
     status = result.get("result", {})
     print(f"  {tool}/{platform}: {status}")
     if status.get("status") != "success":

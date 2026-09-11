@@ -50,7 +50,20 @@ RMSGW_BINARY = "rmsgw"
 # rmsgw's own `usercall` argument completely unchecked, and LinBPQ's stdin
 # handoff is the one place in this whole chain an untrusted remote RF
 # station's own input reaches this wrapper before rmsgw itself takes over.
-_CALLSIGN_RE = re.compile(r"^[A-Z0-9]{2,8}(-[0-9]{1,2})?$")
+#
+# Real bug found 2026-09-10: the previous pattern, `^[A-Z0-9]{2,8}(-[0-9]{1,2})?$`, did NOT
+# actually enforce the "at least one digit" this comment (and this function's own stated purpose)
+# claims -- confirmed empirically, not assumed: a purely numeric line ("12345678") and a purely
+# alphabetic line ("ABCDEFGH") both matched it, despite neither being a real, valid amateur-radio
+# callsign shape (every real callsign has both a letter prefix/suffix component AND a digit).
+# `os.execvp`'s argv-list form still means this can never become a shell-injection vector either
+# way, but the validation's own DOCUMENTED job -- reject anything that isn't callsign-shaped --
+# wasn't actually being done for these two realistic-looking-but-wrong shapes, silently letting
+# them reach `rmsgw`'s own `usercall` argument as if they'd passed a real check. Fixed with two
+# lookaheads requiring at least one letter AND at least one digit somewhere in the base
+# 2-8-character group, while keeping the same permissive base shape (still accepts unusual real
+# formats, e.g. a UK-style leading-digit prefix like "2E0ABC").
+_CALLSIGN_RE = re.compile(r"^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{2,8}(-[0-9]{1,2})?$")
 
 
 def main(argv):

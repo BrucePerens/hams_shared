@@ -37,6 +37,64 @@ def _resolve_repo_root(given_path):
     return given_path
 
 
+def _resolve_module_path(mod, repo_root, community_dir):
+    """Resolve a named module to its real manifest directory: `repo_root` first, falling back to
+    `community_dir` (the sibling repo) if the module has no `__manifest__.py` there. Returns the
+    resolved path, or `None` if it exists in neither. Shared by main()'s own pre-flight-check
+    loop and its `targets` computation for `flake8`/`check_burn_list`/etc -- see the comment at
+    that loop's own call site for the real bug this sharing fixes (those two used to compute the
+    module's path two different, divergent ways)."""
+    mod_path = os.path.join(repo_root, mod)
+    if os.path.isfile(os.path.join(mod_path, "__manifest__.py")):
+        return mod_path
+    if community_dir:
+        comm_mod_path = os.path.join(community_dir, mod)
+        if os.path.isfile(os.path.join(comm_mod_path, "__manifest__.py")):
+            return comm_mod_path
+    return None
+
+
+def _run_per_target_checker(python_exec, dir_path, script_name, targets):
+    """Run a `hams_shared/tools/check_*.py` script that only ever reads a SINGLE repo-dir
+    argument -- once per entry in `targets`, instead of batching every target into one argv
+    list (`[script] + targets`).
+
+    Real bug found 2026-09-10 reviewing this file: `check_manifest_dependencies.py`,
+    `check_test_tags.py`, `check_absolute_paths.py`, `check_rabbitmq_pool.py`,
+    `check_shebang.py`, and `check_init_imports.py` all read only `sys.argv[1]`, silently
+    ignoring `sys.argv[2:]` entirely (confirmed by reading each script directly, not assumed);
+    `check_burn_list.py` declares its positional `directory` argument with `nargs="?"`, which
+    argparse rejects outright (a loud "unrecognized arguments" failure) given 2+ positional
+    values. `targets` becomes a multi-element list whenever `target_modules_str` names more
+    than one comma-separated module -- a real, deliberately supported feature of this file's own
+    module-discovery step (`mod_array = [m.strip() for m in target_modules_str.split(",") ...]`),
+    not a hypothetical. Before this fix, scoping a lint run to two or more named modules meant
+    six of these seven checkers silently checked only the first module and never touched the
+    rest -- no error, no warning, an exit code that looked clean -- while the seventh
+    (`check_burn_list.py`) crashed instead. Running once per target and aggregating the result
+    fixes both failure modes without touching any of those already-reviewed checker scripts'
+    own CLI contracts. For the common unscoped case (`targets == [repo_root]`, a single
+    element), this produces exactly one subprocess call with exactly the same argv as before --
+    behavior for that invocation is unchanged.
+    """
+    any_failed = False
+    for target in targets:
+        res = subprocess.run(
+            [python_exec, os.path.join(dir_path, "tools", script_name), target],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            if res.stdout:
+                print(res.stdout, end="")
+            if res.stderr:
+                print(res.stderr, end="")
+            any_failed = True
+        elif res.stdout and res.stdout.strip():
+            print(res.stdout, end="")
+    return any_failed
+
+
 def main():
     dir_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     repo_root = _resolve_repo_root(dir_path)
@@ -123,17 +181,33 @@ def main():
         mod_array = [m.strip() for m in target_modules_str.split(",") if m.strip()]
 
     # 6. Pre-flight Checks
+    # `resolved_mod_paths` also becomes `targets` below (when modules were explicitly named) --
+    # real bug found 2026-09-10: the OLD code recomputed `targets` from scratch as
+    # `[os.path.join(repo_root, m) for m in mod_array]`, unconditionally assuming every named
+    # module lives directly under `repo_root` and completely ignoring the `community_dir`
+    # fallback this very loop performs one path resolution earlier. A module that exists only in
+    # the sibling repo (e.g. running from `hams_com` and naming a `hams_open`-only module like
+    # `zero_sudo`) got a `targets` entry pointing at a path that doesn't exist at all under
+    # `repo_root` -- `os.walk()` on a nonexistent directory yields nothing and raises nothing, so
+    # every `targets`-scoped checker (flake8, check_burn_list, verify_anchors,
+    # check_manifest_dependencies, check_js_syntax, check_test_tags, check_absolute_paths,
+    # check_rabbitmq_pool, check_shebang, check_init_imports) silently scanned zero files for
+    # that module and reported a clean pass, even though `pre_flight_check.py` (this same loop,
+    # correctly, via `mod_path`) was checking the real, correctly-resolved sibling-repo path the
+    # whole time. Fixed by reusing this loop's own already-correct `mod_path` resolution instead
+    # of recomputing a second, wrong one. A module name that resolves in neither repo now prints
+    # an explicit warning and fails the run instead of being silently absent from `targets` with
+    # no signal at all (the same "loud, honest failure over a silent no-op" preference this
+    # campaign applies everywhere else).
+    resolved_mod_paths = []
     for mod in mod_array:
-        mod_path = os.path.join(repo_root, mod)
-        if not os.path.isfile(os.path.join(mod_path, "__manifest__.py")):
-            if community_dir:
-                comm_mod_path = os.path.join(community_dir, mod)
-                if os.path.isfile(os.path.join(comm_mod_path, "__manifest__.py")):
-                    mod_path = comm_mod_path
-                else:
-                    continue
-            else:
-                continue
+        mod_path = _resolve_module_path(mod, repo_root, community_dir)
+        if mod_path is None:
+            where = f"{repo_root} or {community_dir}" if community_dir else repo_root
+            print(f"❌ Module '{mod}' not found under {where}.")
+            linters_failed = True
+            continue
+        resolved_mod_paths.append(mod_path)
 
         pre_flight_cmd = [
             python_exec,
@@ -153,8 +227,8 @@ def main():
 
     # 7. Flake8
     flake8_cmd = "/usr/bin/flake8"
-    
-    targets = [os.path.join(repo_root, m) for m in mod_array] if target_modules_str else [repo_root]
+
+    targets = resolved_mod_paths if target_modules_str else [repo_root]
 
     try:
         res = subprocess.run(
@@ -185,20 +259,12 @@ def main():
         print("❌ Flake8 executable not found.")
         linters_failed = True
 
-    # 8. check_burn_list
-    res = subprocess.run(
-        [python_exec, os.path.join(dir_path, "tools", "check_burn_list.py")] + targets,
-        capture_output=True,
-        text=True,
-    )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
+    # 8. check_burn_list -- one subprocess call per target, not one batched call with all of
+    # `targets` appended (see `_run_per_target_checker`'s own docstring): `check_burn_list.py`'s
+    # `directory` argument is `nargs="?"`, which argparse rejects outright given 2+ positional
+    # values, so a multi-module scoped run used to crash this step entirely.
+    if _run_per_target_checker(python_exec, dir_path, "check_burn_list.py", targets):
         linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 9. verify_anchors
     res = subprocess.run(
@@ -215,23 +281,11 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
-    # 10. check_manifest_dependencies
-    res = subprocess.run(
-        [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_manifest_dependencies.py"),
-        ] + targets,
-        capture_output=True,
-        text=True,
-    )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
+    # 10. check_manifest_dependencies -- one call per target, not batched: this script reads
+    # only `sys.argv[1]` (see `_run_per_target_checker`'s own docstring) and silently ignores
+    # any additional targets appended after it.
+    if _run_per_target_checker(python_exec, dir_path, "check_manifest_dependencies.py", targets):
         linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 11. check_js_syntax
     res = subprocess.run(
@@ -248,76 +302,37 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
-    # 12. check_test_tags
-    res = subprocess.run(
-        [python_exec, os.path.join(dir_path, "tools", "check_test_tags.py")] + targets,
-        capture_output=True,
-        text=True,
-    )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
+    # 12. check_test_tags -- one call per target, not batched (sys.argv[1]-only, see
+    # `_run_per_target_checker`'s own docstring).
+    if _run_per_target_checker(python_exec, dir_path, "check_test_tags.py", targets):
         linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
-    # 13. check_absolute_paths
-    res = subprocess.run(
-        [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_absolute_paths.py"),
-        ] + targets,
-        capture_output=True,
-        text=True,
-    )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
+    # 13. check_absolute_paths -- one call per target, not batched (sys.argv[1]-only, see
+    # `_run_per_target_checker`'s own docstring).
+    if _run_per_target_checker(python_exec, dir_path, "check_absolute_paths.py", targets):
         linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
-    # 14. check_rabbitmq_pool
-    res = subprocess.run(
-        [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_rabbitmq_pool.py"),
-        ] + targets,
-        capture_output=True,
-        text=True,
-    )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
+    # 14. check_rabbitmq_pool -- one call per target, not batched (sys.argv[1]-only, see
+    # `_run_per_target_checker`'s own docstring).
+    if _run_per_target_checker(python_exec, dir_path, "check_rabbitmq_pool.py", targets):
         linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
-    # 15. check_shebang
-    res = subprocess.run(
-        [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_shebang.py"),
-        ] + targets,
-        capture_output=True,
-        text=True,
-    )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
+    # 15. check_shebang -- one call per target, not batched (sys.argv[1]-only, see
+    # `_run_per_target_checker`'s own docstring).
+    if _run_per_target_checker(python_exec, dir_path, "check_shebang.py", targets):
         linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 16. check_summation_bias
+    # Hardening, 2026-09-10: pin `cwd` to `repo_root` explicitly rather than inheriting
+    # run_linters.py's own ambient process cwd. check_summation_bias.py resolves ITS OWN repo
+    # root via `git rev-parse --show-toplevel`, which works correctly from any cwd already
+    # inside the right repo (its own docstring documents that this was already fixed once for a
+    # different reason) -- so this is not a confirmed live bug, no caller was found that invokes
+    # run_linters.py from a cwd outside the repo it's scoped to. But every OTHER step in this
+    # file that needs a specific repo root pins it explicitly (as an argv/positional, or via
+    # `cwd=`, e.g. step 21's ESLint) rather than trusting whatever cwd happened to be ambient
+    # when this process started -- this was the one silent exception. Pinning it here removes
+    # that latent inconsistency at zero behavioral cost for every invocation seen in practice.
     res = subprocess.run(
         [
             python_exec,
@@ -325,6 +340,7 @@ def main():
         ],
         capture_output=True,
         text=True,
+        cwd=repo_root,
     )
     if res.returncode != 0:
         if res.stdout:
@@ -353,21 +369,10 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
-    # 18. check_init_imports
-    res = subprocess.run(
-        [python_exec, os.path.join(dir_path, "tools", "check_init_imports.py")]
-        + targets,
-        capture_output=True,
-        text=True,
-    )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
+    # 18. check_init_imports -- one call per target, not batched (sys.argv[1]-only, see
+    # `_run_per_target_checker`'s own docstring).
+    if _run_per_target_checker(python_exec, dir_path, "check_init_imports.py", targets):
         linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 19. check_dependency_cycles
     # Always scans the full repo (not the possibly-scoped `targets`) --
