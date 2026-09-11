@@ -48,9 +48,15 @@ def check_shebang(repo_dir):
                             violations.append(
                                 f"{os.path.relpath(file_path, repo_dir)}:{i} Contains shebang `#!` on a line other than line 1"
                             )
-            except UnicodeDecodeError as e:
-                # Skip binary files or files with weird encodings
-                print(f"Warning: UnicodeDecodeError reading {file_path}: {e}")
+            except (UnicodeDecodeError, OSError) as e:
+                # Skip binary files or files with weird encodings (UnicodeDecodeError), AND any
+                # other realistic filesystem condition open() can raise for a name os.walk()
+                # already handed us as a "file" -- most concretely a broken symlink
+                # (FileNotFoundError), a real, currently-reachable state in this exact repo
+                # (see check_absolute_paths.py's own identical fix/comment for the concrete
+                # AGENTS.md-in-a-fresh-worktree scenario this guards against). Before this fix,
+                # a single broken symlink to a .py/.sh file crashed the ENTIRE scan.
+                print(f"Warning: could not read {file_path}: {e}")
 
     return violations
 

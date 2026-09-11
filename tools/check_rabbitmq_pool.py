@@ -52,8 +52,12 @@ def check_rabbitmq(repo_dir):
                             violations.append(
                                 f"{os.path.relpath(file_path, repo_dir)}:{i} Instantiates pika connection directly. Use env['hams_rabbitmq.pool'] instead."
                             )
-            except UnicodeDecodeError as e:
-                print(f"Warning: UnicodeDecodeError reading {file_path}: {e}")
+            except (UnicodeDecodeError, OSError) as e:
+                # OSError added 2026-09-10: a broken symlink (target doesn't exist) with a
+                # .py extension makes open() raise FileNotFoundError, not caught before this
+                # fix -- crashing the entire scan on one unreadable file. Real, reachable repo
+                # state (see check_absolute_paths.py's identical fix), not contrived.
+                print(f"Warning: could not read {file_path}: {e}")
 
     return violations
 

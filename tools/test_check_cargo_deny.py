@@ -106,6 +106,23 @@ class MainTests(unittest.TestCase):
             printed = " ".join(str(c) for c in mock_print.call_args_list)
             self.assertIn("not installed", printed)
 
+    def test_cargo_itself_missing_exits_1_with_the_same_clear_message_not_a_crash(self):
+        # Real bug found 2026-09-10: `subprocess.run(["cargo", "deny", "--version"])` raises
+        # FileNotFoundError, uncaught, when the `cargo` binary itself isn't on PATH at all -- a
+        # materially different, realistic condition (a Python-only environment/CI stage with no
+        # Rust toolchain set up yet) from "cargo exists but cargo-deny isn't installed", which
+        # was already handled gracefully via a non-zero returncode.
+        self._make_crate()
+        with patch.object(sys, "argv", self._argv()), patch(
+            "check_cargo_deny.subprocess.run", side_effect=FileNotFoundError("no such file: cargo")
+        ) as mock_run, patch("builtins.print") as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                chk.main()
+            self.assertEqual(ctx.exception.code, 1)
+            self.assertEqual(mock_run.call_count, 1)
+            printed = " ".join(str(c) for c in mock_print.call_args_list)
+            self.assertIn("not installed", printed)
+
     def test_a_clean_check_exits_0(self):
         self._make_crate()
         version_check = MagicMock(returncode=0)

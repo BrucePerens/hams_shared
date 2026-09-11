@@ -29,7 +29,19 @@ import os
 import re
 import sys
 
-SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "tools", "radae"}
+SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "radae"}
+# Real bug found 2026-09-10: the bare directory name "tools" was in SKIP_DIRS above (almost
+# certainly meant to exempt this checker's OWN directory, hams_shared/tools), but os.walk's
+# `dirs[:] = [d for d in dirs if ...]` filter matches ANY directory literally named "tools"
+# ANYWHERE in either repo's tree by bare name, not just hams_shared/tools specifically --
+# silently exempting a real Odoo module's own "tools" subdirectory too (ham_shack/tools is a
+# real, currently-existing example; it has no .xml files today, so this was latent, not yet
+# live, but any future XML data/view file placed there would go unchecked with no warning).
+# Matched by path suffix below instead, the same precision check_init_imports.py's own
+# odoo_type_stubs exclusion already uses for the identical class of mistake ("matched by the
+# exact generated path, not just the directory name, so an unrelated directory that happens to
+# share that name elsewhere in the repo is not silently exempted too").
+_HAMS_SHARED_TOOLS_SUFFIX = os.path.join("hams_shared", "tools")
 
 _COMMENT_RE = re.compile(r"<!--(.*?)-->", re.DOTALL)
 
@@ -64,10 +76,25 @@ def _line_of_offset(text, offset):
     return text.count("\n", 0, offset) + 1
 
 
+def _is_hams_shared_tools(path):
+    """True only for the real hams_shared/tools directory itself (by path suffix, not bare
+    name) -- see the SKIP_DIRS comment above for why a bare "tools" name match was wrong."""
+    normalized = os.path.normpath(path)
+    return normalized == _HAMS_SHARED_TOOLS_SUFFIX or normalized.endswith(
+        os.sep + _HAMS_SHARED_TOOLS_SUFFIX
+    )
+
+
 def check_xml_comment_double_hyphen(repo_root):
     violations = []
     for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+        dirs[:] = [
+            d
+            for d in dirs
+            if d not in SKIP_DIRS
+            and not d.startswith(".")
+            and not (d == "tools" and _is_hams_shared_tools(os.path.join(root, d)))
+        ]
         for filename in files:
             if not filename.endswith(".xml"):
                 continue
@@ -75,8 +102,12 @@ def check_xml_comment_double_hyphen(repo_root):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     content = f.read()
-            except UnicodeDecodeError as e:
-                print(f"Warning: UnicodeDecodeError reading {path}: {e}")
+            except (UnicodeDecodeError, OSError) as e:
+                # OSError added 2026-09-10: a broken symlink (target doesn't exist) named
+                # *.xml makes open() raise FileNotFoundError, not caught before this fix --
+                # crashing the entire scan on one unreadable file. Real, reachable repo state
+                # (see check_absolute_paths.py's identical fix), not contrived.
+                print(f"Warning: could not read {path}: {e}")
                 continue
 
             for match in _COMMENT_RE.finditer(content):

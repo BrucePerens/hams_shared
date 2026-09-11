@@ -82,6 +82,17 @@ class CheckRabbitmqTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "foo.py"), "conn = env['hams_rabbitmq.pool'].get()\n")
         self.assertEqual(chk.check_rabbitmq(self.tmp), [])
 
+    def test_a_broken_symlink_is_skipped_without_crashing(self):
+        # Real bug found 2026-09-10: a broken symlink (target doesn't exist) with a .py
+        # extension makes open() raise FileNotFoundError, not caught before this fix -- crashing
+        # the entire scan on one unreadable file. Real, reachable repo state (see
+        # check_absolute_paths.py's identical fix), not contrived.
+        os.symlink(
+            os.path.join(self.tmp, "does_not_exist.py"),
+            os.path.join(self.tmp, "broken.py"),
+        )
+        self.assertEqual(chk.check_rabbitmq(self.tmp), [])
+
 
 class MainIntegrationTests(unittest.TestCase):
     def setUp(self):

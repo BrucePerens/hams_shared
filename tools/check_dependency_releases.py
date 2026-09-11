@@ -70,6 +70,18 @@ def check_one(name, entry):
         return {"name": name, "error": f"HTTP {e.code} from GitHub API for {repo}"}
     except urllib.error.URLError as e:
         return {"name": name, "error": f"network error reaching GitHub API: {e.reason}"}
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        # Real bug found 2026-09-10: a response GitHub's own API returns with HTTP 200 but
+        # a body this script doesn't expect -- a non-JSON error/maintenance page (json.load
+        # raises JSONDecodeError), or valid JSON missing "tag_name"/"sha" (a schema a future
+        # GitHub API change, or an edge-case repo state, could produce) -- was not caught
+        # anywhere, so ONE malformed entry's response crashed `check_one()` with an uncaught
+        # exception. Since `main()` calls `check_one()` for every tracked dependency inside a
+        # single list comprehension with no per-item isolation, that uncaught exception
+        # aborted the ENTIRE scheduled run before it could report on ANY of the other,
+        # perfectly healthy dependencies -- the opposite of this checker's own "isolate one
+        # entry's failure from the rest" design already proven for HTTPError/URLError above.
+        return {"name": name, "error": f"unexpected response from GitHub API for {repo}: {e}"}
 
     return {"name": name, "repo": repo, "pinned": pinned, "latest": latest, "stale": stale}
 

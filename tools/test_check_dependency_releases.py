@@ -96,6 +96,30 @@ class CheckOneTests(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("no route to host", result["error"])
 
+    def test_a_response_missing_the_expected_key_is_reported_not_raised(self):
+        # Real bug found 2026-09-10: GitHub's API returning valid JSON with an unexpected
+        # schema (missing "tag_name") raised an uncaught KeyError from inside check_one(),
+        # rather than being isolated to this one entry's own error report the way HTTPError/
+        # URLError already are.
+        entry = {"repo": "owner/repo", "mode": "release", "pinned": "v1.0.0"}
+        with patch.object(chk, "_github_get", return_value={"unexpected": "schema"}):
+            result = chk.check_one("thing", entry)
+        self.assertIn("error", result)
+        self.assertIn("owner/repo", result["error"])
+
+    def test_a_non_json_response_body_is_reported_not_raised(self):
+        # Same underlying bug, the other real trigger: a non-JSON body (an HTML error/
+        # maintenance page GitHub can return with a 200 status) makes json.load() itself
+        # raise json.JSONDecodeError inside _github_get(), also previously uncaught.
+        entry = {"repo": "owner/repo", "mode": "release", "pinned": "v1.0.0"}
+        with patch.object(
+            chk,
+            "_github_get",
+            side_effect=json.JSONDecodeError("Expecting value", "<html>oops</html>", 0),
+        ):
+            result = chk.check_one("thing", entry)
+        self.assertIn("error", result)
+
 
 class MainIntegrationTests(unittest.TestCase):
     def setUp(self):
@@ -147,6 +171,25 @@ class MainIntegrationTests(unittest.TestCase):
                 {"tag_name": "v1.0.0"},
                 HTTPError("url", 500, "Server Error", {}, None),
             ],
+        ):
+            code = self._run()
+        self.assertEqual(code, 1)
+
+    def test_a_malformed_response_for_one_dependency_does_not_abort_the_whole_run(self):
+        # Real bug found 2026-09-10: before the fix, an uncaught KeyError from ONE
+        # dependency's malformed API response propagated out of the list comprehension in
+        # main(), crashing the whole scheduled run with a traceback before "thing_b" (a
+        # perfectly healthy, up-to-date dependency) was ever checked or reported on.
+        self._write_manifest(
+            {
+                "thing_a": {"repo": "owner/a", "mode": "release", "pinned": "v1.0.0"},
+                "thing_b": {"repo": "owner/b", "mode": "release", "pinned": "v1.0.0"},
+            }
+        )
+        with patch.object(
+            chk,
+            "_github_get",
+            side_effect=[{"unexpected": "schema"}, {"tag_name": "v1.0.0"}],
         ):
             code = self._run()
         self.assertEqual(code, 1)

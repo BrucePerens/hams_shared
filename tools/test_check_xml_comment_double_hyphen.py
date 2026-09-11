@@ -97,6 +97,42 @@ class CheckXmlCommentDoubleHyphenTests(unittest.TestCase):
         violations = cxc.check_xml_comment_double_hyphen(self.tmp)
         self.assertEqual(violations, [])
 
+    def test_a_module_directory_literally_named_tools_is_still_checked(self):
+        # Real bug found 2026-09-10: SKIP_DIRS used to contain the bare name "tools" --
+        # matching ANY directory named "tools" anywhere in the tree, not just the real
+        # hams_shared/tools this checker's own directory. ham_shack/tools is a real, currently
+        # existing example of a module's own "tools" subdirectory that was silently exempted
+        # by this over-broad match. This fabricated module.xml under a "tools" dir must still
+        # be checked.
+        self._write(
+            "ham_shack/tools/module.xml",
+            "<odoo>\n<!-- some explanation -- with an aside -->\n</odoo>\n",
+        )
+        violations = cxc.check_xml_comment_double_hyphen(self.tmp)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("module.xml:2", violations[0])
+
+    def test_the_real_hams_shared_tools_directory_is_still_skipped(self):
+        # The fix must still exempt the REAL hams_shared/tools (this checker's own directory)
+        # by path, not just stop exempting everything named "tools".
+        self._write(
+            "hams_shared/tools/some_fixture.xml",
+            "<odoo>\n<!-- some explanation -- with an aside -->\n</odoo>\n",
+        )
+        violations = cxc.check_xml_comment_double_hyphen(self.tmp)
+        self.assertEqual(violations, [])
+
+    def test_a_broken_symlink_is_skipped_without_crashing(self):
+        # Real bug found 2026-09-10: a broken symlink (target doesn't exist) named *.xml
+        # makes open() raise FileNotFoundError, not caught before this fix -- crashing the
+        # entire scan. Real, reachable repo state (see check_absolute_paths.py's identical
+        # fix), not contrived.
+        target = os.path.join(self.tmp, "some_module", "views", "does_not_exist.xml")
+        link = os.path.join(self.tmp, "some_module", "views", "broken.xml")
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        os.symlink(target, link)
+        self.assertEqual(cxc.check_xml_comment_double_hyphen(self.tmp), [])
+
 
 class ResolveRepoRootTests(unittest.TestCase):
     def test_a_hams_shared_path_redirects_to_its_parent_repo(self):

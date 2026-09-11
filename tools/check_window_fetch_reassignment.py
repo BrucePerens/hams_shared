@@ -76,8 +76,12 @@ def check_window_fetch_reassignment(repo_dir):
                                 "ham_shack/static/tests/web_transceiver.test.js for the established "
                                 "pattern)."
                             )
-            except UnicodeDecodeError as e:
-                print(f"Warning: UnicodeDecodeError reading {file_path}: {e}")
+            except (UnicodeDecodeError, OSError) as e:
+                # OSError added 2026-09-10: a broken symlink (target doesn't exist) with a
+                # .test.js name makes open() raise FileNotFoundError, not caught before this
+                # fix -- crashing the entire scan on one unreadable file. Real, reachable repo
+                # state (see check_absolute_paths.py's identical fix), not contrived.
+                print(f"Warning: could not read {file_path}: {e}")
 
     return violations
 

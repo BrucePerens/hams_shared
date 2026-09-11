@@ -118,6 +118,18 @@ class CheckWindowFetchReassignmentTests(unittest.TestCase):
         # Must not raise.
         chk.check_window_fetch_reassignment(self.tmp)
 
+    def test_a_broken_symlink_is_skipped_without_crashing(self):
+        # Real bug found 2026-09-10: a broken symlink (target doesn't exist) named *.test.js
+        # makes open() raise FileNotFoundError, not caught before this fix -- crashing the
+        # entire scan. Real, reachable repo state (see check_absolute_paths.py's identical
+        # fix), not contrived.
+        os.makedirs(self.tmp, exist_ok=True)
+        os.symlink(
+            os.path.join(self.tmp, "does_not_exist.test.js"),
+            os.path.join(self.tmp, "broken.test.js"),
+        )
+        self.assertEqual(chk.check_window_fetch_reassignment(self.tmp), [])
+
     def test_multiple_violations_across_files_are_all_reported(self):
         _write(os.path.join(self.tmp, "a.test.js"), "window.fetch = a;\n")
         _write(os.path.join(self.tmp, "b.test.js"), "window.fetch = b;\n")

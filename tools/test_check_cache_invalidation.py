@@ -129,6 +129,69 @@ class CheckFileTests(unittest.TestCase):
         p = self._path("def foo(self):\n    return self.name\n")
         self.assertEqual(chk.check_file(p), [])
 
+    def test_an_invalidation_call_hidden_inside_an_unused_nested_helper_is_not_counted(self):
+        # Real bug found 2026-09-10: `ast.walk(node)` recurses into EVERY
+        # descendant, including a nested `def`'s own body -- so a
+        # notify_model_invalidation() call that only lives inside a nested
+        # helper function (defined but never actually invoked from `bar`'s
+        # own control flow) was wrongly counted as if it ran on `bar`'s own
+        # path, silently clearing `has_invalidation` to True. `bar` itself
+        # never actually invalidates anything after its mutating UPDATE.
+        p = self._path(
+            "def bar(self):\n"
+            "    self.env.cr.execute('UPDATE foo SET x = 1')\n"
+            "\n"
+            "    def _unused_helper():\n"
+            "        notify_model_invalidation(self.env, 'foo')\n"
+        )
+        errors = chk.check_file(p)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("bar", errors[0])
+
+    def test_a_nested_helper_invoked_from_the_outer_function_is_still_flagged(self):
+        # Documents the fix's own scope boundary, not a case the fix resolves: a nested helper
+        # that IS actually called from the outer function's own body is a legitimate, if
+        # unusual, way to structure the real invalidation call, but the outer function's own
+        # scope only sees a call to `_do_invalidate` (an ast.Name the checker doesn't recognize
+        # as an invalidation call) -- it does NOT trace into the helper's own body to see the
+        # real notify_model_invalidation() call nested inside it. So `bar` is still flagged here,
+        # a known, accepted limitation this fix does not attempt to close (tracing through an
+        # arbitrary call graph is out of scope for this checker) -- this test exists so a future
+        # change doesn't silently "fix" this into different, unverified behavior without a
+        # deliberate decision to do so.
+        p = self._path(
+            "def bar(self):\n"
+            "    self.env.cr.execute('UPDATE foo SET x = 1')\n"
+            "\n"
+            "    def _do_invalidate():\n"
+            "        notify_model_invalidation(self.env, 'foo')\n"
+            "    _do_invalidate()\n"
+        )
+        # `bar` itself still shows no direct invalidation call on its own
+        # scope (only a call to the nested helper, which is an Attribute-
+        # free ast.Name call to `_do_invalidate`, not to
+        # notify_model_invalidation) -- documenting the real, current
+        # limitation (an indirection the checker still can't see through)
+        # rather than asserting a fix this change does not attempt.
+        errors = chk.check_file(p)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("bar", errors[0])
+
+    def test_an_async_def_with_mutating_sql_and_no_invalidation_is_flagged(self):
+        # Real bug found 2026-09-10, same review pass: the outer scan only
+        # matched `ast.FunctionDef`, silently skipping every `async def`
+        # entirely regardless of what it does -- an async model method
+        # (or daemon-adjacent helper under a `models/` directory) doing a
+        # raw mutating execute with no invalidation call was never checked
+        # at all.
+        p = self._path(
+            "async def foo(self):\n"
+            "    self.env.cr.execute('UPDATE ham_qso SET x = 1')\n"
+        )
+        errors = chk.check_file(p)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("foo", errors[0])
+
     def test_each_function_is_evaluated_independently(self):
         p = self._path(
             "def good(self):\n"

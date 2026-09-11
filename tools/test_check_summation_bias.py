@@ -156,6 +156,32 @@ class CheckSummationBiasTests(unittest.TestCase):
         code, out = _run(self.tmp)
         self.assertEqual(code, 1)
 
+    def test_a_gutted_file_is_still_flagged_when_run_from_a_subdirectory(self):
+        # Real bug found 2026-09-10: `git diff --name-only HEAD` always reports paths
+        # relative to the REPO ROOT no matter where git was invoked from, but the old code
+        # checked os.path.exists(filepath)/os.path.getsize(filepath) against the raw,
+        # repo-root-relative path -- which only resolves correctly when the SCRIPT's own cwd
+        # happens to already be the repo root. Confirmed this script's real, primary
+        # invocation (as the actual `.git/hooks/pre-commit`, per this file's own module
+        # docstring) is safe from this specific angle -- git always runs hooks with cwd
+        # already at the top-level working directory, verified directly against a real git
+        # hook in this same investigation -- but ANY other invocation (a manual re-run, or
+        # run_linters.py's own subprocess call, from a working directory that is not exactly
+        # the repo root) silently treated every real, modified file as "deleted" and reported
+        # zero violations, with no warning that the check had effectively not run at all.
+        # This test reproduces that non-hook invocation shape directly.
+        _commit_file(self.tmp, "subdir/foo.py", "x = 1\n" * 100)
+        _write(os.path.join(self.tmp, "subdir", "foo.py"), "x = 1\n")
+        result = subprocess.run(
+            [sys.executable, _SCRIPT],
+            cwd=os.path.join(self.tmp, "subdir"),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("SUMMATION BIAS DETECTED", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

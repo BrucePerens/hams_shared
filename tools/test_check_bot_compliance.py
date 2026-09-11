@@ -50,6 +50,16 @@ class GetPublicIpTests(unittest.TestCase):
         mock_urlopen.side_effect = OSError("timed out")
         self.assertIsNone(chk.get_public_ip())
 
+    @patch("check_bot_compliance.urllib.request.urlopen")
+    def test_valid_json_missing_the_ip_key_returns_none_instead_of_crashing(self, mock_urlopen):
+        # Real bug found 2026-09-10: a 200 response with a valid-but-differently-shaped JSON
+        # body (e.g. a CDN/edge challenge or rate-limit page fronting api.ipify.org -- the
+        # exact kind of interference this script's own FCrDNS check exists to diagnose) raised
+        # an uncaught KeyError on `["ip"]` instead of being reported the same way a network or
+        # parse failure already is.
+        mock_urlopen.return_value.read.return_value = json.dumps({"error": "rate limited"}).encode()
+        self.assertIsNone(chk.get_public_ip())
+
 
 class CheckFcrdnsTests(unittest.TestCase):
     @patch("check_bot_compliance.socket.gethostbyname")

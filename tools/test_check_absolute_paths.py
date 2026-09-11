@@ -151,6 +151,34 @@ class CheckAbsolutePathsTests(unittest.TestCase):
         self.assertTrue(violations[0].startswith(os.path.join("sub", "script.py")))
         self.assertNotIn(self.tmp, violations[0])
 
+    def test_a_broken_symlink_to_a_checked_extension_is_skipped_without_crashing(self):
+        # Real bug found 2026-09-10: a broken symlink (target doesn't exist) with a checked
+        # extension makes open() raise FileNotFoundError, which was NOT caught (only
+        # UnicodeDecodeError was) -- crashing the entire scan instead of skipping just this one
+        # unreadable file. This is a real, currently-reachable repo state, not a contrived
+        # edge case: hams_com's own checked-in "AGENTS.md -> hams_shared/AGENTS.md" symlink is
+        # broken inside a freshly created git worktree (this exact bug-hunt campaign's own
+        # standard working setup) until fix_worktree_symlinks.py is run, and AGENTS.md's ".md"
+        # extension is one this checker scans.
+        os.symlink(
+            os.path.join(self.tmp, "does_not_exist_target.md"),
+            os.path.join(self.tmp, "AGENTS.md"),
+        )
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+
+    def test_a_real_violation_alongside_a_broken_symlink_is_still_caught(self):
+        # The broken symlink must not silently swallow a REAL violation sitting right next to
+        # it in the same scan -- confirms the fix skips only the one unreadable file, not the
+        # whole run.
+        os.symlink(
+            os.path.join(self.tmp, "does_not_exist_target.md"),
+            os.path.join(self.tmp, "AGENTS.md"),
+        )
+        _write(os.path.join(self.tmp, "script.py"), f"path = '{_HOME}/thing'\n")
+        violations = chk.check_absolute_paths(self.tmp)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("script.py:1", violations[0])
+
 
 class MainIntegrationTests(unittest.TestCase):
     def setUp(self):

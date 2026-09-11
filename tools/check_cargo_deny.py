@@ -79,8 +79,18 @@ def main():
     if not crate_dirs:
         sys.exit(0)
 
-    check = subprocess.run(["cargo", "deny", "--version"], capture_output=True, text=True)
-    if check.returncode != 0:
+    try:
+        check = subprocess.run(["cargo", "deny", "--version"], capture_output=True, text=True)
+    except FileNotFoundError:
+        # Real bug found 2026-09-10: `subprocess.run(["cargo", ...])` raises FileNotFoundError,
+        # uncaught, when the `cargo` binary itself isn't on PATH at all -- a materially
+        # different, realistic condition from "cargo exists but the `deny` subcommand isn't
+        # installed" (already handled below via a non-zero returncode). A Python-only
+        # environment/CI stage that hasn't set up the Rust toolchain yet (or simply doesn't
+        # have it) crashed here with a raw traceback instead of the same clear, actionable
+        # message already given for the "cargo-deny not installed" case.
+        check = None
+    if check is None or check.returncode != 0:
         print(
             "❌ cargo-deny is not installed (cargo install cargo-deny, or "
             "`rustup component add` does not cover it -- it's a separate cargo subcommand) "

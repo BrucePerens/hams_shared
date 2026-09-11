@@ -7,6 +7,33 @@ import os
 import sys
 
 
+def _own_scope_nodes(node):
+    """Yields every descendant of `node` that executes as part of `node`'s
+    OWN control flow -- deliberately does NOT descend into a nested
+    FunctionDef/AsyncFunctionDef/Lambda/ClassDef's own body, since code
+    inside one of those only runs when that nested scope is later called/
+    instantiated, not merely by being defined inside `node`. Mirrors
+    check_function_test_anchors.py's own `_direct_functions` convention
+    ("deliberately does NOT descend into a FunctionDef's own body to find
+    closures nested [inside]"), applied here to call-detection instead of
+    anchor-citation scanning.
+
+    Without this, `ast.walk(node)` (which recurses into everything) counts
+    a call inside a nested helper function's body as if it ran on `node`'s
+    own path -- so a mutating `self.env.cr.execute(...)` in `node` followed
+    only by an unused, never-invoked nested `def _helper(): notify_model_
+    invalidation(...)` was silently treated as "invalidation present",
+    missing the exact "raw SQL mutation with no real invalidation" case
+    this checker exists to catch."""
+    for child in ast.iter_child_nodes(node):
+        if isinstance(
+            child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+        ):
+            continue
+        yield child
+        yield from _own_scope_nodes(child)
+
+
 def check_file(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
         tree = ast.parse(f.read(), filename=filepath)
@@ -14,12 +41,12 @@ def check_file(filepath):
     errors = []
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             has_execute = False
             has_invalidation = False
             mutating_query = False
 
-            for child in ast.walk(node):
+            for child in _own_scope_nodes(node):
                 if isinstance(child, ast.Call):
                     # Check for self.env.cr.execute(...)
                     func_name = ""

@@ -15,31 +15,57 @@ import sys
 
 def main():
     try:
+        # `git rev-parse --show-toplevel` resolves correctly regardless of the CURRENT working
+        # directory, as long as it's anywhere inside the repo -- unlike the naive relative-path
+        # reads below, which is exactly the real bug this fixes (see comment at the
+        # os.path.exists/os.path.getsize call sites).
+        repo_root_res = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True
+        )
+        repo_root = repo_root_res.stdout.strip()
+
         # Get list of modified files against HEAD
         res = subprocess.run(["git", "diff", "--name-only", "HEAD"], capture_output=True, text=True, check=True)
         modified_files = [f for f in res.stdout.strip().split("\n") if f]
     except subprocess.CalledProcessError:
         # Not in a git repo or no HEAD yet
         sys.exit(0)
-    
+
     violation = False
-    
+
     for filepath in modified_files:
-        if not os.path.exists(filepath):
+        # Real bug found 2026-09-10: `git diff --name-only` always reports paths relative to
+        # the REPO ROOT, regardless of the process's own current working directory -- but
+        # os.path.exists/os.path.getsize resolve a relative path against the CURRENT working
+        # directory instead. Running this script from anywhere other than the exact repo root
+        # (any subdirectory -- entirely realistic: nothing about how this script is invoked
+        # pins the caller's cwd to the repo root) made every real, non-deleted, modified file
+        # resolve to a nonexistent path from that subdirectory's own point of view, silently
+        # hitting the "file was deleted" branch below for EVERY file and reporting zero
+        # violations -- completely defeating this exact anti-summation-bias check, with no
+        # warning, on a script whose whole purpose is guarding against silent content loss.
+        abs_filepath = os.path.join(repo_root, filepath)
+        if not os.path.exists(abs_filepath):
             continue  # file was deleted, that's fine (or at least handled by other PR reviews)
-        
+
         # We specifically care about prompt files, python files, and docs
         if not (filepath.endswith(".md") or filepath.endswith(".py") or filepath.endswith(".json")):
             continue
 
         try:
-            old_size_res = subprocess.run(["git", "cat-file", "-s", f"HEAD:{filepath}"], capture_output=True, text=True, check=True)
+            old_size_res = subprocess.run(
+                ["git", "cat-file", "-s", f"HEAD:{filepath}"],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=repo_root,
+            )
             old_size = int(old_size_res.stdout.strip())
         except subprocess.CalledProcessError:
             # File might be new (not in HEAD)
             continue
-            
-        new_size = os.path.getsize(filepath)
+
+        new_size = os.path.getsize(abs_filepath)
         
         if old_size > 0 and new_size < old_size:
             reduction_ratio = (old_size - new_size) / old_size

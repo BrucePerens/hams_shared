@@ -119,9 +119,18 @@ def check_absolute_paths(repo_dir):
                             violations.append(
                                 f"{os.path.relpath(file_path, repo_dir)}:{i} Contains hardcoded home path"
                             )
-            except UnicodeDecodeError:
-                # Skip binary files or files with weird encodings
-                pass
+            except (UnicodeDecodeError, OSError) as e:
+                # Skip binary files or files with weird encodings (UnicodeDecodeError), AND
+                # any other real, realistic filesystem condition open() can raise for a name
+                # os.walk() already handed us as a "file" -- most concretely a broken symlink
+                # (FileNotFoundError), which is a REAL, currently-reachable state in this exact
+                # repo: hams_com's own checked-in AGENTS.md -> hams_shared/AGENTS.md symlink is
+                # broken inside a freshly created git worktree until fix_worktree_symlinks.py
+                # runs, and AGENTS.md's own ".md" extension is in this checker's valid_exts.
+                # Before this fix, that one broken symlink crashed the ENTIRE scan with an
+                # uncaught FileNotFoundError instead of being skipped like any other unreadable
+                # file already is.
+                print(f"Warning: could not read {file_path}: {e}")
 
     return violations
 
