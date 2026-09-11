@@ -197,7 +197,7 @@ def _find_js_files(module_dir, module):
     return declarations
 
 
-TOKEN_RE = re.compile(r"[\w.]+")
+TOKEN_RE = re.compile(r"[\w.-]+")
 
 
 def _build_reference_index(repo_roots):
