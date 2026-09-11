@@ -1,3 +1,9 @@
+# Claude Code agent worktrees -- created locally per-session for isolated
+# subagent dispatches (Agent tool, isolation: "worktree"), never meant to be
+# committed; a stray one otherwise shows up as untracked noise in every
+# `git status` for the rest of the session.
+.claude/worktrees/
+
 # Internationalization
 i18n/hams_master.pot
 
