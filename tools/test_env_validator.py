@@ -200,6 +200,28 @@ class CheckGeminiTests(unittest.TestCase):
         self.assertIn("API Key verification failed with HTTP 500: Server Error", buf.getvalue())
         self.assertNotIn("Invalid or expired", buf.getvalue())
 
+    def test_the_api_key_is_sent_via_header_never_in_the_request_url(self):
+        # Bug-hunt regression test (2026-09-10, bug class 51:
+        # secret-in-url-or-log): the API key used to be interpolated into
+        # the URL's own query string (?key=<api_key>), a real exposure
+        # vector (proxy/CDN access logs record full request URLs) distinct
+        # from transport encryption. Confirmed via a real HTTPS request
+        # (curl, outside this test) that generativelanguage.googleapis.com
+        # accepts the key identically via the x-goog-api-key header.
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["header"] = req.get_header("X-goog-api-key")
+            return self._resp(200)
+
+        with patch.dict(
+            "os.environ", {"GEMINI_API_KEY": "sekrit-value"}, clear=True
+        ), patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            ev.check_gemini()
+        self.assertNotIn("sekrit-value", captured["url"])
+        self.assertEqual(captured["header"], "sekrit-value")
+
     def test_a_network_level_url_error_is_reported_distinctly_from_an_http_error(self):
         def raise_url_error(*_a, **_k):
             raise URLError("no network")

@@ -7,6 +7,7 @@ Standalone Environment Provisioning Script
 Must be run as root.
 """
 import os
+import re
 import sys
 import subprocess
 import logging
@@ -24,8 +25,22 @@ def provision():
 
     if os.geteuid() != 0:
         _logger.info("[*] Elevating privileges (sudo) to provision environment...")
+        # Bug-hunt fix (2026-09-10): this re-exec previously dropped every
+        # one of this process's own CLI arguments (sys.argv[1:], e.g.
+        # --test/--force-reset) -- confirmed by direct comparison against
+        # test.py's own equivalent self-re-exec-via-sudo pattern
+        # (`["sudo", "-H", "-E", sys.executable] + sys.argv`), which does
+        # forward them. A caller running `provision.py --force-reset` as a
+        # non-root user (the common case) had that flag silently vanish
+        # the moment this script escalated to root: the re-exec'd,
+        # actually-provisioning process ran with NO CLI args at all, so
+        # neither --force-reset nor --test ever took effect unless the
+        # caller happened to already be root. Fixed by forwarding
+        # sys.argv[1:] explicitly, matching test.py's own pattern.
         os.execvp(
-            "sudo", ["sudo", "-H", "-E", sys.executable, os.path.abspath(__file__)]
+            "sudo",
+            ["sudo", "-H", "-E", sys.executable, os.path.abspath(__file__)]
+            + sys.argv[1:],
         )
 
     orig_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
@@ -52,6 +67,24 @@ def provision():
 
     if args.force_reset:
         db_name = env_vars.get("DB_NAME", "hams_test")
+        # Bug-hunt fix (2026-09-10): db_name is interpolated below into a
+        # filesystem path that a subsequent `rm -rf` deletes outright
+        # (`filestore_path`). DB_NAME is normally an operator-controlled
+        # config value (a .env file or an interactive prompt in
+        # infrastructure.load_and_prompt_env), not external input, so this
+        # guards against a typo'd/copy-pasted DB_NAME (e.g. one containing
+        # "../") causing this force-reset to `rm -rf` something outside
+        # the intended filestore directory, not against a remote attacker.
+        # Mirrors test.py's own rebuild_db() identifier check (same
+        # underlying risk shape: a config value interpolated unvalidated
+        # into a destructive operation).
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", db_name):
+            _logger.error(
+                f"[!] DB_NAME {db_name!r} is not a safe database/directory "
+                "name (must match ^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to "
+                "use it in a --force-reset teardown."
+            )
+            sys.exit(1)
         _logger.warning(f"[*] Force-reset enabled! Tearing down old environment for '{db_name}'...")
         
         _logger.info("[*] Stopping odoo service...")

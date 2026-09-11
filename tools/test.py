@@ -753,8 +753,17 @@ def robust_reap(pid):
         print(f"[*] [REAPER] Error during reap: {e}")
 
 
+# Module-level (not a local inside run_cmd) so a test can monkeypatch it to
+# a small value instead of waiting through several real 60-second no-output
+# windows to exercise the bound.
+RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS = 5
+# Lifetime (never reset by intervening real output) cap for the same loop --
+# see the comment on total_hang_recovery_attempts inside run_cmd for why this
+# exists alongside the consecutive-only cap above.
+RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS = 10
+
+
 def run_cmd(cmd, extractor=None, cwd=None, env=None):
-    initial_errors = len(extractor.captured_blocks) if extractor else 0
     if env is None:
         env = dict(os.environ)
 
@@ -814,6 +823,37 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
     watchdog.start()
 
     force_killed = False
+    # Bug-hunt fix (2026-09-10): a 2026-06-24 commit (e24ff25) replaced this
+    # loop's original "kill the whole process on the first 60s stall"
+    # behavior (robust_reap() + force_killed = True + break) with a
+    # kill-chrome-and-keep-waiting recovery attempt, intentionally, to let a
+    # tour recover from a merely-stuck browser without failing the whole
+    # run. But that change never bounded how many times recovery can be
+    # retried -- `force_killed` was left assigned `False` and never set
+    # True again anywhere in this function (confirmed via
+    # `grep -n force_killed test.py`), so the `if force_killed:` branch
+    # near this function's own return has been permanently dead code ever
+    # since, and a test process that stays stuck even with chrome dead
+    # (e.g. a hang unrelated to the browser at all) re-triggers this same
+    # 60s idle branch forever: `run_cmd` -- and therefore the whole
+    # `test.py` invocation -- never terminates.
+    # `RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS` (module-level, above) bounds
+    # that: after this many consecutive un-hang attempts with no real
+    # output in between, actually reap the process and report failure
+    # instead of retrying indefinitely. A SEPARATE lifetime counter
+    # (`total_hang_recovery_attempts`, never reset) also bounds the case
+    # where killing chrome itself provokes a line or two of real output
+    # (a websocket/CDP error, a tour-teardown message) each time -- that
+    # would reset the consecutive counter to 0 forever while the run is
+    # still, in substance, stuck in the same hang/kill/hang cycle. Not
+    # confirmed either way against a real transcript (no logged
+    # "[!] TEST TIMEOUT" -> resumed-output sequence was found in this
+    # project's own night_shift_history.md/night_shift_todo.md to settle
+    # it), so this is defense-in-depth against an assumption the
+    # consecutive-only counter alone would silently depend on, not a
+    # confirmed second bug.
+    hang_recovery_attempts = 0
+    total_hang_recovery_attempts = 0
     q = queue.Queue()
     last_output_time = time.time()
 
@@ -843,6 +883,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                     break
 
                 last_output_time = time.time()
+                hang_recovery_attempts = 0
 
                 if "@t-esc" in line and "deprecated" in line.lower():
                     continue
@@ -873,6 +914,46 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                     and not os.environ.get("HAMS_PAUSE_ON_FAIL")
                     and (time.time() - last_output_time > 60.0)
                 ):
+                    hang_recovery_attempts += 1
+                    total_hang_recovery_attempts += 1
+
+                    if (
+                        hang_recovery_attempts > RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS
+                        or total_hang_recovery_attempts
+                        > RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS
+                    ):
+                        # Bug-hunt fix (2026-09-10): un-hang-by-killing-chrome
+                        # has already been tried too many times -- either
+                        # RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS times in a row
+                        # with zero real output in between (whatever is stuck
+                        # is not, or is no longer, a hung chrome tab), or
+                        # RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS times total
+                        # across this one run even with occasional output
+                        # resetting the consecutive count (a run stuck in a
+                        # repeating hang/kill-chrome/brief-output/hang cycle is
+                        # not healthy just because the counter above never hit
+                        # its own consecutive threshold). Actually terminate
+                        # the test process and report failure instead of
+                        # retrying/looping indefinitely.
+                        print(
+                            f"\n[!] TEST TIMEOUT: still no sustained output after "
+                            f"{total_hang_recovery_attempts} total un-hang attempt(s) "
+                            "this run (killing chrome did not help). Force-killing "
+                            "the test process...\n"
+                        )
+                        if extractor:
+                            extractor.capturing = True
+                            extractor.current_block.append(
+                                "\n[!] DIAGNOSTIC FOR AI (HARD TIMEOUT, UNRECOVERABLE):\n"
+                                "    The test runner timed out repeatedly and killing headless "
+                                "chrome did not un-stick it -- the process is force-killed and "
+                                "this run is reported as a failure.\n\n"
+                            )
+                            extractor.capturing = False
+                        robust_reap(process.pid)
+                        force_killed = True
+                        break
+
                     print(
                         "\n[!] TEST TIMEOUT: No output received for 60 seconds. Tour or test likely hung. Terminating...\n"
                     )
@@ -943,8 +1024,14 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         _logger.warning("Failed to reap watchdog: %s", e)
 
     if force_killed:
-        final_errors = len(extractor.captured_blocks) if extractor else 0
-        return 1 if final_errors > initial_errors else 0
+        # A force-kill only happens after RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS
+        # un-hang attempts produced no real output -- the run never
+        # completed, so it is always a failure regardless of whether any
+        # error text happened to be captured before the process was
+        # killed (a hang with no captured error text is not evidence the
+        # test would have passed, it is evidence nothing about it could be
+        # observed).
+        return 1
 
     return process.returncode
 
@@ -1181,7 +1268,14 @@ def check_linters(
 
     print("[*] Running JavaScript Syntax Linter...")
     js_linter = os.path.join(shared_dir, "tools", "check_js_syntax.py")
-    target_dirs = [os.path.join(base_dir, m) for m in target_modules]
+    # `target_modules` defaults to None (see this function's own signature);
+    # the burn-list command above already handles that via `if target_modules
+    # and ...`, but this list comprehension previously assumed a non-None
+    # iterable unconditionally -- a `TypeError: 'NoneType' is not iterable`
+    # for any future caller (this function's sole current caller in main()
+    # always passes a real list, so this was latent, not live) that reuses
+    # this function without an explicit module list.
+    target_dirs = [os.path.join(base_dir, m) for m in (target_modules or [])]
     cmd_js = [python_exec, js_linter, "--ignore-file", ignore_filepath] + target_dirs
     res_js = subprocess.run(cmd_js, capture_output=True, text=True)
     if res_js.returncode != 0:
@@ -1241,7 +1335,30 @@ def get_pg_bin(name):
     return res
 
 
+_SAFE_DB_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def rebuild_db(db_name):
+    # Bug-hunt fix (2026-09-10, bug class 47 candidate: raw SQL built by
+    # string interpolation with no parameterization): `db_name` below is
+    # interpolated directly into double-quoted SQL identifiers
+    # (DROP/CREATE DATABASE, \c) -- PostgreSQL has no parameterized-query
+    # placeholder for an *identifier* (only for values), so the standard
+    # defense is a strict allow-list check on the identifier itself before
+    # ever building the SQL string, not an attempt to escape it. `db_name`
+    # comes from this script's own `--db` CLI flag (default "hams_test"),
+    # not from any external/network input, so this is a local-operator
+    # safeguard against a typo'd or copy-pasted `--db` value doing
+    # something other than what was intended (e.g. a stray `"` closing the
+    # identifier early) rather than a defense against a remote attacker.
+    if not _SAFE_DB_NAME_RE.match(db_name):
+        print(
+            f"❌ ERROR: --db {db_name!r} is not a safe database name "
+            "(must match ^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to "
+            "interpolate it into a DROP/CREATE DATABASE statement."
+        )
+        sys.exit(1)
+
     print(f"[*] Dropping and Rebuilding Database Schema ({db_name})...")
     env = dict(os.environ)
 
@@ -2479,6 +2596,33 @@ def main():
             rc = run_cmd(cmd, extractor)
             if rc != 0:
                 final_rc = 1
+
+    else:
+        # Bug-hunt fix (2026-09-10, bug class 19: no-default-dispatch):
+        # "xml" and "downloads" have been accepted --mode choices since
+        # this file's very first commit, but neither one was ever given a
+        # dispatch branch here -- confirmed via `git log -p --follow` on
+        # this file, which shows the argparse `choices=` list unchanged
+        # since day one while only "standard"/"individual" were ever
+        # handled below it. Before this fix, passing either value silently
+        # skipped rebuild_db()/run_cmd() entirely (this if/elif simply
+        # matched nothing) and fell straight through to the
+        # Chrome-cleanup/audio-sink checks with `final_rc` still at its
+        # initial 0 -- `test.py --mode xml -u <module>` reported a clean,
+        # passing exit code having run zero actual Odoo tests. Confirmed
+        # latent, not live: grepped both hams_com and hams_open for any
+        # real invocation of `--mode xml`/`--mode downloads` and found
+        # none. Fail loudly instead of silently no-opping, matching this
+        # codebase's own fail-fast philosophy, rather than guessing at
+        # what either mode was originally meant to do.
+        print(
+            f"❌ ERROR: --mode {args.mode!r} has no implementation in this "
+            "runner (only 'standard' and 'individual' are wired up) -- "
+            "refusing to report a false pass. If this mode is still "
+            "needed, implement its own dispatch branch here; otherwise "
+            "remove it from --mode's own choices list."
+        )
+        sys.exit(1)
 
     if args.coverage and args.mode in ("standard", "individual"):
         combine_cmd = [
