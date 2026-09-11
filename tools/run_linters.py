@@ -1147,6 +1147,52 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 47. check_async_lock_scope -- Rust daemon gate born 2026-09-11 from a real bug found by
+    # adversarial review in hams_relay_bridge's telemetry_loop: a tokio::sync::RwLock read
+    # guard bound at the top of a loop body with no explicit drop stayed held across a slow
+    # network POST (Rust's lexical drop-scope rules don't shorten a guard's lifetime just
+    # because the borrow checker's own "last use" analysis ends earlier) -- since
+    # tokio::sync::RwLock is write-preferring, that stalled every other reader/writer in the
+    # daemon for as long as the POST took. cargo clippy's own `await_holding_lock` lint
+    # (step 36) doesn't catch this: it only fires for non-async-aware std::sync guards, never
+    # tokio's own async-aware ones. This gate walks every .rs file in both repos looking for
+    # exactly that shape. Same two-repo sweep as step 45 -- daemons live under hams_com, but
+    # ham_digital_modes (a real Rust crate) lives under hams_open.
+    for _repo in (dir_path, sibling_dir):
+        res = subprocess.run(
+            [python_exec, os.path.join(dir_path, "tools", "check_async_lock_scope.py"), _repo],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            if res.stdout:
+                print(res.stdout, end="")
+            if res.stderr:
+                print(res.stderr, end="")
+            linters_failed = True
+
+    # 48. check_fake_network_listener -- born the same night as step 47, from the same
+    # real-network-integration-test work that found hams_relay_bridge and dx_firehose had zero
+    # tests exercising their own actual WebSocket routing (every prior test either checked
+    # extracted pure logic directly or mocked Odoo's own HTTP responses). The fix pattern
+    # (real TcpListener/websockets.serve on an ephemeral port, real connecting client, mock
+    # only genuine external boundaries) is now established in both daemons; this gate flags a
+    # regression toward the old anti-pattern -- a hand-rolled Fake/Mock/Dummy/Stub type named
+    # for a network primitive (Socket/Listener/Stream/Connection/WebSocket/Channel/Transport)
+    # in a file with no real bound listener anywhere in it. Same two-repo sweep as step 47.
+    for _repo in (dir_path, sibling_dir):
+        res = subprocess.run(
+            [python_exec, os.path.join(dir_path, "tools", "check_fake_network_listener.py"), _repo],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            if res.stdout:
+                print(res.stdout, end="")
+            if res.stderr:
+                print(res.stderr, end="")
+            linters_failed = True
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

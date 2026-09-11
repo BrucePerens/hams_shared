@@ -3755,6 +3755,29 @@ def scan_file(filepath, is_odoo_module=False):
                 # ingress rules genuinely route to
                 # ssh://localhost:22 / http://localhost:8069).
                 "burn-ignore-cloudflared-ingress",
+                # A loopback-address comparison validating that an
+                # INCOMING request's own real transport peer (request.
+                # httprequest.remote_addr) is the local Cloudflare Tunnel
+                # process, not a hardcoded OUTBOUND connection target --
+                # the reverse direction from the CRITICAL NETWORK
+                # HARDCODING rule's actual concern (Docker networking
+                # making a bare loopback address resolve to the wrong
+                # container when Odoo connects OUT to it). This
+                # deployment is Tunnel-only (cloudflared runs on the SAME
+                # host as Odoo, confirmed by Bruce 2026-09-11 -- see
+                # docs/bug_hunt_claims/hams_open/cloudflare/models/claims/cf_get_request_context.md),
+                # so a loopback remote_addr genuinely IS "this request came
+                # through our own tunnel," used to decide whether to trust
+                # CF-Connecting-IP/X-Forwarded-For headers rather than to
+                # connect anywhere. Distinct from
+                # burn-ignore-cloudflared-ingress above (a Tunnel *ingress
+                # config* URL target) and burn-ignore-relay-loopback (a
+                # browser-redirect-URL allow-list) -- this is a
+                # security-check comparison, not a connection or a
+                # redirect target. First used by
+                # zero_sudo/models/security_utils.py's
+                # _get_trusted_client_ip().
+                "burn-ignore-tunnel-peer-check",
                 # GENERAL_ERROR_RULES matches raw line text, not AST --
                 # a string literal used as search/replace *data* for
                 # patching a vendored third-party file (e.g. a dict key
