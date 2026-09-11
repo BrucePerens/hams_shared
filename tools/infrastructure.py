@@ -3019,6 +3019,18 @@ def write_env_files(base_etc_dir, env_vars, run_cmd_func, dest_dir=""):
 
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
         fd = os.open(filepath, flags, 0o400)
+        # os.open()'s own mode argument is silently ignored by the kernel
+        # when filepath already exists (mode only applies to a brand-new
+        # file) -- so if this file previously existed with looser
+        # permissions (a legacy file, one created by hand, or one left over
+        # from before this hardening existed), the O_TRUNC above would
+        # start writing real secret content (DB_PASS, ODOO_ADMIN_PASSWORD,
+        # CLOUDFLARE_API_TOKEN, etc.) into a file still readable by whoever
+        # the old permissions allowed, for the whole duration of the write,
+        # until the apply_permissions() call below finally tightens it.
+        # fchmod here closes that window unconditionally, regardless of
+        # whatever permissions the file had a moment ago.
+        os.fchmod(fd, 0o400)
         with open(fd, "w", encoding="utf-8") as f:
             f.write(content)
 
@@ -3105,6 +3117,11 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
             content = format_env(file_spec.get("content", ""), env_vars)
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
             fd = os.open(path, flags, mode)
+            # See write_env_files' own comment: os.open()'s mode argument is
+            # ignored when the file already exists, so a pre-existing file
+            # with looser permissions than `mode` would be written to at its
+            # old, looser permissions until apply_permissions() below runs.
+            os.fchmod(fd, mode)
             with open(fd, "w", encoding="utf-8") as f:
                 f.write(content)
 
@@ -3143,6 +3160,9 @@ def provision_systemd_override(run_cmd_func, env_vars, environment="prod", dest_
 
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(override_file, flags, 0o644)
+    # See write_env_files' own comment: os.open()'s mode argument is ignored
+    # when the file already exists.
+    os.fchmod(fd, 0o644)
     with open(fd, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 

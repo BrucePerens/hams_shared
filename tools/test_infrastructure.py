@@ -371,6 +371,132 @@ class GetMountPathsTests(unittest.TestCase):
             self.assertEqual(infra.get_mount_paths("test", "tmpfs"), [])
 
 
+def _mode_at_first_write(tmp, target_path, real_open, action):
+    """
+    Runs `action()` (expected to os.open() + write to target_path, which
+    must already exist on disk) and returns the file's permission bits at
+    the exact moment the first write-mode `open(fd, ...)` call is made on
+    it -- i.e. whether the file was already hardened to its final mode
+    *before* any content was written, or only after
+    (`apply_permissions()`/a trailing chmod runs later).
+    """
+    captured = {}
+
+    def spying_open(fd_or_path, *a, **kw):
+        f = real_open(fd_or_path, *a, **kw)
+        if isinstance(fd_or_path, int) and "mode" not in captured:
+            captured["mode"] = os.stat(target_path).st_mode & 0o777
+        return f
+
+    with patch("builtins.open", side_effect=spying_open):
+        action()
+    return captured["mode"]
+
+
+class WriteEnvFilesTests(_TmpDirTestCase):
+    def test_creates_new_files_at_mode_400(self):
+        infra.write_env_files(self.tmp, {"DB_NAME": "hams_test"}, MagicMock())
+        path = os.path.join(self.tmp, "db.env")
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o400)
+
+    def test_a_pre_existing_looser_permission_file_is_hardened_before_any_content_is_written(self):
+        # Regression test for a real credential-handling gap: os.open()'s
+        # own `mode` argument is silently ignored by the kernel when the
+        # target file already exists, so re-provisioning over a legacy/
+        # loosely-permissioned db.env used to write fresh secret content
+        # (DB_PASS, ODOO_ADMIN_PASSWORD, CLOUDFLARE_API_TOKEN, ...) into a
+        # file still world/group-readable for the entire duration of the
+        # write, only tightened by the trailing apply_permissions() call
+        # *after* the secret was already on disk at the old permissions.
+        filepath = os.path.join(self.tmp, "db.env")
+        with open(filepath, "w") as f:
+            f.write("DB_NAME=old\n")
+        os.chmod(filepath, 0o644)
+        self.assertEqual(os.stat(filepath).st_mode & 0o777, 0o644)
+
+        mode_during_write = _mode_at_first_write(
+            self.tmp,
+            filepath,
+            _REAL_OPEN,
+            lambda: infra.write_env_files(
+                self.tmp, {"DB_NAME": "hams_test", "POSTGRES_PASSWORD": "s3cr3t"}, MagicMock()
+            ),
+        )
+
+        self.assertEqual(
+            mode_during_write,
+            0o400,
+            "db.env must already be hardened to 0o400 by the time secret "
+            "content is written, not left at its old, looser permissions "
+            "until a trailing chmod runs after the write",
+        )
+        # And the final state is still correct too.
+        self.assertEqual(os.stat(filepath).st_mode & 0o777, 0o400)
+        with open(filepath) as f:
+            self.assertIn("POSTGRES_PASSWORD=s3cr3t", f.read())
+
+    def test_only_writes_keys_present_in_env_vars(self):
+        infra.write_env_files(self.tmp, {"DB_NAME": "hams_test"}, MagicMock())
+        with open(os.path.join(self.tmp, "db.env")) as f:
+            content = f.read()
+        self.assertIn("DB_NAME=hams_test", content)
+        self.assertNotIn("DB_PASS=", content)
+
+
+class ProvisionStaticFilesPermissionTests(_TmpDirTestCase):
+    def test_a_pre_existing_looser_permission_file_is_hardened_before_content_is_written(self):
+        fake_manifest = {
+            "static_files": [
+                {
+                    "path": os.path.join(self.tmp, "secret.conf"),
+                    "content": "top-secret-value\n",
+                    "owner": None,
+                    "mode": "600",
+                    "environments": ["prod"],
+                }
+            ]
+        }
+        target = os.path.join(self.tmp, "secret.conf")
+        with open(target, "w") as f:
+            f.write("old\n")
+        os.chmod(target, 0o644)
+
+        with patch.dict(infra.MANIFEST, fake_manifest, clear=True):
+            mode_during_write = _mode_at_first_write(
+                self.tmp,
+                target,
+                _REAL_OPEN,
+                lambda: infra.provision_static_files(MagicMock(), {}, environment="prod"),
+            )
+
+        self.assertEqual(mode_during_write, 0o600)
+        self.assertEqual(os.stat(target).st_mode & 0o777, 0o600)
+
+
+class ProvisionSystemdOverrideTests(_TmpDirTestCase):
+    def setUp(self):
+        super().setUp()
+        self.override_dir = os.path.join(self.tmp, "etc/systemd/system/odoo.service.d")
+
+    def test_a_pre_existing_looser_permission_override_file_is_hardened_before_content_is_written(self):
+        os.makedirs(self.override_dir, exist_ok=True)
+        override_file = os.path.join(self.override_dir, "override.conf")
+        with open(override_file, "w") as f:
+            f.write("old\n")
+        os.chmod(override_file, 0o666)
+
+        mode_during_write = _mode_at_first_write(
+            self.tmp,
+            override_file,
+            _REAL_OPEN,
+            lambda: infra.provision_systemd_override(MagicMock(), {}, environment="prod", dest_dir=self.tmp),
+        )
+
+        self.assertEqual(mode_during_write, 0o644)
+        self.assertEqual(os.stat(override_file).st_mode & 0o777, 0o644)
+
+
 class LoadAndPromptEnvTests(_SafePatchTestCase):
     """load_and_prompt_env() no longer prompts interactively -- these confirm
     the replacement non-interactive contract: DOMAIN has no safe default and
