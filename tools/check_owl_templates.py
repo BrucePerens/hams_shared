@@ -68,7 +68,20 @@ def find_owl_template_files(target_dir):
     was just "/xml", making the substring check match almost any path and short-circuit past the
     real, precise component check below it)."""
     for root, dirs, files in os.walk(target_dir):
-        dirs[:] = [d for d in dirs if d not in ("node_modules", "__pycache__", ".git", "target")]
+        # Dot-directories -- critically ".claude/worktrees/<session>/", this project's own
+        # standing convention for running concurrent bug-hunt dispatches in isolated git
+        # worktrees INSIDE the repo root -- are never real template locations. Without this, a
+        # concurrently running session's own worktree gets scanned as if it were part of the real
+        # repo: confirmed live while reviewing this exact file -- 40 of 60 real-repo template
+        # files found were duplicates from two other concurrently active sessions' own worktrees,
+        # meaning this checker was spending roughly two-thirds of its real headless-Chrome
+        # compile work re-checking other sessions' own copies of the same templates.
+        dirs[:] = [
+            d
+            for d in dirs
+            if d not in ("node_modules", "__pycache__", ".git", "target")
+            and not d.startswith(".")
+        ]
         parts = root.replace("\\", "/").split("/")
         if parts[-3:] != ["static", "src", "xml"]:
             continue

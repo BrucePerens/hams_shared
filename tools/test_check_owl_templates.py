@@ -59,6 +59,25 @@ class FindOwlTemplateFilesTests(unittest.TestCase):
             found = list(find_owl_template_files(tmpdir))
         self.assertEqual(found, [])
 
+    def test_ignores_a_claude_worktree_directory(self):
+        """Real, live bug found reviewing this checker: the dirs-pruning tuple had no generic
+        dot-directory exclusion. This project's own standing convention runs concurrent bug-hunt
+        dispatches in isolated git worktrees under .claude/worktrees/<session>/ INSIDE the repo
+        root -- confirmed live: running this exact function against the real hams_com repo during
+        this review found 40 of 60 template files were duplicates from two other concurrently
+        active sessions' own worktrees, meaning this checker (which compiles every template via a
+        real headless Chrome) was spending roughly two-thirds of its real compile work re-checking
+        other sessions' own unrelated copies."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = (
+                Path(tmpdir) / ".claude" / "worktrees" / "agent-other-session" / "some_module"
+                / "static" / "src" / "xml" / "foo.xml"
+            )
+            target.parent.mkdir(parents=True)
+            target.write_text("<templates/>", encoding="utf-8")
+            found = list(find_owl_template_files(tmpdir))
+        self.assertEqual(found, [])
+
     def test_ignores_non_xml_files_under_static_src_xml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             target = Path(tmpdir) / "some_module" / "static" / "src" / "xml" / "readme.md"
