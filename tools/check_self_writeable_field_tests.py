@@ -89,6 +89,7 @@ def _find_self_writeable_overrides(repo_roots):
                 d
                 for d in dirs
                 if d not in ("node_modules", "__pycache__", ".git", "tools", "daemons")
+                and not d.startswith(".")
             ]
             if os.sep + "tests" + os.sep in root + os.sep or root.endswith("tests"):
                 continue

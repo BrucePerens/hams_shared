@@ -126,6 +126,26 @@ class FindSelfWriteableOverridesTests(unittest.TestCase):
         )
         self.assertEqual(list(chk._find_self_writeable_overrides([self.tmp])), [])
 
+    def test_a_claude_worktree_directory_is_never_walked(self):
+        """Real, live bug found reviewing this checker: the dirs-pruning tuple had no generic
+        dot-directory exclusion (unlike several sibling checkers in this tree). This project's
+        own standing convention runs concurrent bug-hunt dispatches in isolated git worktrees
+        under .claude/worktrees/<session>/ INSIDE the repo root -- confirmed live: two other
+        real, concurrently active sessions' own worktrees were found sitting in the real repo
+        root during this exact review. A concurrent session's own in-progress override (even a
+        genuinely hollow one, mid-refactor) would have been reported as a real MASTER_10
+        violation against the wrong repo entirely."""
+        _write(
+            os.path.join(
+                self.tmp, ".claude", "worktrees", "agent-other-session", "mod_a", "models",
+                "res_users.py",
+            ),
+            "class ResUsers(models.Model):\n"
+            "    def SELF_WRITEABLE_FIELDS(self):\n"
+            "        return []\n",
+        )
+        self.assertEqual(list(chk._find_self_writeable_overrides([self.tmp])), [])
+
     def test_a_non_python_file_alongside_a_real_override_is_skipped_not_crashed_on(self):
         _write(os.path.join(self.tmp, "mod_a", "models", "README.md"), "# notes\n")
         _write(
