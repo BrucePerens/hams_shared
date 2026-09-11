@@ -132,6 +132,52 @@ class CheckManifestDependenciesTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("ERROR parsing", out)
 
+    def test_a_multiline_brace_import_from_an_undeclared_module_is_still_a_violation(self):
+        """Real bug: import_pattern was applied line-by-line (`for line_no, line in
+        enumerate(f, 1): match = import_pattern.search(line)`), and the regex itself requires
+        'import'/'export' and the 'from \"@module/...\"' quote on the SAME line. A real,
+        ordinary JS style -- a destructured import list wrapped across multiple lines, exactly
+        what prettier/eslint auto-formatting produces once an import line gets long -- puts
+        'import {' on one line and 'from \"@module/...\"' on a later line, so neither line alone
+        ever matches the pattern. Confirmed live in the real repo:
+        ham_shack/static/src/js/azimuth_map.js imports antenna_pattern_math this exact way.
+        Before the fix, a multi-line cross-module import naming an undeclared dependency was
+        never flagged at all -- exactly the 'silently passes bad code' failure mode this whole
+        checker exists to prevent."""
+        self._manifest("mod_a", depends=[])
+        self._manifest("mod_b")
+        _write(
+            os.path.join(self.tmp, "mod_a", "static", "src", "js", "main.js"),
+            "import {\n"
+            "    thing,\n"
+            "    otherThing,\n"
+            "} from '@mod_b/js/thing';\n",
+        )
+        code, out = _run(self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("MANIFEST DEPENDENCY VIOLATION", out)
+
+    def test_a_multiline_brace_import_does_not_leak_into_a_following_unrelated_import(self):
+        """Guards the fix above against a naive 'just add re.DOTALL' regression: a lazy
+        '.*?...from...' skip-span, once allowed to cross newlines, can also cross an entire
+        UNRELATED prior import statement (e.g. a side-effect-only import with no 'from' of its
+        own) and misattribute a distant later import's target to the first statement, silently
+        skipping the first import's own real target. Both imports here name different modules
+        neither of which is declared -- both must be independently flagged, and each violation
+        must report its own real target module, not the other one's."""
+        self._manifest("mod_a", depends=[])
+        self._manifest("mod_b")
+        self._manifest("mod_c")
+        _write(
+            os.path.join(self.tmp, "mod_a", "static", "src", "js", "main.js"),
+            "import '@mod_b/js/side_effect_only';\n"
+            "import { thing } from '@mod_c/js/thing';\n",
+        )
+        code, out = _run(self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("'@mod_b'", out)
+        self.assertIn("'@mod_c'", out)
+
     def test_a_manifest_that_crashes_literal_eval_with_typeerror_is_reported_not_a_traceback(
         self,
     ):
