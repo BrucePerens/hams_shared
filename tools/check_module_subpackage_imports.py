@@ -38,7 +38,13 @@ import os
 import sys
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "tools", "radae"}
-CHECKED_SUBPACKAGES = ("models", "controllers", "wizard")
+CHECKED_SUBPACKAGES = ("models", "controllers", "wizard", "utils", "i18n")
+# The module docstring above says this list was "confirmed by survey, not guessed" -- re-surveyed
+# 2026-09-10 (this pass): "utils" (cloudflare/utils/) and "i18n" (user_websites/i18n/) are two
+# more real, currently-used Python subpackage kinds that had grown in since the original survey,
+# both correctly imported today (so this addition changes no current finding) but neither
+# previously checked -- a future module adding either and forgetting to import it would have been
+# silently missed. Re-survey periodically rather than treating this list as permanently closed.
 
 
 def _resolve_repo_root(given_path):
