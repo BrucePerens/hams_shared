@@ -182,7 +182,11 @@ def defines_odoo_model_class(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
             source = f.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # UnicodeDecodeError is a ValueError subclass, not an OSError subclass -- pairing it with
+        # OSError here matches every sibling checker in this tree's own established convention
+        # for exactly this failure mode (a real file with invalid-UTF-8 bytes anywhere under the
+        # scanned tree would otherwise crash the whole checker before mypy ever runs).
         return False
     try:
         tree = ast.parse(source, filename=path)

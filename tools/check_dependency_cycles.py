@@ -80,6 +80,18 @@ def _find_sibling_repo(repo_root):
 
 
 def _build_graph(roots):
+    # Real, live bug found reviewing this file: without the "not d.startswith('.')" filter just
+    # below, this walk descends into ".claude/worktrees/<session>/" -- this project's own
+    # standing convention for running concurrent bug-hunt dispatches in isolated git worktrees
+    # INSIDE the repo root (confirmed live: two other real, concurrently active sessions' own
+    # worktrees were found sitting in the real repo root during this review). This is worse than
+    # merely wasted work: `graph[mod] = [...]` below keys purely by `os.path.basename(root)`, with
+    # NO path-based disambiguation, so a worktree's own copy of a real module (same basename,
+    # same manifest-derived name, but possibly a different, in-progress 'depends' list) silently
+    # OVERWRITES or is overwritten by the real repo's own entry depending on os.walk's own
+    # (filesystem-dependent, not alphabetically guaranteed) traversal order -- a real risk of
+    # reasoning about the wrong, stale, or mid-edit dependency data for a real module, not just
+    # duplicated effort.
     graph = {}
     depends_cycle = {}
     for repo_root in roots:
@@ -90,6 +102,7 @@ def _build_graph(roots):
                 d
                 for d in dirs
                 if d not in ("node_modules", "__pycache__", ".git", "daemons", "tools")
+                and not d.startswith(".")
             ]
             if "__manifest__.py" not in files:
                 continue
@@ -103,14 +116,24 @@ def _build_graph(roots):
             for node in ast.walk(tree):
                 if isinstance(node, ast.Dict):
                     for key, value in zip(node.keys, node.values):
+                        # `.elts` only exists on ast.List/ast.Tuple -- a manifest referencing a
+                        # variable instead of a literal list ('depends': SOME_DEPS_VAR) is
+                        # syntactically valid Python (ast.parse's own SyntaxError guard doesn't
+                        # catch it), making `value` some other node type with no `.elts` at all.
+                        # Guard explicitly rather than let AttributeError crash the whole checker
+                        # on one such manifest.
                         if isinstance(key, ast.Constant) and key.value == "depends":
-                            graph[mod] = [
-                                e.value for e in value.elts if isinstance(e, ast.Constant)
-                            ]
+                            graph[mod] = (
+                                [e.value for e in value.elts if isinstance(e, ast.Constant)]
+                                if isinstance(value, (ast.List, ast.Tuple))
+                                else []
+                            )
                         elif isinstance(key, ast.Constant) and key.value == "depends_cycle":
-                            depends_cycle[mod] = [
-                                e.value for e in value.elts if isinstance(e, ast.Constant)
-                            ]
+                            depends_cycle[mod] = (
+                                [e.value for e in value.elts if isinstance(e, ast.Constant)]
+                                if isinstance(value, (ast.List, ast.Tuple))
+                                else []
+                            )
                     if mod in graph:
                         break
     return graph, depends_cycle

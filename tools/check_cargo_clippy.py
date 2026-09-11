@@ -88,7 +88,16 @@ def find_cargo_crates(repo_root):
     duplicate work."""
     found = []
     for root, dirs, filenames in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES]
+        # Dot-directories (".claude", ".git", a stray ".venv" not already named above, etc.) are
+        # never real crate locations -- critically including ".claude/worktrees/<session>/", this
+        # project's own standing convention for running concurrent bug-hunt dispatches in
+        # isolated git worktrees INSIDE the repo root. Without this, a concurrently running
+        # session's own worktree gets walked as if it were part of the real repo: confirmed live
+        # while reviewing this exact file, finding the same daemon crates listed three times over
+        # (the real repo plus two other real, concurrently active sessions' worktrees) -- wasted
+        # work at best, a spurious finding against another session's unrelated in-progress,
+        # uncommitted code at worst.
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES and not d.startswith(".")]
         if "Cargo.toml" not in filenames:
             continue
         if os.path.relpath(root, repo_root) in EXCLUDE_CRATE_RELPATHS:

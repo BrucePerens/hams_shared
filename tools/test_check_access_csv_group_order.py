@@ -133,6 +133,40 @@ class CheckModuleTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class DefinedGroupIdsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+
+    def test_id_before_model_is_recognized(self):
+        path = os.path.join(self.tmpdir, "a.xml")
+        _write(path, '<record id="group_x" model="res.groups"><field name="name">X</field></record>')
+        self.assertEqual(chk._defined_group_ids(path), {"group_x"})
+
+    def test_model_before_id_is_also_recognized(self):
+        """Real gap found reviewing this checker: _GROUP_RECORD_RE = r'<record\\s+id="([^"]+)"
+        \\s+model="res\\.groups"' hard-codes id-then-model attribute order, with nothing between
+        them but whitespace -- a <record model="res.groups" id="group_x"> (attributes in the
+        other order, or with a third attribute like `name=` in between) is never matched, so a
+        genuinely-defined group is reported as this checker's own 'not defined by any XML file in
+        this module's own data list at all' error -- a false positive on correct code, exactly
+        the class of failure this checker's own docstring calls out as expensive (it's a hard,
+        blocking gate). Not yet live in the real repo (every current res.groups record happens to
+        write id first), but a realistic, ordinary XML style this regex silently can't handle."""
+        path = os.path.join(self.tmpdir, "a.xml")
+        _write(path, '<record model="res.groups" id="group_x"><field name="name">X</field></record>')
+        self.assertEqual(chk._defined_group_ids(path), {"group_x"})
+
+    def test_a_third_attribute_between_id_and_model_is_also_recognized(self):
+        path = os.path.join(self.tmpdir, "a.xml")
+        _write(
+            path,
+            '<record id="group_x" name="irrelevant" model="res.groups">'
+            '<field name="name">X</field></record>',
+        )
+        self.assertEqual(chk._defined_group_ids(path), {"group_x"})
+
+
 class ResolveRepoRootTests(unittest.TestCase):
     # Regression test for a real bug found the same night this checker was built:
     # run_linters.py's own dir_path resolves to .../hams_shared (its __file__ lives inside

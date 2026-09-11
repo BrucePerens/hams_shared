@@ -221,7 +221,12 @@ def collect_minified_js_assets(repo_root):
                 continue
             try:
                 manifest_dict = ast.literal_eval(node.value)
-            except ValueError:
+            except (ValueError, TypeError, MemoryError, RecursionError):
+                # ast.literal_eval() does NOT limit its failure modes to ValueError -- e.g. a
+                # syntactically-valid-but-unhashable dict key (a list/dict/set literal used as a
+                # key) raises TypeError instead. check_burn_list.py's own manifest-parsing code
+                # documents this same real failure mode; matched here so one malformed-but-
+                # parseable manifest anywhere in the tree can't crash this whole checker.
                 continue
             assets = manifest_dict.get("assets", {})
             if not isinstance(assets, dict):

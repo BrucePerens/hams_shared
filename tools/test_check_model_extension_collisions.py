@@ -239,6 +239,38 @@ class ScanIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("CROSS-MODULE EXTENSION OF AN _auto=False MODEL", result.stdout)
 
+    def test_an_auto_false_model_whose_owner_self_references_is_still_detected_via_main(self):
+        """Real gap found reviewing this checker: check 2's owner_module_of is built from
+        claiming_owners, which deliberately EXCLUDES a self-referencing _name=X + _inherit
+        containing X declaration (the documented "extend + add a mixin" idiom -- see
+        test_a_self_referencing_name_plus_inherit_is_excluded_from_claiming_owners above). If the
+        model's OWN sole owner happens to use that exact idiom on its own base declaration (e.g.
+        _name = "x", _auto = False, _inherit = ["x", "some.mixin"] -- unusual but not impossible:
+        mixing "hand-built SQL view" with "self-declare + extend with a mixin"), the owner is
+        excluded from claiming_owners entirely, so owner_module_of never resolves it -- and check
+        2 (ADR 0086 rule 2, banned outright, 'no exemption') silently misses a real cross-module
+        _auto=False extension it exists specifically to catch. Not yet found live in either real
+        repo (confirmed via a full scan for this exact shape), but a real, live gap in the
+        checker's own logic for its most severe rule."""
+        self._module(
+            "mod_owner",
+            'class Foo(models.Model):\n'
+            '    _name = "ham.repeater.public.view"\n'
+            '    _auto = False\n'
+            '    _inherit = ["ham.repeater.public.view", "some.mixin"]\n'
+            '    def init(self):\n'
+            '        pass\n',
+        )
+        self._module(
+            "mod_extender",
+            'class Bar(models.Model):\n    _inherit = "ham.repeater.public.view"\n',
+        )
+        import subprocess
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_model_extension_collisions.py")
+        result = subprocess.run([sys.executable, script, self.tmp], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("CROSS-MODULE EXTENSION OF AN _auto=False MODEL", result.stdout)
+
     def test_an_inherit_only_class_of_a_normal_auto_true_model_is_fine(self):
         self._module("mod_owner", 'class Foo(models.Model):\n    _name = "ham.qso"\n')
         self._module("mod_extender", 'class Bar(models.Model):\n    _inherit = "ham.qso"\n')

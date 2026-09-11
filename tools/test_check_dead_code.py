@@ -213,6 +213,32 @@ class DeadJsTests(unittest.TestCase):
         flagged = [name for _, _, name in dead_js]
         self.assertNotIn("worklet_processor.js", flagged)
 
+    def test_a_hyphenated_js_filename_listed_in_the_manifest_bundle_is_not_flagged(self):
+        """Real bug found reviewing the real repo: TOKEN_RE = r"[\\w.]+" excludes hyphens, so a
+        hyphenated filename like 'story-components.js' never appears as a single token in the
+        reference index (it splits into 'story' and 'components.js' at the hyphen) while the
+        declaration side still searches for the whole hyphenated string as one needle -- so a
+        hyphenated JS file listed verbatim in the manifest's own asset bundle was still reported
+        dead. Confirmed live against hams_com: 'ham_training/static/src/js/components/
+        story-components.js' and 'ics_forms/static/src/js/components/ics-form.js' were both
+        false-positive-flagged as dead despite being real, live, manifest-listed files."""
+        _make_module(self.tmp, "mod_a")
+        _write(
+            os.path.join(
+                self.tmp, "mod_a", "static", "src", "js", "components", "story-components.js"
+            ),
+            "/** @odoo-module **/\nexport function liveFn() { return 1; }\n",
+        )
+        _write(
+            os.path.join(self.tmp, "mod_a", "__manifest__.py"),
+            "{'name': 'mod_a', 'depends': [], 'data': [], 'assets': "
+            "{'web.assets_frontend': "
+            "['mod_a/static/src/js/components/story-components.js']}}\n",
+        )
+        dead_templates, dead_views, dead_js = cdc.check_dead_code([self.tmp])
+        flagged = [name for _, _, name in dead_js]
+        self.assertNotIn("story-components.js", flagged)
+
     def test_a_test_js_file_is_never_scanned_as_a_declaration(self):
         _make_module(self.tmp, "mod_a")
         _write(

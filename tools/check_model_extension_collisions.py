@@ -260,6 +260,24 @@ def main():
         modules = {m for m, _f, _l in owners}
         if len(modules) == 1:
             owner_module_of[model_name] = next(iter(modules))
+    # Fallback for a model whose ONLY `_name = X` declarer used the self-referencing
+    # `_inherit` containing X idiom on its own base declaration (e.g. `_name = "x", _auto =
+    # False, _inherit = ["x", "some.mixin"]`) -- `claiming_owners` deliberately excludes a
+    # self-referencing declaration (it isn't a second ownership CLAIM the way check 1 needs to
+    # reason about ambiguity), but that exclusion also means such a model never gets an
+    # `owner_module_of` entry via the loop above even when it plainly has exactly one real,
+    # physical owner -- silently disabling check 2 (ADR 0086 rule 2, "banned outright... no
+    # exemption") for that model. `name_owners` has no such exclusion (every `_name = X`
+    # declaration is recorded there, self-referencing or not), so use it here ONLY for a model
+    # `claiming_owners` never resolved a single owner for at all -- this can't change the outcome
+    # for any model check 1 already reasons about correctly, since a model present in
+    # `claiming_owners` with a real single owner already took the branch above.
+    for model_name, owners in name_owners.items():
+        if model_name in owner_module_of:
+            continue
+        modules = {m for m, _f, _l in owners}
+        if len(modules) == 1:
+            owner_module_of[model_name] = next(iter(modules))
 
     for target_name, mod, fpath, lineno in inherit_only:
         if target_name not in auto_false_models:

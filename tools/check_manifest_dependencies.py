@@ -32,6 +32,14 @@ def main():
     for root, dirs, files in os.walk(repo_root):
         if "radae" in dirs:
             dirs.remove("radae")
+        # Dot-directories -- critically ".claude/worktrees/<session>/", this project's own
+        # standing convention for running concurrent bug-hunt dispatches in isolated git
+        # worktrees INSIDE the repo root -- are never real module locations. Without this, a
+        # concurrently running session's own in-progress, uncommitted manifest changes get
+        # scanned as if they belonged to the real repo (confirmed live while reviewing this exact
+        # file: two other real, concurrently active sessions' own worktrees were found sitting in
+        # the real repo root).
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
         if "__manifest__.py" in files:
             mod_name = os.path.basename(root)
             manifest_path = os.path.join(root, "__manifest__.py")
@@ -73,19 +81,43 @@ def main():
                                     file_to_bundles.setdefault(asset_path, []).append(
                                         bundle_name
                                     )
-            except (SyntaxError, ValueError, OSError) as e:
+            except (SyntaxError, ValueError, OSError, TypeError, MemoryError, RecursionError) as e:
+                # ast.literal_eval() does NOT limit its failure modes to ValueError -- e.g. a
+                # syntactically-valid-but-unhashable dict key (a list/dict/set literal used as a
+                # key) raises TypeError instead. check_burn_list.py's own manifest-parsing code
+                # documents this same real failure mode; matched here so one malformed-but-
+                # parseable manifest anywhere in the tree is reported instead of crashing the
+                # whole process with a raw traceback.
                 print(f"❌ ERROR parsing {manifest_path}: {e}")
                 errors_found = True
 
     # 2. Scan all JS files for Odoo '@' alias imports
+    #
+    # The "skip to from" middle group is bounded by a negative lookahead against ';', 'import',
+    # and 'export' so it can cross a multi-line destructured import list's own newlines (a real,
+    # ordinary JS style -- exactly what prettier/eslint produce once an import line gets long,
+    # confirmed live in ham_shack/static/src/js/azimuth_map.js) WITHOUT also being able to cross
+    # into a different, later import/export statement. Before this bound existed, the pattern was
+    # applied per-line (`for line_no, line in enumerate(f, 1): match =
+    # import_pattern.search(line)`) with no DOTALL at all, so a multi-line import's 'from
+    # "@module/..."' quote -- on a different line than its own 'import' keyword -- never matched
+    # anything: a cross-module import naming an undeclared dependency this way was silently never
+    # checked. A naive fix of just adding re.DOTALL without this lookahead bound would trade that
+    # false negative for a worse one: the lazy '.*?' would then happily skip across an entire
+    # unrelated PRIOR import statement to reach a distant later 'from', misattributing that later
+    # import's own target to the first statement and skipping the first statement's real target
+    # entirely (see test_a_multiline_brace_import_does_not_leak_into_a_following_unrelated_import).
     import_pattern = re.compile(
-        r"(?:import|export)\s+(?:.*?\s+from\s+)?['\"]@([a-zA-Z0-9_-]+)/(.*?)['\"]"
+        r"(?:import|export)\s+"
+        r"(?:(?:(?!;|\bimport\b|\bexport\b)[\s\S])*?\s+from\s+)?"
+        r"['\"]@([a-zA-Z0-9_-]+)/(.*?)['\"]"
     )
 
     mod_cache = {}
     for root, dirs, files in os.walk(repo_root):
         if "radae" in dirs:
             dirs.remove("radae")
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
         if "node_modules" in root:
             continue
         for file in files:
@@ -120,95 +152,99 @@ def main():
                 )
                 importing_bundles = file_to_bundles.get(importing_file_rel, [])
 
-                # Check imports against dependencies and bundle boundaries
+                # Check imports against dependencies and bundle boundaries. Scanned as one
+                # whole-file string (not per-line) so import_pattern's bounded lazy skip can
+                # cross a multi-line destructured import list's own newlines -- see
+                # import_pattern's own comment above for why a per-line scan silently missed
+                # exactly the class of violation this checker exists to catch.
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:
-                        for line_no, line in enumerate(f, 1):
-                            match = import_pattern.search(line)
-                            if match:
-                                imported_mod = match.group(1)
-                                imported_subpath = match.group(2)
+                        content = f.read()
+                    for match in import_pattern.finditer(content):
+                        line_no = content[: match.start()].count("\n") + 1
+                        imported_mod = match.group(1)
+                        imported_subpath = match.group(2)
 
-                                # A. Inter-Module Dependency Check
-                                if (
-                                    imported_mod != current_mod
-                                    and imported_mod not in manifests[current_mod]
-                                    and imported_mod not in ("web", "base", "odoo")
+                        # A. Inter-Module Dependency Check
+                        if (
+                            imported_mod != current_mod
+                            and imported_mod not in manifests[current_mod]
+                            and imported_mod not in ("web", "base", "odoo")
+                        ):
+                            print(
+                                f"🚨 MANIFEST DEPENDENCY VIOLATION in {current_mod}"
+                            )
+                            print(f"  File: {importing_file_rel}:{line_no}")
+                            print(
+                                f"  Imports: '@{imported_mod}' but '{imported_mod}' is NOT listed in {current_mod}/__manifest__.py 'depends' array."
+                            )
+                            print(
+                                f"  Fix: Add '{imported_mod}' to the depends array to prevent module_loader.js race conditions."
+                            )
+                            errors_found = True
+
+                        # B. Intra-Module Cross-Bundle Check (Bundle Safety)
+                        if imported_mod == current_mod:
+                            physical_import_path = (
+                                f"{current_mod}/static/src/{imported_subpath}"
+                            )
+                            if not physical_import_path.endswith(".js"):
+                                physical_import_path += ".js"
+
+                            imported_bundles = file_to_bundles.get(
+                                physical_import_path, []
+                            )
+                            test_bundles = {"web.assets_tests"}
+                            prod_bundles = {
+                                "web.assets_backend",
+                                "web.assets_frontend",
+                                "web.assets_common",
+                                "web.assets_core",
+                            }
+
+                            # 1. Test runner safety: test assets must import things available in testing
+                            if any(
+                                b in test_bundles for b in importing_bundles
+                            ):
+                                allowed_bundles = test_bundles | prod_bundles
+                                if imported_bundles and not any(
+                                    b in allowed_bundles
+                                    for b in imported_bundles
                                 ):
                                     print(
-                                        f"🚨 MANIFEST DEPENDENCY VIOLATION in {current_mod}"
-                                    )
-                                    print(f"  File: {importing_file_rel}:{line_no}")
-                                    print(
-                                        f"  Imports: '@{imported_mod}' but '{imported_mod}' is NOT listed in {current_mod}/__manifest__.py 'depends' array."
+                                        f"🚨 ASSET BUNDLE CROSS-CONTAMINATION in {current_mod}"
                                     )
                                     print(
-                                        f"  Fix: Add '{imported_mod}' to the depends array to prevent module_loader.js race conditions."
+                                        f"  File: {importing_file_rel}:{line_no}"
+                                    )
+                                    print(
+                                        f"  Imports: '@{current_mod}/{imported_subpath}' which is only registered in bundles: {imported_bundles}"
+                                    )
+                                    print(
+                                        "  Error: The importing file is in 'web.assets_tests', but the imported utility is NOT. This causes the test runner to crash due to missing dependencies. Move the imported file to 'web.assets_tests', 'web.assets_backend', or 'web.assets_frontend'."
                                     )
                                     errors_found = True
 
-                                # B. Intra-Module Cross-Bundle Check (Bundle Safety)
-                                if imported_mod == current_mod:
-                                    physical_import_path = (
-                                        f"{current_mod}/static/src/{imported_subpath}"
+                            # 2. Production safety: production assets MUST NOT import test assets
+                            if any(
+                                b in prod_bundles for b in importing_bundles
+                            ):
+                                if imported_bundles and all(
+                                    b in test_bundles for b in imported_bundles
+                                ):
+                                    print(
+                                        f"🚨 ASSET BUNDLE CROSS-CONTAMINATION in {current_mod}"
                                     )
-                                    if not physical_import_path.endswith(".js"):
-                                        physical_import_path += ".js"
-
-                                    imported_bundles = file_to_bundles.get(
-                                        physical_import_path, []
+                                    print(
+                                        f"  File: {importing_file_rel}:{line_no}"
                                     )
-                                    test_bundles = {"web.assets_tests"}
-                                    prod_bundles = {
-                                        "web.assets_backend",
-                                        "web.assets_frontend",
-                                        "web.assets_common",
-                                        "web.assets_core",
-                                    }
-
-                                    # 1. Test runner safety: test assets must import things available in testing
-                                    if any(
-                                        b in test_bundles for b in importing_bundles
-                                    ):
-                                        allowed_bundles = test_bundles | prod_bundles
-                                        if imported_bundles and not any(
-                                            b in allowed_bundles
-                                            for b in imported_bundles
-                                        ):
-                                            print(
-                                                f"🚨 ASSET BUNDLE CROSS-CONTAMINATION in {current_mod}"
-                                            )
-                                            print(
-                                                f"  File: {importing_file_rel}:{line_no}"
-                                            )
-                                            print(
-                                                f"  Imports: '@{current_mod}/{imported_subpath}' which is only registered in bundles: {imported_bundles}"
-                                            )
-                                            print(
-                                                "  Error: The importing file is in 'web.assets_tests', but the imported utility is NOT. This causes the test runner to crash due to missing dependencies. Move the imported file to 'web.assets_tests', 'web.assets_backend', or 'web.assets_frontend'."
-                                            )
-                                            errors_found = True
-
-                                    # 2. Production safety: production assets MUST NOT import test assets
-                                    if any(
-                                        b in prod_bundles for b in importing_bundles
-                                    ):
-                                        if imported_bundles and all(
-                                            b in test_bundles for b in imported_bundles
-                                        ):
-                                            print(
-                                                f"🚨 ASSET BUNDLE CROSS-CONTAMINATION in {current_mod}"
-                                            )
-                                            print(
-                                                f"  File: {importing_file_rel}:{line_no}"
-                                            )
-                                            print(
-                                                f"  Imports: '@{current_mod}/{imported_subpath}' which is strictly a TEST asset."
-                                            )
-                                            print(
-                                                "  Error: A production asset cannot import a test-only asset. This will crash the live production environment."
-                                            )
-                                            errors_found = True
+                                    print(
+                                        f"  Imports: '@{current_mod}/{imported_subpath}' which is strictly a TEST asset."
+                                    )
+                                    print(
+                                        "  Error: A production asset cannot import a test-only asset. This will crash the live production environment."
+                                    )
+                                    errors_found = True
                 except OSError as e:
                     print(f"⚠️ Warning: Could not read JS file {filepath}: {e}")
 

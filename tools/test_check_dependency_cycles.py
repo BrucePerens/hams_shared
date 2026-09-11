@@ -75,6 +75,21 @@ class BuildGraphTests(unittest.TestCase):
         graph, _ = cdc._build_graph([self.repo])
         self.assertEqual(graph, {})
 
+    def test_a_depends_value_that_is_not_a_list_or_tuple_literal_does_not_crash(self):
+        """Real gap found reviewing this checker: `graph[mod] = [e.value for e in value.elts if
+        ...]` accesses `value.elts` unconditionally once a 'depends' key is found -- but `.elts`
+        only exists on ast.List/ast.Tuple nodes. A manifest referencing a variable instead of a
+        literal list ('depends': SOME_DEPS_VAR -- syntactically valid Python, so ast.parse's own
+        SyntaxError guard doesn't catch it) makes `value` an ast.Name node with no `.elts`
+        attribute at all, raising an uncaught AttributeError that crashes the whole checker (a
+        hard, blocking gate) on one such manifest anywhere across either repo."""
+        mod_dir = os.path.join(self.repo, "weird_mod")
+        os.makedirs(mod_dir)
+        with open(os.path.join(mod_dir, "__manifest__.py"), "w", encoding="utf-8") as f:
+            f.write("SOME_DEPS_VAR = ['base']\n{\n    'depends': SOME_DEPS_VAR,\n}\n")
+        graph, _ = cdc._build_graph([self.repo])
+        self.assertEqual(graph.get("weird_mod"), [])
+
     def test_does_not_descend_into_a_daemons_or_tools_directory(self):
         # Real repos keep a `daemons/` and `tools/` dir at the root that are
         # never Odoo modules; a manifest-shaped file placed under one must
@@ -82,6 +97,26 @@ class BuildGraphTests(unittest.TestCase):
         _write_manifest(os.path.join(self.repo, "daemons"), "not_really_a_module")
         graph, _ = cdc._build_graph([self.repo])
         self.assertNotIn("not_really_a_module", graph)
+
+    def test_a_claude_worktree_directory_is_never_scanned_at_all(self):
+        """Real, live bug found reviewing this checker: without a dot-directory exclusion, a
+        concurrent session's own .claude/worktrees/<session>/ directory -- this project's own
+        standing convention for running concurrent bug-hunt dispatches in isolated git worktrees
+        INSIDE the repo root -- gets scanned as if it were part of the real repo. Beyond wasted
+        work, `graph[mod] = [...]` keys purely by basename with no path disambiguation, so a
+        worktree's own copy of a real module (same basename, possibly a different, in-progress
+        'depends' list) can silently overwrite -- or be overwritten by -- the real repo's own
+        entry depending on os.walk's own filesystem-dependent traversal order. Using a uniquely-
+        named worktree module here (rather than relying on which of two same-named copies happens
+        to be visited last, which is itself non-deterministic) makes this a reliable regression
+        test: if the exclusion is missing, the worktree's module shows up in the graph at all."""
+        _write_manifest(self.repo, "mod_a", depends=["mod_b"])
+        _write_manifest(self.repo, "mod_b", depends=[])
+        worktree_root = os.path.join(self.repo, ".claude", "worktrees", "agent-other-session")
+        _write_manifest(worktree_root, "mod_only_in_worktree", depends=[])
+        graph, _ = cdc._build_graph([self.repo])
+        self.assertNotIn("mod_only_in_worktree", graph)
+        self.assertEqual(graph["mod_a"], ["mod_b"])
 
 
 class ReachableTests(unittest.TestCase):

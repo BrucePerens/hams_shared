@@ -80,6 +80,20 @@ class CollectMinifiedJsAssetsTests(unittest.TestCase):
         result = chk.collect_minified_js_assets(self.tmp)
         self.assertEqual(set(result.keys()), {"mod_a/static/src/js/b.js"})
 
+    def test_a_manifest_dict_value_that_crashes_literal_eval_with_typeerror_is_skipped_not_fatal(
+        self,
+    ):
+        """Same real ast.literal_eval() failure mode documented in check_burn_list.py and shared
+        with check_minified_js_nested_templates.py's identical collector: an unhashable dict key
+        (syntactically valid Python) raises TypeError, not ValueError -- this checker's own
+        `except ValueError: continue` around the same call let that propagate uncaught."""
+        _write(
+            os.path.join(self.tmp, "mod_a", "__manifest__.py"),
+            "{'assets': {}, 'weird': {[1, 2]: 3}}\n",
+        )
+        result = chk.collect_minified_js_assets(self.tmp)
+        self.assertEqual(result, {})
+
 
 class ResolveAssetPathTests(unittest.TestCase):
     def setUp(self):

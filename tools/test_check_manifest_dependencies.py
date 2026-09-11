@@ -132,6 +132,106 @@ class CheckManifestDependenciesTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("ERROR parsing", out)
 
+    def test_a_multiline_brace_import_from_an_undeclared_module_is_still_a_violation(self):
+        """Real bug: import_pattern was applied line-by-line (`for line_no, line in
+        enumerate(f, 1): match = import_pattern.search(line)`), and the regex itself requires
+        'import'/'export' and the 'from \"@module/...\"' quote on the SAME line. A real,
+        ordinary JS style -- a destructured import list wrapped across multiple lines, exactly
+        what prettier/eslint auto-formatting produces once an import line gets long -- puts
+        'import {' on one line and 'from \"@module/...\"' on a later line, so neither line alone
+        ever matches the pattern. Confirmed live in the real repo:
+        ham_shack/static/src/js/azimuth_map.js imports antenna_pattern_math this exact way.
+        Before the fix, a multi-line cross-module import naming an undeclared dependency was
+        never flagged at all -- exactly the 'silently passes bad code' failure mode this whole
+        checker exists to prevent."""
+        self._manifest("mod_a", depends=[])
+        self._manifest("mod_b")
+        _write(
+            os.path.join(self.tmp, "mod_a", "static", "src", "js", "main.js"),
+            "import {\n"
+            "    thing,\n"
+            "    otherThing,\n"
+            "} from '@mod_b/js/thing';\n",
+        )
+        code, out = _run(self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("MANIFEST DEPENDENCY VIOLATION", out)
+
+    def test_a_multiline_brace_import_does_not_leak_into_a_following_unrelated_import(self):
+        """Guards the fix above against a naive 'just add re.DOTALL' regression: a lazy
+        '.*?...from...' skip-span, once allowed to cross newlines, can also cross an entire
+        UNRELATED prior import statement (e.g. a side-effect-only import with no 'from' of its
+        own) and misattribute a distant later import's target to the first statement, silently
+        skipping the first import's own real target. Both imports here name different modules
+        neither of which is declared -- both must be independently flagged, and each violation
+        must report its own real target module, not the other one's."""
+        self._manifest("mod_a", depends=[])
+        self._manifest("mod_b")
+        self._manifest("mod_c")
+        _write(
+            os.path.join(self.tmp, "mod_a", "static", "src", "js", "main.js"),
+            "import '@mod_b/js/side_effect_only';\n"
+            "import { thing } from '@mod_c/js/thing';\n",
+        )
+        code, out = _run(self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("'@mod_b'", out)
+        self.assertIn("'@mod_c'", out)
+
+    def test_a_concurrent_sessions_claude_worktree_is_never_scanned(self):
+        """Real, live bug found reviewing this checker: neither of its two os.walk loops (the
+        manifest-mapping pass, the JS-import-scanning pass) excludes dot-directories or
+        ".claude" specifically. This project's own standing convention runs concurrent bug-hunt
+        dispatches in isolated git worktrees under ".claude/worktrees/<session>/" INSIDE the repo
+        root -- confirmed live: two other real, concurrently active sessions' own worktrees were
+        found sitting in the real repo root while this exact review was running. A concurrent
+        session's own in-progress, uncommitted manifest/JS changes (completely normal for work in
+        progress -- an undeclared dependency mid-refactor, say) would be reported as a MANIFEST
+        DEPENDENCY VIOLATION against the wrong repo entirely."""
+        self._manifest("mod_a", depends=[])
+        self._manifest("mod_b")
+        _write(
+            os.path.join(self.tmp, "mod_a", "static", "src", "js", "main.js"),
+            "import { thing } from '@mod_b/js/thing';\n",
+        )
+        # A concurrent session's own worktree sitting under .claude/worktrees/ should never be
+        # scanned at all, regardless of what it contains.
+        worktree_root = os.path.join(self.tmp, ".claude", "worktrees", "agent-other-session")
+        os.makedirs(os.path.join(worktree_root, "mod_c"), exist_ok=True)
+        _write(
+            os.path.join(worktree_root, "mod_c", "__manifest__.py"),
+            "{\n    'depends': [],\n    'description': 'x',\n}\n",
+        )
+        _write(
+            os.path.join(worktree_root, "mod_c", "static", "src", "js", "main.js"),
+            "import { thing } from '@mod_b/js/thing';\n",
+        )
+        code, out = _run(self.tmp)
+        self.assertEqual(code, 1, out)  # mod_a's own real violation still fires
+        self.assertNotIn("mod_c", out)  # the worktree copy is never scanned at all
+
+    def test_a_manifest_that_crashes_literal_eval_with_typeerror_is_reported_not_a_traceback(
+        self,
+    ):
+        """ast.literal_eval() does not limit its failure modes to ValueError -- an unhashable
+        dict key (syntactically valid Python, e.g. a list literal used as a key) makes it raise
+        TypeError instead (confirmed directly: `ast.literal_eval(ast.parse("{[1,2]: 3}",
+        mode="eval").body)` raises TypeError, not ValueError). check_burn_list.py's own
+        manifest-parsing code documents this exact real failure mode and catches TypeError
+        (plus MemoryError/RecursionError) alongside ValueError for it; this script's own
+        `except (SyntaxError, ValueError, OSError)` around the same call was narrower and let a
+        TypeError escape uncaught -- crashing the whole process with a raw Python traceback
+        instead of the intended 'ERROR parsing' diagnostic, on one malformed-but-parseable
+        manifest anywhere in the tree."""
+        _write(
+            os.path.join(self.tmp, "weird_mod", "__manifest__.py"),
+            "{'depends': [], 'description': 'x', 'weird': {[1, 2]: 3}}\n",
+        )
+        code, out = _run(self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("ERROR parsing", out)
+        self.assertNotIn("Traceback", out)
+
     def test_a_test_bundle_file_importing_a_backend_bundled_utility_is_fine(self):
         # web.assets_backend is itself in the allowed set for a test-bundle
         # import (test_bundles | prod_bundles) -- only an import of

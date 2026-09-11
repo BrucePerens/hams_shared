@@ -78,6 +78,31 @@ class CheckModuleTests(unittest.TestCase):
         self.assertIn("controllers", joined)
         self.assertIn("wizard", joined)
 
+    def test_a_utils_subpackage_never_imported_is_flagged(self):
+        """Real coverage gap found reviewing this checker: CHECKED_SUBPACKAGES = ("models",
+        "controllers", "wizard") was "confirmed by survey, not guessed" when this checker was
+        built, but a fresh survey of both real repos today found two more real, currently-used
+        Python subpackage kinds not on that list: cloudflare/utils/ (hams_open) and
+        user_websites/i18n/ (hams_open) -- both currently correctly imported (so no live bug
+        today), but a FUTURE module adding a utils/ or i18n/ subpackage and forgetting to import
+        it would be silently missed by this checker, the exact failure mode it exists to catch."""
+        module_dir = os.path.join(self.tmpdir, "test_mod")
+        _write(os.path.join(module_dir, "__init__.py"), "from . import models\n")
+        _write(os.path.join(module_dir, "models", "__init__.py"), "\n")
+        _write(os.path.join(module_dir, "utils", "__init__.py"), "\n")
+        errors = chk._check_module("test_mod", module_dir)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("utils", errors[0])
+
+    def test_an_i18n_subpackage_never_imported_is_flagged(self):
+        module_dir = os.path.join(self.tmpdir, "test_mod")
+        _write(os.path.join(module_dir, "__init__.py"), "from . import models\n")
+        _write(os.path.join(module_dir, "models", "__init__.py"), "\n")
+        _write(os.path.join(module_dir, "i18n", "__init__.py"), "\n")
+        errors = chk._check_module("test_mod", module_dir)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("i18n", errors[0])
+
     def test_a_module_with_no_top_level_init_at_all_is_not_this_checkers_problem(self):
         module_dir = os.path.join(self.tmpdir, "test_mod")
         _write(os.path.join(module_dir, "models", "__init__.py"), "\n")

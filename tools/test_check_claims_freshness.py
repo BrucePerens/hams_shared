@@ -110,6 +110,70 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("missing required frontmatter", problems[0][1])
 
+    def test_a_centralized_store_claim_is_not_flagged_orphaned_it_belongs_to_check_claims_py(self):
+        """Real bug found running this checker against the actual hams_com repo for the first
+        time ever (it has never been wired into run_linters.py -- ADR 0091 itself names this as a
+        real, tracked follow-on, 'not yet wired... not forgotten'): a claim under
+        docs/bug_hunt_claims/<repo>/... documents code that lives in a DIFFERENT git repo
+        (hams_open/hams_shared), per this project's own centralized-claims-store policy (the
+        skill's own docs: 'Verify a centralized claim with ... check_claims.py ... since the
+        normal check_claims_freshness.py assumes the claim and its code share one repo root').
+        Before this fix, this checker's own `f'{os.sep}claims{os.sep}' in claim_path` test doesn't
+        distinguish a centralized-store claim from a co-located one -- it tries to verify the
+        centralized claim's anchor against ITS OWN repo's Python files, never finds it (the real
+        anchor lives in a different repo entirely), and reports it as 'orphaned claim' -- a false
+        positive on every single centralized claim, confirmed live: running this checker against
+        the real hams_com repo for the first time produced over 1100 'orphaned claim' false
+        positives, the overwhelming majority under docs/bug_hunt_claims/, none of them real."""
+        _write(os.path.join(self.tmp, "mod.py"), "def bar():\n    pass\n")
+        _write(
+            os.path.join(self.tmp, "docs", "bug_hunt_claims", "hams_open", "some_module", "claims", "foo.md"),
+            "---\nanchor: some_module:foo\ncode_hash: sha256:abc123\n---\n\n1. Does something.\n",
+        )
+        _init_git_repo(self.tmp)
+        problems = ccf.check_claims(self.tmp)
+        self.assertEqual(problems, [])
+
+    def test_a_not_computable_code_hash_is_skipped_not_flagged_orphaned(self):
+        """The established, already-in-active-use convention (this checker's own predecessor
+        claims across the real repo -- every Rust-anchored claim in daemons/hams_local_relay/
+        claims/, plus several written by this exact bug-hunt dispatch for un-anchored Python
+        functions) for a claim this checker structurally cannot hash yet (a Rust/JS anchor, or no
+        real [@ANCHOR:] at all) is `code_hash: not computable -- <reason>`, not a real sha256.
+        Before this fix, this checker didn't recognize that convention at all: it still tried to
+        resolve the anchor against its own Python-only index, never found it (the real anchor, if
+        any, lives in a .rs/.js file this checker can't parse), and reported "orphaned claim" --
+        a false positive, and a misleading one (implying the anchor was deleted, when in fact it
+        was simply never Python). Confirmed live: running this checker against the real hams_com
+        repo, ALL 344 of its post-centralized-store-fix "orphaned claim" findings turned out to be
+        claims using this exact `not computable` convention, none of them genuinely orphaned."""
+        _write(os.path.join(self.tmp, "mod.py"), "def bar():\n    pass\n")
+        _write(
+            os.path.join(self.tmp, "claims", "foo.md"),
+            "---\nanchor: some_crate:foo\ncode_hash: not computable -- Rust claims-hashing "
+            "tooling doesn't exist yet\n---\n\n1. Does something.\n",
+        )
+        _init_git_repo(self.tmp)
+        problems = ccf.check_claims(self.tmp)
+        self.assertEqual(problems, [])
+
+    def test_a_readme_inside_a_claims_directory_is_not_treated_as_a_claim(self):
+        """Real, live false positive found against the real hams_com repo: hardware/claims/
+        README.md is a real, deliberate index/explanation file for the directory ('hardware/ --
+        reviewed, out of scope for the bug-hunt campaign'), not a claim -- it carries no
+        frontmatter at all because it isn't one. Before this fix, this checker's own
+        `f'{os.sep}claims{os.sep}' in claim_path` test doesn't distinguish a README from a real
+        claim file, so it was reported as 'missing required frontmatter fields' -- a false
+        positive on a file that was never meant to have any."""
+        _write(os.path.join(self.tmp, "mod.py"), "def bar():\n    pass\n")
+        _write(
+            os.path.join(self.tmp, "claims", "README.md"),
+            "# claims/ -- what this directory is for\n\nJust an explanation, not a claim.\n",
+        )
+        _init_git_repo(self.tmp)
+        problems = ccf.check_claims(self.tmp)
+        self.assertEqual(problems, [])
+
     def test_a_tests_link_to_an_anchor_does_not_clobber_the_base_declarations_hash(self):
         # Real bug found while prototyping this checker against hams_com: a test file's own
         # "# Tests [@ANCHOR: name]" line matches the same ANCHOR_PATTERN as the base declaration,
