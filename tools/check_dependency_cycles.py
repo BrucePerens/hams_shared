@@ -80,6 +80,18 @@ def _find_sibling_repo(repo_root):
 
 
 def _build_graph(roots):
+    # Real, live bug found reviewing this file: without the "not d.startswith('.')" filter just
+    # below, this walk descends into ".claude/worktrees/<session>/" -- this project's own
+    # standing convention for running concurrent bug-hunt dispatches in isolated git worktrees
+    # INSIDE the repo root (confirmed live: two other real, concurrently active sessions' own
+    # worktrees were found sitting in the real repo root during this review). This is worse than
+    # merely wasted work: `graph[mod] = [...]` below keys purely by `os.path.basename(root)`, with
+    # NO path-based disambiguation, so a worktree's own copy of a real module (same basename,
+    # same manifest-derived name, but possibly a different, in-progress 'depends' list) silently
+    # OVERWRITES or is overwritten by the real repo's own entry depending on os.walk's own
+    # (filesystem-dependent, not alphabetically guaranteed) traversal order -- a real risk of
+    # reasoning about the wrong, stale, or mid-edit dependency data for a real module, not just
+    # duplicated effort.
     graph = {}
     depends_cycle = {}
     for repo_root in roots:
@@ -90,6 +102,7 @@ def _build_graph(roots):
                 d
                 for d in dirs
                 if d not in ("node_modules", "__pycache__", ".git", "daemons", "tools")
+                and not d.startswith(".")
             ]
             if "__manifest__.py" not in files:
                 continue

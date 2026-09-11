@@ -98,6 +98,26 @@ class BuildGraphTests(unittest.TestCase):
         graph, _ = cdc._build_graph([self.repo])
         self.assertNotIn("not_really_a_module", graph)
 
+    def test_a_claude_worktree_directory_is_never_scanned_at_all(self):
+        """Real, live bug found reviewing this checker: without a dot-directory exclusion, a
+        concurrent session's own .claude/worktrees/<session>/ directory -- this project's own
+        standing convention for running concurrent bug-hunt dispatches in isolated git worktrees
+        INSIDE the repo root -- gets scanned as if it were part of the real repo. Beyond wasted
+        work, `graph[mod] = [...]` keys purely by basename with no path disambiguation, so a
+        worktree's own copy of a real module (same basename, possibly a different, in-progress
+        'depends' list) can silently overwrite -- or be overwritten by -- the real repo's own
+        entry depending on os.walk's own filesystem-dependent traversal order. Using a uniquely-
+        named worktree module here (rather than relying on which of two same-named copies happens
+        to be visited last, which is itself non-deterministic) makes this a reliable regression
+        test: if the exclusion is missing, the worktree's module shows up in the graph at all."""
+        _write_manifest(self.repo, "mod_a", depends=["mod_b"])
+        _write_manifest(self.repo, "mod_b", depends=[])
+        worktree_root = os.path.join(self.repo, ".claude", "worktrees", "agent-other-session")
+        _write_manifest(worktree_root, "mod_only_in_worktree", depends=[])
+        graph, _ = cdc._build_graph([self.repo])
+        self.assertNotIn("mod_only_in_worktree", graph)
+        self.assertEqual(graph["mod_a"], ["mod_b"])
+
 
 class ReachableTests(unittest.TestCase):
     def test_direct_edge_is_reachable(self):
