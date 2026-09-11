@@ -51,7 +51,6 @@ import re
 import socket
 import subprocess
 import sys
-import tempfile
 
 CATCH_TARGET = "this.failed.add(name);"
 STACK_CAPTURE_MARKER = "STACK_CAPTURE_FOR_"
@@ -131,6 +130,43 @@ def write_as_root(path, content):
     return result
 
 
+def restore_and_verify(loader_path, original_content):
+    """Always attempt to restore `loader_path` to `original_content` and report the real
+    outcome, even if the restore's own write fails.
+
+    Real bug found 2026-09-10: main()'s own `finally` block used to call `write_as_root()`
+    directly with no exception handling of its own. `write_as_root` uses `check=True`, so a
+    real, plausible failure on a shared dev box (an expired sudo timestamp, a transient
+    permission glitch) would raise `CalledProcessError` INSIDE the `finally` block -- which
+    replaces whatever exception (if any) was already propagating from the `try` body, with no
+    trace of what that original error was, and with NO attempt to verify or report the real
+    on-disk state of a shared system file every other JS test on this box depends on. This
+    function makes the restore-and-verify step itself fail closed: a failure at any point
+    (the write, or the follow-up read-back to verify it) prints a clear, actionable warning
+    and returns, rather than letting an exception escape the caller's own `finally` block.
+    """
+    print(f"[*] Restoring original {loader_path}...")
+    try:
+        write_as_root(loader_path, original_content)
+    except Exception as e:
+        print(f"🛑 WARNING: failed to restore {loader_path}: {e}")
+        print(
+            f"🛑 WARNING: {loader_path} is left in an UNKNOWN, possibly-patched state -- "
+            "check it by hand before running any other JS test on this box."
+        )
+        return
+    try:
+        with open(loader_path, "r", encoding="utf-8") as f:
+            restored = f.read()
+    except OSError as e:
+        print(f"🛑 WARNING: could not re-read {loader_path} to verify the restore: {e}")
+        return
+    if restored != original_content:
+        print(f"🛑 WARNING: {loader_path} did not verify as restored correctly -- check it by hand.")
+    else:
+        print("[+] Restore verified.")
+
+
 def get_free_port():
     """OS-assigned free TCP port -- inherently racy (nothing stops another process
     from binding it between this call and the real server starting), but good enough
@@ -194,26 +230,37 @@ def main():
         port = get_free_port()
         print(f"[*] Running --test-tags {args.test_tags!r} against a one-shot Odoo process on port {port}...")
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".envlist", delete=False) as env_file:
-            for key, value in service_env.items():
-                env_file.write(f"{key}={value}\n")
-            env_file_path = env_file.name
-        # The sudo'd `cat` below runs as --os-user (odoo), not bruce -- NamedTemporaryFile's
-        # default 0600 mode would make it unreadable to that user.
-        os.chmod(env_file_path, 0o644)
-
-        cmd = (
-            f"env -i $(cat {env_file_path}) /usr/bin/odoo "
-            f"--config {args.config} -d {args.db} --test-enable --test-tags {args.test_tags} "
-            f"--stop-after-init --workers=0 --http-port={port} --log-level=test"
-        )
+        # Real bug found 2026-09-10: this used to build a single shell string
+        # (`env -i $(cat <tempfile>) /usr/bin/odoo --config {args.config} ...`) run via
+        # `bash -c`, interpolating every CLI arg AND every real environment variable value
+        # unquoted. `bash -c` then word-splits both the `$(cat ...)` substitution and the
+        # interpolated args on whitespace -- any real env var value from the live Odoo
+        # service's own environment (or any CLI arg this tool's own operator passes) that
+        # contains a space or shell metacharacter would silently corrupt the resulting argv
+        # (a value split into multiple bogus `env` assignments, or a stray shell token). Fixed
+        # by passing every argument and every KEY=VALUE environment pair as its own real argv
+        # element to `sudo`/`env`/`odoo` directly -- no shell involved, so no word-splitting or
+        # re-parsing of any value regardless of its content. This also removes the temp
+        # env-file/chmod/unlink dance entirely, since `env -i KEY=VAL ...` accepts the pairs
+        # directly as leading arguments.
+        odoo_cmd = [
+            "/usr/bin/odoo",
+            "--config", args.config,
+            "-d", args.db,
+            "--test-enable",
+            "--test-tags", args.test_tags,
+            "--stop-after-init",
+            "--workers=0",
+            f"--http-port={port}",
+            "--log-level=test",
+        ]
+        env_pairs = [f"{key}={value}" for key, value in service_env.items()]
         result = subprocess.run(
-            ["sudo", "-u", args.os_user, "bash", "-c", cmd],
+            ["sudo", "-u", args.os_user, "env", "-i"] + env_pairs + odoo_cmd,
             capture_output=True,
             text=True,
             timeout=args.timeout,
         )
-        os.unlink(env_file_path)
         output = result.stdout + result.stderr
 
         captures = extract_stack_captures(output)
@@ -231,14 +278,7 @@ def main():
 
         return 0 if captures == [] and result.returncode == 0 else 1
     finally:
-        print(f"[*] Restoring original {loader_path}...")
-        write_as_root(loader_path, original_content)
-        with open(loader_path, "r", encoding="utf-8") as f:
-            restored = f.read()
-        if restored != original_content:
-            print(f"🛑 WARNING: {loader_path} did not verify as restored correctly -- check it by hand.")
-        else:
-            print("[+] Restore verified.")
+        restore_and_verify(loader_path, original_content)
 
 
 if __name__ == "__main__":

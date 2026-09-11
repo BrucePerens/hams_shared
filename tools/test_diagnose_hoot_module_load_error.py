@@ -17,6 +17,7 @@ import os
 import socket
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -89,6 +90,49 @@ class ExtractStackCapturesTests(unittest.TestCase):
         output = "STACK_CAPTURE_FOR_@x/mod: TypeError: no frames follow\nnext unrelated line\n"
         captures = diag.extract_stack_captures(output)
         self.assertEqual(captures, ["STACK_CAPTURE_FOR_@x/mod: TypeError: no frames follow"])
+
+
+class RestoreAndVerifyTests(unittest.TestCase):
+    # Real bug found 2026-09-10: main()'s own `finally` block called write_as_root() directly,
+    # with no exception handling -- a real, plausible sudo failure during the restore attempt
+    # would raise INSIDE the finally block, masking whatever original exception (if any) was
+    # already propagating, with no warning about the real on-disk state of a shared system file.
+    # restore_and_verify() is the fix: it must never raise, and must always print an actionable
+    # warning when something goes wrong, rather than letting the caller's own finally block see
+    # an exception escape.
+    def test_a_successful_restore_prints_verified(self):
+        with mock.patch.object(diag, "write_as_root") as mock_write, \
+             mock.patch("builtins.open", mock.mock_open(read_data="original")):
+            diag.restore_and_verify("/fake/path.js", "original")
+            mock_write.assert_called_once_with("/fake/path.js", "original")
+
+    def test_a_write_failure_does_not_raise_and_warns_clearly(self):
+        # Confirmed to fail against the pre-fix source: main()'s old inline finally-block code
+        # had no equivalent function to call here at all, and the old code would have let this
+        # exact CalledProcessError propagate straight out of the finally block.
+        with mock.patch.object(
+            diag, "write_as_root", side_effect=RuntimeError("sudo timestamp expired")
+        ):
+            try:
+                diag.restore_and_verify("/fake/path.js", "original")
+            except RuntimeError:
+                self.fail("restore_and_verify() must never let a write failure raise")
+
+    def test_a_verification_read_failure_does_not_raise_and_warns_clearly(self):
+        with mock.patch.object(diag, "write_as_root"), \
+             mock.patch("builtins.open", side_effect=OSError("permission denied")):
+            try:
+                diag.restore_and_verify("/fake/path.js", "original")
+            except OSError:
+                self.fail("restore_and_verify() must never let a verification-read failure raise")
+
+    def test_a_mismatched_restore_is_reported_but_does_not_raise(self):
+        with mock.patch.object(diag, "write_as_root"), \
+             mock.patch("builtins.open", mock.mock_open(read_data="something-else")):
+            try:
+                diag.restore_and_verify("/fake/path.js", "original")
+            except Exception:
+                self.fail("restore_and_verify() must never raise on a content mismatch")
 
 
 class GetFreePortTests(unittest.TestCase):
