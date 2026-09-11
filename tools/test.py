@@ -1225,6 +1225,24 @@ def check_linters(
     if res_init.returncode != 0:
         print(res_init.stdout)
         print(res_init.stderr)
+        # Real gap found 2026-09-11 (night_shift_todo.md: "HIGH PRIORITY,
+        # found 2026-09-11: real security regression test files existed on
+        # disk but never actually ran"): this branch used to print the
+        # checker's own real findings (a test_*.py file missing from its
+        # package's __init__.py, so its tests silently never execute) and
+        # then fall through to running the suite anyway -- the exact
+        # "phantom coverage" risk that gate exists to catch, undone by
+        # never actually halting on it. Both real instances found that day
+        # (ham_events/ham_testing) had a genuine, previously-unknown live
+        # bug once wired up. Halt like the burn-list gate above, not skip
+        # like the anchor-scan gate below -- this checker has no
+        # baseline/ratchet mechanism to grandfather a pre-existing backlog
+        # into, and none currently exists (confirmed clean on both real
+        # repos before this fix landed).
+        print("🛑 Halting due to init-imports violations.")
+        if extractor:
+            extractor.aborted = True
+        sys.exit(1)
     else:
         print(res_init.stdout)
 
