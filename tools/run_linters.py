@@ -568,14 +568,14 @@ def main():
     # test_run_linters.py, etc.), not all of them start with "check_", so
     # a `test_check_*` glob would silently skip most future suites -- the
     # exact failure this step exists to prevent, recurring by naming
-    # accident. tools/test.py, tools/test_cf.py, and tools/test_mcp_server.py
-    # all also match a bare `test_*.py` glob, but are Odoo test-runner/
-    # MCP-server launcher scripts, not suites -- collecting them would
-    # execute their own module-level Odoo-launching code instead of
-    # running unit tests, so they're the ones excluded by name. Always the
-    # full glob, run once, not scoped to `targets`: a checker's own logic
-    # bug isn't a property of any one target module.
-    _RUNNER_SCRIPTS_NOT_SUITES = {"test.py", "test_cf.py", "test_mcp_server.py"}
+    # accident. tools/test.py and tools/test_mcp_server.py also match a
+    # bare `test_*.py` glob, but are Odoo test-runner/MCP-server launcher
+    # scripts, not suites -- collecting them would execute their own
+    # module-level Odoo-launching code instead of running unit tests, so
+    # they're the ones excluded by name. Always the full glob, run once,
+    # not scoped to `targets`: a checker's own logic bug isn't a property
+    # of any one target module.
+    _RUNNER_SCRIPTS_NOT_SUITES = {"test.py", "test_mcp_server.py"}
     tool_test_files = sorted(
         f
         for f in glob.glob(os.path.join(dir_path, "tools", "test_*.py"))

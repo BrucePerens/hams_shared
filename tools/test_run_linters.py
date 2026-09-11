@@ -16,8 +16,8 @@ to lock in the specific regression this step exists to prevent: a
 future edit narrowing the glob back to `test_check_*.py` (which is
 exactly how the "nothing runs these tests" bug happened the first
 time), or removing a runner script from the exclusion set so pytest
-tries to collect test.py/test_cf.py/test_mcp_server.py and executes
-their module-level Odoo-launching code instead of running unit tests.
+tries to collect test.py/test_mcp_server.py and executes their
+module-level Odoo-launching code instead of running unit tests.
 """
 
 import glob
@@ -91,17 +91,12 @@ class DiscoverySnippetTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "tools", "test.py"))
         self.assertEqual(self._run_snippet(), [])
 
-    def test_test_cf_py_the_odoo_runner_script_is_excluded(self):
-        _write(os.path.join(self.tmp, "tools", "test_cf.py"))
-        self.assertEqual(self._run_snippet(), [])
-
     def test_test_mcp_server_py_is_excluded(self):
         _write(os.path.join(self.tmp, "tools", "test_mcp_server.py"))
         self.assertEqual(self._run_snippet(), [])
 
     def test_a_mix_of_runner_scripts_and_real_suites_keeps_only_the_suites_sorted(self):
         _write(os.path.join(self.tmp, "tools", "test.py"))
-        _write(os.path.join(self.tmp, "tools", "test_cf.py"))
         _write(os.path.join(self.tmp, "tools", "test_mcp_server.py"))
         _write(os.path.join(self.tmp, "tools", "test_zzz_last.py"))
         _write(os.path.join(self.tmp, "tools", "test_aaa_first.py"))
