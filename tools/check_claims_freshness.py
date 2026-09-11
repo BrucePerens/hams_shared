@@ -133,6 +133,28 @@ def check_claims(repo_root):
     for claim_path in _git_tracked_files(repo_root, ".md"):
         if f"{os.sep}claims{os.sep}" not in claim_path:
             continue
+        # A README.md inside a claims/ directory is a deliberate index/explanation file for the
+        # directory itself (e.g. hardware/claims/README.md: "reviewed, out of scope for the
+        # bug-hunt campaign"), not a claim -- it carries no frontmatter because it isn't one.
+        # Confirmed live: this was a real false positive ("missing required frontmatter") against
+        # the real hams_com repo before this exclusion.
+        if os.path.basename(claim_path) == "README.md":
+            continue
+        # The centralized claims store (docs/bug_hunt_claims/<repo>/...) documents code that
+        # lives in a DIFFERENT git repo (hams_open/hams_shared claims, centralized into hams_com
+        # per the bug-hunt skill's own store policy) -- this checker's whole freshness model
+        # assumes the claim and the anchored code share one repo root (`build_anchor_hash_index`
+        # only ever scans `repo_root`'s own git-tracked .py files), so it can never find a
+        # centralized claim's real anchor and would otherwise always report it "orphaned". The
+        # bug-hunt skill's own docs already name the correct tool for these:
+        # `check_claims.py --source-root <other-repo>`. Confirmed live: before this exclusion,
+        # running this checker against the real hams_com repo for the first time ever (it has
+        # never been wired into run_linters.py -- ADR 0091 names this as a real, tracked
+        # follow-on) produced over 1100 false-positive "orphaned claim" reports, the large
+        # majority of them centralized-store claims for hams_open/hams_shared code.
+        rel = os.path.relpath(claim_path, repo_root)
+        if rel.split(os.sep)[:2] == ["docs", "bug_hunt_claims"]:
+            continue
         try:
             with open(claim_path, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -145,11 +167,25 @@ def check_claims(repo_root):
             )
             continue
 
+        recorded = fields["code_hash"]
+        if recorded.strip().lower().startswith("not computable"):
+            # Established convention (already in active use across the real repo -- every
+            # Rust-anchored claim in daemons/*/claims/, plus claims for genuinely un-anchored
+            # Python functions) for a claim this checker structurally cannot verify yet: Python-
+            # only anchor hashing (per this file's own docstring, "JS and Rust claims support are
+            # real, named, not-yet-done follow-ons") has no way to resolve a Rust/JS anchor, and a
+            # function with no real `[@ANCHOR:]` at all has nothing to hash regardless. Before
+            # this check, such a claim always fell through to the "anchor not found" branch below
+            # and was reported as "orphaned" -- a false positive, and a misleading one (implying
+            # the anchor was deleted, when it was simply never Python). Confirmed live: ALL 344 of
+            # the real hams_com repo's post-centralized-store-fix "orphaned claim" findings used
+            # this exact convention, none of them genuinely orphaned.
+            continue
+
         if anchor_hashes is None:
             anchor_hashes = build_anchor_hash_index(repo_root)
 
         anchor = fields["anchor"]
-        recorded = fields["code_hash"]
         current = anchor_hashes.get(va._clean(anchor))
         if current is None:
             problems.append(
