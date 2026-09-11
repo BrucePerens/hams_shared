@@ -1959,6 +1959,15 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         is_reviewed_stdlib_feature_check = (
                             self.filepath.replace("\\", "/").endswith("ingest/daemon_utils.py")
                             and self.current_method == "try_enable_line_buffering"
+                        ) or (
+                            # Same pattern, second reviewed home: response.geturl() isn't
+                            # guaranteed on every urlopen()-like object (this module's own
+                            # tests use plain io.BytesIO-based response doubles), not this
+                            # codebase's own model/schema uncertainty.
+                            self.filepath.replace("\\", "/").endswith(
+                                "binary_downloader/models/binary_utils.py"
+                            )
+                            and self.current_method == "_safe_response_geturl"
                         )
                         if "burn-ignore-introspection" not in line_content and not is_reviewed_stdlib_feature_check:
                             self.add_error(
