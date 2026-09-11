@@ -73,7 +73,13 @@ def main():
                                     file_to_bundles.setdefault(asset_path, []).append(
                                         bundle_name
                                     )
-            except (SyntaxError, ValueError, OSError) as e:
+            except (SyntaxError, ValueError, OSError, TypeError, MemoryError, RecursionError) as e:
+                # ast.literal_eval() does NOT limit its failure modes to ValueError -- e.g. a
+                # syntactically-valid-but-unhashable dict key (a list/dict/set literal used as a
+                # key) raises TypeError instead. check_burn_list.py's own manifest-parsing code
+                # documents this same real failure mode; matched here so one malformed-but-
+                # parseable manifest anywhere in the tree is reported instead of crashing the
+                # whole process with a raw traceback.
                 print(f"❌ ERROR parsing {manifest_path}: {e}")
                 errors_found = True
 

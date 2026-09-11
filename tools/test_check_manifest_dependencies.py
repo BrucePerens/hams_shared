@@ -132,6 +132,28 @@ class CheckManifestDependenciesTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("ERROR parsing", out)
 
+    def test_a_manifest_that_crashes_literal_eval_with_typeerror_is_reported_not_a_traceback(
+        self,
+    ):
+        """ast.literal_eval() does not limit its failure modes to ValueError -- an unhashable
+        dict key (syntactically valid Python, e.g. a list literal used as a key) makes it raise
+        TypeError instead (confirmed directly: `ast.literal_eval(ast.parse("{[1,2]: 3}",
+        mode="eval").body)` raises TypeError, not ValueError). check_burn_list.py's own
+        manifest-parsing code documents this exact real failure mode and catches TypeError
+        (plus MemoryError/RecursionError) alongside ValueError for it; this script's own
+        `except (SyntaxError, ValueError, OSError)` around the same call was narrower and let a
+        TypeError escape uncaught -- crashing the whole process with a raw Python traceback
+        instead of the intended 'ERROR parsing' diagnostic, on one malformed-but-parseable
+        manifest anywhere in the tree."""
+        _write(
+            os.path.join(self.tmp, "weird_mod", "__manifest__.py"),
+            "{'depends': [], 'description': 'x', 'weird': {[1, 2]: 3}}\n",
+        )
+        code, out = _run(self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("ERROR parsing", out)
+        self.assertNotIn("Traceback", out)
+
     def test_a_test_bundle_file_importing_a_backend_bundled_utility_is_fine(self):
         # web.assets_backend is itself in the allowed set for a test-bundle
         # import (test_bundles | prod_bundles) -- only an import of

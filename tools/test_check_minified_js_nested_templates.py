@@ -169,6 +169,26 @@ class CollectMinifiedJsAssetsTests(unittest.TestCase):
         result = chk.collect_minified_js_assets(self.tmp)
         self.assertEqual(result, {})
 
+    def test_a_manifest_dict_value_that_crashes_literal_eval_with_typeerror_is_skipped_not_fatal(
+        self,
+    ):
+        """ast.literal_eval() does not limit its failure modes to ValueError -- an unhashable
+        dict key (syntactically valid Python, e.g. a list literal used as a key) makes
+        literal_eval raise TypeError instead (confirmed directly: `ast.literal_eval(ast.parse(
+        "{[1,2]: 3}", mode="eval").body)` raises `TypeError: unhashable type: 'list'`, not
+        ValueError). check_burn_list.py's own manifest-parsing code documents this exact
+        real failure mode and catches (SyntaxError, OSError, ValueError, TypeError, MemoryError,
+        RecursionError) for it -- this checker's own `except ValueError: continue` around
+        the same ast.literal_eval() call is narrower and lets a TypeError propagate uncaught,
+        crashing the whole checker process on one malformed-but-parseable manifest anywhere in
+        the tree."""
+        self._write(
+            os.path.join(self.tmp, "mod_a", "__manifest__.py"),
+            "{'assets': {}, 'weird': {[1, 2]: 3}}\n",
+        )
+        result = chk.collect_minified_js_assets(self.tmp)
+        self.assertEqual(result, {})
+
 
 class ResolveAssetPathTests(unittest.TestCase):
     def setUp(self):
