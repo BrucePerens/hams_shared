@@ -104,6 +104,23 @@ class RunCmdHangRecoveryTests(unittest.TestCase):
             rc = _test_runner.run_cmd(["sleep", "3600"], extractor=extractor)
         self.assertEqual(rc, 1)
 
+    def test_the_lifetime_cap_alone_also_bounds_the_loop(self):
+        # A real hang/kill-chrome cycle might not stay perfectly silent --
+        # killing chrome could itself provoke a line or two of real output
+        # (a websocket/CDP error, a tour-teardown message) each time, which
+        # would reset the CONSECUTIVE counter to 0 forever while the run is,
+        # in substance, still stuck in the same cycle. This test proves the
+        # separate lifetime cap (RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS)
+        # bounds the loop on its own even when the consecutive cap is set
+        # high enough that it would never fire by itself.
+        with patch.object(
+            _test_runner, "RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS", 1000
+        ), patch.object(
+            _test_runner, "RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS", 1
+        ), patch("time.time", side_effect=self._fake_clock()):
+            rc = _test_runner.run_cmd(["sleep", "3600"])
+        self.assertEqual(rc, 1)
+
 
 class MainModeDispatchTests(unittest.TestCase):
     """--mode has accepted "xml" and "downloads" as valid argparse choices

@@ -757,6 +757,10 @@ def robust_reap(pid):
 # a small value instead of waiting through several real 60-second no-output
 # windows to exercise the bound.
 RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS = 5
+# Lifetime (never reset by intervening real output) cap for the same loop --
+# see the comment on total_hang_recovery_attempts inside run_cmd for why this
+# exists alongside the consecutive-only cap above.
+RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS = 10
 
 
 def run_cmd(cmd, extractor=None, cwd=None, env=None):
@@ -836,8 +840,20 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
     # `RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS` (module-level, above) bounds
     # that: after this many consecutive un-hang attempts with no real
     # output in between, actually reap the process and report failure
-    # instead of retrying indefinitely.
+    # instead of retrying indefinitely. A SEPARATE lifetime counter
+    # (`total_hang_recovery_attempts`, never reset) also bounds the case
+    # where killing chrome itself provokes a line or two of real output
+    # (a websocket/CDP error, a tour-teardown message) each time -- that
+    # would reset the consecutive counter to 0 forever while the run is
+    # still, in substance, stuck in the same hang/kill/hang cycle. Not
+    # confirmed either way against a real transcript (no logged
+    # "[!] TEST TIMEOUT" -> resumed-output sequence was found in this
+    # project's own night_shift_history.md/night_shift_todo.md to settle
+    # it), so this is defense-in-depth against an assumption the
+    # consecutive-only counter alone would silently depend on, not a
+    # confirmed second bug.
     hang_recovery_attempts = 0
+    total_hang_recovery_attempts = 0
     q = queue.Queue()
     last_output_time = time.time()
 
@@ -899,20 +915,31 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                     and (time.time() - last_output_time > 60.0)
                 ):
                     hang_recovery_attempts += 1
+                    total_hang_recovery_attempts += 1
 
-                    if hang_recovery_attempts > RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS:
+                    if (
+                        hang_recovery_attempts > RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS
+                        or total_hang_recovery_attempts
+                        > RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS
+                    ):
                         # Bug-hunt fix (2026-09-10): un-hang-by-killing-chrome
-                        # has already been tried RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS
-                        # times with zero real output in between -- whatever
-                        # is stuck is not (or is no longer) a hung chrome tab,
-                        # so retrying the same recovery again would just spin
-                        # forever. Actually terminate the test process and
-                        # report failure instead of looping indefinitely.
+                        # has already been tried too many times -- either
+                        # RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS times in a row
+                        # with zero real output in between (whatever is stuck
+                        # is not, or is no longer, a hung chrome tab), or
+                        # RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS times total
+                        # across this one run even with occasional output
+                        # resetting the consecutive count (a run stuck in a
+                        # repeating hang/kill-chrome/brief-output/hang cycle is
+                        # not healthy just because the counter above never hit
+                        # its own consecutive threshold). Actually terminate
+                        # the test process and report failure instead of
+                        # retrying/looping indefinitely.
                         print(
-                            f"\n[!] TEST TIMEOUT: still no output after "
-                            f"{hang_recovery_attempts - 1} un-hang attempt(s) "
-                            "(killing chrome did not help). Force-killing the "
-                            "test process...\n"
+                            f"\n[!] TEST TIMEOUT: still no sustained output after "
+                            f"{total_hang_recovery_attempts} total un-hang attempt(s) "
+                            "this run (killing chrome did not help). Force-killing "
+                            "the test process...\n"
                         )
                         if extractor:
                             extractor.capturing = True
