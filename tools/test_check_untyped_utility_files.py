@@ -99,6 +99,19 @@ class DefinesOdooModelClassTests(unittest.TestCase):
     def test_false_for_a_nonexistent_file(self):
         self.assertFalse(chk.defines_odoo_model_class(os.path.join(self.tmp, "does_not_exist.py")))
 
+    def test_false_and_no_crash_for_invalid_utf8_bytes(self):
+        """Real gap found reviewing this checker: `except OSError:` around the file read does
+        NOT also catch UnicodeDecodeError -- UnicodeDecodeError is a ValueError subclass, not an
+        OSError subclass, in Python 3. Every sibling checker in this tree pairs
+        `except (OSError, UnicodeDecodeError):` for exactly this reason; this file's own
+        `except OSError:` alone would let an invalid-encoding .py file crash the whole checker
+        (collect_candidates calls this on every real .py file under daemons/ and ingest/ before
+        ever running mypy)."""
+        p = os.path.join(self.tmp, "f.py")
+        with open(p, "wb") as f:
+            f.write(b"# -*- coding: utf-8 -*-\nx = '\xff\xfe broken bytes'\n")
+        self.assertFalse(chk.defines_odoo_model_class(p))
+
 
 class CollectCandidatesTests(unittest.TestCase):
     def setUp(self):
