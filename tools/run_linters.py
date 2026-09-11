@@ -1123,6 +1123,30 @@ def main():
                 print(res.stderr, end="")
             linters_failed = True
 
+    # 46. check_js_test_hook_gating -- ADR 0094: a client-shipped JS file's TEST_*-prefixed
+    # postMessage/event branches must be gated behind a real, server-substituted
+    # TEST_HOOKS_ENABLED flag (a deliberate, per-deployment ir.config_parameter, never Odoo's
+    # own test_enable -- that shape of test/prod branching is banned, see
+    # ham_repeater_dir/models/ham_repeater_import.py's own comment). Found live: both real
+    # Service Workers (sw.js, shack_sw.js) shipped several such hooks completely unguarded in
+    # every production deployment before this ADR. Real AST parse via acorn
+    # (js_test_hook_gating_scan.cjs), same split-responsibility pattern as steps 39/40. No
+    # baseline/ratchet: a brand-new rule with exactly two known real instances at introduction,
+    # both already fixed -- any violation found is real and new, not grandfathered.
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_js_test_hook_gating.py"), repo_root],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

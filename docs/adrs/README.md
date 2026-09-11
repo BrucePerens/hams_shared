@@ -61,6 +61,8 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   Every function must carry a real test anchor (documentation is routed by audience -- README.md for infrastructure, docs/stories or data/documentation.html for user-visible features -- never exempted); a CI-enforced ratchet (`check_function_test_anchors.py`, run_linters.py step 38) blocks new unanchored code starting now, with the real pre-existing backlog (1193 functions, both repos) grandfathered into a committed baseline pending the full sweep.
 * ADR 0091: Function-Level Claims Directory and Bug-Hunt Integration -- **relocated to
   `hams_com/docs/adrs/0091_function_level_claims_and_bug_hunt_integration.md`** (2026-09-09).
+* [ADR 0094: Server-Gated Test-Only Hooks in Client-Shipped JavaScript](0094_js_test_only_hook_gating.md)
+  Mandates that a `TEST_*`-prefixed postMessage/event hook in client-shipped JS be gated behind a real, per-deployment `ir.config_parameter` substituted server-side into a `TEST_HOOKS_ENABLED` constant -- never Odoo's own `test_enable` flag, which is banned for this purpose. Enforced by a new CI linter (`check_js_test_hook_gating.py`, run_linters.py step 46) via a real acorn AST scan, no baseline/ratchet needed at introduction.
   `hams_shared` is a public repo; the bug-hunt review method itself (the claim-then-verify
   technique, the accumulated bug-class checklist, the cost-tiered model-routing strategy) is a
   competitive/trade-secret asset and doesn't belong here. What DOES stay in this public repo and
