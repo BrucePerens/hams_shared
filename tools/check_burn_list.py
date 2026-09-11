@@ -1652,7 +1652,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     )
                 is_catch_all = handler.type is None or (
                     isinstance(handler.type, ast.Name)
-                    and handler.type.id == "Exception"
+                    and handler.type.id in ("Exception", "BaseException")
                 )
                 if is_catch_all:
                     handler_line = getattr(handler, "lineno", node.lineno)
@@ -1660,7 +1660,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     if "audit-ignore-catch-all" not in line_content:
                         self.add_error(
                             handler_line,
-                            "[!] DIAGNOSTIC FOR AI: Catch-all exceptions (bare or Exception) are forbidden. Target specific exceptions (e.g., KeyError, ValueError). Use # audit-ignore-catch-all ONLY where an operation must continue past failure.",
+                            "[!] DIAGNOSTIC FOR AI: Catch-all exceptions (bare, Exception, or BaseException) are forbidden. Target specific exceptions (e.g., KeyError, ValueError). BaseException also swallows KeyboardInterrupt/SystemExit/GeneratorExit, which must never be caught. Use # audit-ignore-catch-all ONLY where an operation must continue past failure.",
                         )
                     else:
                         has_logging = any(
@@ -1669,10 +1669,20 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             in ("warning", "error", "critical", "exception", "info")
                             for child in ast.walk(handler)
                         )
-                        if not has_logging:
+                        # A handler that unconditionally re-raises (bare `raise`, or `raise
+                        # NewError(...) from e`) never swallows the traceback -- it propagates
+                        # to whatever caller-side logging already exists -- so it's exempt from
+                        # the "must log" requirement below, which exists specifically to catch
+                        # swallowed tracebacks. This is the standard "clean up on ANY exception
+                        # (including KeyboardInterrupt/SystemExit), then re-raise" idiom (e.g.
+                        # closing a file descriptor before propagating), not a silent failure.
+                        has_reraise = any(
+                            isinstance(child, ast.Raise) for child in ast.walk(handler)
+                        )
+                        if not has_logging and not has_reraise:
                             self.add_error(
                                 handler_line,
-                                "CRITICAL SILENT FAILURE: Even with audit-ignore-catch-all, the exception block must contain a logging call to prevent swallowed tracebacks.",
+                                "CRITICAL SILENT FAILURE: Even with audit-ignore-catch-all, the exception block must contain a logging call (or unconditionally re-raise) to prevent swallowed tracebacks.",
                             )
             self.generic_visit(node)
 

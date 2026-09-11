@@ -1302,6 +1302,63 @@ def test_get_service_uid_escape_hatch_still_recognized_when_the_call_is_line_wra
     assert not any("_get_service_uid MUST NOT be wrapped" in e for e in errors)
 
 
+def test_except_base_exception_is_forbidden_without_the_audit_tag():
+    # Bug-hunt fix, 2026-09-11: the catch-all check only ever matched bare `except:` and
+    # `except Exception`, missing `except BaseException` entirely -- a strictly WORSE
+    # catch-all, since it also swallows KeyboardInterrupt/SystemExit/GeneratorExit, none of
+    # which `except Exception` would ever catch. A real, live, unmarked instance of exactly
+    # this shape was found in ics_forms/models/ics_form_record.py before this fix.
+    source = "try:\n    risky()\nexcept BaseException:\n    handle_it()\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Catch-all exceptions" in e for e in errors)
+
+
+def test_a_base_exception_catch_all_with_the_audit_tag_and_logging_is_allowed():
+    source = (
+        "try:\n"
+        "    risky()\n"
+        "except BaseException as e:  # audit-ignore-catch-all\n"
+        "    logger.warning('failed: %s', e)\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("Catch-all exceptions" in e for e in errors)
+    assert not any("SILENT FAILURE" in e for e in errors)
+
+
+def test_a_catch_all_that_unconditionally_reraises_is_exempt_from_the_logging_requirement():
+    # Bug-hunt fix, 2026-09-11: a handler that always re-raises (the standard "clean up on
+    # ANY exception -- including KeyboardInterrupt/SystemExit -- then propagate" idiom, e.g.
+    # closing a file descriptor before the caller sees the original exception) never swallows
+    # a traceback, so it shouldn't need a logging call of its own -- the exception still
+    # surfaces to whatever caller-side logging already exists. Real, live instances of exactly
+    # this shape (BaseException + unconditional bare raise) were found in
+    # ham_relay_bridge/models/{device_command_authority,noise_attestation,
+    # subcarrier_attestation}.py before this fix.
+    source = (
+        "try:\n"
+        "    risky()\n"
+        "except BaseException:  # audit-ignore-catch-all\n"
+        "    cleanup()\n"
+        "    raise\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("Catch-all exceptions" in e for e in errors)
+    assert not any("SILENT FAILURE" in e for e in errors)
+
+
+def test_a_catch_all_that_neither_logs_nor_reraises_is_still_a_silent_failure():
+    # The re-raise exemption above must not become a blanket exemption for any catch-all --
+    # one that neither logs nor re-raises really does swallow the exception silently.
+    source = (
+        "try:\n"
+        "    risky()\n"
+        "except Exception:  # audit-ignore-catch-all\n"
+        "    cleanup()\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("SILENT FAILURE" in e for e in errors)
+
+
 def test_catch_all_with_the_audit_tag_placed_inside_the_handler_body_is_still_recognized():
     # Same reflow-robustness fix, the ExceptHandler case: the tag doesn't
     # have to sit on the `except Exception:` line itself any more, just
