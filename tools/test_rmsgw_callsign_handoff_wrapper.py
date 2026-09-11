@@ -92,6 +92,34 @@ class RmsgwCallsignHandoffWrapperTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(os.path.exists(self._argv_capture_file))
 
+    def test_a_purely_numeric_line_is_rejected_and_rmsgw_is_never_invoked(self):
+        # Real bug found 2026-09-10: the previous callsign regex did not actually require at
+        # least one letter, so a purely numeric line like this one incorrectly passed validation
+        # and would have been handed straight to rmsgw as a "usercall" -- despite no real amateur
+        # radio callsign ever being all-digits. Confirmed to FAIL against the pre-fix source (the
+        # old regex matched this and rmsgw WAS invoked).
+        result = self._run_wrapper("N0CALL-10", "radio", "12345678\r\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(os.path.exists(self._argv_capture_file))
+
+    def test_a_purely_alphabetic_line_is_rejected_and_rmsgw_is_never_invoked(self):
+        # The other half of the same real bug: the previous regex also did not require at least
+        # one digit, so a purely alphabetic line like this one incorrectly passed too -- no real
+        # amateur radio callsign is ever all-letters either. Confirmed to FAIL against the pre-fix
+        # source the same way.
+        result = self._run_wrapper("N0CALL-10", "radio", "ABCDEFGH\r\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(os.path.exists(self._argv_capture_file))
+
+    def test_a_real_uk_style_leading_digit_callsign_still_passes(self):
+        # Confirms the tightened regex didn't over-correct: a real UK-style callsign whose
+        # prefix itself starts with a digit must still be accepted.
+        result = self._run_wrapper("N0CALL-10", "radio", "2E0ABC\r\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with open(self._argv_capture_file) as f:
+            captured = f.read()
+        self.assertIn("2E0ABC", captured.splitlines())
+
     def test_missing_arguments_are_a_usage_error_and_rmsgw_is_never_invoked(self):
         result = self._run_wrapper("N0CALL-10", None, "N0CALL2\r\n")
         self.assertEqual(result.returncode, 2)
