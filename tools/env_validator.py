@@ -90,8 +90,18 @@ def check_gemini():
         print_warning("GEMINI", "GEMINI_API_KEY is not set. AI features will be disabled.")
         return
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-    req = urllib.request.Request(url, method="GET")
+    # Bug-hunt fix (2026-09-10, bug class 51: secret-in-url-or-log): the API
+    # key used to be carried in the URL's own query string
+    # (?key=<api_key>), a real exposure vector distinct from the request
+    # being HTTPS (any intermediate proxy/CDN access log records the full
+    # request URL, unlike headers, which most access-log formats omit).
+    # Empirically confirmed generativelanguage.googleapis.com accepts the
+    # key via the x-goog-api-key header identically to ?key= (same 400 for
+    # a bogus key either way, vs. 403 with neither) -- switched to the
+    # header, matching this bug class's own fix guidance ("pass credentials
+    # via a header ... never a query string").
+    url = "https://generativelanguage.googleapis.com/v1beta/models"
+    req = urllib.request.Request(url, method="GET", headers={"x-goog-api-key": api_key})
     try:
         with urllib.request.urlopen(req, timeout=5) as response:
             if response.status != 200:

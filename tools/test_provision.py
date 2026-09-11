@@ -98,6 +98,27 @@ class ProvisionRootElevationTests(ProvisionTestCase):
         self.run_provision([])
         mock_execvp.assert_not_called()
 
+    def test_re_exec_forwards_the_original_cli_arguments(self):
+        # Bug-hunt regression test (2026-09-10): before the fix, this
+        # re-exec silently dropped every one of the original process's own
+        # CLI arguments -- a non-root caller running
+        # `provision.py --force-reset` never actually got a force-reset,
+        # because the re-exec'd root process ran with no CLI args at all.
+        mock_execvp = self.safe_patch_object(os, "execvp")
+        self.safe_patch_object(os, "geteuid", return_value=1000)
+        self.safe_patch_object(
+            sys, "argv", ["provision.py", "--force-reset", "--test"]
+        )
+        self.safe_patch_object(provision, "infrastructure", MagicMock())
+        self.safe_patch_object(provision, "subprocess", MagicMock())
+        self.safe_patch("os.chdir")
+        with self.assertRaises(SystemExit):
+            provision.provision()
+        mock_execvp.assert_called_once()
+        args = mock_execvp.call_args[0][1]
+        self.assertIn("--force-reset", args)
+        self.assertIn("--test", args)
+
 
 class ProvisionOsGatingTests(ProvisionTestCase):
     def test_refuses_to_proceed_on_an_unsupported_os(self):
@@ -174,6 +195,29 @@ class ProvisionForceResetTests(ProvisionTestCase):
         self.assertTrue(
             any("my_custom_db" in cmd for cmd in commands_run),
             f"expected the real DB_NAME to reach dropdb, got: {commands_run}",
+        )
+
+    def test_force_reset_refuses_an_unsafe_db_name_instead_of_running_rm_rf(self):
+        # Bug-hunt regression test (2026-09-10): DB_NAME feeds directly
+        # into an `rm -rf` filestore path with no validation -- a
+        # traversal-shaped value (e.g. containing "../") could point that
+        # deletion outside the intended filestore directory. Confirmed
+        # this reproduces against the pre-fix code (removing the new
+        # re.match() guard lets this proceed straight to subprocess.run).
+        self.safe_patch_dict(os.environ, {"DB_NAME": "../../etc"})
+        self.safe_patch_object(os, "geteuid", return_value=0)
+        self.safe_patch_object(sys, "argv", ["provision.py", "--force-reset"])
+        mock_infra = self.safe_patch_object(provision, "infrastructure", MagicMock())
+        mock_infra.get_os_identifier.return_value = "debian"
+        mock_subprocess = self.safe_patch_object(provision, "subprocess", MagicMock())
+        self.safe_patch("os.chdir")
+        with self.assertRaises(SystemExit) as ctx:
+            provision.provision()
+        self.assertEqual(ctx.exception.code, 1)
+        commands_run = [c.args[0] for c in mock_subprocess.run.call_args_list]
+        self.assertFalse(
+            any(cmd[:2] == ["rm", "-rf"] for cmd in commands_run),
+            f"must never reach rm -rf with an unvalidated DB_NAME, got: {commands_run}",
         )
 
 
