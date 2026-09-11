@@ -4122,13 +4122,22 @@ def _verify_test_ast(
                 found_trigger = True
             if func_attr in ("send_mail", "message_post"):
                 found_mail = True
-            if func_attr in (
-                "assertRaises",
-                "assertRaisesRegex",
-                "assertFalse",
-                "assertTrue",
-            ):
+            if func_attr in ("assertRaises", "assertRaisesRegex"):
                 found_security_check = True
+            if func_attr in ("assertFalse", "assertTrue"):
+                # Bug-hunt fix, 2026-09-11: burn-ignore-financial used to be discharged by
+                # ANY assertTrue/assertFalse call, including a vacuous, always-true literal
+                # (assertTrue(True), assertFalse(False)) that asserts nothing real about
+                # financial data protection at all -- a tag anyone could satisfy with a
+                # tautology instead of an actual security check. Requiring the asserted
+                # expression itself (unittest's own API: assertTrue(expr, msg=None), always
+                # the first positional arg) to not be a bare literal constant closes the
+                # easiest version of this hole -- it can't catch a non-constant but still
+                # trivially-true expression (e.g. `assertTrue(1 == 1)`), which is a deeper,
+                # real-dataflow problem this shallow AST check was never going to solve, but
+                # it does close the cheapest, most likely-to-be-copy-pasted evasion.
+                if node.args and not isinstance(node.args[0], ast.Constant):
+                    found_security_check = True
             if func_attr in ("object", "safe_patch_object"):
                 for arg in getattr(node, "args", []):
                     if isinstance(arg, ast.Constant) and arg.value in (

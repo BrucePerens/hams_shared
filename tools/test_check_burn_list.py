@@ -2728,6 +2728,45 @@ def test_verify_test_ast_burn_ignore_financial_valid_with_assert_raises():
     assert result == (0, 0)
 
 
+def test_verify_test_ast_burn_ignore_financial_valid_with_assert_true_on_a_real_expression():
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_financial_blocked(self):\n"
+        "        # [@ANCHOR: COMM_test_financial_blocked]\n"
+        "        self.assertTrue(record.balance == 0)\n"
+    )
+    req = {"anchor": "test_financial_blocked", "type": "burn-ignore-financial"}
+    result = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert result == (0, 0)
+
+
+def test_verify_test_ast_burn_ignore_financial_invalid_with_a_vacuous_assert_true():
+    # Bug-hunt fix, 2026-09-11: burn-ignore-financial used to be discharged by ANY
+    # assertTrue/assertFalse call, including a vacuous literal that asserts nothing real
+    # about financial data protection at all -- the cheapest possible evasion of this tag.
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_financial_blocked(self):\n"
+        "        # [@ANCHOR: COMM_test_financial_blocked]\n"
+        "        self.assertTrue(True)\n"
+    )
+    req = {"anchor": "test_financial_blocked", "type": "burn-ignore-financial"}
+    errors, total = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert errors == 1 and total == 1
+
+
+def test_verify_test_ast_burn_ignore_financial_invalid_with_a_vacuous_assert_false():
+    target_content = (
+        "class FooTests(TestCase):\n"
+        "    def test_financial_blocked(self):\n"
+        "        # [@ANCHOR: COMM_test_financial_blocked]\n"
+        "        self.assertFalse(False)\n"
+    )
+    req = {"anchor": "test_financial_blocked", "type": "burn-ignore-financial"}
+    errors, total = _verify_test_ast(req, target_content, "test_foo.py", 0, 0)
+    assert errors == 1 and total == 1
+
+
 def test_verify_test_ast_loop_evasion_still_caught_for_get_view():
     # Bug-hunt regression test, 2026-09-11: pre-existing coverage for the loop-evasion check's
     # original two names (get_view/url_open) -- confirms the widened call-name tuple didn't
