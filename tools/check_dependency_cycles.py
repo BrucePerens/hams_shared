@@ -103,14 +103,24 @@ def _build_graph(roots):
             for node in ast.walk(tree):
                 if isinstance(node, ast.Dict):
                     for key, value in zip(node.keys, node.values):
+                        # `.elts` only exists on ast.List/ast.Tuple -- a manifest referencing a
+                        # variable instead of a literal list ('depends': SOME_DEPS_VAR) is
+                        # syntactically valid Python (ast.parse's own SyntaxError guard doesn't
+                        # catch it), making `value` some other node type with no `.elts` at all.
+                        # Guard explicitly rather than let AttributeError crash the whole checker
+                        # on one such manifest.
                         if isinstance(key, ast.Constant) and key.value == "depends":
-                            graph[mod] = [
-                                e.value for e in value.elts if isinstance(e, ast.Constant)
-                            ]
+                            graph[mod] = (
+                                [e.value for e in value.elts if isinstance(e, ast.Constant)]
+                                if isinstance(value, (ast.List, ast.Tuple))
+                                else []
+                            )
                         elif isinstance(key, ast.Constant) and key.value == "depends_cycle":
-                            depends_cycle[mod] = [
-                                e.value for e in value.elts if isinstance(e, ast.Constant)
-                            ]
+                            depends_cycle[mod] = (
+                                [e.value for e in value.elts if isinstance(e, ast.Constant)]
+                                if isinstance(value, (ast.List, ast.Tuple))
+                                else []
+                            )
                     if mod in graph:
                         break
     return graph, depends_cycle

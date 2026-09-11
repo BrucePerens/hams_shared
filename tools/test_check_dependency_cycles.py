@@ -75,6 +75,21 @@ class BuildGraphTests(unittest.TestCase):
         graph, _ = cdc._build_graph([self.repo])
         self.assertEqual(graph, {})
 
+    def test_a_depends_value_that_is_not_a_list_or_tuple_literal_does_not_crash(self):
+        """Real gap found reviewing this checker: `graph[mod] = [e.value for e in value.elts if
+        ...]` accesses `value.elts` unconditionally once a 'depends' key is found -- but `.elts`
+        only exists on ast.List/ast.Tuple nodes. A manifest referencing a variable instead of a
+        literal list ('depends': SOME_DEPS_VAR -- syntactically valid Python, so ast.parse's own
+        SyntaxError guard doesn't catch it) makes `value` an ast.Name node with no `.elts`
+        attribute at all, raising an uncaught AttributeError that crashes the whole checker (a
+        hard, blocking gate) on one such manifest anywhere across either repo."""
+        mod_dir = os.path.join(self.repo, "weird_mod")
+        os.makedirs(mod_dir)
+        with open(os.path.join(mod_dir, "__manifest__.py"), "w", encoding="utf-8") as f:
+            f.write("SOME_DEPS_VAR = ['base']\n{\n    'depends': SOME_DEPS_VAR,\n}\n")
+        graph, _ = cdc._build_graph([self.repo])
+        self.assertEqual(graph.get("weird_mod"), [])
+
     def test_does_not_descend_into_a_daemons_or_tools_directory(self):
         # Real repos keep a `daemons/` and `tools/` dir at the root that are
         # never Odoo modules; a manifest-shaped file placed under one must
