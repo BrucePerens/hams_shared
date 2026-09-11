@@ -38,9 +38,9 @@ import sys
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "tools", "radae"}
 
-_GROUP_RECORD_RE = re.compile(
-    r'<record\s+id="([^"]+)"\s+model="res\.groups"', re.IGNORECASE
-)
+_RECORD_TAG_RE = re.compile(r"<record\b[^>]*>", re.IGNORECASE | re.DOTALL)
+_ID_ATTR_RE = re.compile(r'\bid="([^"]+)"')
+_MODEL_GROUPS_ATTR_RE = re.compile(r'\bmodel="res\.groups"', re.IGNORECASE)
 
 
 def _resolve_repo_root(given_path):
@@ -139,12 +139,26 @@ def _same_module_group_refs(csv_path, module_name):
 
 
 def _defined_group_ids(xml_path):
+    """Finds every <record ...> tag defining a res.groups record, independent of attribute order
+    or any other attributes appearing between `id=` and `model=` -- a plain
+    `<record\\s+id="..."\\s+model="res\\.groups"` regex (this function's pre-fix version) hard-
+    codes id-then-model with nothing else in between, so a real, ordinary
+    `<record model="res.groups" id="...">` (or a third attribute like `name=` in between) is
+    silently never matched, making a genuinely-defined group look undefined to this checker --
+    a false positive on correct code for a hard, blocking gate."""
     try:
         with open(xml_path, "r", encoding="utf-8") as f:
             content = f.read()
     except OSError:
         return set()
-    return set(_GROUP_RECORD_RE.findall(content))
+    group_ids = set()
+    for tag in _RECORD_TAG_RE.findall(content):
+        if not _MODEL_GROUPS_ATTR_RE.search(tag):
+            continue
+        id_match = _ID_ATTR_RE.search(tag)
+        if id_match:
+            group_ids.add(id_match.group(1))
+    return group_ids
 
 
 def _check_module(module_name, module_dir, manifest_path):
