@@ -178,6 +178,38 @@ class CheckManifestDependenciesTests(unittest.TestCase):
         self.assertIn("'@mod_b'", out)
         self.assertIn("'@mod_c'", out)
 
+    def test_a_concurrent_sessions_claude_worktree_is_never_scanned(self):
+        """Real, live bug found reviewing this checker: neither of its two os.walk loops (the
+        manifest-mapping pass, the JS-import-scanning pass) excludes dot-directories or
+        ".claude" specifically. This project's own standing convention runs concurrent bug-hunt
+        dispatches in isolated git worktrees under ".claude/worktrees/<session>/" INSIDE the repo
+        root -- confirmed live: two other real, concurrently active sessions' own worktrees were
+        found sitting in the real repo root while this exact review was running. A concurrent
+        session's own in-progress, uncommitted manifest/JS changes (completely normal for work in
+        progress -- an undeclared dependency mid-refactor, say) would be reported as a MANIFEST
+        DEPENDENCY VIOLATION against the wrong repo entirely."""
+        self._manifest("mod_a", depends=[])
+        self._manifest("mod_b")
+        _write(
+            os.path.join(self.tmp, "mod_a", "static", "src", "js", "main.js"),
+            "import { thing } from '@mod_b/js/thing';\n",
+        )
+        # A concurrent session's own worktree sitting under .claude/worktrees/ should never be
+        # scanned at all, regardless of what it contains.
+        worktree_root = os.path.join(self.tmp, ".claude", "worktrees", "agent-other-session")
+        os.makedirs(os.path.join(worktree_root, "mod_c"), exist_ok=True)
+        _write(
+            os.path.join(worktree_root, "mod_c", "__manifest__.py"),
+            "{\n    'depends': [],\n    'description': 'x',\n}\n",
+        )
+        _write(
+            os.path.join(worktree_root, "mod_c", "static", "src", "js", "main.js"),
+            "import { thing } from '@mod_b/js/thing';\n",
+        )
+        code, out = _run(self.tmp)
+        self.assertEqual(code, 1, out)  # mod_a's own real violation still fires
+        self.assertNotIn("mod_c", out)  # the worktree copy is never scanned at all
+
     def test_a_manifest_that_crashes_literal_eval_with_typeerror_is_reported_not_a_traceback(
         self,
     ):
