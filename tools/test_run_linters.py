@@ -28,6 +28,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -244,6 +245,30 @@ class RunPerTargetCheckerTests(unittest.TestCase):
             sys.executable, dir_path, "check_shebang.py", [mod_a, mod_b]
         )
         self.assertFalse(any_failed)
+
+    def test_a_single_element_targets_list_makes_exactly_one_call_with_unchanged_argv(self):
+        # The docstring on `_run_per_target_checker` asserts, but this file's own tests never
+        # actually pinned down, that the common unscoped case (`targets == [repo_root]`, the
+        # shape every call site uses before any multi-module scoping is requested) "produces
+        # exactly one subprocess call with exactly the same argv as before" the refactor that
+        # introduced this helper. This is the single most-exercised invocation shape of all --
+        # a regression here (e.g. an accidental double-invocation, or an argv reordering) would
+        # hit every unscoped lint run silently. Mocks subprocess.run directly rather than
+        # exercising a real checker script, since the point here is call *shape*, not a real
+        # checker's own pass/fail behavior (already covered by the two tests above).
+        fake_result = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(
+            run_linters.subprocess, "run", return_value=fake_result
+        ) as mock_run:
+            any_failed = run_linters._run_per_target_checker(
+                "/usr/bin/python3", "/repo", "check_shebang.py", ["/repo"]
+            )
+        self.assertFalse(any_failed)
+        mock_run.assert_called_once_with(
+            ["/usr/bin/python3", os.path.join("/repo", "tools", "check_shebang.py"), "/repo"],
+            capture_output=True,
+            text=True,
+        )
 
 
 if __name__ == "__main__":
