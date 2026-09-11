@@ -20,6 +20,7 @@ file covers the smaller units that logic actually lives in.
 
 import builtins
 import os
+import shlex
 import shutil
 import tempfile
 import unittest
@@ -555,6 +556,134 @@ class LoadAndPromptEnvTests(_SafePatchTestCase):
         with patch("builtins.input", side_effect=AssertionError("must not prompt")):
             infra.load_and_prompt_env(env_vars, is_test=False)
         self.assertFalse(hasattr(infra, "getpass"))
+
+
+class CreateOdooRoleCmdTests(unittest.TestCase):
+    def test_a_single_quote_in_db_pass_does_not_reach_the_sql_text_unescaped(self):
+        # Regression test for a real SQL-injection bug: the prior code
+        # f-string-interpolated db_pass directly into
+        # `PASSWORD '{db_pass}'`, so a password containing a single quote
+        # broke out of the SQL string literal and injected arbitrary SQL,
+        # executed as the postgres superuser via `sudo -u postgres`.
+        malicious_pass = "x'; DROP TABLE pg_roles; --"
+        cmd = infra._create_odoo_role_cmd(malicious_pass)
+
+        sql_text = cmd[cmd.index("-c") + 1]
+        self.assertNotIn(malicious_pass, sql_text)
+        self.assertIn(":'db_pass'", sql_text)
+
+        # The raw value is instead passed via psql's own `-v` mechanism,
+        # which the -c SQL text references as `:'db_pass'` -- psql itself
+        # (not this code) applies SQL-literal quoting at expansion time.
+        v_value = cmd[cmd.index("-v") + 1]
+        self.assertEqual(v_value, f"db_pass={malicious_pass}")
+
+    def test_normal_password_still_produces_a_working_command_shape(self):
+        cmd = infra._create_odoo_role_cmd("normalPass123")
+        self.assertEqual(cmd[:4], ["sudo", "-u", "postgres", "psql"])
+        self.assertIn("db_pass=normalPass123", cmd)
+
+
+class DatabaseExistsAndOwnerTests(_SafePatchTestCase):
+    def test_database_exists_never_splices_db_name_into_a_shell_or_sql_string(self):
+        malicious_name = "x'; DROP DATABASE hams_prod; --"
+        mock_run = self.safe_patch_object(
+            infra.subprocess, "run",
+            return_value=MagicMock(returncode=0, stdout="1\n"),
+        )
+        result = infra._database_exists(malicious_name)
+        self.assertTrue(result)
+
+        cmd = mock_run.call_args[0][0]
+        # No shell is invoked at all (no "bash"/"-c" in the argv), and the
+        # SQL text itself never contains the raw malicious value.
+        self.assertNotIn("bash", cmd)
+        sql_text = cmd[cmd.index("-tAc") + 1]
+        self.assertNotIn(malicious_name, sql_text)
+        self.assertIn(":'db_name'", sql_text)
+
+    def test_create_database_if_missing_only_creates_when_absent(self):
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra, "_database_exists", return_value=True)
+        infra._create_database_if_missing(run_cmd, "hams_test")
+        run_cmd.assert_not_called()
+
+        self.safe_patch_object(infra, "_database_exists", return_value=False)
+        infra._create_database_if_missing(run_cmd, "hams_test")
+        run_cmd.assert_called_once_with(["sudo", "-u", "postgres", "createdb", "-O", "odoo", "hams_test"])
+
+    def test_alter_database_owner_never_splices_db_name_into_a_shell_or_sql_string(self):
+        malicious_name = 'x"; DROP DATABASE hams_prod; --'
+        run_cmd = MagicMock()
+        infra._alter_database_owner_to_odoo(run_cmd, malicious_name)
+
+        cmd = run_cmd.call_args[0][0]
+        self.assertNotIn("bash", cmd)
+        sql_text = cmd[cmd.index("-c") + 1]
+        self.assertNotIn(malicious_name, sql_text)
+        self.assertIn(':"db_name"', sql_text)
+        self.assertEqual(cmd[cmd.index("-v") + 1], f"db_name={malicious_name}")
+
+
+class RefuseUnsafeTestDbDropTests(unittest.TestCase):
+    def test_refuses_to_drop_the_well_known_prod_db_name(self):
+        # Regression test for a real destructive-operation bug:
+        # load_and_prompt_env() reads *.env files unconditionally (before
+        # the is_test branch even runs) and populates DB_NAME via
+        # setdefault, so a stale/shared /opt/hams/etc/db.env from a prior
+        # non-test provisioning run silently survives into a later
+        # is_test=True run. Without this guard, provision_environment's
+        # test-mode branch would run `dropdb --if-exists hams_prod`.
+        with self.assertRaisesRegex(RuntimeError, "hams_prod"):
+            infra._refuse_if_unsafe_test_db_drop("hams_prod")
+
+    def test_does_not_raise_for_an_ordinary_test_db_name(self):
+        infra._refuse_if_unsafe_test_db_drop("hams_test")  # must not raise
+        infra._refuse_if_unsafe_test_db_drop("some_custom_test_db")  # must not raise
+
+
+class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
+    def _run_with_dirs(self, hams_open_dir, hams_com_dir, run_cmd):
+        self.safe_patch_object(infra.os, "listdir", return_value=["ham_base"])
+        # Force at least one "module" so the function doesn't bail out
+        # early on "no custom modules found" -- both the repo dirs
+        # themselves and every module dir's own __manifest__.py must
+        # appear to exist.
+        self.safe_patch_object(
+            infra.os.path, "exists",
+            side_effect=lambda p: p.endswith("__manifest__.py") or p in (hams_com_dir, hams_open_dir),
+        )
+        self.safe_patch_object(infra.os.path, "isdir", return_value=True)
+        infra.initialize_odoo_database(run_cmd, hams_open_dir, hams_com_dir)
+
+    def test_a_single_quote_in_a_repo_dir_does_not_break_out_of_the_shell_quoting(self):
+        # Regression test for a real shell-injection bug: the prior code
+        # f-string-interpolated addons_path_str (built from hams_com_dir/
+        # hams_open_dir) directly into `bash -c "echo '...' >> ..."`; a
+        # single quote in either directory path broke out of the quoted
+        # echo argument and let arbitrary shell commands run as root via
+        # sudo.
+        malicious_dir = "/tmp/repo'; touch /tmp/PWNED; echo '"
+        run_cmd = MagicMock()
+        self._run_with_dirs(malicious_dir, "/tmp/hams_com", run_cmd)
+
+        addons_path_calls = [
+            c.args[0] for c in run_cmd.call_args_list
+            if len(c.args[0]) >= 3 and c.args[0][:2] == ["sudo", "bash"]
+            and "addons_path" in c.args[0][3]
+        ]
+        self.assertTrue(addons_path_calls, "expected an `addons_path` `sudo bash -c ...` call")
+        script = addons_path_calls[0][3]
+        # shlex.split must parse the echo's argument as a single, complete
+        # token containing the whole malicious path literally -- if the
+        # quoting were broken, shlex would either raise or split it into
+        # multiple tokens (the injected `touch` becoming its own command
+        # instead of inert text inside the echo).
+        parsed = shlex.split(script)
+        self.assertIn("echo", parsed)
+        echoed = parsed[parsed.index("echo") + 1]
+        self.assertIn(malicious_dir, echoed)
+        self.assertNotIn("touch", [t for t in parsed if t != echoed])
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ import grp
 import logging
 import os
 import pwd
+import shlex
 import shutil
 import subprocess
 import sys
@@ -3217,8 +3218,14 @@ def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
         
         run_cmd_func(["sudo", "sed", "-i", "/^addons_path/d", "/etc/odoo/odoo.conf"])
         run_cmd_func(["sudo", "sed", "-i", "/^workers/d", "/etc/odoo/odoo.conf"])
-        run_cmd_func(["sudo", "bash", "-c", f"echo 'addons_path = {addons_path_str}' >> /etc/odoo/odoo.conf"])
-        run_cmd_func(["sudo", "bash", "-c", f"echo 'workers = {workers}' >> /etc/odoo/odoo.conf"])
+        # addons_path_str is built from hams_com_dir/hams_open_dir (ultimately
+        # operator/REPO_ROOT-controlled paths, not fixed literals) -- passing
+        # it unescaped inside a `bash -c "echo '...'"` string let a single
+        # quote anywhere in either path break out of the quoted literal and
+        # inject arbitrary shell commands, run as root via sudo. shlex.quote()
+        # neutralizes that regardless of what characters the path contains.
+        run_cmd_func(["sudo", "bash", "-c", f"echo {shlex.quote(f'addons_path = {addons_path_str}')} >> /etc/odoo/odoo.conf"])
+        run_cmd_func(["sudo", "bash", "-c", f"echo {shlex.quote(f'workers = {workers}')} >> /etc/odoo/odoo.conf"])
     except Exception as e: # audit-ignore-catch-all
         _logger.warning("Failed to update odoo.conf: %s", e)
 
@@ -3526,6 +3533,114 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault("CLOUDFLARE_ZONE_ID", "none")
         env_vars.setdefault("CLOUDFLARE_TUNNEL_TOKEN", "none")
 
+
+def _create_odoo_role_cmd(db_pass):
+    """
+    Builds the argv for a `psql -c` call that creates the `odoo` PostgreSQL
+    role with the given password, IF it doesn't already exist.
+
+    db_pass reaches here from env_vars["DB_PASS"] -- machine-generated via
+    generate_secure_password() on a fresh box (safe: letters/digits only),
+    but on a re-provisioned box it can instead come from an operator-edited
+    *.env file (see load_and_prompt_env), which is NOT guaranteed to be free
+    of a single quote or other SQL-literal-breaking characters. The SQL
+    text itself never has db_pass spliced into it directly -- the value is
+    passed via psql's own `-v name=value` mechanism and referenced in the
+    SQL as `:'db_pass'`, which psql expands using proper SQL string-literal
+    quoting (quote_literal semantics) at parse time, regardless of what
+    characters the value contains. This replaces a prior version that
+    f-string-interpolated db_pass directly into `PASSWORD '{db_pass}'` --
+    a single quote in db_pass broke out of that literal and injected
+    arbitrary SQL, executed as the postgres superuser via `sudo -u
+    postgres`.
+    """
+    sql_create_roles = (
+        "DO $$BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'odoo') "
+        "THEN CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD :'db_pass'; END IF; END$$;"
+    )
+    return [
+        "sudo", "-u", "postgres", "psql",
+        "-v", f"db_pass={db_pass}",
+        "-c", sql_create_roles,
+    ]
+
+
+def _database_exists(db_name):
+    """
+    Checks (via a real, non-shell psql invocation) whether a PostgreSQL
+    database named db_name exists, without ever splicing db_name into a SQL
+    string or a shell command line -- see _create_odoo_role_cmd's own
+    docstring for why that matters. db_name is the same
+    operator/*.env-controlled value as db_pass there.
+    """
+    res = subprocess.run(
+        [
+            "sudo", "-u", "postgres", "psql",
+            "-v", f"db_name={db_name}",
+            "-tAc", "SELECT 1 FROM pg_database WHERE datname = :'db_name'",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return res.returncode == 0 and res.stdout.strip() == "1"
+
+
+def _create_database_if_missing(run_cmd_func, db_name):
+    if not _database_exists(db_name):
+        run_cmd_func(["sudo", "-u", "postgres", "createdb", "-O", "odoo", db_name])
+
+
+def _alter_database_owner_to_odoo(run_cmd_func, db_name):
+    """
+    Alters db_name's owner to `odoo`, using psql's `:"db_name"` identifier-
+    quoting syntax (quote_ident semantics) rather than splicing db_name
+    directly into `ALTER DATABASE {db_name} OWNER TO odoo;` -- the prior
+    version of this call also ran through `bash -c`, so an unescaped
+    db_name containing a single quote or shell metacharacter was a combined
+    shell-injection *and* SQL-injection vector, both closed by removing the
+    shell entirely and letting psql's own variable substitution handle
+    quoting.
+    """
+    run_cmd_func(
+        [
+            "sudo", "-u", "postgres", "psql",
+            "-v", f"db_name={db_name}",
+            "-c", 'ALTER DATABASE :"db_name" OWNER TO odoo;',
+        ]
+    )
+
+
+def _refuse_if_unsafe_test_db_drop(db_name):
+    """
+    Refuses to let test-mode provisioning drop a database named "hams_prod"
+    -- load_and_prompt_env's own well-known non-test DB_NAME default.
+
+    load_and_prompt_env() reads every *.env file already under
+    /opt/hams/etc UNCONDITIONALLY (regardless of is_test) and populates
+    env_vars via `setdefault`, before is_test's own
+    `env_vars.setdefault("DB_NAME", "hams_test")` ever runs. `setdefault`
+    only takes effect when the key is still unset -- so on a shared box
+    that was ever provisioned non-test (or that inherited a stale db.env
+    left over from one), DB_NAME already carries whatever non-test value
+    was persisted there, and a later is_test=True provisioning run silently
+    inherits it instead of getting the intended fresh "hams_test" default.
+    Without this guard, provision_environment's own test-mode branch would
+    then run `dropdb --if-exists <db_name>` -- and this project's own
+    conventions describe exactly this kind of shared, persistent dev box,
+    not strictly separate per-environment machines.
+    """
+    if db_name == "hams_prod":
+        raise RuntimeError(
+            f"Refusing to drop database {db_name!r} during test-mode provisioning: "
+            "this is load_and_prompt_env's own well-known production DB_NAME default, "
+            "so it was very likely inherited from a stale /opt/hams/etc/db.env left "
+            "over from a prior non-test provisioning run on this same box, not a "
+            "database anyone actually intended to wipe. If a database genuinely named "
+            "hams_prod needs to be used for a test run, set an explicit, different "
+            "DB_NAME rather than relying on this default."
+        )
+
+
 def provision_environment(
     run_cmd_func, env_vars, orig_user, os_id=None, skip_apt=False, is_test=False
 ):
@@ -3829,29 +3944,17 @@ def provision_environment(
                     "[*] Bootstrapping initial Odoo PostgreSQL role and database (%s)...", db_name
                 )
                 db_pass = env_vars.get("DB_PASS", "odoo")
-                sql_create_roles = f"DO $$BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'odoo') THEN CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD '{db_pass}'; END IF; END$$;"
-                run_cmd_func(["sudo", "-u", "postgres", "psql", "-c", sql_create_roles])
-                
+                run_cmd_func(_create_odoo_role_cmd(db_pass))
+
                 if is_test:
+                    _refuse_if_unsafe_test_db_drop(db_name)
                     run_cmd_func(["sudo", "-u", "postgres", "dropdb", "--if-exists", db_name])
                     run_cmd_func(["sudo", "-u", "postgres", "createdb", "-O", "odoo", db_name])
                 else:
-                    run_cmd_func(
-                        [
-                            "bash",
-                            "-c",
-                            f"sudo -u postgres psql -tc \"SELECT 1 FROM pg_database WHERE datname = '{db_name}'\" | grep -q 1 || sudo -u postgres createdb -O odoo {db_name}",
-                        ]
-                    )
-                
+                    _create_database_if_missing(run_cmd_func, db_name)
+
                 # Unconditionally ensure the database is owned by odoo to fix pre-existing DBs
-                run_cmd_func(
-                    [
-                        "bash",
-                        "-c",
-                        f"sudo -u postgres psql -c \"ALTER DATABASE {db_name} OWNER TO odoo;\"",
-                    ]
-                )
+                _alter_database_owner_to_odoo(run_cmd_func, db_name)
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to configure PostgreSQL settings: %s", e)
 
