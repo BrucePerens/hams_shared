@@ -12,10 +12,12 @@ built on, which is where a parsing bug would actually hide.
 """
 
 import asyncio
+import inspect
 import json
 import os
 import shutil
 import tempfile
+import threading
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -179,6 +181,57 @@ class IsAgentDeadTests(unittest.TestCase):
         self.assertFalse(wd.is_agent_dead(self.path))
 
 
+class CheckTurnLimitTests(unittest.TestCase):
+    # Regression coverage for a real bug found 2026-09-12:
+    # wait_for_agent_state_change's own inline copy of this exact check had
+    # silently regressed to `if False and lines >= turn_warning_limit` --
+    # permanently dead code that disabled the turn-limit/graceful-hand-over
+    # alert for that tool entirely, while wait_for_result's separate inline
+    # copy of the identical check kept working the whole time. The fix
+    # extracts one shared, tested function (this one) that both call sites
+    # now call, so there is exactly one copy of the logic left to regress.
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.path = os.path.join(self.tmp, "transcript.jsonl")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_below_the_limit_returns_none(self):
+        _write_transcript(self.path, [{"a": 1}, {"a": 2}])
+        self.assertIsNone(wd.check_turn_limit(self.path, 10))
+
+    def test_at_the_limit_returns_the_line_count(self):
+        _write_transcript(self.path, [{"a": i} for i in range(5)])
+        self.assertEqual(wd.check_turn_limit(self.path, 5), 5)
+
+    def test_over_the_limit_returns_the_line_count(self):
+        _write_transcript(self.path, [{"a": i} for i in range(5)])
+        self.assertEqual(wd.check_turn_limit(self.path, 3), 5)
+
+    def test_a_non_positive_limit_disables_the_check(self):
+        _write_transcript(self.path, [{"a": i} for i in range(100)])
+        self.assertIsNone(wd.check_turn_limit(self.path, 0))
+        self.assertIsNone(wd.check_turn_limit(self.path, -1))
+
+    def test_blank_lines_are_not_counted_as_turns(self):
+        with open(self.path, "w") as f:
+            f.write(json.dumps({"a": 1}) + "\n\n\n" + json.dumps({"a": 2}) + "\n")
+        self.assertIsNone(wd.check_turn_limit(self.path, 3))
+        self.assertEqual(wd.check_turn_limit(self.path, 2), 2)
+
+    def test_both_wait_tools_call_the_shared_helper_not_a_private_copy(self):
+        # Belt-and-suspenders guard tied directly to the historical bug
+        # pattern: assert neither tool's source has drifted back to an
+        # inline duplicate (or a stray "if False and") of this check.
+        for tool in (wd.wait_for_agent_state_change, wd.wait_for_result):
+            src = inspect.getsource(tool)
+            with self.subTest(tool=tool.__name__):
+                self.assertIn("check_turn_limit(", src)
+                self.assertNotIn("if False", src)
+
+
 def _write_subagent_spawn_line(transcript_path, child_ids):
     """A minimal real-shaped line matching parse_family_tree's own scan:
     a plain (non-EPHEMERAL_MESSAGE) entry whose serialized content contains
@@ -240,6 +293,38 @@ class ParseFamilyTreeTests(unittest.TestCase):
         active_family, parent_map, root_id = wd.parse_family_tree(self.tmp, "child-1")
         self.assertNotIn("unrelated-parent", active_family)
         self.assertNotIn("unrelated-child", active_family)
+
+    def test_a_cyclic_parent_chain_does_not_hang_forever(self):
+        # Regression coverage for a real bug found 2026-09-12: parent_map is
+        # built by regex-scraping each agent's own transcript content for
+        # "Created the following subagents" claims -- loosely-structured
+        # data that can end up mutually self-referential (agent-a's
+        # transcript claims it spawned agent-b, agent-b's claims it spawned
+        # agent-a). The root-walk `while root_id in parent_map: root_id =
+        # parent_map[root_id]` had no cycle check at all, so this used to be
+        # a genuine, confirmed-live infinite loop -- and since this is a
+        # plain synchronous function with no `await` inside it, a hang here
+        # freezes the ENTIRE single-threaded watchdog process, not just this
+        # one call. Run on a background daemon thread with a hard join
+        # timeout so a real hang fails this test cleanly instead of wedging
+        # the whole suite.
+        _write_subagent_spawn_line(self._transcript_path("agent-a"), ["agent-b"])
+        _write_subagent_spawn_line(self._transcript_path("agent-b"), ["agent-a"])
+
+        result = {}
+
+        def _run():
+            result["value"] = wd.parse_family_tree(self.tmp, "agent-a")
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "parse_family_tree hung on a cyclic parent chain")
+
+        active_family, parent_map, root_id = result["value"]
+        self.assertIn(root_id, {"agent-a", "agent-b"})
+        self.assertEqual(active_family, {"agent-a", "agent-b"})
+        self.assertEqual(parent_map, {"agent-a": "agent-b", "agent-b": "agent-a"})
 
 
 class GetQueueTests(unittest.TestCase):
@@ -311,6 +396,53 @@ class SendIpcMessageAndQueueStatusAreAsyncTests(_SafePatchTestCase, unittest.Iso
         # Never touched the local queue -- a stdio instance's own _QUEUES
         # would be a different store than the shared instance's.
         self.assertNotIn("night-shift-queue", wd._QUEUES)
+
+
+class WaitForResultExpectedFileRaceTests(_SafePatchTestCase, unittest.IsolatedAsyncioTestCase):
+    # Regression coverage for a real TOCTOU race found 2026-09-12 in
+    # wait_for_result's `expected_file` polling: it used to check
+    # `os.path.exists(expected_file) and os.path.getsize(expected_file) > 0`
+    # as two separate syscalls. A producer that writes the file then
+    # atomically renames it into place, or any process that rotates/removes
+    # it, can make the path vanish in the gap between those two calls --
+    # os.path.getsize() then raises FileNotFoundError, an exception nothing
+    # in wait_for_result caught, which crashed the whole tool call and
+    # skipped notifier.stop(), leaking the pyinotify watch (exactly the
+    # class of bug this file's own "Fix file descriptor leak" commit history
+    # was about). The fix routes through get_fsize(), which already treats
+    # a file that isn't there right now as "not ready yet" (0) -- correct
+    # polling semantics, not error-masking.
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        os.makedirs(os.path.join(self.tmp, ".gemini", "antigravity", "brain"), exist_ok=True)
+        self.safe_patch("mcp_watchdog.os.path.expanduser", side_effect=lambda p: p.replace("~", self.tmp))
+
+    async def test_a_file_that_vanishes_between_exists_and_getsize_does_not_crash(self):
+        expected_file = os.path.join(self.tmp, "expected_output.txt")
+        with open(expected_file, "w") as f:
+            f.write("data")
+
+        real_getsize = os.path.getsize
+
+        def _flaky_getsize(path):
+            if path == expected_file:
+                raise FileNotFoundError(path)
+            return real_getsize(path)
+
+        self.safe_patch("mcp_watchdog.os.path.getsize", side_effect=_flaky_getsize)
+
+        # timeout_mins=0 makes wait_for_result hit its own "Wait timeout
+        # reached" return on the very first loop pass -- but only if the
+        # expected_file check ahead of it doesn't raise first. Bounded with
+        # an outer wait_for as a last-resort safety net, not because this is
+        # expected to hang.
+        result = await asyncio.wait_for(
+            wd.wait_for_result("nonexistent-agent", expected_file=expected_file, timeout_mins=0),
+            timeout=5,
+        )
+        self.assertIn("Wait timeout reached", result)
 
 
 class AllToolsHaveRealDocstringsTests(unittest.TestCase):

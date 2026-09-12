@@ -245,9 +245,31 @@ def parse_family_tree(brain_dir, self_agent_id):
             pass
             
     root_id = self_agent_id
+    # Cycle guard: parent_map is built by regex-scraping each agent's own
+    # transcript content for "Created the following subagents" claims, which
+    # is exactly the kind of loosely-structured data that can end up
+    # mutually self-referential (agent A's transcript claims it spawned B,
+    # B's claims it spawned A) if the underlying content is malformed,
+    # duplicated, or just wrong. Without this guard, a cycle sent this
+    # root-walk into a genuine infinite loop -- confirmed via a live repro:
+    # a synchronous, `await`-free while-loop like this one freezes the
+    # entire single-threaded watchdog process, not just the one call, since
+    # nothing else can run until it returns. Stop and settle for the last
+    # visited id as "root" the moment we'd revisit a node instead of looping
+    # forever.
+    visited_roots = {root_id}
     while root_id in parent_map:
-        root_id = parent_map[root_id]
-        
+        next_root = parent_map[root_id]
+        if next_root in visited_roots:
+            logger.warning(
+                "parse_family_tree: cyclic parent chain detected while walking up from %r "
+                "(would revisit %r) -- stopping at %r instead of looping forever",
+                self_agent_id, next_root, root_id,
+            )
+            break
+        visited_roots.add(next_root)
+        root_id = next_root
+
     active_family = {root_id}
     def add_children(node):
         for child, parent in parent_map.items():
@@ -256,6 +278,28 @@ def parse_family_tree(brain_dir, self_agent_id):
                 add_children(child)
     add_children(root_id)
     return active_family, parent_map, root_id
+
+def check_turn_limit(transcript_path, turn_warning_limit):
+    """
+    Return the current non-blank line (turn) count in `transcript_path` if it
+    has reached `turn_warning_limit`, else None. Shared by
+    wait_for_agent_state_change and wait_for_result so there is exactly one
+    copy of this check to get right -- found necessary 2026-09-12 after
+    wait_for_agent_state_change's own inline copy of this logic silently
+    regressed to `if False and lines >= turn_warning_limit` (permanently
+    dead code that disabled the whole turn-limit/graceful-hand-over alert
+    for that tool), while wait_for_result's separate inline copy of the
+    identical check kept working the whole time -- undetected because
+    nothing exercised the two copies against each other. night-shift and
+    divide-and-conquer SKILL.md both document a "Graceful Hand-Overs"
+    workflow that depends on this ACTION REQUIRED message actually being
+    returned by the orchestrator's own wait call.
+    """
+    if turn_warning_limit <= 0:
+        return None
+    with open(transcript_path, 'r', encoding='utf-8') as f:
+        lines = sum(1 for line in f if line.strip())
+    return lines if lines >= turn_warning_limit else None
 
 def is_agent_dead(transcript_path):
     try:
@@ -430,10 +474,9 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                     if time.time() - mtime > 86400:
                         state["warned"] = True
                         continue
-                        
-                    with open(transcript_path, 'r', encoding='utf-8') as f:
-                        lines = sum(1 for line in f if line.strip())
-                    if False and lines >= turn_warning_limit:
+
+                    lines = check_turn_limit(transcript_path, turn_warning_limit)
+                    if lines is not None:
                         state["warned"] = True
                         notifier.stop()
                         save_persisted_states(current_states, self_agent_id)
@@ -572,8 +615,17 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
     while True:
         now = time.time()
         
-        # Check expected file
-        if expected_file and os.path.exists(expected_file) and os.path.getsize(expected_file) > 0:
+        # Check expected file. Uses get_fsize (not a raw os.path.exists()
+        # then os.path.getsize()) to avoid a TOCTOU race: a producer that
+        # writes the file then atomically renames it into place (or another
+        # process that rotates/cleans it up) can make the file vanish in the
+        # gap between an exists() check and a getsize() call on the same
+        # path, and a raw getsize() would raise FileNotFoundError there --
+        # an unhandled exception that crashed this tool call outright and
+        # skipped notifier.stop(), leaking the pyinotify watch. get_fsize
+        # already treats a file that isn't there right now as "not ready
+        # yet" (0), which is exactly the correct thing to do while polling.
+        if expected_file and get_fsize(expected_file) > 0:
             notifier.stop()
             return f"Condition met: {expected_file} is ready."
             
@@ -618,9 +670,8 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
         # Check turn warning limit
         if turn_warning_limit > 0 and not warned and fsize > 0:
             try:
-                with open(transcript_path, 'r', encoding='utf-8') as f:
-                    lines = sum(1 for line in f if line.strip())
-                if lines >= turn_warning_limit:
+                lines = check_turn_limit(transcript_path, turn_warning_limit)
+                if lines is not None:
                     warned = True
                     notifier.stop()
                     return f"Agent {target_agent_id} is approaching its turn limit ({lines} turns). It has ~50 turns remaining. ACTION REQUIRED: Instruct Agent {target_agent_id} to gracefully finish its work, notify you when it's ready for a hand-over, and exit. Then spawn a replacement."
