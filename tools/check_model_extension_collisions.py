@@ -121,7 +121,20 @@ def _literal_str_or_list(value_node):
 
 def _extract_class_info(class_node):
     """Returns (name_values, inherit_values, auto_false, has_init) for one
-    model class body."""
+    model class body.
+
+    Real bug found 2026-09-10, fixed 2026-09-12 (mirroring the identical fix applied the same
+    night to odoo_registry_builder.py's own equivalent walk -- this file's own docstring already
+    states it deliberately mirrors that tool's model-declaration recognition, so the two must
+    agree on what counts as one): only recognized a plain `ast.Assign`, silently missing a
+    type-annotated declaration like `_name: str = "some.model"` (`ast.AnnAssign`, a different
+    node type -- single `.target`, not `.targets`, and `.value` can legitimately be None for a
+    bare annotation with no RHS). A class using this style was completely invisible to this
+    checker's own `_name`/`_inherit` collision detection, with no warning -- confirmed latent, not
+    live, as of 2026-09-10 (zero real models in either repo use this style), but a real landmine
+    for the first future model that adopts annotated class attributes (this codebase's own
+    ODOO_AWARE_TYPE_CHECKING.md pushes toward stricter typing). Fixed by handling ast.AnnAssign
+    (with a non-None `.value`) alongside ast.Assign, same as odoo_registry_builder.py's own fix."""
     name_values = None
     inherit_values = None
     auto_false = False
@@ -129,16 +142,21 @@ def _extract_class_info(class_node):
     for stmt in class_node.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == "init":
             has_init = True
-        if not isinstance(stmt, ast.Assign):
+        if isinstance(stmt, ast.Assign):
+            targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+            value = stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None and isinstance(stmt.target, ast.Name):
+            targets = [stmt.target.id]
+            value = stmt.value
+        else:
             continue
-        targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
         if "_name" in targets:
-            name_values = _literal_str_or_list(stmt.value)
+            name_values = _literal_str_or_list(value)
         elif "_inherit" in targets:
-            inherit_values = _literal_str_or_list(stmt.value)
+            inherit_values = _literal_str_or_list(value)
         elif "_auto" in targets:
             try:
-                auto_false = ast.literal_eval(stmt.value) is False
+                auto_false = ast.literal_eval(value) is False
             except (ValueError, SyntaxError):
                 pass
     return name_values, inherit_values, auto_false, has_init

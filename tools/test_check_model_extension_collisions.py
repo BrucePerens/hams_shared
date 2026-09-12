@@ -121,6 +121,39 @@ class ExtractClassInfoTests(unittest.TestCase):
         self.assertIsNone(name)
         self.assertEqual(inherit, ["ham.qso"])
 
+    def test_a_type_annotated_name_declaration_is_still_recognized(self):
+        # Real bug found 2026-09-10, fixed 2026-09-12 (mirroring the identical fix applied the
+        # same night to odoo_registry_builder.py's own equivalent walk, which this file's own
+        # docstring already states this checker deliberately mirrors): only a plain ast.Assign
+        # was recognized, so `_name: str = "ham.qso"` (ast.AnnAssign, a different node type) was
+        # completely invisible -- a class using this style would never be flagged for a real
+        # _name collision with another class. Confirmed to FAIL against the pre-fix code (name
+        # came back None instead of ["ham.qso"]).
+        node = _class_node('class Foo(models.Model):\n    _name: str = "ham.qso"\n')
+        name, inherit, auto_false, has_init = chk._extract_class_info(node)
+        self.assertEqual(name, ["ham.qso"])
+        self.assertIsNone(inherit)
+        self.assertFalse(auto_false)
+        self.assertFalse(has_init)
+
+    def test_a_type_annotated_inherit_declaration_is_still_recognized(self):
+        node = _class_node(
+            'class Foo(models.Model):\n'
+            '    _name: str = "res.users"\n'
+            '    _inherit: list = ["res.users", "edge.routing.mixin"]\n'
+        )
+        name, inherit, _auto_false, _has_init = chk._extract_class_info(node)
+        self.assertEqual(name, ["res.users"])
+        self.assertEqual(inherit, ["res.users", "edge.routing.mixin"])
+
+    def test_a_bare_annotation_with_no_value_is_not_mistaken_for_a_declaration(self):
+        # `_name: str` with no `= ...` (a bare annotation, legal Python) has stmt.value is None --
+        # must not crash and must not be treated as declaring anything.
+        node = _class_node('class Foo(models.Model):\n    _name: str\n    _inherit = "ham.qso"\n')
+        name, inherit, _auto_false, _has_init = chk._extract_class_info(node)
+        self.assertIsNone(name)
+        self.assertEqual(inherit, ["ham.qso"])
+
 
 class ResolveRepoRootTests(unittest.TestCase):
     # Regression test for a real bug found the same night check_access_csv_group_order.py's own
