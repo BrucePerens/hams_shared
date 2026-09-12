@@ -7,6 +7,7 @@ Unit tests for odoo_registry_builder.py (ODOO_AWARE_TYPE_CHECKING.md Phase 2 fou
 """
 
 import ast
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -557,9 +558,7 @@ class ManifestDependsTests(unittest.TestCase):
 
 
 def _odoo_addons_dir_available():
-    try:
-        import odoo  # noqa: F401
-    except ImportError:
+    if importlib.util.find_spec("odoo") is None:
         return False
     return orb.find_odoo_core_addons_path() is not None
 

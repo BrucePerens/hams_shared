@@ -224,8 +224,11 @@ class TestOOMWatchdogSharedMemoryAccounting(unittest.TestCase):
 
         try:
             total, _ = _measure_process_tree(runner_pid=os.getpid(), exclude_pid=-1)
-        except Exception as e:  # noqa
-            self.fail(f"measurement raised on a real live process tree: {e!r}")
+        except Exception as e:  # audit-ignore-catch-all: this test asserts the real
+            # measurement path raises nothing at all, so any exception shape is a failure
+            raise AssertionError(
+                f"measurement raised on a real live process tree: {e!r}"
+            ) from e
         self.assertIsInstance(total, int)
 
     def test_a_process_that_exits_mid_scan_is_noted_not_silently_dropped(self):

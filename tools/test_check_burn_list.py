@@ -4012,9 +4012,9 @@ def test_res_groups_record_outside_a_noupdate_data_block_is_also_forbidden():
 
 
 def test_noqa_comment_is_forbidden_linter_evasion():
-    content = "import unused_module  # noqa\n"
+    content = "import unused_module  # noqa\n"  # burn-ignore-noqa-example
     errors, _warnings = _scan_file(content, "some_module.py")
-    assert any("CRITICAL LINTER EVASION" in e and "noqa" in e for e in errors)
+    assert any("CRITICAL LINTER EVASION" in e and "noqa" in e for e in errors)  # burn-ignore-noqa-example
 
 
 def test_noqa_e402_is_the_one_real_exemption():
@@ -5233,3 +5233,22 @@ def test_env_var_credential_fallback_in_hams_shared_tools_is_not_a_tenant_leak()
     )
     errors, _warnings = _scan_file(content, "tools/check_dependency_releases.py")
     assert not any("CRITICAL TENANT LEAK" in e for e in errors)
+
+
+def test_noqa_example_tag_exempts_a_real_fixture_string_from_the_linter_evasion_check():
+    # Real false positive found 2026-09-12: a Python string literal (embedded `\n` escapes,
+    # not real newlines, so the multi-line-docstring skip never applies) feeding a fixture
+    # into test_noqa_comment_is_forbidden_linter_evasion tripped this same rule when the
+    # OUTER check_burn_list.py scans test_check_burn_list.py itself.
+    content = 'content = "import unused_module  # noqa\\n"  # burn-ignore-noqa-example\n'
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert not any("LINTER EVASION" in e for e in errors)
+
+
+def test_noqa_example_tag_does_not_leak_into_a_real_untagged_noqa_elsewhere():
+    content = (
+        'content = "import unused_module  # noqa\\n"  # burn-ignore-noqa-example\n'
+        "import real_thing  # noqa\n"
+    )
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert any("LINTER EVASION" in e and "import real_thing" in e for e in errors)

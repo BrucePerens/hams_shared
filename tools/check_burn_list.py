@@ -4043,6 +4043,16 @@ def scan_file(filepath, is_odoo_module=False):
         if re.search(r"\bnoqa\b", line, re.IGNORECASE):
             if "noqa: e402" in line.lower():
                 pass  # Exception allowed for sys.path injections in isolated daemon tests
+            elif "burn-ignore-noqa-example" in line:
+                # A Python string literal (embedded `\n` escapes, not real newlines) feeding
+                # a fixture into a test of this exact noqa-ban rule itself -- e.g.
+                # test_check_burn_list.py's own `content = "import unused_module  # noqa\n"`.
+                # It's all on one physical source line, so the multi-line-docstring skip above
+                # never applies, and the outer scan (this file scanning itself) sees a literal
+                # "# noqa" substring in real, uncommented Python source. See
+                # test_noqa_comment_is_forbidden_linter_evasion for why this exact fixture
+                # shape is required to prove the rule's own detection logic works.
+                pass
             else:
                 errors_found.append(
                     f"Line {line_num}: CRITICAL LINTER EVASION: Use of 'noqa' is strictly forbidden.\n      Code: `{stripped}`"
@@ -4323,6 +4333,11 @@ def scan_file(filepath, is_odoo_module=False):
                 # the full rationale. First used by test_rmsgw_protocol.py's
                 # sgl_challenge_response().
                 "burn-ignore-legacy-protocol-hash",
+                # A Python string literal (embedded `\n` escapes) feeding a fixture into a
+                # test of the noqa-ban rule's own detection logic -- see the noqa check's own
+                # comment for the full rationale. First used by test_check_burn_list.py's
+                # test_noqa_comment_is_forbidden_linter_evasion.
+                "burn-ignore-noqa-example",
             ]
         ):
             errors_found.append(
