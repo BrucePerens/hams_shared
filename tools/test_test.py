@@ -16,7 +16,9 @@ tests cover the two real bugs this pass found and fixed in run_cmd() and
 main(), not an exhaustive suite of the whole file.
 """
 
+import contextlib
 import importlib.util
+import io
 import itertools
 import os
 import shutil
@@ -256,6 +258,66 @@ class ResolveRepoLayoutTests(unittest.TestCase):
         self.assertEqual(repo_root, self.tmp)
         self.assertEqual(parent_dir, os.path.abspath(os.path.join(self.tmp, "..")))
         self.assertTrue(any(self.tmp in msg for msg in cm.output))
+
+
+class FailureExtractorAttributeGuardTests(unittest.TestCase):
+    """hams_shared/tools/ 326-finding discovery, 2026-09-12 (CRITICAL AI LAZINESS:
+    Catch-all AttributeError): FailureExtractor.set_context()/finish_and_write() used to
+    wrap self.current_test/self._written/self.aborted reads in `try/except AttributeError`,
+    even though __init__ unconditionally sets all three before returning and the only
+    attribute this instance exposes to outside code before __init__ finishes
+    (atexit.register(self.finish_and_write)) never reads any of them -- confirmed by reading
+    __init__ and finish_and_write's full bodies, not assumed. These tests exercise the real
+    behavior with the guards removed, not just that they don't crash.
+
+    Real instantiation (not a MagicMock, unlike every other FailureExtractor reference in
+    this file) is needed to exercise set_context()/finish_and_write() for real;
+    disable_atexit=True keeps that from registering a real atexit hook per test, and
+    os.path.expanduser is patched so the hardcoded "~/tmp/test_progress.txt" progress file
+    lands in this test's own tmpdir instead of the real developer's home directory.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        real_expanduser = os.path.expanduser
+
+        def fake_expanduser(path):
+            if path.startswith("~/"):
+                return os.path.join(self.tmp, path[2:])
+            if path == "~":
+                return self.tmp
+            return real_expanduser(path)
+
+        patcher = patch.object(_test_runner.os.path, "expanduser", side_effect=fake_expanduser)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_set_context_tracks_the_current_test_across_calls(self):
+        extractor = _test_runner.FailureExtractor(self.tmp, disable_atexit=True)
+        extractor.set_context("Starting test_one")
+        self.assertEqual(extractor.current_test, "test_one")
+        extractor.set_context("Starting test_two")
+        self.assertEqual(extractor.current_test, "test_two")
+
+    def test_finish_and_write_is_idempotent_via_the_written_flag(self):
+        extractor = _test_runner.FailureExtractor(self.tmp, disable_atexit=True)
+        extractor.finish_and_write()
+        self.assertTrue(os.path.exists(extractor.output_path))
+        os.remove(extractor.output_path)
+        # A second call must no-op (return early on self._written) rather than
+        # re-creating the file -- proves the "w = self._written" read still works
+        # correctly with the try/except AttributeError guard removed.
+        extractor.finish_and_write()
+        self.assertFalse(os.path.exists(extractor.output_path))
+
+    def test_finish_and_write_reports_the_aborted_state(self):
+        extractor = _test_runner.FailureExtractor(self.tmp, disable_atexit=True)
+        extractor.aborted = True
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            extractor.finish_and_write()
+        self.assertIn("TEST RUN ABORTED", buf.getvalue())
 
 
 if __name__ == "__main__":

@@ -394,7 +394,8 @@ def extract_page_state(page):
             if not label:
                 continue
             elements.append({"tag": tag, "label": label[:120], "_locator_index": i})
-        except Exception:
+        except Exception as e:  # audit-ignore-catch-all: one element going stale/detached mid-scan (a live, dynamic page can mutate its own DOM between locator.count() and this element's own turn) must not abort extraction of every other element in this loop -- same "disposable, fall-through" reasoning as the label lookups above, just at the whole-element granularity.
+            _logger.info("extract_page_state: skipping element %d, failed mid-extraction: %s", i, e)
             continue
     return visible_text, elements
 
@@ -622,7 +623,7 @@ def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_
                 history.append("Waited a few seconds for the page to finish loading.")
             else:
                 history.append(f"Unrecognized/unsupported action '{action}', stayed put.")
-        except Exception as e:
+        except Exception as e:  # audit-ignore-catch-all: one persona-driven action against an arbitrary, real, live page (a stale locator, a navigation mid-click, a real Playwright timeout, etc.) must not crash the whole audit run -- it's recorded into `history` (visible to the persona/Conductor) and the audit continues to the next step.
             _logger.warning("Action execution failed at step %d: %s", step, e)
             history.append(f"Tried to {action} but it didn't work ({e}).")
             continue

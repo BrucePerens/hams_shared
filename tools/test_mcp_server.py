@@ -4,6 +4,7 @@
 
 import sys
 import os
+import signal
 import logging
 import io
 import unittest
@@ -232,9 +233,6 @@ def kill_server() -> str:
     Kill the MCP server and Odoo processes entirely.
     Example: (no arguments)
     """
-    import os
-    import signal
-
     print("Shutting down MCP server and all its subprocesses...")
     try:
         # Since the MCP server is spawned in its own session/process group by test.py,

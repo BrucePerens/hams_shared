@@ -43,8 +43,11 @@ class FindTranslatableStringsTests(unittest.TestCase):
         self.assertEqual(result["Hello world"], [("mod_a/models.py", 1)])
 
     def test_an_attribute_call_named_underscore_is_not_treated_as_gettext(self):
-        # node.func is an ast.Attribute here, not ast.Name, so it has no
-        # .id -- the AttributeError is caught and func_id stays None.
+        # node.func is an ast.Attribute here, not ast.Name, so it has no .id --
+        # find_translatable_strings() checks isinstance(node.func, ast.Name) (fixed
+        # 2026-09-12 away from a try/except AttributeError around node.func.id, the same
+        # end result with no except block to mask an unrelated AttributeError) and
+        # func_id stays None.
         _write(self.tmp, "mod_a/other.py", 'y = obj._("not gettext")\n')
         result = gp.find_translatable_strings(self.tmp)
         self.assertNotIn("not gettext", result)

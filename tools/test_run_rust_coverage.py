@@ -308,7 +308,13 @@ class RealCargoLlvmCovAcceptanceTest(unittest.TestCase):
         # (--release, full suite) completed in ~20s, matching what's used here.
         proc = subprocess.run(["which", "cargo-llvm-cov"], capture_output=True)
         if proc.returncode != 0:
-            self.skipTest("cargo-llvm-cov not installed")
+            # Genuinely optional dev tool (confirmed live, 2026-09-12: `which cargo-llvm-cov`
+            # resolves on this dev box at ~/.cargo/bin/cargo-llvm-cov, so this branch does NOT
+            # currently fire here) -- a checkout on a machine without the Rust coverage
+            # toolchain installed can't run this specific real-cargo acceptance test at all,
+            # same shape as this file's own class-level @unittest.skipUnless right above for
+            # the sibling ham_digital_modes-checkout gate.
+            self.skipTest("cargo-llvm-cov not installed")  # burn-ignore-skiptest-soft-dependency
 
         with tempfile.TemporaryDirectory() as tmp:
             output_path = os.path.join(tmp, "rust_coverage.json")

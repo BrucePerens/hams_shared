@@ -95,6 +95,20 @@ _HAMS_SHARED_DIR = os.path.dirname(_TOOLS_DIR)
 # like ham_dns/).
 _OWN_REPO_DIR = os.path.dirname(_HAMS_SHARED_DIR)
 
+# Both _find_hams_com() and _find_hams_open() need odoo_registry_builder's
+# _find_sibling_repo(), and both used to re-do this same sys.path.insert() +
+# import locally on every call -- but _HAMS_COM_DIR/_HAMS_OPEN_DIR below call
+# them exactly once each, unconditionally, at module-import time, so there
+# was never any actual laziness to gain: the import ran immediately either
+# way. Hoisted to module scope (satisfies check_burn_list.py's LOCAL IMPORT
+# rule) with the exact same sys.path.insert(0, _TOOLS_DIR) defensiveness
+# this file's own docstring justifies above -- this test file can be reached
+# through more than one symlink path depending on invocation (pytest vs.
+# run_linters.py's subprocess), so it doesn't rely on Python's own automatic
+# sys.path[0] insertion being the real tools/ directory.
+sys.path.insert(0, _TOOLS_DIR)
+import odoo_registry_builder as orb  # noqa: E402
+
 
 def _write(path, content):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -103,9 +117,6 @@ def _write(path, content):
 
 
 def _find_hams_com():
-    sys.path.insert(0, _TOOLS_DIR)
-    import odoo_registry_builder as orb  # noqa: E402
-
     if os.path.basename(_OWN_REPO_DIR) == "hams_com":
         return _OWN_REPO_DIR
     sibling = orb._find_sibling_repo(_OWN_REPO_DIR)
@@ -120,9 +131,6 @@ def _find_hams_open():
     # a fixed directory relationship (this repo pair's mutual-symlink
     # structure has already produced two real, confirmed bugs from doing
     # that), always resolve through the same real, robust sibling lookup.
-    sys.path.insert(0, _TOOLS_DIR)
-    import odoo_registry_builder as orb  # noqa: E402
-
     if os.path.basename(_OWN_REPO_DIR) == "hams_open":
         return _OWN_REPO_DIR
     sibling = orb._find_sibling_repo(_OWN_REPO_DIR)

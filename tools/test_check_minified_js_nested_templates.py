@@ -16,6 +16,7 @@ containing a brace), verified as real current behavior, not assumed.
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -226,7 +227,6 @@ class MainIntegrationTests(unittest.TestCase):
             f.write(content)
 
     def _run(self):
-        import subprocess
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_minified_js_nested_templates.py")
         result = subprocess.run(
             [sys.executable, script, self.tmp], capture_output=True, text=True, timeout=30

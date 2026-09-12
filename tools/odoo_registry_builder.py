@@ -49,6 +49,23 @@ import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+# Deliberately module-level (not inside find_odoo_core_addons_path(), where
+# this used to live) so it satisfies check_burn_list.py's LOCAL IMPORT rule
+# without changing behavior: this stays a genuine, documented optional
+# dependency (see find_odoo_core_addons_path()'s own docstring) because this
+# module's whole purpose is static AST analysis that must keep working in
+# an environment without Odoo installed -- only the addon-path lookup
+# degrades (returns None, "core coverage unavailable here") rather than the
+# whole registry build crashing. The try/except ImportError itself is a
+# separate, already-tracked check_burn_list.py finding (CRITICAL FAST FAIL:
+# soft dependencies) left alone here on purpose: removing it would force a
+# hard failure exactly where graceful degradation is the documented,
+# correct behavior.
+try:
+    import odoo
+except ImportError:
+    odoo = None
+
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "tools", "radae"}
@@ -154,11 +171,6 @@ def find_odoo_core_addons_path():
     callers should treat that as "core coverage unavailable here", not
     crash the whole registry build over it.
     """
-    try:
-        import odoo
-    except ImportError:
-        odoo = None
-
     candidates = []
     if odoo is not None:
         # __file__ can genuinely be None here (confirmed directly on this

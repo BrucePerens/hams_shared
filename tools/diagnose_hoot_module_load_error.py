@@ -46,11 +46,14 @@ every commit.
 """
 
 import argparse
+import logging
 import os
 import re
 import socket
 import subprocess
 import sys
+
+_logger = logging.getLogger(__name__)
 
 CATCH_TARGET = "this.failed.add(name);"
 STACK_CAPTURE_MARKER = "STACK_CAPTURE_FOR_"
@@ -148,7 +151,8 @@ def restore_and_verify(loader_path, original_content):
     print(f"[*] Restoring original {loader_path}...")
     try:
         write_as_root(loader_path, original_content)
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: restore-and-verify step must fail closed (see docstring) -- any failure here is reported, never re-raised, so it can't clobber whatever exception is already propagating through the caller's own `finally` block.
+        _logger.warning("Failed to restore %s: %s", loader_path, e)
         print(f"🛑 WARNING: failed to restore {loader_path}: {e}")
         print(
             f"🛑 WARNING: {loader_path} is left in an UNKNOWN, possibly-patched state -- "

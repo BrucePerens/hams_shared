@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import check_minified_js_syntax_errors as chk  # noqa: E402
 
@@ -153,6 +154,38 @@ class CheckOneTests(unittest.TestCase):
         self.assertIsNotNone(result)
         _asset_path, _real_path, err = result
         self.assertIn("could not read file", err)
+
+    def test_rjsmin_typeerror_is_caught_and_reported_not_crashed(self):
+        # rjsmin's own C accelerator explicitly raises TypeError("Unexpected type") for a
+        # non-str/bytes argument (confirmed directly against the installed rjsmin -- see the
+        # narrowed `except (TypeError, MemoryError)` in _check_one). Forced here via mock.patch
+        # since _check_one always passes it a real str, so this path can't be hit with real
+        # input in this dev environment's installed rjsmin.
+        p = self._path("export function f(x) { return x + 1; }\n")
+        with mock.patch.object(chk.rjsmin, "jsmin", side_effect=TypeError("Unexpected type")):
+            result = chk._check_one(("mod_a/static/src/js/asset.js", p))
+        self.assertIsNotNone(result)
+        _asset_path, _real_path, err = result
+        self.assertIn("rjsmin.jsmin() itself raised", err)
+        self.assertIn("Unexpected type", err)
+
+    def test_rjsmin_memoryerror_is_caught_and_reported_not_crashed(self):
+        p = self._path("export function f(x) { return x + 1; }\n")
+        with mock.patch.object(chk.rjsmin, "jsmin", side_effect=MemoryError("out of memory")):
+            result = chk._check_one(("mod_a/static/src/js/asset.js", p))
+        self.assertIsNotNone(result)
+        _asset_path, _real_path, err = result
+        self.assertIn("rjsmin.jsmin() itself raised", err)
+
+    def test_an_unnarrowed_rjsmin_exception_propagates_instead_of_being_swallowed(self):
+        # This is the actual regression this narrowing (TypeError/MemoryError only, not a
+        # catch-all Exception) exists to enforce: a genuinely new/unexpected rjsmin failure
+        # mode must crash this worker loudly rather than being silently mislabeled as a
+        # "rjsmin.jsmin() itself raised" result indistinguishable from the two known cases.
+        p = self._path("export function f(x) { return x + 1; }\n")
+        with mock.patch.object(chk.rjsmin, "jsmin", side_effect=ValueError("some new rjsmin bug")):
+            with self.assertRaises(ValueError):
+                chk._check_one(("mod_a/static/src/js/asset.js", p))
 
 
 class MainIntegrationTests(unittest.TestCase):

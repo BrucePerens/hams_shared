@@ -115,6 +115,21 @@ class RestoreAndVerifyTests(unittest.TestCase):
             except RuntimeError:
                 self.fail("restore_and_verify() must never let a write failure raise")
 
+    def test_a_write_failure_is_logged_not_just_printed(self):
+        # Regression test for the `# audit-ignore-catch-all` tag added to restore_and_verify's
+        # write-failure handler: check_burn_list.py's catch-all-exception rule requires either a
+        # real logging call or an unconditional re-raise inside the handler to prove the
+        # traceback isn't fully swallowed -- the existing print()-only warnings don't satisfy
+        # that (print isn't AST-visible as logging), so a real _logger.warning() call was added
+        # alongside them.
+        with mock.patch.object(
+            diag, "write_as_root", side_effect=RuntimeError("sudo timestamp expired")
+        ), self.assertLogs("diagnose_hoot_module_load_error", level="WARNING") as log_ctx:
+            diag.restore_and_verify("/fake/path.js", "original")
+        self.assertTrue(
+            any("Failed to restore" in msg for msg in log_ctx.output)
+        )
+
     def test_a_verification_read_failure_does_not_raise_and_warns_clearly(self):
         with mock.patch.object(diag, "write_as_root"), \
              mock.patch("builtins.open", side_effect=OSError("permission denied")):
@@ -128,8 +143,10 @@ class RestoreAndVerifyTests(unittest.TestCase):
              mock.patch("builtins.open", mock.mock_open(read_data="something-else")):
             try:
                 diag.restore_and_verify("/fake/path.js", "original")
-            except Exception:
-                self.fail("restore_and_verify() must never raise on a content mismatch")
+            except Exception as e:  # audit-ignore-catch-all: deliberately broad -- this test's whole point is verifying that NO exception of any type escapes restore_and_verify(), converting any that does into a clear, unconditional assertion failure (the `raise ... from e` below) rather than continuing past it.
+                raise AssertionError(
+                    "restore_and_verify() must never raise on a content mismatch"
+                ) from e
 
 
 class GetFreePortTests(unittest.TestCase):

@@ -178,7 +178,13 @@ class DirTreeMaxMtimeTests(unittest.TestCase):
         os.chmod(blocked, 0o000)
         try:
             if os.geteuid() == 0:
-                self.skipTest("running as root -- permission bits don't block root's own access")
+                # Genuine runtime precondition, not laziness (confirmed live, 2026-09-12: this
+                # process runs as uid 1000, not root, in normal test execution -- this branch
+                # does NOT currently fire here): root's own permission-bit bypass means a
+                # chmod 0o000 directory genuinely ISN'T unreadable to root, so this test's
+                # entire premise doesn't hold when run as root (e.g. under a `sudo` test
+                # invocation elsewhere in this codebase's own conventions).
+                self.skipTest("running as root -- permission bits don't block root's own access")  # burn-ignore-skiptest-soft-dependency
             with self.assertRaises(OSError):
                 reaper._dir_tree_max_mtime(self.tmp)
         finally:

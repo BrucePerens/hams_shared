@@ -7,6 +7,9 @@ anything that can shell out (a subagent whose own MCP tool-calling layer is flak
 that motivated this) can still reach mcp_watchdog.py's shared instance directly.
 """
 import asyncio
+import json
+import subprocess
+import sys
 import unittest
 
 import mcp_watchdog_client as client
@@ -46,10 +49,6 @@ class CliSmokeTests(unittest.TestCase):
     # queue always returns "exists": false immediately, without needing a live server.
 
     def test_status_on_an_unknown_queue_reports_it_does_not_exist(self):
-        import json
-        import subprocess
-        import sys
-
         result = subprocess.run(
             [sys.executable, "mcp_watchdog_client.py", "status", "definitely_never_used_queue_xyz"],
             capture_output=True,

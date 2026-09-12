@@ -19,8 +19,10 @@ future edit can't silently drop the base class again.
 import ast
 import keyword
 import os
+import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
@@ -41,7 +43,6 @@ class FindModelBaseTests(unittest.TestCase):
         gen._ast_cache.clear()
 
     def tearDown(self):
-        import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
         gen._ast_cache.clear()
 
@@ -78,10 +79,20 @@ class FindModelBaseTests(unittest.TestCase):
         # models.AbstractModel.
         core_addons_path = orb.find_odoo_core_addons_path()
         if not core_addons_path:
-            self.skipTest("Odoo core addons not installed in this environment")
+            # Genuinely optional soft dependency (confirmed live, 2026-09-12: on this dev
+            # box find_odoo_core_addons_path() resolves to a real, installed
+            # /usr/lib/python3/dist-packages/odoo/addons, so this branch does NOT currently
+            # fire here) -- a CI checkout or dev box without the real Odoo core package
+            # installed can't run this specific real-source assertion at all, the same
+            # "mirrors production's own graceful degradation" shape as
+            # burn-ignore-skiptest-soft-dependency's other documented uses.
+            self.skipTest("Odoo core addons not installed in this environment")  # burn-ignore-skiptest-soft-dependency
         real_file = os.path.join(core_addons_path, "base", "models", "ir_http.py")
         if not os.path.isfile(real_file):
-            self.skipTest("base/models/ir_http.py not found at the expected real path")
+            # Same rationale as the skipTest above: a real Odoo core install whose internal
+            # layout has moved base/models/ir_http.py (or an install missing the base
+            # module) is an environment-shape gap, not a bug to fix in this test.
+            self.skipTest("base/models/ir_http.py not found at the expected real path")  # burn-ignore-skiptest-soft-dependency
         self.assertEqual(gen._find_model_base(real_file, "IrHttp"), "AbstractModel")
 
 
@@ -91,7 +102,6 @@ class RenderStubTests(unittest.TestCase):
         gen._ast_cache.clear()
 
     def tearDown(self):
-        import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
         gen._ast_cache.clear()
 
@@ -225,6 +235,61 @@ class RenderMethodParamsPropertyTests(unittest.TestCase):
         self.assertEqual(sorted(expected_names), sorted(rendered_names))
         self.assertEqual(bool(func_def.args.vararg), method.has_varargs)
         self.assertEqual(bool(func_def.args.kwarg), method.has_varkw)
+
+
+class GenerateStaleStubWipeTests(unittest.TestCase):
+    """generate()'s own cleanup step, isolated from real Odoo core source by mocking
+    odoo_registry_builder's three entry points it calls -- generate() itself doesn't care
+    what's in the registry for these tests, only how it wipes the target directory first."""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="generate_odoo_core_stubs_test_")
+        self._target = os.path.join(self._tmp, "odoo", "addons")
+        self._patches = [
+            patch.object(gen, "_GENERATED_ADDONS_ROOT", self._target),
+            patch.object(orb, "find_odoo_core_addons_path", return_value="/fake/core"),
+            patch.object(orb, "find_needed_core_modules", return_value=set()),
+            patch.object(orb, "build_registry", return_value={}),
+        ]
+        for p in self._patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_a_first_run_with_no_existing_stub_directory_does_not_raise(self):
+        self.assertFalse(os.path.exists(self._target))
+        self.assertEqual(gen.generate(), 0)
+
+    def test_an_existing_stub_directory_is_actually_removed(self):
+        stale_file = os.path.join(self._target, "some_addon", "models.py")
+        os.makedirs(os.path.dirname(stale_file))
+        with open(stale_file, "w", encoding="utf-8") as f:
+            f.write("# stale, should be wiped\n")
+        gen.generate()
+        self.assertFalse(os.path.exists(stale_file))
+
+    def test_a_genuine_removal_failure_propagates_instead_of_being_silently_swallowed(self):
+        # Real bug found 2026-09-12: `shutil.rmtree(path, ignore_errors=True)` doesn't just
+        # tolerate a missing directory (the first-run case) -- it also silently swallows a
+        # genuine PARTIAL failure partway through the wipe, leaving stale and fresh stubs
+        # mixed together, exactly the failure mode this function's own comment says is worse
+        # than a missing stub. Reproduced with a REAL permission failure (an unreadable/
+        # unwritable subdirectory rmtree can't traverse into to unlink its contents), not a
+        # mocked shutil.rmtree -- a mock replacing rmtree wholesale would raise regardless of
+        # ignore_errors and wouldn't actually distinguish the two behaviors. Confirmed this
+        # exact scenario is silently swallowed (no exception, stale file survives) against the
+        # pre-fix `ignore_errors=True` source.
+        blocked_dir = os.path.join(self._target, "blocked")
+        os.makedirs(blocked_dir)
+        stale_file = os.path.join(blocked_dir, "f.py")
+        with open(stale_file, "w", encoding="utf-8") as f:
+            f.write("# stale\n")
+        os.chmod(blocked_dir, 0o000)
+        self.addCleanup(lambda: os.chmod(blocked_dir, 0o755))
+        with self.assertRaises(OSError):
+            gen.generate()
 
 
 if __name__ == "__main__":

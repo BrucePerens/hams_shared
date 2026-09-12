@@ -255,6 +255,68 @@ class ExtractPageStateAccessibleNameTests(unittest.TestCase):
         self.assertEqual(labels, ["QSL card layout"])
 
 
+class ExtractPageStateStaleElementTests(unittest.TestCase):
+    # Regression coverage for the `# audit-ignore-catch-all` tag + logging call added to
+    # extract_page_state()'s per-element `except Exception: continue` (previously zero-trace).
+    # A real, live, dynamic page can mutate its own DOM between locator.count() and a given
+    # element's own turn in the loop, so one element raising mid-extraction (detached,
+    # navigated away, etc.) is a genuine, expected failure mode this loop must tolerate --
+    # skipping just that element, not the whole page scan -- while now also logging it instead
+    # of continuing in total silence. Uses lightweight duck-typed fake page/locator/element
+    # objects (extract_page_state only ever calls documented Playwright-style methods on
+    # `page`, nothing type-checks it) rather than a real browser, since the fault needs to be
+    # deterministic -- injected on one specific element -- not racing a real page's own DOM
+    # mutation timing.
+
+    class _ExplodingElement:
+        def is_visible(self):
+            raise RuntimeError("simulated: element detached from DOM")
+
+    class _FineElement:
+        def is_visible(self):
+            return True
+
+        def bounding_box(self):
+            return {"x": 0, "y": 0, "width": 50, "height": 20}
+
+        def evaluate(self, _script):
+            return "button"
+
+        def inner_text(self):
+            return "Click me"
+
+        def get_attribute(self, _name):
+            return None
+
+    class _FakeLocator:
+        def __init__(self, elements):
+            self._elements = elements
+
+        def count(self):
+            return len(self._elements)
+
+        def nth(self, i):
+            return self._elements[i]
+
+    class _FakePage:
+        def __init__(self, elements):
+            self._locator = ExtractPageStateStaleElementTests._FakeLocator(elements)
+
+        def evaluate(self, _script):
+            return ""
+
+        def locator(self, _selector):
+            return self._locator
+
+    def test_one_stale_element_is_skipped_and_logged_others_still_extracted(self):
+        page = self._FakePage([self._ExplodingElement(), self._FineElement()])
+        with self.assertLogs("usability_audit_daemon", level="INFO") as cm:
+            _visible_text, elements = uad.extract_page_state(page)
+        self.assertEqual(len(elements), 1)
+        self.assertEqual(elements[0]["label"], "Click me")
+        self.assertTrue(any("skipping element 0" in msg for msg in cm.output))
+
+
 class SelectImageNoteTests(unittest.TestCase):
     # Found live 2026-08-29 running the screen_reader_user persona for real
     # against a canvas-containing page (the Web Shack console): run_leg()
@@ -424,6 +486,43 @@ class _FakePage:
 
     def wait_for_load_state(self, state, timeout=2000):
         raise uad.PlaywrightTimeoutError("networkidle wait timed out")
+
+
+class _ExplodingGoBackPage(_FakePage):
+    """Same minimal surface as _FakePage, but go_back() raises -- exercises run_leg()'s
+    outer action-execution `except Exception` handler (the `# audit-ignore-catch-all` tag
+    added alongside its pre-existing _logger.warning() call) instead of the inner
+    networkidle-timeout handler _FakePage's own wait_for_load_state() exercises."""
+
+    def go_back(self, timeout=5000):
+        raise RuntimeError("simulated: navigation failed mid-action")
+
+    def wait_for_load_state(self, state, timeout=2000):
+        return None
+
+
+class RunLegActionExecutionFailureTests(_SafePatchTestCase):
+    # Regression test for the `# audit-ignore-catch-all` tag added to run_leg()'s outer
+    # action-execution handler: it already logged via _logger.warning() (unlike the two bugs
+    # documented elsewhere in this file that had zero trace at all), so this is confirming
+    # that pre-existing, correct behavior still holds -- the action failure is both logged
+    # and recorded into `history` for the persona/Conductor to see, and the leg continues
+    # (does not raise) rather than crashing the whole audit run.
+    def test_a_failed_action_is_logged_and_recorded_but_does_not_crash_the_leg(self):
+        self.safe_patch(
+            "usability_audit_daemon.ask_executor",
+            return_value={"action": "navigate_back", "thought": "going back"},
+        )
+        log_fh = io.StringIO()
+        with self.assertLogs("usability_audit_daemon", level="WARNING") as cm:
+            history = uad.run_leg(
+                _ExplodingGoBackPage(), "fake-model", "a curious ham", "go back", "https://example.test",
+                max_steps=1, log_fh=log_fh,
+            )
+        self.assertTrue(any("Action execution failed at step 1" in msg for msg in cm.output))
+        self.assertEqual(len(history), 1)
+        self.assertIn("didn't work", history[0])
+        self.assertIn("simulated: navigation failed mid-action", history[0])
 
 
 class RunLegNetworkIdleTimeoutTests(_SafePatchTestCase):

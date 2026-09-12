@@ -16,6 +16,7 @@ base_dir to the fixture root -- confirmed empirically before writing
 these assertions, not assumed from reading the code.
 """
 
+import ast
 import os
 import shutil
 import subprocess
@@ -97,13 +98,11 @@ class ScanFileTests(unittest.TestCase):
 
         # Re-derive the count the same way scan_file does internally, by
         # re-running the same visitor shape directly against the source.
-        import ast as _ast
-
         with open(p, encoding="utf-8") as f:
-            tree = _ast.parse(f.read(), filename=p)
+            tree = ast.parse(f.read(), filename=p)
         found = []
 
-        class _V(_ast.NodeVisitor):
+        class _V(ast.NodeVisitor):
             def visit_Constant(self, node):
                 if isinstance(node.value, str) and "using" in node.value and "if" in node.value:
                     found.append(node.value)
@@ -112,9 +111,9 @@ class ScanFileTests(unittest.TestCase):
             def visit_JoinedStr(self, node):
                 parts = []
                 for val in node.values:
-                    if isinstance(val, _ast.Constant) and isinstance(val.value, str):
+                    if isinstance(val, ast.Constant) and isinstance(val.value, str):
                         parts.append(val.value)
-                    elif isinstance(val, _ast.FormattedValue):
+                    elif isinstance(val, ast.FormattedValue):
                         parts.append("{...}")
                 full = "".join(parts)
                 if "using" in full and "if" in full:

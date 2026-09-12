@@ -45,7 +45,9 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
+from shutil import which
 
 import requests
 import websockets
@@ -165,8 +167,6 @@ async def check_templates_via_cdp(xml_file_contents, port):
 def _launch_headless_chrome(port, user_data_dir, log_file):
     chrome_bin = None
     for candidate in ("google-chrome", "chromium", "chromium-browser"):
-        from shutil import which
-
         if which(candidate):
             chrome_bin = candidate
             break
@@ -223,8 +223,6 @@ def main():
                 xml_file_contents.append((fp, f.read()))
         except OSError as e:
             print(f"  ❌ ERROR: Could not read {fp}: {e}")
-
-    import tempfile
 
     user_data_dir = tempfile.mkdtemp(prefix="owl_template_check_")
     log_path = os.path.join(user_data_dir, "chrome.log")

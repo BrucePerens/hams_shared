@@ -6,6 +6,7 @@
 Standalone Environment Provisioning Script
 Must be run as root.
 """
+import argparse
 import os
 import re
 import sys
@@ -51,7 +52,6 @@ def provision():
     os_id = infrastructure.get_os_identifier()
     _logger.info(f"[*] Discovered OS: {os_id}")
 
-    import argparse
     parser = argparse.ArgumentParser(description="Standalone Environment Provisioning Script")
     parser.add_argument("--test", action="store_true", help="Smoke-test all daemons and stop them after")
     parser.add_argument("--force-reset", action="store_true", help="Completely destroy the existing database, filestore, and cache before provisioning")

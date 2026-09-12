@@ -253,7 +253,16 @@ class RmsgwProtocolIntegrationTest(unittest.TestCase):
 
     def setUp(self):
         if not os.access(HOSTS_FILE, os.W_OK):
-            self.skipTest(
+            # Genuine, currently-checkable environmental precondition, not laziness -- this
+            # whole class is already opt-in only (three class-level @unittest.skipUnless
+            # gates above: real rmsgw binary, real channels.xml, and an explicit
+            # RMSGW_INTEGRATION_TEST=1), and this is the fourth, narrower gate the module's
+            # own docstring documents at length: a real, shared system file
+            # (/usr/local/etc/rmsgw/hosts) needs a one-time `sudo chown` by the operator
+            # before this test can safely rewrite and restore it. Not automatable by the
+            # test itself under this codebase's zero-sudo policy for committed code (see
+            # the module docstring's own "Deliberately contains no sudo call" section).
+            self.skipTest(  # burn-ignore-skiptest-soft-dependency
                 f"{HOSTS_FILE} is not writable by this user -- see module docstring's "
                 "one-time operator setup step"
             )

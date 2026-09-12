@@ -212,7 +212,15 @@ def generate():
     # from the dependency closure, or a class/file removed upstream, doesn't leave a stale stub
     # behind (a stale stub that still resolves is a worse failure mode than a missing one: it
     # would silently hide a real removal instead of surfacing it as a fresh false positive).
-    shutil.rmtree(_GENERATED_ADDONS_ROOT, ignore_errors=True)
+    #
+    # Real bug found 2026-09-12: `ignore_errors=True` doesn't just tolerate the directory not
+    # existing yet (the first-run case this needs to handle) -- it also silently swallows a
+    # genuine PARTIAL failure partway through the wipe (a permission error, a file locked by
+    # another process), leaving exactly the stale-stub-mixed-with-fresh-stub state this
+    # function's own comment says is worse than a missing stub. Only tolerate "nothing to
+    # remove"; let any real removal failure raise.
+    if os.path.exists(_GENERATED_ADDONS_ROOT):
+        shutil.rmtree(_GENERATED_ADDONS_ROOT)
 
     roots = [os.path.join(core_addons_path, m) for m in sorted(needed)]
     registry = orb.build_registry(roots)

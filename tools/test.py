@@ -61,6 +61,23 @@ import os
 import pwd
 import queue
 import re
+# `resource` (used only inside preexec_odoo()'s post-fork preexec_fn, plus
+# the --internal-ns-init in-namespace init path below) is imported here at
+# module top rather than locally, same as `ctypes` above: both used to be
+# local imports inside preexec_fn callbacks that run in the CHILD process
+# after os.fork() but before exec(). Importing a not-yet-loaded module
+# there is a real, documented CPython hazard, not just a style nit --
+# CPython's import system acquires a per-module lock during import, and if
+# another thread held that lock at the moment of fork() (plausible in this
+# multi-threaded test runner -- see test_test.py's own fork()
+# DeprecationWarning), the forked child inherits a lock that can never be
+# released, since the thread that would release it doesn't exist in the
+# child: a silent, hard-to-reproduce hang. Importing both modules here,
+# unconditionally, at parent-process startup (well before any fork()) means
+# they're already fully loaded and present in sys.modules by the time any
+# preexec_fn runs, so referencing `ctypes.CDLL(...)` / `resource.setrlimit(...)`
+# post-fork is a plain global name lookup, not a real import.
+import resource
 import shutil
 import signal
 import socket
@@ -471,10 +488,16 @@ class FailureExtractor:
 
         if "Starting " in context_name:
             test_name = context_name.split("Starting ")[-1].strip()
-            try:
-                curr = self.current_test
-            except AttributeError:
-                curr = None
+            # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
+            # LAZINESS: Catch-all AttributeError): __init__ unconditionally sets
+            # self.current_test = "Initializing..." before returning, and the only
+            # attribute this instance ever exposes to outside code before __init__
+            # finishes is via atexit.register(self.finish_and_write) -- which never reads
+            # current_test at all (confirmed by reading its full body). set_context() is
+            # only ever called (via process_line()) on a fully-constructed instance, so
+            # self.current_test always exists here; the try/except was masking an
+            # AttributeError that could never actually occur.
+            curr = self.current_test
             if (
                 curr
                 and curr != test_name
@@ -604,10 +627,12 @@ class FailureExtractor:
         return modules
 
     def finish_and_write(self):
-        try:
-            w = self._written
-        except AttributeError:
-            w = False
+        # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
+        # LAZINESS: Catch-all AttributeError): self._written = False is set unconditionally
+        # in __init__ before atexit.register(self.finish_and_write) ever runs, so this
+        # method can never see an instance without it -- the try/except was masking an
+        # AttributeError that could never actually occur.
+        w = self._written
         if w:
             return
         self._written = True
@@ -686,10 +711,12 @@ class FailureExtractor:
             return
 
         print("\n==========================================================")
-        try:
-            a = self.aborted
-        except AttributeError:
-            a = False
+        # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
+        # LAZINESS: Catch-all AttributeError): self.aborted = False is set unconditionally
+        # in __init__ before this method can ever run (see finish_and_write's own comment
+        # above for the full atexit-ordering argument) -- the try/except was masking an
+        # AttributeError that could never actually occur.
+        a = self.aborted
         if a:
             print(
                 "🛑 TEST RUN ABORTED: Did not complete due to pre-flight linter errors."
@@ -1651,7 +1678,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
     try:
         pg_user = pwd.getpwnam("postgres")
-    except KeyError:
+    except KeyError:  # burn-ignore-os-account-probe
         pg_user = pwd.getpwnam("root")
 
     def preexec_pg():
@@ -1762,8 +1789,6 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         os.setresgid(redis_user.pw_gid, redis_user.pw_gid, redis_user.pw_gid)
         os.setresuid(redis_user.pw_uid, redis_user.pw_uid, redis_user.pw_uid)
         try:
-            import ctypes
-
             libc = ctypes.CDLL("libc.so.6")
             libc.prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
         except Exception as e: # audit-ignore-catch-all
@@ -1794,8 +1819,6 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         os.environ["HOME"] = "/var/lib/rabbitmq"
         os.setpgid(0, 0)
         try:
-            import ctypes
-
             libc = ctypes.CDLL("libc.so.6")
             libc.prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
         except Exception as e: # audit-ignore-catch-all
@@ -1815,17 +1838,16 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
             stderr=subprocess.DEVNULL,
         )
     except Exception as e: # audit-ignore-catch-all
+        # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
+        # LAZINESS: Catch-all AttributeError x2): subprocess.Popen()'s own constructor
+        # only ever raises OSError/ValueError (e.g. FileNotFoundError if bash isn't on
+        # PATH) -- never subprocess.CalledProcessError, the only stdlib exception type
+        # that carries .stdout/.stderr, and stdout/stderr are DEVNULL above regardless, so
+        # nothing is ever captured to report even in principle. `out`/`err` were
+        # unconditionally "" every time this branch could ever run; the two try/except
+        # blocks and the misleading "STDOUT:"/"STDERR:" lines they fed added no real
+        # information and are removed rather than kept as dead code.
         print(f"❌ ERROR starting RabbitMQ: {e}")
-        try:
-            out = e.stdout
-        except AttributeError:
-            out = ""
-        try:
-            err = e.stderr
-        except AttributeError:
-            err = ""
-        print(f"STDOUT: {out}")
-        print(f"STDERR: {err}")
         sys.exit(1)
 
     wait_for_port(5672, "RabbitMQ")
@@ -1847,8 +1869,6 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
     def preexec_odoo():
         try:
-            import resource
-
             # 1200 seconds (20 minutes) of ACTIVE CPU TIME. Safe for tests, deadly for infinite loops.
             resource.setrlimit(resource.RLIMIT_CPU, (1200, 1200))
         except OSError as e:
@@ -1909,7 +1929,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
     try:
         orig_uid = pwd.getpwnam(orig_user).pw_uid
-    except KeyError:
+    except KeyError:  # burn-ignore-os-account-probe
         orig_uid = -1
 
     if orig_uid != -1:
@@ -2243,8 +2263,6 @@ def main():
 
         if "--internal-ns-init" in sys.argv:
             # Phase 2: Execute completely within Python (No bash script interpolation)
-            import resource
-
             try:
                 resource.setrlimit(
                     resource.RLIMIT_STACK, (16 * 1024 * 1024, resource.RLIM_INFINITY)

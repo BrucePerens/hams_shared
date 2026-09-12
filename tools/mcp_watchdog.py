@@ -92,7 +92,7 @@ def _handle_bridge_conn(conn):
         q = _get_queue(queue_name)
         q.put(content)
         _QUEUE_META[queue_name]["last_put_at"] = time.time()
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: one bad client connection (malformed data, mid-recv disconnect, etc.) must not crash this bridge thread and take every other client with it.
         logger.warning(f"[legacy bridge] error handling client: {e}")
     finally:
         conn.close()
@@ -170,7 +170,7 @@ def load_persisted_states(self_agent_id):
         try:
             with open(state_file, "r") as f:
                 return json.load(f)
-        except Exception as e:
+        except Exception as e:  # audit-ignore-catch-all: a corrupt/unreadable state file must not block startup -- falls through to `return None` below regardless of cause.
             logger.warning(f"Failed to load persisted watchdog state from {state_file}: {e}")
     return None
 
@@ -239,9 +239,19 @@ def parse_family_tree(brain_dir, self_agent_id):
                                     matches = re.findall(r'"conversationId":\s*"([^"]+)"', content)
                                     for child_id in matches:
                                         parent_map[child_id] = agent_id
-                        except Exception as e:
+                        except (json.JSONDecodeError, AttributeError, TypeError) as e:
+                            # json.JSONDecodeError: the line isn't valid JSON at all.
+                            # AttributeError: it parsed to something other than a dict/object
+                            # (a bare JSON list/number/string/null), so .get() doesn't exist.
+                            # TypeError: entry parsed to a dict, but its "content" field isn't
+                            # a string (e.g. a number or null) -- `in` on a non-iterable, or
+                            # re.findall() on a non-string, both raise TypeError, not
+                            # AttributeError. Narrowed (not a catch-all) since these are all
+                            # expected, routine shapes of "this line wasn't the well-formed
+                            # envelope we're scanning for", not "any error at all" -- logged
+                            # at debug, not warning, so it doesn't spam normal operation.
                             logger.debug(f"parse_family_tree: skipping unparseable line in {transcript_path}: {e}")
-        except Exception as e:
+        except Exception as e:  # audit-ignore-catch-all: one agent's unreadable/corrupt transcript file must not abort the scan of every other agent_dir in this loop.
             logger.warning(f"parse_family_tree: failed to read transcript {transcript_path}: {e}")
             
     root_id = self_agent_id
@@ -326,7 +336,7 @@ def is_agent_dead(transcript_path):
                     return False
             except json.JSONDecodeError:
                 continue
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: an unreadable/corrupt transcript must not crash the caller -- fails safe to "assuming not dead" below.
         logger.warning(f"is_agent_dead: failed to read/scan {transcript_path}, assuming not dead: {e}")
     return False
 
@@ -782,7 +792,13 @@ async def wait_for_all_complete(
                         "file": file_path,
                         "content": f.read()
                     })
-            except Exception as e:
+            except (OSError, UnicodeDecodeError) as e:
+                # OSError: missing/unreadable/not-a-file path (an agent never wrote it, wrote
+                # it somewhere else, or a permissions issue). UnicodeDecodeError: the file
+                # isn't valid text under the default encoding (e.g. an agent wrote binary
+                # output here by mistake). One bad output_files entry must not lose the
+                # other agents' real results, so the error is surfaced to the caller inline
+                # instead of raised.
                 outputs.append({
                     "file": file_path,
                     "error": str(e)
@@ -921,7 +937,7 @@ async def spawn_managed_daemons(session_id: str, commands_json: str) -> str:
     
     try:
         commands = json.loads(commands_json)
-    except Exception as e:
+    except json.JSONDecodeError as e:
         return f"Invalid JSON format for commands: {e}"
         
     if session_id in SESSION_REGISTRY:
@@ -958,7 +974,8 @@ async def spawn_managed_daemons(session_id: str, commands_json: str) -> str:
             asyncio.create_task(monitor_proc(proc, name))
             
         return f"Successfully spawned {len(SESSION_REGISTRY[session_id]['procs'])} daemons for session {session_id}."
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: `cmd` is an arbitrary, caller-supplied argv (missing executable, bad permissions, bad args, ...) -- the real failure mode isn't knowable in advance, and one bad command in `commands` must still report clearly (both to the caller and into SESSION_REGISTRY for wait_for_agent_state_change's DAEMON_CRASH check) rather than crash this tool call.
+        logger.warning(f"spawn_managed_daemons: failed to spawn daemons for session {session_id}: {e}")
         SESSION_REGISTRY[session_id]["dead"] = True
         SESSION_REGISTRY[session_id]["error"] = f"Failed to spawn daemons: {e}"
         return SESSION_REGISTRY[session_id]["error"]
@@ -1051,10 +1068,16 @@ async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id:
                         # ask_executor()) wants readable instructions, not a
                         # JSON blob it has to parse itself to find them.
                         return payload.get("prompt", raw_str)
-                except Exception as e:
-                    # Expected for the common case of a plain-text message (not
-                    # every sender's payload is a structured JSON envelope) --
-                    # falls through to returning the raw string either way.
+                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    # json.JSONDecodeError: expected for the common case of a plain-text
+                    # message (not every sender's payload is a structured JSON envelope).
+                    # KeyError: a "_meta_expectation" envelope missing its required "file"
+                    # key. TypeError: "_meta_expectation" parsed to something other than a
+                    # dict (exp["file"] on a non-dict), or "timeout_mins" isn't numeric
+                    # (str * int, then float + str in the deadline computation). All fall
+                    # through to returning the raw string either way -- not a catch-all,
+                    # since each is a specific, anticipated shape of "this wasn't a
+                    # well-formed expectation envelope", not "any error at all".
                     logger.debug(f"wait_for_inbox: message on {queue_name} is not a structured JSON envelope, returning raw: {e}")
 
                 return raw_str

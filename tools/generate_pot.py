@@ -6,6 +6,7 @@
 import os
 import ast
 import datetime
+import logging
 from collections import defaultdict
 
 
@@ -36,11 +37,15 @@ def find_translatable_strings(root_dir):
                     # Walk the AST looking for function calls
                     for node in ast.walk(tree):
                         if isinstance(node, ast.Call):
-                            # Check if the function being called is named '_'
-                            try:
-                                func_id = node.func.id
-                            except AttributeError:
-                                func_id = None
+                            # Check if the function being called is named '_'. Real fix,
+                            # 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL
+                            # AI LAZINESS: Catch-all AttributeError): node.func is only ever
+                            # an ast.Name (has .id) for a plain `_(...)` call; any other call
+                            # shape (an ast.Attribute for `self._(...)`, a Subscript, etc.)
+                            # has no .id at all. isinstance() expresses that exactly, with no
+                            # except block to mask an unrelated AttributeError raised
+                            # elsewhere in this branch.
+                            func_id = node.func.id if isinstance(node.func, ast.Name) else None
                             if func_id == "_":
                                 # Ensure it has at least one argument and that argument is a static string
                                 if (
@@ -57,7 +62,6 @@ def find_translatable_strings(root_dir):
                 except SyntaxError as e:
                     print(f"[WARN] Syntax error, skipping {filepath}: {e}")
                 except Exception as e: # audit-ignore-catch-all
-                    import logging
                     logging.getLogger(__name__).warning(f"[WARN] Could not parse {filepath}: {e}")
                     print(f"[WARN] Could not parse {filepath}: {e}")
 

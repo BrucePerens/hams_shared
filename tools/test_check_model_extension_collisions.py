@@ -16,6 +16,7 @@ import contextlib
 import io
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -279,7 +280,6 @@ class ScanIntegrationTests(unittest.TestCase):
             "mod_extender",
             'class Bar(models.Model):\n    _inherit = "ham.repeater.public.view"\n',
         )
-        import subprocess
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_model_extension_collisions.py")
         result = subprocess.run([sys.executable, script, self.tmp], capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 1)
@@ -311,7 +311,6 @@ class ScanIntegrationTests(unittest.TestCase):
             "mod_extender",
             'class Bar(models.Model):\n    _inherit = "ham.repeater.public.view"\n',
         )
-        import subprocess
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_model_extension_collisions.py")
         result = subprocess.run([sys.executable, script, self.tmp], capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 1, result.stdout)
@@ -320,7 +319,6 @@ class ScanIntegrationTests(unittest.TestCase):
     def test_an_inherit_only_class_of_a_normal_auto_true_model_is_fine(self):
         self._module("mod_owner", 'class Foo(models.Model):\n    _name = "ham.qso"\n')
         self._module("mod_extender", 'class Bar(models.Model):\n    _inherit = "ham.qso"\n')
-        import subprocess
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_model_extension_collisions.py")
         result = subprocess.run([sys.executable, script, self.tmp], capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout)

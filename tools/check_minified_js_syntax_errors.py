@@ -37,6 +37,7 @@ this check only reports whatever Node's parser says about the byte offset in
 the minified (whitespace-stripped, hard for a human to read) output.
 """
 
+import ast
 import os
 import sys
 import subprocess
@@ -80,8 +81,6 @@ def collect_minified_js_assets(repo_root):
     names it appears in -- identical logic to check_minified_js_nested_templates.py's own
     collector (kept as a separate copy rather than a shared import, matching this codebase's own
     established convention of each check_*.py tool staying independently invocable)."""
-    import ast
-
     asset_to_bundles = {}
     for root, dirs, files in os.walk(repo_root):
         if "radae" in dirs:
@@ -138,7 +137,15 @@ def _check_one(args):
 
     try:
         minified = rjsmin.jsmin(code)
-    except Exception as e:  # rjsmin itself is a regex engine, not immune to raising
+    except (TypeError, MemoryError) as e:
+        # rjsmin's C accelerator (_rjsmin.jsmin) explicitly raises TypeError for a
+        # non-str/bytes argument (see /usr/lib/python3/dist-packages/rjsmin.py's own
+        # `raise TypeError("Unexpected type")`), and a C extension allocating buffers
+        # over arbitrarily large source text can plausibly raise MemoryError. Empirically
+        # probed against pathological inputs (100k+ nested parens, backticks, backslashes,
+        # quotes) with no other exception type observed. Narrowed instead of catch-all so
+        # an unexpected new failure mode surfaces as a real crash of this worker rather
+        # than a silently-mislabeled "syntax error".
         return (asset_path, real_path, f"rjsmin.jsmin() itself raised: {e}")
 
     res = subprocess.run(

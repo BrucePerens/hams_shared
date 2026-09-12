@@ -1273,6 +1273,72 @@ def test_except_importerror_with_skiptest_soft_dependency_tag_is_allowed():
     assert not any("Soft dependencies" in e for e in errors)
 
 
+def test_except_importerror_is_still_forbidden_via_ast_outside_tools():
+    # Companion to the tools/ exclusion test below: confirms the AST-based visit_Try check
+    # (check_ast_vulnerabilities) still fires for a real Odoo module / daemon path, not just
+    # the GENERAL_ERROR_RULES text-based twin exercised by _scan_file below.
+    source = "try:\n    import optional_thing\nexcept ImportError:\n    optional_thing = None\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/models/res_users.py")
+    assert any("Soft dependencies" in e for e in errors)
+
+
+def test_except_importerror_soft_dependency_is_allowed_in_tools_dir_ast():
+    # hams_shared/tools/ 326-finding discovery, 2026-09-12: a standalone dev CLI script (e.g.
+    # odoo_registry_builder.py, whose own docstring documents deliberate graceful degradation
+    # when Odoo isn't importable) isn't a long-running Odoo module or daemon, so the rule's own
+    # rationale ("Modules and daemons must fast-fail") doesn't describe it. Covers the AST-based
+    # visit_Try check (check_ast_vulnerabilities), gated on the literal "/tools/" path segment.
+    source = "try:\n    import optional_thing\nexcept ImportError:\n    optional_thing = None\n"
+    errors, _warnings = _dict_findings(source, filepath="/tmp/hams_shared/tools/some_script.py")
+    assert not any("Soft dependencies" in e for e in errors)
+
+
+def test_except_importerror_soft_dependency_is_allowed_in_tools_dir_text_rule():
+    # Same exclusion, but for the GENERAL_ERROR_RULES text-based twin of the AST rule above
+    # (the one that fires per raw source line rather than per AST Try node) -- both had to be
+    # updated since they duplicate the same check via two different mechanisms.
+    source = "try:\n    import optional_thing\nexcept ImportError:\n    optional_thing = None\n"
+    errors, _warnings = _scan_file(source, "tools/some_script.py", is_odoo_module=False)
+    assert not any("Soft dependencies" in e for e in errors)
+
+
+def test_except_importerror_soft_dependency_text_rule_still_fires_outside_tools():
+    source = "try:\n    import optional_thing\nexcept ImportError:\n    optional_thing = None\n"
+    errors, _warnings = _scan_file(source, "some_module/models/res_users.py", is_odoo_module=True)
+    assert any("Soft dependencies" in e for e in errors)
+
+
+def test_catch_all_keyerror_is_forbidden_by_default():
+    source = "try:\n    x = d['key']\nexcept KeyError:\n    x = None\n"  # burn-ignore-vendor-patch-text
+    errors, _warnings = _scan_file(source, "some_module/models/res_users.py", is_odoo_module=True)
+    assert any("Catch-all KeyError is forbidden" in e for e in errors)
+
+
+def test_catch_all_keyerror_with_the_os_account_probe_tag_is_exempt():
+    # hams_shared/tools/ 326-finding discovery, 2026-09-12: pwd.getpwnam()/grp.getgrnam()
+    # existence probes (infrastructure.py's apply_permissions/provision_system_accounts,
+    # test.py's postgres-user/orig-user fallbacks) use `except KeyError:` as the only
+    # non-exception-based way stdlib offers to check "does this Unix account/group exist" --
+    # a legitimate, narrow, already-reviewed exception, not the self.env-model-lookup
+    # laziness this rule's own message describes. See burn-ignore-os-account-probe's own
+    # definition (in the UNAUTHORIZED BYPASS allow-list) for the full, per-real-site
+    # rationale.
+    source = (
+        "try:\n"
+        "    pwd.getpwnam(user)\n"
+        "except KeyError:  # burn-ignore-os-account-probe\n"
+        "    useradd(user)\n"
+    )
+    errors, _warnings = _scan_file(source, "infrastructure.py", is_odoo_module=False)
+    assert not any("Catch-all KeyError is forbidden" in e for e in errors)
+
+
+def test_catch_all_attributeerror_is_forbidden_by_default():
+    source = "try:\n    x = obj.maybe_attr\nexcept AttributeError:\n    x = None\n"  # burn-ignore-vendor-patch-text
+    errors, _warnings = _scan_file(source, "some_module/models/res_users.py", is_odoo_module=True)
+    assert any("Catch-all AttributeError is forbidden" in e for e in errors)
+
+
 def test_a_bare_catch_all_except_is_forbidden_without_the_audit_tag():
     source = "try:\n    risky()\nexcept:\n    handle_it()\n"
     errors, _warnings = _dict_findings(source)
@@ -5028,7 +5094,7 @@ def test_tools_directory_is_pruned_by_default_but_scanned_with_the_flag(tmp_path
     # not that every rule now fires there regardless of fit.
     tools_file = tmp_path / "hams_shared" / "tools" / "some_checker.py"
     tools_file.parent.mkdir(parents=True)
-    tools_file.write_text("try:\n    x.y\nexcept AttributeError:\n    pass\n", encoding="utf-8")
+    tools_file.write_text("try:\n    x.y\nexcept AttributeError:\n    pass\n", encoding="utf-8")  # burn-ignore-vendor-patch-text
     out_default = _run_main(tmp_path)
     assert "some_checker.py" not in out_default
     out_flagged = _run_main(tmp_path, extra_args=["--scan-daemons-and-tools"])

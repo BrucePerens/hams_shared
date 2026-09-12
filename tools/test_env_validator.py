@@ -85,6 +85,18 @@ class CheckSocketTests(unittest.TestCase):
             ev.check_socket("localhost", "not-a-port", "POSTGRES")
         self.assertIn("Failed to connect to localhost:not-a-port", buf.getvalue())
 
+    def test_a_connection_failure_is_also_logged_not_just_printed(self):
+        # Regression test for the `# audit-ignore-catch-all` tag added to this handler:
+        # check_burn_list.py's catch-all-exception rule requires a real logging call (or an
+        # unconditional re-raise) inside the handler to prove the caught exception isn't
+        # fully swallowed -- print_warning()'s stderr write alone doesn't satisfy that (it
+        # isn't AST-visible as a logging call), so a real logging.exception() call was added.
+        with self.assertLogs(level="ERROR") as log_ctx, patch(
+            "socket.create_connection", side_effect=ConnectionRefusedError("refused")
+        ):
+            ev.check_socket("localhost", "5432", "RABBITMQ")
+        self.assertTrue(any("Failed to connect to localhost:5432" in msg for msg in log_ctx.output))
+
 
 class CheckSmtpTests(unittest.TestCase):
     def test_missing_host_or_port_warns_without_connecting(self):
@@ -137,6 +149,19 @@ class CheckSmtpTests(unittest.TestCase):
         self.assertIn("STARTTLS not available or failed for h:25", buf.getvalue())
         self.assertIn("no TLS", buf.getvalue())
 
+    def test_starttls_failure_is_also_logged_not_just_printed(self):
+        # Regression test for the `# audit-ignore-catch-all` tag added to this handler (see
+        # test_a_connection_failure_is_also_logged_not_just_printed above for the same rule).
+        server = MagicMock()
+        server.starttls.side_effect = smtplib.SMTPNotSupportedError("no TLS")
+        with self.assertLogs(level="ERROR") as log_ctx, patch.dict(
+            "os.environ",
+            {"SMTP_HOST": "h", "SMTP_PORT": "25", "SMTP_USER": "u", "SMTP_PASS": "p"},
+            clear=True,
+        ), patch("smtplib.SMTP", return_value=server):
+            ev.check_smtp()
+        self.assertTrue(any("STARTTLS not available or failed for h:25" in msg for msg in log_ctx.output))
+
     def test_a_connection_failure_is_reported_with_host_port_and_the_underlying_error(self):
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf), patch.dict(
@@ -145,6 +170,16 @@ class CheckSmtpTests(unittest.TestCase):
             ev.check_smtp()
         self.assertIn("Failed to connect or verify SMTP server at h:25", buf.getvalue())
         self.assertIn("conn refused", buf.getvalue())
+
+    def test_a_connection_failure_is_also_logged_not_just_printed(self):
+        # Regression test for the `# audit-ignore-catch-all` tag added to this handler.
+        with self.assertLogs(level="ERROR") as log_ctx, patch.dict(
+            "os.environ", {"SMTP_HOST": "h", "SMTP_PORT": "25"}, clear=True
+        ), patch("smtplib.SMTP", side_effect=OSError("conn refused")):
+            ev.check_smtp()
+        self.assertTrue(
+            any("Failed to connect or verify SMTP server at h:25" in msg for msg in log_ctx.output)
+        )
 
 
 class CheckGeminiTests(unittest.TestCase):
@@ -235,6 +270,24 @@ class CheckGeminiTests(unittest.TestCase):
         ), patch("urllib.request.urlopen", side_effect=raise_url_error):
             ev.check_gemini()
         self.assertIn("Network error when verifying API key: no network", buf.getvalue())
+
+    def test_a_wholly_unexpected_exception_is_reported_and_also_logged(self):
+        # Regression test for the `# audit-ignore-catch-all` tag added to check_gemini's final
+        # bare `except Exception` handler (the true catch-all fallback below the specific
+        # HTTPError/URLError branches). Same rule as the other tests in this file: a real
+        # logging call is now required, and present, alongside the existing print_warning().
+        def raise_something_unexpected(*_a, **_k):
+            raise ValueError("totally unexpected")
+
+        buf = io.StringIO()
+        with self.assertLogs(level="ERROR") as log_ctx, contextlib.redirect_stderr(buf), patch.dict(
+            "os.environ", {"GEMINI_API_KEY": "x"}, clear=True
+        ), patch("urllib.request.urlopen", side_effect=raise_something_unexpected):
+            ev.check_gemini()
+        self.assertIn("Unexpected error during API key verification", buf.getvalue())
+        self.assertTrue(
+            any("Unexpected error during API key verification" in msg for msg in log_ctx.output)
+        )
 
 
 class LoadEnvFilesTests(unittest.TestCase):

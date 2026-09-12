@@ -16,6 +16,7 @@ import socket
 import urllib.request
 from urllib.error import URLError, HTTPError
 import glob
+import logging
 
 
 def load_env_files():
@@ -50,7 +51,8 @@ def check_socket(host, port, name):
         port = int(port)
         with socket.create_connection((host, port), timeout=5):
             pass
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: this whole script is documented (see module docstring) as non-fatal -- every check warns and continues so the other checks and the eventual `sys.exit(0)` still run.
+        logging.exception("Failed to connect to %s:%s - %s", host, port, e)
         print_warning(name, f"Failed to connect to {host}:{port} - {e}")
 
 
@@ -73,17 +75,19 @@ def check_smtp():
         if user and password:
             try:
                 server.starttls()
-            except Exception as e:
+            except Exception as e:  # audit-ignore-catch-all
                 # Expected/benign for servers that don't offer STARTTLS (e.g. local test
                 # servers like MailHog); still surfaced so a real, unexpected TLS failure
                 # doesn't disappear silently.
+                logging.exception("STARTTLS not available or failed for %s:%s: %s", host, port, e)
                 print_warning("SMTP", f"STARTTLS not available or failed for {host}:{port}, continuing without it: {e}")
             try:
                 server.login(user, password)
             except smtplib.SMTPAuthenticationError as e:
                 print_warning("SMTP", f"Authentication failed for user '{user}': {e}")
         server.quit()
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: non-fatal per module docstring -- other checks and the final sys.exit(0) must still run.
+        logging.exception("Failed to connect or verify SMTP server at %s:%s: %s", host, port, e)
         print_warning("SMTP", f"Failed to connect or verify SMTP server at {host}:{port}: {e}")
 
 
@@ -116,7 +120,8 @@ def check_gemini():
             print_warning("GEMINI", f"API Key verification failed with HTTP {e.code}: {e.reason}")
     except URLError as e:
         print_warning("GEMINI", f"Network error when verifying API key: {e.reason}")
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: non-fatal per module docstring -- other checks and the final sys.exit(0) must still run.
+        logging.exception("Unexpected error during API key verification: %s", e)
         print_warning("GEMINI", f"Unexpected error during API key verification: {e}")
 
 

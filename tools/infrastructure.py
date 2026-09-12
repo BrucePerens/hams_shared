@@ -12,7 +12,9 @@ import compileall
 import contextlib
 import glob
 import grp
+import json
 import logging
+import multiprocessing
 import os
 import pwd
 import shlex
@@ -126,13 +128,34 @@ def micro_privilege(username):
 
 
 def format_env(text, env_vars):
+    """Substitute `{VAR}`-style placeholders in `text` from `env_vars`.
+
+    Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery): this used to catch
+    KeyError and silently return `text` unformatted, with a comment (and a now-corrected
+    test) claiming that was needed so "a hook with an unresolved placeholder shouldn't
+    crash the whole provisioning run." Checked directly against every real call site
+    (grep for `format_env(` -- there are exactly four, all inside provision_static_files):
+    none of them format a hook's own template text at all -- hooks are plain functions run
+    AFTER a static file is written, never passed through format_env. All four real call
+    sites format a `static_files` MANIFEST entry's `path`, `src`, `url`, or `content`, and
+    every `{VAR}` any such entry actually references (DOMAIN, PDNS_API_KEY, HAMS_COM_DIR,
+    HAMS_COMMUNITY_DIR, DEB_CODENAME, DEB_TARGET_ARCH_CPU) is unconditionally populated in
+    env_vars before provision_static_files ever runs (DOMAIN/PDNS_API_KEY at their own
+    fail-fast checks; HAMS_COM_DIR/HAMS_COMMUNITY_DIR unconditionally set, with fallback
+    defaults, right before every provision_static_files call; DEB_CODENAME/
+    DEB_TARGET_ARCH_CPU populated inline in provision_static_files itself just before use).
+    A KeyError here therefore always means a real authoring bug (a typo'd variable name, or
+    the one edge case where the `dpkg-architecture` probe for DEB_TARGET_ARCH_CPU failed) --
+    silently returning the unformatted template used to mean writing a real file to disk
+    with a literal, unresolved `{VAR}` in its path or body while reporting success, exactly
+    the "no-bricking... but also no silent wrong state" failure shape hams-fail-fast-
+    philosophy exists to prevent. write_env_files() elsewhere in this same file already
+    gets this right for the analogous case (`if k in env_vars`, skipping rather than
+    KeyError-catching) -- this now matches that convention instead of contradicting it.
+    """
     if not text:
         return ""
-    try:
-        return text.format(**(env_vars or {}))
-    except KeyError as e:
-        _logger.debug("KeyError formatting %s: %s", text, e)
-        return text
+    return text.format(**(env_vars or {}))
 
 
 def safe_remove(path):
@@ -150,7 +173,7 @@ def apply_permissions(path, owner_str, mode_int):
             user, group = owner_str.split(":")
             uid = pwd.getpwnam(user).pw_uid
             gid = grp.getgrnam(group).gr_gid
-        except KeyError as e:
+        except KeyError as e:  # burn-ignore-os-account-probe
             _logger.warning("User/Group %s not found: %s", owner_str, e)
 
     def _apply(p):
@@ -2966,12 +2989,12 @@ def provision_system_accounts(run_cmd_func, environment="prod", dest_dir=""):
 
         try:
             grp.getgrnam(group)
-        except KeyError:
+        except KeyError:  # burn-ignore-os-account-probe
             run_cmd_func(["groupadd", "--system", group])
 
         try:
             pwd.getpwnam(user)
-        except KeyError:
+        except KeyError:  # burn-ignore-os-account-probe
             run_cmd_func(
                 ["useradd", "--system", "-g", group, "-d", home, "-s", shell, user]
             )
@@ -2980,7 +3003,7 @@ def provision_system_accounts(run_cmd_func, environment="prod", dest_dir=""):
             try:
                 pwd.getpwnam(extra_user)
                 run_cmd_func(["usermod", "-a", "-G", group, extra_user])
-            except KeyError:
+            except KeyError:  # burn-ignore-os-account-probe
                 _logger.debug("User %s not found, skipping group addition.", extra_user)
 
 
@@ -3217,7 +3240,6 @@ def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
             run_cmd_func(["sudo", "chmod", "a+x", home_dir])
 
     try:
-        import multiprocessing
         cpu_count = multiprocessing.cpu_count()
         workers = cpu_count * 2 + 1
         
@@ -3237,7 +3259,7 @@ def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
     # Stop Odoo service to prevent database/port conflicts during initialization
     try:
         run_cmd_func(["sudo", "systemctl", "stop", "odoo.service"])
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: best-effort stop before init (e.g. service already stopped/not installed yet on a fresh box); logged and initialization proceeds regardless.
         _logger.warning("Failed to stop odoo.service before init: %s", e)
 
     cmd = [
@@ -3518,8 +3540,6 @@ def load_and_prompt_env(env_vars, is_test):
             if cf_token and cf_token != "none":
                 print(f"[*] Attempting to derive Cloudflare Zone ID for {domain}...")
                 try:
-                    import urllib.request
-                    import json
                     req = urllib.request.Request(
                         f"https://api.cloudflare.com/client/v4/zones?name={domain}",
                         headers={"Authorization": f"Bearer {cf_token}", "Content-Type": "application/json"}
@@ -3532,8 +3552,9 @@ def load_and_prompt_env(env_vars, is_test):
                             env_vars["CLOUDFLARE_ZONE_ID"] = zone_id
                         else:
                             print("[!] Could not find Zone ID for domain.")
-                except Exception as e:
+                except Exception as e:  # audit-ignore-catch-all: best-effort Zone ID auto-derivation; falls back to "none" below regardless of cause (DNS/network failure, malformed JSON, unexpected API response shape), so provisioning must continue rather than abort.
                     print(f"[!] Failed to fetch Cloudflare Zone ID: {e}")
+                    _logger.warning("Failed to fetch Cloudflare Zone ID for %s: %s", domain, e)
             
         env_vars.setdefault("CLOUDFLARE_ZONE_ID", "none")
         env_vars.setdefault("CLOUDFLARE_TUNNEL_TOKEN", "none")
@@ -3731,7 +3752,7 @@ def provision_environment(
                             hams_community_dir,
                         ]
                     )
-                except KeyError as e:
+                except KeyError as e:  # burn-ignore-os-account-probe
                     _logger.debug("Original user %s not found: %s", orig_user, e)
         except subprocess.CalledProcessError as e:
             _logger.warning("[*] Failed to clone hams_community: %s", e)
@@ -3978,7 +3999,7 @@ def provision_environment(
                 os.makedirs(user_tmp, exist_ok=True)
                 apply_permissions(user_tmp, f"{orig_user}:{orig_user}", None)
 
-            except KeyError as e:
+            except KeyError as e:  # burn-ignore-os-account-probe
                 _logger.debug("Original user %s not found: %s", orig_user, e)
 
         _logger.info("[*] Linking custom systemd units...")

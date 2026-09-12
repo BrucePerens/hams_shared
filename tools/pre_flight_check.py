@@ -13,6 +13,8 @@ import os
 import sys
 import ast
 import argparse
+import json
+import logging
 
 # Core Odoo modules this project does not itself own/tier -- shared by both
 # the missing-dependency check and the tier-violation check below (moved to
@@ -46,7 +48,6 @@ def parse_manifest(manifest_path):
             manifest_content = f.read()
             return ast.literal_eval(manifest_content)
     except Exception as e: # audit-ignore-catch-all
-        import logging
         logging.getLogger(__name__).error(f"❌ Error parsing manifest at '{manifest_path}': {e}")
         print(f"❌ Error parsing manifest at '{manifest_path}': {e}")
         sys.exit(1)
@@ -79,8 +80,6 @@ def main():
     )
     TIERS = {}
     if os.path.exists(tier_config_path):
-        import json
-
         with open(tier_config_path, "r", encoding="utf-8") as f:
             loaded_tiers = json.load(f)
             TIERS = {int(k): v for k, v in loaded_tiers.items()}

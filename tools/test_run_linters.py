@@ -315,7 +315,13 @@ class Flake8ExcludeListTests(unittest.TestCase):
         # this file's own flake8 step passes. Confirmed to fail against the pre-fix exclude
         # value (no ".claude" entry): flake8 reported the worktree file's F401 violation.
         if shutil.which("flake8") is None:
-            self.skipTest("flake8 not installed in this environment")
+            # Genuinely optional dev tool (confirmed live, 2026-09-12: `which flake8`
+            # resolves on this dev box at /usr/bin/flake8, version 7.1.1, so this branch
+            # does NOT currently fire here) -- a checkout on a machine without flake8
+            # installed (e.g. a minimal container) can't run this specific real-flake8
+            # empirical test at all; the textual test above (test_the_exclude_list_names_dot_claude)
+            # still covers the same regression without needing the real binary.
+            self.skipTest("flake8 not installed in this environment")  # burn-ignore-skiptest-soft-dependency
         tmp = tempfile.mkdtemp()
         try:
             worktree_file = os.path.join(tmp, ".claude", "worktrees", "sess1", "bad.py")

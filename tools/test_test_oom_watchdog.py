@@ -57,8 +57,6 @@ def _measure_process_tree(runner_pid, exclude_pid):
     -- the exact function OOMWatchdog.run() itself calls every 2 seconds
     in production -- rather than a hand-copied reimplementation, so this
     test actually breaks if that function's logic regresses."""
-    import psutil
-
     total = _test_runner.measure_process_tree_memory(runner_pid, exclude_pid)
     num_procs = len(psutil.Process(runner_pid).children(recursive=True))
     return total, num_procs
@@ -121,8 +119,6 @@ class TestOOMWatchdogSharedMemoryAccounting(unittest.TestCase):
         return target_pid
 
     def _kill_tree(self, root_pid):
-        import psutil
-
         try:
             root = psutil.Process(root_pid)
             for p in root.children(recursive=True):

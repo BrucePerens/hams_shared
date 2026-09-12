@@ -239,7 +239,41 @@ GENERAL_ERROR_RULES = [
         "CRITICAL OWL SYNTAX: Iterating directly over `state.X` in a t-foreach can crash if the array is uninitialized in useState(). Use a fallback like `t-foreach=\"state.X || []\"` or ensure strict initialization in the component.",
     ),
     (
-        r"\.py$",
+        # Excludes hams_shared/tools/ (2026-09-12, the hams_shared/tools/ 326-finding
+        # discovery, same shape as the sibling CRITICAL TENANT LEAK and CRITICAL
+        # ARCHITECTURE: Native patch decorators exclusions above): this rule's own message
+        # says "Modules and daemons must fast-fail" -- daemons are deliberately NOT excluded
+        # here, only tools/, because the rule's rationale (a long-running Odoo module or
+        # daemon silently degrading instead of crashing on a missing dependency) genuinely
+        # doesn't describe a one-shot standalone dev CLI script. Confirmed live, all 10
+        # findings, zero real bugs:
+        #   - list_routes.py: `try: import odoo... except ImportError as e: print(...);
+        #     sys.exit(1)` -- this already fails fast, it just prints a friendlier message
+        #     than a bare traceback before exiting non-zero.
+        #   - bulk_explanation_manager.py: an optional import of hams_com's own
+        #     daemons/hams_config.py, whose own comment already documents why (hams_shared is
+        #     shared with hams_open, which has no sibling hams_com checkout) -- main() still
+        #     calls sys.exit(1) with a clear message if the import failed and the tool is
+        #     actually invoked, the same "optional cross-repo dependency" shape already
+        #     precedented by burn-ignore-optional-cross-repo-dep elsewhere in this file.
+        #   - test_mcp_server.py (an MCP tool server for running Odoo tests, not itself a
+        #     unit test suite despite its filename): `importlib.import_module(f"odoo.addons.
+        #     {mod}.tests")` inside `except ImportError: print(...); continue` is a normal
+        #     "does this addon even have a tests package" existence probe, not a masked bug --
+        #     plenty of real addons have no tests subpackage at all.
+        #   - odoo_registry_builder.py: find_odoo_core_addons_path()'s own docstring says
+        #     "Returns None (not a hard failure) if Odoo isn't importable in the current
+        #     environment -- callers should treat that as 'core coverage unavailable here',
+        #     not crash the whole registry build over it" -- deliberate, documented graceful
+        #     degradation for a static-analysis tool that must also run without Odoo
+        #     installed.
+        #   - test_check_burn_list.py: a meta-test's own fixture string, `source = "try:\n
+        #     import optional_thing\nexcept ImportError:\n    optional_thing = None\n"`,
+        #     feeding this exact checker a deliberately bad-looking snippet to verify the
+        #     checker itself still catches it in a real Odoo/daemon file -- not a real
+        #     violation, the same "test fixture string trips a text-based regex" class as the
+        #     /tmp and TransactionCase exclusions above.
+        r"^(?!.*(?:^|/)tools/).*\.py$",
         re.compile(r"except\s+ImportError\s*:"),
         "CRITICAL FAST FAIL: Soft dependencies (try/except ImportError) are forbidden. Modules and daemons must fast-fail on missing dependencies. If Odoo, use manifest external_dependencies.",
     ),
@@ -1836,8 +1870,21 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     isinstance(handler.type, ast.Name)
                     and handler.type.id == "ImportError"
                 ):
-                    if "burn-ignore-skiptest-soft-dependency" not in self.node_span_text(
-                        node
+                    # Mirrors the identical tools/ exclusion added to this same rule's
+                    # GENERAL_ERROR_RULES text-based twin (see that entry's own comment for
+                    # the full per-file evidence, 2026-09-12): the rule's own message says
+                    # "Modules and daemons must fast-fail" -- daemons are deliberately still
+                    # covered, only a standalone hams_shared/tools/ dev CLI script is excluded,
+                    # since the rule's rationale (a long-running module/daemon silently
+                    # degrading) doesn't describe a one-shot tool that either already fails
+                    # fast with a friendlier message (list_routes.py, sys.exit(1)) or
+                    # documents genuine, deliberate optional-dependency graceful degradation
+                    # (odoo_registry_builder.py's find_odoo_core_addons_path() docstring).
+                    in_tools_dir = "/tools/" in self.filepath.replace("\\", "/")
+                    if (
+                        not in_tools_dir
+                        and "burn-ignore-skiptest-soft-dependency"
+                        not in self.node_span_text(node)
                     ):
                         self.add_error(
                             node.lineno,
@@ -4130,6 +4177,19 @@ def scan_file(filepath, is_odoo_module=False):
                 # any real code that rule concerns. First used by
                 # hams_s3/scripts/install_oca_storage.py's OCA
                 # storage_backend vendoring/patch script.
+                #
+                # Second use, 2026-09-12 (hams_shared/tools/ 326-finding discovery): the
+                # identical shape for the CRITICAL AI LAZINESS: Catch-all AttributeError
+                # rule, not just the soft-dependency one above -- test_check_burn_list.py's
+                # own test_tools_directory_is_pruned_by_default_but_scanned_with_the_flag
+                # deliberately writes a fixture string containing "except AttributeError:"
+                # to a REAL temp file to prove the AttributeError rule still fires under
+                # --scan-daemons-and-tools for tools/ paths (unlike the soft-dependency and
+                # native-patch-decorator rules, this one is intentionally NOT tools/-scoped)
+                # -- but that fixture string is written as a single physical Python source
+                # line in THIS file, so the outer scan of test_check_burn_list.py's own
+                # source trips on its own test data, the same "string literal describing a
+                # violation is not the violation" shape as the OCA vendoring case above.
                 "burn-ignore-vendor-patch-text",
                 # A search()/search_count()/read_group() call inside a
                 # per-company loop that ISN'T the ordinary repeated-query
@@ -4233,6 +4293,31 @@ def scan_file(filepath, is_odoo_module=False):
                 # test_onboarding_tours.py, both gated on the same
                 # zero_sudo.security.utils._resolve_dependency_cycle("ham_testing")
                 # check the production signup page itself uses.
+                #
+                # Also covers a closely related, deliberately-not-split-into-a-separate-tag
+                # shape (hams_shared/tools/ 326-finding discovery, 2026-09-12): a test whose
+                # entire premise (a chmod 0o000 directory genuinely denies access) is false
+                # under a specific, checkable runtime precondition rather than a missing
+                # library/binary -- test_reap_stale_test_databases.py's
+                # test_an_unreadable_subdirectory_raises_rather_than_silently_under_reporting
+                # skips only `if os.geteuid() == 0`, since root's own permission-bit bypass
+                # means the directory genuinely ISN'T unreadable in that specific context, the
+                # same "the test's real precondition genuinely isn't met right now, mirroring
+                # a real runtime fact rather than laziness" shape as the soft-dependency case
+                # above, just keyed on privilege level instead of package presence.
+                #
+                # Same discovery pass also covers two more of this tag's already-established
+                # "genuinely optional binary not installed" shape (test_run_rust_coverage.py's
+                # cargo-llvm-cov check, test_run_linters.py's flake8 check -- both confirmed
+                # actually installed on the dev box this was found on, so neither skip fires
+                # there, the same way the original ham_onboarding uses aren't always live
+                # either) and one more shape again keyed on a real, checkable runtime fact
+                # rather than package presence: test_rmsgw_protocol.py's
+                # RmsgwProtocolIntegrationTest.setUp() skips if a real, shared system file
+                # (/usr/local/etc/rmsgw/hosts) isn't writable by the current user -- a one-time
+                # operator `sudo chown` setup step the module's own docstring documents at
+                # length, deliberately not automated by the test itself per this codebase's
+                # zero-sudo policy for committed code.
                 "burn-ignore-skiptest-soft-dependency",
                 # A one-shot, personal local-dev CLI/debug script (not a
                 # daemon, not shipped, not reachable in any deployed
@@ -4345,6 +4430,35 @@ def scan_file(filepath, is_odoo_module=False):
                 # comment for the full rationale. First used by test_check_burn_list.py's
                 # test_noqa_comment_is_forbidden_linter_evasion.
                 "burn-ignore-noqa-example",
+                # `except KeyError:` (or `except KeyError as e:`) around pwd.getpwnam()/
+                # grp.getgrnam(), used purely as an OS-level existence probe for a Unix
+                # account or group, not to mask a missing Odoo model or a broken schema
+                # contract (what the Catch-all KeyError rule's own message is actually
+                # about -- "Let missing models in self.env fail fast"). The pwd/grp stdlib
+                # modules offer no non-exception-based "does this user/group exist" check,
+                # so this IS the correct, idiomatic mechanism, not a shortcut around one --
+                # confirmed by reading every real site (all 9, hams_shared/tools/
+                # 326-finding discovery, 2026-09-12), each already-tested or already-
+                # idempotent-by-design:
+                #   - infrastructure.py's apply_permissions(): an unresolvable "user:group"
+                #     owner string skips chown but still chmods, already locked in by
+                #     test_infrastructure.py's own
+                #     test_an_unresolvable_owner_string_skips_chown_but_still_chmods.
+                #   - infrastructure.py's provision_system_accounts(): the textbook
+                #     idempotent "does this system group/user already exist? if not,
+                #     create it" pattern (groupadd/useradd), plus the add_to_users loop's
+                #     "only usermod -a -G if the extra user actually exists yet."
+                #   - infrastructure.py's two "chown a cloned repo / a per-user tmp dir
+                #     back to the invoking sudo user" sites: best-effort ownership
+                #     restoration for orig_user, skipped (with a debug log) if that
+                #     user genuinely doesn't resolve.
+                #   - test.py's "prefer the postgres system user, fall back to root" and
+                #     "resolve orig_user's uid, or -1 if it doesn't resolve" sites -- same
+                #     existence-probe idiom, just for the test-runner's own sandboxing
+                #     rather than production provisioning.
+                # None of these touch self.env or an Odoo model at all; the rule's own
+                # rationale doesn't describe any of them.
+                "burn-ignore-os-account-probe",
             ]
         ):
             errors_found.append(

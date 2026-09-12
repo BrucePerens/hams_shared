@@ -6,6 +6,7 @@
 Unit tests for check_function_test_anchors.py (ADR 0090).
 """
 
+import ast
 import os
 import shutil
 import subprocess
@@ -32,29 +33,21 @@ def _init_git_repo(root):
 
 class DirectFunctionsTests(unittest.TestCase):
     def test_a_module_level_function_is_found(self):
-        import ast
-
         tree = ast.parse("def foo():\n    pass\n")
         found = list(cfta._direct_functions(tree.body, []))
         self.assertEqual([q for q, _n in found], ["foo"])
 
     def test_a_class_method_is_found_with_its_qualified_name(self):
-        import ast
-
         tree = ast.parse("class Foo:\n    def bar(self):\n        pass\n")
         found = list(cfta._direct_functions(tree.body, []))
         self.assertEqual([q for q, _n in found], ["Foo.bar"])
 
     def test_a_nested_closure_is_not_found(self):
-        import ast
-
         tree = ast.parse("def outer():\n    def inner():\n        pass\n    return inner\n")
         found = list(cfta._direct_functions(tree.body, []))
         self.assertEqual([q for q, _n in found], ["outer"])
 
     def test_an_async_function_is_found(self):
-        import ast
-
         tree = ast.parse("async def foo():\n    pass\n")
         found = list(cfta._direct_functions(tree.body, []))
         self.assertEqual([q for q, _n in found], ["foo"])

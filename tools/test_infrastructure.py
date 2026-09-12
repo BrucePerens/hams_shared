@@ -123,11 +123,20 @@ class FormatEnvTests(unittest.TestCase):
     def test_substitutes_a_real_variable(self):
         self.assertEqual(infra.format_env("host={DOMAIN}", {"DOMAIN": "hams.com"}), "host=hams.com")
 
-    def test_a_missing_variable_returns_the_original_text_unformatted(self):
-        # KeyError is caught -- the format template is returned as-is
-        # rather than raising, since a hook with an unresolved
-        # placeholder shouldn't crash the whole provisioning run.
-        self.assertEqual(infra.format_env("host={MISSING}", {}), "host={MISSING}")
+    def test_a_missing_variable_now_raises_instead_of_silently_degrading(self):
+        # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
+        # LAZINESS: Catch-all KeyError): this used to silently return the unformatted
+        # template instead of raising, on the theory that "a hook with an unresolved
+        # placeholder shouldn't crash the whole provisioning run" -- but format_env() is
+        # never actually called on a hook's own template text (see format_env's own
+        # docstring for the full, checked-against-every-real-call-site rationale). Every
+        # real caller is provision_static_files() writing a path/src/url/content to disk;
+        # a missing key there always means a real authoring bug, and used to mean silently
+        # writing a real file to disk with a literal, unresolved "{VAR}" while reporting
+        # success. See test_provision_static_files_raises_loudly_on_an_unresolved_placeholder
+        # in ProvisionStaticFilesPermissionTests below for that end-to-end case.
+        with self.assertRaises(KeyError):
+            infra.format_env("host={MISSING}", {})
 
 
 class SafeRemoveTests(_TmpDirTestCase):
@@ -474,6 +483,29 @@ class ProvisionStaticFilesPermissionTests(_TmpDirTestCase):
         self.assertEqual(mode_during_write, 0o600)
         self.assertEqual(os.stat(target).st_mode & 0o777, 0o600)
 
+    def test_provision_static_files_raises_loudly_on_an_unresolved_placeholder(self):
+        # Companion to FormatEnvTests.test_a_missing_variable_now_raises_instead_of_silently_degrading:
+        # confirms the fix actually surfaces end-to-end through provision_static_files(),
+        # not just in format_env() in isolation -- a manifest entry referencing a variable
+        # missing from env_vars (a typo, or a var some pre-population step failed to set)
+        # must fail the provisioning run rather than write a file to disk with a literal,
+        # unresolved "{VAR}" in it while reporting success.
+        fake_manifest = {
+            "static_files": [
+                {
+                    "path": os.path.join(self.tmp, "broken.conf"),
+                    "content": "key={TYPOED_VAR_NAME}\n",
+                    "owner": None,
+                    "mode": "600",
+                    "environments": ["prod"],
+                }
+            ]
+        }
+        with patch.dict(infra.MANIFEST, fake_manifest, clear=True):
+            with self.assertRaises(KeyError):
+                infra.provision_static_files(MagicMock(), {}, environment="prod")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "broken.conf")))
+
 
 class ProvisionSystemdOverrideTests(_TmpDirTestCase):
     def setUp(self):
@@ -548,6 +580,28 @@ class LoadAndPromptEnvTests(_SafePatchTestCase):
         self.assertEqual(env_vars["CLOUDFLARE_ZONE_ID"], "none")
         self.assertEqual(env_vars["CLOUDFLARE_TUNNEL_TOKEN"], "none")
 
+    def test_cloudflare_zone_id_derivation_failure_is_logged_and_falls_back_to_none(self):
+        # Regression test for the narrow catch-all-exception fix: a real API
+        # token is supplied (so the urllib.request.urlopen() branch actually
+        # runs) and urlopen is mocked to raise, simulating a real-world
+        # failure mode (DNS/network error, HTTP error, malformed JSON, etc).
+        # This must not crash load_and_prompt_env -- Zone ID derivation is
+        # best-effort -- but the failure must now be both printed (existing
+        # behavior) and logged via _logger.warning (added so the
+        # `# audit-ignore-catch-all` handler satisfies check_burn_list.py's
+        # own "must log or re-raise" requirement instead of silently
+        # swallowing the traceback).
+        env_vars = {"DOMAIN": "hams.com", "CLOUDFLARE_API_TOKEN": "a-real-token"}
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=OSError("simulated network failure"),
+        ), self.assertLogs("infrastructure", level="WARNING") as log_ctx:
+            infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(env_vars["CLOUDFLARE_ZONE_ID"], "none")
+        self.assertTrue(
+            any("Failed to fetch Cloudflare Zone ID" in msg for msg in log_ctx.output)
+        )
+
     def test_never_reads_stdin(self):
         # A regression guard for the exact bug class being removed: nothing
         # in load_and_prompt_env should call input() or getpass.getpass()
@@ -555,7 +609,9 @@ class LoadAndPromptEnvTests(_SafePatchTestCase):
         env_vars = {"DOMAIN": "hams.com"}
         with patch("builtins.input", side_effect=AssertionError("must not prompt")):
             infra.load_and_prompt_env(env_vars, is_test=False)
-        self.assertFalse(hasattr(infra, "getpass"))
+        # A regression guard checking whether a specific name is bound in the infra
+        # module's own namespace, not a production-code probe for an uncertain interface.
+        self.assertFalse(hasattr(infra, "getpass"))  # burn-ignore-introspection
 
 
 class CreateOdooRoleCmdTests(unittest.TestCase):
@@ -684,6 +740,31 @@ class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
         echoed = parsed[parsed.index("echo") + 1]
         self.assertIn(malicious_dir, echoed)
         self.assertNotIn("touch", [t for t in parsed if t != echoed])
+
+    def test_a_failure_stopping_odoo_service_is_logged_and_does_not_abort_init(self):
+        # Regression test for the `# audit-ignore-catch-all` tag added to this
+        # handler (it already logged via _logger.warning, just lacked the
+        # tag check_burn_list.py's catch-all-exception rule requires):
+        # stopping odoo.service before init is explicitly best-effort (a
+        # fresh box may not have the service installed/running yet), so a
+        # failure here must be logged, not raised, and initialization must
+        # still proceed to the actual `odoo -i ...` call below it.
+        def run_cmd(cmd, *a, **kw):
+            if cmd[:3] == ["sudo", "systemctl", "stop"]:
+                raise RuntimeError("simulated: odoo.service not found")
+            return MagicMock()
+
+        run_cmd_mock = MagicMock(side_effect=run_cmd)
+        with self.assertLogs("infrastructure", level="WARNING") as log_ctx:
+            self._run_with_dirs("/tmp/hams_open", "/tmp/hams_com", run_cmd_mock)
+        self.assertTrue(
+            any("Failed to stop odoo.service before init" in msg for msg in log_ctx.output)
+        )
+        init_calls = [
+            c.args[0] for c in run_cmd_mock.call_args_list
+            if len(c.args[0]) >= 2 and c.args[0][0] == "sudo" and c.args[0][1] == "-u"
+        ]
+        self.assertTrue(init_calls, "expected the actual `odoo -i ...` init call to still run")
 
 
 if __name__ == "__main__":
