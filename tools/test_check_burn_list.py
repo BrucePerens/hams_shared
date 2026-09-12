@@ -5252,3 +5252,33 @@ def test_noqa_example_tag_does_not_leak_into_a_real_untagged_noqa_elsewhere():
     )
     errors, _warnings = _scan_file(content, "some_module.py")
     assert any("LINTER EVASION" in e and "import real_thing" in e for e in errors)
+
+
+def test_a_genuinely_bare_burn_ignore_comment_is_not_an_unauthorized_bypass():
+    # Real false positive found 2026-09-12: the "is this a recognized burn-ignore tag"
+    # check used a bare `"burn-ignore" in line` substring test, so it couldn't tell a
+    # genuinely bare `# burn-ignore: <reason>` (always allowed -- see
+    # _GENERIC_BURN_IGNORE_REGEX's own `burn-ignore(?!-)` negative lookahead, the mechanism
+    # add_error()/add_warning() already use) from an attempted-but-unapproved specific tag
+    # like `burn-ignore-made-up-tag`. Only a hyphenated tag attempt should ever reach this
+    # check.
+    content = "eval(x)  # burn-ignore: reviewed, static developer-authored input only\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert not any("UNAUTHORIZED BYPASS" in e for e in errors)
+
+
+def test_a_hyphenated_but_unapproved_burn_ignore_tag_is_still_an_unauthorized_bypass():
+    content = "x = 1  # burn-ignore-made-up-tag-nobody-approved\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert any("UNAUTHORIZED BYPASS" in e for e in errors)
+
+
+def test_audit_ignore_ssti_is_a_recognized_tag_not_an_unauthorized_bypass():
+    # Real false positive found 2026-09-12: audit-ignore-ssti has been a real, enforced
+    # exemption tag for the CRITICAL SSTI check since before this separate "is this
+    # audit-ignore tag recognized" allow-list existed, but the allow-list had never been
+    # told about it -- the same "two separate checks disagree about the same tag" bug
+    # already documented for audit-ignore-gdpr-hand-rolled-unlink above.
+    content = "x = 1  # audit-ignore-ssti: static developer-authored expression\n"
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert not any("UNAUTHORIZED BYPASS" in e for e in errors)

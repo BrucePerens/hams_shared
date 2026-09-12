@@ -4058,7 +4058,14 @@ def scan_file(filepath, is_odoo_module=False):
                     f"Line {line_num}: CRITICAL LINTER EVASION: Use of 'noqa' is strictly forbidden.\n      Code: `{stripped}`"
                 )
 
-        if "burn-ignore" in line and not any(
+        # Real false positive found 2026-09-12: a genuinely bare `# burn-ignore: <reason>`
+        # comment (no hyphenated tag name at all -- the always-allowed generic form
+        # add_error()/add_warning() already recognize via _GENERIC_BURN_IGNORE_REGEX's own
+        # `burn-ignore(?!-)` negative lookahead) used to be flagged as UNAUTHORIZED BYPASS
+        # here too, since a bare substring check can't distinguish "burn-ignore: some prose"
+        # from "burn-ignore-madeUpTagName", and the two mechanisms had never been made to
+        # agree. Only fire when a HYPHENATED tag attempt is actually present.
+        if re.search(r"burn-ignore-[A-Za-z]", line) and not any(
             allowed in line
             for allowed in [
                 "burn-ignore-financial",
@@ -4396,6 +4403,18 @@ def scan_file(filepath, is_odoo_module=False):
                 # content_security_policy/models/ir_http.py's
                 # _post_dispatch.
                 "audit-ignore-service-uid-cursorless",
+                # The CRITICAL SSTI check's own dedicated escape hatch (visit_Call/
+                # visit_XmlNode's "request.env inside QWeb templates" rule, a few hundred
+                # lines above this generic allow-list), for a static, developer-authored
+                # expression with no reachable untrusted input. Same bug class already found
+                # for audit-ignore-gdpr-hand-rolled-unlink above: the SSTI rule has enforced
+                # this tag since before this allow-list existed, but this file's own separate
+                # "is this audit-ignore tag recognized" check had never been told about it --
+                # found 2026-09-12 via a real false positive: this session's own
+                # test_audit_ignore_ssti_suppresses_the_finding_for_a_reviewed_static_expression
+                # fixture correctly suppressed the CRITICAL SSTI finding but then tripped
+                # UNAUTHORIZED BYPASS on the exact same tag.
+                "audit-ignore-ssti",
             ]
             if not any(tag in line for tag in valid_audits):
                 errors_found.append(
