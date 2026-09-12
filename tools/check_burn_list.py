@@ -1240,22 +1240,45 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     has_model_name = False
                     has_rname_lineno = None
                     has_name = False
+                    name_value = None
+                    inherit_values = []
                     for stmt in node.body:
                         if isinstance(stmt, ast.Assign):
                             for target in stmt.targets:
                                 if isinstance(target, ast.Name):
                                     if target.id == "_name":
                                         has_model_name = True
+                                        if isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
+                                            name_value = stmt.value.value
                                     elif target.id == "_" + "rec_name":
                                         has_rname_lineno = stmt.lineno
                                     elif target.id == "name":
                                         has_name = True
+                                    elif target.id == "_inherit":
+                                        if isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
+                                            inherit_values = [stmt.value.value]
+                                        elif isinstance(stmt.value, (ast.List, ast.Tuple)):
+                                            inherit_values = [
+                                                elt.value
+                                                for elt in stmt.value.elts
+                                                if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                                            ]
                     if has_rname_lineno:
                         self.add_error(
                             has_rname_lineno,
                             "CRITICAL SCHEMA: The use of " + "'_" + "rec_name' is forbidden. Every model MUST have a textual 'name' field defined."
                         )
-                    if has_model_name and not has_name:
+                    # Real false positive found 2026-09-12 (user_websites_seo's own
+                    # ResUsersSEO/BlogBlogSEO/BlogPostSEO/WebsitePageSEO/UserWebsitesGroupSEO,
+                    # each `_name = X; _inherit = [X, some_mixin]`): this rule fires per-class,
+                    # with no awareness that `_name == _inherit[0]` means the class is EXTENDING
+                    # an already-existing model (Odoo core's own `res.users`/`blog.blog`/
+                    # `blog.post`/`website.page`, or another module's own model), not defining a
+                    # fresh one -- the `name` field was already required and defined at that
+                    # model's ORIGINAL declaration site, so re-demanding it on every subsequent
+                    # extension class is a false positive, not a real schema gap.
+                    is_self_extension = bool(name_value) and name_value in inherit_values
+                    if has_model_name and not has_name and not is_self_extension:
                         self.add_error(
                             node.lineno,
                             "CRITICAL SCHEMA: Every model MUST have a textual 'name' field defined. Relying on " + "'_" + "rec_name' or implicitly missing 'name' is forbidden."

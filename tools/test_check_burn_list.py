@@ -1048,6 +1048,48 @@ def test_a_model_with_neither_name_nor_rec_name_is_flagged():
     assert any("CRITICAL SCHEMA" in e and "MUST have a textual" in e for e in errors)
 
 
+def test_a_class_extending_an_existing_model_by_the_same_name_is_not_flagged():
+    # Real false positive found live 2026-09-12 (user_websites_seo's own
+    # ResUsersSEO/BlogBlogSEO/BlogPostSEO/WebsitePageSEO/UserWebsitesGroupSEO): `_name = X;
+    # _inherit = [X, mixin]` EXTENDS an already-existing model (Odoo core's own res.users,
+    # blog.blog, etc.) rather than defining a fresh one -- that model's own `name` field was
+    # already required and defined at its ORIGINAL declaration site, so re-demanding one on
+    # every subsequent extension class is a false positive, not a real schema gap.
+    source = (
+        "class ResUsersSEO(models.Model):\n"
+        "    _name = 'res.users'\n"
+        "    _inherit = ['res.users', 'user.websites.seo.metadata.mixin']\n"
+        "    seo_name = fields.Char()\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("CRITICAL SCHEMA" in e for e in errors)
+
+
+def test_a_class_extending_by_the_same_name_via_a_bare_string_inherit_is_not_flagged():
+    source = (
+        "class ResUsersExt(models.Model):\n"
+        "    _name = 'res.users'\n"
+        "    _inherit = 'res.users'\n"
+        "    extra_field = fields.Char()\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("CRITICAL SCHEMA" in e for e in errors)
+
+
+def test_a_new_model_that_merely_also_inherits_a_mixin_is_still_flagged():
+    # The self-extension exemption must not become a blanket bypass: a genuinely NEW model
+    # (its own `_name`, not matching anything in `_inherit`) that happens to also mix in some
+    # unrelated abstract model still needs its own real `name` field.
+    source = (
+        "class Foo(models.Model):\n"
+        "    _name = 'ham.foo'\n"
+        "    _inherit = ['mail.thread']\n"
+        "    callsign = fields.Char()\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("CRITICAL SCHEMA" in e and "MUST have a textual" in e for e in errors)
+
+
 def test_a_plain_non_model_class_is_never_subject_to_the_schema_rule():
     source = (
         "class Foo:\n"
