@@ -86,8 +86,13 @@ def run_llvm_cov_lcov(crate_dir, release=True):
     finally:
         try:
             os.unlink(lcov_path)
-        except OSError:
-            pass
+        except OSError as e:
+            # Real, if rare, failure mode: the temp file's own containing directory could be
+            # unwritable, or something else already removed it -- either way, silently
+            # swallowing this hides a genuine cleanup failure from the operator running this
+            # tool, matching this repo's own established "log, don't silently swallow" rule for
+            # exception handlers.
+            print(f"Warning: failed to clean up temp file {lcov_path}: {e}", file=sys.stderr)
 
 
 def parse_lcov(lcov_text):
