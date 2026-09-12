@@ -15,9 +15,9 @@ the real sweep closes it; any function added or modified to lose its anchor AFTE
 taken is a real, new CI failure.
 
 Deliberately narrower than `verify_anchors.py`'s own full traceability check: this only asks "does
-this function have a base anchor at all" (any of `[@ANCHOR: name]` / `[@ANCHOR-BEGIN: name]`
-inside its own line span, including a leading comment or docstring), not whether that anchor
-resolves to a real, verified test the way `verify_anchors.py`'s bidirectional check does -- that
+this function have a base anchor at all" -- any of the two base-declaration forms (plain, or the
+begin/end pair) inside its own line span, including a leading comment or docstring -- not whether
+that anchor resolves to a real, verified test the way `verify_anchors.py`'s bidirectional check does -- that
 deeper verification already runs separately, on whatever anchors DO exist. This check's only job
 is "don't let the countable population of real gaps grow while nobody's watching."
 
@@ -44,7 +44,6 @@ import re
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import verify_anchors as va  # noqa: E402
 
 EXCLUDE_DIRS = {

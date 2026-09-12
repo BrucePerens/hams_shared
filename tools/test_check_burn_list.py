@@ -3170,7 +3170,7 @@ def test_find_anchor_line_returns_negative_one_when_absent():
 
 def test_anchor_citation_present_recognizes_both_forms():
     assert _anchor_citation_present("# [@ANCHOR: COMM_foo]\n", "COMM_foo")
-    assert _anchor_citation_present("# [@ANCHOR-BEGIN: COMM_foo]\n", "COMM_foo")
+    assert _anchor_citation_present("# [@ANCHOR-BEGIN: COMM_foo]\n", "COMM_foo")  # burn-ignore-anchor-example
     assert not _anchor_citation_present("# [@ANCHOR: COMM_bar]\n", "COMM_foo")
 
 
@@ -3233,6 +3233,30 @@ def test_check_anchor_pairing_allows_independent_anchors_in_the_same_file():
         "# [@ANCHOR-BEGIN: bar]\ny = 2\n# [@ANCHOR-END: bar]\n"
     )
     assert check_anchor_pairing(content) == []
+
+
+def test_check_anchor_pairing_exempts_a_tagged_example_line():
+    # Real false-positive class found 2026-09-12, the same one already fixed for the
+    # TransactionCase/hardcoded-/tmp/exec() rules elsewhere in this file: this scan matches raw
+    # line text, so a begin-marker-shaped example inside a docstring explaining the convention
+    # itself trips it exactly as readily as a real forgotten end marker. Confirmed against this
+    # repo's own real check_function_test_anchors.py docstring. Confirmed to FAIL against the
+    # pre-fix function (no exemption mechanism existed at all).
+    content = "# [@ANCHOR-BEGIN: foo]  # burn-ignore-anchor-example\nx = 1\n"
+    assert check_anchor_pairing(content) == []
+
+
+def test_check_anchor_pairing_tag_does_not_leak_into_pairing_a_real_end_elsewhere():
+    # An exempted BEGIN must not silently "use up" a real, later, non-exempt END for the same
+    # name -- the exemption only suppresses THIS line's own would-be finding, it doesn't pretend
+    # the exempted marker was a real, valid BEGIN for pairing purposes.
+    content = (
+        "# [@ANCHOR-BEGIN: foo]  # burn-ignore-anchor-example\nx = 1\n"
+        "# [@ANCHOR-END: foo]\n"
+    )
+    errors = check_anchor_pairing(content)
+    assert len(errors) == 1
+    assert "has no preceding" in errors[0]
 
 
 def test_scan_file_surfaces_an_orphaned_anchor_marker_as_a_real_error():

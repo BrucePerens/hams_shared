@@ -860,28 +860,41 @@ def check_anchor_pairing(content):
     list, so a pairing mistake counts toward the real pass/fail exit code
     like any other finding, not a side print nobody's told to check.
     """
+    # Real false-positive class found 2026-09-12, the same one already fixed for the
+    # TransactionCase/hardcoded-/tmp/exec() rules elsewhere in this file: this scan matches raw
+    # line text, not AST, so a `[@ANCHOR-BEGIN: X]`-shaped example inside a docstring (explaining
+    # the convention itself, e.g. this repo's own check_function_test_anchors.py) or a fixture
+    # string testing THIS exact function's own detection logic (test_check_burn_list.py's own
+    # test_scan_file_surfaces_an_orphaned_anchor_marker_as_a_real_error, whose whole point is to
+    # prove an orphaned marker gets flagged) trips it exactly as readily as a real forgotten END
+    # marker. Lines carrying `burn-ignore-anchor-example` are exempted per-line, tracked
+    # separately so an exempted BEGIN doesn't still get silently paired against a real,
+    # non-exempt END elsewhere in the same file.
     errors = []
     begins = {}
     for i, line_text in enumerate(content.splitlines(), 1):
+        exempt = "burn-ignore-anchor-example" in line_text
         m = ANCHOR_BEGIN_REGEX.search(line_text)
         if m:
             name = m.group(1)
-            if name in begins:
-                errors.append(
-                    f"Line {i}: ORPHANED ANCHOR MARKER: [@ANCHOR-BEGIN: {name}] appears twice in "
-                    f"this file (first at line {begins[name]}) with no [@ANCHOR-END: {name}] between them."
-                )
-            begins[name] = i
+            if not exempt:
+                if name in begins:
+                    errors.append(
+                        f"Line {i}: ORPHANED ANCHOR MARKER: [@ANCHOR-BEGIN: {name}] appears twice in "
+                        f"this file (first at line {begins[name]}) with no [@ANCHOR-END: {name}] between them."
+                    )
+                begins[name] = i
         m = ANCHOR_END_REGEX.search(line_text)
         if m:
             name = m.group(1)
-            if name not in begins:
-                errors.append(
-                    f"Line {i}: ORPHANED ANCHOR MARKER: [@ANCHOR-END: {name}] has no preceding "
-                    f"[@ANCHOR-BEGIN: {name}] in this file."
-                )
-            else:
-                del begins[name]
+            if not exempt:
+                if name not in begins:
+                    errors.append(
+                        f"Line {i}: ORPHANED ANCHOR MARKER: [@ANCHOR-END: {name}] has no preceding "
+                        f"[@ANCHOR-BEGIN: {name}] in this file."
+                    )
+                else:
+                    del begins[name]
     for name, line in begins.items():
         errors.append(
             f"Line {line}: ORPHANED ANCHOR MARKER: [@ANCHOR-BEGIN: {name}] has no [@ANCHOR-END: {name}] in this file."
@@ -4279,6 +4292,11 @@ def scan_file(filepath, is_odoo_module=False):
                 # test_run_linters.py/test_fix_manifests.py/test_bulk_explanation_manager.py,
                 # each already carrying their own "real source, not user input" comment.
                 "burn-ignore-exec-own-source",
+                # A `[@ANCHOR-BEGIN: X]`-shaped example inside a docstring explaining the anchor
+                # convention itself, or a fixture string testing check_anchor_pairing()'s own
+                # orphaned-marker detection -- neither is a real, forgotten BEGIN/END pair. See
+                # check_anchor_pairing()'s own comment for the full rationale.
+                "burn-ignore-anchor-example",
             ]
         ):
             errors_found.append(
