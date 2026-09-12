@@ -16,7 +16,7 @@ import unittest
 import check_absolute_paths as chk  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_absolute_paths.py")
-_HOME = "/h" + "ome/bruce/workspace"
+_HOME = "/home/bruce/workspace"
 
 
 def _write(path, content):
@@ -201,6 +201,35 @@ class MainIntegrationTests(unittest.TestCase):
         code, out = self._run()
         self.assertEqual(code, 1)
         self.assertIn("Absolute Paths Violations", out)
+
+    def test_check_absolute_paths_dot_py_is_specifically_excluded(self):
+        # Real false positive found 2026-09-12: this checker's own source necessarily
+        # contains the literal "/home/" string it searches for, so scanning it would
+        # always flag a false self-match. Confirms the by-filename self-exclusion, not
+        # just that the string happens to be absent from the real file today.
+        _write(
+            os.path.join(self.tmp, "check_absolute_paths.py"),
+            f"path = '{_HOME}'\n",
+        )
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+
+    def test_test_check_absolute_paths_dot_py_is_specifically_excluded(self):
+        _write(
+            os.path.join(self.tmp, "test_check_absolute_paths.py"),
+            f"_HOME = '{_HOME}'\n",
+        )
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+
+    def test_a_same_named_violation_in_a_different_file_is_still_caught(self):
+        # The exclusion above is by exact filename, not a blanket "skip anything with
+        # 'check_absolute_paths' in the name" -- confirms it doesn't over-widen.
+        _write(
+            os.path.join(self.tmp, "other_script.py"),
+            f"path = '{_HOME}'\n",
+        )
+        violations = chk.check_absolute_paths(self.tmp)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("other_script.py:1", violations[0])
 
 
 if __name__ == "__main__":

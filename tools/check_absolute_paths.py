@@ -109,11 +109,21 @@ def check_absolute_paths(repo_dir):
             if file.startswith("course_") and file.endswith(".json"):
                 continue
 
+            # This checker's own source and test necessarily embed the literal string
+            # "/home/" somewhere -- it's what they search for and exercise -- so scanning
+            # them would always flag a false self-match. Real false positive found
+            # 2026-09-12: this used to be worked around with `"/h" + "ome/"` string
+            # concatenation instead of a real exclusion, which only traded one false
+            # positive (self-flagging) for another (check_burn_list.py's own separate
+            # "no string concatenation, it's a linter-evasion technique" rule).
+            if file in ("check_absolute_paths.py", "test_check_absolute_paths.py"):
+                continue
+
             file_path = os.path.join(root, file)
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     for i, line in enumerate(f, 1):
-                        if "/h" + "ome/" in line:
+                        if "/home/" in line:
                             # Skip if it is a file URI which may be in SKILL.md examples or similar
                             # Actually, we should even prohibit the h-o-m-e path because it's non-portable
                             violations.append(
