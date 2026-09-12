@@ -55,6 +55,16 @@ class FindDenyCratesTests(unittest.TestCase):
         _write(os.path.join(crate, "deny.toml"))
         self.assertEqual(chk.find_deny_crates(self.tmp), [])
 
+    def test_a_claude_worktree_directory_is_never_walked(self):
+        # Real bug found 2026-09-12, confirmed empirically against a real `git worktree add`
+        # from this exact repo (all 4 real deny.toml-bearing crates were checked out and
+        # re-found under the worktree path): a worktree is a full checkout, not an empty
+        # directory. A previous review pass wrongly assumed otherwise; retracted.
+        crate = os.path.join(self.tmp, ".claude", "worktrees", "sess1", "daemons", "some_daemon")
+        _write(os.path.join(crate, "Cargo.toml"))
+        _write(os.path.join(crate, "deny.toml"))
+        self.assertEqual(chk.find_deny_crates(self.tmp), [])
+
     def test_multiple_crates_are_all_found_and_sorted(self):
         crate_a = os.path.join(self.tmp, "daemons", "a_daemon")
         crate_b = os.path.join(self.tmp, "daemons", "b_daemon")

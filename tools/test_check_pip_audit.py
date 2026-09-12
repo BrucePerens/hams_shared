@@ -64,6 +64,17 @@ class FindRequirementsFilesTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "node_modules", "pkg", "requirements.txt"))
         self.assertEqual(chk.find_requirements_files(self.tmp), [])
 
+    def test_a_claude_worktree_directory_is_never_walked(self):
+        # Real bug found 2026-09-12, confirmed empirically against a real `git worktree add`:
+        # this project's own standing convention runs concurrent bug-hunt dispatches in
+        # isolated git worktrees under `.claude/worktrees/<session>/` INSIDE the repo root, and
+        # a worktree is a full checkout -- `requirements.txt` included, not an empty directory.
+        # A previous review pass wrongly assumed a worktree couldn't contain one; retracted.
+        _write(
+            os.path.join(self.tmp, ".claude", "worktrees", "sess1", "requirements.txt")
+        )
+        self.assertEqual(chk.find_requirements_files(self.tmp), [])
+
     def test_multiple_files_across_directories_are_all_found_and_sorted(self):
         _write(os.path.join(self.tmp, "daemons", "foo", "requirements.txt"))
         _write(os.path.join(self.tmp, "ingest", "requirements.txt"))

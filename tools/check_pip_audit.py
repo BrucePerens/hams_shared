@@ -22,7 +22,23 @@ import os
 import subprocess
 import sys
 
-IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git"}
+IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", ".claude"}
+
+# Real bug found 2026-09-12, confirmed empirically with a real `git worktree add`: this
+# project's own standing convention runs concurrent bug-hunt dispatches in isolated git
+# worktrees under `.claude/worktrees/<session>/` INSIDE the repo root -- and a git worktree
+# checks out a full copy of every tracked file at its own commit/branch, `requirements.txt`
+# included. Before `.claude` was added to IGNORE_DIR_NAMES above,
+# `find_requirements_files()` walked straight into a live worktree and found its own
+# `requirements.txt` as a second, real scan target -- confirmed directly against a real
+# worktree created from this exact repo (found 2 real requirements.txt files under it). A
+# previous review pass (see night_shift_todo.md) wrongly dismissed this checker as immune to
+# the ".claude worktree" bug class on the reasoning that "a worktree wouldn't contain a
+# requirements.txt to falsely match in the first place" -- that reasoning was never verified
+# against a real worktree and was wrong: a worktree is a full checkout, not an empty
+# directory. Running pip-audit a second time against another session's own in-progress,
+# uncommitted requirements.txt wastes real network calls and could report spurious findings
+# against dependency changes that were never actually merged.
 
 # Real gap found 2026-09-12: neither subprocess.run() call below passed a `timeout=`, despite
 # this module's own docstring stating pip-audit "Requires network access" (PyPI's JSON Advisory

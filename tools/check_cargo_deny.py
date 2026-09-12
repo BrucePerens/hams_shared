@@ -24,7 +24,16 @@ import os
 import subprocess
 import sys
 
-IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git"}
+IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", ".claude"}
+
+# Real bug found 2026-09-12, same class and same real-worktree confirmation as
+# check_pip_audit.py's own fix (see its own comment): `.claude/worktrees/<session>/` is a real
+# `git worktree` checkout, not an empty directory -- confirmed directly, a real worktree created
+# from this exact repo checked out all 4 real deny.toml-bearing crates
+# (hams_local_relay/hams_relay_bridge/hams_data_relay/hams_simulated_band), and
+# `find_deny_crates()` found all 4 again under the worktree path before this fix. A previous
+# review pass wrongly dismissed this checker as immune on the same never-actually-verified
+# reasoning already corrected in check_pip_audit.py -- retracted here too.
 
 # Real gap found 2026-09-12, same class as check_pip_audit.py's own fix: `cargo deny check` can
 # fetch a fresh advisory-db over the network (per cargo-deny's own documented behavior), and
