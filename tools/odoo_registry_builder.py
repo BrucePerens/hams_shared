@@ -182,7 +182,18 @@ def find_odoo_core_addons_path():
 
 def _manifest_depends(manifest_path):
     """Reads just the 'depends' list out of one __manifest__.py via AST
-    (never imports/executes the manifest), returns [] if missing/unparseable."""
+    (never imports/executes the manifest), returns [] if missing/unparseable
+    -- including a 'depends' value that parses fine as Python but isn't
+    actually a list/tuple (e.g. a real, plausible manifest typo like
+    `'depends': 'base'` instead of `'depends': ['base']`). Confirmed this
+    used to crash outright: `value.elts` assumes an ast.List/ast.Tuple, and
+    raises AttributeError on an ast.Constant (or any other node type) --
+    this function feeds find_needed_core_modules' own walk across every
+    hams_com/hams_open module AND every reachable Odoo core module, so one
+    malformed manifest anywhere in that whole tree would previously take
+    down the entire registry build (and, downstream, the mypy plugin's own
+    type-check run) instead of degrading gracefully the same way the
+    SyntaxError/OSError case just above already does."""
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
             tree = ast.parse(f.read(), filename=manifest_path)
@@ -192,6 +203,8 @@ def _manifest_depends(manifest_path):
         if isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values):
                 if isinstance(key, ast.Constant) and key.value == "depends":
+                    if not isinstance(value, (ast.List, ast.Tuple)):
+                        return []
                     return [e.value for e in value.elts if isinstance(e, ast.Constant)]
     return []
 
@@ -294,6 +307,26 @@ def find_env_getitem_targets(roots) -> Dict[str, List[str]]:
     return targets
 
 
+def _resolve_repo_root(given_path):
+    """A human invoking `python3 odoo_registry_builder.py <repo_root>` (this module's own
+    documented "Usage as a script" form) from inside hams_shared/tools/ -- this script's own
+    home -- naturally reaches for `.` or `..`, landing on hams_shared itself rather than a real
+    repo root. That's the exact same wrong-root failure check_model_extension_collisions.py's
+    own _resolve_repo_root already documents and fixes for run_linters.py's `dir_path` (also
+    computed from a tool's own __file__ inside hams_shared/tools/): hams_shared has no Odoo
+    modules of its own, so build_registry() silently walks an empty tree -- confirmed directly
+    on this checkout: 0 models found pointed at hams_shared vs 631 pointed at either real repo
+    root. odoo_mypy_plugin.py's and generate_odoo_core_stubs.py's own _repo_roots() never hit
+    this (they derive repo_root from their own __file__, two directories up, never from a CLI
+    arg or hams_shared directly) -- this is specific to main()'s own argv-based entry point.
+    Same fix as check_model_extension_collisions.py/run_linters.py/
+    check_access_csv_group_order.py for this identical bug class."""
+    given_path = os.path.abspath(given_path)
+    if os.path.basename(given_path) == "hams_shared":
+        return os.path.dirname(given_path)
+    return given_path
+
+
 def _find_sibling_repo(repo_root):
     """Mirrors check_model_extension_collisions.py's sibling-repo resolution."""
     repo_root = os.path.abspath(repo_root)
@@ -375,9 +408,23 @@ def _field_call_info(call_node):
 
 
 def _extract_fields(class_node, module, fpath):
+    """Handles both a plain `name = fields.Char()` assignment and a PEP 526
+    annotated one (`name: str = fields.Char()`) -- confirmed as a real gap:
+    ast.AnnAssign is a completely different node type from ast.Assign (it
+    has a single `.target`, not a `.targets` list, and `.value` can
+    legitimately be None for a bare annotation with no RHS at all), so a
+    version that only checked `isinstance(stmt, ast.Assign)` silently
+    dropped every annotated field with no warning -- exactly the kind of
+    registry gap this tool exists to not produce, and a increasingly
+    plausible style in a codebase actively adding type annotations for
+    mypy's own benefit (ODOO_AWARE_TYPE_CHECKING.md)."""
     out = []
     for stmt in class_node.body:
-        if not isinstance(stmt, ast.Assign):
+        if isinstance(stmt, ast.Assign):
+            targets = stmt.targets
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            targets = [stmt.target]
+        else:
             continue
         if not isinstance(stmt.value, ast.Call):
             continue
@@ -385,7 +432,7 @@ def _extract_fields(class_node, module, fpath):
         if info is None:
             continue
         ftype, comodel = info
-        for target in stmt.targets:
+        for target in targets:
             if isinstance(target, ast.Name):
                 out.append(FieldInfo(
                     name=target.id, field_type=ftype, comodel=comodel,
@@ -449,9 +496,17 @@ def _extract_class_info(class_node, module, fpath):
     name_values = None
     inherit_values = None
     for stmt in class_node.body:
-        if not isinstance(stmt, ast.Assign):
+        # Same ast.Assign/ast.AnnAssign split as _extract_fields (see its own
+        # comment): `_name: str = "ham.qso"` is real, legal Python and was
+        # previously invisible here too -- not just a missed field, but a
+        # missed _name/_inherit declaration, which meant the WHOLE
+        # contributing class silently landed nowhere in the registry.
+        if isinstance(stmt, ast.Assign):
+            targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None and isinstance(stmt.target, ast.Name):
+            targets = [stmt.target.id]
+        else:
             continue
-        targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
         if "_name" in targets:
             name_values = _literal_str_or_list(stmt.value)
         elif "_inherit" in targets:
@@ -617,7 +672,7 @@ def main():
         print("Usage: odoo_registry_builder.py <repo_root> [model.name ...]")
         sys.exit(1)
 
-    repo_root = os.path.abspath(sys.argv[1])
+    repo_root = _resolve_repo_root(sys.argv[1])
     hams_roots = [repo_root]
     sibling = _find_sibling_repo(repo_root)
     if sibling:

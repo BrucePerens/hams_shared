@@ -107,6 +107,30 @@ class ExtractFieldsTests(unittest.TestCase):
         names = {f.name for f in fields_found}
         self.assertEqual(names, {"a", "b"})
 
+    def test_a_pep_526_annotated_field_assignment_is_extracted(self):
+        # Regression test: `name: str = fields.Char()` is real, legal Python
+        # (PEP 526) -- an increasingly plausible style in this exact codebase
+        # given its own push toward stricter typing (ODOO_AWARE_TYPE_CHECKING.md).
+        # Before the fix, _extract_fields only matched ast.Assign, so an
+        # ast.AnnAssign statement was silently skipped entirely -- no error,
+        # no warning, just a field that vanished from the registry.
+        node = _class_node(
+            "class Foo(models.Model):\n"
+            "    callsign: str = fields.Char()\n"
+            "    partner_id: int = fields.Many2one('res.partner')\n"
+        )
+        fields_found = orb._extract_fields(node, "mod_a", "foo.py")
+        by_name = {f.name: f for f in fields_found}
+        self.assertEqual(set(by_name), {"callsign", "partner_id"})
+        self.assertEqual(by_name["callsign"].field_type, "Char")
+        self.assertEqual(by_name["partner_id"].comodel, "res.partner")
+
+    def test_a_bare_annotation_with_no_value_is_not_a_field(self):
+        # `callsign: str` (annotation only, no RHS) has stmt.value is None on
+        # the AnnAssign node -- must not be treated as a field declaration.
+        node = _class_node("class Foo(models.Model):\n    callsign: str\n")
+        self.assertEqual(orb._extract_fields(node, "mod_a", "foo.py"), [])
+
 
 class ArgsInfoTests(unittest.TestCase):
     def _args(self, src):
@@ -181,6 +205,27 @@ class ExtractClassInfoTests(unittest.TestCase):
         self.assertEqual(inherit_values, ["ham.qso", "mail.thread"])
         self.assertEqual(len(fields_found), 1)
         self.assertEqual(len(methods_found), 1)
+
+    def test_an_annotated_name_and_inherit_are_also_recognized(self):
+        # Regression test: before the fix, `_name: str = "ham.qso"` (a PEP 526
+        # annotated assignment) was completely invisible to this function --
+        # not just a missed field, but a missed _name/_inherit declaration,
+        # which meant the WHOLE contributing class silently landed nowhere in
+        # the registry (name_values and inherit_values both came back None,
+        # so build_registry's `if name_values: ... elif inherit_values: ...`
+        # branch never fired for it at all).
+        node = _class_node(
+            "class Foo(models.Model):\n"
+            "    _name: str = 'ham.qso'\n"
+            "    _inherit: list = ['ham.qso', 'mail.thread']\n"
+            "    callsign: str = fields.Char()\n"
+        )
+        name_values, inherit_values, fields_found, _methods_found = orb._extract_class_info(
+            node, "mod_a", "foo.py"
+        )
+        self.assertEqual(name_values, ["ham.qso"])
+        self.assertEqual(inherit_values, ["ham.qso", "mail.thread"])
+        self.assertEqual(len(fields_found), 1)
 
 
 class MergeIntoTests(unittest.TestCase):
@@ -329,6 +374,20 @@ class BuildRegistryTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "mod_a", "models", "broken.py"), "class Foo(: broken")
         self.assertEqual(orb.build_registry([self.tmp]), {})
 
+    def test_an_annotated_name_declaring_class_registers_its_fields_end_to_end(self):
+        # End-to-end regression test for the AnnAssign gap, through the real
+        # build_registry() entry point (not just _extract_class_info directly).
+        _write(os.path.join(self.tmp, "mod_a", "__manifest__.py"), "{}\n")
+        _write(
+            os.path.join(self.tmp, "mod_a", "models", "ham_qso.py"),
+            "class HamQSO(models.Model):\n"
+            "    _name: str = 'ham.qso'\n"
+            "    callsign: str = fields.Char()\n",
+        )
+        registry = orb.build_registry([self.tmp])
+        self.assertIn("ham.qso", registry)
+        self.assertIn("callsign", registry["ham.qso"].fields)
+
 
 class FindEnvGetitemTargetsTests(unittest.TestCase):
     """odoo_registry_builder.find_env_getitem_targets (ODOO_AWARE_TYPE_CHECKING.md Phase 2
@@ -431,6 +490,30 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("not found in registry", out)
 
+    def test_invoking_with_hams_shared_itself_as_repo_root_still_finds_the_real_module(self):
+        # Regression test through the real CLI entry point: a real module lives
+        # in the "hams_open" directory, but the script is invoked with
+        # "hams_open/hams_shared" as its repo_root argument (the exact wrong-
+        # root mistake this bug class is named for). Before the _resolve_repo_root
+        # fix, this silently built an empty (0-model) registry with no error.
+        hams_open = os.path.join(self.tmp, "hams_open")
+        hams_shared = os.path.join(hams_open, "hams_shared")
+        os.makedirs(hams_shared)
+        _write(os.path.join(hams_open, "mod_a", "__manifest__.py"), "{}\n")
+        _write(
+            os.path.join(hams_open, "mod_a", "models", "ham_qso.py"),
+            "class HamQSO(models.Model):\n    _name = 'ham.qso'\n    callsign = fields.Char()\n",
+        )
+        result = subprocess.run(
+            [sys.executable, _SCRIPT, hams_shared],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        out = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, out)
+        self.assertIn("Registry built: 1 models", out)
+
 
 class ManifestDependsTests(unittest.TestCase):
     def setUp(self):
@@ -454,6 +537,24 @@ class ManifestDependsTests(unittest.TestCase):
     def test_a_manifest_with_no_depends_key_returns_an_empty_list(self):
         path = os.path.join(self.tmp, "__manifest__.py")
         _write(path, "{'name': 'Thing'}\n")
+        self.assertEqual(orb._manifest_depends(path), [])
+
+    def test_a_depends_value_that_is_a_bare_string_does_not_crash(self):
+        # Regression test: a real, plausible manifest typo -- 'depends': 'base'
+        # instead of 'depends': ['base'] -- used to crash with
+        # AttributeError: 'Constant' object has no attribute 'elts', because
+        # the code assumed the depends value was always an ast.List/ast.Tuple
+        # and reached straight for `.elts`. This function feeds
+        # find_needed_core_modules' own walk across every hams_com/hams_open
+        # AND core Odoo manifest, so one malformed manifest anywhere in that
+        # whole tree used to take down the entire registry build.
+        path = os.path.join(self.tmp, "__manifest__.py")
+        _write(path, "{'name': 'Thing', 'depends': 'base'}\n")
+        self.assertEqual(orb._manifest_depends(path), [])
+
+    def test_a_depends_value_that_is_none_does_not_crash(self):
+        path = os.path.join(self.tmp, "__manifest__.py")
+        _write(path, "{'name': 'Thing', 'depends': None}\n")
         self.assertEqual(orb._manifest_depends(path), [])
 
 
@@ -535,6 +636,46 @@ class FindNeededCoreModulesTests(unittest.TestCase):
         )
         needed = orb.find_needed_core_modules([self.hams_root], self.core_addons)
         self.assertEqual(needed, set())
+
+
+class ResolveRepoRootTests(unittest.TestCase):
+    # Regression coverage for the exact "wrong repo root" bug class this session's
+    # bug hunt already found and fixed in ~13 other hams_shared/tools scripts
+    # (check_pip_audit.py, check_cargo_deny.py, scan_ui_vulnerabilities.py,
+    # check_model_extension_collisions.py, ...): a script living in
+    # hams_shared/tools/ gets invoked with hams_shared itself as its "repo root"
+    # argument (either directly by a human running `python3
+    # odoo_registry_builder.py ..` from inside tools/, or via run_linters.py's
+    # own `dir_path`, which resolves to hams_shared). hams_shared has no Odoo
+    # modules of its own, so build_registry([hams_shared]) silently walks an
+    # empty tree with no error -- confirmed directly: 0 models built pointed at
+    # hams_shared vs 631 pointed at either real repo root on this checkout.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_hams_shared_itself_resolves_to_its_parent_repo(self):
+        hams_shared = os.path.join(self.tmp, "hams_open", "hams_shared")
+        os.makedirs(hams_shared)
+        self.assertEqual(
+            orb._resolve_repo_root(hams_shared),
+            os.path.join(self.tmp, "hams_open"),
+        )
+
+    def test_a_real_repo_root_passes_through_unchanged(self):
+        hams_com = os.path.join(self.tmp, "hams_com")
+        os.makedirs(hams_com)
+        self.assertEqual(orb._resolve_repo_root(hams_com), hams_com)
+
+    def test_hams_shared_as_a_relative_dot_dot_path_still_resolves(self):
+        # The realistic manual-invocation case: cd into hams_shared/tools/ (this
+        # script's own home) and pass `..`, which abspath()s to hams_shared
+        # itself, not any real repo root.
+        hams_open = os.path.join(self.tmp, "hams_open")
+        tools_dir = os.path.join(hams_open, "hams_shared", "tools")
+        os.makedirs(tools_dir)
+        relative = os.path.join(tools_dir, "..")
+        self.assertEqual(orb._resolve_repo_root(relative), hams_open)
 
 
 class RegistryBuilderFindSiblingRepoTests(unittest.TestCase):
