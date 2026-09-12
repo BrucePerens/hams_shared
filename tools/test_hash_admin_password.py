@@ -11,9 +11,24 @@ instead, and by asserting `hash_password()` is called with the exact password st
 intended, for the line-ending-stripping fix specifically.
 """
 
+import os
+import subprocess
+import sys
 import unittest
 
 import hash_admin_password as ham  # noqa: E402
+
+_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hash_admin_password.py")
+
+
+def _run(args, stdin_text):
+    return subprocess.run(
+        [sys.executable, _SCRIPT, *args],
+        input=stdin_text,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
 
 
 class HashPasswordTests(unittest.TestCase):
@@ -55,6 +70,30 @@ class StripLineEndingTests(unittest.TestCase):
 
     def test_only_one_trailing_line_ending_is_stripped_not_repeated_newlines(self):
         self.assertEqual(ham._strip_line_ending("pass\n\n"), "pass\n")
+
+
+class RoundsFloorTests(unittest.TestCase):
+    # Real gap found 2026-09-12: passlib itself only rejects rounds <= 0, so `--rounds 1`
+    # used to silently produce a cryptographically negligible-cost hash with no warning --
+    # confirmed to fail against the pre-fix source (no floor check existed in main() at all).
+    def test_rounds_below_odoo_s_own_min_rounds_floor_is_refused(self):
+        result = _run(["--rounds", "1000"], "correct horse battery staple\n")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("MIN_ROUNDS floor", result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_rounds_at_exactly_the_floor_is_accepted(self):
+        result = _run(["--rounds", str(ham.DEFAULT_ROUNDS)], "correct horse battery staple\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith("$pbkdf2-sha512$"))
+
+    def test_hash_password_itself_still_honors_a_low_round_count_directly(self):
+        # The floor is enforced only in main()'s CLI-argument handling, not in
+        # hash_password() itself -- callers like this test file's own
+        # test_a_custom_round_count_is_actually_honored above still need to pass an
+        # arbitrarily low round count directly for fast, non-CLI unit testing.
+        h = ham.hash_password("test", rounds=1)
+        self.assertIn("$1$", h)
 
 
 if __name__ == "__main__":

@@ -68,6 +68,24 @@ def main():
     )
     args = parser.parse_args()
 
+    # Real gap found 2026-09-12: passlib itself only rejects rounds <= 0 (a ValueError at
+    # hash time), so `--rounds 1` silently produced a cryptographically negligible-cost
+    # hash with no warning at all. Odoo's own _crypt_context() (odoo/addons/base/models/
+    # res_users.py) never lets a configured round count go below MIN_ROUNDS either --
+    # `max(MIN_ROUNDS, int(cfg.get_param(...)))` -- but this tool exists specifically to
+    # inject a pre-hashed password via raw SQL, bypassing that runtime enforcement
+    # entirely, so a weak hash produced here would persist until the account's next real
+    # password change. Reject rather than silently clamp, matching this codebase's own
+    # fail-fast convention -- an operator who deliberately typoed the round count deserves
+    # a loud error, not a silently "corrected" hash they never asked for.
+    if args.rounds < DEFAULT_ROUNDS:
+        print(
+            f"Refusing to hash with --rounds {args.rounds}: below Odoo's own "
+            f"MIN_ROUNDS floor of {DEFAULT_ROUNDS}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if sys.stdin.isatty():
         password = getpass.getpass("Password to hash: ")
         confirm = getpass.getpass("Confirm password: ")
