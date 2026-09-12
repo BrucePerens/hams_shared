@@ -1216,6 +1216,27 @@ def main():
                 print(res.stderr, end="")
             linters_failed = True
 
+    # 50. check_float_isfinite -- born 2026-09-11/12 from a single night's bug-hunt sweep that
+    # found and fixed roughly fifteen separate real instances of the same bug class: float(x)
+    # parses "nan"/"inf"/"-infinity" with NO exception at all, so a `try: float(x) except
+    # ValueError: ...` block -- which reads as "safely parse this untrusted text" -- silently
+    # lets a non-finite value through. This gate flags a float(...) call inside a try/except
+    # ValueError with no math.isfinite() call anywhere in the enclosing function. Same two-repo
+    # sweep as steps 47/48/49; validated silent on every site fixed that night after adding
+    # float-isfinite-ignore escape hatches to the confirmed-safe remainder.
+    for _repo in (dir_path, sibling_dir):
+        res = subprocess.run(
+            [python_exec, os.path.join(dir_path, "tools", "check_float_isfinite.py"), _repo],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            if res.stdout:
+                print(res.stdout, end="")
+            if res.stderr:
+                print(res.stderr, end="")
+            linters_failed = True
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

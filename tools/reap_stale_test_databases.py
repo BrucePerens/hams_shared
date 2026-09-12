@@ -113,7 +113,7 @@ def _database_age_hours(oid: int) -> float | None:
                 capture_output=True,
                 text=True,
             )
-            mtime = float(result.stdout.strip())
+            mtime = float(result.stdout.strip())  # float-isfinite-ignore: stat -c "%Y" always emits a plain decimal epoch integer, not adversarial text
         except (subprocess.CalledProcessError, ValueError):
             return None
     age = datetime.datetime.now().timestamp() - mtime
