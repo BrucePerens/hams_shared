@@ -2700,9 +2700,21 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     if node.lineno <= len(self.lines)
                     else ""
                 )
+                # Case-insensitive, plus a "_re" suffix (this codebase's own
+                # convention for a module-level compiled-regex constant, e.g.
+                # `_CSP_CUSTOM_VALUE_INJECTION_RE = re.compile(...)`) -- the
+                # original check only matched a literal "re" receiver or a
+                # lowercase "regex" substring, so an UPPER_SNAKE_CASE regex
+                # constant's own .search() call was misidentified as an ORM
+                # '.search()' and flagged as N+1 locking.
+                caller_id_lower = caller_id.lower()
+                is_regex_receiver = (
+                    caller_id == "re"
+                    or "regex" in caller_id_lower
+                    or caller_id_lower.endswith("_re")
+                )
                 if (
-                    caller_id != "re"
-                    and "regex" not in caller_id
+                    not is_regex_receiver
                     and not is_ir_module_module_in_test
                     and "burn-ignore-company-scoped-loop" not in line_content
                 ):

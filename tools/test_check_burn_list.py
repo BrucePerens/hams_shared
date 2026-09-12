@@ -2702,6 +2702,23 @@ def test_a_regex_named_objects_search_inside_a_loop_is_exempt_from_n_plus_one():
     assert not any("N+1 locking" in e for e in errors)
 
 
+def test_an_upper_snake_case_re_suffixed_constants_search_is_exempt_from_n_plus_one():
+    # Real false positive found 2026-09-12 in content_security_policy/models/
+    # csp_directive.py: `_CSP_CUSTOM_VALUE_INJECTION_RE.search(rec.custom_value)`
+    # inside a `for rec in self:` loop was misidentified as an ORM '.search()'
+    # call -- the receiver is a module-level compiled regex constant, not a
+    # recordset, and this codebase's own convention names such constants with
+    # an UPPER_SNAKE_CASE "_RE" suffix, not the lowercase "regex" substring
+    # the original heuristic alone checked for.
+    source = (
+        "for rec in self:\n"
+        "    if _CSP_CUSTOM_VALUE_INJECTION_RE.search(rec.custom_value):\n"
+        "        pass\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("N+1 locking" in e for e in errors)
+
+
 def test_ir_module_module_search_count_inside_a_loop_in_a_test_file_is_exempt():
     source = (
         "for _i in range(2):\n"
