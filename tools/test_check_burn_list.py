@@ -2588,6 +2588,26 @@ def test_models_dot_get_is_forbidden_soft_dependency_checking():
     assert any("Soft-dependency checking" in e for e in errors)
 
 
+def test_a_local_variable_named_registry_in_tools_is_not_a_soft_dependency_violation():
+    # Real false positive found 2026-09-12: this check matches by variable NAME alone, with
+    # no way to tell Odoo's own live model registry apart from an unrelated local variable
+    # that happens to share the name. odoo_registry_builder.py's own `registry =
+    # build_registry(roots)` is a plain dict this standalone static-analysis tool builds
+    # itself by parsing source with ast -- no relationship to Odoo's manifest/dependency
+    # system, and tools/ has no __manifest__.py to declare anything in.
+    source = "registry = build_registry(roots)\nmod = registry.get('some_model')\n"
+    errors, _warnings = _scan_file(source, "tools/odoo_registry_builder.py")
+    assert not any("Soft-dependency checking" in e for e in errors)
+
+
+def test_registry_dot_get_outside_tools_is_still_a_soft_dependency_violation():
+    # The exclusion above is scoped to tools/, not a blanket loosening -- confirms real
+    # Odoo application code using this exact anti-pattern is still caught.
+    source = "mod = registry.get('optional_module')\n"
+    errors, _warnings = _scan_file(source, "some_module/models/res_users.py")
+    assert any("Soft-dependency checking" in e for e in errors)
+
+
 def test_searching_ir_module_module_outside_a_test_file_is_forbidden():
     source = "mods = self.env['ir.module.module'].search([('name', '=', 'foo')])\n"
     errors, _warnings = _dict_findings(source)

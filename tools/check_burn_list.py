@@ -2681,10 +2681,23 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     and getattr(node.func.value.value, "attr", "")
                     in ("registry", "models")
                 ):
-                    self.add_error(
-                        node.lineno,
-                        "CRITICAL ARCHITECTURE: Soft-dependency checking via `registry.get()` is forbidden. Declare dependencies in __manifest__.py.",
-                    )
+                    # Real false positive found 2026-09-12 (hams_shared/tools/ 326-finding
+                    # discovery): this check matches by variable NAME alone ("registry" or
+                    # "models"), with no way to tell Odoo's own live model registry
+                    # (self.env.registry / self.pool) apart from an unrelated local
+                    # variable that happens to share the name. odoo_registry_builder.py's
+                    # own `registry = build_registry(roots)` is a plain dict this
+                    # standalone static-analysis tool builds itself by parsing source with
+                    # ast -- it has no relationship to Odoo's manifest/dependency system at
+                    # all, so the rule's own rationale ("declare dependencies in
+                    # __manifest__.py") doesn't describe it. tools/ has no __manifest__.py
+                    # to declare anything in.
+                    in_tools_dir = "/tools/" in self.filepath.replace("\\", "/")
+                    if not in_tools_dir:
+                        self.add_error(
+                            node.lineno,
+                            "CRITICAL ARCHITECTURE: Soft-dependency checking via `registry.get()` is forbidden. Declare dependencies in __manifest__.py.",
+                        )
 
             if func_name in ("search", "search_count"):
                 val = getattr(node.func, "value", None)
