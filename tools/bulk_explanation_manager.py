@@ -74,7 +74,7 @@ def export_pending(client, output_file):
             
         logger.info(f"Exported {len(export_data)} questions to {output_file}")
         
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: CLI export step; log and let the tool continue rather than crash mid-batch.
         logger.exception(f"Failed to export: {e}")
 
 def import_completed(client, input_file):
@@ -102,15 +102,29 @@ def import_completed(client, input_file):
             try:
                 client.execute("survey.question", "daemon_write_questions", q_dict=updates)
                 logger.info(f"Successfully updated {len(updates)} questions using bulk method.")
-            except Exception as e:
+            except Exception as e:  # audit-ignore-catch-all: bulk RPC method may not exist on older servers; log and fall back to the iterative write below rather than crash.
                 logger.warning(f"Bulk write failed, falling back to iterative write. Error: {e}")
+                # Real bug found 2026-09-12: a single failing write here (e.g. a question
+                # deleted between export and import, or a stale/invalid id) used to raise
+                # straight out of this loop and abort the whole fallback, silently leaving
+                # every remaining question in the batch un-updated with no indication of
+                # which ones did or didn't make it. Isolate each write so one bad id can't
+                # sink the rest of the batch.
+                succeeded, failed = 0, []
                 for str_id, vals in updates.items():
-                    client.execute("survey.question", "write", [int(str_id)], vals)
-                logger.info(f"Successfully updated {len(updates)} questions using iterative method.")
+                    try:
+                        client.execute("survey.question", "write", [int(str_id)], vals)
+                        succeeded += 1
+                    except Exception as write_err:  # audit-ignore-catch-all: isolate one question's write failure from the rest of the batch.
+                        logger.error(f"Failed to update question {str_id}: {write_err}")
+                        failed.append(str_id)
+                logger.info(f"Successfully updated {succeeded} questions using iterative method.")
+                if failed:
+                    logger.error(f"Failed to update {len(failed)} questions: {failed}")
         else:
             logger.info("No valid explanations found to import.")
             
-    except Exception as e:
+    except Exception as e:  # audit-ignore-catch-all: CLI import step; log and let the tool continue rather than crash mid-batch.
         logger.exception(f"Failed to import: {e}")
 
 if __name__ == "__main__":

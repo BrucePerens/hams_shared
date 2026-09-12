@@ -180,6 +180,28 @@ class ImportCompletedTests(unittest.TestCase):
         self.import_completed(client, p)  # must not raise
         client.execute.assert_not_called()
 
+    def test_one_failing_write_in_the_fallback_loop_does_not_abort_the_rest_of_the_batch(self):
+        # Real bug found 2026-09-12: a single failing write in the iterative fallback used
+        # to raise straight out of the loop, silently leaving every remaining question in
+        # the batch un-updated with no indication of which ones did or didn't make it.
+        client = MagicMock()
+
+        def side_effect(model, method, ids=None, vals=None, *a, **kw):
+            if method == "daemon_write_questions":
+                raise RuntimeError("no such method")
+            if method == "write" and ids == [6]:
+                raise RuntimeError("question 6 no longer exists")
+            return None
+
+        client.execute.side_effect = side_effect
+        p = self._input(
+            '[{"id": 5, "explanation": "five"}, {"id": 6, "explanation": "six"}, '
+            '{"id": 7, "explanation": "seven"}]'
+        )
+        self.import_completed(client, p)  # must not raise
+        client.execute.assert_any_call("survey.question", "write", [5], {"explanation": "five"})
+        client.execute.assert_any_call("survey.question", "write", [7], {"explanation": "seven"})
+
 
 if __name__ == "__main__":
     unittest.main()
