@@ -910,8 +910,16 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             # real work, instead of being flagged just because its one call
             # target happens to be defined in this same file. Last-definition
             # wins on a duplicate name (e.g. same method name in two
-            # classes) -- acceptable here since this is a false-positive
-            # reduction heuristic, not a security check.
+            # classes) -- a real, accepted imprecision, not just a
+            # theoretical one: a call to a name that collides with an
+            # unrelated same-named method/helper elsewhere in the file could
+            # resolve to the WRONG node and inherit its "calls something
+            # real" verdict. This can only produce a false NEGATIVE (an
+            # actually-empty test judged non-empty because some unrelated
+            # same-named function elsewhere does real work), never a new
+            # false positive, so it's acceptable for a false-positive
+            # reduction heuristic -- but it does mean this check is not a
+            # sound proof that a passing test really exercises real logic.
             self.function_def_nodes_by_name = {
                 n.name: n
                 for n in ast.walk(tree)
