@@ -129,7 +129,9 @@ def sgl_challenge_response(challenge: str, password: str) -> str:
     reassembled per the (always-taken, see module docstring) __BIG_ENDIAN branch as a
     native little-endian uint32_t with the top byte masked to 6 bits, formatted as a
     zero-padded 10-digit decimal string, and only the last 8 digits kept."""
-    digest = hashlib.md5(challenge.encode() + password.encode() + _SALT).digest()
+    digest = hashlib.md5(  # burn-ignore-legacy-protocol-hash: real rmsgw's own fixed algorithm, not our choice
+        challenge.encode() + password.encode() + _SALT
+    ).digest()
     value = digest[0] | (digest[1] << 8) | (digest[2] << 16) | ((digest[3] & 0x3F) << 24)
     return f"{value:010d}"[2:]
 

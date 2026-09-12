@@ -2279,7 +2279,19 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 attr in ("md5", "sha1")
                 and getattr(node.func.value, "id", "") == "hashlib"
             ):
-                self.add_error(node.lineno, "WEAK CRYPTO: MD5/SHA1 broken.")
+                # Real, narrow exemption found 2026-09-12: this rule's own concern is a security
+                # token WE choose to generate with a broken hash -- it doesn't apply to
+                # faithfully reproducing an EXISTING external protocol's own, already-fixed,
+                # unchangeable hash algorithm for interop/testing. First used by
+                # test_rmsgw_protocol.py's sgl_challenge_response(), a Python port of real
+                # rmsgw's own lib/sglchallenge.c sgl_challenge_response()/ChallengedPassword():
+                # Winlink's real "Secure Gateway Login" challenge-response scheme is
+                # MD5(challenge + password + salt), not a choice this codebase makes -- using
+                # sha256 instead would make the test unable to interoperate with the real,
+                # unmodified rmsgw binary it exists to exercise.
+                line_content = self.node_span_text(node)
+                if "burn-ignore-legacy-protocol-hash" not in line_content:
+                    self.add_error(node.lineno, "WEAK CRYPTO: MD5/SHA1 broken.")
             elif (
                 attr in ("choice", "randint", "random")
                 and getattr(node.func.value, "id", "") == "random"
@@ -4297,6 +4309,12 @@ def scan_file(filepath, is_odoo_module=False):
                 # orphaned-marker detection -- neither is a real, forgotten BEGIN/END pair. See
                 # check_anchor_pairing()'s own comment for the full rationale.
                 "burn-ignore-anchor-example",
+                # hashlib.md5()/sha1() faithfully reproducing an existing external protocol's
+                # own, already-fixed hash algorithm for interop/testing -- not a security token
+                # this codebase chooses to generate. See the WEAK CRYPTO check's own comment for
+                # the full rationale. First used by test_rmsgw_protocol.py's
+                # sgl_challenge_response().
+                "burn-ignore-legacy-protocol-hash",
             ]
         ):
             errors_found.append(

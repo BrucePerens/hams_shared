@@ -2252,6 +2252,18 @@ def test_hashlib_sha1_is_weak_crypto():
     assert any("WEAK CRYPTO" in e for e in errors)
 
 
+def test_hashlib_md5_with_the_real_burn_ignore_tag_is_exempt():
+    # Real, narrow exemption found 2026-09-12: this rule's own concern is a security token WE
+    # choose to generate with a broken hash -- not faithfully reproducing an EXISTING external
+    # protocol's own, already-fixed hash algorithm for interop/testing. Confirmed against this
+    # repo's own real test_rmsgw_protocol.py's sgl_challenge_response(), a Python port of real
+    # rmsgw's own MD5-based Secure Gateway Login challenge-response scheme. Confirmed to FAIL
+    # against the pre-fix rule (no exemption mechanism existed at all).
+    source = "digest = hashlib.md5(data).hexdigest()  # burn-ignore-legacy-protocol-hash\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("WEAK CRYPTO" in e for e in errors)
+
+
 def test_random_choice_is_weak_crypto():
     source = "picked = random.choice(candidates)\n"
     errors, _warnings = _dict_findings(source)
