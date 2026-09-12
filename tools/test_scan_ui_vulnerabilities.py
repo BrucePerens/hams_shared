@@ -128,6 +128,106 @@ class ScanFileTests(unittest.TestCase):
         self.assertTrue(chk.scan_file(p))
 
 
+class ResolveRepoRootTests(unittest.TestCase):
+    # Regression tests for a real gap found 2026-09-12: with no CLI argument (the only way this
+    # script was ever actually invocable before this fix), main()'s base_dir always resolved to
+    # `hams_shared/` itself -- confirmed directly (`ls hams_shared/`) to contain zero real Odoo
+    # application modules, only agents/docs/tools/scripts/config, so this checker could
+    # structurally never find the raw-XML-in-a-string-literal risk it exists to catch (that risk
+    # lives in portal controllers/view-generation helpers under ham_logbook/ham_satellite/
+    # user_websites/etc, never in hams_shared). Same _resolve_repo_root/_resolve_repo_roots shape
+    # already fixed in check_pip_audit.py/check_cargo_deny.py.
+    def test_a_hams_shared_path_redirects_to_its_parent_repo(self):
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(
+            chk._resolve_repo_root(os.path.join(fake_repo, "hams_shared")),
+            fake_repo,
+        )
+
+    def test_a_real_repo_root_passes_through_unchanged(self):
+        fake_repo = os.path.join(os.sep, "some", "workspace", "some_repo")
+        self.assertEqual(chk._resolve_repo_root(fake_repo), fake_repo)
+
+
+class ResolveRepoRootsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.workspace = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.workspace)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make_repo(self, name, module_names=()):
+        repo = os.path.join(self.workspace, name)
+        for module_name in module_names:
+            _write(os.path.join(repo, module_name, "__manifest__.py"), "{}")
+        return repo
+
+    def test_hams_shared_input_appends_the_real_hams_com_sibling(self):
+        self._make_repo("hams_open", module_names=["zero_sudo"])
+        hams_com = self._make_repo("hams_com", module_names=["ham_base"])
+        hams_shared = os.path.join(self.workspace, "hams_open", "hams_shared")
+        os.makedirs(hams_shared)
+        roots = chk._resolve_repo_roots(hams_shared)
+        self.assertEqual(roots, [os.path.join(self.workspace, "hams_open"), hams_com])
+
+    def test_a_real_repo_root_with_no_odoo_sibling_present_scans_alone(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        self.assertEqual(chk._resolve_repo_roots(repo), [repo])
+
+    def test_a_sibling_directory_with_no_manifest_py_anywhere_is_not_treated_as_a_repo(self):
+        repo = self._make_repo("hams_open", module_names=["zero_sudo"])
+        os.makedirs(os.path.join(self.workspace, "hams_com", "not_a_module"))
+        self.assertEqual(chk._resolve_repo_roots(repo), [repo])
+
+
+class ExplicitRepoRootIntegrationTests(unittest.TestCase):
+    """Regression tests proving the new optional CLI argument actually reaches the real risk
+    surface, unlike the old no-argument-only invocation."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, *args):
+        result = subprocess.run(
+            [sys.executable, _SCRIPT, *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result.returncode, result.stdout + result.stderr
+
+    def test_an_explicit_repo_root_is_actually_scanned_not_the_scripts_own_directory(self):
+        _write(os.path.join(self.tmp, "some_module", "bad.py"), 'x = "<record id=\\"bad\\">"\n')
+        code, out = self._run(self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("bad.py", out)
+
+    def test_a_hams_shared_argument_redirects_to_its_parent_and_finds_a_sibling_vulnerability(
+        self,
+    ):
+        # Simulates the real deployment shape (hams_open/hams_shared, hams_com sibling) without
+        # touching the actual repos -- a vulnerability planted only in the sibling repo must still
+        # be found when this script is invoked as if from hams_shared's own tools/ directory,
+        # exactly how run_linters.py's own real invocation pattern works for the other checkers.
+        hams_open = os.path.join(self.tmp, "hams_open")
+        hams_com = os.path.join(self.tmp, "hams_com")
+        _write(os.path.join(hams_open, "zero_sudo", "__manifest__.py"), "{}")
+        _write(os.path.join(hams_com, "ham_base", "__manifest__.py"), "{}")
+        _write(
+            os.path.join(hams_com, "ham_base", "bad.py"), 'x = "<record id=\\"bad\\">"\n'
+        )
+        hams_shared = os.path.join(hams_open, "hams_shared")
+        os.makedirs(hams_shared)
+        code, out = self._run(hams_shared)
+        self.assertEqual(code, 1)
+        self.assertIn("bad.py", out)
+
+
 class MainIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
