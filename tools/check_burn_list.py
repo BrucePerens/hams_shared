@@ -2009,6 +2009,22 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             or ".sudo().unlink()" in line_content
                             or ".sudo().with_company(" in line_content
                             or ".sudo().create(" in line_content
+                            # A test verifying a record's own real chatter
+                            # state (message_ids) after some action already
+                            # ran, against a recordset bound to a narrowly-
+                            # scoped service account that deliberately lacks
+                            # the Central Mail Service Group -- empirically
+                            # confirmed necessary 2026-09-12
+                            # (ham_relay_bridge/tests/test_relay_node.py:
+                            # removing .sudo() here made
+                            # test_receive_telemetry_persists_and_tracks_operating_callsign
+                            # and its _does_not_re_track_ sibling fail with a
+                            # real AccessError on mail.message, not a false
+                            # alarm). This bypasses ACL only to read back
+                            # what the system under test already did, never
+                            # to grant the service account itself broader
+                            # access.
+                            or ".sudo().message_ids" in line_content
                         )
                     ):
                         self.add_error(

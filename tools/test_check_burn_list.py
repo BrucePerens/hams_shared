@@ -2036,6 +2036,18 @@ def test_sudo_create_with_the_real_burn_ignore_tag_is_exempt():
     assert not any(".sudo()" in e for e in errors)
 
 
+def test_sudo_message_ids_read_with_the_real_burn_ignore_tag_is_exempt():
+    # Fifth allowed shape, added 2026-09-12, empirically confirmed necessary
+    # (not just asserted): ham_relay_bridge/tests/test_relay_node.py verifies
+    # a record's own real chatter state (message_ids) via a recordset bound
+    # to a narrowly-scoped service account deliberately excluded from the
+    # Central Mail Service Group. Removing .sudo() here made two real tests
+    # fail with a genuine mail.message AccessError, not a hypothetical one.
+    source = "tracked = self.node.sudo().message_ids.filtered(fn)  # burn-ignore-sudo\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any(".sudo()" in e for e in errors)
+
+
 def test_sudo_with_the_tag_but_not_one_of_the_four_allowed_shapes_is_still_flagged():
     # Real bug found and fixed via the bug-hunt campaign, 2026-09-10 (this test used to document
     # the bug itself, asserting the line was wrongly exempt -- see add_error()'s own
