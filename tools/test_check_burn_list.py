@@ -2719,6 +2719,22 @@ def test_an_upper_snake_case_re_suffixed_constants_search_is_exempt_from_n_plus_
     assert not any("N+1 locking" in e for e in errors)
 
 
+def test_a_lowercase_re_suffixed_recordset_variables_search_is_not_exempt():
+    # Pins the boundary of the fix above: the "_RE" suffix exemption is
+    # deliberately an exact-case match, not a case-insensitive one. An
+    # ordinary recordset variable that happens to be named with a lowercase
+    # "_re" suffix (e.g. a filtered/renamed source) must still be treated as
+    # a real ORM '.search()' call inside a loop, not silently exempted --
+    # a case-insensitive suffix match would reopen the exact hole this rule
+    # exists to close.
+    source = (
+        "for rec in self:\n"
+        "    filtered_source_re.search([('id', '=', rec.id)])\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("N+1 locking" in e for e in errors)
+
+
 def test_ir_module_module_search_count_inside_a_loop_in_a_test_file_is_exempt():
     source = (
         "for _i in range(2):\n"

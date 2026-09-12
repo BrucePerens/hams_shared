@@ -2700,19 +2700,20 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     if node.lineno <= len(self.lines)
                     else ""
                 )
-                # Case-insensitive, plus a "_re" suffix (this codebase's own
-                # convention for a module-level compiled-regex constant, e.g.
-                # `_CSP_CUSTOM_VALUE_INJECTION_RE = re.compile(...)`) -- the
-                # original check only matched a literal "re" receiver or a
-                # lowercase "regex" substring, so an UPPER_SNAKE_CASE regex
-                # constant's own .search() call was misidentified as an ORM
-                # '.search()' and flagged as N+1 locking.
-                caller_id_lower = caller_id.lower()
-                is_regex_receiver = (
-                    caller_id == "re"
-                    or "regex" in caller_id_lower
-                    or caller_id_lower.endswith("_re")
-                )
+                # Plus an exact uppercase "_RE" suffix (this codebase's own
+                # observed convention for a module-level compiled-regex
+                # constant, e.g. `_CSP_CUSTOM_VALUE_INJECTION_RE =
+                # re.compile(...)`) -- the original check only matched a
+                # literal "re" receiver or a lowercase "regex" substring, so
+                # such a constant's own .search() call was misidentified as
+                # an ORM '.search()' and flagged as N+1 locking. Deliberately
+                # NOT case-insensitive/lowercased here: a generic
+                # case-insensitive "_re" suffix would also exempt an ordinary
+                # recordset variable someone happens to name e.g.
+                # `filtered_source_re`, silently reopening the hole this
+                # rule exists to close. Pinned to the exact spelling actually
+                # observed in this codebase's own regex constants.
+                is_regex_receiver = caller_id == "re" or "regex" in caller_id or caller_id.endswith("_RE")
                 if (
                     not is_regex_receiver
                     and not is_ir_module_module_in_test
