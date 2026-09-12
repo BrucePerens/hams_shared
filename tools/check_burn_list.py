@@ -390,7 +390,15 @@ GENERAL_ERROR_RULES = [
         # above, for the identical reason: real, single-tenant, non-Odoo code living alongside
         # actual multi-tenant Odoo models this rule still correctly covers (confirmed zero
         # TENANT LEAK hits inside any models/ file in this same sweep).
-        r"^(?!.*(?:^|/)daemons?/)(?!.*(?:^|/)scripts/).*\.py$",
+        #
+        # Real false positives found 2026-09-12, the hams_shared/tools/ 326-finding discovery: 3
+        # more hits, same shape, this time in tools/ itself -- check_dependency_releases.py's
+        # GITHUB_TOKEN (a standard, optional CI personal-access-token for a scheduled dependency-
+        # staleness check, not a per-customer secret) and env_validator.py's SMTP_PASS (a single,
+        # systemwide daemon's outgoing-mail credential, read at process startup, not a per-tenant
+        # Odoo model field). Neither file has any concept of "tenant" either -- extended the same
+        # exclusion to tools/ for the identical reason as daemons?/ and scripts/ above.
+        r"^(?!.*(?:^|/)daemons?/)(?!.*(?:^|/)scripts/)(?!.*(?:^|/)tools/).*\.py$",
         re.compile(
             r"os\.(?:environ\.get|getenv)\s*\(\s*['\"][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASS|API|CRED)[A-Za-z0-9_]*['\"]",
             re.IGNORECASE,

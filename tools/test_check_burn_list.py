@@ -5207,3 +5207,29 @@ def test_a_fixture_string_containing_a_tmp_path_inside_tools_is_not_flagged(tmp_
     )
     out = _run_main(tmp_path, extra_args=["--scan-daemons-and-tools"])
     assert "Hardcoding '/tmp' is forbidden" not in out
+
+
+def test_env_var_credential_fallback_in_a_real_odoo_model_is_a_tenant_leak():
+    content = (
+        "class ResUsers(models.Model):\n"
+        "    _inherit = 'res.users'\n\n"
+        "    def _get_api_key(self):\n"
+        "        return os.environ.get('STRIPE_API_KEY')\n"
+    )
+    errors, _warnings = _scan_file(content, "models/res_users.py")
+    assert any("CRITICAL TENANT LEAK" in e for e in errors)
+
+
+def test_env_var_credential_fallback_in_hams_shared_tools_is_not_a_tenant_leak():
+    # Real false positive found 2026-09-12, the hams_shared/tools/ 326-finding discovery:
+    # check_dependency_releases.py (a standalone CLI that checks GitHub for stale pinned
+    # dependencies) reads an optional GITHUB_TOKEN from the environment -- the standard
+    # personal-access-token pattern for a scheduled, non-interactive CI job, not a per-tenant
+    # Odoo credential. tools/ has no concept of "tenant" at all, same reasoning already
+    # applied to daemons?/ and scripts/ above.
+    content = (
+        "def _github_get(path):\n"
+        "    token = os.environ.get('GITHUB_TOKEN')\n"
+    )
+    errors, _warnings = _scan_file(content, "tools/check_dependency_releases.py")
+    assert not any("CRITICAL TENANT LEAK" in e for e in errors)
