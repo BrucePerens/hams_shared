@@ -4928,6 +4928,36 @@ def test_target_directory_is_always_pruned(tmp_path):
     assert "bad.js" not in out
 
 
+def test_a_claude_worktree_directory_is_never_walked_by_the_tour_class_audit(tmp_path):
+    # Real bug found 2026-09-12: the main scan loop above already prunes any dotfile-prefixed
+    # directory, but a SECOND, independent os.walk over the same target_dir (the "Orphaned
+    # Tour Class" / "Dangling Tour Target" bidirectional audit) never did -- including this
+    # project's own standing convention of running concurrent bug-hunt dispatches in isolated
+    # git worktrees under .claude/worktrees/<session>/ inside the repo root (a real git
+    # worktree checkout, confirmed with a real `git worktree add` earlier tonight, not an empty
+    # directory). Before this fix, an XML tour class defined only inside another session's own
+    # in-progress worktree -- with no corresponding JS target anywhere in the REAL repo -- would
+    # be flagged as a genuine "Orphaned Tour Class", a false positive tied to content that isn't
+    # part of the real repo state this invocation is actually scoped to check.
+    worktree_xml = (
+        tmp_path
+        / ".claude"
+        / "worktrees"
+        / "sess1"
+        / "some_mod"
+        / "views"
+        / "tour_templates.xml"
+    )
+    worktree_xml.parent.mkdir(parents=True)
+    worktree_xml.write_text(
+        "<templates><t t-name='o_tour_from_another_sessions_worktree'/></templates>\n",
+        encoding="utf-8",
+    )
+    out = _run_main(tmp_path)
+    assert "o_tour_from_another_sessions_worktree" not in out
+    assert "Orphaned Tour Class" not in out
+
+
 def test_odoo_type_stubs_directory_is_always_pruned(tmp_path):
     stub_file = tmp_path / "hams_shared" / "tools" / "odoo_type_stubs" / "odoo" / "models.py"
     stub_file.parent.mkdir(parents=True)

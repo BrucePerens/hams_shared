@@ -4955,7 +4955,17 @@ def main():
     for root, dirs, files in os.walk(target_dir):
         if "radae" in dirs:
             dirs.remove("radae")
-        dirs[:] = [d for d in dirs if "env" not in d]
+        # Real bug found 2026-09-12: unlike the main scan loop above (which prunes any
+        # dotfile-prefixed directory), this second, independent walk over the same target_dir
+        # never excluded dotfile directories at all -- including this project's own standing
+        # convention of running concurrent bug-hunt dispatches in isolated git worktrees under
+        # .claude/worktrees/<session>/ inside the repo root (a real git worktree checkout,
+        # confirmed with a real `git worktree add` earlier tonight, not an empty directory).
+        # Without this, a real XML/JS tour file inside another session's own in-progress
+        # worktree would be scanned for o_tour_ classes, potentially producing a bogus
+        # "orphaned"/"dangling" tour finding tied to content that isn't part of the real repo
+        # state this invocation is actually scoped to check.
+        dirs[:] = [d for d in dirs if "env" not in d and not d.startswith(".")]
         if "venv" in root or "site-packages" in root:
             continue
         if "node_modules" in root:
