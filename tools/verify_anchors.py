@@ -77,6 +77,35 @@ CODE_ISLANDS_UNDER_DOCS = [
 def _clean(name):
     return name.replace("COMM_", "").replace("PRI_", "")
 
+
+def _ends_with_marker(prefix, marker):
+    """True if `prefix` ends with the exact word/phrase `marker`, as a standalone token --
+    not merely as a trailing substring glued onto a longer word.
+
+    Real bug found 2026-09-12, confirmed empirically: the classification below used to call
+    `own_prefix.endswith("Tests")` (and the "Verified by"/"Tested by"/"Triggers"/"Triggered by"
+    marker checks) directly, with no word-boundary check at all. A base-declaration comment that
+    simply happened to end in a word SUFFIXED by one of these markers -- e.g. `# Runs our
+    UnitTests [@ANCHOR: COMM_x]`, a normal English sentence, not the documented `# Tests
+    [@ANCHOR: ...]` convention -- silently misclassified as a real "# Tests" link purely because
+    "UnitTests" ends with the substring "Tests". Confirmed directly: that exact comment recorded
+    the anchor in `tests_links_set` as genuinely tested. Consequence: `_report_bidirectional_orphans`'s
+    orphaned-source check (`a not in tests_links_set`) would then treat a truly untested feature as
+    already covered, masking a real ADR-0054 coverage gap -- a false negative in the class of bug
+    this campaign exists to catch. Fixed by additionally requiring the character immediately
+    before the marker (if any) not be a word-continuation character, so "UnitTests" no longer
+    matches "Tests" but "# Tests" (and "# Add more Tests", which was already permissively accepted
+    before this fix and is left unchanged) still does.
+    """
+    if not prefix.endswith(marker):
+        return False
+    idx = len(prefix) - len(marker)
+    if idx == 0:
+        return True
+    prev_char = prefix[idx - 1]
+    return not (prev_char.isalnum() or prev_char == "_")
+
+
 def get_module(path):
     """Resolves the Odoo module boundary for a given file path to enforce cross-module strictness."""
     abs_path = os.path.abspath(path)
@@ -290,15 +319,15 @@ def _process_file_for_anchors(
 
             anchor = f"{explicit_mod}:{anchor_name}"
 
-            if own_prefix.endswith("Tests"):
+            if _ends_with_marker(own_prefix, "Tests"):
                 # LLM NOTE: Matches `# Tests [@ANCHOR: COMM_target]`
                 # Used in test files to explicitly state what feature is being tested.
                 tests_links.setdefault(full_path, []).append((anchor, line_num))
                 tests_links_set.setdefault(anchor, []).append(loc_str)
                 code_anchors.setdefault(anchor, []).append(loc_str)
 
-            elif own_prefix.endswith("Verified by") or own_prefix.endswith(
-                "Tested by"
+            elif _ends_with_marker(own_prefix, "Verified by") or _ends_with_marker(
+                own_prefix, "Tested by"
             ):
                 # LLM NOTE: Matches `# # Verified by [@ANCHOR: COMM_test_method_name]`
                 # Used in source files to point to the test that verifies it.
@@ -319,8 +348,8 @@ def _process_file_for_anchors(
                 if "audit-ignore-view" in own_prefix and full_path.endswith(".xml"):
                     audit_ignore_links.setdefault(anchor, []).append(loc_str)
 
-            elif own_prefix.endswith("Triggers") or own_prefix.endswith(
-                "Triggered by"
+            elif _ends_with_marker(own_prefix, "Triggers") or _ends_with_marker(
+                own_prefix, "Triggered by"
             ):
                 # LLM NOTE: Matches `# Triggers [@ANCHOR: COMM_target_feature]`
                 # Documents architectural handoffs between modules or daemons.
@@ -1031,7 +1060,29 @@ def main():
     primary_dirs = [os.path.abspath(d) for d in args]
     target_dirs = list(primary_dirs)
 
-    target_dirs, sibling_warning = _add_sibling_repo_target(repo_root, target_dirs)
+    # Real bug found 2026-09-12, confirmed empirically against the real repo tree (not just
+    # read): `repo_root` above is deliberately THIS SCRIPT's own containing directory --
+    # `hams_shared` itself -- so every reported location string stays relative to the real
+    # hams_shared root even when scanning a different target (see test_verify_anchors.py's own
+    # module docstring). But `_add_sibling_repo_target` was being handed that SAME `repo_root`
+    # value, even though its own logic (and its own unit tests, which pass "hams_com"/"hams_open"
+    # directly) assumes its `repo_root` argument IS the enclosing checkout -- hams_com or
+    # hams_open, whichever one hosts this hams_shared -- not hams_shared itself. Since
+    # `os.path.basename(hams_shared_path)` is always literally "hams_shared", `own_name` was never
+    # "hams_com" or "hams_open", so `other_names` never excluded either real name, and
+    # `has_sibling` went true purely because the PRIMARY scan target itself happened to be named
+    # "hams_com" (the ordinary unscoped-from-hams_com invocation) -- never because hams_open had
+    # actually been added. Even where `has_sibling` correctly came out False (a module-scoped
+    # invocation), the sibling-candidate paths were still computed one directory level too deep
+    # (relative to hams_shared instead of its own parent), so they never resolved to the real
+    # sibling either. Net, confirmed effect: a real, unscoped `verify_anchors.py .` run from
+    # hams_com's own root never scanned hams_open at all -- e.g. `zero_sudo:*` anchors, whose
+    # real source lives only in hams_open, were reported as "missing from operational source
+    # code" purely because hams_open was silently never scanned, not because the anchors don't
+    # exist. `os.path.dirname(repo_root)` is the actual enclosing hams_com/hams_open checkout
+    # that `_add_sibling_repo_target` needs.
+    enclosing_repo_dir = os.path.dirname(repo_root)
+    target_dirs, sibling_warning = _add_sibling_repo_target(enclosing_repo_dir, target_dirs)
     if sibling_warning:
         print(
             "\n================================================================================"
@@ -1079,6 +1130,32 @@ def main():
             dups,
             cal,
         ) = find_anchors_in_code(target_dir, repo_root)
+
+        # Real bug found 2026-09-12, confirmed empirically: `find_anchors_in_code`'s own
+        # duplicate-base-anchor detection (see `_process_file_for_anchors`) only ever compares
+        # against the `anchor_locations` dict it builds DURING THAT SINGLE CALL -- scoped to one
+        # `target_dir`. Since this tool's flagship use case is scanning hams_com and hams_open
+        # TOGETHER (see `_add_sibling_repo_target` above), a base anchor declared once in each
+        # repo -- a real, genuine ADR-0054 duplicate -- was never compared against the other
+        # repo's own already-accumulated `anchor_locations` at all, so it silently passed the
+        # "Duplicate Semantic Anchors" check entirely. Confirmed directly: two fixtures each
+        # declaring the same base anchor, passed as two separate positional target directories,
+        # produced zero duplicate-anchor output before this fix. Caught here, incrementally, by
+        # comparing this target_dir's own newly-found base anchors against the anchor_locations
+        # already accumulated from EARLIER target_dirs before merging them in -- intra-target_dir
+        # duplicates stay exactly as already reported by `dups` below; this only adds the
+        # cross-target_dir case that a single, per-target_dir call can never see on its own.
+        for anchor, locs in a_locs.items():
+            base_name = anchor.split(":")[1]
+            if _clean(base_name).startswith("example_") or _clean(base_name) in (
+                "unique_name",
+                "name",
+                "feature_name",
+            ):
+                continue
+            if anchor in anchor_locations:
+                for loc in locs:
+                    duplicates.append((anchor, loc, list(anchor_locations[anchor])))
 
         for k, v in c_anchors.items():
             code_anchors.setdefault(k, []).extend(v)

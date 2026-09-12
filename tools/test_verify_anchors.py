@@ -324,6 +324,55 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         self.assertNotIn("mod_a:mentioned_elsewhere", tests_links_set)
         self.assertNotIn("mod_a:mentioned_elsewhere", code_anchors)
 
+    def test_a_base_declaration_whose_preceding_text_merely_ends_in_the_word_tests_is_not_a_tests_link(self):
+        # Real bug found 2026-09-12, confirmed empirically: the "Tests"/"Verified by"/"Tested
+        # by"/"Triggers"/"Triggered by" marker checks used bare `str.endswith(...)`, with no
+        # word-boundary check at all. A perfectly ordinary base-declaration comment that happens
+        # to end in a word SUFFIXED by "Tests" -- e.g. "UnitTests", nothing to do with the
+        # documented `# Tests [@ANCHOR: ...]` convention -- silently misclassified the anchor as
+        # test-covered, purely because "UnitTests".endswith("Tests") is True. Consequence: a truly
+        # untested feature's own orphaned-source check (`a not in tests_links_set`) would
+        # incorrectly conclude it already has test coverage, masking a real ADR-0054 gap -- a
+        # false negative in the exact class of bug this campaign hunts for.
+        _write(
+            os.path.join(self.tmp, "mod_a", "models", "foo.py"),
+            "# Runs our UnitTests [@ANCHOR: COMM_should_be_a_base_anchor]\n",
+        )
+        code_anchors, anchor_locations, _tl, tests_links_set, *_rest = self._scan()
+        self.assertIn("mod_a:COMM_should_be_a_base_anchor", anchor_locations)
+        self.assertNotIn("mod_a:COMM_should_be_a_base_anchor", tests_links_set)
+
+    def test_a_base_declaration_whose_preceding_text_ends_in_a_word_glued_onto_triggers_is_not_a_cross_reference(self):
+        # Same bug, the "Triggers" marker: "MisTriggers" ends with the substring "Triggers" too.
+        _write(
+            os.path.join(self.tmp, "mod_a", "models", "foo.py"),
+            "# MisTriggers [@ANCHOR: COMM_should_be_a_base_anchor]\n",
+        )
+        code_anchors, anchor_locations, _tl, _tls, _verified, _audit, cross_refs, *_rest = self._scan()
+        self.assertIn("mod_a:COMM_should_be_a_base_anchor", anchor_locations)
+        self.assertNotIn("mod_a:COMM_should_be_a_base_anchor", cross_refs)
+
+    def test_a_base_declaration_whose_preceding_text_ends_in_a_word_glued_onto_verified_by_is_not_a_verified_by_link(self):
+        # Same bug, the "Verified by" marker: "NotVerified by" ends with the phrase "Verified by".
+        _write(
+            os.path.join(self.tmp, "mod_a", "models", "foo.py"),
+            "# NotVerified by [@ANCHOR: COMM_should_be_a_base_anchor]\n",
+        )
+        code_anchors, anchor_locations, _tl, _tls, verified_by_links, *_rest = self._scan()
+        self.assertIn("mod_a:COMM_should_be_a_base_anchor", anchor_locations)
+        self.assertNotIn("mod_a:COMM_should_be_a_base_anchor", verified_by_links)
+
+    def test_a_genuine_tests_marker_with_extra_leading_prose_still_works_after_the_word_boundary_fix(self):
+        # Guards against an over-correction: the word-boundary fix must not break the
+        # already-permissive (and already-tested-elsewhere) acceptance of extra whitespace-
+        # separated words before the marker, only the glued-word-suffix case.
+        _write(
+            os.path.join(self.tmp, "mod_a", "tests", "test_foo.py"),
+            "# Add more Tests [@ANCHOR: COMM_x]\n",
+        )
+        code_anchors, _locs, _tl, tests_links_set, *_rest = self._scan()
+        self.assertIn("mod_a:COMM_x", tests_links_set)
+
 
 class ReportDuplicatesTests(unittest.TestCase):
     def setUp(self):
@@ -721,6 +770,119 @@ class MainIntegrationTests(unittest.TestCase):
         code, out = self._run()
         self.assertEqual(code, 1)
         self.assertIn("Duplicate Semantic Anchors", out)
+
+    def test_a_duplicate_base_anchor_declared_once_in_each_of_two_scanned_target_dirs_is_flagged(self):
+        # Real bug found 2026-09-12, confirmed empirically against this exact fixture before the
+        # fix (zero "Duplicate Semantic Anchors" output): find_anchors_in_code's own duplicate
+        # detection is scoped to a single call (one target_dir) -- main() calls it once per
+        # `final_target` and merges the accumulated results afterward, but never re-checked the
+        # merged `anchor_locations` for a base anchor declared once in EACH of two separately-
+        # scanned target dirs. Since this tool's flagship use case is scanning hams_com and
+        # hams_open TOGETHER (see AddSiblingRepoTargetTests / `_add_sibling_repo_target` above), a
+        # genuine duplicate straddling that exact repo boundary went completely undetected -- the
+        # other checks (missing-test-link, missing-docs) still correctly saw both locations,
+        # because those operate on the already-merged dicts, but "Duplicate Semantic Anchors"
+        # itself silently passed.
+        dir_a = os.path.join(self.tmp, "repo_a")
+        dir_b = os.path.join(self.tmp, "repo_b")
+        _write(os.path.join(dir_a, "mod_a", "__manifest__.py"), "{}\n")
+        _write(os.path.join(dir_a, "mod_a", "models", "foo.py"), "# [@ANCHOR: COMM_dup_cross_repo]\n")
+        _write(os.path.join(dir_b, "mod_a", "__manifest__.py"), "{}\n")
+        _write(os.path.join(dir_b, "mod_a", "models", "foo.py"), "# [@ANCHOR: COMM_dup_cross_repo]\n")
+        result = subprocess.run(
+            [sys.executable, _SCRIPT, dir_a, dir_b], capture_output=True, text=True, timeout=30
+        )
+        out = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, out)
+        self.assertIn("Duplicate Semantic Anchors", out, out)
+        self.assertIn("mod_a:COMM_dup_cross_repo", out, out)
+
+
+class SiblingRepoScanningIntegrationTests(unittest.TestCase):
+    """Real bug found 2026-09-12, confirmed empirically against the real hams_com/hams_open
+    checkouts before the fix: main()'s own `repo_root` (this script's containing directory,
+    deliberately `hams_shared` itself -- see this file's own module docstring) was being passed
+    straight into `_add_sibling_repo_target`, whose own logic and unit tests (see
+    AddSiblingRepoTargetTests above) assume that argument IS the enclosing hams_com/hams_open
+    checkout, not hams_shared. Since `os.path.basename(<...>/hams_shared)` is always literally
+    "hams_shared", the function's own `own_name`-exclusion logic never excluded either real repo
+    name, so `has_sibling` went true purely because the PRIMARY scan target happened to be named
+    "hams_com" (or "hams_open") -- never because the actual sibling had been added -- and even
+    where that short-circuit didn't fire (a module-scoped invocation), the sibling-candidate paths
+    were computed one directory level too deep to ever resolve. Net, directly-observed effect
+    against the real repo: a real, unscoped `verify_anchors.py .` run from hams_com's own root
+    never scanned hams_open at all -- e.g. `zero_sudo:*` anchors, whose real source lives only in
+    hams_open, were reported as "missing from operational source code" purely because hams_open
+    was silently never scanned.
+
+    These fixtures reproduce the real script's own directory shape -- a COPY of the real
+    verify_anchors.py under `<tmp>/hams_com/hams_shared/tools/` (so its own `__file__`-derived
+    `repo_root` resolves exactly the way it does in the real checkout) with a real sibling
+    `<tmp>/hams_open` directory -- and confirm a cross-repo `# Triggers` reference into the
+    sibling resolves cleanly, both unscoped and module-scoped, matching the two real invocation
+    shapes `run_linters.py` actually uses.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.hams_com = os.path.join(self.tmp, "hams_com")
+        self.hams_open = os.path.join(self.tmp, "hams_open")
+        self.script_copy = os.path.join(self.hams_com, "hams_shared", "tools", "verify_anchors.py")
+        os.makedirs(os.path.dirname(self.script_copy), exist_ok=True)
+        shutil.copy(_SCRIPT, self.script_copy)
+
+        # A real anchor whose ONLY source-code declaration lives in the hams_open sibling.
+        _write(os.path.join(self.hams_open, "mod_b", "__manifest__.py"), "{}\n")
+        _write(
+            os.path.join(self.hams_open, "mod_b", "models", "target.py"),
+            "# [@ANCHOR: COMM_shared_target]\n",
+        )
+        _write(
+            os.path.join(self.hams_open, "mod_b", "tests", "test_target.py"),
+            "# Tests [@ANCHOR: COMM_shared_target]\n",
+        )
+        _write(
+            os.path.join(self.hams_open, "mod_b", "docs", "stories", "target.md"),
+            "[@ANCHOR: COMM_shared_target]\n",
+        )
+
+        # A hams_com module that cross-references it via the real `# Triggers` syntax.
+        _write(os.path.join(self.hams_com, "mod_a", "__manifest__.py"), "{}\n")
+        _write(
+            os.path.join(self.hams_com, "mod_a", "models", "trigger.py"),
+            "# Triggers [@ANCHOR: mod_b:COMM_shared_target]\n",
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_an_unscoped_run_from_the_hams_com_root_still_scans_the_hams_open_sibling(self):
+        # The exact shape run_linters.py uses for an unscoped run: `targets == [repo_root]`.
+        result = subprocess.run(
+            [sys.executable, self.script_copy, self.hams_com],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        out = result.stdout + result.stderr
+        self.assertNotIn("Missing Cross-Reference Target", out, out)
+        self.assertNotIn(
+            "mod_b:COMM_shared_target' is missing from operational source code", out, out
+        )
+
+    def test_a_module_scoped_run_under_hams_com_still_scans_the_hams_open_sibling(self):
+        # The exact shape run_linters.py uses for a scoped run: `targets == resolved_mod_paths`,
+        # a deeper path whose basename is a module name, not "hams_com" or "hams_open" -- the
+        # sibling must still be found via the candidate-path search, not the has_sibling
+        # short-circuit.
+        result = subprocess.run(
+            [sys.executable, self.script_copy, os.path.join(self.hams_com, "mod_a")],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        out = result.stdout + result.stderr
+        self.assertNotIn("Missing Cross-Reference Target", out, out)
 
 
 if __name__ == "__main__":
