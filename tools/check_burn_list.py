@@ -1041,10 +1041,29 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             getattr(comp.value, "id", "") == "self"
                             or getattr(comp.value, "id", "") == "request"
                         ):
-                            self.add_error(
-                                node.lineno,
-                                "CRITICAL ARCHITECTURE: Soft-dependency checking (`'model' in self.env`) is forbidden. You MUST explicitly declare dependencies in __manifest__.py.",
+                            # burn-ignore-optional-oca-dep (documented at its
+                            # own definition in GENERAL_ERROR_RULES's
+                            # allow-list below) is "the one legitimate use of
+                            # the soft-dependency check's target pattern":
+                            # detecting whether OCA's storage_backend addon
+                            # is installed, since it's genuinely optional and
+                            # installed post-hoc by a script, not declared in
+                            # __manifest__.py. This rule never actually
+                            # checked line_content for it, so the tag was
+                            # permanently inert. Confirmed live: hams_s3/
+                            # models/res_config_settings.py's 3 sites and
+                            # tests/test_res_config_settings.py's 2 sites all
+                            # carry the tag and were still flagged.
+                            line_content = (
+                                self.lines[node.lineno - 1]
+                                if node.lineno <= len(self.lines)
+                                else ""
                             )
+                            if "burn-ignore-optional-oca-dep" not in line_content:
+                                self.add_error(
+                                    node.lineno,
+                                    "CRITICAL ARCHITECTURE: Soft-dependency checking (`'model' in self.env`) is forbidden. You MUST explicitly declare dependencies in __manifest__.py.",
+                                )
                     if (
                         isinstance(comp, ast.Attribute)
                         and comp.attr == "modules"

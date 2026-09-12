@@ -3427,6 +3427,27 @@ def test_model_string_in_request_dot_env_is_forbidden_soft_dependency_checking()
     assert any("Soft-dependency checking" in e for e in errors)
 
 
+def test_storage_backend_check_with_the_optional_oca_dep_tag_is_exempt():
+    # burn-ignore-optional-oca-dep is documented as "the one legitimate use
+    # of the soft-dependency check's target pattern" -- OCA's storage_backend
+    # addon, genuinely optional and installed post-hoc by a script. Real
+    # false positive: this rule never checked line_content for the tag, so
+    # it was permanently inert despite being recognized. Found live in
+    # hams_s3/models/res_config_settings.py and its test file (5 sites).
+    source = "if 'storage.backend' in self.env:  # burn-ignore-optional-oca-dep\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Soft-dependency checking" in e for e in errors)
+
+
+def test_model_string_in_self_dot_env_without_the_tag_is_still_flagged():
+    # The new exemption must not swallow the ordinary case just because a
+    # comment happens to be present -- only the specific documented tag
+    # suppresses this rule.
+    source = "if 'optional.model' in self.env:  # some other comment\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Soft-dependency checking" in e for e in errors)
+
+
 def test_probing_sys_modules_is_forbidden_test_evasion():
     source = "if 'ham_base' in sys.modules:\n    pass\n"
     errors, _warnings = _dict_findings(source)
