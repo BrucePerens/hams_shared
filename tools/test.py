@@ -1847,6 +1847,11 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         # unconditionally "" every time this branch could ever run; the two try/except
         # blocks and the misleading "STDOUT:"/"STDERR:" lines they fed added no real
         # information and are removed rather than kept as dead code.
+        # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL SILENT
+        # FAILURE): print() alone isn't a recognized logging call, and sys.exit(1) below
+        # isn't an AST-visible raise, so this handler's own traceback had no trace anywhere
+        # a log aggregator could see it, only the interactive CLI's own stdout.
+        _logger.error("Failed to start RabbitMQ: %s", e)
         print(f"❌ ERROR starting RabbitMQ: {e}")
         sys.exit(1)
 
