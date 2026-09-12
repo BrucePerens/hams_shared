@@ -1293,6 +1293,11 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     for base in node.bases
                     if isinstance(base, ast.Attribute)
                 )
+                is_abstract_model = any(
+                    getattr(base, "attr", "") == "AbstractModel"
+                    for base in node.bases
+                    if isinstance(base, ast.Attribute)
+                )
                 if is_model:
                     has_model_name = False
                     has_rname_lineno = None
@@ -1335,7 +1340,23 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     # model's ORIGINAL declaration site, so re-demanding it on every subsequent
                     # extension class is a false positive, not a real schema gap.
                     is_self_extension = bool(name_value) and name_value in inherit_values
-                    if has_model_name and not has_name and not is_self_extension:
+                    # AbstractModel gets no database table at all (Odoo never
+                    # sets _auto=True for it), so it never holds a directly
+                    # displayed record of its own -- it's always combined,
+                    # via _inherit, into a concrete Model/TransientModel that
+                    # already supplies its own real 'name' field. Demanding
+                    # one here too is a false positive: found for real via
+                    # user_websites_seo/models/seo_metadata_mixin.py's
+                    # SEOMetadataMixin, an AbstractModel with no 'name' field
+                    # of its own, always mixed into ResUsersSEO/BlogBlogSEO/
+                    # etc., each of which already has one at its own
+                    # (non-abstract) original model declaration.
+                    if (
+                        has_model_name
+                        and not has_name
+                        and not is_self_extension
+                        and not is_abstract_model
+                    ):
                         self.add_error(
                             node.lineno,
                             "CRITICAL SCHEMA: Every model MUST have a textual 'name' field defined. Relying on " + "'_" + "rec_name' or implicitly missing 'name' is forbidden."
@@ -1828,10 +1849,16 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 )
 
             if any(alias.name == "SUPERUSER_ID" for alias in node.names):
-                self.add_error(
-                    node.lineno,
-                    "[!] DIAGNOSTIC FOR AI: `.sudo()` and `SUPERUSER_ID` are completely forbidden on this platform to prevent privilege escalation. Use the service account architecture (`with_user()`) instead.",
+                line_content = (
+                    self.lines[node.lineno - 1]
+                    if node.lineno <= len(self.lines)
+                    else ""
                 )
+                if "burn-ignore-superuser-rejection-test" not in line_content:
+                    self.add_error(
+                        node.lineno,
+                        "[!] DIAGNOSTIC FOR AI: `.sudo()` and `SUPERUSER_ID` are completely forbidden on this platform to prevent privilege escalation. Use the service account architecture (`with_user()`) instead.",
+                    )
 
             self.generic_visit(node)
 
@@ -1863,10 +1890,28 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         "[!] DIAGNOSTIC FOR AI: Use 'models.Constraint' instead of '_sql_constraints'.",
                     )
                 elif node.id == "SUPERUSER_ID":
-                    self.add_error(
-                        node.lineno,
-                        "[!] DIAGNOSTIC FOR AI: `.sudo()` and `SUPERUSER_ID` are completely forbidden on this platform to prevent privilege escalation. Use the service account architecture (`with_user()`) instead.",
+                    line_content = (
+                        self.lines[node.lineno - 1]
+                        if node.lineno <= len(self.lines)
+                        else ""
                     )
+                    # A test proving a caller-supplied override_svc_uid
+                    # parameter is now REJECTED (get_record_by_slug() and
+                    # friends in edge_routing/tests/test_routing_mixin.py,
+                    # bug-hunt fix 2026-09-12: the parameter itself was
+                    # removed after a real RPC privilege-escalation finding)
+                    # legitimately passes the literal SUPERUSER_ID token as
+                    # the value an attacker would have tried, inside
+                    # assertRaises(TypeError) -- it never runs with elevated
+                    # privilege, it proves the call now fails before it
+                    # could. Narrowly tagged per call site, not a blanket
+                    # exemption, since this check guards a real, otherwise
+                    # unconditional privilege-escalation ban.
+                    if "burn-ignore-superuser-rejection-test" not in line_content:
+                        self.add_error(
+                            node.lineno,
+                            "[!] DIAGNOSTIC FOR AI: `.sudo()` and `SUPERUSER_ID` are completely forbidden on this platform to prevent privilege escalation. Use the service account architecture (`with_user()`) instead.",
+                        )
             self.generic_visit(node)
 
         def visit_keyword(self, node):
@@ -3334,9 +3379,28 @@ def scan_file(filepath, is_odoo_module=False):
                         for child in node.children
                     )
                     if not has_group:
-                        errors_found.append(
-                            f"Line {node.lineno}: CRITICAL SECURITY: ir.rule must specify a 'groups' field. Global rules (no group) are deprecated and banned."
+                        # A deliberately global ir.rule is a real, narrow
+                        # exception, not the common case this check exists to
+                        # catch (an accidentally-omitted `groups` field on
+                        # what should have been a group-scoped rule): see
+                        # ham_crm_security/security/security_rules.xml's own
+                        # crm_lead_block_portal, whose lengthy comment
+                        # documents exactly why it must be global to close a
+                        # real disjoint-groups gap a group-scoped rule can't
+                        # close. Same burn-ignore lookback as the
+                        # act_window/views check just above.
+                        lookback_start = _xml_audit_lookback_start(node)
+                        raw_text = "\n".join(
+                            lines[
+                                max(0, lookback_start) : min(
+                                    len(lines), node.end_lineno + 1
+                                )
+                            ]
                         )
+                        if "burn-ignore" not in raw_text:
+                            errors_found.append(
+                                f"Line {node.lineno}: CRITICAL SECURITY: ir.rule must specify a 'groups' field. Global rules (no group) are deprecated and banned."
+                            )
                     for child in node.children:
                         if (
                             child.tag == "field"
@@ -4016,6 +4080,24 @@ def scan_file(filepath, is_odoo_module=False):
                 # and the localhost/localhost.evil.com test cases in
                 # ham_relay_bridge/tests/test_relay_node.py.
                 "burn-ignore-relay-loopback",
+                # A deliberately global ir.rule (no `groups` field) closing a
+                # real gap a group-scoped rule structurally can't close --
+                # ham_crm_security/security/security_rules.xml's
+                # crm_lead_block_portal, whose own multi-paragraph comment
+                # documents why (a group-scoped always-false rule is OR-ed
+                # with, not AND-ed against, any other permissive group rule
+                # on the same model, so it can be silently out-voted; a
+                # global rule is AND-ed with everything and can't be). The
+                # "ir.rule must specify groups" check exists to catch an
+                # accidentally-omitted groups field, not to forbid this
+                # narrow, already-reviewed exception.
+                "burn-ignore-global-rule",
+                # A regression test proving a caller-supplied override_svc_uid
+                # parameter is now REJECTED, not a real use of elevated
+                # privilege -- see the SUPERUSER_ID check's own comment in
+                # visit_Name/visit_ImportFrom for the full explanation.
+                # First used by edge_routing/tests/test_routing_mixin.py.
+                "burn-ignore-superuser-rejection-test",
                 # skipTest() for a genuinely optional soft dependency not being
                 # installed, mirroring production's own graceful degradation
                 # (e.g. a signup-flow CAPTCHA that silently omits itself when its

@@ -1065,6 +1065,24 @@ def test_a_class_extending_an_existing_model_by_the_same_name_is_not_flagged():
     assert not any("CRITICAL SCHEMA" in e for e in errors)
 
 
+def test_an_abstract_model_mixin_with_no_name_field_of_its_own_is_not_flagged():
+    # Real false positive found live 2026-09-12
+    # (user_websites_seo/models/seo_metadata_mixin.py's own SEOMetadataMixin):
+    # an AbstractModel gets no database table (Odoo never sets _auto=True for
+    # it), so it never holds a record of its own -- it's always mixed, via
+    # _inherit, into a concrete Model that already supplies a real 'name'
+    # field at its own original declaration site. Demanding one on the
+    # mixin's own AbstractModel definition is a false positive, not a real
+    # schema gap.
+    source = (
+        "class SeoMixin(models.AbstractModel):\n"
+        "    _name = 'seo.metadata.mixin'\n"
+        "    seo_name = fields.Char()\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("CRITICAL SCHEMA" in e for e in errors)
+
+
 def test_a_class_extending_by_the_same_name_via_a_bare_string_inherit_is_not_flagged():
     source = (
         "class ResUsersExt(models.Model):\n"
@@ -1742,6 +1760,23 @@ def test_an_unrelated_ordinary_import_is_not_flagged_by_any_of_these_rules():
     source = "from odoo import models, fields\n"
     errors, _warnings = _dict_findings(source)
     assert errors == []
+
+
+def test_importing_superuser_id_is_allowed_with_burn_ignore_superuser_rejection_test():
+    source = "from odoo import SUPERUSER_ID  # burn-ignore-superuser-rejection-test\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("privilege escalation" in e for e in errors)
+
+
+def test_using_superuser_id_is_allowed_with_burn_ignore_superuser_rejection_test():
+    # Real case found live 2026-09-12
+    # (edge_routing/tests/test_routing_mixin.py): a regression test proving
+    # a removed override_svc_uid parameter now raises TypeError legitimately
+    # passes the literal SUPERUSER_ID token as the value that should be
+    # rejected -- it never runs with elevated privilege.
+    source = "override_svc_uid=SUPERUSER_ID  # burn-ignore-superuser-rejection-test\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("privilege escalation" in e for e in errors)
 
 
 # visit_FunctionDef() -- monkey-patch wrapper signature requirement, empty-function-pass ban
@@ -4143,6 +4178,22 @@ def test_ir_rule_without_a_groups_field_is_forbidden_as_a_deprecated_global_rule
     )
     errors, _warnings = _scan_file(xml, "security_data.xml")
     assert any("must specify a 'groups' field" in e for e in errors)
+
+
+def test_ir_rule_without_a_groups_field_is_allowed_with_burn_ignore_global_rule():
+    xml = (
+        "<odoo>\n"
+        '    <data noupdate="1">\n'
+        "        <!-- Deliberately global: burn-ignore-global-rule -->\n"
+        '        <record id="rule2b" model="ir.rule">\n'
+        '            <field name="name">Rule</field>\n'
+        '            <field name="model_id" ref="model_ham_qso"/>\n'
+        "        </record>\n"
+        "    </data>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "security_data.xml")
+    assert not any("must specify a 'groups' field" in e for e in errors)
 
 
 def test_ir_rule_for_a_financial_model_is_forbidden():
