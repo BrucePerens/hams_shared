@@ -3472,6 +3472,20 @@ def test_storage_backend_check_with_the_optional_oca_dep_tag_is_exempt():
     assert not any("Soft-dependency checking" in e for e in errors)
 
 
+def test_ham_dns_check_with_the_optional_cross_repo_dep_tag_is_exempt():
+    # burn-ignore-optional-cross-repo-dep: a different legitimate soft-
+    # dependency shape than the OCA one above -- an optional integration
+    # with a module that lives in the OTHER hams_open/hams_com repo, where
+    # a real __manifest__.py dependency would break standalone
+    # installability across that repo boundary. Asked and confirmed with
+    # Bruce 2026-09-12: pager_duty/models/pager_check.py's ham_dns
+    # integration is a pure convenience (auto-create a DNS record), not
+    # something pager_duty structurally needs.
+    source = "if 'ham.dns.record' in self.env:  # burn-ignore-optional-cross-repo-dep\n    pass\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Soft-dependency checking" in e for e in errors)
+
+
 def test_model_string_in_self_dot_env_without_the_tag_is_still_flagged():
     # The new exemption must not swallow the ordinary case just because a
     # comment happens to be present -- only the specific documented tag

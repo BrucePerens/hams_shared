@@ -1076,12 +1076,28 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             # models/res_config_settings.py's 3 sites and
                             # tests/test_res_config_settings.py's 2 sites all
                             # carry the tag and were still flagged.
+                            #
+                            # burn-ignore-optional-cross-repo-dep (own
+                            # definition in the same allow-list) is a
+                            # DIFFERENT, narrower legitimate case: an optional
+                            # INTEGRATION with a module that lives in the
+                            # OTHER hams_open/hams_com repo, where a real
+                            # __manifest__.py 'depends' entry would force
+                            # hams_open to no longer be installable/testable
+                            # standalone without also checking out hams_com --
+                            # not just "genuinely optional," but optional
+                            # ACROSS A REPO BOUNDARY this codebase otherwise
+                            # keeps clean. First used by pager_duty/models/
+                            # pager_check.py's ham_dns integration.
                             line_content = (
                                 self.lines[node.lineno - 1]
                                 if node.lineno <= len(self.lines)
                                 else ""
                             )
-                            if "burn-ignore-optional-oca-dep" not in line_content:
+                            if (
+                                "burn-ignore-optional-oca-dep" not in line_content
+                                and "burn-ignore-optional-cross-repo-dep" not in line_content
+                            ):
                                 self.add_error(
                                     node.lineno,
                                     "CRITICAL ARCHITECTURE: Soft-dependency checking (`'model' in self.env`) is forbidden. You MUST explicitly declare dependencies in __manifest__.py.",
@@ -3960,6 +3976,25 @@ def scan_file(filepath, is_odoo_module=False):
                 # question (see hams_s3/models/res_config_settings.py's own
                 # comment). First used there.
                 "burn-ignore-optional-oca-dep",
+                # `'ham.dns.record' in self.env` (pager_duty/models/
+                # pager_check.py's update_lets_encrypt_domains(), asked
+                # about directly and answered by Bruce 2026-09-12): a
+                # different legitimate soft-dependency shape than the OCA
+                # one above -- ham_dns lives in hams_com, pager_duty lives
+                # in hams_open, and a real __manifest__.py 'depends' entry
+                # would mean hams_open can no longer be installed/tested
+                # standalone without also checking out hams_com (checked
+                # directly: every OTHER cross-referenced module name in any
+                # hams_open manifest is itself defined inside hams_open --
+                # this would be the first exception). The DNS auto-
+                # configuration this guards is a pure convenience
+                # integration on top of pager_duty's own real job (certbot-
+                # renewal monitoring, which needs nothing from ham_dns at
+                # all) -- not something pager_duty structurally needs to
+                # function, so keeping it soft-optional rather than forcing
+                # every pager_duty install to also vendor ham_dns is the
+                # right tradeoff, not a workaround.
+                "burn-ignore-optional-cross-repo-dep",
                 # `_is_safe_redirect()`'s allow-list of literal hostnames a
                 # relay-login redirect_uri may target -- this isn't Odoo (or
                 # anything else) connecting OUT to a hardcoded service
