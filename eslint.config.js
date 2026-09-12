@@ -147,6 +147,16 @@ module.exports = tseslint.config(
       // undeclared identifiers this config's browser-only globals list
       // should be expected to know about.
       "**/tools/**",
+      // Real bug found 2026-09-12: this project's own standing convention runs concurrent
+      // bug-hunt dispatches in isolated git worktrees under `.claude/worktrees/<session>/`
+      // INSIDE the repo root (see run_linters.py's own flake8 --exclude fix the same night, and
+      // the 5 Python checkers already fixed for the identical gap per docs/
+      // BUG_HUNT_PROGRESS.md's "Batch A" entry) -- without this entry, ESLint (invoked with
+      // `cwd` set to the workspace root and the real repo root as its target, per
+      // run_linters.py's own step 21) descends into another session's own in-progress,
+      // uncommitted worktree. Confirmed empirically: a fixture
+      // `.claude/worktrees/<session>/bad.js` file was scanned and reported before this fix.
+      "**/.claude/**",
     ],
   }
 );
