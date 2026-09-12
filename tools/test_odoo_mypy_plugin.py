@@ -358,6 +358,35 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         output = self._run_mypy(probe, mixin_sibling)
         self.assertIn("_this_mixin_method_genuinely_does_not_exist_anywhere", output, output)
 
+    # --- Transitive (2+ hop) mixin chain: a REAL bug found auditing this file, not synthetic.
+    # `ham.club.owned.mixin` (hams_com/ham_club_management/models/ham_club_features.py's
+    # HamClubOwnedMixin) declares zero methods of its own -- it depends entirely on a SECOND
+    # mixin, `_inherit = ["ham.club.owned.mixin", "user_websites.owned.mixin"]`, for
+    # `_check_proxy_ownership_create`/`_check_proxy_ownership_write`. Real, currently-shipping
+    # code two hops away (ham_club_management/models/survey_extensions.py's SurveyUserInput,
+    # `_inherit = ["survey.user_input", "ham.club.owned.mixin"]`) genuinely calls both methods
+    # at lines 140/170. Confirmed directly, before this fix existed: running the real plugin
+    # config against survey_extensions.py (with user_websites_owned_mixin.py passed explicitly,
+    # the same "sibling passed explicitly" pattern the mixin tests above already use, for the
+    # same already-documented "get_additional_deps' own single-file pulling-in behavior for
+    # mixin injection" reason cited above) reported both real calls as
+    # `"SurveyUserInput" has no attribute "_check_proxy_ownership_create"`/
+    # `"_check_proxy_ownership_write"` -- a live false positive on real production code. Root
+    # cause: `_compute_sibling_map`'s mixin injection only walked ONE hop (`ham.club.owned.mixin`'s
+    # own further `_inherit` target was read into a variable deliberately named with a leading
+    # underscore, then discarded). Fixed by `_transitive_mixin_contributors`, a BFS that walks
+    # every hop, with a visited-model-names cycle guard.
+    #
+    # These tests use the real production files directly (no synthetic scratch fixture) --
+    # this bug is about real, already-shipping code, not a shape worth reproducing synthetically.
+    @unittest.skipUnless(_HAMS_OPEN_DIR, "hams_open sibling repo not found -- the second-hop mixin lives there")
+    def test_transitive_mixin_chain_two_hops_away_resolves(self):
+        real_file = os.path.join(_HAMS_COM_DIR, "ham_club_management", "models", "survey_extensions.py")
+        second_hop_mixin = os.path.join(_HAMS_OPEN_DIR, "user_websites", "models", "user_websites_owned_mixin.py")
+        output = self._run_mypy(real_file, second_hop_mixin)
+        self.assertNotIn("_check_proxy_ownership_create", output, output)
+        self.assertNotIn("_check_proxy_ownership_write", output, output)
+
 
 _SCRATCH_DIR_SIBLINGS = os.path.join(_HAMS_COM_DIR, "_test_scratch_mypy_plugin_class_siblings") if _HAMS_COM_DIR else None
 

@@ -260,6 +260,53 @@ class OdooPlugin(Plugin):
         self._compute_comodel_targets()
         self._compute_env_targets()
 
+    def _transitive_mixin_contributors(self, mixin_targets):
+        """BFS outward from `mixin_targets` (a contributor's own extra
+        `_inherit` targets, beyond its primary `_name`) through each named
+        model's own contributors' OWN mixin_targets, so a 2+-hop mixin chain
+        resolves fully instead of just the first hop. This is a real
+        production shape, not a hypothetical one worth defending against
+        speculatively: `ham.club.owned.mixin` has no methods of its own and
+        depends entirely on a second mixin, `user_websites.owned.mixin`, for
+        the two methods real code (ham_club_management/models/
+        survey_extensions.py) actually calls two hops away -- see
+        _compute_sibling_map's own comment at this method's call site for
+        the full trace.
+
+        Guards against a cycle in the chain (model A's own contributor
+        naming model B as a mixin target, and some contributor of B naming A
+        right back) with a visited-model-names set -- `_inherit` lists carry
+        no acyclicity guarantee, even though no real cycle exists in this
+        codebase today; without this guard a real cycle would hang this
+        plugin (and therefore the entire mypy run) forever at startup.
+
+        Returns a deduped list of (module, fpath, class_name) for every
+        contributor reachable this way (the target models' own contributors
+        directly, plus whatever further mixin targets those contributors
+        themselves name), regardless of how many hops away.
+        """
+        contributors = []
+        seen_models = set()
+        seen_contributors = set()
+        queue = list(mixin_targets)
+        while queue:
+            target = queue.pop(0)
+            if target in seen_models:
+                continue
+            seen_models.add(target)
+            model = self._registry.get(target)
+            if model is None:
+                continue
+            for m_mod, m_fpath, _m_lineno, m_class_name, m_mixin_targets in model.contributors:
+                key = (m_mod, m_fpath, m_class_name)
+                if key not in seen_contributors:
+                    seen_contributors.add(key)
+                    contributors.append(key)
+                for further in m_mixin_targets:
+                    if further not in seen_models:
+                        queue.append(further)
+        return contributors
+
     def _compute_sibling_map(self):
         for model in self._registry.values():
             fullnames = []
@@ -322,26 +369,49 @@ class OdooPlugin(Plugin):
             # siblings -- otherwise get_customize_class_mro_hook's
             # ctx.api.lookup_fully_qualified_or_none finds nothing for a
             # mixin class mypy hasn't analyzed yet.
+            #
+            # TRANSITIVE, not just one hop: _transitive_mixin_contributors
+            # below walks a mixin target's own contributors' OWN
+            # mixin_targets too. A real, previously-uncaught bug found
+            # auditing this file (confirmed against real production code,
+            # not synthetic): `ham.club.owned.mixin` (ham_club_management/
+            # models/ham_club_features.py's HamClubOwnedMixin) declares ZERO
+            # methods of its own and depends entirely on a SECOND mixin,
+            # `_inherit = ["ham.club.owned.mixin", "user_websites.owned.mixin"]`,
+            # for `_check_proxy_ownership_create`/`_check_proxy_ownership_write`
+            # -- and real code two hops away
+            # (ham_club_management/models/survey_extensions.py's
+            # SurveySurvey/SurveyUserInput, `_inherit = ["survey.survey",
+            # "ham.club.owned.mixin"]`) genuinely calls both methods. A
+            # one-level-only injection here left `mixin_fn`'s own further
+            # mixin_targets (previously read into a variable named with a
+            # leading underscore specifically because it was discarded)
+            # completely unpropagated, so mypy had no way to see those
+            # methods on the two-hops-away contributor: confirmed directly
+            # by running the real plugin config against the real file before
+            # this fix -- `mypy` reported both calls as
+            # `"SurveyUserInput" has no attribute "_check_proxy_ownership_create"`/
+            # `"_check_proxy_ownership_write"`, a live false positive on
+            # real, currently-shipping code, not a hypothetical. See
+            # test_transitive_mixin_chain_two_hops_away_resolves in
+            # test_odoo_mypy_plugin.py, which pins this exact real-code
+            # shape.
             for fn, mixin_targets in contributor_mixin_targets.items():
                 fn_modname = fn.rsplit(".", 1)[0]
-                for mixin_target in mixin_targets:
-                    mixin_model = self._registry.get(mixin_target)
-                    if mixin_model is None:
+                for m_mod, m_fpath, m_class_name in self._transitive_mixin_contributors(mixin_targets):
+                    mixin_fn = _fullname_for_contributor(
+                        m_mod, m_fpath, m_class_name, self._hams_roots, self._core_addons_path
+                    )
+                    if not mixin_fn or mixin_fn == fn:
                         continue
-                    for m_mod, m_fpath, m_lineno, m_class_name, _m_mixin_targets in mixin_model.contributors:
-                        mixin_fn = _fullname_for_contributor(
-                            m_mod, m_fpath, m_class_name, self._hams_roots, self._core_addons_path
-                        )
-                        if not mixin_fn or mixin_fn == fn:
-                            continue
-                        self._class_siblings.setdefault(fn, [])
-                        if mixin_fn not in self._class_siblings[fn]:
-                            self._class_siblings[fn].append(mixin_fn)
-                        mixin_modname = mixin_fn.rsplit(".", 1)[0]
-                        if mixin_modname != fn_modname:
-                            self._module_siblings.setdefault(fn_modname, [])
-                            if mixin_modname not in self._module_siblings[fn_modname]:
-                                self._module_siblings[fn_modname].append(mixin_modname)
+                    self._class_siblings.setdefault(fn, [])
+                    if mixin_fn not in self._class_siblings[fn]:
+                        self._class_siblings[fn].append(mixin_fn)
+                    mixin_modname = mixin_fn.rsplit(".", 1)[0]
+                    if mixin_modname != fn_modname:
+                        self._module_siblings.setdefault(fn_modname, [])
+                        if mixin_modname not in self._module_siblings[fn_modname]:
+                            self._module_siblings[fn_modname].append(mixin_modname)
 
             modnames = sorted({fn.rsplit(".", 1)[0] for fn in fullnames})
             for modname in modnames:
