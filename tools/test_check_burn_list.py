@@ -5072,3 +5072,57 @@ def test_manifest_with_a_non_dict_assets_value_does_not_crash_the_tour_registrat
         text=True,
     )
     assert "Traceback" not in result.stderr
+
+
+def test_a_real_transaction_case_subclass_outside_tools_is_flagged(tmp_path):
+    # The rule this is testing: "class Foo(TransactionCase):" outside HamsTransactionCase/
+    # HamsHttpCase is a real, intended violation for actual Odoo test files.
+    real_test = tmp_path / "ham_logbook" / "tests" / "test_qso.py"
+    real_test.parent.mkdir(parents=True)
+    real_test.write_text(
+        "from odoo.tests.common import TransactionCase\n"
+        "class TestQSO(TransactionCase):\n    pass\n",
+        encoding="utf-8",
+    )
+    out = _run_main(tmp_path)
+    assert "Tests must inherit from HamsTransactionCase" in out
+
+
+def test_a_fixture_string_containing_transactioncase_text_inside_tools_is_not_flagged(tmp_path):
+    # Real false-positive class found 2026-09-12, confirmed against this repo's own real
+    # test_check_test_tags.py/test_check_self_writeable_field_tests.py (23 findings total, zero
+    # of them a real Odoo test class): this rule matches raw line text, not AST, so a Python
+    # string LITERAL containing "class Foo(TransactionCase):" -- used as fixture data to test
+    # ANOTHER checker (e.g. check_test_tags.py) -- tripped this rule exactly as readily as a real
+    # class declaration would. Real Odoo test files never live under any tools/ directory in this
+    # codebase; only meta-tests for the linter tooling itself do. Confirmed to FAIL against the
+    # pre-fix rule pattern (the finding fired for this exact fixture shape before the fix).
+    meta_test = tmp_path / "hams_shared" / "tools" / "test_check_test_tags.py"
+    meta_test.parent.mkdir(parents=True)
+    meta_test.write_text(
+        "def test_something():\n"
+        '    fixture = "class TestFoo(TransactionCase):\\n    pass\\n"\n',
+        encoding="utf-8",
+    )
+    out = _run_main(tmp_path, extra_args=["--scan-daemons-and-tools"])
+    assert "Tests must inherit from HamsTransactionCase" not in out
+
+
+def test_a_real_transaction_case_subclass_inside_tools_is_also_excluded_by_this_rule(tmp_path):
+    # Documents the exclusion's own honest scope, not a gap this test discovered: this rule
+    # can't structurally distinguish a real class declaration from a fixture string containing
+    # the same text (it matches raw line text, not AST), so excluding tools/ from this ONE rule
+    # necessarily also blinds it to a genuine Odoo test class if one were ever misplaced there --
+    # itself already a structural mistake, since no real Odoo test belongs under any tools/
+    # directory in this codebase. That's the accepted, deliberate tradeoff behind this fix, not a
+    # hidden gap -- recorded here so a future reader doesn't mistake this rule's own silence
+    # under tools/ for a broader guarantee it never made.
+    misplaced = tmp_path / "hams_shared" / "tools" / "test_stray.py"
+    misplaced.parent.mkdir(parents=True)
+    misplaced.write_text(
+        "from odoo.tests.common import TransactionCase\n"
+        "class TestStray(TransactionCase):\n    pass\n",
+        encoding="utf-8",
+    )
+    out = _run_main(tmp_path, extra_args=["--scan-daemons-and-tools"])
+    assert "Tests must inherit from HamsTransactionCase" not in out

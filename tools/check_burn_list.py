@@ -278,7 +278,31 @@ GENERAL_ERROR_RULES = [
         "CRITICAL TOUR RACE CONDITION: Do not poll the DOM natively for modals. You MUST use TourUtils.waitForAbsence or TourUtils.waitForElement to ensure they are mounted properly.",
     ),
     (
-        r"test_.*\.py$",
+        # Real false-positive class found 2026-09-12: this rule matches raw line text, not AST
+        # (see GENERAL_ERROR_RULES' own docstring note on this), so a Python string LITERAL
+        # containing the text "class Foo(TransactionCase):" trips it exactly as readily as a
+        # real class declaration would. `hams_shared/tools/test_check_test_tags.py` and
+        # `test_check_self_writeable_field_tests.py` both legitimately need to feed a realistic-
+        # looking "bad" Odoo test file (as a string, written to a temp fixture) to the checker
+        # THEY test -- that fixture string is data describing what a real violation looks like,
+        # not a real class declaration in this file's own code. Confirmed live: 23 findings, one
+        # per fixture-string occurrence across those two files, zero of them a real Odoo test
+        # class. Real Odoo test files (this rule's actual, intended target) never live under any
+        # `tools/` directory in this codebase -- only meta-tests for the linter tooling itself do
+        # -- so the lookbehind below excludes any `.../tools/test_*.py` path from this ONE rule
+        # rather than tagging every individual fixture-string line (which would need repeating
+        # for every future test this whole tools/ suite adds).
+        #
+        # `[^/]*` between `test_` and `.py$`, NOT `.*`: a greedy `.*` can span MULTIPLE path
+        # segments, letting `re.search` latch onto an EARLIER, unrelated "/test_...py$" match
+        # elsewhere in the path (confirmed live: a pytest `tmp_path` fixture's own directory name
+        # is derived from the test function's name, e.g. `.../test_something_or_other0/hams_
+        # shared/tools/real_file.py` -- an outer "/test_" segment the lookbehind was never meant
+        # to police) and never even reach the real, later `/tools/` segment this exclusion
+        # targets. Anchoring the match to a single path segment (no `/` inside it) makes the
+        # lookbehind check the actual immediately-enclosing directory, not an arbitrary earlier
+        # one anywhere up the tree.
+        r"(?<!/tools)/test_[^/]*\.py$",
         re.compile(
             r"class\s+[A-Za-z0-9_]+\s*\(\s*(?:TransactionCase|HttpCase)\s*\)\s*:"
         ),
