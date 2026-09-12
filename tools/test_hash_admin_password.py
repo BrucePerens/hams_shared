@@ -11,11 +11,7 @@ instead, and by asserting `hash_password()` is called with the exact password st
 intended, for the line-ending-stripping fix specifically.
 """
 
-import os
-import sys
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import hash_admin_password as ham  # noqa: E402
 

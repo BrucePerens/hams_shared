@@ -19,14 +19,11 @@ future edit can't silently drop the base class again.
 import ast
 import keyword
 import os
-import sys
 import tempfile
 import unittest
 
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import generate_odoo_core_stubs as gen  # noqa: E402
 import odoo_registry_builder as orb  # noqa: E402

@@ -8,11 +8,8 @@ Unit tests for check_window_fetch_reassignment.py.
 
 import os
 import shutil
-import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_window_fetch_reassignment as chk  # noqa: E402
 

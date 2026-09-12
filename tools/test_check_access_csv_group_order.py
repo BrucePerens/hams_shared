@@ -20,8 +20,6 @@ import unittest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import check_access_csv_group_order as chk  # noqa: E402
 
 _SETTINGS = settings(max_examples=200, deadline=None)

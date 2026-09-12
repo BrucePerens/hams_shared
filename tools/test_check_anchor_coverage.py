@@ -15,11 +15,8 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_anchor_coverage as cac  # noqa: E402
 

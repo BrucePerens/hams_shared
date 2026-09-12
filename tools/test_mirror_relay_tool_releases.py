@@ -11,13 +11,9 @@ urllib call is mocked.
 
 import io
 import json
-import os
-import sys
 import unittest
 import urllib.error
 from unittest import mock
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import mirror_relay_tool_releases as mirror  # noqa: E402
 

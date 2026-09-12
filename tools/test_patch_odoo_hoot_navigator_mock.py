@@ -4,11 +4,7 @@
 
 """Unit tests for patch_odoo_hoot_navigator_mock.py's pure content-patching logic."""
 
-import os
-import sys
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import patch_odoo_hoot_navigator_mock as patcher  # noqa: E402
 

@@ -16,8 +16,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 from check_owl_templates import find_owl_template_files  # noqa: E402
 
 _SCRIPT = str(Path(__file__).parent / "check_owl_templates.py")

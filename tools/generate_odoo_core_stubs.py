@@ -60,7 +60,6 @@ import os
 import shutil
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import odoo_registry_builder as orb  # noqa: E402
 
 _MODEL_BASE_NAMES = ("Model", "AbstractModel", "TransientModel")

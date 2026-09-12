@@ -13,14 +13,10 @@ same way verify_full_pipeline_end_to_end.py isn't wrapped in its own pytest
 suite either.
 """
 
-import os
 import socket
 import subprocess
-import sys
 import unittest
 from unittest import mock
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import diagnose_hoot_module_load_error as diag  # noqa: E402
 

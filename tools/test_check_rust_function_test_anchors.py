@@ -14,11 +14,8 @@ establishes for the JS sub-track, since this is exactly the integration point
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_rust_function_test_anchors as crfta  # noqa: E402
 

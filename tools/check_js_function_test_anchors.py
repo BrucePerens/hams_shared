@@ -47,7 +47,6 @@ import re
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import verify_anchors as va  # noqa: E402
 from check_function_test_anchors import _is_base_anchor_declaration  # noqa: E402
 

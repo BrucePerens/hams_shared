@@ -26,7 +26,6 @@ import unittest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import run_rust_coverage as rrc  # noqa: E402
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))

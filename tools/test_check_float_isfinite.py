@@ -8,15 +8,12 @@ Unit tests for check_float_isfinite.py, exercised against real temp-directory .p
 
 import os
 import shutil
-import sys
 import tempfile
 import textwrap
 import unittest
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_float_isfinite as chk  # noqa: E402
 

@@ -21,8 +21,6 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import check_dependency_releases as chk  # noqa: E402
 
 

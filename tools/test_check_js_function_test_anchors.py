@@ -14,11 +14,8 @@ likely to break in a way a mock would hide.
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_js_function_test_anchors as cjfta  # noqa: E402
 

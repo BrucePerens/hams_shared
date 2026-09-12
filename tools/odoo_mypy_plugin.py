@@ -99,14 +99,12 @@ accumulate-vs-overwrite fix in detail.
 """
 
 import os
-import sys
 from typing import Callable, Dict, List, Optional, Set
 
 from mypy.nodes import MypyFile, StrExpr, TypeInfo
 from mypy.plugin import ClassDefContext, FunctionContext, MethodContext, Plugin
 from mypy.types import AnyType, Instance, Type, TypeOfAny
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import odoo_registry_builder as orb  # noqa: E402
 
 

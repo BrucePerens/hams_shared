@@ -33,8 +33,6 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import verify_anchors as va  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify_anchors.py")

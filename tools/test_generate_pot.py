@@ -14,12 +14,9 @@ them directly against real temp-directory fixtures.
 
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 from collections import defaultdict
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import generate_pot as gp  # noqa: E402
 

@@ -8,14 +8,11 @@ Unit tests for check_xml_comment_double_hyphen.py.
 
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_xml_comment_double_hyphen as cxc  # noqa: E402
 

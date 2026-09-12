@@ -10,11 +10,8 @@ import hashlib
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_claims_freshness as ccf  # noqa: E402
 

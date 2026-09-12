@@ -44,7 +44,6 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check_function_test_anchors as cfta  # noqa: E402
 import verify_anchors as va  # noqa: E402
 

@@ -23,8 +23,6 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import scan_ui_vulnerabilities as chk  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scan_ui_vulnerabilities.py")

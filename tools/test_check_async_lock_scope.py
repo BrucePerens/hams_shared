@@ -9,14 +9,11 @@ Unit tests for check_async_lock_scope.py, exercised against real temp-directory 
 
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_async_lock_scope as chk  # noqa: E402
 

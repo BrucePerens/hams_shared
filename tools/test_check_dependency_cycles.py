@@ -16,11 +16,8 @@ graph helpers in isolation.
 
 import os
 import shutil
-import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_dependency_cycles as cdc  # noqa: E402
 

@@ -14,8 +14,6 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import odoo_registry_builder as orb  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "odoo_registry_builder.py")

@@ -14,8 +14,6 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import check_hoot_runner_coverage as chk  # noqa: E402
 
 

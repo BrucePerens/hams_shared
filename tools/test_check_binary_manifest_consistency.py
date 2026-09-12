@@ -13,8 +13,6 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import check_binary_manifest_consistency as chk  # noqa: E402
 
 _SCRIPT = os.path.join(

@@ -15,14 +15,10 @@ host's DNS configuration.
 """
 
 import json
-import os
 import socket
-import sys
 import unittest
 import urllib.error
 from unittest.mock import MagicMock, patch
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_bot_compliance as chk  # noqa: E402
 

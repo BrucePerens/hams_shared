@@ -10,14 +10,11 @@ bundle output (ANCHOR_COVERAGE_AND_REMEDIATION_PLAN.md's JS Stage 2 section, 202
 `ham_dns`'s real DNS tour test run under `debug=assets`, not a guessed-at format.
 """
 import os
-import sys
 import tempfile
 import unittest
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from run_js_coverage import parse_bundle_module_offsets, resolve_addon_static_path  # noqa: E402
 

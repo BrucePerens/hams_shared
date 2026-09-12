@@ -16,13 +16,10 @@ touch a real database or a real directory.
 import logging
 import os
 import shutil
-import sys
 import tempfile
 import time
 import unittest
 from unittest import mock
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import reap_stale_test_databases as reaper  # noqa: E402
 
