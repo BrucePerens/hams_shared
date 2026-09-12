@@ -22,6 +22,11 @@ def check_shebang(repo_dir):
         ".venv",
         "__pycache__",
         ".agents",
+        # Real bug found 2026-09-12: this project's own standing convention runs concurrent
+        # bug-hunt dispatches in isolated git worktrees under .claude/worktrees/<session>/
+        # inside the repo root -- a real git worktree checkout, not an empty directory --
+        # which this set never excluded.
+        ".claude",
         "target",
         "radae",
     }

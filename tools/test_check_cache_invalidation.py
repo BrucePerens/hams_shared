@@ -236,6 +236,21 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("CRITICAL", out)
 
+    def test_a_claude_worktree_directory_is_never_walked(self):
+        # Real bug found 2026-09-12: main()'s os.walk() pruned NOTHING at all before this fix --
+        # unlike every sibling checker in this tree, it didn't even exclude .git/node_modules/
+        # venv, let alone this project's own standing .claude/worktrees/<session>/ convention (a
+        # real git worktree checkout, confirmed with a real `git worktree add`).
+        _write(
+            os.path.join(
+                self.tmp, ".claude", "worktrees", "sess1", "mod_a", "models", "foo.py"
+            ),
+            "def foo(self):\n    self.env.cr.execute('UPDATE x SET y = 1')\n",
+        )
+        code, out = self._run(self.tmp)
+        self.assertEqual(code, 0, out)
+        self.assertIn("passed successfully", out)
+
     def test_the_same_violation_outside_a_models_directory_is_not_scanned(self):
         _write(
             os.path.join(self.tmp, "mod_a", "tools", "foo.py"),

@@ -76,6 +76,16 @@ class CheckShebangTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "node_modules", "pkg", "cli.py"), "x\n#!bad\n")
         self.assertEqual(chk.check_shebang(self.tmp), [])
 
+    def test_a_claude_worktree_directory_is_never_walked(self):
+        # Real bug found 2026-09-12: this project's own standing convention runs concurrent
+        # bug-hunt dispatches in isolated git worktrees under .claude/worktrees/<session>/
+        # inside the repo root -- a real git worktree checkout (confirmed with a real
+        # `git worktree add`), not an empty directory -- which this set never excluded.
+        _write(
+            os.path.join(self.tmp, ".claude", "worktrees", "sess1", "cli.py"), "x\n#!bad\n"
+        )
+        self.assertEqual(chk.check_shebang(self.tmp), [])
+
     def test_a_binary_file_with_invalid_utf8_is_skipped_without_crashing(self):
         p = os.path.join(self.tmp, "data.py")
         with open(p, "wb") as f:

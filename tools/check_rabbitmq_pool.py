@@ -27,6 +27,11 @@ def check_rabbitmq(repo_dir):
         "radae",
         "daemon",
         "daemons",
+        # Real bug found 2026-09-12: this project's own standing convention runs concurrent
+        # bug-hunt dispatches in isolated git worktrees under .claude/worktrees/<session>/
+        # inside the repo root -- a real git worktree checkout, not an empty directory --
+        # which this set never excluded.
+        ".claude",
     }
     
     # Pattern to look for direct pika connection instantiation

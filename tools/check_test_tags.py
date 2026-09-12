@@ -93,6 +93,14 @@ def main():
         "target",
         "radae",
         "site-packages",
+        # Real bug found 2026-09-12: this set's own comment above claims it "matches the ignore
+        # set check_absolute_paths.py already uses for the same reason" -- but check_absolute_
+        # paths.py already added ".claude" for the standing worktree-isolation convention
+        # (concurrent bug-hunt dispatches run in .claude/worktrees/<session>/ inside the repo
+        # root, a real git worktree checkout), and this copy fell out of sync. Without it, a
+        # `@tagged(...)` test tag inside another session's own in-progress worktree gets
+        # scanned as if it were real repo content.
+        ".claude",
     }
 
     for root, dirs, files in os.walk(repo_root):

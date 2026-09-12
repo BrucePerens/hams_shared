@@ -114,6 +114,34 @@ class MainIntegrationTests(unittest.TestCase):
         code, out = self._run()
         self.assertEqual(code, 0, out)
 
+    def test_a_claude_worktree_directory_is_never_walked(self):
+        # Real bug found 2026-09-12: this project's own standing convention runs concurrent
+        # bug-hunt dispatches in isolated git worktrees under .claude/worktrees/<session>/
+        # inside the repo root -- a real git worktree checkout (confirmed with a real
+        # `git worktree add`), not an empty directory -- which this exclusion list never
+        # covered. Independent of this file's own separately-flagged "possible missing
+        # cross-repo scan" open question, which still needs Bruce's own call.
+        _write(
+            os.path.join(
+                self.tmp, ".claude", "worktrees", "sess1", "mod_a", "models", "__init__.py"
+            ),
+            "\n",
+        )
+        _write(
+            os.path.join(
+                self.tmp,
+                ".claude",
+                "worktrees",
+                "sess1",
+                "mod_a",
+                "models",
+                "ham_qso.py",
+            ),
+            "class HamQSO:\n    pass\n",
+        )
+        code, out = self._run()
+        self.assertEqual(code, 0, out)
+
     def test_an_explicitly_excluded_file_is_never_flagged(self):
         _write(os.path.join(self.tmp, "ham_shack", "tests", "__init__.py"), "\n")
         _write(
