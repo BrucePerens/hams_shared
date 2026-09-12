@@ -45,6 +45,7 @@ tour run, not a blind addition alongside an unrelated parser utility.
 
 import argparse
 import json
+import os
 import re
 import sys
 
@@ -89,8 +90,6 @@ def resolve_addon_static_path(addon_relative_path, addons_path_dirs):
     does, not assumed to be any single fixed prefix. Returns `None` if no addons-path directory has
     a matching file (a real gap to report, not silently swallow) rather than guessing.
     """
-    import os
-
     parts = addon_relative_path.lstrip("/").split("/", 1)
     if len(parts) != 2:
         return None
