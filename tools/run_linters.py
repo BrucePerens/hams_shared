@@ -1193,6 +1193,29 @@ def main():
                 print(res.stderr, end="")
             linters_failed = True
 
+    # 49. check_int_float_overflow -- born 2026-09-11 from a real bug found by adversarial
+    # review in sota_sync.process_sota_csv()'s own _int() helper: int(float(val)) wrapped in
+    # `except ValueError` looks like it safely handles any malformed numeric string, but
+    # int(float("inf")) raises OverflowError, not ValueError -- Python's float() parses
+    # "inf"/"nan"/"-infinity" (case-insensitively) with no exception at all, and only the
+    # subsequent int() conversion of that non-finite value fails, with the "wrong" exception
+    # type. One bad CSV cell used to silently drop every row remaining in the file for that
+    # whole sync cycle. This gate walks every .py file in both repos for int(<expr containing
+    # a float(...) call>) not guarded by a try/except that would catch OverflowError. Same
+    # two-repo sweep as steps 47/48.
+    for _repo in (dir_path, sibling_dir):
+        res = subprocess.run(
+            [python_exec, os.path.join(dir_path, "tools", "check_int_float_overflow.py"), _repo],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            if res.stdout:
+                print(res.stdout, end="")
+            if res.stderr:
+                print(res.stderr, end="")
+            linters_failed = True
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
