@@ -2713,6 +2713,33 @@ def test_ir_module_module_search_count_inside_a_loop_in_a_test_file_is_exempt():
     assert not any("N+1 locking" in e for e in errors)
 
 
+def test_company_scoped_search_count_inside_a_loop_with_the_ignore_tag_is_exempt():
+    # Real false positive: burn-ignore-company-scoped-loop is a documented,
+    # recognized tag (see its own entry in the burn-ignore allow-list) for
+    # exactly this shape -- a .with_company(company) call whose loop
+    # variable is what makes each company's records visible at all -- but
+    # this rule never checked line_content for it, so the tag was
+    # permanently inert. Found live in user_websites/models/
+    # content_violation_report.py:98.
+    source = (
+        "for company in companies:\n"
+        "    count = self.with_company(company).search_count([('state', '=', 'new')])  # burn-ignore-company-scoped-loop\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("N+1 locking" in e for e in errors)
+
+
+def test_company_scoped_search_count_inside_a_loop_without_the_tag_is_still_flagged():
+    # The new exemption must not swallow the ordinary N+1 case just because
+    # some unrelated .with_company() call appears in the loop body.
+    source = (
+        "for company in companies:\n"
+        "    count = self.with_company(company).search_count([('state', '=', 'new')])\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("N+1 locking" in e for e in errors)
+
+
 def test_start_tour_without_debug_1_is_forbidden():
     source = "start_tour('/odoo', 'my_tour')\n"
     errors, _warnings = _dict_findings(source)
@@ -3928,6 +3955,49 @@ def test_record_with_all_its_mandatory_fields_is_not_a_data_integrity_error():
     )
     errors, _warnings = _scan_file(xml, "security_data.xml")
     assert not any("DATA INTEGRITY" in e for e in errors)
+
+
+def test_a_dotted_id_record_updating_an_existing_base_group_is_not_a_data_integrity_error():
+    # Odoo idiom: <record id="base.group_user" model="res.groups"> refers to
+    # the ALREADY-EXISTING base.group_user record (created by the "base"
+    # module), and only writes the fields listed here -- it never (re-)
+    # creates the record, so "name" isn't required. Real false positive
+    # found live in user_websites/security/user_websites_security.xml,
+    # which extends base.group_user/base.group_portal's own implied_ids.
+    xml = (
+        "<odoo>\n"
+        '    <data noupdate="1">\n'
+        '        <record id="base.group_user" model="res.groups">\n'
+        '            <field name="implied_ids" eval="[(4, ref(\'my_module.group_foo\'))]"/>\n'
+        "        </record>\n"
+        "    </data>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "security_data.xml")
+    assert not any("DATA INTEGRITY" in e for e in errors)
+
+
+def test_a_bare_id_record_still_requires_its_mandatory_fields_even_alongside_a_dotted_one():
+    # The dotted-id exemption must not swallow a genuinely new, genuinely
+    # incomplete record just because some OTHER record in the same file
+    # happens to use a dotted id.
+    xml = (
+        "<odoo>\n"
+        '    <data noupdate="1">\n'
+        '        <record id="base.group_user" model="res.groups">\n'
+        '            <field name="implied_ids" eval="[(4, ref(\'my_module.group_foo\'))]"/>\n'
+        "        </record>\n"
+        '        <record id="group_new" model="res.groups">\n'
+        '            <field name="category_id" ref="base.module_category_hidden"/>\n'
+        "        </record>\n"
+        "    </data>\n"
+        "</odoo>\n"
+    )
+    errors, _warnings = _scan_file(xml, "security_data.xml")
+    assert any(
+        "DATA INTEGRITY" in e and "missing mandatory fields" in e and ": name." in e
+        for e in errors
+    )
 
 
 def test_res_users_record_inside_a_noupdate_block_is_a_record_update_warning():

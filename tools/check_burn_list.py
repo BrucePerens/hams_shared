@@ -2666,7 +2666,27 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     and isinstance(func_val.slice, ast.Constant)
                     and func_val.slice.value == "ir.module.module"
                 )
-                if caller_id != "re" and "regex" not in caller_id and not is_ir_module_module_in_test:
+                # burn-ignore-company-scoped-loop (documented at its own
+                # definition in GENERAL_ERROR_RULES's allow-list below) is
+                # meant to suppress exactly this finding for a
+                # .with_company(company)-scoped call whose loop variable is
+                # what makes each company's records visible at all -- but
+                # this AST rule never actually checked line_content for it,
+                # so the tag was permanently inert here despite being a
+                # recognized, documented tag (confirmed live: user_websites/
+                # models/content_violation_report.py:98 carries the tag and
+                # was still flagged).
+                line_content = (
+                    self.lines[node.lineno - 1]
+                    if node.lineno <= len(self.lines)
+                    else ""
+                )
+                if (
+                    caller_id != "re"
+                    and "regex" not in caller_id
+                    and not is_ir_module_module_in_test
+                    and "burn-ignore-company-scoped-loop" not in line_content
+                ):
                     self.add_error(
                         node.lineno,
                         f"[!] DIAGNOSTIC FOR AI: ORM '.{attr}()' inside a loop causes N+1 locking. Pre-fetch data outside the loop.",
@@ -3085,7 +3105,23 @@ def scan_file(filepath, is_odoo_module=False):
                         "res.partner": {"name"},
                     }
 
-                    if model_name in mandatory_model_fields:
+                    # A record `id` containing a "." (e.g. "base.group_user")
+                    # names an ALREADY-EXISTING record from another module's
+                    # own namespace, not a new one this module is creating --
+                    # the standard Odoo idiom for extending a base record
+                    # in-place (e.g. appending to a base group's implied_ids)
+                    # writes only the fields being changed, not every field
+                    # the record needed at its own original creation. Odoo
+                    # itself never uses a dotted id to (re-)create a record
+                    # in its own module's namespace (confirmed empirically:
+                    # no module in this codebase's own security/data XML
+                    # declares a `<record id="ITS_OWN_module.xxx">`), so this
+                    # is a safe, narrow exemption, not a loosening that could
+                    # mask a genuinely new, genuinely incomplete record.
+                    record_id = node.attrs.get("id", "")
+                    is_external_record_update = "." in record_id
+
+                    if model_name in mandatory_model_fields and not is_external_record_update:
                         required = mandatory_model_fields[model_name]
                         missing = required - defined_fields
                         if missing:
