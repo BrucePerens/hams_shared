@@ -13,6 +13,9 @@ import sys
 import tempfile
 import unittest
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_async_lock_scope as chk  # noqa: E402
@@ -176,6 +179,88 @@ class CheckFileTests(unittest.TestCase):
             """,
         )
         self.assertEqual(len(chk.check_file(path)), 2)
+
+    @given(num_awaits=st.integers(min_value=0, max_value=12))
+    @settings(max_examples=50)
+    def test_a_held_guard_produces_exactly_one_finding_per_trailing_await(self, num_awaits):
+        # Generalizes test_multiple_awaits_after_one_binding_each_produce_their_own_finding
+        # (fixed at 2) across an arbitrary count, including the boundary case of zero trailing
+        # awaits (no finding at all -- a bound-but-never-awaited-past guard is not a bug this
+        # checker's own contract covers).
+        body = "\n".join(f"                call_{i}().await;" for i in range(num_awaits))
+        path = _write_rs(
+            self.tmp,
+            f"""
+            async fn f() {{
+                let st = state.write().await;
+{body}
+            }}
+            """,
+        )
+        findings = chk.check_file(path)
+        self.assertEqual(
+            len(findings),
+            num_awaits,
+            f"expected exactly {num_awaits} findings (one per trailing await) for a guard with "
+            f"no drop and no scope exit, got {len(findings)}: {findings}",
+        )
+
+    @given(
+        num_guards=st.integers(min_value=0, max_value=5),
+        num_awaits=st.integers(min_value=0, max_value=5),
+    )
+    @settings(max_examples=50)
+    def test_any_number_of_underscore_prefixed_guards_is_never_flagged(self, num_guards, num_awaits):
+        # Generalizes test_an_underscore_prefixed_name_is_never_flagged across an arbitrary
+        # number of deliberately-held guards and an arbitrary number of later awaits -- Rust's
+        # own "held for the whole scope on purpose" idiom must never be flagged, no matter how
+        # many such guards are stacked or how many awaits follow them.
+        guard_lines = "\n".join(
+            f"                let _guard_{i} = LOCK_{i}.lock().await;" for i in range(num_guards)
+        )
+        await_lines = "\n".join(f"                call_{i}().await;" for i in range(num_awaits))
+        path = _write_rs(
+            self.tmp,
+            f"""
+            async fn f() {{
+{guard_lines}
+{await_lines}
+            }}
+            """,
+        )
+        self.assertEqual(
+            chk.check_file(path),
+            [],
+            f"expected zero findings for {num_guards} underscore-prefixed guards and "
+            f"{num_awaits} trailing awaits",
+        )
+
+    @given(num_guards=st.integers(min_value=0, max_value=5))
+    @settings(max_examples=50)
+    def test_any_number_of_immediately_dropped_guards_is_never_flagged(self, num_guards):
+        # Generalizes test_a_guard_dropped_before_the_later_await_is_not_flagged across an
+        # arbitrary number of independently-named, independently-dropped guards, all sharing
+        # one later await -- each guard's own explicit drop() must suppress it regardless of
+        # how many siblings are also being tracked at the same time.
+        bind_and_drop_lines = "\n".join(
+            f"                let st_{i} = state_{i}.read().await;\n"
+            f"                drop(st_{i});"
+            for i in range(num_guards)
+        )
+        path = _write_rs(
+            self.tmp,
+            f"""
+            async fn f() {{
+{bind_and_drop_lines}
+                slow_call().await;
+            }}
+            """,
+        )
+        self.assertEqual(
+            chk.check_file(path),
+            [],
+            f"expected zero findings for {num_guards} guards each dropped before the trailing await",
+        )
 
 
 class FindRustFilesTests(unittest.TestCase):

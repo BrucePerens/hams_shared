@@ -12,6 +12,9 @@ import sys
 import tempfile
 import unittest
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_fake_network_listener as chk  # noqa: E402
@@ -22,6 +25,19 @@ def _write(path, content):
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     return path
+
+
+# 8 distinct, genuinely-matching fake-network type names (one real prefix + real suffix
+# combination each) for property tests generating N independent type definitions -- NOT an
+# f-string with a numeric index glued onto the name (e.g. "FakeStream0"): the trailing digit
+# breaks _FAKE_TYPE_RE's own trailing `\b` requirement after the suffix word ("Stream0" doesn't
+# end in a word boundary right after "Stream"), which is correct regex behavior, not a bug in
+# check_fake_network_listener.py -- discovered by an earlier, broken version of these very
+# property tests.
+_FAKE_TYPE_NAMES = [
+    "FakeSocket", "MockListener", "DummyStream", "StubConnection",
+    "FakeWebSocket", "MockWs", "DummyChannel", "StubTransport",
+]
 
 
 class CheckFileTests(unittest.TestCase):
@@ -92,6 +108,70 @@ class CheckFileTests(unittest.TestCase):
             "struct FakeClock { now: u64 }\n",
         )
         self.assertEqual(chk.check_file(path), [])
+
+    @given(num_types=st.integers(min_value=0, max_value=8))
+    @settings(max_examples=50)
+    def test_n_fake_types_with_no_real_bind_produce_exactly_n_findings(self, num_types):
+        # Generalizes test_a_fake_websocket_struct_with_no_real_bind_anywhere_is_flagged (fixed
+        # at 1) across an arbitrary count of independently-named fake network types stacked in
+        # one file, including zero (no fake types at all -> no findings).
+        content = "".join(
+            f"struct {_FAKE_TYPE_NAMES[i]} {{ data: Vec<u8> }}\n" for i in range(num_types)
+        )
+        path = _write(os.path.join(self.tmp, "src", "lib.rs"), content or "// empty\n")
+        findings = chk.check_file(path)
+        self.assertEqual(
+            len(findings),
+            num_types,
+            f"expected exactly {num_types} findings for {num_types} unignored fake network "
+            f"types with no real bind evidence, got {len(findings)}: {findings}",
+        )
+
+    @given(
+        num_types=st.integers(min_value=0, max_value=5),
+        bind_position=st.integers(min_value=0, max_value=5),
+    )
+    @settings(max_examples=50)
+    def test_real_bind_evidence_anywhere_in_the_file_exempts_every_fake_type(
+        self, num_types, bind_position
+    ):
+        # Generalizes test_a_real_tcplistener_bind_anywhere_in_the_file_exempts_it: check_file's
+        # own real-bind check runs once over the WHOLE file content, so its position relative to
+        # however many fake types are also present must never matter -- before all of them,
+        # after all of them, or interleaved partway through.
+        lines = [f"struct {_FAKE_TYPE_NAMES[i]} {{ data: Vec<u8> }}\n" for i in range(num_types)]
+        lines.insert(
+            min(bind_position, len(lines)),
+            'async fn spawn() { TcpListener::bind("127.0.0.1:0").await.unwrap(); }\n',
+        )
+        path = _write(os.path.join(self.tmp, "src", "lib.rs"), "".join(lines))
+        self.assertEqual(
+            chk.check_file(path),
+            [],
+            f"expected zero findings for {num_types} fake types with a real bind at position "
+            f"{bind_position}",
+        )
+
+    @given(ignored_flags=st.lists(st.booleans(), min_size=0, max_size=8))
+    @settings(max_examples=50)
+    def test_ignore_tagged_types_are_excluded_but_untagged_siblings_still_flag(self, ignored_flags):
+        # Generalizes test_a_suppression_comment_exempts_that_line: an arbitrary mix of
+        # tagged/untagged fake-type definitions in the same file must suppress exactly the
+        # tagged ones, never more (an untagged sibling must still be caught) and never fewer
+        # (a tagged one must never leak through).
+        lines = []
+        for i, is_ignored in enumerate(ignored_flags):
+            suffix = " // fake-network-ignore: reviewed, not real" if is_ignored else ""
+            lines.append(f"struct {_FAKE_TYPE_NAMES[i]} {{ data: Vec<u8> }}{suffix}\n")
+        path = _write(os.path.join(self.tmp, "src", "lib.rs"), "".join(lines) or "// empty\n")
+        findings = chk.check_file(path)
+        expected = sum(1 for f in ignored_flags if not f)
+        self.assertEqual(
+            len(findings),
+            expected,
+            f"expected {expected} findings (one per untagged fake type) for ignore pattern "
+            f"{ignored_flags}, got {len(findings)}: {findings}",
+        )
 
 
 class FindCandidateFilesTests(unittest.TestCase):
