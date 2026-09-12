@@ -101,8 +101,8 @@ def _run_legacy_bridge():
     if os.path.exists(_BRIDGE_SOCK_PATH):
         try:
             os.remove(_BRIDGE_SOCK_PATH)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.warning(f"[legacy bridge] could not remove stale socket {_BRIDGE_SOCK_PATH}: {e}")
     os.makedirs(os.path.dirname(_BRIDGE_SOCK_PATH), exist_ok=True)
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(_BRIDGE_SOCK_PATH)
@@ -170,8 +170,8 @@ def load_persisted_states(self_agent_id):
         try:
             with open(state_file, "r") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to load persisted watchdog state from {state_file}: {e}")
     return None
 
 def save_persisted_states(states, self_agent_id):
@@ -218,7 +218,7 @@ class WatchdogEventHandler(pyinotify.ProcessEvent):
             self.changed_agents_set.add(agent_id)
             self.file_changed_event.set()
         except ValueError:
-            pass
+            logger.warning(f"transcript.jsonl event with no '.system_generated' in its path, ignoring: {event.pathname}")
 
 
 def parse_family_tree(brain_dir, self_agent_id):
@@ -239,10 +239,10 @@ def parse_family_tree(brain_dir, self_agent_id):
                                     matches = re.findall(r'"conversationId":\s*"([^"]+)"', content)
                                     for child_id in matches:
                                         parent_map[child_id] = agent_id
-                        except:
-                            pass
-        except:
-            pass
+                        except Exception as e:
+                            logger.debug(f"parse_family_tree: skipping unparseable line in {transcript_path}: {e}")
+        except Exception as e:
+            logger.warning(f"parse_family_tree: failed to read transcript {transcript_path}: {e}")
             
     root_id = self_agent_id
     # Cycle guard: parent_map is built by regex-scraping each agent's own
@@ -326,8 +326,8 @@ def is_agent_dead(transcript_path):
                     return False
             except json.JSONDecodeError:
                 continue
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"is_agent_dead: failed to read/scan {transcript_path}, assuming not dead: {e}")
     return False
 
 @mcp.tool()
@@ -423,7 +423,10 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
             await asyncio.wait_for(file_changed_event.wait(), timeout=sleep_timeout)
             file_changed_event.clear()
         except asyncio.TimeoutError:
-            pass # Timeout reached, meaning a stall threshold was crossed or max_wait ended!
+            # Expected on most poll iterations: a stall threshold was crossed or
+            # max_wait ended without any file activity in between. Logged at
+            # debug (not warning) since this is the routine, common case.
+            logger.debug("wait_for_agent_state_change: poll timeout reached, re-evaluating state")
 
         now = time.time()
         
@@ -484,9 +487,9 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                             return f"You (Agent {agent_id}) are approaching your turn limit ({lines} turns). You have ~50 turns remaining. ACTION REQUIRED: Gracefully finish your work, notify your Orchestrator to do the hand-over now, and exit."
                         else:
                             return f"Agent {agent_id} is approaching its turn limit ({lines} turns). It has ~50 turns remaining. ACTION REQUIRED: Instruct Agent {agent_id} to gracefully finish its work, notify you when it's ready for a hand-over, and exit. Then spawn a replacement."
-                except OSError:
-                    pass
-                    
+                except OSError as e:
+                    logger.warning(f"wait_for_agent_state_change: failed to check turn limit for {transcript_path}: {e}")
+
             if self_agent_id and agent_id == self_agent_id:
                 last_sizes[agent_id] = fsize
                 continue
@@ -522,8 +525,12 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                         notifier.stop()
                         save_persisted_states(current_states, self_agent_id)
                         return f"Heartbeat stale (no agent heartbeat in > {stall_mins}m for {hb_path}). ACTION REQUIRED: Investigate agents and ensure heartbeats are being written."
-                except OSError:
-                    pass
+                except OSError as e:
+                    # Debug, not warning: the fallback heartbeat path is a hardcoded
+                    # default checked even when heartbeat monitoring isn't actually
+                    # configured for this session, so a missing file here is routine,
+                    # not a real problem, for most callers.
+                    logger.debug(f"wait_for_agent_state_change: could not stat heartbeat file {hb_path}: {e}")
             # Resumed Check
             if not new_is_stalled and init_state.get("is_stalled"):
                 notifier.stop()
@@ -555,10 +562,10 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
                                         notifier.stop()
                                         save_persisted_states(current_states, self_agent_id)
                                         return f"Agent {agent_id} sent a message."
-                        except json.JSONDecodeError:
-                            pass
-                except OSError:
-                    pass
+                        except json.JSONDecodeError as e:
+                            logger.debug(f"wait_for_agent_state_change: skipping unparseable transcript line for {agent_id}: {e}")
+                except OSError as e:
+                    logger.warning(f"wait_for_agent_state_change: failed to read new content from {transcript_path}: {e}")
             last_sizes[agent_id] = fsize
 
         # Exit condition: all monitored agents are inactive
@@ -647,8 +654,10 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
             await asyncio.wait_for(file_changed_event.wait(), timeout=time_left)
             file_changed_event.clear()
         except asyncio.TimeoutError:
-            pass
-            
+            # Expected on most poll iterations: no file activity within this
+            # wait window. Logged at debug, not warning, since it's routine.
+            logger.debug("wait_for_result: poll timeout reached, re-evaluating state")
+
         # Re-check self for messages
         if self_transcript_path:
             self_fsize = get_fsize(self_transcript_path)
@@ -675,9 +684,9 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
                     warned = True
                     notifier.stop()
                     return f"Agent {target_agent_id} is approaching its turn limit ({lines} turns). It has ~50 turns remaining. ACTION REQUIRED: Instruct Agent {target_agent_id} to gracefully finish its work, notify you when it's ready for a hand-over, and exit. Then spawn a replacement."
-            except OSError:
-                pass
-                
+            except OSError as e:
+                logger.warning(f"wait_for_result: failed to check turn limit for {transcript_path}: {e}")
+
         if fsize > last_size:
             try:
                 with open(transcript_path, 'r', encoding='utf-8') as f:
@@ -697,10 +706,10 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
                                 if call.get('name') == 'send_message' or call.get('toolName') == 'send_message':
                                     notifier.stop()
                                     return f"Agent {target_agent_id} sent a message."
-                    except json.JSONDecodeError:
-                        pass
-            except OSError:
-                pass
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"wait_for_result: skipping unparseable transcript line for {target_agent_id}: {e}")
+            except OSError as e:
+                logger.warning(f"wait_for_result: failed to read new content from {transcript_path}: {e}")
             last_size = fsize
 
 @mcp.tool()
@@ -754,7 +763,9 @@ async def wait_for_all_complete(
                 try:
                     await asyncio.wait_for(event.wait(), timeout=30.0)
                 except asyncio.TimeoutError:
-                    pass
+                    # Expected on most poll iterations: no watched agent's
+                    # transcript changed within this 30s window.
+                    logger.debug("wait_for_all_complete: poll timeout reached, re-checking agent states")
         finally:
             notifier.stop()
 
@@ -928,7 +939,7 @@ async def spawn_managed_daemons(session_id: str, commands_json: str) -> str:
                     try:
                         p.terminate()
                     except ProcessLookupError:
-                        pass
+                        logger.info(f"spawn_managed_daemons: sibling PID {p.pid} for session {session_id} already exited before it could be terminated")
     
     try:
         for item in commands:
@@ -1040,8 +1051,11 @@ async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id:
                         # ask_executor()) wants readable instructions, not a
                         # JSON blob it has to parse itself to find them.
                         return payload.get("prompt", raw_str)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Expected for the common case of a plain-text message (not
+                    # every sender's payload is a structured JSON envelope) --
+                    # falls through to returning the raw string either way.
+                    logger.debug(f"wait_for_inbox: message on {queue_name} is not a structured JSON envelope, returning raw: {e}")
 
                 return raw_str
             except stdlib_queue.Empty:
@@ -1055,7 +1069,13 @@ async def wait_for_inbox(queue_name: str, timeout_mins: int = 15, self_agent_id:
                     except ProcessLookupError:
                         return f"WRITER_DEAD: The writer process (PID {writer_pid}) is no longer running. You MUST stop polling and exit immediately."
                     except PermissionError:
-                        pass
+                        # A signal-0 liveness probe against a PID owned by a
+                        # different user (e.g. a service account) raises this
+                        # instead of confirming existence -- inconclusive, so
+                        # fall through and keep polling rather than wrongly
+                        # declaring the writer dead, but note it since it means
+                        # this check can never actually detect that writer's death.
+                        logger.warning(f"wait_for_inbox: cannot check liveness of writer PID {writer_pid} (owned by another user); will keep polling until timeout instead")
         return "Timeout waiting for inbox message."
     finally:
         with _QUEUE_LOCK:

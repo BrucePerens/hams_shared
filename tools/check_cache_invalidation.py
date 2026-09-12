@@ -149,8 +149,11 @@ def main():
                     filepath = os.path.join(root, file)
                     try:
                         all_errors.extend(check_file(filepath))
-                    except (SyntaxError, OSError):
-                        pass  # Ignore syntax errors in unsupported files
+                    except (SyntaxError, OSError) as e:
+                        print(
+                            f"Warning: could not check {filepath} for cache invalidation issues: {e}",
+                            file=sys.stderr,
+                        )
 
     if all_errors:
         print("CRITICAL: Found raw SQL mutations without cache invalidations:")

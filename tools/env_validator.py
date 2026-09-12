@@ -33,8 +33,8 @@ def load_env_files():
                             key, val = line.split("=", 1)
                             if key.strip() not in os.environ:
                                 os.environ[key.strip()] = val.strip()
-            except OSError:
-                pass
+            except OSError as e:
+                print_warning("ENV", f"Failed to read env file {env_file}: {e}")
 
 
 def print_warning(module, message):
@@ -73,8 +73,11 @@ def check_smtp():
         if user and password:
             try:
                 server.starttls()
-            except Exception:
-                pass  # Ignore if STARTTLS is not supported by the server
+            except Exception as e:
+                # Expected/benign for servers that don't offer STARTTLS (e.g. local test
+                # servers like MailHog); still surfaced so a real, unexpected TLS failure
+                # doesn't disappear silently.
+                print_warning("SMTP", f"STARTTLS not available or failed for {host}:{port}, continuing without it: {e}")
             try:
                 server.login(user, password)
             except smtplib.SMTPAuthenticationError as e:

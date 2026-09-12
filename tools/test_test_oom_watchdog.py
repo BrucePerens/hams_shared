@@ -24,12 +24,17 @@ reverts to its old (over-cautious) behavior.
 own module name collides with Python's stdlib `test` package.
 """
 
+import contextlib
 import importlib.util
+import io
 import mmap
 import os
 import sys
 import time
 import unittest
+from unittest.mock import MagicMock, patch
+
+import psutil
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _TEST_PY_PATH = os.path.join(_HERE, "test.py")
@@ -124,21 +129,50 @@ class TestOOMWatchdogSharedMemoryAccounting(unittest.TestCase):
                 try:
                     p.kill()
                 except psutil.NoSuchProcess:
-                    pass
+                    # Expected, benign race: the child may have already exited on
+                    # its own (e.g. its own 30s sleep finished) before this
+                    # best-effort cleanup got to it -- still noted, not silently
+                    # dropped, so a real difference from the expected topology
+                    # is visible if this ever fires unexpectedly often.
+                    print(f"Note: child pid {p.pid} already exited before test cleanup could kill it", file=sys.stderr)
             root.kill()
         except psutil.NoSuchProcess:
-            pass
+            print(f"Note: root pid {root_pid} already exited before test cleanup could kill it", file=sys.stderr)
         try:
             os.waitpid(root_pid, 0)
         except ChildProcessError:
-            pass
+            print(f"Note: root pid {root_pid} was already reaped before test cleanup's waitpid could collect it", file=sys.stderr)
         try:
             while True:
                 pid, _ = os.waitpid(-1, os.WNOHANG)
                 if pid == 0:
                     break
         except ChildProcessError:
-            pass
+            # Expected loop terminator: os.waitpid(-1, ...) raises ECHILD once
+            # this process has no remaining children left to reap at all --
+            # the normal, successful end state of this cleanup, not a failure.
+            print("Note: no remaining child processes to reap during test cleanup", file=sys.stderr)
+
+    def test_kill_tree_on_an_already_reaped_pid_notes_the_races_instead_of_silently_swallowing(self):
+        # Real bug found 2026-09-12: all three `except ...: pass` clauses in _kill_tree()
+        # used to swallow these expected-but-real races (root already gone, already
+        # reaped, no children left) with zero trace anywhere -- fine when everything is
+        # working, but indistinguishable from _kill_tree() silently doing nothing at all
+        # if the real cleanup topology ever regresses. A pid this test forks, immediately
+        # exits, and fully reaps itself is guaranteed gone by the time _kill_tree() sees
+        # it, exercising the "root already exited" and "already reaped" and "no children
+        # left" branches without needing the real shared-mapping fixture.
+        child_pid = os.fork()
+        if child_pid == 0:
+            os._exit(0)
+        os.waitpid(child_pid, 0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            self._kill_tree(child_pid)  # must not raise
+        self.assertIn("already exited", buf.getvalue())
+        self.assertIn("already reaped", buf.getvalue())
+        self.assertIn("no remaining child processes", buf.getvalue())
 
     def test_pss_measurement_does_not_overcount_shared_mapping(self):
         target_pid = self._spawn_sibling_target_tree()
@@ -193,6 +227,27 @@ class TestOOMWatchdogSharedMemoryAccounting(unittest.TestCase):
         except Exception as e:  # noqa
             self.fail(f"measurement raised on a real live process tree: {e!r}")
         self.assertIsInstance(total, int)
+
+    def test_a_process_that_exits_mid_scan_is_noted_not_silently_dropped(self):
+        # Real bug found 2026-09-12: the `except psutil.NoSuchProcess: pass`
+        # around a single child's own memory read used to swallow this real,
+        # if benign, race (a process exits between children() listing it and
+        # this function reading its memory) with zero trace anywhere.
+        # Deterministic here (unlike test_measurement_survives_a_dead_child
+        # above, which exercises the same path but can't force it to fire on
+        # every run): a mocked child process whose memory calls always raise.
+        fake_child = MagicMock()
+        fake_child.pid = 999999
+        fake_child.memory_full_info.side_effect = psutil.NoSuchProcess(999999)
+        fake_child.memory_info.side_effect = psutil.NoSuchProcess(999999)
+        fake_runner = MagicMock()
+        fake_runner.children.return_value = [fake_child]
+
+        with patch.object(_test_runner.psutil, "Process", return_value=fake_runner):
+            with self.assertLogs(_test_runner.__name__, level="DEBUG") as cm:
+                total = _test_runner.measure_process_tree_memory(runner_pid=1, exclude_pid=-1)
+        self.assertEqual(total, 0)
+        self.assertTrue(any("999999" in msg for msg in cm.output))
 
 
 if __name__ == "__main__":

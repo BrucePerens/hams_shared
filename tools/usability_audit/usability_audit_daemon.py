@@ -644,7 +644,10 @@ def run_leg(page, model, persona_desc, goal, base_url, max_steps, log_fh, color_
             # as failed.
             page.wait_for_load_state("networkidle", timeout=2000)
         except PlaywrightTimeoutError:
-            pass
+            _logger.info(
+                "networkidle wait timed out after step %d's action (page kept making "
+                "network traffic); continuing without treating the action as failed", step
+            )
     return history
 
 

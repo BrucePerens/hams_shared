@@ -204,5 +204,59 @@ class MainModeDispatchTests(unittest.TestCase):
         mock_run_cmd.assert_called_once()
 
 
+class ResourceMonitorHelperTests(unittest.TestCase):
+    # Real bug found 2026-09-12: both of these helpers wrapped their real
+    # work in `except Exception: pass`, silently returning None/0 (a
+    # legitimate "monitoring is unavailable this cycle" fallback) with zero
+    # trace of WHY. Deliberately a fresh, unstarted instance -- exercising
+    # get_available_memory_mb()/get_chrome_count() directly needs no
+    # background thread.
+    def setUp(self):
+        self.monitor = _test_runner.ResourceMonitorThread()
+
+    def test_get_available_memory_mb_warns_and_returns_none_on_a_real_read_failure(self):
+        def _raise_open(*a, **kw):
+            raise OSError("meminfo unreadable")
+
+        with patch.object(_test_runner, "open", side_effect=_raise_open, create=True):
+            with self.assertLogs(_test_runner.__name__, level="WARNING") as cm:
+                result = self.monitor.get_available_memory_mb()
+        self.assertIsNone(result)
+        self.assertTrue(any("meminfo" in msg for msg in cm.output))
+
+    def test_get_chrome_count_warns_and_returns_zero_on_a_real_pgrep_failure(self):
+        with patch.object(_test_runner.subprocess, "run", side_effect=OSError("pgrep missing")):
+            with self.assertLogs(_test_runner.__name__, level="WARNING") as cm:
+                result = self.monitor.get_chrome_count()
+        self.assertEqual(result, 0)
+        self.assertTrue(any("pgrep" in msg for msg in cm.output))
+
+
+class ResolveRepoLayoutTests(unittest.TestCase):
+    # Real bug found 2026-09-12: the `except (subprocess.CalledProcessError,
+    # OSError): pass` here used to swallow a real `git rev-parse` failure
+    # with zero trace, silently falling back to treating a linked worktree
+    # as if it were a plain clone (a real behavior change -- the sibling-
+    # checkout scan then looks in the wrong parent directory).
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        # A linked-worktree-shaped .git (a FILE, not a directory) is what
+        # routes resolve_repo_layout() into the git-rev-parse branch at all.
+        with open(os.path.join(self.tmp, ".git"), "w") as f:
+            f.write("gitdir: /some/other/path/.git/worktrees/whatever\n")
+
+    def test_a_failed_git_rev_parse_warns_and_falls_back_to_the_plain_clone_layout(self):
+        with patch.object(
+            _test_runner.subprocess, "run",
+            side_effect=_test_runner.subprocess.CalledProcessError(128, ["git"]),
+        ):
+            with self.assertLogs(_test_runner.__name__, level="WARNING") as cm:
+                parent_dir, repo_root = _test_runner.resolve_repo_layout(self.tmp)
+        self.assertEqual(repo_root, self.tmp)
+        self.assertEqual(parent_dir, os.path.abspath(os.path.join(self.tmp, "..")))
+        self.assertTrue(any(self.tmp in msg for msg in cm.output))
+
+
 if __name__ == "__main__":
     unittest.main()

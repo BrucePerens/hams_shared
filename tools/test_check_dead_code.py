@@ -12,13 +12,12 @@ positives on a brand-new heuristic checker are a separate, tracked concern (see
 check_dead_code.py's own docstring), not something a hermetic unit test should assert on.
 """
 
+import contextlib
+import io
 import os
 import shutil
-import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_dead_code as cdc  # noqa: E402
 
@@ -102,6 +101,21 @@ class DeadTemplateTests(unittest.TestCase):
         dead_templates, dead_views, dead_js = cdc.check_dead_code([self.tmp])
         flagged_ids = [tid for _, _, tid in dead_templates]
         self.assertNotIn("live_page", flagged_ids)
+
+    def test_an_undecodable_file_warns_instead_of_silently_swallowing(self):
+        # Real bug found 2026-09-12: _find_template_declarations()'s except
+        # (UnicodeDecodeError, OSError) around the file read used to be a bare `pass`,
+        # silently hiding that a file was never actually scanned for declarations.
+        path = os.path.join(self.tmp, "mod_a", "views", "bad_encoding.xml")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(b"<odoo><template id=\"\xff\xfe broken\n")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            declarations = cdc._find_template_declarations(path, "mod_a")
+        self.assertEqual(declarations, [])
+        self.assertIn("Warning", stderr.getvalue())
+        self.assertIn("bad_encoding.xml", stderr.getvalue())
 
 
 class DeadViewTests(unittest.TestCase):

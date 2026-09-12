@@ -5,6 +5,7 @@ Regression coverage for usability_audit_daemon.py's own IPC client, found live
 (2026-08-28) while running this daemon for real against a running hams.com.
 """
 import asyncio
+import io
 import sys
 import threading
 import unittest
@@ -394,6 +395,58 @@ class NewPageForRunTests(unittest.TestCase):
             self.assertGreater(page.evaluate("() => navigator.maxTouchPoints"), 0)
         finally:
             page.close()
+
+
+class _FakeLocator:
+    def count(self):
+        return 0
+
+
+class _FakePage:
+    """Minimal Playwright-`page`-shaped double: just enough surface for
+    run_leg() to complete one "navigate_back" step (extract_page_state()'s
+    locator scan finds nothing, no screenshot is taken) and then hit its
+    own post-action wait_for_load_state("networkidle") call, which this
+    double always times out -- exercising the real, common "page kept
+    making background network traffic" case documented at that call site.
+    """
+
+    url = "https://example.test/shack"
+
+    def evaluate(self, script):
+        return ""
+
+    def locator(self, selector):
+        return _FakeLocator()
+
+    def go_back(self, timeout=5000):
+        return None
+
+    def wait_for_load_state(self, state, timeout=2000):
+        raise uad.PlaywrightTimeoutError("networkidle wait timed out")
+
+
+class RunLegNetworkIdleTimeoutTests(_SafePatchTestCase):
+    # Real bug found 2026-09-12: the `except PlaywrightTimeoutError: pass` around the
+    # post-action wait_for_load_state("networkidle") call used to swallow this
+    # expected-but-worth-knowing-about condition with zero trace anywhere -- not even
+    # at debug/info level. It must now log it (matching this file's own established
+    # "log an expected fallback at .info" convention used a few lines above at the
+    # label[for]/closest('label') lookup fallbacks), without ever marking the action
+    # itself as failed.
+    def test_a_networkidle_timeout_is_logged_and_does_not_fail_the_step(self):
+        self.safe_patch(
+            "usability_audit_daemon.ask_executor",
+            return_value={"action": "navigate_back", "thought": "going back"},
+        )
+        log_fh = io.StringIO()
+        with self.assertLogs("usability_audit_daemon", level="INFO") as cm:
+            history = uad.run_leg(
+                _FakePage(), "fake-model", "a curious ham", "go back", "https://example.test",
+                max_steps=1, log_fh=log_fh,
+            )
+        self.assertTrue(any("networkidle" in msg for msg in cm.output))
+        self.assertEqual(history, ["Went back to the previous page."])
 
 
 if __name__ == "__main__":

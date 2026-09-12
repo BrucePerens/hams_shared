@@ -105,8 +105,8 @@ def measure_process_tree_memory(runner_pid, exclude_pid):
                 total += p.memory_full_info().pss
             except (psutil.AccessDenied, AttributeError):
                 total += p.memory_info().rss
-        except psutil.NoSuchProcess:
-            pass
+        except psutil.NoSuchProcess as e:
+            _logger.debug("measure_process_tree_memory: process %s exited before its memory could be measured, skipping: %s", p.pid, e)
     return total
 
 
@@ -121,17 +121,17 @@ class OOMWatchdog(multiprocessing.Process):
         try:
             with open("/proc/self/oom_score_adj", "w") as f:
                 f.write("-1000\n")
-        except Exception: # audit-ignore-catch-all
-            pass
+        except Exception as e: # audit-ignore-catch-all
+            _logger.warning("OOMWatchdog: could not lower oom_score_adj (needs root/CAP_SYS_RESOURCE), continuing without it: %s", e)
         try:
             os.nice(-20)
-        except Exception: # audit-ignore-catch-all
-            pass
+        except Exception as e: # audit-ignore-catch-all
+            _logger.warning("OOMWatchdog: could not raise scheduling priority (needs root/CAP_SYS_NICE), continuing without it: %s", e)
         try:
             libc = ctypes.CDLL("libc.so.6", use_errno=True)
             libc.mlockall(3)
-        except Exception: # audit-ignore-catch-all
-            pass
+        except Exception as e: # audit-ignore-catch-all
+            _logger.warning("OOMWatchdog: could not mlockall() (needs root/CAP_IPC_LOCK), continuing without it: %s", e)
         while True:
             try:
                 total_rss = measure_process_tree_memory(
@@ -148,8 +148,11 @@ class OOMWatchdog(multiprocessing.Process):
                             if line.startswith("MemAvailable:"):
                                 mem_avail_mb = int(line.split()[1]) // 1024
                                 break
-                except Exception: # audit-ignore-catch-all
-                    pass
+                except Exception as e: # audit-ignore-catch-all
+                    # A real gap if it fires: mem_avail_mb silently stays at its
+                    # optimistic 10000MB default, disabling the host-memory half
+                    # of this watchdog's own OOM check without any trace.
+                    _logger.warning("OOMWatchdog: could not read /proc/meminfo, host-memory check disabled for this cycle: %s", e)
 
                 if total_rss_gb > self.rss_limit_gb or mem_avail_mb < 512:
                     reason = (
@@ -171,17 +174,21 @@ class OOMWatchdog(multiprocessing.Process):
                             continue
                         try:
                             p.kill()
-                        except psutil.NoSuchProcess:
-                            pass
+                        except psutil.NoSuchProcess as e:
+                            _logger.debug("OOMWatchdog: pid %s already exited before it could be killed: %s", p.pid, e)
                     try:
                         psutil.Process(self.target_pid).kill()
-                    except psutil.NoSuchProcess:
-                        pass
+                    except psutil.NoSuchProcess as e:
+                        _logger.debug("OOMWatchdog: target pid %s already exited before it could be killed: %s", self.target_pid, e)
                     break
             except psutil.NoSuchProcess:
                 break
-            except Exception: # audit-ignore-catch-all
-                pass
+            except Exception as e: # audit-ignore-catch-all
+                # This is the watchdog's own top-level loop: an unexpected,
+                # recurring failure here would otherwise be completely
+                # invisible, silently defeating the whole point of running a
+                # watchdog. Warn and keep looping rather than dying quietly.
+                _logger.warning("OOMWatchdog: unexpected error in monitoring loop, continuing: %s", e)
             time.sleep(2.0)
 
 
@@ -201,6 +208,27 @@ print = functools.partial(print, flush=True)
 # Local modules resolve natively without sys.path hacks.
 
 _logger = logging.getLogger(__name__)
+
+
+class _PostForkSafeLog:
+    """Fork-safe stand-in for _logger, for use ONLY inside a subprocess.Popen
+    preexec_fn (preexec_child/preexec_redis/preexec_rmq/preexec_odoo below).
+
+    Python's logging module takes an internal lock (and each Handler its
+    own) that may be held by some OTHER thread in this multi-threaded
+    process (ResourceMonitorThread, VirtualClockThread) at the instant
+    os.fork() runs. The child copy of that lock is frozen in whatever state
+    it was in -- if it was held, no thread in this now-single-threaded
+    child will ever release it, so a real _logger call here can deadlock
+    the child before it ever reaches exec(). os.write() on a raw fd takes
+    no such lock, so this is genuinely safe where _logger is not."""
+
+    @staticmethod
+    def warning(msg):
+        os.write(2, (msg + "\n").encode())
+
+
+_postfork_log = _PostForkSafeLog()
 
 
 class VirtualClockThread(threading.Thread):
@@ -256,8 +284,8 @@ class ResourceMonitorThread(threading.Thread):
                 for line in f:
                     if line.startswith("MemAvailable:"):
                         return int(line.split()[1]) // 1024
-        except Exception: # audit-ignore-catch-all
-            pass
+        except Exception as e: # audit-ignore-catch-all
+            _logger.warning("ResourceMonitorThread: could not read /proc/meminfo, memory alerts disabled for this cycle: %s", e)
         return None
 
     def get_chrome_count(self):
@@ -267,8 +295,8 @@ class ResourceMonitorThread(threading.Thread):
             )
             if res.returncode == 0:
                 return int(res.stdout.strip())
-        except Exception: # audit-ignore-catch-all
-            pass
+        except Exception as e: # audit-ignore-catch-all
+            _logger.warning("ResourceMonitorThread: could not count Chromium processes via pgrep, browser-leak alerts disabled for this cycle: %s", e)
         return 0
 
     def run(self):
@@ -427,8 +455,11 @@ class FailureExtractor:
                 f.write(f"Passed: {self.passed_tests}\n")
                 f.write(f"Failed: {self.failed_tests}\n")
                 f.flush()
-        except Exception: # audit-ignore-catch-all
-            pass
+        except Exception as e: # audit-ignore-catch-all
+            # See this method's own call-site comment above: silently swallowing this
+            # write failure used to no-op the entire live progress-tracking feature
+            # with zero signal to the user -- still surfaced now, not just documented.
+            _logger.warning("Failed to write live progress to %s: %s", self.progress_path, e)
 
     def set_context(self, context_name):
         if self.capturing and self.current_block:
@@ -799,9 +830,10 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
             libc = ctypes.CDLL("libc.so.6")
             PR_SET_PDEATHSIG = 1
             libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
-        except Exception:  # audit-ignore-catch-all
-            # We are post-fork in preexec_fn; logging is unsafe here.
-            pass
+        except Exception as e:  # audit-ignore-catch-all
+            # We are post-fork in preexec_fn; _logger is unsafe here (see
+            # _PostForkSafeLog's own docstring) -- use the fork-safe stand-in.
+            _postfork_log.warning(f"preexec_child: could not set PR_SET_PDEATHSIG: {e}")
 
     process = subprocess.Popen(
         cmd,
@@ -993,8 +1025,8 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
             )
             # Chromium is caught by the _chrome_odoo filter above.
             process.terminate()
-        except OSError:
-            pass
+        except OSError as e:
+            _logger.debug("Ignored OSError terminating process %s during cleanup: %s", process.pid, e)
 
     print(
         f"[*] [DEBUG-RUNNER] Waiting for process {process.pid} to cleanly terminate...",
@@ -1010,8 +1042,8 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         try:
             process.kill()
             process.wait(timeout=5)
-        except OSError:
-            pass
+        except OSError as e:
+            _logger.debug("Ignored OSError SIGKILLing process %s during cleanup: %s", process.pid, e)
     print(
         f"[*] [DEBUG-RUNNER] Process {process.pid} terminated with return code {process.returncode}."
     )
@@ -1086,8 +1118,12 @@ def resolve_repo_layout(base_dir):
             if os.path.isdir(main_repo_root):
                 repo_root = main_repo_root
                 parent_dir = os.path.abspath(os.path.join(main_repo_root, ".."))
-        except (subprocess.CalledProcessError, OSError):
-            pass
+        except (subprocess.CalledProcessError, OSError) as e:
+            # A real behavior change if it fires, not just a cosmetic
+            # cleanup race: repo_root/parent_dir silently stay at their
+            # plain-clone defaults, so a linked worktree's sibling-checkout
+            # scan looks in the wrong place with no other signal why.
+            _logger.warning("resolve_repo_layout: could not resolve the main repo root for worktree %s, falling back to %s: %s", base_dir, repo_root, e)
     return parent_dir, repo_root
 
 
@@ -1730,8 +1766,10 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
             libc = ctypes.CDLL("libc.so.6")
             libc.prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
-        except Exception: # audit-ignore-catch-all
-            pass
+        except Exception as e: # audit-ignore-catch-all
+            # Post-fork in preexec_fn; _logger is unsafe here (see
+            # _PostForkSafeLog's own docstring) -- use the fork-safe stand-in.
+            _postfork_log.warning(f"preexec_redis: could not set PR_SET_PDEATHSIG: {e}")
 
     redis_proc = subprocess.Popen(cmd, cwd=redis_dir, preexec_fn=preexec_redis)
     wait_for_port(6379, "Redis")
@@ -1760,8 +1798,10 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
             libc = ctypes.CDLL("libc.so.6")
             libc.prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
-        except Exception: # audit-ignore-catch-all
-            pass
+        except Exception as e: # audit-ignore-catch-all
+            # Post-fork in preexec_fn -- same logging-deadlock hazard as
+            # preexec_redis() above; use the fork-safe stand-in instead of _logger.
+            _postfork_log.warning(f"preexec_rmq: could not set PR_SET_PDEATHSIG: {e}")
 
     try:
         rmq_proc = subprocess.Popen(
@@ -1811,8 +1851,10 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
             # 1200 seconds (20 minutes) of ACTIVE CPU TIME. Safe for tests, deadly for infinite loops.
             resource.setrlimit(resource.RLIMIT_CPU, (1200, 1200))
-        except OSError:
-            pass
+        except OSError as e:
+            # Post-fork in preexec_fn -- same logging-deadlock hazard noted at
+            # preexec_redis()/preexec_rmq() above; use the fork-safe stand-in.
+            _postfork_log.warning(f"preexec_odoo: could not set RLIMIT_CPU: {e}")
         os.initgroups("odoo", odoo_user.pw_gid)
         os.setresgid(odoo_user.pw_gid, odoo_user.pw_gid, odoo_user.pw_gid)
         os.setresuid(odoo_user.pw_uid, odoo_user.pw_uid, odoo_user.pw_uid)
@@ -1847,15 +1889,15 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
                         os.getpgid(proc.pid),
                         signal.SIGKILL,
                     )
-                except OSError:
-                    pass
+                except OSError as e:
+                    _logger.debug("Ignored OSError SIGKILLing %s process group %s during teardown: %s", proc_name, proc.pid, e)
                 try:
                     proc.kill()
                     proc.wait(timeout=2)
-                except Exception:  # audit-ignore-catch-all
-                    pass
-            except Exception:  # audit-ignore-catch-all
-                pass
+                except Exception as e:  # audit-ignore-catch-all
+                    _logger.warning("Failed to fully reap %s (PID %s) during teardown: %s", proc_name, proc.pid, e)
+            except Exception as e:  # audit-ignore-catch-all
+                _logger.warning("Unexpected error tearing down %s (PID %s): %s", proc_name, proc.pid, e)
 
     # Explicitly kill Erlang Port Mapper Daemon (epmd) spawned by RabbitMQ
     subprocess.run(
@@ -2135,11 +2177,11 @@ def main():
             _single_instance_lock = os.fdopen(fd, "a")
             try:
                 os.chmod(lock_file_path, 0o777)
-            except OSError:
+            except OSError as e:
                 # Not the file's owner (e.g. a prior run by a different
                 # user already created it) -- fine, we only need to flock
                 # it, not own or widen its permissions.
-                pass
+                _logger.debug("Ignored OSError: %s", e)
         except OSError:  # audit-ignore-catch-all
             fd = os.open(lock_file_path, os.O_RDONLY | os.O_NOFOLLOW)
             _single_instance_lock = os.fdopen(fd, "r")
@@ -2229,8 +2271,8 @@ def main():
             os.remove(symlink_target)
         try:
             os.symlink(os.path.join(real_log_dir, "test_progress.txt"), symlink_target)
-        except OSError:
-            pass
+        except OSError as e:
+            _logger.debug("Ignored OSError: %s", e)
         try:
             os.chmod(real_log_dir, 0o777)
         except OSError as e:

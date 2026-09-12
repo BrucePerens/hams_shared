@@ -78,7 +78,12 @@ class PersistedStateRoundTripTests(_SafePatchTestCase):
         os.makedirs(os.path.dirname(state_file), exist_ok=True)
         with open(state_file, "w") as f:
             f.write("{not valid json")
-        self.assertIsNone(wd.load_persisted_states("agent-1"))
+        # Real bug found 2026-09-12: the `except Exception: pass` here used to
+        # swallow a corrupt state file with zero trace anywhere -- confirmed
+        # here with assertLogs so the warning is real, not just a comment.
+        with self.assertLogs("mcp_watchdog", level="WARNING") as cm:
+            self.assertIsNone(wd.load_persisted_states("agent-1"))
+        self.assertTrue(any(state_file in msg for msg in cm.output))
 
 
 class MtimeFsizeTests(unittest.TestCase):
@@ -179,6 +184,17 @@ class IsAgentDeadTests(unittest.TestCase):
         with open(self.path, "w"):
             pass
         self.assertFalse(wd.is_agent_dead(self.path))
+
+    def test_a_transcript_that_cannot_be_opened_warns_and_defaults_to_alive(self):
+        # Real bug found 2026-09-12: the outer `except Exception: pass` used to
+        # swallow a real read failure (not just a bad line inside the file,
+        # which the inner json.JSONDecodeError handler already covers) with
+        # zero trace. A directory where `path` is expected reproduces a real
+        # IsADirectoryError from the actual filesystem, not a mock.
+        os.makedirs(self.path)
+        with self.assertLogs("mcp_watchdog", level="WARNING") as cm:
+            self.assertFalse(wd.is_agent_dead(self.path))
+        self.assertTrue(any(self.path in msg for msg in cm.output))
 
 
 class CheckTurnLimitTests(unittest.TestCase):
@@ -325,6 +341,32 @@ class ParseFamilyTreeTests(unittest.TestCase):
         self.assertIn(root_id, {"agent-a", "agent-b"})
         self.assertEqual(active_family, {"agent-a", "agent-b"})
         self.assertEqual(parent_map, {"agent-a": "agent-b", "agent-b": "agent-a"})
+
+    def test_an_unparseable_matching_line_is_noted_not_silently_dropped(self):
+        # Real bug found 2026-09-12: the inner `except: pass` around the
+        # per-line json.loads() used to swallow a line that passed the cheap
+        # 'conversationId'/'Created the following subagents' substring
+        # pre-filter but wasn't actually valid JSON, with zero trace.
+        path = self._transcript_path("agent-a")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('{not valid json but mentions conversationId and Created the following subagents\n')
+        with self.assertLogs("mcp_watchdog", level="DEBUG") as cm:
+            active_family, parent_map, root_id = wd.parse_family_tree(self.tmp, "agent-a")
+        self.assertEqual(parent_map, {})
+        self.assertTrue(any(path in msg for msg in cm.output))
+
+    def test_an_unreadable_transcript_is_noted_not_silently_dropped(self):
+        # Real bug found 2026-09-12: the outer `except: pass` around opening
+        # the whole transcript file used to swallow a real read failure (not
+        # just a bad line inside it) with zero trace. A directory where the
+        # file is expected reproduces a real IsADirectoryError, not a mock.
+        path = self._transcript_path("agent-a")
+        os.makedirs(path)
+        with self.assertLogs("mcp_watchdog", level="WARNING") as cm:
+            active_family, parent_map, root_id = wd.parse_family_tree(self.tmp, "agent-a")
+        self.assertEqual(parent_map, {})
+        self.assertTrue(any(path in msg for msg in cm.output))
 
 
 class GetQueueTests(unittest.TestCase):

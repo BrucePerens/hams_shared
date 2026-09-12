@@ -149,8 +149,8 @@ def _find_template_declarations(path, module):
                     if "inherit_id" in line:
                         continue
                     declarations.append((module, match.group(1), path, lineno))
-    except (UnicodeDecodeError, OSError):
-        pass
+    except (UnicodeDecodeError, OSError) as e:
+        print(f"Warning: could not read {path} for template declarations: {e}", file=sys.stderr)
     return declarations
 
 

@@ -13,8 +13,6 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import check_cache_invalidation as chk  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_cache_invalidation.py")
@@ -260,9 +258,14 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_a_syntax_broken_file_is_skipped_without_crashing_the_run(self):
+        # Real bug found 2026-09-12: the except (SyntaxError, OSError) around check_file()
+        # used to be a bare `pass`, silently hiding that a file was never actually checked.
+        # It must now warn so the skip is visible, not silent.
         _write(os.path.join(self.tmp, "mod_a", "models", "broken.py"), "def foo(: broken")
         code, out = self._run(self.tmp)
         self.assertEqual(code, 0, out)
+        self.assertIn("Warning", out)
+        self.assertIn("broken.py", out)
 
 
 if __name__ == "__main__":

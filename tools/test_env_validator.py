@@ -29,14 +29,11 @@ import contextlib
 import io
 import os
 import smtplib
-import sys
 import tempfile
 import shutil
 import unittest
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import env_validator as ev  # noqa: E402
 
@@ -121,7 +118,12 @@ class CheckSmtpTests(unittest.TestCase):
             ev.check_smtp()
         self.assertIn("Authentication failed for user 'u'", buf.getvalue())
 
-    def test_starttls_not_supported_is_silently_ignored_and_login_still_attempted(self):
+    def test_starttls_not_supported_is_reported_but_login_still_attempted(self):
+        # Real bug found 2026-09-12: the `except Exception: pass` around starttls()
+        # used to swallow this with zero trace anywhere, even though the same except
+        # clause also catches a genuine, unexpected TLS failure (not just the
+        # documented "server doesn't offer STARTTLS" case) identically. It must now
+        # be visible, while still not blocking the login attempt that follows.
         buf = io.StringIO()
         server = MagicMock()
         server.starttls.side_effect = smtplib.SMTPNotSupportedError("no TLS")
@@ -132,7 +134,8 @@ class CheckSmtpTests(unittest.TestCase):
         ), patch("smtplib.SMTP", return_value=server):
             ev.check_smtp()
         server.login.assert_called_once_with("u", "p")
-        self.assertEqual(buf.getvalue(), "")
+        self.assertIn("STARTTLS not available or failed for h:25", buf.getvalue())
+        self.assertIn("no TLS", buf.getvalue())
 
     def test_a_connection_failure_is_reported_with_host_port_and_the_underlying_error(self):
         buf = io.StringIO()
@@ -291,6 +294,22 @@ class LoadEnvFilesTests(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True):
             ev.load_env_files()
             self.assertEqual(os.environ.get("FOO"), "bar")
+
+    def test_an_unreadable_env_file_warns_instead_of_silently_swallowing(self):
+        # Real bug found 2026-09-12: the `except OSError: pass` around the per-file
+        # open()/parse used to swallow this with zero trace -- a real, broken .env
+        # file (bad permissions, a directory mistakenly named *.env, a dangling
+        # symlink) disappeared silently instead of being reported like every other
+        # failure mode in this module. A directory named "*.env" reproduces a real
+        # OSError (IsADirectoryError) from the actual filesystem, not a mock.
+        os.makedirs(os.path.join(self.tmp, "broken.env"))
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf), patch.dict(
+            "os.environ", {}, clear=True
+        ), patch("os.path.exists", side_effect=lambda p: p == "."):
+            ev.load_env_files()
+        self.assertIn("Failed to read env file", buf.getvalue())
+        self.assertIn("broken.env", buf.getvalue())
 
 
 class MainIntegrationTests(unittest.TestCase):

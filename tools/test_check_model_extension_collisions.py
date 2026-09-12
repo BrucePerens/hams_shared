@@ -12,13 +12,13 @@ disk -- the same pattern already used for check_dependency_cycles.py.
 """
 
 import ast
+import contextlib
+import io
 import os
 import shutil
 import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_model_extension_collisions as chk  # noqa: E402
 
@@ -103,6 +103,19 @@ class ExtractClassInfoTests(unittest.TestCase):
         node = _class_node('class Foo(models.Model):\n    _name = "x"\n    _auto = False\n')
         _name, _inherit, auto_false, _has_init = chk._extract_class_info(node)
         self.assertTrue(auto_false)
+
+    def test_a_non_literal_auto_value_warns_instead_of_silently_swallowing(self):
+        # `_auto = some_computed_value` can't be ast.literal_eval'd; the checker
+        # must warn (not silently swallow the ValueError/SyntaxError) so a real
+        # parsing gap doesn't disappear without a trace.
+        node = _class_node('class Foo(models.Model):\n    _name = "x"\n    _auto = some_flag()\n')
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            _name, _inherit, auto_false, _has_init = chk._extract_class_info(node)
+        self.assertFalse(auto_false)
+        self.assertIn("Warning", stderr.getvalue())
+        self.assertIn("_auto", stderr.getvalue())
+        self.assertIn("Foo", stderr.getvalue())
 
     def test_detects_an_init_override(self):
         node = _class_node(

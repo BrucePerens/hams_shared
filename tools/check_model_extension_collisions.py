@@ -158,7 +158,11 @@ def _extract_class_info(class_node):
             try:
                 auto_false = ast.literal_eval(value) is False
             except (ValueError, SyntaxError):
-                pass
+                print(
+                    f"Warning: could not evaluate '_auto' assignment as a literal in class "
+                    f"'{class_node.name}' at line {stmt.lineno}; assuming _auto is not False",
+                    file=sys.stderr,
+                )
     return name_values, inherit_values, auto_false, has_init
 
 
