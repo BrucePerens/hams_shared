@@ -3521,6 +3521,50 @@ def test_a_test_method_that_calls_a_real_external_assertion_is_not_an_empty_test
     assert not any("Empty test detected" in e for e in errors)
 
 
+def test_a_test_calling_only_a_local_helper_that_does_real_work_is_not_empty():
+    # Real false positive found 2026-09-12 in
+    # ingest/test_forms_ingest_daemon.py: four sibling tests each called
+    # nothing but one shared local helper
+    # (_process_special_field_with_agent_result) that itself drives the
+    # real target function under a real mock/tmp_path setup -- a common,
+    # legitimate DRY pattern -- but the original check only looked at the
+    # test's own immediate call targets, so a test whose only call
+    # happened to be defined in the same file was flagged as empty
+    # regardless of what that helper actually did.
+    source = (
+        "def _run_the_real_thing(x):\n"
+        "    return target_module.process(x)\n"
+        "\n"
+        "class FooTests(TestCase):\n"
+        "    def test_something(self):\n"
+        "        result = _run_the_real_thing(1)\n"
+        "        assert result == 2\n"
+    )
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_foo.py"
+    )
+    assert not any("Empty test detected" in e for e in errors)
+
+
+def test_a_test_calling_only_a_local_helper_that_itself_does_nothing_real_is_still_empty():
+    # Pins the boundary of the fix above: recursing into a locally-defined
+    # helper must not become a blanket exemption for "calls anything
+    # defined in this file" -- a helper that itself only calls other
+    # locally-defined, real-work-free helpers must still be caught.
+    source = (
+        "def _do_nothing_real(x):\n"
+        "    return x\n"
+        "\n"
+        "class FooTests(TestCase):\n"
+        "    def test_something(self):\n"
+        "        _do_nothing_real(1)\n"
+    )
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_foo.py"
+    )
+    assert any("Empty test detected" in e for e in errors)
+
+
 def test_code_after_a_return_inside_a_test_method_is_unreachable_ast_evasion():
     source = (
         "class FooTests(TestCase):\n"

@@ -903,6 +903,20 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 for n in ast.walk(tree)
                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
             }
+            # For _check_test_empty()'s own use: a name -> node lookup so a
+            # test that only calls a LOCALLY-defined helper (a shared
+            # multi-test setup/exercise function, a common and legitimate
+            # DRY pattern) can be judged by whether that helper itself does
+            # real work, instead of being flagged just because its one call
+            # target happens to be defined in this same file. Last-definition
+            # wins on a duplicate name (e.g. same method name in two
+            # classes) -- acceptable here since this is a false-positive
+            # reduction heuristic, not a security check.
+            self.function_def_nodes_by_name = {
+                n.name: n
+                for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
 
             self.has_ham_base = False
             if self.filepath:
@@ -1323,15 +1337,44 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             self.in_real_transaction_case = old_val
             self.in_strict_real_transaction_case = old_strict_val
 
+        def _node_calls_something_real(self, node, visited=None):
+            """True if `node`'s body calls anything outside this file's own
+            defined functions, OR calls a locally-defined helper that
+            itself (recursively) does -- real false positive found
+            2026-09-12 in ingest/test_forms_ingest_daemon.py: four tests
+            each call nothing but a single shared local helper
+            (`_process_special_field_with_agent_result`) that itself drives
+            the real target function under a real mock/tmp_path setup, a
+            common and legitimate DRY pattern for a family of sibling
+            tests -- but the original check only looked at the test's own
+            immediate calls, so a test whose only call target happened to
+            be defined in this same file was flagged as empty regardless
+            of what that helper actually did. `visited` guards against
+            infinite recursion on a self- or mutually-recursive helper.
+            """
+            if visited is None:
+                visited = set()
+            for child in ast.walk(node):
+                if not isinstance(child, ast.Call):
+                    continue
+                callee_name = getattr(
+                    child.func, "id", getattr(child.func, "attr", None)
+                )
+                if callee_name not in self.defined_functions:
+                    return True
+                if callee_name in visited:
+                    continue
+                helper_node = self.function_def_nodes_by_name.get(callee_name)
+                if helper_node is not None and helper_node is not node:
+                    visited.add(callee_name)
+                    if self._node_calls_something_real(helper_node, visited):
+                        return True
+            return False
+
         def _check_test_empty(self, node):
             """Blocks dead-code testing evasion tactics."""
             if self.filename.startswith("test_") and node.name.startswith("test_"):
-                calls_external = any(
-                    isinstance(child, ast.Call)
-                    and getattr(child.func, "id", getattr(child.func, "attr", None))
-                    not in self.defined_functions
-                    for child in ast.walk(node)
-                )
+                calls_external = self._node_calls_something_real(node)
                 if not calls_external:
                     self.add_error(
                         node.lineno,
