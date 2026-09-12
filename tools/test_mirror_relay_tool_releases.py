@@ -73,6 +73,28 @@ class PublishTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 mirror.publish("https://hams.com", "key", "pat", "linux", "v1.0.0", b"data", "pat.tar.gz", "https://x")
 
+    def test_a_jsonrpc_level_server_error_surfaces_the_real_message_not_an_empty_dict(self):
+        # Real bug found 2026-09-12, confirmed against Odoo core's own jsonrpc dispatcher: an
+        # unhandled server-side exception returns HTTP 200 with a top-level {"error": {...}}
+        # envelope, not {"result": {...}} -- so `except urllib.error.HTTPError` never fires, and
+        # the old code's `result.get("result", {})` silently discarded the real error, raising
+        # SystemExit with an empty, useless "{}" instead of the actual message.
+        fake_resp = mock.MagicMock()
+        fake_resp.read.return_value = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "error": {"code": 200, "message": "Odoo Server Error", "data": {"debug": "AccessError: ..."}},
+                "id": None,
+            }
+        ).encode()
+        fake_resp.__enter__ = mock.Mock(return_value=fake_resp)
+        fake_resp.__exit__ = mock.Mock(return_value=False)
+        with mock.patch.object(mirror.urllib.request, "urlopen", return_value=fake_resp):
+            with self.assertRaises(SystemExit) as ctx:
+                mirror.publish("https://hams.com", "key", "pat", "linux", "v1.0.0", b"data", "pat.tar.gz", "https://x")
+            self.assertIn("Odoo Server Error", str(ctx.exception))
+            self.assertIn("AccessError", str(ctx.exception))
+
 
 class AssetPatternTests(unittest.TestCase):
     def test_pat_linux_pattern_matches_a_real_shaped_filename(self):

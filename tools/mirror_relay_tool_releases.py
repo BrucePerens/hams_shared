@@ -116,6 +116,22 @@ def publish(odoo_url: str, publish_key: str, tool: str, platform: str, tag: str,
         raise SystemExit(
             f"Publish failed for {tool}/{platform}: HTTP {e.code} from {odoo_url} -- {body}"
         ) from e
+
+    # Real bug found 2026-09-12: an unhandled server-side exception in publish_tool() (an
+    # Odoo AccessError, a database issue, any unexpected Python exception) does NOT surface as
+    # a non-2xx HTTP status here -- confirmed directly against Odoo core's own jsonrpc
+    # dispatcher (odoo/http.py's JsonRPCDispatcher._response/handle_error): a JSON-RPC-level
+    # error response is still wrapped in make_json_response() with its own default status=200,
+    # so `except urllib.error.HTTPError` above never fires for this case at all. The response
+    # body is instead a top-level `{"jsonrpc": "2.0", "error": {...}}` envelope, not
+    # `{"result": {...}}` -- `result.get("result", {})` below silently returned an empty dict
+    # for this case, and the eventual `raise SystemExit(f"... {status}")` printed a useless
+    # "Publish failed for X/Y: {}" with the real error message/traceback (in `error["message"]`/
+    # `error["data"]["debug"]`) completely discarded. Checked for this envelope shape first so
+    # the real server-side error actually reaches the operator running this by hand.
+    if "error" in result:
+        raise SystemExit(f"Publish failed for {tool}/{platform}: server error -- {result['error']}")
+
     status = result.get("result", {})
     print(f"  {tool}/{platform}: {status}")
     if status.get("status") != "success":
