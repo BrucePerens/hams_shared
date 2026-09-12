@@ -15,6 +15,7 @@ suite either.
 
 import os
 import socket
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -148,6 +149,37 @@ class GetFreePortTests(unittest.TestCase):
         # practice back-to-back calls return different ports -- real behavior, not assumed.
         ports = {diag.get_free_port() for _ in range(5)}
         self.assertGreater(len(ports), 1)
+
+
+class DecodeTimeoutPartialOutputTests(unittest.TestCase):
+    # Real bug found 2026-09-12: main()'s own subprocess.run(..., timeout=...) call on the real
+    # Odoo test process had no exception handling for subprocess.TimeoutExpired at all -- a
+    # timed-out hoot/browser test (a documented, recurring hang risk elsewhere in this codebase)
+    # crashed with a raw Python traceback instead of this tool's own clean output, and silently
+    # discarded whatever real STACK_CAPTURE_FOR_ diagnostics had already been printed before the
+    # hang -- exactly the information this whole tool exists to recover. Confirmed live:
+    # TimeoutExpired.stdout/.stderr carry bytes, not str, even from a text=True subprocess.run
+    # call -- decoded explicitly here.
+    def _fake_timeout(self, stdout=None, stderr=None):
+        return subprocess.TimeoutExpired(cmd=["odoo"], timeout=180, output=stdout, stderr=stderr)
+
+    def test_bytes_stdout_and_stderr_are_both_decoded_and_concatenated(self):
+        exc = self._fake_timeout(
+            stdout=b"STACK_CAPTURE_FOR_x: TypeError\n    at foo (bar.js:1:1)\n",
+            stderr=b"some stderr text\n",
+        )
+        result = diag.decode_timeout_partial_output(exc)
+        self.assertIn("STACK_CAPTURE_FOR_x", result)
+        self.assertIn("some stderr text", result)
+
+    def test_none_stdout_and_stderr_do_not_raise(self):
+        exc = self._fake_timeout(stdout=None, stderr=None)
+        self.assertEqual(diag.decode_timeout_partial_output(exc), "")
+
+    def test_invalid_utf8_bytes_are_replaced_not_raised(self):
+        exc = self._fake_timeout(stdout=b"valid text \xff\xfe invalid bytes", stderr=None)
+        result = diag.decode_timeout_partial_output(exc)
+        self.assertIn("valid text", result)
 
 
 if __name__ == "__main__":

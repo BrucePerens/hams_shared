@@ -167,6 +167,21 @@ def restore_and_verify(loader_path, original_content):
         print("[+] Restore verified.")
 
 
+def decode_timeout_partial_output(exc):
+    """`subprocess.TimeoutExpired.stdout`/`.stderr` carry whatever the killed process had
+    already written before the kill -- confirmed live: they arrive as `bytes`, NOT decoded to
+    `str`, even when the original `subprocess.run(..., text=True, timeout=N)` call requested
+    text mode; `text=True` only governs the SUCCESSFUL-completion return value, not the
+    exception path. Returns the combined, safely-decoded stdout+stderr text."""
+
+    def _decode(value):
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value or ""
+
+    return _decode(exc.stdout) + _decode(exc.stderr)
+
+
 def get_free_port():
     """OS-assigned free TCP port -- inherently racy (nothing stops another process
     from binding it between this call and the real server starting), but good enough
@@ -255,13 +270,35 @@ def main():
             "--log-level=test",
         ]
         env_pairs = [f"{key}={value}" for key, value in service_env.items()]
-        result = subprocess.run(
-            ["sudo", "-u", args.os_user, "env", "-i"] + env_pairs + odoo_cmd,
-            capture_output=True,
-            text=True,
-            timeout=args.timeout,
-        )
-        output = result.stdout + result.stderr
+        try:
+            result = subprocess.run(
+                ["sudo", "-u", args.os_user, "env", "-i"] + env_pairs + odoo_cmd,
+                capture_output=True,
+                text=True,
+                timeout=args.timeout,
+            )
+            output = result.stdout + result.stderr
+            returncode = result.returncode
+        except subprocess.TimeoutExpired as exc:
+            # Real bug found 2026-09-12: a timed-out Odoo test process (hoot/browser tests are
+            # documented elsewhere in this codebase as a real, recurring hang risk) used to
+            # propagate `TimeoutExpired` straight out of this function uncaught -- a raw Python
+            # traceback instead of this tool's own clean, actionable output, AND silently
+            # discarding whatever real stack-capture diagnostics had already printed to the
+            # subprocess's own stdout/stderr before it hung, which is exactly the information
+            # this whole tool exists to recover. Confirmed live: `subprocess.run(...,
+            # capture_output=True, text=True, timeout=N)` still attaches whatever partial output
+            # was captured before the kill to the exception's own `.stdout`/`.stderr` -- but as
+            # `bytes`, NOT decoded to `str` despite `text=True` being passed to the original
+            # call (confirmed directly: a real `TimeoutExpired` from a `text=True` `subprocess.
+            # run` call still carried `bytes`) -- decoded explicitly here rather than assuming
+            # `text=True` covers the exception path too.
+            print(
+                f"\n🛑 Odoo process did not finish within --timeout={args.timeout}s -- "
+                "killed. Recovering whatever real output was captured before the kill:"
+            )
+            output = decode_timeout_partial_output(exc)
+            returncode = None
 
         captures = extract_stack_captures(output)
         if captures:
@@ -276,7 +313,7 @@ def main():
         print("\n--- raw test output tail ---")
         print("\n".join(output.splitlines()[-40:]))
 
-        return 0 if captures == [] and result.returncode == 0 else 1
+        return 0 if captures == [] and returncode == 0 else 1
     finally:
         restore_and_verify(loader_path, original_content)
 
