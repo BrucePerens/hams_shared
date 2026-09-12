@@ -31,11 +31,15 @@ reaper structurally cannot touch them regardless of what future databases get ad
 A candidate is only actually dropped once both of these hold:
   1. It currently has zero connections in pg_stat_activity ("open" check) -- never drop a
      database a test run is still actively using, no matter its age.
-  2. Its on-disk base directory (keyed by OID, real observable evidence -- this codebase has no
-     mechanism to record a `created_at` for ad-hoc `createdb` calls) hasn't been modified in at
-     least --max-age-hours. A database still receiving real writes keeps advancing that mtime,
-     so a long-running scratch database in genuine active use survives even if disconnected
-     between queries.
+  2. Nothing under its on-disk base directory (keyed by OID, real observable evidence -- this
+     codebase has no mechanism to record a `created_at` for ad-hoc `createdb` calls) has been
+     modified in at least --max-age-hours. Checked as the MOST RECENT mtime across the base
+     directory itself AND every file inside it, recursively -- not just the directory's own
+     mtime, which (confirmed empirically 2026-09-12) does NOT advance when an existing file's
+     contents are merely written to, only when an entry is added/removed/renamed. A long-running
+     scratch database in genuine active use (ordinary UPDATE/INSERT into already-created tables)
+     survives even if disconnected between queries, because SOME file inside its directory tree
+     keeps advancing.
 
 When a database is dropped, this reaper also removes its Odoo filestore directory
 (`ODOO_FILESTORE_BASE/<dbname>`) if present -- `dropdb` itself has no concept of the filestore
@@ -100,20 +104,78 @@ def _open_database_names() -> set[str]:
     return {line.strip() for line in out.splitlines() if line.strip()}
 
 
+def _raise(exc):
+    raise exc
+
+
+def _dir_tree_max_mtime(base_dir: str) -> float:
+    """The most recent mtime among `base_dir` itself and every file/directory inside it,
+    recursively. Raises OSError (propagated, never swallowed) if `base_dir` can't be stat'd, or
+    if any part of the walk hits a permission error -- `os.walk`'s own default `onerror` silently
+    SKIPS an unreadable subdirectory rather than raising, which would otherwise let this function
+    return a plausible-looking but silently-incomplete (too-old) mtime instead of correctly
+    falling through to the sudo-based fallback below."""
+    max_mtime = os.stat(base_dir).st_mtime
+    for root, dirs, files in os.walk(base_dir, onerror=_raise):
+        for name in dirs + files:
+            mtime = os.stat(os.path.join(root, name)).st_mtime
+            if mtime > max_mtime:
+                max_mtime = mtime
+    return max_mtime
+
+
+def _sudo_dir_tree_max_mtime(base_dir: str) -> float:
+    """Same as `_dir_tree_max_mtime`, via `sudo find` for a directory owned by postgres and
+    unreadable from this account."""
+    result = subprocess.run(
+        ["sudo", "-n", "find", base_dir, "-printf", "%T@\n"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    mtimes = [
+        float(line)  # float-isfinite-ignore: find -printf "%T@" always emits a plain decimal epoch value, not adversarial text
+        for line in result.stdout.splitlines()
+        if line.strip()
+    ]
+    if not mtimes:
+        raise ValueError(f"`sudo find {base_dir}` produced no output -- directory is empty or gone")
+    return max(mtimes)
+
+
 def _database_age_hours(oid: int) -> float | None:
+    """Hours since the most recent observed write anywhere under this database's own OID
+    directory.
+
+    Real bug found 2026-09-12, confirmed empirically (a real throwaway `tmp_`-prefixed database,
+    real UPDATE/INSERT activity into an already-created table): this used to check ONLY the base
+    OID directory's own mtime, not the mtime of anything inside it. A directory's mtime only
+    advances when an entry is added/removed/renamed inside it (a new file, e.g. a new table or a
+    relation crossing a new segment boundary) -- NOT when an existing file's own contents are
+    merely written to, which is standard POSIX semantics, confirmed live on this exact filesystem
+    with a plain `stat` before/after an `echo > existing_file` and, more concretely, against a
+    real PostgreSQL database: creating a table and inserting 1000 rows advanced the base OID
+    directory's mtime once (the table's own relation file being created), but a subsequent
+    UPDATE + 1000 more INSERTs into that SAME already-existing table left the base directory's own
+    mtime COMPLETELY UNCHANGED, while the relation file's own mtime correctly advanced. This
+    module's own docstring claimed "A database still receiving real writes keeps advancing that
+    mtime" -- that claim was never actually verified against a real database and was false for
+    the common case (ordinary UPDATE/INSERT into pre-existing tables, which is most real Odoo
+    test-run activity after initial schema creation). Consequence: a `tmp_` scratch database that
+    genuinely had real, valuable write activity recently -- but happened to have zero open
+    connections at the moment of this reaper's snapshot check, and whose recent writes didn't
+    happen to also create a new table/segment -- would be misjudged as stale by its base
+    directory's own frozen mtime and DROPPED, destroying real data. Fixed by taking the most
+    recent mtime across the base directory AND every file inside it, recursively, which correctly
+    reflects real write activity regardless of whether it happened to also touch the directory's
+    own entry list."""
     base_dir = os.path.join(PG_DATA_BASE_DIR, str(oid))
     try:
-        mtime = os.stat(base_dir).st_mtime
+        mtime = _dir_tree_max_mtime(base_dir)
     except OSError:
-        # Directory owned by postgres, unreadable from this account -- fall through to sudo stat.
+        # Directory owned by postgres, unreadable from this account -- fall through to sudo find.
         try:
-            result = subprocess.run(
-                ["sudo", "-n", "stat", "-c", "%Y", base_dir],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            mtime = float(result.stdout.strip())  # float-isfinite-ignore: stat -c "%Y" always emits a plain decimal epoch integer, not adversarial text
+            mtime = _sudo_dir_tree_max_mtime(base_dir)
         except (subprocess.CalledProcessError, ValueError):
             return None
     age = datetime.datetime.now().timestamp() - mtime

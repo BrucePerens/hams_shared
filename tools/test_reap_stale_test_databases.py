@@ -15,7 +15,10 @@ touch a real database or a real directory.
 
 import logging
 import os
+import shutil
 import sys
+import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -27,6 +30,11 @@ import reap_stale_test_databases as reaper  # noqa: E402
 class _FakeCompletedProcess:
     def __init__(self, returncode):
         self.returncode = returncode
+
+
+class _FakeCompletedProcessWithStdout:
+    def __init__(self, stdout):
+        self.stdout = stdout
 
 
 class DropOneTests(unittest.TestCase):
@@ -105,6 +113,118 @@ class ListScratchDatabasesTests(unittest.TestCase):
     def test_blank_lines_are_skipped(self):
         with mock.patch.object(reaper, "_run_psql", return_value="tmp_a|1\n\n"):
             self.assertEqual(reaper._list_scratch_databases(), {"tmp_a": 1})
+
+
+class DirTreeMaxMtimeTests(unittest.TestCase):
+    # Real bug found 2026-09-12, confirmed empirically against a real throwaway PostgreSQL
+    # database: a directory's own mtime does NOT advance when an existing file inside it is
+    # merely written to (only when an entry is added/removed/renamed) -- standard POSIX
+    # semantics, but this reaper's own module docstring claimed the opposite ("a database still
+    # receiving real writes keeps advancing that mtime") without ever verifying it. Real UPDATE/
+    # INSERT activity into an already-created table left a real database's base OID directory
+    # mtime completely unchanged while the table's own relation file mtime correctly advanced.
+    # These tests use real temp directories/files (not mocked) since this is pure filesystem
+    # behavior -- the same thing that made the original bug unverified-by-reasoning-alone.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_write_into_an_existing_file_advances_the_reported_mtime(self):
+        # This is the exact real bug: the OLD code (bare os.stat(base_dir).st_mtime) would have
+        # reported the directory's own mtime, which this test's own setup below deliberately
+        # keeps frozen while only mutating the file's contents -- proving the fix actually looks
+        # inside the tree rather than only at the top-level directory.
+        existing_file = os.path.join(self.tmp, "relation_file")
+        with open(existing_file, "w") as f:
+            f.write("initial content\n")
+        dir_mtime_before = os.stat(self.tmp).st_mtime
+        time.sleep(1.1)
+        with open(existing_file, "w") as f:
+            f.write("much longer replacement content that is definitely different\n")
+        dir_mtime_after = os.stat(self.tmp).st_mtime
+        self.assertEqual(
+            dir_mtime_before,
+            dir_mtime_after,
+            "test setup assumption violated: the directory's own mtime moved on a plain file "
+            "write, so this test no longer isolates the bug it's meant to catch",
+        )
+        reported = reaper._dir_tree_max_mtime(self.tmp)
+        self.assertAlmostEqual(reported, os.stat(existing_file).st_mtime, delta=0.5)
+        self.assertGreater(reported, dir_mtime_before)
+
+    def test_a_nested_subdirectory_file_is_also_considered(self):
+        nested = os.path.join(self.tmp, "sub", "deeper")
+        os.makedirs(nested)
+        nested_file = os.path.join(nested, "f")
+        with open(nested_file, "w") as f:
+            f.write("x\n")
+        reported = reaper._dir_tree_max_mtime(self.tmp)
+        self.assertAlmostEqual(reported, os.stat(nested_file).st_mtime, delta=0.5)
+
+    def test_an_empty_directory_returns_its_own_mtime(self):
+        reported = reaper._dir_tree_max_mtime(self.tmp)
+        self.assertAlmostEqual(reported, os.stat(self.tmp).st_mtime, delta=0.5)
+
+    def test_a_nonexistent_directory_raises_oserror(self):
+        with self.assertRaises(OSError):
+            reaper._dir_tree_max_mtime(os.path.join(self.tmp, "does_not_exist"))
+
+    def test_an_unreadable_subdirectory_raises_rather_than_silently_under_reporting(self):
+        # Real risk this test guards against: os.walk()'s own default onerror silently SKIPS an
+        # unlistable subdirectory instead of raising, which would let _dir_tree_max_mtime return
+        # a plausible-looking but silently-incomplete (too-old) mtime instead of correctly
+        # signaling "go use the sudo fallback" to its caller.
+        blocked = os.path.join(self.tmp, "blocked")
+        os.makedirs(blocked)
+        os.chmod(blocked, 0o000)
+        try:
+            if os.geteuid() == 0:
+                self.skipTest("running as root -- permission bits don't block root's own access")
+            with self.assertRaises(OSError):
+                reaper._dir_tree_max_mtime(self.tmp)
+        finally:
+            os.chmod(blocked, 0o755)
+
+
+class SudoDirTreeMaxMtimeTests(unittest.TestCase):
+    def test_the_max_of_several_reported_mtimes_is_returned(self):
+        with mock.patch.object(
+            reaper.subprocess,
+            "run",
+            return_value=_FakeCompletedProcessWithStdout(
+                "1000000000.5\n1000000050.25\n1000000010.0\n"
+            ),
+        ):
+            self.assertEqual(reaper._sudo_dir_tree_max_mtime("/some/dir"), 1000000050.25)
+
+    def test_empty_output_raises_value_error(self):
+        with mock.patch.object(
+            reaper.subprocess, "run", return_value=_FakeCompletedProcessWithStdout("")
+        ):
+            with self.assertRaises(ValueError):
+                reaper._sudo_dir_tree_max_mtime("/some/dir")
+
+
+class DatabaseAgeHoursFallbackTests(unittest.TestCase):
+    def test_the_sudo_fallback_is_used_when_the_direct_walk_raises_oserror(self):
+        with mock.patch.object(
+            reaper, "_dir_tree_max_mtime", side_effect=OSError("permission denied")
+        ), mock.patch.object(
+            reaper, "_sudo_dir_tree_max_mtime", return_value=1000000000.0
+        ) as mock_sudo:
+            result = reaper._database_age_hours(42)
+            mock_sudo.assert_called_once()
+            self.assertIsNotNone(result)
+
+    def test_a_sudo_fallback_failure_returns_none_rather_than_raising(self):
+        with mock.patch.object(
+            reaper, "_dir_tree_max_mtime", side_effect=OSError("permission denied")
+        ), mock.patch.object(
+            reaper, "_sudo_dir_tree_max_mtime", side_effect=ValueError("no mtimes")
+        ):
+            self.assertIsNone(reaper._database_age_hours(42))
 
 
 class OpenDatabaseNamesTests(unittest.TestCase):
