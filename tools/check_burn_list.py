@@ -256,7 +256,22 @@ GENERAL_ERROR_RULES = [
         "CRITICAL NETWORK HARDCODING: 'localhost' and '127.0.0.1' are prohibited. In containerized environments, these resolve to the container's internal loopback, NOT the target service. Use Docker DNS names (e.g., 'odoo', 'redis').",
     ),
     (
-        r"test_.*\.py$",
+        # Real false-positive class found 2026-09-12, the same one already fixed for the
+        # TransactionCase-inheritance rule above and already precedented for the localhost/
+        # 127.0.0.1 rule two entries up (`(?!.*(?:/|^)tools/)`, reused here verbatim for
+        # consistency): this rule matches raw line text, not AST, so a Python string LITERAL
+        # containing "/tmp/..." trips it exactly as readily as a real hardcoded path. Confirmed
+        # live: 39 findings, 100% fixture/test-data strings, zero real production /tmp usage --
+        # 34 in test_check_burn_list.py itself (fake filepath labels fed into this tool's own
+        # AST-checking functions, e.g. filepath="/tmp/some_module/models/res_users.py", never
+        # actually opened/written), 2 in test_infrastructure.py (a shell-injection ATTACK PAYLOAD
+        # fixture, "/tmp/repo'; touch /tmp/PWNED; echo '", testing that a function properly
+        # rejects it), and 3 across test_check_absolute_paths.py/test_run_js_coverage.py (source-
+        # code-as-a-string fixture content written to a REAL tempfile.mkdtemp() path, where the
+        # STRING CONTENT itself contains "/tmp/thing" as bait for the checker being tested to
+        # catch). Real Odoo test files (this rule's actual intended target) never live under any
+        # tools/ directory in this codebase -- only meta-tests for the linter tooling itself do.
+        r"^(?!.*(?:/|^)tools/).*test_.*\.py$",
         re.compile(r"['\"]/tmp(?:/|['\"])"),
         "CRITICAL TEST REALISM / PATHING: Hardcoding '/tmp' is forbidden. Tests must use the exact same paths as the production environment per AGENTS.md.",
     ),

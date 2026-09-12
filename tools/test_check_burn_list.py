@@ -5126,3 +5126,31 @@ def test_a_real_transaction_case_subclass_inside_tools_is_also_excluded_by_this_
     )
     out = _run_main(tmp_path, extra_args=["--scan-daemons-and-tools"])
     assert "Tests must inherit from HamsTransactionCase" not in out
+
+
+def test_a_real_hardcoded_tmp_path_outside_tools_is_flagged(tmp_path):
+    real_test = tmp_path / "ham_logbook" / "tests" / "test_qso.py"
+    real_test.parent.mkdir(parents=True)
+    real_test.write_text('path = "/tmp/some_real_hardcoded_path"\n', encoding="utf-8")
+    out = _run_main(tmp_path)
+    assert "Hardcoding '/tmp' is forbidden" in out
+
+
+def test_a_fixture_string_containing_a_tmp_path_inside_tools_is_not_flagged(tmp_path):
+    # Real false-positive class found 2026-09-12, the same one already fixed for the
+    # TransactionCase-inheritance rule above: this rule matches raw line text, not AST, so a
+    # Python string LITERAL containing "/tmp/..." -- used as a fake filepath label fed into an
+    # AST-checking function under test, never actually opened or written -- tripped this rule
+    # exactly as readily as a real hardcoded path would. Confirmed against this repo's own real
+    # test_check_burn_list.py: 34 of the 39 real findings for this rule were exactly this shape.
+    # Confirmed to FAIL against the pre-fix rule pattern (the finding fired for this exact
+    # fixture shape before the fix).
+    meta_test = tmp_path / "hams_shared" / "tools" / "test_check_burn_list.py"
+    meta_test.parent.mkdir(parents=True)
+    meta_test.write_text(
+        'def test_something():\n'
+        '    errors = _dict_findings(source, filepath="/tmp/some_module/models/res_users.py")\n',
+        encoding="utf-8",
+    )
+    out = _run_main(tmp_path, extra_args=["--scan-daemons-and-tools"])
+    assert "Hardcoding '/tmp' is forbidden" not in out
