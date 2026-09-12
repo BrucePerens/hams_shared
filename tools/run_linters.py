@@ -224,6 +224,21 @@ def main():
             if res.stderr:
                 print(res.stderr, end="")
             linters_failed = True
+        elif res.stdout and res.stdout.strip():
+            # Real bug found 2026-09-12: every other step in this file prints a checker's
+            # stdout even on a clean (returncode == 0) pass when it's non-empty -- this one was
+            # the sole exception, silently dropping any diagnostic pre_flight_check.py prints on
+            # success. Confirmed live, not hypothetical: pre_flight_check.py's own module-tier
+            # dormancy notice ("[*] Module-tier architecture check skipped: ... not found") is
+            # unconditionally printed to stdout with returncode 0 whenever tier_config.json is
+            # absent -- true for every real invocation today, since no tier_config.json exists
+            # anywhere in either repo -- and this branch's absence meant that notice never
+            # reached a live CI/terminal output, only the module's own capture_output buffer.
+            # Already flagged as a known, not-yet-fixed gap in night_shift_todo.md ("pre_flight_
+            # check.py's new tier-config dormancy notice doesn't surface through its real, live
+            # caller"); fixed here by matching this file's own established convention instead of
+            # the "broader design decision" that earlier note assumed was required.
+            print(res.stdout, end="")
 
     # 7. Flake8
     flake8_cmd = "/usr/bin/flake8"
@@ -240,7 +255,23 @@ def main():
                 # check_absolute_paths.py's own docstring) -- rewriting a real developer's
                 # already-committed one-shot script to satisfy a linter would make the
                 # archive inaccurate, not correct.
-                "--exclude=venv,env,.venv,__pycache__,node_modules,target,daemons,archive",
+                #
+                # .claude: real bug found 2026-09-12 reviewing this file. Passing a custom
+                # --exclude replaces flake8's own default exclude list entirely (flake8 does
+                # NOT append to its defaults unless --extend-exclude is used instead), so
+                # without an explicit entry here flake8 descends into
+                # ".claude/worktrees/<session>/" -- this project's own standing, documented
+                # convention (see check_dependency_cycles.py's identical fix, and the "Batch A"
+                # entry in docs/BUG_HUNT_PROGRESS.md fixing the same gap in 5 sibling checker
+                # scripts) for running concurrent bug-hunt dispatches in isolated git worktrees
+                # INSIDE the repo root. Confirmed empirically: a fake .claude/worktrees/<sess>/
+                # tree with one file containing a real, unambiguous F401 violation was scanned
+                # and reported by flake8 with this exact --exclude value before this fix.
+                # Before this fix, a lint run started while another session's worktree existed
+                # could fail (or, depending on E9/F/E402 content, spuriously pass) based on that
+                # OTHER session's own in-progress, uncommitted code -- not the real repo state
+                # this invocation was actually scoped to check.
+                "--exclude=venv,env,.venv,__pycache__,node_modules,target,daemons,archive,.claude",
                 "--select=E9,F,E402",
                 "--per-file-ignores=__init__.py:F401",
             ],

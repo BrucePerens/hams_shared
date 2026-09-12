@@ -20,13 +20,17 @@ tries to collect test.py/test_mcp_server.py and executes their
 module-level Odoo-launching code instead of running unit tests.
 """
 
+import contextlib
 import glob
+import io
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import textwrap
+import types
 import unittest
 from unittest import mock
 
@@ -269,6 +273,146 @@ class RunPerTargetCheckerTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+
+
+def _read_source():
+    with open(_SCRIPT, encoding="utf-8") as f:
+        return f.read()
+
+
+class Flake8ExcludeListTests(unittest.TestCase):
+    # Real bug found 2026-09-12 reviewing this file: passing a custom --exclude to flake8
+    # REPLACES its own built-in default exclude list rather than adding to it (flake8 only
+    # appends to the defaults when --extend-exclude is used instead) -- so the hand-written
+    # --exclude value at run_linters.py's flake8 step never excluded ".claude", and flake8
+    # would descend straight into ".claude/worktrees/<session>/", this project's own standing,
+    # documented convention (see check_dependency_cycles.py and 4 other sibling checkers,
+    # already fixed for the identical bug per docs/BUG_HUNT_PROGRESS.md's "Batch A" entry) for
+    # running concurrent bug-hunt dispatches in isolated git worktrees INSIDE the repo root.
+    # Before this fix, a lint run started while another session's worktree existed could fail
+    # (or spuriously pass) based on that OTHER session's own in-progress, uncommitted code --
+    # not the real repo state this invocation was actually scoped to check.
+    def _extract_exclude_value(self):
+        match = re.search(r'"--exclude=([^"]*)"', _read_source())
+        self.assertIsNotNone(
+            match,
+            "Could not find flake8's --exclude=... literal in run_linters.py -- its source "
+            "shape changed; update this test's extraction regex.",
+        )
+        return match.group(1)
+
+    def test_the_exclude_list_names_dot_claude(self):
+        self.assertIn(
+            ".claude",
+            self._extract_exclude_value().split(","),
+            "run_linters.py's flake8 --exclude list no longer excludes .claude -- a "
+            "concurrent session's own .claude/worktrees/<session>/ tree would be scanned "
+            "as if it were real repo content again.",
+        )
+
+    def test_flake8_with_the_real_exclude_value_does_not_scan_a_worktree(self):
+        # Empirical, not just textual: actually invoke the real flake8 binary (as run_linters.py
+        # itself does) against a fixture tree with one real, unambiguous F401 violation sitting
+        # inside a fake .claude/worktrees/<session>/ directory, using the EXACT --exclude value
+        # this file's own flake8 step passes. Confirmed to fail against the pre-fix exclude
+        # value (no ".claude" entry): flake8 reported the worktree file's F401 violation.
+        if shutil.which("flake8") is None:
+            self.skipTest("flake8 not installed in this environment")
+        tmp = tempfile.mkdtemp()
+        try:
+            worktree_file = os.path.join(tmp, ".claude", "worktrees", "sess1", "bad.py")
+            _write(worktree_file, "import os\nx = 1\n")
+            _write(os.path.join(tmp, "clean.py"), "print(1)\n")
+            exclude_value = self._extract_exclude_value()
+            res = subprocess.run(
+                [
+                    "flake8",
+                    tmp,
+                    f"--exclude={exclude_value}",
+                    "--select=E9,F,E402",
+                    "--per-file-ignores=__init__.py:F401",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                res.returncode,
+                0,
+                "flake8 scanned .claude/worktrees/<session>/ despite the --exclude value "
+                f"extracted from run_linters.py's own source. stdout:\n{res.stdout}",
+            )
+            self.assertNotIn("bad.py", res.stdout)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class PreFlightCheckStepPrintsOnSuccessTests(unittest.TestCase):
+    # Real bug found 2026-09-12: every OTHER subprocess-checking step in run_linters.py prints
+    # a checker's stdout when it's non-empty even on a clean (returncode == 0) pass -- this
+    # pre-flight-check step (step 6) was the sole exception, silently dropping any diagnostic
+    # pre_flight_check.py prints on success. Confirmed live, not hypothetical:
+    # pre_flight_check.py's own module-tier dormancy notice ("[*] Module-tier architecture
+    # check skipped: ... not found") is unconditionally printed with returncode 0 whenever
+    # tier_config.json is absent -- true for every real invocation today, since no
+    # tier_config.json exists anywhere in either repo -- so that notice never reached a live
+    # CI/terminal output before this fix. Already flagged as a known, not-yet-fixed gap in
+    # night_shift_todo.md.
+    def _extract_snippet(self):
+        source = _read_source()
+        match = re.search(
+            r"([ \t]*res = subprocess\.run\(pre_flight_cmd,.*?)\n\n    # 7\. Flake8",
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(
+            match,
+            "Could not locate the pre-flight-check step's source block in run_linters.py -- "
+            "its shape changed; update this test's extraction regex.",
+        )
+        return textwrap.dedent(match.group(1))
+
+    def _run_snippet(self, res):
+        # The extracted snippet's first statement is the real `subprocess.run(pre_flight_cmd,
+        # ...)` call this step actually makes -- stub both `subprocess.run` (to return the
+        # caller-supplied fake `res` instead of really invoking pre_flight_check.py) and
+        # `pre_flight_cmd` (never dereferenced by the stub, but referenced by the snippet's own
+        # source text) rather than trimming that line out of the extracted snippet, so the
+        # exact real source is exercised unmodified.
+        fake_subprocess = types.SimpleNamespace(run=lambda *args, **kwargs: res)
+        namespace = {
+            "subprocess": fake_subprocess,
+            "pre_flight_cmd": None,
+            "linters_failed": False,
+        }
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            exec(self._extract_snippet(), namespace)  # noqa: S102 -- real source, not input
+        return buf.getvalue(), namespace["linters_failed"]
+
+    def test_a_clean_pass_with_diagnostic_stdout_still_prints_it(self):
+        res = types.SimpleNamespace(
+            returncode=0,
+            stdout="[*] Module-tier architecture check skipped: tier_config.json not found.\n",
+            stderr="",
+        )
+        printed, failed = self._run_snippet(res)
+        self.assertIn("Module-tier architecture check skipped", printed)
+        self.assertFalse(failed)
+
+    def test_a_clean_pass_with_no_stdout_prints_nothing(self):
+        res = types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        printed, failed = self._run_snippet(res)
+        self.assertEqual(printed, "")
+        self.assertFalse(failed)
+
+    def test_a_real_failure_still_sets_linters_failed_and_prints(self):
+        res = types.SimpleNamespace(
+            returncode=1, stdout="some violation\n", stderr="traceback\n"
+        )
+        printed, failed = self._run_snippet(res)
+        self.assertIn("some violation", printed)
+        self.assertIn("traceback", printed)
+        self.assertTrue(failed)
 
 
 if __name__ == "__main__":
