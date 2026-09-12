@@ -26,6 +26,16 @@ import sys
 
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git"}
 
+# Real gap found 2026-09-12, same class as check_pip_audit.py's own fix: `cargo deny check` can
+# fetch a fresh advisory-db over the network (per cargo-deny's own documented behavior), and
+# neither subprocess.run() call below passed a `timeout=` -- a stalled network condition would
+# block this call, and everything downstream of it in a run_linters.py run, indefinitely.
+# check_dependency_releases.py's REQUEST_TIMEOUT_SECONDS convention, mirrored here as two
+# separate constants since the version-probe and the real per-crate check have very different
+# realistic durations.
+VERSION_CHECK_TIMEOUT_SECONDS = 30
+DENY_CHECK_TIMEOUT_SECONDS = 300
+
 
 def _resolve_repo_root(given_path):
     """Same hams_shared-redirect fix as check_pip_audit.py/check_model_extension_collisions.py:
@@ -80,7 +90,12 @@ def main():
         sys.exit(0)
 
     try:
-        check = subprocess.run(["cargo", "deny", "--version"], capture_output=True, text=True)
+        check = subprocess.run(
+            ["cargo", "deny", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=VERSION_CHECK_TIMEOUT_SECONDS,
+        )
     except FileNotFoundError:
         # Real bug found 2026-09-10: `subprocess.run(["cargo", ...])` raises FileNotFoundError,
         # uncaught, when the `cargo` binary itself isn't on PATH at all -- a materially
@@ -90,6 +105,12 @@ def main():
         # have it) crashed here with a raw traceback instead of the same clear, actionable
         # message already given for the "cargo-deny not installed" case.
         check = None
+    except subprocess.TimeoutExpired:
+        print(
+            f"❌ cargo deny --version did not respond within "
+            f"{VERSION_CHECK_TIMEOUT_SECONDS}s -- treating as not installed/unusable."
+        )
+        sys.exit(1)
     if check is None or check.returncode != 0:
         print(
             "❌ cargo-deny is not installed (cargo install cargo-deny, or "
@@ -101,12 +122,24 @@ def main():
     any_failed = False
     for repo_root, crate_dir in crate_dirs:
         rel_path = os.path.relpath(crate_dir, repo_root)
-        res = subprocess.run(
-            ["cargo", "deny", "check"],
-            capture_output=True,
-            text=True,
-            cwd=crate_dir,
-        )
+        try:
+            res = subprocess.run(
+                ["cargo", "deny", "check"],
+                capture_output=True,
+                text=True,
+                cwd=crate_dir,
+                timeout=DENY_CHECK_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            if not any_failed:
+                print("❌ cargo-deny findings:")
+            any_failed = True
+            print(
+                f"-- {rel_path} --\ncargo deny check did not complete within "
+                f"{DENY_CHECK_TIMEOUT_SECONDS}s (stalled network fetch of the advisory db?) -- "
+                "failing the gate rather than blocking the run indefinitely."
+            )
+            continue
         if res.returncode != 0:
             if not any_failed:
                 print("❌ cargo-deny findings:")

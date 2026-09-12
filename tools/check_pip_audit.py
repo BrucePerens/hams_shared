@@ -24,6 +24,18 @@ import sys
 
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git"}
 
+# Real gap found 2026-09-12: neither subprocess.run() call below passed a `timeout=`, despite
+# this module's own docstring stating pip-audit "Requires network access" (PyPI's JSON Advisory
+# Database) -- a stalled/hung network condition (or a hung pip-audit subprocess for any other
+# reason) would block this call, and everything downstream of it in a run_linters.py run,
+# indefinitely. check_dependency_releases.py (a sibling network-calling checker in this same
+# tree) already establishes a REQUEST_TIMEOUT_SECONDS convention for exactly this class of call;
+# mirrored here as two separate constants since the version-probe and the real per-file audit
+# have very different realistic durations (a full dependency scan legitimately takes much longer
+# than a `--version` check).
+VERSION_CHECK_TIMEOUT_SECONDS = 30
+AUDIT_TIMEOUT_SECONDS = 300
+
 
 def _resolve_repo_root(given_path):
     """run_linters.py's own `dir_path` resolves to the hams_shared directory itself, not a real
@@ -80,11 +92,19 @@ def main():
     if not requirements_files:
         sys.exit(0)
 
-    check = subprocess.run(
-        [sys.executable, "-m", "pip_audit", "--version"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        check = subprocess.run(
+            [sys.executable, "-m", "pip_audit", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=VERSION_CHECK_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            f"❌ pip-audit --version did not respond within "
+            f"{VERSION_CHECK_TIMEOUT_SECONDS}s -- treating as not installed/unusable."
+        )
+        sys.exit(1)
     if check.returncode != 0:
         print(
             "❌ pip-audit is not installed (python3 -m pip install --user "
@@ -96,20 +116,32 @@ def main():
     any_failed = False
     for repo_root, req_file in requirements_files:
         rel_path = os.path.relpath(req_file, repo_root)
-        res = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip_audit",
-                "-r",
-                req_file,
-                "--progress-spinner",
-                "off",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=repo_root,
-        )
+        try:
+            res = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip_audit",
+                    "-r",
+                    req_file,
+                    "--progress-spinner",
+                    "off",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=repo_root,
+                timeout=AUDIT_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            if not any_failed:
+                print("❌ pip-audit findings:")
+            any_failed = True
+            print(
+                f"-- {rel_path} --\npip-audit did not complete within "
+                f"{AUDIT_TIMEOUT_SECONDS}s (stalled network call to PyPI's Advisory Database?) -- "
+                "failing the gate rather than blocking the run indefinitely."
+            )
+            continue
         if res.returncode != 0:
             if not any_failed:
                 print("❌ pip-audit findings:")

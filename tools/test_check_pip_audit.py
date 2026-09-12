@@ -16,6 +16,7 @@ tested directly against real temp-directory fixtures.
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -145,6 +146,79 @@ class MainTests(unittest.TestCase):
             # 1 version check + 2 per-file audits, not stopped early after
             # the first file's finding.
             self.assertEqual(mock_run.call_count, 3)
+
+
+class TimeoutTests(unittest.TestCase):
+    """Regression tests for a real gap found 2026-09-12: neither subprocess.run() call in
+    main() passed a `timeout=`, despite this module's own docstring stating pip-audit "Requires
+    network access" -- a stalled network call (or a hung pip-audit subprocess for any other
+    reason) would block the whole run_linters.py run indefinitely. Confirmed each call site now
+    passes a real timeout, and that a subprocess.TimeoutExpired is caught cleanly (a readable
+    failure message + exit 1), never an uncaught traceback."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _argv(self):
+        return ["check_pip_audit.py", self.tmp]
+
+    def test_the_version_probe_passes_a_real_timeout_kwarg(self):
+        _write(os.path.join(self.tmp, "requirements.txt"), "requests==2.0\n")
+        version_check = MagicMock(returncode=0)
+        audit_result = MagicMock(returncode=0, stdout="", stderr="")
+        with patch.object(sys, "argv", self._argv()), patch(
+            "check_pip_audit.subprocess.run", side_effect=[version_check, audit_result]
+        ) as mock_run:
+            with self.assertRaises(SystemExit):
+                chk.main()
+            version_call_kwargs = mock_run.call_args_list[0].kwargs
+            self.assertEqual(
+                version_call_kwargs.get("timeout"), chk.VERSION_CHECK_TIMEOUT_SECONDS
+            )
+
+    def test_the_per_file_audit_passes_a_real_timeout_kwarg(self):
+        _write(os.path.join(self.tmp, "requirements.txt"), "requests==2.0\n")
+        version_check = MagicMock(returncode=0)
+        audit_result = MagicMock(returncode=0, stdout="", stderr="")
+        with patch.object(sys, "argv", self._argv()), patch(
+            "check_pip_audit.subprocess.run", side_effect=[version_check, audit_result]
+        ) as mock_run:
+            with self.assertRaises(SystemExit):
+                chk.main()
+            audit_call_kwargs = mock_run.call_args_list[1].kwargs
+            self.assertEqual(audit_call_kwargs.get("timeout"), chk.AUDIT_TIMEOUT_SECONDS)
+
+    def test_a_hung_version_probe_fails_cleanly_instead_of_raising(self):
+        _write(os.path.join(self.tmp, "requirements.txt"), "requests==2.0\n")
+        with patch.object(sys, "argv", self._argv()), patch(
+            "check_pip_audit.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="pip_audit --version", timeout=30),
+        ), patch("builtins.print") as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                chk.main()
+            self.assertEqual(ctx.exception.code, 1)
+            printed = " ".join(str(c) for c in mock_print.call_args_list)
+            self.assertIn("did not respond", printed)
+
+    def test_a_hung_per_file_audit_fails_that_file_cleanly_and_continues(self):
+        _write(os.path.join(self.tmp, "requirements.txt"), "requests==2.0\n")
+        _write(os.path.join(self.tmp, "requirements-dev.txt"), "pytest==8.0\n")
+        version_check = MagicMock(returncode=0)
+        hang = subprocess.TimeoutExpired(cmd="pip_audit -r ...", timeout=300)
+        clean = MagicMock(returncode=0, stdout="", stderr="")
+        with patch.object(sys, "argv", self._argv()), patch(
+            "check_pip_audit.subprocess.run", side_effect=[version_check, hang, clean]
+        ) as mock_run, patch("builtins.print") as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                chk.main()
+            # Both files were attempted -- the hang on the first one didn't abort the loop.
+            self.assertEqual(mock_run.call_count, 3)
+            self.assertEqual(ctx.exception.code, 1)
+            printed = " ".join(str(c) for c in mock_print.call_args_list)
+            self.assertIn("did not complete within", printed)
 
 
 class ResolveRepoRootTests(unittest.TestCase):

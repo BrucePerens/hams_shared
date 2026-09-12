@@ -14,6 +14,7 @@ temp-directory fixtures.
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -163,6 +164,88 @@ class MainTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, 1)
             # version check + one `cargo deny check` per crate = 3 calls.
             self.assertEqual(mock_run.call_count, 3)
+
+
+class TimeoutTests(unittest.TestCase):
+    """Regression tests for a real gap found 2026-09-12, same class as check_pip_audit.py's own
+    fix: `cargo deny check` can fetch a fresh advisory-db over the network, and neither
+    subprocess.run() call in main() passed a `timeout=` -- a stalled network condition would
+    block the whole run_linters.py run indefinitely. Confirmed each call site now passes a real
+    timeout, and that a subprocess.TimeoutExpired is caught cleanly (a readable failure message +
+    exit 1), never an uncaught traceback."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _argv(self):
+        return ["check_cargo_deny.py", self.tmp]
+
+    def _make_crate(self):
+        crate = os.path.join(self.tmp, "daemons", "some_daemon")
+        _write(os.path.join(crate, "Cargo.toml"))
+        _write(os.path.join(crate, "deny.toml"))
+        return crate
+
+    def test_the_version_probe_passes_a_real_timeout_kwarg(self):
+        self._make_crate()
+        version_check = MagicMock(returncode=0)
+        deny_result = MagicMock(returncode=0, stdout="", stderr="")
+        with patch.object(sys, "argv", self._argv()), patch(
+            "check_cargo_deny.subprocess.run", side_effect=[version_check, deny_result]
+        ) as mock_run:
+            with self.assertRaises(SystemExit):
+                chk.main()
+            version_call_kwargs = mock_run.call_args_list[0].kwargs
+            self.assertEqual(
+                version_call_kwargs.get("timeout"), chk.VERSION_CHECK_TIMEOUT_SECONDS
+            )
+
+    def test_the_per_crate_check_passes_a_real_timeout_kwarg(self):
+        self._make_crate()
+        version_check = MagicMock(returncode=0)
+        deny_result = MagicMock(returncode=0, stdout="", stderr="")
+        with patch.object(sys, "argv", self._argv()), patch(
+            "check_cargo_deny.subprocess.run", side_effect=[version_check, deny_result]
+        ) as mock_run:
+            with self.assertRaises(SystemExit):
+                chk.main()
+            deny_call_kwargs = mock_run.call_args_list[1].kwargs
+            self.assertEqual(deny_call_kwargs.get("timeout"), chk.DENY_CHECK_TIMEOUT_SECONDS)
+
+    def test_a_hung_version_probe_fails_cleanly_instead_of_raising(self):
+        self._make_crate()
+        with patch.object(sys, "argv", self._argv()), patch(
+            "check_cargo_deny.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="cargo deny --version", timeout=30),
+        ), patch("builtins.print") as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                chk.main()
+            self.assertEqual(ctx.exception.code, 1)
+            printed = " ".join(str(c) for c in mock_print.call_args_list)
+            self.assertIn("did not respond", printed)
+
+    def test_a_hung_per_crate_check_fails_that_crate_cleanly_and_continues(self):
+        crate_a = os.path.join(self.tmp, "daemons", "a_daemon")
+        crate_b = os.path.join(self.tmp, "daemons", "b_daemon")
+        for crate in (crate_a, crate_b):
+            _write(os.path.join(crate, "Cargo.toml"))
+            _write(os.path.join(crate, "deny.toml"))
+        version_check = MagicMock(returncode=0)
+        hang = subprocess.TimeoutExpired(cmd="cargo deny check", timeout=300)
+        clean = MagicMock(returncode=0, stdout="", stderr="")
+        with patch.object(sys, "argv", self._argv()), patch(
+            "check_cargo_deny.subprocess.run", side_effect=[version_check, hang, clean]
+        ) as mock_run, patch("builtins.print") as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                chk.main()
+            # Both crates were attempted -- the hang on the first one didn't abort the loop.
+            self.assertEqual(mock_run.call_count, 3)
+            self.assertEqual(ctx.exception.code, 1)
+            printed = " ".join(str(c) for c in mock_print.call_args_list)
+            self.assertIn("did not complete within", printed)
 
 
 class ResolveRepoRootTests(unittest.TestCase):
