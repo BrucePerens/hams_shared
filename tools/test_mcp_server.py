@@ -10,6 +10,8 @@ import io
 import unittest
 import importlib
 import subprocess
+import threading
+import time
 from contextlib import redirect_stdout, redirect_stderr
 
 from mcp.server.fastmcp import FastMCP, Context
@@ -227,6 +229,19 @@ def reload_test_files(module_names: str) -> str:
     return out.getvalue()
 
 
+def _kill_own_process_group():
+    # SIGKILL against a process's own group can't be caught, deferred, or
+    # cleaned up after -- it lands mid-instruction with no chance for any
+    # caller further up the stack to run again. Doing this synchronously
+    # inside the tool call means the MCP transport never gets to flush the
+    # "Killed" response before the process delivering it is gone.
+    try:
+        os.killpg(os.getpgid(os.getpid()), signal.SIGKILL)
+    except OSError as e:
+        _logger.error("Error killing process group: %s", e)
+        os._exit(1)
+
+
 @mcp.tool()
 def kill_server() -> str:
     """
@@ -234,13 +249,14 @@ def kill_server() -> str:
     Example: (no arguments)
     """
     print("Shutting down MCP server and all its subprocesses...")
-    try:
-        # Since the MCP server is spawned in its own session/process group by test.py,
-        # killing the process group will reliably take down Chrome, Odoo, and the server itself.
-        os.killpg(os.getpgid(os.getpid()), signal.SIGKILL)
-    except OSError as e:
-        _logger.error("Error killing process group: %s", e)
-        os._exit(1)
+    # Real fix, 2026-09-12 (hams_shared/tools/ adversarial pass): the kill used to
+    # run synchronously here, before `return "Killed"` -- since the MCP server is
+    # spawned in its own session/process group by test.py, that SIGKILL took down
+    # this process too, before it ever returned. The caller got a dropped
+    # connection instead of the tool's declared string response. Fire the kill
+    # from a background thread on a short delay instead, so this call can return
+    # "Killed" and let the MCP transport flush it first.
+    threading.Thread(target=lambda: (time.sleep(0.5), _kill_own_process_group()), daemon=True).start()
     return "Killed"
 
 

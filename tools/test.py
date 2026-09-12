@@ -1949,14 +1949,25 @@ def start_jules_daemons(base_dir):
     subprocess.run(["fuser", "-k", "8075/tcp"], check=False)
 
     print("[*] Provisioning Jules environment via infrastructure.py...")
+    # Real fix, 2026-09-12 (bug class 47 shape, flagged in night_shift_todo.md as
+    # "no live exploitation path found" but never actually closed): the three
+    # interpolated values below used to be embedded as raw f-string text inside
+    # single quotes -- a value containing a quote or backslash (e.g. a `base_dir`
+    # or `$USER` with an embedded `'`) would break out of the string literal and
+    # inject arbitrary Python into a script this function then runs as root via
+    # `sudo -E python3 -c`. `!r` (repr) produces a properly escaped Python string
+    # literal regardless of what the value contains, closing the injection shape
+    # without needing to first decide whether this Jules-VM-only path is kept.
+    tools_dir = os.path.join(base_dir, "hams_shared", "tools")
+    jules_user = os.environ.get("USER", "odoo")
     script = f"""import sys, os, subprocess
-sys.path.insert(0, '{os.path.join(base_dir, "hams_shared", "tools")}')
+sys.path.insert(0, {tools_dir!r})
 import infrastructure
 def _safe_run(cmd, **kw):
     return subprocess.run(cmd, check=True, **kw)
-orig_user = '{os.environ.get("USER", "odoo")}'
+orig_user = {jules_user!r}
 env_vars = dict(os.environ)
-env_vars["REPO_ROOT"] = '{base_dir}'
+env_vars["REPO_ROOT"] = {base_dir!r}
 env_vars["HOME"] = os.path.expanduser('~/tmp')
 env_vars["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
 os.environ["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
@@ -2409,7 +2420,6 @@ def main():
     parser.add_argument("-u", "--module")
     parser.add_argument("-l", "--log-directory", default=os.path.expanduser("~/tmp"))
     parser.add_argument("-c", "--config", default="ignore_list.txt")
-    parser.add_argument("--daemon")
     parser.add_argument("--profile", action="store_true")
     parser.add_argument(
         "--coverage",

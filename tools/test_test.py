@@ -320,5 +320,44 @@ class FailureExtractorAttributeGuardTests(unittest.TestCase):
         self.assertIn("TEST RUN ABORTED", buf.getvalue())
 
 
+class StartJulesDaemonsInjectionTests(unittest.TestCase):
+    """start_jules_daemons() builds a Python script as an f-string and runs it
+    via `sudo -E python3 -c <script>` -- base_dir and $USER used to be embedded
+    as raw f-string text inside single quotes, so a value containing a quote
+    could break out of the string literal and inject arbitrary code into a
+    script that runs as root. Fixed via `!r` (repr) escaping; these tests never
+    let a real `sudo`/`mkdir`/`chmod`/script-execution happen -- subprocess.run
+    is mocked throughout, and the assertions are against the generated script
+    text itself."""
+
+    def test_a_base_dir_and_user_containing_a_quote_do_not_break_out_of_the_generated_script(self):
+        malicious = "/tmp/evil'; os.system('touch /tmp/pwned'); x = '"
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return MagicMock(returncode=0)
+
+        with patch.object(_test_runner.subprocess, "run", side_effect=fake_run), \
+                patch.dict(os.environ, {"USER": malicious}):
+            _test_runner.start_jules_daemons(malicious)
+
+        sudo_calls = [c for c in calls if c and c[0] == "sudo"]
+        self.assertEqual(
+            len(sudo_calls), 1,
+            "expected exactly one `sudo -E <python> -c <script>` invocation",
+        )
+        script = sudo_calls[0][-1]
+
+        # Pre-fix, the unescaped quote in `malicious` breaks the string literal
+        # boundary, and the payload becomes real top-level statements -- this
+        # compile() call raises SyntaxError against the pre-fix code (the broken-
+        # out `x = '...'` never finds its matching close-quote) or, if it happens
+        # to parse, the injected os.system(...) call would appear as bare,
+        # executable source rather than inert string data.
+        compile(script, "<generated-jules-script>", "exec")
+        self.assertNotIn("os.system('touch /tmp/pwned')\n", script)
+
+
 if __name__ == "__main__":
     unittest.main()
