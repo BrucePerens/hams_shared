@@ -128,6 +128,36 @@ class MainScriptTests(unittest.TestCase):
             content = f.read()
         self.assertEqual(content, "# Linter Rules (Burn List)\n\n")
 
+    def test_zero_docs_refuses_to_overwrite_an_existing_file_with_real_content(self):
+        # Real bug found 2026-09-12, confirmed against this repo's own real linter_rules.md:
+        # check_burn_list.py no longer contains any "!"-prefixed literate-doc string (that
+        # convention was abandoned in favor of hand-maintaining linter_rules.md directly), so a
+        # real run of this script today would have silently destroyed that real, valuable,
+        # actively-maintained file, replacing it with just the two-line empty skeleton -- with a
+        # misleading "Extracted 0 ..." success message giving no indication anything destructive
+        # happened. Confirmed to FAIL against the pre-fix source (the old code always
+        # overwrote unconditionally, with no existing-content check at all).
+        _write(os.path.join(self.tmp, "check_burn_list.py"), "x = 1\n")  # zero '!' docs
+        _write(
+            os.path.join(self.tmp, "linter_rules.md"),
+            "# Linter Rules (Burn List)\n\n- A real, hand-maintained rule nobody wants erased.\n",
+        )
+        code, out = self._run()
+        self.assertNotEqual(code, 0)
+        self.assertIn("Refusing to overwrite", out)
+        with open(os.path.join(self.tmp, "linter_rules.md"), encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("A real, hand-maintained rule nobody wants erased.", content)
+
+    def test_zero_docs_with_an_already_empty_output_file_is_not_blocked(self):
+        # The guard must not block the genuinely benign case: re-running against a source with
+        # no docs when the output is already just the empty skeleton (or doesn't exist yet).
+        _write(os.path.join(self.tmp, "check_burn_list.py"), "x = 1\n")
+        _write(os.path.join(self.tmp, "linter_rules.md"), "# Linter Rules (Burn List)\n\n")
+        code, out = self._run()
+        self.assertEqual(code, 0, out)
+        self.assertIn("Extracted 0 literate documentation strings", out)
+
 
 if __name__ == "__main__":
     unittest.main()
