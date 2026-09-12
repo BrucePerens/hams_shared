@@ -63,7 +63,17 @@ RMSGW_BINARY = "rmsgw"
 # lookaheads requiring at least one letter AND at least one digit somewhere in the base
 # 2-8-character group, while keeping the same permissive base shape (still accepts unusual real
 # formats, e.g. a UK-style leading-digit prefix like "2E0ABC").
-_CALLSIGN_RE = re.compile(r"^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{2,8}(-[0-9]{1,2})?$")
+#
+# Real bug found 2026-09-12: `(?=.*[A-Z])`/`(?=.*[0-9])` are unbounded -- `.` matches the SSID
+# suffix's own "-" and digits too, so the lookaheads could be satisfied entirely by characters
+# AFTER the base group, not just within it. Confirmed empirically: "ABCDEF-1" and "AB-12" (a
+# purely alphabetic BASE with no digit of its own, only a numeric SSID) both matched, despite
+# neither being a real callsign shape -- the exact same validation gap the 2026-09-10 fix was
+# meant to close, just reachable via the SSID this time instead of the whole string. Fixed by
+# scoping each lookahead to `[A-Z0-9]*` (not `.*`), which cannot cross the "-" SSID separator
+# since "-" isn't in that character class, so each lookahead can only be satisfied by a character
+# actually inside the base callsign.
+_CALLSIGN_RE = re.compile(r"^(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*[0-9])[A-Z0-9]{2,8}(-[0-9]{1,2})?$")
 
 
 def main(argv):

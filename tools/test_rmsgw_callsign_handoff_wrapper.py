@@ -111,6 +111,18 @@ class RmsgwCallsignHandoffWrapperTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(os.path.exists(self._argv_capture_file))
 
+    def test_a_purely_alphabetic_base_with_a_numeric_ssid_is_rejected(self):
+        # Real bug found 2026-09-12, a more subtle variant of the same class fixed 2026-09-10:
+        # the lookaheads requiring "at least one letter"/"at least one digit" used `.*`, which is
+        # unbounded and can be satisfied by the SSID suffix's own digits -- so a purely
+        # alphabetic BASE callsign (no digit of its own) with a numeric SSID appended, e.g.
+        # "ABCDEF-1", incorrectly passed validation. No real amateur radio callsign has a
+        # digit-free base with the SSID supplying its only digit. Confirmed to FAIL against the
+        # pre-fix source (the old regex matched this and rmsgw WAS invoked).
+        result = self._run_wrapper("N0CALL-10", "radio", "ABCDEF-1\r\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(os.path.exists(self._argv_capture_file))
+
     def test_a_real_uk_style_leading_digit_callsign_still_passes(self):
         # Confirms the tightened regex didn't over-correct: a real UK-style callsign whose
         # prefix itself starts with a digit must still be accepted.
