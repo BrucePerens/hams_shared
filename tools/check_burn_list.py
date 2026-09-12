@@ -2121,10 +2121,26 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             elif fid == "eval":
                 self.add_error(node.lineno, "CRITICAL RCE: Never use native eval()...")
             elif fid == "exec":
-                self.add_error(
-                    node.lineno,
-                    "CRITICAL RCE: The use of exec() is strictly forbidden.",
-                )
+                # Real, narrow exemption found 2026-09-12, mirroring the hasattr()/super()
+                # exemption immediately above: hams_shared/tools' own test suite has an
+                # established, deliberate, and safe convention (test_run_linters.py,
+                # test_fix_manifests.py, test_bulk_explanation_manager.py, each with its own
+                # "real source, not user input" comment already in place) of regex-extracting a
+                # REAL function's own source text from the file under test and exec()'ing it in
+                # an isolated namespace, to unit-test a snippet that's otherwise entangled with
+                # module-level side-effecting or environment-fragile code -- never external or
+                # attacker-influenced input, always this exact repo's own already-committed
+                # source. This is structurally the same trust boundary already accepted for
+                # ast.literal_eval-based checks elsewhere in this file; exec() on a script's own
+                # extracted source carries no more risk than importing the module directly would.
+                # Confirmed live: without this exemption, this rule flagged all 3 of the above
+                # files' own already-reviewed, already-comment-justified exec() calls.
+                line_content = self.node_span_text(node)
+                if "burn-ignore-exec-own-source" not in line_content:
+                    self.add_error(
+                        node.lineno,
+                        "CRITICAL RCE: The use of exec() is strictly forbidden.",
+                    )
             elif self.is_odoo_module:
                 if fid == "get_module_resource":
                     self.add_error(
@@ -4256,6 +4272,13 @@ def scan_file(filepath, is_odoo_module=False):
                 # let sit unnoticed); new modules should add a runner
                 # instead of reaching for this tag.
                 "burn-ignore-hoot-runner-coverage",
+                # exec() on a REAL function's own source text, regex-extracted from the file
+                # under test into an isolated namespace -- never external/attacker-influenced
+                # input, always this repo's own already-committed source. See the exec() check's
+                # own comment (visit_Call, `fid == "exec"`) for the full rationale. First used by
+                # test_run_linters.py/test_fix_manifests.py/test_bulk_explanation_manager.py,
+                # each already carrying their own "real source, not user input" comment.
+                "burn-ignore-exec-own-source",
             ]
         ):
             errors_found.append(

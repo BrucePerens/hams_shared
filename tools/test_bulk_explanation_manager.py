@@ -64,7 +64,7 @@ def _extract_functions():
         "json": json,
         "logger": logging.getLogger("test_bulk_explanation_manager"),
     }
-    exec(match.group(1), namespace)  # real source, not user input
+    exec(match.group(1), namespace)  # burn-ignore-exec-own-source: real source, not user input
     return namespace["export_pending"], namespace["import_completed"]
 
 

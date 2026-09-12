@@ -25,7 +25,6 @@ from pathlib import Path
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-sys.path.insert(0, str(Path(__file__).parent))
 import check_burn_list  # noqa: E402
 from check_burn_list import (  # noqa: E402
     parse_odoo_xml,
@@ -2151,6 +2150,24 @@ def test_hasattr_with_the_real_burn_ignore_tag_is_exempt():
     source = "if hasattr(self, 'some_attr'):  # burn-ignore-introspection\n    pass\n"
     errors, _warnings = _dict_findings(source)
     assert not any("hasattr" in e for e in errors)
+
+
+def test_exec_is_flagged_by_default():
+    source = "exec(some_code, namespace)\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("exec()" in e for e in errors)
+
+
+def test_exec_with_the_real_burn_ignore_tag_is_exempt():
+    # Real, narrow exemption found 2026-09-12: hams_shared/tools' own test suite has an
+    # established, deliberate, and safe convention of exec()'ing a REAL function's own source
+    # text, regex-extracted from the file under test, into an isolated namespace -- never
+    # external/attacker-influenced input. Confirmed against this repo's own real
+    # test_run_linters.py/test_fix_manifests.py/test_bulk_explanation_manager.py, each already
+    # doing exactly this.
+    source = "exec(match.group(1), namespace)  # burn-ignore-exec-own-source: real source\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("exec()" in e for e in errors)
 
 
 def test_get_service_uid_wrapped_in_try_except_is_not_flagged_without_ham_base_present():

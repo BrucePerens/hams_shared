@@ -39,7 +39,7 @@ def _extract_fix_manifest():
             "its shape changed; update this test's extraction regex."
         )
     namespace = {"os": os}
-    exec(match.group(1), namespace)  # real source, not user input
+    exec(match.group(1), namespace)  # burn-ignore-exec-own-source: real source, not user input
     return namespace["fix_manifest"]
 
 

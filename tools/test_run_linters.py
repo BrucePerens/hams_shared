@@ -34,8 +34,6 @@ import types
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import run_linters  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_linters.py")
@@ -73,7 +71,7 @@ class DiscoverySnippetTests(unittest.TestCase):
 
     def _run_snippet(self):
         namespace = {"glob": glob, "os": os, "dir_path": self.tmp}
-        exec(self.snippet, namespace)  # noqa: S102 -- real source, not user input
+        exec(self.snippet, namespace)  # burn-ignore-exec-own-source: real source, not user input
         return namespace["tool_test_files"]
 
     def test_a_real_test_suite_file_is_collected(self):
@@ -386,7 +384,7 @@ class PreFlightCheckStepPrintsOnSuccessTests(unittest.TestCase):
         }
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            exec(self._extract_snippet(), namespace)  # noqa: S102 -- real source, not input
+            exec(self._extract_snippet(), namespace)  # burn-ignore-exec-own-source: real source, not input
         return buf.getvalue(), namespace["linters_failed"]
 
     def test_a_clean_pass_with_diagnostic_stdout_still_prints_it(self):
