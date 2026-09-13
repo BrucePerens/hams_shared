@@ -70,10 +70,6 @@
 
 - Coverage for COMM_story_cache_signaling: [@ANCHOR: zero_sudo:COMM_story_cache_signaling]
 
-- Coverage for COMM_coherent_cache_signal_batch: [@ANCHOR: zero_sudo:COMM_coherent_cache_signal_batch]
-
-- Coverage for COMM_coherent_cache_signal_single: [@ANCHOR: zero_sudo:COMM_coherent_cache_signal_single]
-
 - Coverage for COMM_get_system_param: [@ANCHOR: zero_sudo:COMM_get_system_param]
 
 - Coverage for COMM_story_parameter_whitelisting: [@ANCHOR: zero_sudo:COMM_story_parameter_whitelisting]

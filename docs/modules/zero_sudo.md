@@ -104,7 +104,7 @@ When a daemon or unprivileged user strictly requires native ERP framework intera
 
 <global_cache>
 ## 4. Global Cache Signaling
-* **Postgres NOTIFY Bus:** The `_notify_cache_invalidation` function `[@ANCHOR: COMM_coherent_cache_signal]` provides an entry point to trigger cross-worker cache flushes via the distributed event bus. It supports both single invalidations `[@ANCHOR: COMM_coherent_cache_signal_single]` and bulk chunked notifications `[@ANCHOR: COMM_coherent_cache_signal_batch]`. This behavior is covered by `[@ANCHOR: COMM_test_coherent_cache_signal]`.
+* **Postgres NOTIFY Bus:** The `_notify_cache_invalidation` function `[@ANCHOR: COMM_coherent_cache_signal]` provides an entry point to trigger cross-worker cache flushes via the distributed event bus. Bug-hunt fix, 2026-09-13: this used to send its own, separately-formatted `pg_notify` payload on a channel (`"cache_invalidation"`) nothing actually listens on -- it now delegates to `distributed_redis_cache.redis_cache.notify_model_invalidation()`, the real, correctly-addressed (`"distributed_cache_invalidation"` channel, JSON payload) mechanism the cache-manager daemon actually consumes, at whole-model granularity (the previous single/batch per-key distinction was never consumed by anything downstream). This behavior is covered by `[@ANCHOR: COMM_test_coherent_cache_signal]`.
 </global_cache>
 
 ---
