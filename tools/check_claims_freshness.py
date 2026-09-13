@@ -103,9 +103,10 @@ def compute_function_hash(filepath):
         start, end = _function_span(node, lines)
         span_lines = lines[start - 1 : min(end, len(lines))]
         span = "\n".join(span_lines)
-        for line in span_lines:
+        for i, line in enumerate(span_lines):
+            prev_line = span_lines[i - 1] if i > 0 else ""
             for anchor_match in va.ANCHOR_PATTERN.finditer(line):
-                if not _is_base_anchor_declaration(line, anchor_match):
+                if not _is_base_anchor_declaration(line, anchor_match, prev_line):
                     continue
                 name = va._clean(anchor_match.group(1))
                 hashes[name] = hashlib.sha256(span.encode("utf-8")).hexdigest()

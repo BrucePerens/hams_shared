@@ -98,8 +98,8 @@ def check_anchor_coverage(repo_root, coverage_files):
             # base anchor declaration, wrongly pulling an actually-unanchored function into this
             # stage's "anchored but unexecuted" report instead of leaving it to Stage 1.
             has_anchor = any(
-                cfta._is_base_anchor_declaration(line, m)
-                for line in span_lines
+                cfta._is_base_anchor_declaration(line, m, span_lines[i - 1] if i > 0 else "")
+                for i, line in enumerate(span_lines)
                 for m in va.ANCHOR_PATTERN.finditer(line)
             )
             if not has_anchor:

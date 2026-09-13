@@ -68,12 +68,29 @@ EXCLUDE_DIRS = {
 DEFAULT_BASELINE_FILENAME = "function_test_anchor_baseline.json"
 
 
-def _is_base_anchor_declaration(line, match):
+def _is_base_anchor_declaration(line, match, prev_line=""):
     """True if `match` (an ANCHOR_PATTERN match within `line`) is a base anchor declaration --
     e.g. `# [@ANCHOR: name]` -- rather than a reference TO that anchor from elsewhere: a
     `# Tests [@ANCHOR: name]` link, a `# Verified by [@ANCHOR: name]` link, a
     `# Triggers [@ANCHOR: name]` cross-reference, an inline conversational mention ("see
     [@ANCHOR: name]"), or a `story_`/`journey_`/`doc_`-prefixed documentation-only anchor name.
+
+    `prev_line` (optional, defaults to "" -- every existing caller that doesn't pass it keeps its
+    prior behavior exactly) is the source line immediately before `line`, needed for one more
+    reference shape: a multi-line comment that wraps the referencing word onto the PRECEDING line,
+    e.g. `# ...(see` / `# [@ANCHOR: name]) -- go through...`. Real bug found live, 2026-09-13: this
+    function used to look ONLY at same-line text before the match, so when that same-line prefix is
+    empty (the anchor is the first real content on its own comment line), the actual referencing
+    word sitting on the line above was invisible -- `ham_shack/tests/test_station_timeshare_
+    security.py`'s own `# A friendship can no longer be born already-accepted (see` / `#
+    [@ANCHOR: ham_operator_friendship_create_authz]) -- go through...` took exactly this shape, got
+    wrongly counted as a real base declaration, and (via check_claims_freshness.py's own
+    build_anchor_hash_index and its documented "last file scanned wins" duplicate-anchor
+    resolution) silently corrupted that claim's own recorded hash to a hash computed from the wrong
+    function entirely. Only consulted when `line`'s own same-line prefix is empty -- a real
+    same-line signal (a genuine "Tests"/"Verified by"/etc. prefix, or a genuine bare declaration)
+    always wins on its own terms first, so this can only ever turn an already-ambiguous case into a
+    correctly-classified reference, never override a real same-line declaration.
     Mirrors verify_anchors.py's own `_process_file_for_anchors` classification exactly (same
     prefix checks, same anchor-name-prefix check), reimplemented rather than imported because that
     function is bundled with several unrelated accumulator parameters this check has no use for --
@@ -97,6 +114,21 @@ def _is_base_anchor_declaration(line, match):
     anyway, to close the gap before a function like that is ever written, not because a real gap
     was found and left."""
     first_prefix = line[: match.start()].strip()
+    # A bare comment marker with nothing else before the anchor (e.g. just "#" or "//") carries no
+    # same-line signal at all -- exactly the case a wrapped-from-the-previous-line reference needs
+    # this fallback for. `first_prefix` itself stays exactly as-is for the same-line checks below
+    # (a real "#" prefix must never satisfy `.endswith("Tests")` etc. on its own).
+    bare_comment_marker = bool(re.fullmatch(r"(#|//|/\*|\*)+", first_prefix))
+    if (not first_prefix or bare_comment_marker) and prev_line:
+        prev_prefix = re.sub(r"^\s*(#|//|/\*|\*)+", "", prev_line).strip()
+        if prev_prefix.endswith("Tests"):
+            return False
+        if prev_prefix.endswith("Verified by") or prev_prefix.endswith("Tested by"):
+            return False
+        if prev_prefix.endswith("Triggers") or prev_prefix.endswith("Triggered by"):
+            return False
+        if re.search(r"\b(See|and|also|or|to)\b$", prev_prefix, re.IGNORECASE):
+            return False
     if first_prefix.endswith("Tests"):
         return False
     if first_prefix.endswith("Verified by") or first_prefix.endswith("Tested by"):
@@ -218,8 +250,8 @@ def scan_file(filepath, repo_root):
         # anchor declaration, silently exempting the function from the gap check below. Only a
         # genuine base declaration (per `_is_base_anchor_declaration`) counts as "anchored."
         has_anchor = any(
-            _is_base_anchor_declaration(line, m)
-            for line in span_lines
+            _is_base_anchor_declaration(line, m, span_lines[i - 1] if i > 0 else "")
+            for i, line in enumerate(span_lines)
             for m in va.ANCHOR_PATTERN.finditer(line)
         )
         identity = f"{rel_path}::{qualname}"

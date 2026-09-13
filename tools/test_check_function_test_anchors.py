@@ -161,6 +161,51 @@ class ScanFileTests(unittest.TestCase):
         results = cfta.scan_file(path, self.tmp)
         self.assertEqual(results, [("foo.py::bar", False)])
 
+    def test_a_multiline_comment_reference_with_see_on_the_preceding_line_is_not_a_declaration(self):
+        # Real bug found live, 2026-09-13: ham_shack/tests/test_station_timeshare_security.py had
+        # a comment shaped exactly like this -- the referencing word "see" sits on the line BEFORE
+        # the anchor tag, so the anchor's own same-line prefix is empty and gives no signal either
+        # way. The old check only ever looked at the anchor's own line, wrongly counting this as a
+        # real base declaration -- which, via check_claims_freshness.py's own duplicate-anchor
+        # resolution, silently corrupted a real claim's recorded hash to this function's hash
+        # instead of the real declaring function's.
+        path = os.path.join(self.tmp, "foo.py")
+        _write(
+            path,
+            "def bar():\n"
+            "    # A thing can no longer happen a certain way (see\n"
+            "    # [@ANCHOR: mod:real_thing]) -- go through the real flow instead.\n"
+            "    pass\n",
+        )
+        results = cfta.scan_file(path, self.tmp)
+        self.assertEqual(results, [("foo.py::bar", False)])
+
+    def test_a_multiline_comment_reference_with_verified_by_on_the_preceding_line_is_not_a_declaration(self):
+        path = os.path.join(self.tmp, "foo.py")
+        _write(
+            path,
+            "def bar():\n"
+            "    # Verified by\n"
+            "    # [@ANCHOR: mod:real_thing]\n"
+            "    pass\n",
+        )
+        results = cfta.scan_file(path, self.tmp)
+        self.assertEqual(results, [("foo.py::bar", False)])
+
+    def test_a_real_base_declaration_on_its_own_line_still_counts_when_the_prior_line_is_unrelated(self):
+        # The prev_line check must never turn a GENUINE declaration into a false negative just
+        # because some unrelated comment happens to sit above it.
+        path = os.path.join(self.tmp, "foo.py")
+        _write(
+            path,
+            "def bar():\n"
+            "    # Some unrelated comment line.\n"
+            "    # [@ANCHOR: mod:bar]\n"
+            "    pass\n",
+        )
+        results = cfta.scan_file(path, self.tmp)
+        self.assertEqual(results, [("foo.py::bar", True)])
+
     def test_a_real_base_anchor_alongside_a_citation_still_counts_as_anchored(self):
         path = os.path.join(self.tmp, "foo.py")
         _write(

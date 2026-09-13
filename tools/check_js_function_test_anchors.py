@@ -244,8 +244,8 @@ def scan_tree(repo_root):
             # `// Verified by [@ANCHOR: name]`, `// Tests [@ANCHOR: name]` -- as if it were a real
             # base anchor declaration, silently exempting the function from the gap check below.
             has_anchor = any(
-                _is_base_anchor_declaration(line, m)
-                for line in span_lines
+                _is_base_anchor_declaration(line, m, span_lines[i - 1] if i > 0 else "")
+                for i, line in enumerate(span_lines)
                 for m in va.ANCHOR_PATTERN.finditer(line)
             )
             identity = f"{rel_path}::{qualname}"
