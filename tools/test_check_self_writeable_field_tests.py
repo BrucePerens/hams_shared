@@ -297,6 +297,34 @@ class VerifyWriteProofShapeTests(unittest.TestCase):
         errors = chk._verify_write_proof_shape(node)
         self.assertTrue(any("no assertEqual" in e for e in errors))
 
+    def test_with_user_called_but_not_chained_to_the_write_is_flagged(self):
+        # Real gap found reviewing this checker: calling .with_user(...) on
+        # a throwaway expression while the actual .write(...) still runs
+        # through the original (often admin/default) recordset used to
+        # pass silently -- proving nothing about a non-default user's
+        # self-write actually working, exactly the "looks right, proves
+        # nothing" bug this linter's own docstring says it exists to catch.
+        node = _func_node(
+            "def test_self_write_works(self):\n"
+            "    other.with_user(other)\n"
+            "    user.write({'callsign': 'K6BP'})\n"
+            "    self.assertEqual(user.callsign, 'K6BP')\n"
+        )
+        errors = chk._verify_write_proof_shape(node)
+        self.assertTrue(any("not performed on the with_user" in e for e in errors))
+
+    def test_write_chained_through_an_intermediate_variable_is_still_proven(self):
+        # The two-step form (`switched = rec.with_user(other)` then
+        # `switched.write(...)`) is just as valid as the directly-chained
+        # form and must not be flagged as unchained.
+        node = _func_node(
+            "def test_self_write_works(self):\n"
+            "    switched = user.with_user(user)\n"
+            "    switched.write({'callsign': 'K6BP'})\n"
+            "    self.assertEqual(user.callsign, 'K6BP')\n"
+        )
+        self.assertEqual(chk._verify_write_proof_shape(node), [])
+
     def test_a_write_nested_in_a_try_block_is_still_found(self):
         # ast.walk() is breadth-first, not source order -- this is the
         # exact case the function's own comment documents needing a

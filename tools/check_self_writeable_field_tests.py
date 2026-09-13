@@ -173,12 +173,38 @@ def _find_tests_anchor(module_dir, anchor):
     return None, None, None
 
 
+def _expr_resolves_to_with_user(expr, with_user_vars):
+    """True if `expr` (an AST expression, e.g. the receiver of a `.write(...)`
+    call) is, or was assigned from, a `.with_user(...)` call -- either
+    chained directly (`rec.with_user(other).write(...)`) or via an
+    intermediate variable (`switched = rec.with_user(other)` then
+    `switched.write(...)`, resolved through `with_user_vars`)."""
+    for node in ast.walk(expr):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "with_user":
+            return True
+        if isinstance(node, ast.Name) and node.id in with_user_vars:
+            return True
+    return False
+
+
 def _verify_write_proof_shape(func_node):
     """Returns a list of missing-shape error strings (empty if the shape
     is satisfied)."""
     found_with_user = False
     write_lines = []
+    proven_write_lines = []
     assertion_lines = []
+
+    # First pass: collect any local variable that was assigned the result
+    # of a `.with_user(...)` call, so a two-step
+    # `switched = rec.with_user(other)` / `switched.write(...)` pattern is
+    # recognized, not just the directly-chained form.
+    with_user_vars = set()
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Assign) and _expr_resolves_to_with_user(node.value, ()):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    with_user_vars.add(target.id)
 
     # Two passes rather than one: ast.walk() is breadth-first, not source
     # order, so a write nested one level deeper (e.g. inside a `try:`)
@@ -189,15 +215,28 @@ def _verify_write_proof_shape(func_node):
         if isinstance(node, ast.Call):
             attr = getattr(node.func, "attr", "")
             if attr == "write":
-                write_lines.append(getattr(node, "lineno", 0))
+                lineno = getattr(node, "lineno", 0)
+                write_lines.append(lineno)
+                receiver = getattr(node.func, "value", None)
+                # bug-hunt (2026-09-13): a test can call BOTH .with_user(...)
+                # and .write(...) without the write ever actually running
+                # through the switched recordset -- e.g. a throwaway
+                # `other.with_user(other)` statement alongside a plain
+                # `self.partner.write(...)` still run as the test's default
+                # (often admin) user. Checking that both calls merely exist
+                # ANYWHERE in the function proves nothing; the write's own
+                # receiver must actually resolve to a with_user(...) switch.
+                if receiver is not None and _expr_resolves_to_with_user(receiver, with_user_vars):
+                    proven_write_lines.append(lineno)
             if attr == "with_user":
                 found_with_user = True
             if attr in WRITE_ASSERTIONS:
                 assertion_lines.append(getattr(node, "lineno", 0))
 
     found_write = bool(write_lines)
-    assertion_after_write = found_write and any(
-        a >= min(write_lines) for a in assertion_lines
+    write_chained_to_with_user = bool(proven_write_lines)
+    assertion_after_write = write_chained_to_with_user and any(
+        a >= min(proven_write_lines) for a in assertion_lines
     )
 
     errors = []
@@ -209,7 +248,16 @@ def _verify_write_proof_shape(func_node):
             "non-default user to prove the SELF write works for someone "
             "other than the record's creator/admin context"
         )
-    if found_write and not assertion_after_write:
+    elif found_write and not write_chained_to_with_user:
+        errors.append(
+            "calls both .write(...) and .with_user(...) but the write is not "
+            "performed on the with_user(...)-switched recordset (e.g. "
+            "`rec.with_user(other_user).write(...)`, or `switched = "
+            "rec.with_user(other_user)` then `switched.write(...)`) -- the "
+            "write must actually run as the switched user, not merely appear "
+            "in the same test as an unrelated with_user(...) call"
+        )
+    if found_write and write_chained_to_with_user and not assertion_after_write:
         errors.append(
             "has a .write(...) call but no assertEqual/assertTrue/assertFalse/"
             "assertIn/assertNotEqual AFTER it -- must prove the write actually "
