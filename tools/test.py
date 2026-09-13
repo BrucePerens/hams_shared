@@ -61,6 +61,7 @@ import os
 import pwd
 import queue
 import re
+import shutil
 # `resource` (used only inside preexec_odoo()'s post-fork preexec_fn, plus
 # the --internal-ns-init in-namespace init path below) is imported here at
 # module top rather than locally, same as `ctypes` above: both used to be
@@ -1484,6 +1485,75 @@ CREATE EXTENSION IF NOT EXISTS vector;
         check=True,
         env=env,
     )
+
+    # Bug-hunt fix (2026-09-13): see remove_stale_filestore()'s own docstring for the full
+    # reasoning -- DROP DATABASE never touches Odoo's on-disk filestore, so every real test run
+    # against the same db_name leaked its prior run's own now-unreferenced attachment blobs
+    # forever. Removing them right after the fresh CREATE DATABASE above closes that leak for
+    # this path (this script's own default/per-purpose db names), distinct from
+    # reap_stale_test_databases.py's own already-fixed leak for `tmp_`-prefixed scratch databases.
+    remove_stale_filestore(db_name)
+
+
+ODOO_FILESTORE_BASE = "/var/lib/odoo/.local/share/Odoo/filestore"
+
+
+def remove_stale_filestore(db_name, filestore_base=ODOO_FILESTORE_BASE):
+    """
+    Removes `filestore_base/db_name` if it exists -- best-effort, never raises.
+
+    `DROP DATABASE` (see `rebuild_db()`, this function's only real caller) has no concept of
+    Odoo's filestore; it only touches Postgres's own storage. Since `rebuild_db()` runs on every
+    single real test run against the SAME db_name (default "hams_test", or a per-purpose variant
+    like "hams_test_relay"), a freshly-recreated, empty database has zero `ir.attachment` rows
+    referencing any of the filestore blobs a PRIOR run's own test fixtures wrote there -- every
+    one of those becomes permanently orphaned garbage that nothing else ever cleans up, since
+    Odoo's own filestore GC only runs as a cron job inside a live instance against that instance's
+    own current DB, which a short-lived test run tears down long before any cron would fire.
+    Found live: `hams_test`'s own filestore had grown to 2.3GB, plus ~470MB more across 8 other
+    orphaned *-suffixed test-db filestores with no database left at all (dropped by a run that
+    used a different `--db` value once), on a /var partition already tight on space (see
+    `hams-devbox-var-partition-small`). This is the exact same bug class
+    `reap_stale_test_databases.py`'s own `ODOO_FILESTORE_BASE` fix closed for `tmp_`-prefixed
+    scratch databases on 2026-09-08 -- that reaper structurally only ever touches `tmp_`-prefixed
+    names (a deliberate destructive-operation allowlist), so it was blind to this script's own
+    non-`tmp_`-prefixed default db names.
+
+    Best-effort by design: a failure here should never abort an otherwise-working test run, only
+    leave the old blobs in place (the pre-existing, if wasteful, behavior) for the reaper or a
+    manual cleanup to catch instead.
+
+    This runs as whichever OS user invoked test.py -- sometimes `odoo` (already the filestore's
+    owner, per an outer `sudo -u odoo ...` invocation), sometimes `bruce` (who lacks write access
+    to `odoo:odoo`-owned files, confirmed empirically: 775 permissions, `bruce` in neither the
+    owning user nor group). Tries the plain, no-elevation removal first (the common,
+    already-correct case when already running as `odoo`); only escalates via a non-interactive
+    `sudo -n` on a real `PermissionError`, rather than assuming which user this runs as. `-n`
+    matches this codebase's own established convention (e.g.
+    `reap_stale_test_databases.py`'s `sudo -n -u postgres psql`) for "fail fast, never block on an
+    interactive password/polkit prompt" in an unattended script.
+    """
+    filestore_dir = os.path.join(filestore_base, db_name)
+    if not os.path.isdir(filestore_dir):
+        return
+    try:
+        shutil.rmtree(filestore_dir)
+        print(f"[*] Removed stale filestore for {db_name!r} ({filestore_dir}).")
+    except PermissionError:
+        result = subprocess.run(
+            ["sudo", "-n", "rm", "-rf", "--", filestore_dir],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and not os.path.isdir(filestore_dir):
+            print(f"[*] Removed stale filestore for {db_name!r} ({filestore_dir}) via sudo.")
+        else:
+            print(
+                f"⚠️  WARNING: could not remove stale filestore {filestore_dir} "
+                f"(direct write denied, sudo -n also failed: {result.stderr.strip()})"
+            )
+    except OSError as e:
+        print(f"⚠️  WARNING: could not remove stale filestore {filestore_dir}: {e}")
 
 
 def setup_namespace_and_run_tests(real_log_dir, sys_args):

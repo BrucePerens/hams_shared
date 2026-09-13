@@ -359,5 +359,96 @@ class StartJulesDaemonsInjectionTests(unittest.TestCase):
         self.assertNotIn("os.system('touch /tmp/pwned')\n", script)
 
 
+class RemoveStaleFilestoreTests(unittest.TestCase):
+    """rebuild_db() used to DROP/CREATE the same-named database on every real test run without
+    ever touching its on-disk Odoo filestore -- since a fresh, empty database has zero
+    ir.attachment rows pointing at any of a prior run's own filestore blobs, those became
+    permanently orphaned garbage with no other cleanup path (found live: hams_test's own
+    filestore had grown to 2.3GB). remove_stale_filestore() is the fix, tested here in isolation
+    from rebuild_db()'s own daemon-starting/DB-rebuilding side effects."""
+
+    def test_no_op_when_filestore_directory_does_not_exist(self):
+        with tempfile.TemporaryDirectory() as base:
+            # Deliberately never create base/some_db -- the real, common case for a
+            # never-before-run db_name.
+            with patch.object(_test_runner.subprocess, "run") as mock_run:
+                _test_runner.remove_stale_filestore("some_db", filestore_base=base)
+            mock_run.assert_not_called()
+
+    def test_removes_a_real_directory_it_has_permission_to_delete(self):
+        with tempfile.TemporaryDirectory() as base:
+            target = os.path.join(base, "hams_test")
+            os.makedirs(os.path.join(target, "ab"))
+            with open(os.path.join(target, "ab", "cdef0123"), "w") as f:
+                f.write("stale attachment blob")
+
+            _test_runner.remove_stale_filestore("hams_test", filestore_base=base)
+
+            self.assertFalse(
+                os.path.isdir(target),
+                "a filestore directory the caller can already write to should be removed "
+                "directly, with no need to shell out to sudo at all",
+            )
+
+    def test_permission_error_falls_back_to_sudo_and_succeeds(self):
+        # Captured before patching: `patch.object(_test_runner.shutil, "rmtree", ...)` patches
+        # the one shared `shutil` module object in sys.modules (test.py's own `import shutil`
+        # and this test file's own are the same object) -- so `fake_run` below must not call
+        # `shutil.rmtree` by name, or it would recurse straight back into its own mock instead of
+        # performing the real removal it's meant to simulate `sudo -n rm -rf` doing.
+        real_rmtree = shutil.rmtree
+
+        with tempfile.TemporaryDirectory() as base:
+            target = os.path.join(base, "hams_test")
+            os.makedirs(target)
+
+            def fake_rmtree(path, *a, **kw):
+                raise PermissionError(f"[Errno 13] Permission denied: '{path}'")
+
+            def fake_run(cmd, **kwargs):
+                # Simulate `sudo -n rm -rf -- <target>` actually succeeding.
+                self.assertEqual(cmd[:4], ["sudo", "-n", "rm", "-rf"])
+                self.assertEqual(cmd[-1], target)
+                real_rmtree(target)
+                return MagicMock(returncode=0, stderr="")
+
+            with patch.object(_test_runner.shutil, "rmtree", side_effect=fake_rmtree), \
+                    patch.object(_test_runner.subprocess, "run", side_effect=fake_run):
+                _test_runner.remove_stale_filestore("hams_test", filestore_base=base)
+
+            self.assertFalse(
+                os.path.isdir(target),
+                "a PermissionError on the direct removal must fall back to a non-interactive "
+                "`sudo -n rm -rf` rather than silently giving up",
+            )
+
+    def test_permission_error_with_failing_sudo_warns_but_never_raises(self):
+        with tempfile.TemporaryDirectory() as base:
+            target = os.path.join(base, "hams_test")
+            os.makedirs(target)
+
+            def fake_rmtree(path, *a, **kw):
+                raise PermissionError(f"[Errno 13] Permission denied: '{path}'")
+
+            def fake_run(cmd, **kwargs):
+                # Simulate a real, non-NOPASSWD box: sudo -n fails immediately rather than
+                # blocking on an interactive prompt (the whole point of the -n flag).
+                return MagicMock(
+                    returncode=1, stderr="sudo: a password is required\n"
+                )
+
+            with patch.object(_test_runner.shutil, "rmtree", side_effect=fake_rmtree), \
+                    patch.object(_test_runner.subprocess, "run", side_effect=fake_run):
+                # Must not raise -- this is a best-effort cleanup step inside a real test run,
+                # and a cleanup failure must never abort the run it's cleaning up after.
+                _test_runner.remove_stale_filestore("hams_test", filestore_base=base)
+
+            self.assertTrue(
+                os.path.isdir(target),
+                "the directory should still be there -- this test only asserts the function "
+                "degrades gracefully, not that it magically succeeds anyway",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
