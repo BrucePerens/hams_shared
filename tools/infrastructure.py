@@ -2864,6 +2864,26 @@ WantedBy=multi-user.target
             "debian_name": "python3-pika",
             "environments": ["early_prod"],
         },
+        {
+            # Real, previously-masked missing dependency found 2026-09-13
+            # hardware-qualifying pi500-1 (a genuinely fresh Raspberry Pi 500):
+            # ham_onboarding/__manifest__.py declares a real external Python
+            # dependency on `fitz` (PyMuPDF's import name), but this MANIFEST
+            # never installed the apt package that actually provides it --
+            # `odoo -i ham_onboarding` failed outright on a fresh box with
+            # "Unable to install module... external dependency is not met:
+            # fitz". Never caught on the dev box because it already had
+            # python3-pymupdf/python3-fitz installed incidentally from
+            # unrelated prior work -- the same masking pattern this same
+            # qualification pass already found for python3-pypdf and
+            # python3-lxml-html-clean. python3-fitz (present on both Debian
+            # 12 bookworm, confirmed via apt-cache policy on pi500-1, and
+            # Debian 13 Trixie) provides the exact `fitz` import name the
+            # manifest checks for.
+            "name": "python3-fitz",
+            "debian_name": "python3-fitz",
+            "environments": ["early_prod"],
+        },
         {"name": "sqlite3", "debian_name": "sqlite3", "environments": ["early_prod"]},
         {
             "name": "pdns-server",

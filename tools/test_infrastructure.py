@@ -917,5 +917,33 @@ class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
         self.assertTrue(init_calls, "expected the actual `odoo -i ...` init call to still run")
 
 
+class AptPackagesManifestTests(unittest.TestCase):
+    def test_python3_fitz_is_installed_for_ham_onboardings_real_external_dependency(self):
+        # Real, previously-masked missing dependency found 2026-09-13 hardware-
+        # qualifying pi500-1 (a genuinely fresh Raspberry Pi 500):
+        # ham_onboarding/__manifest__.py declares a real external Python
+        # dependency on `fitz` (PyMuPDF's import name), but this project's own
+        # apt_packages MANIFEST never installed the package that provides it --
+        # `odoo -i ham_onboarding` failed on a fresh box with "external
+        # dependency is not met: fitz". Never caught on the dev box because it
+        # already had python3-pymupdf/python3-fitz installed incidentally from
+        # unrelated prior work. This is a narrow regression guard for this one
+        # real finding, not a general manifest-vs-apt-packages cross-checker
+        # (a real, separate, larger undertaking -- most external_dependencies
+        # entries don't share their apt package's name 1:1, e.g. "yaml" vs
+        # "python3-yaml", so a general check needs a real name-mapping table,
+        # not attempted here).
+        fitz_entries = [
+            pkg for pkg in infra.MANIFEST["apt_packages"]
+            if pkg.get("debian_name") == "python3-fitz"
+        ]
+        self.assertTrue(
+            fitz_entries,
+            "expected an apt_packages MANIFEST entry installing python3-fitz "
+            "for ham_onboarding's real fitz/PyMuPDF dependency",
+        )
+        self.assertIn("early_prod", fitz_entries[0]["environments"])
+
+
 if __name__ == "__main__":
     unittest.main()
