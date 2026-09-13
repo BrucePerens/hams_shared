@@ -278,8 +278,64 @@ def hook_install_pg_key(env_vars, dest_dir, path, run_cmd_func):
     safe_remove(path)
 
 
+# Debian's own dpkg-architecture CPU names -> kopia's own GitHub release
+# asset-name suffix (github.com/kopia/kopia/releases -- kopia-<version>-linux-<suffix>.tar.gz).
+# The two naming schemes only coincide by accident for arm64; amd64 vs x64 do not match at
+# all. See _kopia_release_arch's own docstring for the real bug this closes.
+_KOPIA_ARCH_SUFFIX_BY_DEB_ARCH = {
+    "amd64": "x64",
+    "arm64": "arm64",
+    "armhf": "arm",
+}
+
+
+def _kopia_release_arch(env_vars):
+    """
+    Resolves this machine's real CPU architecture to kopia's own GitHub
+    release asset-name suffix (e.g. "x64" for amd64, "arm64" for arm64,
+    "arm" for armhf) -- NOT the same string as Debian's own
+    dpkg-architecture naming, which this function starts from but then maps.
+
+    Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1 (a
+    Raspberry Pi 500, aarch64): the kopia download URL and this hook's own
+    internal tar-extraction path were both hardcoded to
+    "kopia-0.23.1-linux-x64" (an x86_64 binary) unconditionally, regardless
+    of the real machine architecture. `tar`/`chmod` both "succeeded" (they
+    don't care what architecture a file is), but the installed
+    `/usr/bin/kopia` was a genuine x86_64 ELF binary on an aarch64 box --
+    confirmed directly (`file /usr/bin/kopia` reports "x86-64", and running
+    it fails with "Exec format error") -- a silent failure that would only
+    have surfaced later, whenever kopia was actually invoked for a real
+    backup, not at provisioning time. Never caught on the dev box because
+    it's genuinely x86_64, so the hardcoded suffix happened to be correct
+    there by coincidence.
+    """
+    if "DEB_TARGET_ARCH_CPU" not in env_vars:
+        res = subprocess.run(
+            ["dpkg-architecture", "-q", "DEB_TARGET_ARCH_CPU"],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode == 0:
+            env_vars["DEB_TARGET_ARCH_CPU"] = res.stdout.strip()
+    deb_arch = env_vars.get("DEB_TARGET_ARCH_CPU", "")
+    suffix = _KOPIA_ARCH_SUFFIX_BY_DEB_ARCH.get(deb_arch)
+    if suffix is None:
+        raise RuntimeError(
+            f"No known kopia release asset for Debian architecture {deb_arch!r} -- "
+            "refusing to guess and silently install a binary for the wrong "
+            "architecture (see _kopia_release_arch's own docstring for why that's "
+            "a real, previously-hit bug, not a hypothetical one). Add a real "
+            "mapping entry to _KOPIA_ARCH_SUFFIX_BY_DEB_ARCH once kopia publishes "
+            "a release for this architecture, or confirm one already exists under "
+            "a different name at https://github.com/kopia/kopia/releases."
+        )
+    return suffix
+
+
 def hook_install_kopia_binary(env_vars, dest_dir, path, run_cmd_func):
     try:
+        kopia_arch = env_vars.get("KOPIA_ARCH") or _kopia_release_arch(env_vars)
         target_dir = os.path.join(dest_dir, "usr/bin") if dest_dir else "/usr/bin"
         os.makedirs(target_dir, exist_ok=True)
         run_cmd_func(
@@ -290,7 +346,7 @@ def hook_install_kopia_binary(env_vars, dest_dir, path, run_cmd_func):
                 "-C",
                 target_dir,
                 "--strip-components=1",
-                "kopia-0.23.1-linux-x64/kopia",
+                f"kopia-0.23.1-linux-{kopia_arch}/kopia",
             ]
         )
         run_cmd_func(["chmod", "+x", os.path.join(target_dir, "kopia")])
@@ -676,7 +732,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/tmp/kopia.tar.gz",
-            "url": "https://github.com/kopia/kopia/releases/download/v0.23.1/kopia-0.23.1-linux-x64.tar.gz",
+            "url": "https://github.com/kopia/kopia/releases/download/v0.23.1/kopia-0.23.1-linux-{KOPIA_ARCH}.tar.gz",
             "owner": "root:root",
             "mode": "644",
             "environments": ["prod"],
@@ -3208,6 +3264,8 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
                 )
                 if res.returncode == 0:
                     env_vars["DEB_TARGET_ARCH_CPU"] = res.stdout.strip()
+            if "{KOPIA_ARCH}" in url and "KOPIA_ARCH" not in env_vars:
+                env_vars["KOPIA_ARCH"] = _kopia_release_arch(env_vars)
             download_file(format_env(url, env_vars), path, mode, env_vars)
         else:
             if (
@@ -3634,36 +3692,77 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault("CLOUDFLARE_TUNNEL_TOKEN", "none")
 
 
-# [@ANCHOR: infrastructure:_create_odoo_role_cmd]
-def _create_odoo_role_cmd(db_pass):
+# [@ANCHOR: infrastructure:_role_exists]
+def _role_exists(role_name):
     """
-    Builds the argv for a `psql -c` call that creates the `odoo` PostgreSQL
-    role with the given password, IF it doesn't already exist.
+    Checks (via a real, non-shell psql invocation) whether a PostgreSQL role
+    named role_name exists, mirroring _database_exists's own pattern exactly
+    -- see that function's docstring for why role_name is never spliced into
+    a SQL string or shell command line.
+    """
+    res = subprocess.run(
+        [
+            "sudo", "-u", "postgres", "psql",
+            "-v", f"role_name={role_name}",
+            "-tAc", "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = :'role_name'",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return res.returncode == 0 and res.stdout.strip() == "1"
+
+
+# [@ANCHOR: infrastructure:_create_odoo_role_if_missing]
+def _create_odoo_role_if_missing(run_cmd_func, db_pass):
+    """
+    Creates the `odoo` PostgreSQL role with the given password, IF it
+    doesn't already exist -- checked in Python via _role_exists() first
+    (mirroring _create_database_if_missing's own pattern), not via a SQL-side
+    IF NOT EXISTS.
+
+    Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1 (a
+    genuinely fresh Raspberry Pi 500): the prior version of this function
+    wrapped the CREATE ROLE in a `DO $$...$$` PL/pgSQL block so the SQL
+    itself could check IF NOT EXISTS. That broke role creation outright on
+    any genuinely fresh box -- confirmed directly, not guessed: psql's own
+    `:'variable'` substitution (see the docstring this replaces, and
+    _database_exists's own docstring) does NOT apply inside a dollar-quoted
+    (`$$...$$`) string body, so `PASSWORD :'db_pass'` inside the DO block
+    was sent to the server as the literal, unsubstituted text `:'db_pass'`,
+    which PostgreSQL's own SQL parser then rejected outright with "syntax
+    error at or near ':'" -- a hard failure at parse time, before the IF
+    NOT EXISTS check ever even ran. This was never caught on the dev box
+    because its own `odoo` role already existed from unrelated prior
+    provisioning history -- masking the bug the same way this same
+    qualification pass already found for python3-pypdf and
+    python3-lxml-html-clean. This function's own existence-check-in-Python
+    approach sidesteps the dollar-quoting problem entirely: the real
+    `CREATE ROLE ... PASSWORD :'db_pass'` is now a plain top-level SQL
+    statement (not inside any dollar-quoted block), so psql's substitution
+    works exactly the way _database_exists's own sibling query already
+    relies on, verified working on this project's own CI.
 
     db_pass reaches here from env_vars["DB_PASS"] -- machine-generated via
     generate_secure_password() on a fresh box (safe: letters/digits only),
     but on a re-provisioned box it can instead come from an operator-edited
     *.env file (see load_and_prompt_env), which is NOT guaranteed to be free
-    of a single quote or other SQL-literal-breaking characters. The SQL
-    text itself never has db_pass spliced into it directly -- the value is
-    passed via psql's own `-v name=value` mechanism and referenced in the
-    SQL as `:'db_pass'`, which psql expands using proper SQL string-literal
-    quoting (quote_literal semantics) at parse time, regardless of what
-    characters the value contains. This replaces a prior version that
-    f-string-interpolated db_pass directly into `PASSWORD '{db_pass}'` --
-    a single quote in db_pass broke out of that literal and injected
-    arbitrary SQL, executed as the postgres superuser via `sudo -u
-    postgres`.
+    of a single quote or other SQL-literal-breaking characters. The SQL text
+    itself never has db_pass spliced into it directly -- the value is passed
+    via psql's own `-v name=value` mechanism and referenced in the SQL as
+    `:'db_pass'`, which psql expands using proper SQL string-literal quoting
+    (quote_literal semantics) at parse time, regardless of what characters
+    the value contains. (This safety property is unchanged from the prior
+    version -- only the broken dollar-quoted wrapping around it is gone.)
     """
-    sql_create_roles = (
-        "DO $$BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'odoo') "
-        "THEN CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD :'db_pass'; END IF; END$$;"
+    if _role_exists("odoo"):
+        return
+    run_cmd_func(
+        [
+            "sudo", "-u", "postgres", "psql",
+            "-v", f"db_pass={db_pass}",
+            "-c", "CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD :'db_pass';",
+        ]
     )
-    return [
-        "sudo", "-u", "postgres", "psql",
-        "-v", f"db_pass={db_pass}",
-        "-c", sql_create_roles,
-    ]
 
 
 # [@ANCHOR: infrastructure:_database_exists]
@@ -4049,7 +4148,7 @@ def provision_environment(
                     "[*] Bootstrapping initial Odoo PostgreSQL role and database (%s)...", db_name
                 )
                 db_pass = env_vars.get("DB_PASS", "odoo")
-                run_cmd_func(_create_odoo_role_cmd(db_pass))
+                _create_odoo_role_if_missing(run_cmd_func, db_pass)
 
                 if is_test:
                     _refuse_if_unsafe_test_db_drop(db_name)

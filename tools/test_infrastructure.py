@@ -304,19 +304,32 @@ class HookInstallKeyringTests(_TmpDirTestCase):
 
 
 class HookInstallKopiaBinaryTests(_TmpDirTestCase):
+    # KOPIA_ARCH is always passed explicitly in env_vars here (rather than left for
+    # _kopia_release_arch to auto-resolve via a real dpkg-architecture call) so these
+    # tests are deterministic regardless of the real architecture of whatever machine
+    # actually runs them -- _kopia_release_arch itself has its own dedicated tests below.
     def test_extracts_and_chmods_the_kopia_binary_via_run_cmd_func(self):
         archive_path = os.path.join(self.tmp, "kopia.tar.gz")
         with open(archive_path, "w") as f:
             f.write("fake archive bytes")
 
         mock_run = MagicMock()
-        infra.hook_install_kopia_binary({}, self.tmp, archive_path, mock_run)
+        infra.hook_install_kopia_binary({"KOPIA_ARCH": "arm64"}, self.tmp, archive_path, mock_run)
 
         target_dir = os.path.join(self.tmp, "usr", "bin")
         self.assertEqual(mock_run.call_count, 2)
         extract_cmd = mock_run.call_args_list[0][0][0]
         self.assertIn("tar", extract_cmd)
         self.assertIn(target_dir, extract_cmd)
+        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1 (a real
+        # Raspberry Pi 500, aarch64): this internal tar-extraction path used to be
+        # hardcoded to "kopia-0.23.1-linux-x64/kopia" regardless of the real machine
+        # architecture -- tar/chmod both "succeed" against the wrong-architecture
+        # binary (they don't inspect ELF headers), so the bug was silent until kopia
+        # was actually invoked later, when it failed with "Exec format error". Never
+        # caught on the dev box since it's genuinely x86_64. This asserts the real
+        # fix: the extracted path name matches the real (here, mocked) architecture.
+        self.assertIn("kopia-0.23.1-linux-arm64/kopia", extract_cmd)
         chmod_cmd = mock_run.call_args_list[1][0][0]
         self.assertEqual(chmod_cmd, ["chmod", "+x", os.path.join(target_dir, "kopia")])
         self.assertFalse(os.path.exists(archive_path))
@@ -326,8 +339,53 @@ class HookInstallKopiaBinaryTests(_TmpDirTestCase):
         with open(archive_path, "w") as f:
             f.write("fake archive bytes")
         mock_run = MagicMock(side_effect=RuntimeError("simulated tar failure"))
-        infra.hook_install_kopia_binary({}, self.tmp, archive_path, mock_run)  # must not raise
+        infra.hook_install_kopia_binary(
+            {"KOPIA_ARCH": "arm64"}, self.tmp, archive_path, mock_run
+        )  # must not raise
         self.assertFalse(os.path.exists(archive_path))
+
+    def test_an_unresolvable_architecture_is_swallowed_too_not_raised(self):
+        # hook_install_kopia_binary's own try/except covers _kopia_release_arch's
+        # deliberate RuntimeError for an unmapped architecture too, same as any other
+        # failure in this best-effort install -- it logs and cleans up rather than
+        # crashing the rest of provisioning over an optional backup tool.
+        archive_path = os.path.join(self.tmp, "kopia.tar.gz")
+        with open(archive_path, "w") as f:
+            f.write("fake archive bytes")
+        infra.hook_install_kopia_binary(
+            {"DEB_TARGET_ARCH_CPU": "riscv64"}, self.tmp, archive_path, MagicMock()
+        )  # must not raise
+        self.assertFalse(os.path.exists(archive_path))
+
+
+class KopiaReleaseArchTests(_SafePatchTestCase):
+    def test_maps_known_debian_architectures_to_kopias_own_asset_names(self):
+        self.assertEqual(infra._kopia_release_arch({"DEB_TARGET_ARCH_CPU": "amd64"}), "x64")
+        self.assertEqual(infra._kopia_release_arch({"DEB_TARGET_ARCH_CPU": "arm64"}), "arm64")
+        self.assertEqual(infra._kopia_release_arch({"DEB_TARGET_ARCH_CPU": "armhf"}), "arm")
+
+    def test_raises_rather_than_guessing_for_an_unknown_architecture(self):
+        # Real bug this whole function exists to close: silently falling back to
+        # "x64" (or any other guess) for an architecture kopia doesn't publish a
+        # release for would just reproduce the original wrong-binary bug under a
+        # different name. Fail loudly instead.
+        with self.assertRaises(RuntimeError):
+            infra._kopia_release_arch({"DEB_TARGET_ARCH_CPU": "riscv64"})
+
+    def test_resolves_deb_target_arch_cpu_itself_when_not_already_set(self):
+        env_vars = {}
+        mock_run = self.safe_patch_object(
+            infra.subprocess, "run",
+            return_value=MagicMock(returncode=0, stdout="arm64\n"),
+        )
+        result = infra._kopia_release_arch(env_vars)
+        mock_run.assert_called_once_with(
+            ["dpkg-architecture", "-q", "DEB_TARGET_ARCH_CPU"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result, "arm64")
+        self.assertEqual(env_vars["DEB_TARGET_ARCH_CPU"], "arm64")
 
 
 class HookDaemonsPermsTests(_TmpDirTestCase):
@@ -614,16 +672,26 @@ class LoadAndPromptEnvTests(_SafePatchTestCase):
         self.assertFalse(hasattr(infra, "getpass"))  # burn-ignore-introspection
 
 
-class CreateOdooRoleCmdTests(unittest.TestCase):
+class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
+    def _run(self, db_pass, role_already_exists):
+        mock_role_exists = self.safe_patch_object(
+            infra, "_role_exists", return_value=role_already_exists
+        )
+        mock_run_cmd_func = MagicMock()
+        infra._create_odoo_role_if_missing(mock_run_cmd_func, db_pass)
+        mock_role_exists.assert_called_once_with("odoo")
+        return mock_run_cmd_func
+
     def test_a_single_quote_in_db_pass_does_not_reach_the_sql_text_unescaped(self):
-        # Regression test for a real SQL-injection bug: the prior code
-        # f-string-interpolated db_pass directly into
+        # Regression test for a real SQL-injection bug: an older version of
+        # this code f-string-interpolated db_pass directly into
         # `PASSWORD '{db_pass}'`, so a password containing a single quote
         # broke out of the SQL string literal and injected arbitrary SQL,
         # executed as the postgres superuser via `sudo -u postgres`.
         malicious_pass = "x'; DROP TABLE pg_roles; --"
-        cmd = infra._create_odoo_role_cmd(malicious_pass)
+        mock_run_cmd_func = self._run(malicious_pass, role_already_exists=False)
 
+        cmd = mock_run_cmd_func.call_args[0][0]
         sql_text = cmd[cmd.index("-c") + 1]
         self.assertNotIn(malicious_pass, sql_text)
         self.assertIn(":'db_pass'", sql_text)
@@ -635,9 +703,55 @@ class CreateOdooRoleCmdTests(unittest.TestCase):
         self.assertEqual(v_value, f"db_pass={malicious_pass}")
 
     def test_normal_password_still_produces_a_working_command_shape(self):
-        cmd = infra._create_odoo_role_cmd("normalPass123")
+        cmd = self._run("normalPass123", role_already_exists=False).call_args[0][0]
         self.assertEqual(cmd[:4], ["sudo", "-u", "postgres", "psql"])
         self.assertIn("db_pass=normalPass123", cmd)
+
+    def test_role_creation_sql_is_not_wrapped_in_a_dollar_quoted_do_block(self):
+        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1 (a
+        # genuinely fresh Raspberry Pi 500): the prior version wrapped this
+        # CREATE ROLE in a `DO $$...$$` PL/pgSQL block so the SQL itself
+        # could check IF NOT EXISTS -- but psql's own `:'variable'`
+        # substitution does not apply inside a dollar-quoted string body,
+        # so `PASSWORD :'db_pass'` reached the server as the literal,
+        # unsubstituted text, which PostgreSQL's parser rejected outright
+        # with "syntax error at or near ':'" -- breaking role creation on
+        # every genuinely fresh box. Never caught on the dev box because
+        # its own `odoo` role already existed from unrelated prior history.
+        # This asserts the real fix: no dollar-quoting anywhere in the SQL.
+        cmd = self._run("normalPass123", role_already_exists=False).call_args[0][0]
+        sql_text = cmd[cmd.index("-c") + 1]
+        self.assertNotIn("$$", sql_text, f"SQL must not use dollar-quoting: {sql_text!r}")
+        self.assertNotIn("DO ", sql_text, f"SQL must not be a DO block: {sql_text!r}")
+        self.assertIn("CREATE ROLE odoo", sql_text)
+
+    def test_skips_creation_entirely_when_the_role_already_exists(self):
+        mock_run_cmd_func = self._run("normalPass123", role_already_exists=True)
+        mock_run_cmd_func.assert_not_called()
+
+
+class RoleExistsTests(_SafePatchTestCase):
+    def test_never_splices_role_name_into_a_shell_or_sql_string(self):
+        malicious_name = "x'; DROP TABLE pg_roles; --"
+        mock_run = self.safe_patch_object(
+            infra.subprocess, "run",
+            return_value=MagicMock(returncode=0, stdout="1\n"),
+        )
+        result = infra._role_exists(malicious_name)
+        self.assertTrue(result)
+
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("bash", cmd, f"expected no shell invocation: {cmd!r}")
+        sql_text = cmd[cmd.index("-tAc") + 1]
+        self.assertNotIn(malicious_name, sql_text)
+        self.assertIn(":'role_name'", sql_text)
+
+    def test_returns_false_when_the_role_is_absent(self):
+        self.safe_patch_object(
+            infra.subprocess, "run",
+            return_value=MagicMock(returncode=0, stdout=""),
+        )
+        self.assertFalse(infra._role_exists("odoo"))
 
 
 class DatabaseExistsAndOwnerTests(_SafePatchTestCase):
