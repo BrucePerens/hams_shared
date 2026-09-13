@@ -410,7 +410,21 @@ def find_anchors_in_code(root_dir, repo_root):
             if file == "LLM_LINTER_GUIDE.md" or file == "documentation.html":
                 continue
 
-            if file.endswith((".py", ".js", ".xml", ".html")):
+            # Bug-hunt fix, 2026-09-13: `.rs` was never in this tuple, so this scan (the one that
+            # builds `code_anchors`, the ground truth every doc/claim reference is checked
+            # against) has always been completely blind to Rust source -- `get_module()`'s own
+            # `daemons/<crate>` special-case above already implies Rust was meant to be in scope.
+            # Concretely: every real `[@ANCHOR: ...]` in `daemons/ham_digital_modes/src/**/*.rs`
+            # (`ear_protection`, `div_round_i128`, etc. -- all genuinely present in the source,
+            # confirmed by direct `grep`) was invisible to `code_anchors`, so every claim
+            # documenting one of them was unconditionally reported "missing from operational
+            # source code" by `_report_documentation_gaps` regardless of the real code, a
+            # permanent false-positive baked into this checker rather than a real gap in the
+            # crate's own anchors. `_process_file_for_anchors` below is a plain per-line regex
+            # scan classified by preceding-text markers ("Tests"/"Verified by"), not a
+            # language-aware parser -- nothing in it assumes Python/XML/JS syntax specifically, so
+            # it applies to `//`-commented Rust anchors unchanged.
+            if file.endswith((".py", ".js", ".xml", ".html", ".rs")):
                 full_path = os.path.join(root, file)
                 try:
                     with open(full_path, "r", encoding="utf-8") as f:
