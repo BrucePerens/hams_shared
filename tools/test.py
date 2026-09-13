@@ -78,7 +78,6 @@ import re
 # preexec_fn runs, so referencing `ctypes.CDLL(...)` / `resource.setrlimit(...)`
 # post-fork is a plain global name lookup, not a real import.
 import resource
-import shutil
 import signal
 import socket
 import subprocess
@@ -1402,20 +1401,6 @@ def wait_for_socket(sock_path, name, timeout=60.0):
     return False
 
 
-def get_pg_bin(name):
-    """Locate a PostgreSQL binary reliably across different distributions."""
-    paths = glob.glob(f"/usr/lib/postgresql/*/bin/{name}")
-    if paths:
-        return sorted(paths)[-1]
-    res = shutil.which(name)
-    if not res:
-        for p in [f"/usr/bin/{name}", f"/usr/local/bin/{name}"]:
-            if os.path.exists(p):
-                return p
-        raise FileNotFoundError(f"Could not find PostgreSQL binary: {name}")
-    return res
-
-
 _SAFE_DB_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -1481,7 +1466,7 @@ def rebuild_db(db_name):
             _logger.warning("Daemon flush exception: %s", e)
 
     try:
-        psql_cmd = get_pg_bin("psql")
+        psql_cmd = infrastructure.get_pg_bin("psql")
     except FileNotFoundError as e:
         print(f"❌ ERROR: {e}")
         sys.exit(1)
@@ -1667,7 +1652,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
     # 3. PostgreSQL Sandboxing
     try:
-        psql_cmd = get_pg_bin("psql")
+        psql_cmd = infrastructure.get_pg_bin("psql")
     except FileNotFoundError as e:
         print(f"❌ ERROR: {e}")
         sys.exit(1)
