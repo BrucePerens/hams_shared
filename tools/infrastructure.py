@@ -2110,6 +2110,80 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
+            # Independent cadence from fcc.uls.sync deliberately -- that
+            # daemon polls continuously (Restart=always/RestartSec=10, cheap
+            # per-attempt thanks to its own ETag/Last-Modified short-circuit)
+            # for latency-sensitive FCC data freshness. Geo-enrichment has no
+            # such latency need (docs/proposals/FCC_INGESTION_GEO_ENRICHMENT.md:
+            # congressional-district boundaries only change on redistricting,
+            # not per-record), each run does a real incremental search_read
+            # over ham.callbook plus a live per-address call to the Census
+            # Bureau's free public API (be polite, not a bulk API meant for
+            # hammering per main.py's own docstring) -- a fast restart-loop
+            # cadence would be wasteful DB/API load for no real freshness
+            # benefit. A daily oneshot+timer (the au.callsign.sync/br.anatel
+            # pattern) comfortably keeps up with same-day FCC ingestion.
+            "path": "/opt/hams/systemd/callbook.geo.enrich.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Callbook Congressional District / County Geo-Enrichment (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/ham_callbook_geo_enrich
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=callbook_geo_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_geo_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/ham_callbook_geo_enrich/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=callbook.geo.enrich
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/callbook.geo.enrich.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio Callbook Geo-Enrichment Daily (Incremental)
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/systemd/ised.canada.sync.service",
             "content": """\
 [Unit]
