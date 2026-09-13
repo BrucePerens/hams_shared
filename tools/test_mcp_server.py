@@ -12,6 +12,7 @@ import importlib
 import subprocess
 import threading
 import time
+import traceback
 from contextlib import redirect_stdout, redirect_stderr
 
 from mcp.server.fastmcp import FastMCP, Context
@@ -120,7 +121,17 @@ def run_tests(module_names: str, ctx: Context) -> str:
             runner = unittest.TextTestRunner(stream=sys.stdout, verbosity=2)
             runner.run(suite)
         except Exception:  # audit-ignore-catch-all
+            # Real bug found live, 2026-09-13: this used to only log via
+            # _logger.exception (server-side only) and return whatever had
+            # already been written to `out` before the crash -- often empty,
+            # since discovery can fail before any test output is produced at
+            # all. The calling agent got back an empty or truncated string
+            # with zero indication a crash happened, indistinguishable from
+            # "ran cleanly, nothing to report." Writing the traceback into
+            # the same buffer the caller actually reads means a real
+            # discovery/runner crash is never silently invisible to them.
             _logger.exception("Error running tests:")
+            out.write(f"\n[MCP SERVER ERROR] run_tests crashed:\n{traceback.format_exc()}")
 
     return out.getvalue()
 
@@ -200,7 +211,14 @@ def update_modules(module_names: str) -> str:
                 else:
                     print(f"Modules not found in database: {module_names}")
         except Exception:  # audit-ignore-catch-all
+            # Same real bug as run_tests's own fix above, more consequential here:
+            # button_immediate_upgrade() raising left the caller with an EMPTY
+            # returned string (nothing is printed before the search/upgrade call
+            # succeeds), indistinguishable from "nothing to do" -- for a real DB
+            # mutation, that's a caller silently believing an upgrade succeeded
+            # when it actually crashed.
             _logger.exception("Error updating modules:")
+            out.write(f"\n[MCP SERVER ERROR] update_modules crashed:\n{traceback.format_exc()}")
 
     return out.getvalue()
 
@@ -225,7 +243,9 @@ def reload_test_files(module_names: str) -> str:
                 except ImportError:
                     print(f"Failed to reload tests for {mod_name}")
         except Exception:  # audit-ignore-catch-all
+            # Same real bug as run_tests/update_modules above.
             _logger.exception("Error reloading test files:")
+            out.write(f"\n[MCP SERVER ERROR] reload_test_files crashed:\n{traceback.format_exc()}")
     return out.getvalue()
 
 

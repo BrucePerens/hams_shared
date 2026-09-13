@@ -60,5 +60,62 @@ class KillServerOrderingTests(unittest.TestCase):
             self.assertTrue(killed_event.wait(timeout=3.0), "os.killpg was never called")
 
 
+class CrashVisibilityTests(unittest.TestCase):
+    """Real bug found live, 2026-09-13: run_tests/update_modules/reload_test_files each
+    caught any unexpected exception with `except Exception: _logger.exception(...)`, then
+    returned whatever had already been written to their own output buffer -- often empty,
+    since a crash during discovery/registry setup happens before any real output is
+    produced. The calling MCP client got back an empty or truncated string,
+    indistinguishable from "ran cleanly, nothing to report." Each tool now also writes the
+    traceback into its own returned buffer, so a real crash is never silently invisible to
+    the caller. None of these bootstrap a live Odoo registry -- each mocks out exactly the
+    call that would otherwise need one, so the crash path is exercised without one."""
+
+    def test_run_tests_reports_a_discovery_crash_in_its_own_return_value(self):
+        fake_module = mock.Mock()
+        fake_module.__file__ = "/fake/path/tests/__init__.py"
+        with mock.patch.object(
+            test_mcp_server.importlib, "import_module", return_value=fake_module
+        ), mock.patch.object(
+            test_mcp_server.unittest.defaultTestLoader,
+            "discover",
+            side_effect=RuntimeError("boom: discovery exploded"),
+        ):
+            result = test_mcp_server.run_tests("some_module", mock.Mock())
+        self.assertIn("MCP SERVER ERROR", result)
+        self.assertIn("run_tests crashed", result)
+        self.assertIn("boom: discovery exploded", result)
+
+    def test_update_modules_reports_a_registry_crash_in_its_own_return_value(self):
+        # odoo.registry is resolved lazily (Odoo's own namespace-package
+        # __getattr__), not a real static attribute -- mock.patch.object's
+        # getattr-based lookup can't see it, but it still works to call and to
+        # assign, so patch it with create=True instead.
+        with mock.patch.object(
+            test_mcp_server.odoo,
+            "registry",
+            create=True,
+            side_effect=RuntimeError("boom: registry exploded"),
+        ):
+            result = test_mcp_server.update_modules("some_module")
+        self.assertIn("MCP SERVER ERROR", result)
+        self.assertIn("update_modules crashed", result)
+        self.assertIn("boom: registry exploded", result)
+
+    def test_reload_test_files_reports_a_reload_crash_in_its_own_return_value(self):
+        fake_module = mock.Mock()
+        with mock.patch.object(
+            test_mcp_server.importlib, "import_module", return_value=fake_module
+        ), mock.patch.object(
+            test_mcp_server.importlib,
+            "reload",
+            side_effect=RuntimeError("boom: reload exploded"),
+        ):
+            result = test_mcp_server.reload_test_files("some_module")
+        self.assertIn("MCP SERVER ERROR", result)
+        self.assertIn("reload_test_files crashed", result)
+        self.assertIn("boom: reload exploded", result)
+
+
 if __name__ == "__main__":
     unittest.main()
