@@ -692,12 +692,12 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         mock_run_cmd_func = self._run(malicious_pass, role_already_exists=False)
 
         cmd = mock_run_cmd_func.call_args[0][0]
-        sql_text = cmd[cmd.index("-c") + 1]
+        sql_text = mock_run_cmd_func.call_args.kwargs["input"]
         self.assertNotIn(malicious_pass, sql_text)
         self.assertIn(":'db_pass'", sql_text)
 
         # The raw value is instead passed via psql's own `-v` mechanism,
-        # which the -c SQL text references as `:'db_pass'` -- psql itself
+        # which the SQL text references as `:'db_pass'` -- psql itself
         # (not this code) applies SQL-literal quoting at expansion time.
         v_value = cmd[cmd.index("-v") + 1]
         self.assertEqual(v_value, f"db_pass={malicious_pass}")
@@ -719,11 +719,28 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         # every genuinely fresh box. Never caught on the dev box because
         # its own `odoo` role already existed from unrelated prior history.
         # This asserts the real fix: no dollar-quoting anywhere in the SQL.
-        cmd = self._run("normalPass123", role_already_exists=False).call_args[0][0]
-        sql_text = cmd[cmd.index("-c") + 1]
+        call = self._run("normalPass123", role_already_exists=False).call_args
+        sql_text = call.kwargs["input"]
         self.assertNotIn("$$", sql_text, f"SQL must not use dollar-quoting: {sql_text!r}")
         self.assertNotIn("DO ", sql_text, f"SQL must not be a DO block: {sql_text!r}")
         self.assertIn("CREATE ROLE odoo", sql_text)
+
+    def test_role_creation_sql_is_not_passed_via_dash_c(self):
+        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1,
+        # discovered only AFTER the dollar-quoting fix above still failed
+        # identically on a real, genuinely fresh Postgres 18 instance:
+        # psql's `:'variable'` substitution does not apply at all when SQL
+        # is passed via `-c` (confirmed directly with a bare
+        # `psql -v x=hello -c "SELECT :'x';"`, which fails with the
+        # identical syntax error the dollar-quoting bug produced, on both a
+        # real Raspberry Pi 500 and the x86_64 dev box, same psql version)
+        # -- only when the SQL is read as a script over stdin. This asserts
+        # the real, complete fix: -c is gone from the argv, the SQL goes
+        # over stdin (`input=`) instead.
+        call = self._run("normalPass123", role_already_exists=False).call_args
+        cmd = call.args[0]
+        self.assertNotIn("-c", cmd, f"SQL must not be passed via -c: {cmd!r}")
+        self.assertIn("input", call.kwargs, "SQL must be piped over stdin instead")
 
     def test_skips_creation_entirely_when_the_role_already_exists(self):
         mock_run_cmd_func = self._run("normalPass123", role_already_exists=True)
@@ -741,8 +758,14 @@ class RoleExistsTests(_SafePatchTestCase):
         self.assertTrue(result)
 
         cmd = mock_run.call_args[0][0]
+        kwargs = mock_run.call_args.kwargs
         self.assertNotIn("bash", cmd, f"expected no shell invocation: {cmd!r}")
-        sql_text = cmd[cmd.index("-tAc") + 1]
+        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: see
+        # CreateOdooRoleIfMissingTests.test_role_creation_sql_is_not_passed_via_dash_c
+        # for the full investigation -- `:'variable'` substitution never applies via
+        # `-c`/`-tAc`, only over stdin.
+        self.assertNotIn("-tAc", cmd)
+        sql_text = kwargs["input"]
         self.assertNotIn(malicious_name, sql_text)
         self.assertIn(":'role_name'", sql_text)
 
@@ -765,10 +788,19 @@ class DatabaseExistsAndOwnerTests(_SafePatchTestCase):
         self.assertTrue(result)
 
         cmd = mock_run.call_args[0][0]
-        # No shell is invoked at all (no "bash"/"-c" in the argv), and the
-        # SQL text itself never contains the raw malicious value.
+        kwargs = mock_run.call_args.kwargs
+        # No shell is invoked at all (no "bash" in the argv), and the SQL
+        # text itself never contains the raw malicious value.
         self.assertNotIn("bash", cmd)
-        sql_text = cmd[cmd.index("-tAc") + 1]
+        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: psql's
+        # `:'variable'` substitution does not apply at all when SQL is passed via
+        # `-c`/`-tAc` -- confirmed directly against a real Postgres 18 instance on
+        # both a real Raspberry Pi 500 and the x86_64 dev box -- only when it's
+        # read as a script over stdin. The SQL now goes over stdin (`input=`), and
+        # `-tAc` is gone from the argv entirely (replaced by the boolean `-tA`).
+        self.assertNotIn("-tAc", cmd)
+        self.assertIn("-tA", cmd)
+        sql_text = kwargs["input"]
         self.assertNotIn(malicious_name, sql_text)
         self.assertIn(":'db_name'", sql_text)
 
@@ -788,8 +820,12 @@ class DatabaseExistsAndOwnerTests(_SafePatchTestCase):
         infra._alter_database_owner_to_odoo(run_cmd, malicious_name)
 
         cmd = run_cmd.call_args[0][0]
+        kwargs = run_cmd.call_args.kwargs
         self.assertNotIn("bash", cmd)
-        sql_text = cmd[cmd.index("-c") + 1]
+        # Same real `-c` bug as _database_exists above, fixed the same way: the
+        # SQL is piped over stdin, not passed via -c.
+        self.assertNotIn("-c", cmd)
+        sql_text = kwargs["input"]
         self.assertNotIn(malicious_name, sql_text)
         self.assertIn(':"db_name"', sql_text)
         self.assertEqual(cmd[cmd.index("-v") + 1], f"db_name={malicious_name}")

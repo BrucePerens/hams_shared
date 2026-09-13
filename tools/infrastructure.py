@@ -3698,14 +3698,16 @@ def _role_exists(role_name):
     Checks (via a real, non-shell psql invocation) whether a PostgreSQL role
     named role_name exists, mirroring _database_exists's own pattern exactly
     -- see that function's docstring for why role_name is never spliced into
-    a SQL string or shell command line.
+    a SQL string or shell command line, and for the real `-c`/`-tAc` bug
+    this now avoids by piping the SQL over stdin instead.
     """
     res = subprocess.run(
         [
             "sudo", "-u", "postgres", "psql",
             "-v", f"role_name={role_name}",
-            "-tAc", "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = :'role_name'",
+            "-tA",
         ],
+        input="SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = :'role_name';\n",
         capture_output=True,
         text=True,
     )
@@ -3720,27 +3722,43 @@ def _create_odoo_role_if_missing(run_cmd_func, db_pass):
     (mirroring _create_database_if_missing's own pattern), not via a SQL-side
     IF NOT EXISTS.
 
-    Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1 (a
-    genuinely fresh Raspberry Pi 500): the prior version of this function
-    wrapped the CREATE ROLE in a `DO $$...$$` PL/pgSQL block so the SQL
-    itself could check IF NOT EXISTS. That broke role creation outright on
-    any genuinely fresh box -- confirmed directly, not guessed: psql's own
-    `:'variable'` substitution (see the docstring this replaces, and
-    _database_exists's own docstring) does NOT apply inside a dollar-quoted
-    (`$$...$$`) string body, so `PASSWORD :'db_pass'` inside the DO block
-    was sent to the server as the literal, unsubstituted text `:'db_pass'`,
-    which PostgreSQL's own SQL parser then rejected outright with "syntax
-    error at or near ':'" -- a hard failure at parse time, before the IF
-    NOT EXISTS check ever even ran. This was never caught on the dev box
-    because its own `odoo` role already existed from unrelated prior
-    provisioning history -- masking the bug the same way this same
-    qualification pass already found for python3-pypdf and
-    python3-lxml-html-clean. This function's own existence-check-in-Python
-    approach sidesteps the dollar-quoting problem entirely: the real
-    `CREATE ROLE ... PASSWORD :'db_pass'` is now a plain top-level SQL
-    statement (not inside any dollar-quoted block), so psql's substitution
-    works exactly the way _database_exists's own sibling query already
-    relies on, verified working on this project's own CI.
+    Two real bugs found and fixed 2026-09-13 hardware-qualifying pi500-1 (a
+    genuinely fresh Raspberry Pi 500), layered on top of each other:
+
+    1. The original version of this function wrapped the CREATE ROLE in a
+       `DO $$...$$` PL/pgSQL block so the SQL itself could check IF NOT
+       EXISTS. psql's own `:'variable'` substitution does not apply inside
+       a dollar-quoted (`$$...$$`) string body, so `PASSWORD :'db_pass'`
+       inside the DO block was sent to the server as the literal,
+       unsubstituted text, which PostgreSQL's own parser rejected outright
+       with "syntax error at or near ':'" before the IF NOT EXISTS check
+       ever ran. Fixed by moving the existence check into Python
+       (_role_exists, mirroring _create_database_if_missing's own pattern)
+       so the real CREATE ROLE could be a plain, non-dollar-quoted
+       statement.
+    2. That fix alone still failed identically -- re-tested and confirmed,
+       not assumed. Root-caused further: `:'variable'` substitution does
+       not apply AT ALL when the SQL is passed via `-c`/`-tAc` on the psql
+       command line, regardless of dollar-quoting -- confirmed with a bare
+       `sudo -u postgres psql -v x=hello -c "SELECT :'x';"`, which fails
+       with the identical syntax error, and the identical query piped over
+       stdin instead (`echo "SELECT :'x';" | psql -v x=hello`) succeeds.
+       This is a genuine, version-independent psql behavior (confirmed on
+       psql 18.6, the same version on both the dev box and pi500-1) -- not
+       a Pi/bookworm-specific quirk. Every one of this project's psql calls
+       using `:'var'`/`:"var"` substitution combined with `-c`/`-tAc`
+       (this function, _role_exists, _database_exists,
+       _alter_database_owner_to_odoo) had the identical, never-actually-
+       worked-on-a-fresh-box bug -- all fixed together the same way: the
+       SQL text now goes over stdin instead of `-c`/`-tAc`.
+
+    This was never caught on the dev box because its own `odoo` role
+    (and `hams_test`/`hams_prod` database) already existed from prior
+    history predating this whole `:'var'`-substitution mechanism --
+    masking the bug the same way this same qualification pass already
+    found for python3-pypdf and python3-lxml-html-clean: nobody had run
+    any of these four functions against a genuinely fresh Postgres
+    instance before.
 
     db_pass reaches here from env_vars["DB_PASS"] -- machine-generated via
     generate_secure_password() on a fresh box (safe: letters/digits only),
@@ -3750,9 +3768,11 @@ def _create_odoo_role_if_missing(run_cmd_func, db_pass):
     itself never has db_pass spliced into it directly -- the value is passed
     via psql's own `-v name=value` mechanism and referenced in the SQL as
     `:'db_pass'`, which psql expands using proper SQL string-literal quoting
-    (quote_literal semantics) at parse time, regardless of what characters
-    the value contains. (This safety property is unchanged from the prior
-    version -- only the broken dollar-quoted wrapping around it is gone.)
+    (quote_literal semantics) when the SQL is read as a script (stdin/`-f`),
+    regardless of what characters the value contains. This safety property
+    is unchanged from the prior version -- only the delivery mechanism
+    (stdin instead of `-c`) is different, since that's the one that
+    actually makes the substitution happen at all.
     """
     if _role_exists("odoo"):
         return
@@ -3760,8 +3780,9 @@ def _create_odoo_role_if_missing(run_cmd_func, db_pass):
         [
             "sudo", "-u", "postgres", "psql",
             "-v", f"db_pass={db_pass}",
-            "-c", "CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD :'db_pass';",
-        ]
+        ],
+        input="CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD :'db_pass';\n",
+        text=True,
     )
 
 
@@ -3770,16 +3791,20 @@ def _database_exists(db_name):
     """
     Checks (via a real, non-shell psql invocation) whether a PostgreSQL
     database named db_name exists, without ever splicing db_name into a SQL
-    string or a shell command line -- see _create_odoo_role_cmd's own
-    docstring for why that matters. db_name is the same
-    operator/*.env-controlled value as db_pass there.
+    string or a shell command line -- see _create_odoo_role_if_missing's own
+    docstring for why that matters, and for the real `-c`/`-tAc` bug this
+    now avoids by piping the SQL over stdin instead of passing it as a
+    `-tAc` argument (psql's `:'variable'` substitution does not apply at
+    all in `-c`/`-tAc` mode, confirmed directly, only when SQL is read as a
+    script over stdin or `-f`).
     """
     res = subprocess.run(
         [
             "sudo", "-u", "postgres", "psql",
             "-v", f"db_name={db_name}",
-            "-tAc", "SELECT 1 FROM pg_database WHERE datname = :'db_name'",
+            "-tA",
         ],
+        input="SELECT 1 FROM pg_database WHERE datname = :'db_name';\n",
         capture_output=True,
         text=True,
     )
@@ -3803,13 +3828,22 @@ def _alter_database_owner_to_odoo(run_cmd_func, db_name):
     shell-injection *and* SQL-injection vector, both closed by removing the
     shell entirely and letting psql's own variable substitution handle
     quoting.
+
+    The SQL is piped over stdin (`input=`) rather than passed via `-c` --
+    real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: psql's
+    `:'variable'`/`:"variable"` substitution does not apply at all when SQL
+    is passed via `-c`, confirmed directly (see _create_odoo_role_if_missing's
+    own docstring for the full investigation) -- only when it's read as a
+    script over stdin or `-f`. This call had the identical never-actually-
+    worked-on-a-fresh-box bug as the others.
     """
     run_cmd_func(
         [
             "sudo", "-u", "postgres", "psql",
             "-v", f"db_name={db_name}",
-            "-c", 'ALTER DATABASE :"db_name" OWNER TO odoo;',
-        ]
+        ],
+        input='ALTER DATABASE :"db_name" OWNER TO odoo;\n',
+        text=True,
     )
 
 
