@@ -3629,7 +3629,16 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault("REDIS_PORT", "6379")
         env_vars.setdefault("RABBITMQ_HOST", "rabbitmq")
         env_vars.setdefault("RMQ_PORT", "5672")
-        env_vars.setdefault("RMQ_USER", "guest")
+        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: this used to
+        # default to the literal "guest" (RabbitMQ's well-known factory-default account),
+        # which daemons/adif_processor/main.py's own _require_rabbitmq_credentials
+        # deliberately refuses to accept for either RMQ_USER or RMQ_PASS -- see
+        # _create_rabbitmq_user_if_missing's own docstring for the full investigation,
+        # including confirmation this was never actually working on the dev box either.
+        # A fixed, non-"guest" service-account name (mirroring DB_USER's own fixed "odoo"
+        # default) is fine here -- RabbitMQ usernames don't need generated entropy the way
+        # RMQ_PASS does.
+        env_vars.setdefault("RMQ_USER", "hams_rabbitmq")
         env_vars.setdefault("PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones")
         env_vars.setdefault("WS_PORT", "8080")
         env_vars.setdefault("PYTHONPYCACHEPREFIX", "/tmp/pycache")
@@ -3865,6 +3874,81 @@ def _alter_database_owner_to_odoo(run_cmd_func, db_name):
         input='ALTER DATABASE :"db_name" OWNER TO odoo;\n',
         text=True,
     )
+
+
+# [@ANCHOR: infrastructure:_rabbitmq_user_exists]
+def _rabbitmq_user_exists(user):
+    """
+    Checks (via `rabbitmqctl list_users --formatter json`) whether a
+    RabbitMQ user named `user` already exists.
+    """
+    res = subprocess.run(
+        ["rabbitmqctl", "list_users", "--formatter", "json"],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        return False
+    try:
+        users = json.loads(res.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return any(entry.get("user") == user for entry in users)
+
+
+# [@ANCHOR: infrastructure:_create_rabbitmq_user_if_missing]
+def _create_rabbitmq_user_if_missing(run_cmd_func, rmq_user, rmq_pass):
+    """
+    Creates (or, if it already exists, updates the password and re-grants
+    permissions for) a real RabbitMQ user matching RMQ_USER/RMQ_PASS, and
+    grants it full permissions on the default `/` vhost.
+
+    Real, previously-undiscovered gap found 2026-09-13 hardware-qualifying
+    pi500-1 (a genuinely fresh Raspberry Pi 500): this project's own
+    `daemons/adif_processor/main.py` refuses to start with RabbitMQ
+    credentials of literally "guest" for either RMQ_USER or RMQ_PASS
+    (`_require_rabbitmq_credentials`, a deliberate security check --
+    RabbitMQ's own well-known factory-default account), but
+    `load_and_prompt_env`'s own non-test defaults set `RMQ_USER` to the
+    literal string "guest" (`env_vars.setdefault("RMQ_USER", "guest")`),
+    and NO code anywhere in this file ever actually created a real RabbitMQ
+    user account for whatever RMQ_USER/RMQ_PASS ended up in env_vars --
+    provisioning wrote real env files but never provisioned RabbitMQ itself
+    to match. The result: `adif.processor.service` failed to start on a
+    genuinely fresh box with "RMQ_USER and RMQ_PASS must both be set to
+    real credentials -- refusing to fall back to the well-known
+    'guest'/'guest' default." Confirmed this was never actually working
+    anywhere, not just on this Pi: the dev box's own
+    `/opt/hams/etc/rabbitmq.env` has RMQ_USER=guest, RMQ_PASS=guest too, and
+    `systemctl status adif.processor.service` there reports
+    `inactive (dead)` -- this service has never successfully run on the
+    dev box either, simply because nobody had tried starting it fresh
+    before this qualification pass surfaced it.
+
+    Fixed in two parts: `load_and_prompt_env` (see its own comment) now
+    defaults RMQ_USER to a real, fixed, non-"guest" service-account name
+    instead of "guest" (mirroring DB_USER's own fixed "odoo" default --
+    RabbitMQ usernames don't need generated entropy the way passwords do),
+    and this new function actually provisions that account against the
+    real, running RabbitMQ server -- `add_user` if it doesn't exist yet,
+    `change_password` if it does (idempotent either way, matching
+    `_create_odoo_role_if_missing`'s own pattern), then
+    `set_permissions` granting it full access on the default `/` vhost
+    (this daemon's own connection string uses no other vhost).
+    """
+    if rmq_user == "guest":
+        raise RuntimeError(
+            "_create_rabbitmq_user_if_missing refuses to provision a RabbitMQ "
+            "account literally named 'guest' -- that defeats the entire point "
+            "of this function (see its own docstring for the real bug this "
+            "closes). Fix the caller's RMQ_USER default/config instead of "
+            "relaxing this check."
+        )
+    if _rabbitmq_user_exists(rmq_user):
+        run_cmd_func(["rabbitmqctl", "change_password", rmq_user, rmq_pass])
+    else:
+        run_cmd_func(["rabbitmqctl", "add_user", rmq_user, rmq_pass])
+    run_cmd_func(["rabbitmqctl", "set_permissions", "-p", "/", rmq_user, ".*", ".*", ".*"])
 
 
 # [@ANCHOR: infrastructure:_refuse_if_unsafe_test_db_drop]
@@ -4167,6 +4251,22 @@ def provision_environment(
                 f.write("NODE_IP_ADDRESS=127.0.0.1\n")
             if not is_isolated_ns:
                 run_cmd_func(["systemctl", "restart", "rabbitmq-server"])
+                # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: nothing
+                # here ever actually provisioned a real RabbitMQ user account matching
+                # whatever RMQ_USER/RMQ_PASS ended up in env_vars/the written env files --
+                # see _create_rabbitmq_user_if_missing's own docstring for the full
+                # investigation (this daemon-startup failure was never caught on the dev
+                # box either, since adif.processor.service had simply never been started
+                # there before).
+                rmq_user = env_vars.get("RMQ_USER", "")
+                rmq_pass = env_vars.get("RMQ_PASS", "")
+                if rmq_user and rmq_pass:
+                    _create_rabbitmq_user_if_missing(run_cmd_func, rmq_user, rmq_pass)
+                else:
+                    _logger.warning(
+                        "[*] Skipping RabbitMQ user provisioning -- RMQ_USER/RMQ_PASS "
+                        "not both present in env_vars."
+                    )
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to configure RabbitMQ bindings: %s", e)
 

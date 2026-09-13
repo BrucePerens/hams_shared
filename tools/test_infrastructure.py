@@ -917,6 +917,88 @@ class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
         self.assertTrue(init_calls, "expected the actual `odoo -i ...` init call to still run")
 
 
+class LoadAndPromptEnvRabbitmqUserDefaultTests(unittest.TestCase):
+    def test_rmq_user_defaults_to_a_real_non_guest_service_account(self):
+        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: this used
+        # to default to the literal "guest" (RabbitMQ's factory-default account),
+        # which daemons/adif_processor/main.py's own _require_rabbitmq_credentials
+        # deliberately refuses for either RMQ_USER or RMQ_PASS -- see
+        # _create_rabbitmq_user_if_missing's own docstring for the full
+        # investigation. Never caught on the dev box because adif.processor.service
+        # had simply never been started there either.
+        env_vars = {"DOMAIN": "hams.com"}
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertNotEqual(env_vars["RMQ_USER"], "guest")
+        self.assertTrue(env_vars["RMQ_USER"], "RMQ_USER must not be empty")
+
+
+class RabbitmqUserExistsTests(_SafePatchTestCase):
+    def test_returns_true_when_the_user_is_present(self):
+        self.safe_patch_object(
+            infra.subprocess, "run",
+            return_value=MagicMock(
+                returncode=0,
+                stdout='[\n{"user":"guest","tags":["administrator"]},\n{"user":"hams_rabbitmq","tags":[]}\n]',
+            ),
+        )
+        self.assertTrue(infra._rabbitmq_user_exists("hams_rabbitmq"))
+
+    def test_returns_false_when_the_user_is_absent(self):
+        self.safe_patch_object(
+            infra.subprocess, "run",
+            return_value=MagicMock(returncode=0, stdout='[\n{"user":"guest","tags":["administrator"]}\n]'),
+        )
+        self.assertFalse(infra._rabbitmq_user_exists("hams_rabbitmq"))
+
+    def test_returns_false_on_a_non_zero_exit_or_malformed_json(self):
+        self.safe_patch_object(
+            infra.subprocess, "run",
+            return_value=MagicMock(returncode=1, stdout=""),
+        )
+        self.assertFalse(infra._rabbitmq_user_exists("hams_rabbitmq"))
+
+        self.safe_patch_object(
+            infra.subprocess, "run",
+            return_value=MagicMock(returncode=0, stdout="not json"),
+        )
+        self.assertFalse(infra._rabbitmq_user_exists("hams_rabbitmq"))
+
+
+class CreateRabbitmqUserIfMissingTests(_SafePatchTestCase):
+    def test_refuses_to_provision_a_user_literally_named_guest(self):
+        # Real bug this whole function exists to close: provisioning "guest" as
+        # this project's own real service account would defeat the entire point
+        # -- adif_processor's own security check specifically rejects it.
+        with self.assertRaises(RuntimeError):
+            infra._create_rabbitmq_user_if_missing(MagicMock(), "guest", "somepass")
+
+    def test_adds_a_new_user_and_grants_permissions_when_absent(self):
+        self.safe_patch_object(infra, "_rabbitmq_user_exists", return_value=False)
+        run_cmd = MagicMock()
+        infra._create_rabbitmq_user_if_missing(run_cmd, "hams_rabbitmq", "realpass123")
+
+        calls = [c.args[0] for c in run_cmd.call_args_list]
+        self.assertIn(["rabbitmqctl", "add_user", "hams_rabbitmq", "realpass123"], calls)
+        self.assertNotIn(["rabbitmqctl", "change_password", "hams_rabbitmq", "realpass123"], calls)
+        self.assertIn(
+            ["rabbitmqctl", "set_permissions", "-p", "/", "hams_rabbitmq", ".*", ".*", ".*"],
+            calls,
+        )
+
+    def test_changes_the_password_and_re_grants_permissions_when_already_present(self):
+        self.safe_patch_object(infra, "_rabbitmq_user_exists", return_value=True)
+        run_cmd = MagicMock()
+        infra._create_rabbitmq_user_if_missing(run_cmd, "hams_rabbitmq", "realpass123")
+
+        calls = [c.args[0] for c in run_cmd.call_args_list]
+        self.assertIn(["rabbitmqctl", "change_password", "hams_rabbitmq", "realpass123"], calls)
+        self.assertNotIn(["rabbitmqctl", "add_user", "hams_rabbitmq", "realpass123"], calls)
+        self.assertIn(
+            ["rabbitmqctl", "set_permissions", "-p", "/", "hams_rabbitmq", ".*", ".*", ".*"],
+            calls,
+        )
+
+
 class AptPackagesManifestTests(unittest.TestCase):
     def test_python3_fitz_is_installed_for_ham_onboardings_real_external_dependency(self):
         # Real, previously-masked missing dependency found 2026-09-13 hardware-
