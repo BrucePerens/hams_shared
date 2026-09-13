@@ -152,10 +152,11 @@ fn has_test_attr(attrs: &[syn::Attribute]) -> bool {
         .any(|a| a.path().segments.last().is_some_and(|s| s.ident == "test"))
 }
 
-/// `#[cfg(test)]`, or any `#[cfg(...)]` whose argument tokens mention
-/// `test` at all (`#[cfg(any(test, feature = "..."))]` and similar real
-/// variants) -- a permissive superset, matching `has_test_attr` above.
-fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
+/// Whether any `#[cfg(...)]` attribute's argument tokens mention the
+/// bare identifier `ident` at all (e.g. `#[cfg(any(test, feature =
+/// "..."))]` for `ident = "test"`) -- a permissive superset, matching
+/// `has_test_attr`'s own reasoning above.
+fn has_cfg_mentioning(attrs: &[syn::Attribute], ident: &str) -> bool {
     attrs.iter().any(|a| {
         if !a.path().is_ident("cfg") {
             return false;
@@ -165,8 +166,26 @@ fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
         };
         tokens
             .into_iter()
-            .any(|tok| matches!(tok, proc_macro2::TokenTree::Ident(id) if id == "test"))
+            .any(|tok| matches!(tok, proc_macro2::TokenTree::Ident(id) if id == ident))
     })
+}
+
+/// `#[cfg(test)]`, or any `#[cfg(...)]` mentioning `test` at all.
+fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    has_cfg_mentioning(attrs, "test")
+}
+
+/// `#[cfg(kani)]`, or any `#[cfg(...)]` mentioning `kani` at all --
+/// this codebase's own real Kani formal-verification proof-harness
+/// convention (see `frequency_safety.rs`'s `mod kani_proofs`). A Kani
+/// proof is itself verification/test machinery, not runtime product
+/// logic, the same reasoning `has_cfg_test` already applies to
+/// `#[cfg(test)]` -- confirmed via `check_rust_function_test_anchors.py`
+/// flagging both `kani_proofs::*` functions as "unanchored" before this
+/// fix, the exact false-positive shape this scanner already avoids for
+/// `#[cfg(test)]` modules.
+fn has_cfg_kani(attrs: &[syn::Attribute]) -> bool {
+    has_cfg_mentioning(attrs, "kani")
 }
 
 /// Same backward-over-comment-lines lookback `_extend_span_backward_over_
@@ -219,7 +238,7 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
     for item in items {
         match item {
             syn::Item::Fn(f) => {
-                if has_test_attr(&f.attrs) || has_cfg_test(&f.attrs) {
+                if has_test_attr(&f.attrs) || has_cfg_test(&f.attrs) || has_cfg_kani(&f.attrs) {
                     continue;
                 }
                 let start = attrs_or_span_start_line(&f.attrs, f.sig.fn_token.span());
@@ -233,7 +252,7 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
                 });
             }
             syn::Item::Mod(m) => {
-                if has_cfg_test(&m.attrs) {
+                if has_cfg_test(&m.attrs) || has_cfg_kani(&m.attrs) {
                     continue;
                 }
                 if let Some((_, content)) = &m.content {
@@ -245,7 +264,7 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
                 let new_prefix = qualify(prefix, &type_name(&imp.self_ty));
                 for ii in &imp.items {
                     if let syn::ImplItem::Fn(m) = ii {
-                        if has_test_attr(&m.attrs) || has_cfg_test(&m.attrs) {
+                        if has_test_attr(&m.attrs) || has_cfg_test(&m.attrs) || has_cfg_kani(&m.attrs) {
                             continue;
                         }
                         let start = attrs_or_span_start_line(&m.attrs, m.sig.fn_token.span());
@@ -265,7 +284,7 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
                 for ti in &tr.items {
                     if let syn::TraitItem::Fn(m) = ti {
                         let Some(block) = &m.default else { continue };
-                        if has_test_attr(&m.attrs) || has_cfg_test(&m.attrs) {
+                        if has_test_attr(&m.attrs) || has_cfg_test(&m.attrs) || has_cfg_kani(&m.attrs) {
                             continue;
                         }
                         let start = attrs_or_span_start_line(&m.attrs, m.sig.fn_token.span());
@@ -376,6 +395,27 @@ mod tests {
     #[test]
     fn skips_a_bare_cfg_test_function_not_wrapped_in_a_cfg_test_module() {
         let entries = scan_source("#[cfg(test)]\nfn helper() {\n    1;\n}\n");
+        assert!(entries.is_empty());
+    }
+
+    /// Real bug found and fixed in `hams_local_relay`, 2026-09-13: `#[cfg(kani)] mod
+    /// kani_proofs { ... }` (this codebase's own real Kani formal-verification proof-harness
+    /// convention, e.g. `frequency_safety.rs`) was flagged as containing unanchored functions
+    /// -- the exact same false-positive shape `#[cfg(test)]` modules already avoid, since a
+    /// Kani proof is itself verification machinery, not runtime product logic needing its own
+    /// separate anchor+test.
+    #[test]
+    fn skips_functions_inside_a_cfg_kani_module() {
+        let entries = scan_source(
+            "fn real() {\n    1;\n}\n#[cfg(kani)]\nmod kani_proofs {\n    #[kani::proof]\n    fn proof_something() {\n        assert!(true);\n    }\n}\n",
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "real");
+    }
+
+    #[test]
+    fn skips_a_bare_cfg_kani_function_not_wrapped_in_a_cfg_kani_module() {
+        let entries = scan_source("#[cfg(kani)]\nfn proof_helper() {\n    1;\n}\n");
         assert!(entries.is_empty());
     }
 

@@ -33,6 +33,14 @@ and `tests/` (a crate's own top-level integration-test directory -- these ARE th
 analogue of Python's `test_*.py` and JS's `*.test.js` exclusions, applied by directory name since
 Rust's own convention places integration tests in a dedicated directory rather than a filename
 pattern).
+
+Real gap found and fixed 2026-09-13 (`hams_local_relay`'s own first full run against this scanner
+surfaced it): `fuzz/` (cargo-fuzz's own reserved top-level sub-crate directory, e.g.
+`fuzz/fuzz_targets/*.rs`) was missing from the same "not core product code" exclusion list
+`examples/`/`benches/` already get, and `build.rs` (cargo's own reserved build-script filename,
+compile-time codegen that never ships in the runtime binary) had no exclusion at all -- both were
+being flagged as needing a runtime anchor+test, which doesn't apply to either shape of code. Fixed
+by adding `fuzz` to `EXCLUDE_DIRS` and a `build.rs`-basename check alongside it.
 """
 
 import argparse
@@ -52,6 +60,7 @@ EXCLUDE_DIRS = {
     "examples",
     "benches",
     "tests",
+    "fuzz",
     "node_modules",
     "hams_community",
     "hams_com",
@@ -81,6 +90,12 @@ def _git_tracked_rust_files(repo_root):
     for rel in out.splitlines():
         parts = rel.split("/")
         if any(p in EXCLUDE_DIRS for p in parts):
+            continue
+        # `build.rs` (cargo's own reserved build-script filename, always run at compile time,
+        # never part of the shipped runtime binary) -- same "not core product code" exclusion
+        # as EXCLUDE_DIRS above, just filename- rather than directory-based since a build
+        # script is a single file at its own crate's root, not a whole subdirectory.
+        if os.path.basename(rel) == "build.rs":
             continue
         files.append(os.path.join(repo_root, rel))
     return files

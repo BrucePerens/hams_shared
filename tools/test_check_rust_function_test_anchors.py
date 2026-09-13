@@ -161,6 +161,32 @@ class ScanTreeTests(unittest.TestCase):
         gaps = crfta.scan_tree(self.tmp)
         self.assertEqual(gaps, {})
 
+    def test_a_fuzz_directory_is_excluded(self):
+        # Real gap found 2026-09-13: hams_local_relay's own `fuzz/fuzz_targets/
+        # rtty_round_trip.rs` was flagged as needing a runtime anchor+test before this fix --
+        # cargo-fuzz's own reserved sub-crate directory, same "not core product code" shape as
+        # examples/benches above.
+        _write(
+            os.path.join(self.tmp, "fuzz", "fuzz_targets", "demo.rs"),
+            f"fn fuzz_target(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = crfta.scan_tree(self.tmp)
+        self.assertEqual(gaps, {})
+
+    def test_a_build_rs_file_is_excluded(self):
+        # Real gap found 2026-09-13: hams_local_relay's own build.rs (compile-time codegen,
+        # never part of the shipped runtime binary) was flagged the same way -- a filename-based
+        # exclusion, not a directory one, since a build script is a single file at its crate's
+        # own root.
+        _write(
+            os.path.join(self.tmp, "build.rs"),
+            f"fn generate_table() {{\n    let x = 1;\n    {self._NONTRIVIAL_BODY};\n}}\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = crfta.scan_tree(self.tmp)
+        self.assertEqual(gaps, {})
+
     def test_a_syntax_error_file_is_skipped_not_crashed_on(self):
         _write(os.path.join(self.tmp, "broken.rs"), "fn broken( {\n    1\n")
         _init_git_repo(self.tmp)
