@@ -110,6 +110,20 @@ def provision():
         _logger.info("[*] Generating dummy python3-pypdf2 package for Debian compatibility")
         run_sys(["apt-get", "update", "-y"])
         run_sys(["apt-get", "install", "-y", "equivs"])
+        # Real, previously-masked ordering bug found 2026-09-13 hardware-qualifying pi500-1
+        # (Raspberry Pi 500, a genuinely fresh Debian 12 bookworm box): the equivs package
+        # built just below declares `Depends: python3-pypdf`, but that real package is only
+        # installed later, inside infrastructure.provision_environment()'s own apt_packages
+        # pass -- so `dpkg -i` on a fresh box fails outright with "python3-pypdf2 depends on
+        # python3-pypdf; however: Package python3-pypdf is not installed." This was never
+        # caught on the dev box because it already had python3-pypdf installed incidentally
+        # from unrelated prior work, masking the real ordering bug the same way this
+        # project's own install_debian_deps.sh has already documented for python3-numpy/
+        # autoconf/automake/libtool on a bare CI image. Install the real dependency here,
+        # explicitly, before building/installing the dummy compatibility package that needs
+        # it -- not duplicated later, since infrastructure.py's own MANIFEST-driven install of
+        # python3-pypdf is naturally a no-op once apt already has it satisfied.
+        run_sys(["apt-get", "install", "-y", "python3-pypdf"])
         equivs_config = (
             "Section: python\n"
             "Priority: optional\n"

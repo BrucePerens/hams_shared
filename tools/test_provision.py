@@ -161,6 +161,35 @@ class ProvisionDebianDummyPackageTests(ProvisionTestCase):
             f"expected a dpkg -i invocation, got: {commands_run}",
         )
 
+    def test_installs_the_real_python3_pypdf_before_dpkg_installs_the_dummy_package(self):
+        # Real ordering bug found 2026-09-13 hardware-qualifying pi500-1 (a genuinely
+        # fresh Raspberry Pi 500, Debian 12 bookworm): the equivs-built dummy
+        # python3-pypdf2 package declares `Depends: python3-pypdf`, but that real
+        # package was previously only installed later, inside
+        # infrastructure.provision_environment()'s own apt_packages pass -- so a
+        # fresh box's `dpkg -i` failed outright with "python3-pypdf2 depends on
+        # python3-pypdf; however: Package python3-pypdf is not installed." Never
+        # caught on the dev box because it already had python3-pypdf installed
+        # incidentally from unrelated prior work. This test asserts the real fix:
+        # python3-pypdf is installed explicitly, and strictly before the dpkg -i
+        # that needs it to already be present.
+        _, mock_subprocess = self.run_provision([], os_id="debian")
+        commands_run = [c.args[0] for c in mock_subprocess.run.call_args_list]
+        self.assertIn(
+            ["apt-get", "install", "-y", "python3-pypdf"],
+            commands_run,
+            f"expected an explicit python3-pypdf install, got: {commands_run}",
+        )
+        pypdf_index = commands_run.index(["apt-get", "install", "-y", "python3-pypdf"])
+        dpkg_indices = [i for i, cmd in enumerate(commands_run) if cmd[:2] == ["dpkg", "-i"]]
+        self.assertTrue(dpkg_indices, f"expected a dpkg -i invocation, got: {commands_run}")
+        self.assertLess(
+            pypdf_index,
+            dpkg_indices[0],
+            "python3-pypdf must be installed BEFORE dpkg -i installs the dummy "
+            "python3-pypdf2 package that depends on it, not after",
+        )
+
     def test_skips_the_dummy_pypdf2_package_on_ubuntu(self):
         _, mock_subprocess = self.run_provision([], os_id="ubuntu", patch_open=False)
         commands_run = [c.args[0] for c in mock_subprocess.run.call_args_list]
