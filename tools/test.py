@@ -1233,6 +1233,18 @@ def check_linters(
 
     print("[*] Running AST Burn List Linter...")
     burn_script = os.path.join(shared_dir, "tools", "check_burn_list.py")
+    # --scan-daemons-and-tools wired in for real 2026-09-14: this flag has existed since
+    # LINTER_POLICY_REVISIT.md's own "Discovered, not acted on" entry and Bruce's own
+    # 2026-09-07 decision (night_shift_todo.md) to apply the existing generic rules to
+    # daemons/tools/hams_local_relay/hams_community too -- but this call site never
+    # actually passed it, so that whole category of Python source went completely
+    # untriaged by the routine burn-list pass every multi-module test.py run and CI job
+    # exercises. Closed a real, previously-invisible 34-error backlog across 18 daemon
+    # directories (plus 2 more real bugs found in check_burn_list.py's own rule logic
+    # along the way) before finally wiring this in -- see night_shift_todo.md's own
+    # 2026-09-14 entries for the full trace. A fresh, real, whole-repo scan with this
+    # flag confirmed 0 errors before this line was changed; do not remove this flag to
+    # "fix" a future daemons/tools finding without first fixing the finding itself.
     cmd_burn = (
         [
             python_exec,
@@ -1240,9 +1252,17 @@ def check_linters(
             os.path.join(base_dir, target_modules[0]),
             "--ignore-file",
             ignore_filepath,
+            "--scan-daemons-and-tools",
         ]
         if target_modules and len(target_modules) == 1
-        else [python_exec, burn_script, base_dir, "--ignore-file", ignore_filepath]
+        else [
+            python_exec,
+            burn_script,
+            base_dir,
+            "--ignore-file",
+            ignore_filepath,
+            "--scan-daemons-and-tools",
+        ]
     )
 
     res_burn = subprocess.run(cmd_burn, capture_output=True, text=True)

@@ -4159,6 +4159,24 @@ def scan_file(filepath, is_odoo_module=False):
                 # containerization. First used by ham_shack/tests/
                 # verify_noise_xx_handshake.py.
                 "burn-ignore-self-hosted-server",
+                # A service's own default LISTEN/BIND address, not a client
+                # connecting OUT to a hardcoded service location -- the
+                # CRITICAL NETWORK HARDCODING rule's actual concern (Docker
+                # networking making a bare loopback address resolve to the
+                # wrong container when one service connects to ANOTHER) does
+                # not apply to what interface a process listens on itself.
+                # Loopback-by-default, explicit-env-var-widens is this
+                # codebase's own established real convention
+                # (hams_simulated_band/src/main.rs's own resolve_bind_addr(),
+                # [@ANCHOR: resolve_bind_addr]) for exactly this reason: the
+                # safer default for a daemon with no documented need for
+                # direct external exposure. First used by
+                # daemons/hams_config.py's own resolve_bind_addr() (2026-09-14,
+                # centralizing what a first pass at adif_ingress/main.py and
+                # gdpr_csv_export/main.py's own --scan-daemons-and-tools fixes
+                # had each written inline) -- the literal lives in exactly this
+                # one shared, tested definition, not repeated per caller.
+                "burn-ignore-bind-address-default",
                 # cloudflared's own ingress architecture: it runs on the
                 # SAME host as the services it fronts and proxies traffic
                 # from Cloudflare's edge back to them over loopback --
