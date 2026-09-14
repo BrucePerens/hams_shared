@@ -19,6 +19,7 @@ process kill: kill_server's response-before-termination ordering, via a mocked
 os.killpg that records whether it already fired by the time kill_server() returns.
 """
 
+import os
 import threading
 import time
 import unittest
@@ -86,21 +87,28 @@ class CrashVisibilityTests(unittest.TestCase):
         self.assertIn("run_tests crashed", result)
         self.assertIn("boom: discovery exploded", result)
 
-    def test_update_modules_reports_a_registry_crash_in_its_own_return_value(self):
-        # odoo.registry is resolved lazily (Odoo's own namespace-package
-        # __getattr__), not a real static attribute -- mock.patch.object's
-        # getattr-based lookup can't see it, but it still works to call and to
-        # assign, so patch it with create=True instead.
+    def test_update_modules_reports_a_subprocess_crash_in_its_own_return_value(self):
+        # Real fix, 2026-09-14 (night_shift_todo.md's "OPEN QUESTION for Bruce" ->
+        # "FIXED" entry): update_modules() no longer bootstraps an in-process
+        # SUPERUSER_ID Environment/registry at all (see its own doc comment for why
+        # that pattern is architecturally impossible for button_immediate_upgrade
+        # specifically) -- it shells out to a real `odoo` OS process instead. The
+        # crash-visibility contract this class covers still applies to THAT call:
+        # an unexpected exception from subprocess.run() itself (not just a non-zero
+        # exit, which is handled separately) must still surface in the return value.
         with mock.patch.object(
-            test_mcp_server.odoo,
-            "registry",
-            create=True,
-            side_effect=RuntimeError("boom: registry exploded"),
+            test_mcp_server.odoo.modules.module,
+            "get_manifest",
+            return_value={"name": "some_module"},
+        ), mock.patch.object(
+            test_mcp_server.subprocess,
+            "run",
+            side_effect=RuntimeError("boom: subprocess exploded"),
         ):
             result = test_mcp_server.update_modules("some_module")
         self.assertIn("MCP SERVER ERROR", result)
         self.assertIn("update_modules crashed", result)
-        self.assertIn("boom: registry exploded", result)
+        self.assertIn("boom: subprocess exploded", result)
 
     def test_reload_test_files_reports_a_reload_crash_in_its_own_return_value(self):
         fake_module = mock.Mock()
@@ -115,6 +123,88 @@ class CrashVisibilityTests(unittest.TestCase):
         self.assertIn("MCP SERVER ERROR", result)
         self.assertIn("reload_test_files crashed", result)
         self.assertIn("boom: reload exploded", result)
+
+
+class UpdateModulesNoLongerUsesSuperuserTests(unittest.TestCase):
+    """Real fix, 2026-09-14 (night_shift_todo.md's "OPEN QUESTION for Bruce" ->
+    "FIXED" entry): update_modules() used to do `env = odoo.api.Environment(cr,
+    odoo.SUPERUSER_ID, {})` then call `mod_records.button_immediate_upgrade()`
+    in-process under that superuser environment -- a CRITICAL ZERO-SUDO VIOLATION
+    (check_burn_list.py). That could not be fixed by resolving a scoped
+    service-account uid instead (see update_modules()'s own doc comment: Odoo
+    core's `button_immediate_upgrade` requires env.is_admin(), and zero_sudo's own
+    `_get_service_uid()` structurally refuses to resolve any service account
+    holding admin groups), so the real fix shells out to a real `odoo` OS process
+    instead -- the same already-established pattern hams_shared/tools/test.py
+    itself uses to install/update modules -- and reloads this server's own
+    in-process registry afterward via Registry.new(). This class locks in both
+    halves: no SUPERUSER_ID/Environment usage survives anywhere in the file, and
+    the new mechanism's own two real code paths (module not found, successful
+    update) behave as documented."""
+
+    def test_source_no_longer_references_superuser_id_or_environment_in_real_code(self):
+        # Checked against real, non-comment source lines only -- this file's own doc
+        # comment on update_modules() deliberately quotes the OLD violating code
+        # (`env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})`) as history, which
+        # would otherwise trip a bare substring check despite that code no longer
+        # existing anywhere real.
+        with open(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_mcp_server.py"),
+            encoding="utf-8",
+        ) as f:
+            code_lines = [
+                line for line in f.readlines() if not line.strip().startswith("#")
+            ]
+        for line in code_lines:
+            self.assertNotIn("SUPERUSER_ID", line, f"real code line still uses SUPERUSER_ID: {line!r}")
+            self.assertNotIn("api.Environment", line, f"real code line still uses api.Environment: {line!r}")
+
+    def test_a_module_missing_on_disk_is_reported_without_ever_shelling_out(self):
+        with mock.patch.object(
+            test_mcp_server.odoo.modules.module, "get_manifest", return_value={}
+        ), mock.patch.object(test_mcp_server.subprocess, "run") as mock_run:
+            result = test_mcp_server.update_modules("does_not_exist_anywhere")
+        mock_run.assert_not_called()
+        self.assertIn("Modules not found on disk", result)
+        self.assertIn("does_not_exist_anywhere", result)
+
+    def test_a_successful_subprocess_update_reloads_the_registry_and_reports_success(self):
+        fake_result = mock.Mock(returncode=0, stdout="upgrade log output", stderr="")
+        with mock.patch.object(
+            test_mcp_server.odoo.modules.module,
+            "get_manifest",
+            return_value={"name": "some_module"},
+        ), mock.patch.object(
+            test_mcp_server.subprocess, "run", return_value=fake_result
+        ) as mock_run, mock.patch.object(
+            test_mcp_server.Registry, "new"
+        ) as mock_registry_new:
+            result = test_mcp_server.update_modules("some_module")
+        mock_run.assert_called_once()
+        # The subprocess must be a plain `odoo` invocation, not an in-process
+        # Environment/registry call under any particular uid.
+        cmd = mock_run.call_args.args[0]
+        self.assertEqual(cmd[0], "/usr/bin/odoo")
+        self.assertIn("-u", cmd)
+        self.assertIn("some_module", cmd)
+        mock_registry_new.assert_called_once()
+        self.assertIn("upgrade log output", result)
+        self.assertIn("Successfully triggered update for: some_module", result)
+
+    def test_a_nonzero_subprocess_exit_is_reported_and_does_not_reload_the_registry(self):
+        fake_result = mock.Mock(returncode=1, stdout="", stderr="boom: upgrade failed")
+        with mock.patch.object(
+            test_mcp_server.odoo.modules.module,
+            "get_manifest",
+            return_value={"name": "some_module"},
+        ), mock.patch.object(
+            test_mcp_server.subprocess, "run", return_value=fake_result
+        ), mock.patch.object(test_mcp_server.Registry, "new") as mock_registry_new:
+            result = test_mcp_server.update_modules("some_module")
+        mock_registry_new.assert_not_called()
+        self.assertIn("MCP SERVER ERROR", result)
+        self.assertIn("exited with code 1", result)
+        self.assertIn("boom: upgrade failed", result)
 
 
 if __name__ == "__main__":

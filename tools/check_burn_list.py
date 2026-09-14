@@ -2775,10 +2775,41 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     ):
                         is_su = True
                     if is_su:
-                        self.add_error(
-                            node.lineno,
-                            "CRITICAL ZERO-SUDO VIOLATION: Instantiating an Environment with SUPERUSER_ID or uid=1 is strictly forbidden (sudo cheat). Query for a service account ID instead.",
-                        )
+                        # Real, narrow, sanctioned exception, 2026-09-14 (night_shift_todo.md's
+                        # "OPEN QUESTION for Bruce" -> "FIXED" entry): `zero_sudo.security.
+                        # utils._get_service_uid(xml_id)` -- the only sanctioned way to resolve a
+                        # real, scoped service account's uid -- is itself an `@api.model` method
+                        # on a real Odoo model, so calling it at all requires SOME existing
+                        # Environment to look the account up through. There is no way to
+                        # bootstrap a scoped-uid Environment without first having *an*
+                        # Environment, so a handful of genuinely standalone, offline bootstrap
+                        # call sites (list_routes.py's own sysadmin CLI, bootstrapping its own
+                        # registry directly from odoo.conf, entirely outside the normal
+                        # web-request lifecycle) need a transient SUPERUSER_ID Environment for
+                        # exactly one purpose: resolving the real uid, then discarding that
+                        # Environment immediately and building a SECOND, real Environment with
+                        # the resolved uid for all actual work. Bruce's own explicit decision,
+                        # 2026-09-14, picking this over the sibling option of just exempting
+                        # these files outright. This tag is deliberately much narrower than a
+                        # file/directory exemption: it excuses only the ONE Environment(...) call
+                        # this exact tag sits on, not every SUPERUSER_ID use in the file, so a
+                        # second, real, unrelated SUPERUSER_ID misuse added later to the same
+                        # file still trips this check normally. Whoever adds this tag is
+                        # asserting, in their own comment on the same call, that: (1) this
+                        # Environment is used for nothing except a `_get_service_uid()`/
+                        # `_get_service_env()` call, (2) it is discarded (not merely
+                        # reassigned/shadowed) immediately afterward, and (3) a second,
+                        # non-superuser Environment built from the resolved uid is what actually
+                        # does the real work. See "audit-ignore-service-uid-cursorless" a few
+                        # hundred lines below (the sibling escape hatch for a different, unrelated
+                        # narrow case) for the same "one exact call site, not a blanket exemption"
+                        # design this tag follows.
+                        span_text = self.node_span_text(node)
+                        if "audit-ignore-superuser-bootstrap-for-service-uid-resolution" not in span_text:
+                            self.add_error(
+                                node.lineno,
+                                "CRITICAL ZERO-SUDO VIOLATION: Instantiating an Environment with SUPERUSER_ID or uid=1 is strictly forbidden (sudo cheat). Query for a service account ID instead. If this is a narrow, transient BOOTSTRAP environment used ONLY to resolve a real service account's uid via _get_service_uid()/_get_service_env() before being immediately discarded (never used for any other read or write), add '# audit-ignore-superuser-bootstrap-for-service-uid-resolution' with a comment naming the resolved service account and confirming the bootstrap env is discarded right after.",
+                            )
 
             if isinstance(node.func, ast.Name) and node.func.id == "print":
                 if not (
@@ -4572,6 +4603,18 @@ def scan_file(filepath, is_odoo_module=False):
                 # fixture correctly suppressed the CRITICAL SSTI finding but then tripped
                 # UNAUTHORIZED BYPASS on the exact same tag.
                 "audit-ignore-ssti",
+                # The CRITICAL ZERO-SUDO VIOLATION check's own dedicated escape hatch for
+                # Environment(cr, SUPERUSER_ID, ...) instantiation (visit_Call's own "is_su"
+                # branch, a few hundred lines above this generic allow-list) -- see that check's
+                # own doc comment for the full rationale. Enforced there since before this
+                # allow-list was told about it; registered here for the same reason
+                # audit-ignore-service-uid-cursorless and audit-ignore-ssti are: without an
+                # entry here, a correctly-tagged, correctly-suppressed transient-bootstrap line
+                # would still trip this separate generic "is this audit-ignore tag recognized"
+                # UNAUTHORIZED BYPASS check. First used by list_routes.py's own transient
+                # SUPERUSER_ID bootstrap (see night_shift_todo.md's "OPEN QUESTION for Bruce" ->
+                # "FIXED" entry, 2026-09-14).
+                "audit-ignore-superuser-bootstrap-for-service-uid-resolution",
             ]
             if not any(tag in line for tag in valid_audits):
                 errors_found.append(

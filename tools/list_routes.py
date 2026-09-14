@@ -32,7 +32,7 @@ import threading
 # changes (and doesn't change) about --help/missing-config behavior.
 import odoo
 import odoo.tools.config
-from odoo import api, SUPERUSER_ID
+from odoo import api
 import odoo.modules.registry
 
 
@@ -73,7 +73,39 @@ def main():
     threading.current_thread().dbname = args.database
 
     with registry.cursor() as cr:
-        env = api.Environment(cr, SUPERUSER_ID, {})
+        # Real fix, 2026-09-14 (night_shift_todo.md's "OPEN QUESTION for Bruce" ->
+        # "FIXED" entry): this used to do `env = api.Environment(cr, SUPERUSER_ID, {})`
+        # and use THAT env for the real routing-map read below -- a CRITICAL ZERO-SUDO
+        # VIOLATION (check_burn_list.py). The complication that left this unfixed for a
+        # while: `zero_sudo.security.utils._get_service_uid(xml_id)` (the only sanctioned
+        # way to resolve a real, scoped service account's uid) is itself an `@api.model`
+        # method on a real Odoo model, so calling it at all requires SOME existing
+        # Environment to look the account up through -- there's no way to bootstrap a
+        # scoped-uid Environment without first having *an* Environment. Bruce's own
+        # explicit decision, 2026-09-14: keep a transient SUPERUSER_ID environment used
+        # ONLY to resolve the real uid, discard it immediately, then build a second, real
+        # environment with that resolved uid for all actual work.
+        #
+        # `zero_sudo.odoo_facility_service_internal` is the right account for this job,
+        # not a new one: it's this codebase's own already-established "generic internal
+        # tooling / framework-metadata read" service account (see
+        # zero_sudo/models/ir_module_module.py's own `ir.module.module` reads and
+        # check_burn_list.py's own "CRITICAL FRAMEWORK ACL" rule, which names this exact
+        # account for framework-table reads that fail without at least `base.group_user`)
+        # -- `ir.http.routing_map()` builds the Werkzeug routing map from registered
+        # controllers, not from any row-level-ACL-guarded table, so no MORE privileged
+        # account is needed; a bare, ungrouped service account holding no groups at all
+        # would already be sufficient in principle, but reusing this established account
+        # (rather than registering a new one for a one-line read) keeps the service-
+        # account roster from growing for no real capability gain.
+        bootstrap_env = api.Environment(cr, api.SUPERUSER_ID, {})  # audit-ignore-superuser-bootstrap-for-service-uid-resolution: transient bootstrap ONLY, used once immediately below to resolve zero_sudo.odoo_facility_service_internal's real uid via _get_service_uid(), then discarded on the next line -- never used for any other read or write. See list_routes.py's own comment above this line for the full rationale.
+        svc_uid = bootstrap_env["zero_sudo.security.utils"]._get_service_uid(
+            "zero_sudo.odoo_facility_service_internal"
+        )
+        del bootstrap_env  # discard immediately -- must never be used again past this point
+
+        env = api.Environment(cr, svc_uid, {})
+        assert not env.su, "the real working environment must not be superuser-mode"
 
         print(f"\n{'='*110}")
         print(f"{'ROUTE PATH':<65} | {'METHODS':<15} | {'ENDPOINT FUNCTION'}")

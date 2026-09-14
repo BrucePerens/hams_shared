@@ -2650,6 +2650,52 @@ def test_environment_instantiation_with_a_service_account_uid_is_not_flagged():
     assert not any("Instantiating an Environment" in e for e in errors)
 
 
+# The transient-bootstrap escape hatch, 2026-09-14 (night_shift_todo.md's "OPEN QUESTION for
+# Bruce" -> "FIXED" entry): _get_service_uid() is itself an @api.model method on a real Odoo
+# model, so resolving a scoped service account's uid requires SOME existing Environment to
+# call it through -- a handful of genuinely standalone bootstrap call sites (list_routes.py)
+# need a transient SUPERUSER_ID Environment for exactly that one purpose, discarded
+# immediately afterward. See visit_Call's own "is_su" branch doc comment for the full
+# rationale and exactly what the tag asserts.
+
+
+def test_superuser_bootstrap_environment_without_the_tag_is_still_flagged():
+    source = "bootstrap_env = api.Environment(cr, api.SUPERUSER_ID, {})\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("Instantiating an Environment" in e and "ZERO-SUDO" in e for e in errors)
+
+
+def test_superuser_bootstrap_environment_with_the_tag_is_suppressed():
+    source = (
+        "bootstrap_env = api.Environment(cr, api.SUPERUSER_ID, {})"
+        "  # audit-ignore-superuser-bootstrap-for-service-uid-resolution:"
+        " resolves zero_sudo.odoo_facility_service_internal, discarded next line\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("Instantiating an Environment" in e for e in errors)
+    # The tag must also be recognized by the separate, generic "is this audit-ignore tag
+    # registered" UNAUTHORIZED BYPASS check -- see audit-ignore-ssti's own sibling test for
+    # why this is a real, previously-hit failure mode (a tag enforced at its own call site but
+    # never added to the generic allow-list trips a second, unrelated finding).
+    assert not any("UNAUTHORIZED BYPASS" in e for e in errors)
+
+
+def test_superuser_bootstrap_tag_does_not_suppress_an_unrelated_second_superuser_use_in_the_file():
+    # This tag excuses only the ONE Environment(...) call it sits on, not the whole file --
+    # a second, real, untagged SUPERUSER_ID misuse elsewhere must still be caught.
+    source = (
+        "bootstrap_env = api.Environment(cr, api.SUPERUSER_ID, {})"
+        "  # audit-ignore-superuser-bootstrap-for-service-uid-resolution:"
+        " resolves some.service, discarded next line\n"
+        "real_env = api.Environment(cr, api.SUPERUSER_ID, {})\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    zero_sudo_errors = [
+        e for e in errors if "Instantiating an Environment" in e and "ZERO-SUDO" in e
+    ]
+    assert len(zero_sudo_errors) == 1
+
+
 # Still more of visit_Call()'s own direct rule cluster: print() ban, PATH TRAVERSAL warning
 # for filesystem ops in controllers/models, hollow-assertion bans (assertTrue/assertFalse on
 # a literal or a multi-condition `and`, assertEqual of identical literals or a variable to
