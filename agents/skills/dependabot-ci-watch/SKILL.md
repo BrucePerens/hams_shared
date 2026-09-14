@@ -198,28 +198,35 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `WINEPREFIX: /tmp/wine-ci-prefix`), and rustup prints a harmless
   `error: $HOME differs from euid-obtained home directory` in every container leg. That rustup
   line is noise, not the failure -- keep reading.
-- **The arm64 `build-linux` leg runs `ubuntu:24.04` under QEMU user-mode emulation on this x86_64
-  host.** It needs `qemu-aarch64` binfmt handlers registered on the host, and handlers registered
-  with `tonistiigi/binfmt --install` do NOT survive a reboot. Signature: the job container is
-  "not running" at checkout. Check with `ls /proc/sys/fs/binfmt_misc/ | grep qemu` or
-  `docker run --rm --platform linux/arm64 arm64v8/ubuntu:24.04 uname -m`, which prints
-  `exec format error` when the handlers are missing. Re-registering is a host-level change for
-  Bruce, not something to do from an unattended run.
-- **`hams_local_relay` pins its compiler in `rust-toolchain.toml`** (1.97.1 as of 2026-09-14), and
-  CI's `cargo clippy` runs under that pin, not under whatever `dtolnay/rust-toolchain@stable`
-  installed. To reproduce CI's clippy locally, run it inside `daemons/hams_local_relay` with no
-  `+toolchain` override, using a scratch `CARGO_TARGET_DIR` so you don't disturb other sessions'
-  builds. Running `cargo +stable clippy` there instead picks up newer lints (1.98.1 added 26
-  `chunks_exact`-with-constant-size errors) that CI won't hit until the pin is bumped, which is
-  worth knowing when someone does bump it.
+- **The arm64 `build-linux` leg runs natively on the Raspberry Pi 500 runner `pi500-1`** (since
+  2026-09-14; it used to run under QEMU emulation on the dev box, which broke whenever a reboot
+  dropped the binfmt handlers). Facts: runner label `pi500-1`; Debian 12 bookworm, aarch64; jobs
+  run as the `ai` account, which has passwordless sudo; rustup is installed; there is no Docker,
+  so that leg has `container: ""` and runs on the host. The runner is ephemeral (one job per
+  just-in-time registration), re-minted continuously by `pi500-runner-jit-loop.service` on the dev
+  box. If the Pi picks up no jobs, check that service first (`systemctl status
+  pi500-runner-jit-loop`), then `gh api repos/BrucePerens/hams_com/actions/runners`. The Pi has an
+  outbound firewall (`pi500-egress`) allowing only ports 80/443/22, DNS and NTP, so a build step
+  that needs another port will be dropped (logged as `pi500-egress-drop:` in the Pi's dmesg).
+  `test-pi500-runner-smoke.yml` (workflow_dispatch) is a cheap check that the runner is alive.
+  Security note: the runner's just-in-time config is visible in its process arguments on the Pi,
+  so never paste `ps` command lines from that box into a record.
+- **`hams_local_relay` pins its compiler in `rust-toolchain.toml`**, and CI's `cargo clippy` runs
+  under that pin, not under whatever `dtolnay/rust-toolchain@stable` installed. To reproduce CI's
+  clippy locally, run it inside `daemons/hams_local_relay` with no `+toolchain` override, using a
+  scratch `CARGO_TARGET_DIR` so you don't disturb other sessions' builds. The three server daemon
+  crates (`hams_relay_bridge`, `hams_data_relay`, `hams_simulated_band`) have NO pin: their CI
+  uses the newest stable directly, so a new Rust release can turn them red with new lints. Check
+  them with `cargo +stable clippy --release --all-targets -- -D warnings`.
 - **`build-relay.yml` only triggers on pushes under `daemons/hams_local_relay/**`.** A push that
   only touches the workflow file does not run CI. Verifying such a fix needs the next relay push
   or `gh workflow run build-relay.yml --ref main` (workflow_dispatch builds and tests but never
   publishes). That runs a full matrix on Bruce's laptop, so check `ListAgents` and coordinate
   first; another session may already have one in flight.
-- **`hams_open`'s `Dependency Release Watch` shows red by design** whenever a hand-tracked pin
+- **`hams_open`'s `Dependency Release Watch` shows red whenever a hand-tracked pin**
   (`hams_shared/tools/dependency_watch.json`) is behind upstream. It is a staleness alarm, not a
-  CI bug. Don't re-triage it each run; only note when the set of stale pins changes.
+  broken script -- and per Bruce's standing decision below, a red run is work to do: bump the stale
+  pins, following the verification procedure each entry's own `notes` field documents.
 - **The hams_com working tree is shared with other live Claude sessions.** Commits and line
   numbers can change under you mid-run. `git fetch` and re-read before editing, find edit sites
   by content rather than stale line numbers, and `git add` only the specific files you changed.
@@ -229,6 +236,37 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   still says hams_com pushes are blocked by the missing `workflow` scope and unpushed commit
   `a723508b`. That is stale as of 2026-09-14: the scope was granted and `a723508b` is pushed.
   This file is authoritative; check `gh auth status` fresh.
+
+## Standing decisions from Bruce -- act on these, don't ask
+
+Bruce answered these on 2026-09-14 and asked that they be recorded here so no future session asks
+him again. They override any older text in this file that says to defer such items or record them
+as needing his judgment.
+
+1. **Update dependencies when you can.** Stale pins flagged by `Dependency Release Watch` (ardopcf,
+   mercury, cloudflared, kopia, etcd, pat, hamlib) and Dependabot alerts with an available fix are
+   work for this run, not "for later". Verify each bump for real (build it, run the relay's tests
+   against it, checksum release binaries, per the entry's `notes`), update `pinned` and `notes`,
+   commit and push. A bump that genuinely breaks something you can't fix in the same run gets
+   recorded with the exact error -- that's a real blocker, not a preference question.
+2. **When upgrading Rust, fix the new clippy errors** the newer toolchain introduces, in the same
+   change. That covers bumping `daemons/hams_local_relay/rust-toolchain.toml` to a new stable, and
+   the unpinned server daemon crates that pick up new stable lints automatically. Fix the code the
+   way clippy suggests (behavior-preserving); use a targeted, commented `#[allow]` only where the
+   lint is genuinely wrong for that code. Never weaken or delete tests.
+3. **When a distribution lacks a tool the relay needs, download and build it from source** in the
+   install script, rather than dropping the platform or asking. Pin the exact version or commit,
+   verify downloads by checksum or commit hash, and keep build toolchains inside the temporary
+   build directory. Example: `install_relay_runtime_deps.sh` builds pat at the version
+   `dependency_watch.json` pins, with a checksum-pinned official Go toolchain, because Ubuntu 20.04
+   has no `pat` package and other distributions ship an outdated one. When pat's pin is bumped,
+   update `PAT_VERSION`/`PAT_COMMIT` there too, and the Go version and checksums if pat needs a
+   newer Go.
+4. **arm64 CI builds run natively on `pi500-1`** (see the operating-knowledge note above), not under
+   emulation.
+
+Still Bruce's (these involve money, accounts, or product direction): GitHub billing (the macOS
+leg), creating or re-scoping credentials, and dismissing Dependabot alerts on GitHub.
 
 ## Step 3: Record everything, always
 
