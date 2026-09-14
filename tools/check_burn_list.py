@@ -278,7 +278,19 @@ GENERAL_ERROR_RULES = [
         "CRITICAL FAST FAIL: Soft dependencies (try/except ImportError) are forbidden. Modules and daemons must fast-fail on missing dependencies. If Odoo, use manifest external_dependencies.",
     ),
     (
-        r"test_.*\.py$",
+        # Anchored to the START of the basename (`(?:^|/)`), not a bare
+        # substring search -- `test_.*\.py$` alone false-positived on
+        # daemons/event_sync/sm3cer_contest_sync.py, a real PRODUCTION sync
+        # daemon whose own real, intentional `requests.get(SM3CER_URL, ...)`
+        # call got flagged only because "contest_sync.py" happens to contain
+        # the substring "test_sync.py". Confirmed via the same "basename
+        # starts with test_" convention this file already uses everywhere
+        # else it means to identify a real test file (e.g.
+        # `self.filename.startswith("test_")`, line ~3994's
+        # `filename.startswith("test_")`) -- this ext_pattern was the odd
+        # one out, matching raw substrings instead. Found and fixed
+        # 2026-09-13 while triaging real daemons/ bug-hunt findings.
+        r"(?:^|/)test_[^/]*\.py$",
         re.compile(
             r"(?<![\'\"])(?:urllib\.request\.urlretrieve|requests\.(?:get|post|put|delete))\s*\("
         ),
