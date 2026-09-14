@@ -8,7 +8,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 4
+version: 5
 ---
 
 # Dependabot & CI Build Watch
@@ -166,6 +166,23 @@ repos' workflows, it needs this same step, or this exact failure mode will come 
 If you ever see `Deleting the contents of...`/`EACCES`/`rmdir` in a checkout failure log again,
 this is almost certainly the same root cause: check the runner host directly (`sudo find
 <runner's _work tree> -not -user github-runner`) before assuming it's something new.
+
+**The same gotcha also hits Docker container ACTIONS, not just job-level `container:` jobs
+(found and fixed 2026-09-14, same day, after the fix above looked complete but wasn't)**: the
+`security-audit` job in both `build-relay.yml` and `build-server-daemons.yml` has no job-level
+`container:` at all, yet hit the identical `EACCES` checkout failure -- because
+`EmbarkStudios/cargo-deny-action@v2` (one of its two steps) is itself a Docker container *action*
+(`runs: using: docker` in its own `action.yml`), and its Dockerfile sets no `USER`, so it runs as
+root with the workspace bind-mounted in, same as a job-level container would. The OTHER action in
+that job, `rustsec/audit-check@v2.0.0`, is a plain `node20` action and is not a suspect -- check an
+action's own `action.yml` `runs:` block before assuming which one is responsible. Because this job
+has no container of its own, the job-level fix's "clean up as your own last step, from inside the
+container" trick doesn't apply directly -- fixed instead with `docker run --rm -v "${{
+github.workspace }}:/w" alpine chmod -R a+rwX /w` as the job's own last step (`github-runner` is
+already in the `docker` group, so this needs no new host privilege). If a workflow ever adds a NEW
+step using a Docker container action (check its `action.yml`'s `runs:` block, not just whether the
+job itself declares `container:`), assume it can write root-owned files into the workspace and
+needs this same `docker run ... chmod` step after it, not just after job-level `container:` usage.
 
 **More operating knowledge (added 2026-09-14, second hourly run)**:
 - **Billing-blocked GitHub-hosted jobs** (`build-macos`, the one leg still on `macos-latest`): the
