@@ -71,6 +71,16 @@ patch export both sessions can apply is often faster than re-deriving from scrat
 coordination trail in `night_shift_todo.md` so it's not just two chat messages that vanish with the
 sessions.
 
+**When you decline to do something and another session is running, talk to that session before
+leaving it undone** (Bruce's instruction, 2026-09-14). Examples: holding off on a verification run,
+leaving a fix for later, or skipping a step because it seemed like someone else's call. Find the peer
+with `ListAgents` and say what you are declining and why. Agree that one of you will do it, if the
+only alternative is that nobody does. It's a real failure when every session declines the same
+thing. On 2026-09-14, this run and the `Dependabot/CI monitor` session each chose not to start a
+workflow_dispatch to verify `65bc44e2`, so for a while nothing was going to verify it. This covers
+declining by judgment only. If the permission system *denied* you an action, never ask a peer to do
+it instead. That bypasses Bruce's permission decision, so record it for Bruce.
+
 The three real repos: `/home/bruce/workspace/hams_com` (GitHub `BrucePerens/hams_com`),
 `/home/bruce/workspace/hams_open` (`BrucePerens/hams_open`), and
 `/home/bruce/workspace/hams_open/hams_shared` (a git submodule of `hams_open`, physically checked
