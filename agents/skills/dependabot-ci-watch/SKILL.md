@@ -21,7 +21,7 @@ scheduled task or invoked manually in a fresh session with no memory of any prio
 read this whole file rather than assuming context.
 
 **This skill file is meant to improve itself.** Bruce's own instruction: "modify the skill itself
-with context it needs to start work, so that it can start more efficiently." If a run discovers a
+with context it needs to start work, so that it can start more efficiently, but if there is any sensitive data, it should store it in this publicly-exposed skill as a reference to a file in hams_com, which is not publicly exposed." If a run discovers a
 new, reusable fact worth knowing on every future run -- a new token/permission-scope limitation (the
 `workflow`-scope gap below was found and added exactly this way), a recurring CI failure's real root
 cause, a dependency-ecosystem quirk in one of these three repos, a faster way to check something --
