@@ -8,7 +8,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 6
+version: 7
 ---
 
 # Dependabot & CI Build Watch
@@ -252,6 +252,20 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   still says hams_com pushes are blocked by the missing `workflow` scope and unpushed commit
   `a723508b`. That is stale as of 2026-09-14: the scope was granted and `a723508b` is pushed.
   This file is authoritative; check `gh auth status` fresh.
+- **Before calling a failure a regression, check that the fix is actually in the run's head
+  commit**: `git merge-base --is-ancestor <fix-commit> <run's headSha>`. The single `hams-devbox`
+  runner often has several runs queued, so runs on commits from before a fix keep reporting the
+  "fixed" failure for hours afterward. On 2026-09-14 a `jq: Argument list too long` and a burst of
+  checkout `EACCES` both showed up after their fixes had been pushed, and both came from such runs.
+  Runs queued from before `9c77855d` still re-poison the workspace with root-owned files after
+  every cleanup, until they drain. `gh run cancel` on superseded runs and a manual `chmod` of the
+  `_work` tree were both denied by the scheduled run's permission classifier on 2026-09-14. Record
+  them for Bruce rather than routing around the denial.
+- **`hams_com` has no repository secrets** (`gh secret list` is empty, as of 2026-09-14; no
+  production Odoo exists yet). Every publish step on `main` (binary zips, .deb, .rpm, apt repo,
+  Windows) will fail at `curl "$ODOO_URL/..."` with an empty URL once its build is green. That is
+  expected before deployment, not a new bug. Check `gh secret list` fresh, because it stops being
+  true once Bruce creates them.
 
 ## Standing decisions from Bruce -- act on these, don't ask
 
