@@ -8,7 +8,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 8
+version: 9
 ---
 
 # Dependabot & CI Build Watch
@@ -200,9 +200,16 @@ undeletable by the next job's `actions/checkout` step, which runs directly on th
 unprivileged `github-runner` account -- surfaces as `Deleting the contents of...` failing with
 `EACCES`, blocking EVERY subsequent checkout regardless of which workflow runs next, not just the
 one that caused it. Every container job in `build-relay.yml` now has a `Fix workspace ownership
-for the next job` step (`if: always()`, `chmod -R a+rwX "${{ github.workspace }}"`, deliberately
+for the next job` step (`if: always()`, `chmod -R a+rwX "$GITHUB_WORKSPACE"`, deliberately
 chmod rather than chown to a hardcoded uid:gid, which would go stale if the service account is
-ever recreated) as its last step. If a NEW container-based job is ever added to any of these three
+ever recreated) as its last step. **Inside a job container, use `$GITHUB_WORKSPACE`, never
+`${{ github.workspace }}`.** The expression expands to the host path, which doesn't exist in the
+container, where the workspace is mounted at `/__w/<repo>/<repo>`. The step was first written with
+the expression, and every container job's cleanup exited 1 with `chmod: cannot access ...: No such
+file or directory`. It cleaned nothing and turned green legs red for hours before anyone read the
+step's own log line (fixed 2026-09-14, fourth hourly run). A step that runs on the host (like the
+`docker run -v` cleanup below) is correct with the expression. When verifying a cleanup fix,
+read the cleanup step's own log output. The job going green or red doesn't tell you whether it worked. If a NEW container-based job is ever added to any of these three
 repos' workflows, it needs this same step, or this exact failure mode will come back for that job.
 If you ever see `Deleting the contents of...`/`EACCES`/`rmdir` in a checkout failure log again,
 this is almost certainly the same root cause: check the runner host directly (`sudo find
