@@ -227,6 +227,16 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `test-pi500-runner-smoke.yml` (workflow_dispatch) is a cheap check that the runner is alive.
   Security note: the runner's just-in-time config is visible in its process arguments on the Pi,
   so never paste `ps` command lines from that box into a record.
+  Two failure shapes the first native runs hit (2026-09-14), worth recognizing immediately:
+  (1) **Non-root cleanup.** Unlike the root-in-container legs, the Pi leg runs as `ai`, so anything
+  that creates read-only files (Go's module cache is the known case) breaks a plain `rm -rf`.
+  `install_relay_runtime_deps.sh` now builds with `-modcacherw` and `chmod -R u+w`s before cleanup.
+  (2) **The firewall drops, it doesn't reject**, so a connection to a blocked port hangs until the
+  caller's timeout instead of failing fast. Relay tests must never dial live outside services on
+  non-web ports. The winlink tests used pat's `telnet` alias, which dials the real Winlink CMS on
+  port 8772; they now use a closed loopback URL. When a Pi-only test failure is a timeout, check
+  `sudo journalctl -k --since today | grep pi500-egress-drop | grep -o 'DPT=[0-9]*' | sort | uniq -c`
+  on the Pi first. Running the same tests in a root container is not an equivalent reproduction.
 - **`hams_local_relay` pins its compiler in `rust-toolchain.toml`**, and CI's `cargo clippy` runs
   under that pin, not under whatever `dtolnay/rust-toolchain@stable` installed. To reproduce CI's
   clippy locally, run it inside `daemons/hams_local_relay` with no `+toolchain` override, using a
