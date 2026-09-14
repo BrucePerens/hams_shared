@@ -8,7 +8,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 5
+version: 6
 ---
 
 # Dependabot & CI Build Watch
@@ -150,6 +150,22 @@ in `night_shift_todo.md` (grep for the workflow name + rough date):
    real evidence for why you believe that, not just an assumption.
 5. If the SAME workflow has failed repeatedly across multiple runs with the same root cause,
    that's a higher-priority, more consequential finding than a one-off -- say so explicitly.
+
+**Fix the whole implication chain, not just the first-reported symptom (Bruce's own standing
+instruction, 2026-09-14)**: "Fixing CI problems and dependency issues means fixing them and all of
+their implications. You should be doing that autonomously." A dependency or toolchain bump is not
+done when the bump itself lands -- if it changes what the codebase's own tooling flags (a newer
+Rust's clippy surfacing lints an older one didn't, a newer linter/formatter version changing its
+own defaults, a newer test framework deprecating an API this codebase used), fix those too, in the
+same pass, without stopping to ask. Concretely: this project's own `rust-toolchain.toml` pins are
+meant to track real current stable (see `daemons/hams_local_relay/rust-toolchain.toml`'s own doc
+comment) -- when you bump one, immediately run `cargo clippy --release -- -D warnings` (matching
+CI's own "Clippy (warnings as errors)" step exactly) under the NEW toolchain and fix every new
+finding it surfaces, the same run, not as a separately-deferred follow-up. The same principle
+applies to a Dependabot dependency bump that changes a library's own deprecated-API surface, or any
+other case where fixing the reported thing reveals more of the same category of problem one level
+deeper -- keep going until the whole chain is actually clean, not just the one failure that was
+originally reported.
 
 **Known self-hosted-runner gotcha (fixed 2026-09-14, worth knowing if it ever resurfaces)**:
 `hams_com`'s runner (`hams-devbox`) is persistent, not ephemeral -- the same `_work` tree is
