@@ -98,3 +98,10 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   at the moment of legitimate use; never let a decrypted credential reach a log or side channel.
   Prompted by a real over-broad `ham_logbook` trust-boundary finding -- that field's own end-to-end
   audit against this ADR is tracked in `night_shift_todo.md`, not restated here.
+* [ADR 0097: No Ham Radio Function Depends on Our Server](0097_server_independent_relay_operation.md)
+  Given `hams_local_relay` installed and the remote endpoint directly reachable over the Internet,
+  controlling your own radio, a friend's/club's authorized radio, or any repeater you're authorized
+  for must all work with hams.com's own server completely unreachable -- only logging queues and
+  syncs later. Names a real, unresolved tension (locally-cached authorization for offline
+  availability vs. timely revocation) rather than papering over it, and sets a standing review bar
+  for all future features: does this need hams.com up at the moment of use, and why.
