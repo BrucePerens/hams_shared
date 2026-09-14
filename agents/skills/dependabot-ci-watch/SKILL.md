@@ -8,7 +8,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 2
+version: 3
 ---
 
 # Dependabot & CI Build Watch
@@ -102,20 +102,20 @@ For each open alert found:
    you're not confident in -- pushing your own uncertainty is different
    from pushing a verified fix.
 
-   **Real, confirmed gap in the current token's scope**: the `gh` token's scopes are
-   `admin:public_key, gist, read:org, repo` -- notably NOT `workflow`. GitHub specifically
-   requires the `workflow` OAuth scope to push ANY change to a file under `.github/workflows/`,
-   even a plain `.sh` helper script that lives there but isn't itself a `.yml` workflow
-   definition (confirmed directly: a real push touching `.github/workflows/publish_relay_binary.sh`
-   was rejected with `refusing to allow an OAuth App to create or update workflow ... without
-   'workflow' scope`, exit non-zero, commit made locally but not pushed). If you fix something
-   under `.github/workflows/` (a real, plausible thing for this exact task to need, since CI
-   script bugs live there), expect this same rejection. Do NOT attempt to work around it (no
-   force-push, no alternate auth path, no creating your own token). Commit the fix locally as
-   normal, then report in your `night_shift_todo.md` entry that it's committed-but-not-pushed
-   specifically because of this scope gap, and name the exact fix: either Bruce pushes that one
-   commit himself, or he runs `gh auth refresh -s workflow` (an interactive device-code approval
-   only he can complete) to add the missing scope permanently.
+   **Formerly a real gap, now resolved (2026-09-14)**: the `gh` token's scopes used to be
+   `admin:public_key, gist, read:org, repo` -- notably missing `workflow`, which GitHub
+   specifically requires to push ANY change to a file under `.github/workflows/`, even a plain
+   `.sh` helper script that lives there but isn't itself a `.yml` workflow definition (confirmed
+   directly the first time this was hit: a real push touching
+   `.github/workflows/publish_relay_binary.sh` was rejected with `refusing to allow an OAuth App
+   to create or update workflow ... without 'workflow' scope`). Bruce ran `gh auth refresh -s
+   workflow` since then -- `gh auth status` now shows `workflow` in the token's scopes, and a
+   real push touching `.github/workflows/build-relay.yml` succeeded cleanly the same night,
+   confirming the fix actually stuck. **Don't assume this gap is still present** -- check `gh
+   auth status`'s own scope list fresh each run rather than trusting this note's history; if
+   `workflow` is ever missing again (e.g. a re-auth or a fresh token), the same rejection and the
+   same fix (`gh auth refresh -s workflow`, an interactive device-code approval only Bruce can
+   complete) apply.
 
 ## Step 2: Check CI build status
 
@@ -142,6 +142,22 @@ in `night_shift_todo.md` (grep for the workflow name + rough date):
    real evidence for why you believe that, not just an assumption.
 5. If the SAME workflow has failed repeatedly across multiple runs with the same root cause,
    that's a higher-priority, more consequential finding than a one-off -- say so explicitly.
+
+**Known self-hosted-runner gotcha (fixed 2026-09-14, worth knowing if it ever resurfaces)**:
+`hams_com`'s runner (`hams-devbox`) is persistent, not ephemeral -- the same `_work` tree is
+reused across jobs. Any job whose `container:` is a plain OS image (ubuntu/fedora/rockylinux,
+none of which set a non-root `USER`) runs as root, and root-owned files it leaves behind become
+undeletable by the next job's `actions/checkout` step, which runs directly on the host as the
+unprivileged `github-runner` account -- surfaces as `Deleting the contents of...` failing with
+`EACCES`, blocking EVERY subsequent checkout regardless of which workflow runs next, not just the
+one that caused it. Every container job in `build-relay.yml` now has a `Fix workspace ownership
+for the next job` step (`if: always()`, `chmod -R a+rwX "${{ github.workspace }}"`, deliberately
+chmod rather than chown to a hardcoded uid:gid, which would go stale if the service account is
+ever recreated) as its last step. If a NEW container-based job is ever added to any of these three
+repos' workflows, it needs this same step, or this exact failure mode will come back for that job.
+If you ever see `Deleting the contents of...`/`EACCES`/`rmdir` in a checkout failure log again,
+this is almost certainly the same root cause: check the runner host directly (`sudo find
+<runner's _work tree> -not -user github-runner`) before assuming it's something new.
 
 ## Step 3: Record everything, always
 
