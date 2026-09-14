@@ -67,11 +67,24 @@ For each open alert found:
    removing/replacing a dependency entirely, do NOT force it unilaterally -- record it clearly in
    `night_shift_todo.md` as needing Bruce's own judgment call, with the specific tradeoff named
    (not just "needs a decision").
-4. You have permission to push these commits directly (Bruce handed this over 2026-09-14 -- git
-   is configured to push over HTTPS using `gh`'s own stored credential, no SSH hardware key
-   needed; just run `git push` normally). Push real, tested, low-risk fixes (dependency bumps that
-   pass their real test suite) directly. For anything flagged as needing Bruce's own judgment,
-   don't push code changes you're not confident in -- pushing your own uncertainty is different
+4. You have permission to push these commits directly (Bruce handed this over 2026-09-14). **How
+   push access actually works, so you don't hit the same wall a prior session did**: Bruce's own
+   git identity normally authenticates over SSH with a hardware YubiKey (`ED25519-SK`), which
+   requires his own physical touch on the key for every signature -- something no autonomous
+   session can ever provide. The real, working path instead: a `gh` CLI login already exists
+   (`gh auth status` shows account `BrucePerens`, token scopes including `repo`, stored securely
+   in the system keyring, not a plaintext secret anywhere), wired as git's own HTTPS credential
+   helper via `gh auth setup-git` (check `git config --global --get "credential.https://github.com.helper"`
+   -- should show `!/usr/bin/gh auth git-credential`), with all three repos' `origin` remotes
+   pointed at `https://github.com/BrucePerens/<repo>.git` rather than the SSH `git@github.com:...`
+   form. If `git push` ever fails with an SSH/publickey/YubiKey-signing error, check `git remote -v`
+   first -- it likely means a remote reverted to the SSH form (re-run
+   `git remote set-url origin https://github.com/BrucePerens/<repo>.git`) or `gh auth status` shows
+   the login is gone (report that plainly rather than trying to create a brand-new token yourself;
+   ask Bruce, per this project's own credential-handling caution -- see the "Secret Safety" section
+   of `CLAUDE.md`). Push real, tested, low-risk fixes (dependency bumps that pass their real test
+   suite) directly. For anything flagged as needing Bruce's own judgment, don't push code changes
+   you're not confident in -- pushing your own uncertainty is different
    from pushing a verified fix.
 
 ## Step 2: Check CI build status
