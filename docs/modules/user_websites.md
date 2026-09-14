@@ -251,7 +251,17 @@ For detailed narratives and end-to-end workflows, refer to the following:
 * **Streamed GDPR Export Keys:** `[@ANCHOR: user_websites:COMM_get_gdpr_streamed_keys]` -- generator-based streaming to avoid OOM on large exports.
 
 ### Settings
-* **Settings Read/Write:** `[@ANCHOR: user_websites:COMM_settings_get_values]`, `[@ANCHOR: user_websites:COMM_settings_set_values]`.
+* **Settings fields:** `global_website_page_limit`, `company_abuse_email` -- plain scalar
+  `config_parameter`-backed fields persisted by `res.config.settings`'s own base
+  `get_values()`/`set_values()`, no override needed. The module's own prior
+  `get_values()`/`set_values()` overrides (anchors `user_websites:COMM_settings_get_values` /
+  `user_websites:COMM_settings_set_values`) were removed -- see ADR-0096
+  (`hams_shared/docs/adrs/0096_res_config_settings_authorization_model.md`) -- because they wrote
+  `group_user_websites_administrator.user_ids` as a side effect of every Settings save, which is
+  what let an unrelated field's write cascade into a crash, and because that access-csv row also
+  granted this role model-level access to every OTHER module's Settings fields. Managing this
+  group's membership now goes through Odoo's own "Groups" screen (button on the Settings page),
+  verified by `[@ANCHOR: test_dropzone_settings]`.
 
 ### SQL Views and Functions (`_auto=False`, proven live by any test that successfully queries the resulting view -- a broken `init()` would fail module installation before any such test could run)
 * **Public Directory View:** `[@ANCHOR: user_websites:COMM_public_directory_view_init]`.

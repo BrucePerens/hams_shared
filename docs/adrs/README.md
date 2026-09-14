@@ -98,6 +98,17 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   at the moment of legitimate use; never let a decrypted credential reach a log or side channel.
   Prompted by a real over-broad `ham_logbook` trust-boundary finding -- that field's own end-to-end
   audit against this ADR is tracked in `night_shift_todo.md`, not restated here.
+* [ADR 0096: `res.config.settings` Authorization Is All-or-Nothing, By Design](0096_res_config_settings_authorization_model.md)
+  `res.config.settings` write access is `base.group_system` only, full stop -- no module may grant
+  a different group model-level access to this shared `TransientModel`, since `ir.model.access.csv`
+  grants are per (model, group), never per field, so there is no such thing as a narrower delegation
+  here. `set_values()`/`get_values()` overrides may only persist independent scalar
+  `config_parameter` values, never a side effect on another model, because this method fires
+  unconditionally on every installed module's Settings save. Delegating a narrower administrative
+  role goes through Odoo's own Users & Groups mechanism instead. Prompted by a real `user_websites`
+  privilege-escalation hole (a content-moderation role held read/write on every module's Settings
+  fields, including other modules' credentials) found alongside the crash that originally motivated
+  this ADR; both are recorded in `night_shift_todo.md`.
 * [ADR 0097: No Ham Radio Function Depends on Our Server](0097_server_independent_relay_operation.md)
   Given `hams_local_relay` installed and the remote endpoint directly reachable over the Internet,
   controlling your own radio, a friend's/club's authorized radio, or any repeater you're authorized

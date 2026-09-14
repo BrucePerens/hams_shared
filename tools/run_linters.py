@@ -1268,6 +1268,36 @@ def main():
                 print(res.stderr, end="")
             linters_failed = True
 
+    # 51. check_res_config_settings_access -- ADR-0096, born from the real
+    # night_shift_todo.md "saving ANY Settings page can crash with an
+    # AccessError" investigation: user_websites/security/ir.model.access.csv
+    # granted group_user_websites_administrator (not a base.group_system
+    # group) full read/write/create/unlink on the ENTIRE shared
+    # res.config.settings model -- ir.model.access.csv grants are per
+    # (model, group), never per field, so that was never actually scoped to
+    # user_websites' own 3 settings fields; it handed that role read/write
+    # on every OTHER installed module's settings too (confirmed
+    # concretely: distributed_redis_cache's redis_password, cloudflare's
+    # cloudflare_api_token). Same reasoning as step 30: always scans the
+    # full repo, since a module adding this kind of row can happen anywhere.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_res_config_settings_access.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
