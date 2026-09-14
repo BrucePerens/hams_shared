@@ -8,7 +8,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 7
+version: 8
 ---
 
 # Dependabot & CI Build Watch
@@ -45,6 +45,31 @@ right channel for those; messaging is an ADDITION to the durable record for urge
 replacement for it (a chip or message alone is not durable -- see the
 `hams-durable-tracking-over-chips` convention, which is exactly why this all also goes into
 `night_shift_todo.md` regardless of whether you also messaged someone).
+
+**Check `ListAgents` before starting substantive work, not just when something urgent comes up.**
+This skill runs both as an hourly scheduled task and as manual, on-demand sessions Bruce starts
+himself -- on a shared dev box, that means multiple sessions can genuinely be working the same
+CI/dependency backlog at the same moment, all with standing authorization to act autonomously. Real
+collision, 2026-09-14: two sessions independently started the identical rust-toolchain 1.98.1 bump
+and clippy-fix task (same Bruce instruction, given separately to both), and it was only caught
+because one session proactively messaged the other -- if neither had checked in, both would have
+burned real time re-deriving the same 26 lint fixes. A second, smaller mishap the same day: a
+session running `git commit` without reviewing `git diff --cached` first swept up another session's
+already-staged, unrelated changes into its own commit (content wasn't lost, but the commit message
+became misleading, and it took a cross-session exchange to sort out and record correctly).
+Concretely: before committing to a specific fix (not before reading/investigating -- that's always
+safe), a quick `ListAgents` costs nothing and tells you if another session is active on the same
+codebase; if its name or a recent message suggests overlapping work, say so with `SendMessage`
+before duplicating effort, not after. Before running `git add`/`git commit` on this shared working
+tree, check `git diff --cached` (or use a scoped pathspec on `git add`, or a temporary
+`GIT_INDEX_FILE` for the whole add-then-commit sequence) rather than trusting that everything
+currently staged is your own -- another session's `git add`ed-but-not-yet-committed work can be
+sitting in the same shared index. When you do find a real overlap: don't just pick one side
+arbitrarily -- coordinate on who keeps working which piece (per file/module is usually a clean
+split), reuse completed work across sessions rather than redoing it (a `git worktree diff` or
+patch export both sessions can apply is often faster than re-deriving from scratch), and record the
+coordination trail in `night_shift_todo.md` so it's not just two chat messages that vanish with the
+sessions.
 
 The three real repos: `/home/bruce/workspace/hams_com` (GitHub `BrucePerens/hams_com`),
 `/home/bruce/workspace/hams_open` (`BrucePerens/hams_open`), and
