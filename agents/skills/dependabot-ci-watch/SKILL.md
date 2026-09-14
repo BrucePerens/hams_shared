@@ -266,6 +266,18 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   Windows) will fail at `curl "$ODOO_URL/..."` with an empty URL once its build is green. That is
   expected before deployment, not a new bug. Check `gh secret list` fresh, because it stops being
   true once Bruce creates them.
+- **The hams_com git index is shared too, not just the working tree.** On 2026-09-14 this run
+  committed `night_shift_todo.md` with a plain `git commit`, and another session's already-staged
+  Rust changes (199 of 201 lines) went in under a todo-only commit message and were pushed.
+  `git commit -- <path>` doesn't fully protect you either: it commits the path's *working-tree*
+  content, including any other session's uncommitted edits to the same file. The safe pattern for
+  appending only your own text to a shared file is a private index:
+  `git show HEAD:<file> > tmp; cat my_entry >> tmp; GIT_INDEX_FILE=idx git read-tree HEAD;
+  GIT_INDEX_FILE=idx git update-index --add --cacheinfo 100644,$(git hash-object -w tmp),<file>;
+  c=$(git commit-tree $(GIT_INDEX_FILE=idx git write-tree) -p HEAD -m "...")`. Then check
+  `git diff --stat HEAD $c`, run `git update-ref refs/heads/main $c HEAD`, and put the new blob into
+  the real index for that one path, so the shared index doesn't show your commit staged in reverse.
+  Also append the same entry to the working-tree file.
 
 ## Standing decisions from Bruce -- act on these, don't ask
 
