@@ -302,9 +302,21 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   Every `Build Local Relay` run on a commit from before hams_com `65bc44e2` re-poisons the workspace
   with root-owned files, until they drain. Before that commit, the job-level container cleanup never
   worked (see the `$GITHUB_WORKSPACE` note above), so runs on commits after `9c77855d` but before
-  `65bc44e2` (e.g. 34900430486, 34903239033) don't verify the container-leg cleanup either. `gh run cancel` on superseded runs and a manual `chmod` of the
-  `_work` tree were both denied by the scheduled run's permission classifier on 2026-09-14. Record
-  them for Bruce rather than routing around the denial.
+  `65bc44e2` (e.g. 34900430486, 34903239033) don't verify the container-leg cleanup either.
+- **You may cancel superseded runs and clean the runner workspace yourself.** Bruce added these to
+  `permissions.allow` on 2026-09-14 and asked that this skill say so: `Bash(gh run cancel:*)`,
+  `Bash(gh run *)`, `Bash(sudo -n chmod *)`, and `Bash(sudo *)`. Before they were added, the
+  permission classifier denied both actions. `gh run *` also covers `gh run watch`, `list`, `view`
+  and `rerun`, so you can watch a verification run to completion instead of leaving it for the next
+  hourly run.
+  - Cancel a queued run when a later queued run of the same workflow on `main` makes it pointless.
+  - Clean the runner workspace (`sudo -n find <_work tree> -not -user github-runner | wc -l`, then
+    `sudo -n chmod -R a+rwX /home/github-runner/actions-runner-hams-com/_work/hams_com/hams_com`)
+    when checkout fails with `EACCES`.
+  - Run each `gh run cancel <id>` as its own simple command, not in a shell loop, so it matches the
+    allow rule.
+  - Never cancel a run that is already in progress on a publish step.
+  - Record what you cancelled in `night_shift_todo.md`.
 - **`hams_com` has no repository secrets** (`gh secret list` is empty, as of 2026-09-14; no
   production Odoo exists yet). Every publish step on `main` (binary zips, .deb, .rpm, apt repo,
   Windows) will fail at `curl "$ODOO_URL/..."` with an empty URL once its build is green. That is
