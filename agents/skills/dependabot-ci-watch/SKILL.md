@@ -8,7 +8,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 3
+version: 4
 ---
 
 # Dependabot & CI Build Watch
@@ -126,9 +126,17 @@ gh run list --repo BrucePerens/<repo> --limit 15 --json databaseId,name,status,c
 
 For each run with `conclusion: "failure"` on the main/default branch that's NOT already recorded
 in `night_shift_todo.md` (grep for the workflow name + rough date):
-1. Get the real failure log: `gh run view <databaseId> --repo BrucePerens/<repo> --log-failed`
+1. Get the real failure log. First map which jobs/steps failed:
+   `gh run view <databaseId> --repo BrucePerens/<repo> --json jobs --jq '.jobs[] | select(.conclusion=="failure") | "\(.databaseId) \(.name) [" + ([.steps[]|select(.conclusion=="failure")|.name]|join(", ")) + "]"'`
+   then fetch each failing job's own log: `gh api repos/BrucePerens/<repo>/actions/jobs/<job_id>/logs`.
+   Don't rely on `gh run view --log-failed` alone -- it returns EMPTY output for jobs that fail in
+   `actions/checkout`, in service-container startup, or before a runner was ever assigned (3 of 4
+   failing runs on 2026-09-14 gave 0 lines that way).
 2. Read enough of the actual log to find the real root cause -- don't guess from the workflow
-   name alone.
+   name alone. Read EVERY failing job's own failing step, not just the first one: one run of
+   `Build Local Relay` can fail for several unrelated reasons at once (on 2026-09-14 it was
+   eight legs with six distinct causes), and fixing one shared-looking cause does not turn the
+   other legs green.
 3. If it's a real, fixable bug in this codebase's own script/config/code (a real example already
    fixed once: a `jq --arg` call blowing past the kernel's `ARG_MAX` on a multi-MB base64 payload,
    fixed with `jq --rawfile` reading from a file instead -- see
@@ -158,6 +166,52 @@ repos' workflows, it needs this same step, or this exact failure mode will come 
 If you ever see `Deleting the contents of...`/`EACCES`/`rmdir` in a checkout failure log again,
 this is almost certainly the same root cause: check the runner host directly (`sudo find
 <runner's _work tree> -not -user github-runner`) before assuming it's something new.
+
+**More operating knowledge (added 2026-09-14, second hourly run)**:
+- **Billing-blocked GitHub-hosted jobs** (`build-macos`, the one leg still on `macos-latest`): the
+  job shows `conclusion: failure` with empty `steps`, no `runner_name`, and a `BlobNotFound` 404
+  for its log. The real reason is only in the check-run annotations:
+  `gh api repos/BrucePerens/<repo>/check-runs/<job_id>/annotations --jq '.[].message'` (seen:
+  "recent account payments have failed or your spending limit needs to be increased"). Only
+  Bruce can fix billing. Every other hams_com job runs on the self-hosted `hams-devbox` runner
+  and is unaffected.
+- **Container jobs run as root, but `HOME=/github/home` is a bind mount owned by the host's
+  `github-runner` account.** Tools that insist on owning their home refuse to run: Wine exits with
+  `wine: '/github/home' is not owned by you` (fixed in `build-windows` with a job-level
+  `WINEPREFIX: /tmp/wine-ci-prefix`), and rustup prints a harmless
+  `error: $HOME differs from euid-obtained home directory` in every container leg. That rustup
+  line is noise, not the failure -- keep reading.
+- **The arm64 `build-linux` leg runs `ubuntu:24.04` under QEMU user-mode emulation on this x86_64
+  host.** It needs `qemu-aarch64` binfmt handlers registered on the host, and handlers registered
+  with `tonistiigi/binfmt --install` do NOT survive a reboot. Signature: the job container is
+  "not running" at checkout. Check with `ls /proc/sys/fs/binfmt_misc/ | grep qemu` or
+  `docker run --rm --platform linux/arm64 arm64v8/ubuntu:24.04 uname -m`, which prints
+  `exec format error` when the handlers are missing. Re-registering is a host-level change for
+  Bruce, not something to do from an unattended run.
+- **`hams_local_relay` pins its compiler in `rust-toolchain.toml`** (1.97.1 as of 2026-09-14), and
+  CI's `cargo clippy` runs under that pin, not under whatever `dtolnay/rust-toolchain@stable`
+  installed. To reproduce CI's clippy locally, run it inside `daemons/hams_local_relay` with no
+  `+toolchain` override, using a scratch `CARGO_TARGET_DIR` so you don't disturb other sessions'
+  builds. Running `cargo +stable clippy` there instead picks up newer lints (1.98.1 added 26
+  `chunks_exact`-with-constant-size errors) that CI won't hit until the pin is bumped, which is
+  worth knowing when someone does bump it.
+- **`build-relay.yml` only triggers on pushes under `daemons/hams_local_relay/**`.** A push that
+  only touches the workflow file does not run CI. Verifying such a fix needs the next relay push
+  or `gh workflow run build-relay.yml --ref main` (workflow_dispatch builds and tests but never
+  publishes). That runs a full matrix on Bruce's laptop, so check `ListAgents` and coordinate
+  first; another session may already have one in flight.
+- **`hams_open`'s `Dependency Release Watch` shows red by design** whenever a hand-tracked pin
+  (`hams_shared/tools/dependency_watch.json`) is behind upstream. It is a staleness alarm, not a
+  CI bug. Don't re-triage it each run; only note when the set of stale pins changes.
+- **The hams_com working tree is shared with other live Claude sessions.** Commits and line
+  numbers can change under you mid-run. `git fetch` and re-read before editing, find edit sites
+  by content rather than stale line numbers, and `git add` only the specific files you changed.
+  If a peer session is working the same failures (`ListAgents`, then a short `SendMessage`
+  naming who takes which item), split the work rather than both editing the same workflow file.
+- The scheduled task's own prompt (`~/.claude/scheduled-tasks/dependabot-and-ci-watch/SKILL.md`)
+  still says hams_com pushes are blocked by the missing `workflow` scope and unpushed commit
+  `a723508b`. That is stale as of 2026-09-14: the scope was granted and `a723508b` is pushed.
+  This file is authoritative; check `gh auth status` fresh.
 
 ## Step 3: Record everything, always
 
