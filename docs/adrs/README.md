@@ -105,3 +105,10 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   syncs later. Names a real, unresolved tension (locally-cached authorization for offline
   availability vs. timely revocation) rather than papering over it, and sets a standing review bar
   for all future features: does this need hams.com up at the moment of use, and why.
+* [ADR 0098: Public-Key Friend/Club Authorization and Direct Relay Connectivity](0098_public_key_authorization_direct_connectivity.md)
+  Resolves ADR 0097's own named tension concretely: friend/club timeshare authorization moves from a
+  live per-connection Odoo lookup to a locally-verified public-key credential (extending the relay's
+  already-real Noise/Ed25519 attestation pipeline, not a new crypto scheme), hams.com's own relay
+  infrastructure becomes a fallback for when direct relay-to-relay connectivity genuinely isn't
+  available rather than the default path, and IPv6 is a first-class connectivity preference given how
+  much less it relies on NAT than IPv4.
