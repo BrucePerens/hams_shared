@@ -1128,8 +1128,15 @@ EnvironmentFile=-/opt/hams/etc/redis.env
 EnvironmentFile=-/opt/hams/etc/rabbitmq.env
 EnvironmentFile=-/opt/hams/etc/pdns.env
 EnvironmentFile=-/opt/hams/etc/odoo.env
-Environment="ODOO_USER=logbook_api_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/logbook_api_service_internal.key"
+# Real, dedicated service account for this daemon -- previously guessed as
+# logbook_api_service_internal (the READ-ONLY public-API proxy account),
+# which cannot even authenticate to ham.qso.sync_qsl_batch() (hardcoded to
+# require ham_logbook.user_logbook_sync_service specifically) or write
+# lotw_last_sync/eqsl_last_sync back to res.users (that account's own ACL
+# is read-only). See night_shift_todo.md's "Follow-up, 2026-09-14" entry
+# and its closure below for the real investigation.
+Environment="ODOO_USER=logbook_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/logbook_sync_service_internal.key"
 Environment="POLL_INTERVAL=86400"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
@@ -1181,8 +1188,14 @@ EnvironmentFile=-/opt/hams/etc/rabbitmq.env
 EnvironmentFile=-/opt/hams/etc/pdns.env
 EnvironmentFile=-/opt/hams/etc/odoo.env
 EnvironmentFile=-/opt/hams/etc/clublog.env
-Environment="ODOO_USER=logbook_api_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/logbook_api_service_internal.key"
+# Real, dedicated service account for this daemon -- previously guessed as
+# logbook_api_service_internal (the READ-ONLY public-API proxy account, an
+# unrelated consumer), which cannot write clublog_last_sync/clublog_qso_upload_status
+# back to Odoo (that account's own ACL is read-only, and it was never
+# provisioned via daemon.key.registry for this daemon at all). See
+# night_shift_todo.md's "Follow-up, 2026-09-14" entry and its closure below.
+Environment="ODOO_USER=clublog_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/clublog_sync_service_internal.key"
 Environment="POLL_INTERVAL=86400"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
