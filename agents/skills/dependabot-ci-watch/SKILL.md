@@ -20,6 +20,21 @@ hour, for now." This skill is the repeatable procedure for that -- whether trigg
 scheduled task or invoked manually in a fresh session with no memory of any prior conversation, so
 read this whole file rather than assuming context.
 
+**This skill file is meant to improve itself.** Bruce's own instruction: "modify the skill itself
+with context it needs to start work, so that it can start more efficiently." If a run discovers a
+new, reusable fact worth knowing on every future run -- a new token/permission-scope limitation (the
+`workflow`-scope gap below was found and added exactly this way), a recurring CI failure's real root
+cause, a dependency-ecosystem quirk in one of these three repos, a faster way to check something --
+add it directly to THIS FILE as part of that run's own commit, not only to `night_shift_todo.md`.
+`night_shift_todo.md` is the durable historical record of what happened; this file is the durable
+OPERATING KNOWLEDGE the next run starts with, and the two serve different purposes -- a fact that
+would help every future run start faster or avoid rediscovering the same wall belongs here, edited
+directly, committed and pushed alongside whatever else that run did (matching the "keep this and the
+scheduled task's own prompt in sync" note at the bottom of this file). Don't let this file grow
+unbounded with one-off trivia, though -- only add something here if a FUTURE run would genuinely
+benefit from already knowing it, the same bar as any other durable-knowledge decision in this
+codebase.
+
 **Three ways to act, not just one**: fix things yourself and push, record durably in
 `night_shift_todo.md`, or message another active Claude session directly (`ListAgents` to see
 what's running, `SendMessage` to reach one) if something is time-sensitive -- a real, currently-
@@ -86,6 +101,21 @@ For each open alert found:
    suite) directly. For anything flagged as needing Bruce's own judgment, don't push code changes
    you're not confident in -- pushing your own uncertainty is different
    from pushing a verified fix.
+
+   **Real, confirmed gap in the current token's scope**: the `gh` token's scopes are
+   `admin:public_key, gist, read:org, repo` -- notably NOT `workflow`. GitHub specifically
+   requires the `workflow` OAuth scope to push ANY change to a file under `.github/workflows/`,
+   even a plain `.sh` helper script that lives there but isn't itself a `.yml` workflow
+   definition (confirmed directly: a real push touching `.github/workflows/publish_relay_binary.sh`
+   was rejected with `refusing to allow an OAuth App to create or update workflow ... without
+   'workflow' scope`, exit non-zero, commit made locally but not pushed). If you fix something
+   under `.github/workflows/` (a real, plausible thing for this exact task to need, since CI
+   script bugs live there), expect this same rejection. Do NOT attempt to work around it (no
+   force-push, no alternate auth path, no creating your own token). Commit the fix locally as
+   normal, then report in your `night_shift_todo.md` entry that it's committed-but-not-pushed
+   specifically because of this scope gap, and name the exact fix: either Bruce pushes that one
+   commit himself, or he runs `gh auth refresh -s workflow` (an interactive device-code approval
+   only he can complete) to add the missing scope permanently.
 
 ## Step 2: Check CI build status
 
