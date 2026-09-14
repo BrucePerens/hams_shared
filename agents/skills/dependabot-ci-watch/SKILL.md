@@ -299,8 +299,10 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   runner often has several runs queued, so runs on commits from before a fix keep reporting the
   "fixed" failure for hours afterward. On 2026-09-14 a `jq: Argument list too long` and a burst of
   checkout `EACCES` both showed up after their fixes had been pushed, and both came from such runs.
-  Runs queued from before `9c77855d` still re-poison the workspace with root-owned files after
-  every cleanup, until they drain. `gh run cancel` on superseded runs and a manual `chmod` of the
+  Every `Build Local Relay` run on a commit from before hams_com `65bc44e2` re-poisons the workspace
+  with root-owned files, until they drain. Before that commit, the job-level container cleanup never
+  worked (see the `$GITHUB_WORKSPACE` note above), so runs on commits after `9c77855d` but before
+  `65bc44e2` (e.g. 34900430486, 34903239033) don't verify the container-leg cleanup either. `gh run cancel` on superseded runs and a manual `chmod` of the
   `_work` tree were both denied by the scheduled run's permission classifier on 2026-09-14. Record
   them for Bruce rather than routing around the denial.
 - **`hams_com` has no repository secrets** (`gh secret list` is empty, as of 2026-09-14; no
