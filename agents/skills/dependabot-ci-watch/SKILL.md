@@ -371,6 +371,21 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   2026-09-15: `build-raspbian` doesn't run `install_debian_deps.sh`, so it needs the host tools
   (pkg-config, cmake, autotools) listed itself, plus host `libhamlib-utils`. Without that package,
   build.rs bakes an empty rig model table into the armv7 binary, and the build still succeeds.
+- **The ubuntu:20.04 relay leg links Hamlib 3.3, not 4.x.** Ubuntu 20.04's libhamlib is 3.3.
+  `install_relay_runtime_deps.sh` builds static 4.7.2 only for mercury, and the relay itself
+  still links the distribution library. So relay code and tests must stick to what 3.3 has.
+  Three differences surfaced on 2026-09-15, the first time that leg reached Run Tests:
+  (1) `rig_get_conf2` doesn't exist. The test binary fails to link with `undefined symbol`, while
+  the release build still links, because only a test called it. Use `rig_get_conf` with a buffer
+  of at least 128 bytes.
+  (2) Rig model numbers are `backend*100+n` (IC-7300 = 373), not 4.x's `backend*1000+n` (3073).
+  build.rs bakes the matching table, so tests take the number from
+  `hamlib::linked_hamlib_ic7300_model_id()` instead of a literal.
+  (3) The dummy rotator's azimuth range is -180..180, not -180..450.
+  To check a 3.3 question, the 3.3 source tarball is on the Hamlib GitHub releases page (tag
+  `3.3`). A full `cargo test` for this leg runs in an `ubuntu:20.04` container: install
+  `install_debian_deps.sh` and `install_relay_runtime_deps.sh`, then run cargo with a scratch
+  `CARGO_TARGET_DIR`. The build takes about 7 minutes, the tests about 5.
 - **Wine GUI installers need a virtual display in CI.** Inno Setup's `innosetup-*.exe
   /VERYSILENT` still creates a window. With no X display it exits 1 without printing anything
   under `WINEDEBUG=-all`. Pass `/LOG="C:\x.log"` and read the log from the Wine prefix to see the
