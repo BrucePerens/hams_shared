@@ -5562,3 +5562,49 @@ def test_daemon_key_registration_flags_an_unregistered_key_and_passes_a_register
     # Not a hams_com checkout (files absent): a silent no-op, never a false positive.
     with tempfile.TemporaryDirectory() as tmpdir:
         assert check_burn_list.check_daemon_key_registration(tmpdir) == []
+
+
+# CRITICAL HARDCODED CREDENTIAL DEFAULT: a credential env read under daemons/, scripts/ or
+# tools/ must not fall back to a literal (2026-09-15: RMQ_PASS="guest", DB_PASS="odoo").
+_CRED_DEFAULT_MSG = "HARDCODED CREDENTIAL DEFAULT"
+
+
+def test_credential_env_read_with_literal_default_is_flagged_in_daemons_scripts_and_tools():
+    for path in ("daemons/pdns_sync/main.py", "scripts/rotate.py", "tools/some_tool.py", "pager_duty/daemon/monitor.py"):
+        for line in (
+            'RMQ_PASS = os.environ.get("RMQ_PASS", "guest")\n',  # burn-ignore-env: fixture for this rule's own test
+            "DB_PASS = os.getenv('DB_PASS', 'odoo')\n",  # burn-ignore-env: fixture for this rule's own test
+            'TOKEN = os.environ.get("GITHUB_TOKEN" , f"x")\n',  # burn-ignore-env: fixture for this rule's own test
+            'K = os.environ.get("PDNS_API_KEY", "secret")\n',  # burn-ignore-env: fixture for this rule's own test
+        ):
+            errors, _warnings = _scan_file(line, path, is_odoo_module=False)
+            assert any(_CRED_DEFAULT_MSG in e for e in errors), (path, line, errors)
+
+
+def test_credential_env_read_without_a_literal_default_is_not_flagged():
+    for line in (
+        'RMQ_PASS = os.environ.get("RMQ_PASS", "")\n',
+        'RMQ_PASS = os.environ.get("RMQ_PASS")\n',
+        'RMQ_PASS = os.environ["RMQ_PASS"]\n',
+        'PW = os.environ.get("DB_PASS", default_pw)\n',
+        # Not credential names: a fixed role name and a non-secret setting.
+        'DB_USER = os.environ.get("DB_USER", "odoo")\n',
+        'HOST = os.environ.get("RABBITMQ_HOST", "rabbitmq")\n',
+    ):
+        errors, _warnings = _scan_file(line, "daemons/pdns_sync/main.py", is_odoo_module=False)
+        assert not any(_CRED_DEFAULT_MSG in e for e in errors), (line, errors)
+
+
+def test_credential_default_rule_only_covers_daemon_script_and_tool_paths():
+    # Odoo module code is covered by the stricter TENANT LEAK rule instead.
+    line = 'RMQ_PASS = os.environ.get("RMQ_PASS", "guest")\n'  # burn-ignore-env: fixture for this rule's own test
+    errors, _warnings = _scan_file(line, "some_module/models/res_users.py", is_odoo_module=True)
+    assert not any(_CRED_DEFAULT_MSG in e for e in errors)
+    assert any("TENANT LEAK" in e for e in errors)
+
+
+def test_credential_default_rule_is_suppressed_by_burn_ignore_env():
+    line = 'PW = os.environ.get("TEST_DB_PASS", "placeholder")  # burn-ignore-env: test-only placeholder\n'
+    errors, _warnings = _scan_file(line, "tools/some_tool.py", is_odoo_module=False)
+    assert not any(_CRED_DEFAULT_MSG in e for e in errors)
+    assert not any("UNAUTHORIZED BYPASS" in e for e in errors)

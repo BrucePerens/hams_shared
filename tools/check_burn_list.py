@@ -452,6 +452,24 @@ GENERAL_ERROR_RULES = [
         "CRITICAL TENANT LEAK: Do not use environment variables as fallbacks for credentials in multi-tenant systems. This breaks isolation. Use configuration models or secure daemon key registries instead.",
     ),
     (
+        # The complement of the rule above, for exactly the paths it excludes. Reading a
+        # credential from the environment is the correct pattern for a standalone daemon or
+        # script; giving that read a hardcoded fallback is not. Found 2026-09-15:
+        # adif_processor and pdns_sync defaulted RMQ_PASS to "guest" (RabbitMQ's factory
+        # account) and dx_firehose defaulted DB_PASS to "odoo". Their systemd units use
+        # EnvironmentFile=-, which tolerates a missing file, so a misnamed env file would have
+        # started them with well-known credentials instead of failing (fail-fast philosophy).
+        # An empty default is fine -- the daemon's own startup check refuses it. The name
+        # list is deliberately narrow (no bare KEY/USER) so a cache-key prefix or a fixed
+        # role name like DB_USER="odoo" isn't flagged. Suppress a real exception with
+        # `# burn-ignore-env: <reason>`.
+        r"(?:^|/)(?:daemons?|scripts|tools)/.*\.py$",
+        re.compile(
+            r"os\.(?:environ\.get|getenv)\s*\(\s*['\"][A-Za-z0-9_]*(?:PASS|SECRET|TOKEN|API_KEY|PRIVATE_KEY|CRED)[A-Za-z0-9_]*['\"]\s*,\s*[rbuf]?['\"][^'\"]"
+        ),
+        "CRITICAL HARDCODED CREDENTIAL DEFAULT: A credential read from the environment must not fall back to a literal value -- a missing env file would silently start the process with a well-known password. Default to empty and refuse to start when it is unset.",
+    ),
+    (
         r"\.(py|js|xml|csv)$",
         re.compile(r"\[[^\]\n]+\]\(https?://[^)\n]+\)"),
         "CRITICAL MARKDOWN BLEED: Found a Markdown-formatted URL `[text](url)` in a non-Markdown file. The Web UI occasionally corrupts raw URLs into markdown links. You MUST output URLs as raw strings.",
@@ -4311,6 +4329,9 @@ def scan_file(filepath, is_odoo_module=False):
                 "burn-ignore-csrf-token",
                 "burn-ignore-sudo",
                 "burn-ignore-route",
+                # Suppresses CRITICAL HARDCODED CREDENTIAL DEFAULT (GENERAL_ERROR_RULES) for a
+                # credential env read whose literal fallback is genuinely safe, e.g. a
+                # test-only placeholder. Always give the reason after the tag.
                 "burn-ignore-env",
                 "burn-ignore-test-tags",
                 "burn-ignore-pika",
