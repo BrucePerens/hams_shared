@@ -434,9 +434,12 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   was captured from Bruce's shell, so it lists `/home/bruce/.local/bin`, `.cargo/bin`, `go/bin` and
   Claude plugin directories ahead of `/usr/bin`. Only `/home/bruce/.local` and `.config` are mode
   700, so the EACCES lines are just those entries, and `git` falls through to `/usr/bin/git`.
-  **`/home/bruce/.cargo/bin` and `go/bin` are reachable**: until hams_com `security-audit`'s own
-  toolchain steps landed (2026-09-15), both host-side `security-audit` jobs ran
-  `/home/bruce/.cargo/bin/cargo audit`, meaning Bruce's own rustup and cargo-audit. An earlier run
+  **`/home/bruce/.cargo/bin` and `go/bin` are reachable**: both host-side `security-audit` jobs ran
+  `/home/bruce/.cargo/bin/cargo audit`, meaning Bruce's own rustup and cargo-audit. The first fix
+  (hams_com `e1934525`) still let `dtolnay/rust-toolchain` run Bruce's rustup. That action installs
+  rustup only when `command -v rustup` finds none anywhere on PATH, so a stale entry is enough to
+  skip it. The jobs now install the runner account's own rustup first (hams_com `f22e97c0`). Any
+  new host-side Rust job needs that same pre-step, not just `dtolnay/rust-toolchain`. An earlier run
   of this skill called the whole PATH harmless after reading one EACCES line. Check reachability as
   the runner account instead: `sudo -n -u github-runner test -x <dir>`. A host-side job's
   `[command]` log lines show which binary actually ran. `runsvc.sh` exports `.path` once at service
