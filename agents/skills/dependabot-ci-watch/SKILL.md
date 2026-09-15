@@ -501,6 +501,10 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `RELAY_RELEASE_SIGNING_KEY` and requires 64 bytes (hams_com `9c68a521`), because `printf '%s'`
   truncated a raw key at a NUL byte. So set that secret base64-encoded
   (`base64 -w0 release.key | gh secret set ...`). The GPG key is armored text and needs no encoding.
+  **A job only sees a secret that existed when the job started.** `gh secret list` prints each
+  secret's last-update time. Compare it with the job's start time before calling an empty secret a
+  wiring bug. In run 35008066571, the windows and raspbian publish steps started at 19:06 and 19:15
+  UTC and logged `RELEASE_SIGNING_KEY is not set`. The secret was set at 19:29, so that was expected.
   **With the secrets set, each publish step signs before it reaches the expected `curl: (3)`.** A
   publish step that fails earlier, in `cargo install zipsign`, `rpmsign`, or `gpg --import`, is a
   new failure, not the missing-`ODOO_URL` case. The binary publish log should show
