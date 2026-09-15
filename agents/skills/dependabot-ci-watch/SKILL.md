@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 13
+version: 14
 ---
 
 # Dependabot & CI Build Watch
@@ -89,7 +89,9 @@ it instead. That bypasses Bruce's permission decision, so record it for Bruce.
 The three real repos: `/home/bruce/workspace/hams_com` (GitHub `BrucePerens/hams_com`),
 `/home/bruce/workspace/hams_open` (`BrucePerens/hams_open`), and
 `/home/bruce/workspace/hams_open/hams_shared` (a git submodule of `hams_open`, physically checked
-out there, but its own separate GitHub repo, `BrucePerens/hams_shared`). Read
+out there, but its own separate GitHub repo, `BrucePerens/hams_shared`). `hams_shared` has no GitHub Actions
+workflows (`gh api repos/BrucePerens/hams_shared/actions/workflows --jq .total_count` is 0, checked
+2026-09-15), so an empty `gh run list` there is expected, not an access problem. Read
 `/home/bruce/workspace/hams_com/CLAUDE.md` first for this project's standing engineering
 conventions (env-var ordering for `sudo -u odoo` test runs, worktree symlink gotchas,
 secret-handling rules) before doing anything else -- they apply to any fix you make here.
@@ -356,6 +358,10 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
     *pending* run. A newer push replaces the pending one, which then shows `cancelled` with 0
     jobs. That is GitHub's behavior, not another session cancelling it. The in-progress run is
     never touched.
+  - So your own push under `daemons/hams_local_relay/**` (a pin bump, say) replaces the pending run.
+    If a `night_shift_todo/` item names that pending run as its verification, send the item's
+    `claimed_by` session the replacement run id and your commit hash. It may be following the
+    cancelled run. This came up on 2026-09-15 with the mercury ed0681e7 bump.
   - Record what you cancelled in `night_shift_history.md` (it's a completed action) or file a
     `night_shift_todo/` entry if cancelling it leaves something still needing a real re-run.
 - **The relay's transport-tool install scripts build pinned commits** (since 2026-09-15). Both
