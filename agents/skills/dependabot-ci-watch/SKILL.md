@@ -300,6 +300,12 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   (`hams_shared/tools/dependency_watch.json`) is behind upstream. It is a staleness alarm, not a
   broken script -- and per Bruce's standing decision below, a red run is work to do: bump the stale
   pins, following the verification procedure each entry's own `notes` field documents.
+  **That workflow runs only on Mondays (cron `0 13 * * 1`), so a green run or a "clear" note goes
+  stale within hours.** mercury's `mercuryv2` branch in particular moves several times a day. Each
+  run of this skill should run the checker itself, from `hams_open`:
+  `python3 hams_shared/tools/check_dependency_releases.py` (exit 1 means a pin is behind). It takes a
+  few seconds. On 2026-09-15 (seventeenth check), a note saying "clear" had been copied forward for
+  13 hours while mercury was behind again.
 - **The hams_com working tree is shared with other live Claude sessions.** Commits and line
   numbers can change under you mid-run. `git fetch` and re-read before editing, find edit sites
   by content rather than stale line numbers, and `git add` only the specific files you changed.
