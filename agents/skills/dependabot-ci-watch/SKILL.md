@@ -8,7 +8,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 9
+version: 10
 ---
 
 # Dependabot & CI Build Watch
@@ -443,6 +443,14 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `git diff --stat HEAD $c`, run `git update-ref refs/heads/main $c HEAD`, and put the new blob into
   the real index for that one path, so the shared index doesn't show your commit staged in reverse.
   Also append the same entry to the working-tree file.
+- **Before pushing hams_com, run `git log --oneline origin/main..main`.** Another session may
+  have committed on `main` and be holding the push on purpose. For example, a relay change can wait
+  until a local test run finishes, because pushing anything under `daemons/hams_local_relay/**`
+  queues a full relay CI matrix on the dev box. Pushing your commit would push theirs too. If
+  the list shows commits that aren't yours, commit locally and don't push. Use `ListAgents` and
+  `SendMessage` to find the owner and agree that it pushes your commit along with its own. Note
+  that in `night_shift_todo.md`. This happened on 2026-09-15, eighth hourly check (hams_com
+  `afd538ff`).
 
 ## Standing decisions from Bruce -- act on these, don't ask
 
