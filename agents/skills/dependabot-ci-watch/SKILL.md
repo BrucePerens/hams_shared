@@ -217,7 +217,12 @@ ever recreated) as its last step. **Inside a job container, use `$GITHUB_WORKSPA
 container, where the workspace is mounted at `/__w/<repo>/<repo>`. The step was first written with
 the expression, and every container job's cleanup exited 1 with `chmod: cannot access ...: No such
 file or directory`. It cleaned nothing and turned green legs red for hours before anyone read the
-step's own log line (fixed 2026-09-14, fourth hourly run). A step that runs on the host (like the
+step's own log line (fixed 2026-09-14, fourth hourly run). The fix is confirmed in real CI: in run
+34910889692, the rockylinux:9 and ubuntu:24.04 legs ran the cleanup with no error. The count of
+runner workspace files that are neither owned by github-runner nor world-writable
+(`sudo -n find <_work tree> -not -user github-runner -not -perm -o+w | wc -l`) climbed to ~10k
+while a container leg was writing and dropped to 0 after each leg's cleanup. A nonzero count while
+a container is running (`sudo -n docker ps`) is normal and does not mean the workspace is poisoned. A step that runs on the host (like the
 `docker run -v` cleanup below) is correct with the expression. When verifying a cleanup fix,
 read the cleanup step's own log output. The job going green or red doesn't tell you whether it worked. If a NEW container-based job is ever added to any of these three
 repos' workflows, it needs this same step, or this exact failure mode will come back for that job.
