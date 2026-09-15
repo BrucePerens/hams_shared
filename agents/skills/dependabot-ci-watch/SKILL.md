@@ -358,6 +358,31 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   varies `container:` needs the same `key:`. To see which cache a leg restored, read the rust-cache
   step's `Restored from cache key` line. `gh api repos/BrucePerens/hams_com/actions/caches` lists
   the caches and when each was saved.
+- **Reproduce a failing container leg locally before calling a CI fix done, and keep going past
+  the first error.** `build-raspbian` and `build-windows` each hid several failures in a row,
+  because each failure stops the job at its first broken step. Stage the committed source with
+  `git archive <commit> daemons/hams_local_relay` (plus hams_open's `daemons/ham_digital_modes` in
+  a sibling directory, so the symlink resolves). Then run the job's steps in a `docker run --rm
+  --cpus N --memory Ng ubuntu:24.04` container and fix each new error in turn. Found this way on
+  2026-09-15: `build-raspbian` doesn't run `install_debian_deps.sh`, so it needs the host tools
+  (pkg-config, cmake, autotools) listed itself, plus host `libhamlib-utils`. Without that package,
+  build.rs bakes an empty rig model table into the armv7 binary, and the build still succeeds.
+- **Wine GUI installers need a virtual display in CI.** Inno Setup's `innosetup-*.exe
+  /VERYSILENT` still creates a window. With no X display it exits 1 without printing anything
+  under `WINEDEBUG=-all`. Pass `/LOG="C:\x.log"` and read the log from the Wine prefix to see the
+  real error ("Invalid window handle", code 1400). The fix is `xvfb-run -a wine ...`, with `xvfb
+  xauth` installed. `ISCC.exe` itself runs headless without it. The dev box has a live desktop
+  session, which is why local runs there don't hit this.
+- **A cross target must be listed in `daemons/hams_local_relay/rust-toolchain.toml`.** That file
+  pins the compiler, and `dtolnay/rust-toolchain`'s `targets:` only installs a target for *stable*.
+  Cargo inside that directory uses the pinned toolchain, and fails with "can't find crate for
+  `core`". armv7 and x86_64-pc-windows-gnu are listed. When bumping `channel`, keep the list.
+  Also, unix-only APIs (`tokio::signal::unix`, `std::os::unix`) need `#[cfg(unix)]`; `build-windows`
+  is the only CI leg that catches an ungated one.
+- **`cargo fmt --check` runs only on the ubuntu-22.04 leg** (with clippy). Check that leg's
+  Formatting step specifically. In the shared working tree, another session may have formatted a
+  file and not committed it. Compare `git hash-object` of the working-tree file against your own
+  formatted copy before committing, so you don't overwrite someone's unrelated edits.
 - **A step-less, runner-less `Security audit` job in `Build Server Daemons`** is the check-run
   `rustsec/audit-check` creates itself. It mirrors the matrix `security-audit` jobs' result and has
   no log of its own. Read the matrix job's `RustSec advisory check` step instead.
@@ -407,8 +432,10 @@ as needing his judgment.
 4. **arm64 CI builds run natively on `pi500-1`** (see the operating-knowledge note above), not under
    emulation.
 
-Still Bruce's (these involve money, accounts, or product direction): GitHub billing (the macOS
-leg), creating or re-scoping credentials, and dismissing Dependabot alerts on GitHub.
+Still Bruce's (these involve money, accounts, or product direction): creating or re-scoping
+credentials, and dismissing Dependabot alerts on GitHub. The macOS leg is no longer a billing item:
+Bruce postponed it until the self-hosted Mac arrives, and hams_com `2520690c` sets `build-macos`
+to `if: false`. Don't report its skipped job as a failure.
 
 ## Step 3: Record everything, always
 
