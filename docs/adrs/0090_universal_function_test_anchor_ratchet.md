@@ -11,7 +11,12 @@ replaces, `MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md`'s existing anchor-traceabilit
 `verify_anchors.py`'s existing enforcement of it.
 
 ## Context
-`verify_anchors.py` already enforces *consistency* of anchors that exist (a declared anchor must
+An "anchor" here is a `# @ANCHOR: <id>` (or begin/end-paired) comment marker placed on a function,
+plus a matching `# Tests [@ANCHOR: <id>]` marker on the test(s) that exercise it and a documentation
+reference to the same id -- the mechanism `MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md` and ADR-0054
+already define, which lets `verify_anchors.py` trace any given function forward to its real test and
+its real documentation instead of trusting that either exists. `verify_anchors.py` already enforces
+*consistency* of anchors that exist (a declared anchor must
 be tested, documented, and bidirectionally linked) but never required an anchor on a function in
 the first place -- anchoring was an authoring judgment call ("core features," per the tool's own
 error text). `ANCHOR_COVERAGE_AND_REMEDIATION_PLAN.md` named five real decisions this scope
@@ -60,6 +65,14 @@ question, and four adjacent ones, needed before any real sweep could start.
    both committed alongside this ADR), grandfathers in every function that was already unanchored;
    anything unanchored that is NOT in the baseline -- new code, or existing code edited in a way
    that lost its anchor -- is a real, new CI failure. Wired into `run_linters.py` as step 38.
+   **Why this is a ratchet and not just a static floor**: the baseline file only ever shrinks by an
+   explicit `--generate-baseline` re-run against the tree's then-current state, never automatically
+   as individual functions gain anchors. But once the real Stage 1 sweep closes some of the 422/771
+   baseline gaps and someone re-runs `--generate-baseline`, every function that gained an anchor
+   drops out of the new, smaller baseline -- so if it later loses that anchor again, CI now catches
+   it as a new failure, exactly like code that was never grandfathered. Coverage only ever moves
+   toward full anchoring, one baseline regeneration at a time; nothing in the mechanism allows a
+   fixed function to silently slip back into "allowed to be unanchored" the way a plain floor would.
    **Python only for now**: `verify_anchors.py`'s own anchor recognition (which this ratchet reuses,
    `ANCHOR_PATTERN`) already covers `.py`/`.js`/`.xml`/`.html`; Rust (`.rs`) functions are not
    scanned by any anchor mechanism yet -- a real, named, not-yet-done follow-on, not silently
