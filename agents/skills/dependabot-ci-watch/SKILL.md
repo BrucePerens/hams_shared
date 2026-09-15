@@ -429,14 +429,21 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `rustsec/audit-check` creates itself. It mirrors the matrix `security-audit` jobs' result and has
   no log of its own. Read the matrix job's `RustSec advisory check` step instead.
 - **`EACCES: permission denied, stat '/home/bruce/.local/bin/git'` lines in hams-devbox job logs
-  are noise.** They are not the workspace-ownership `EACCES` described above. The runner's saved
-  `PATH` (`/home/github-runner/actions-runner-hams-com/.path`) was captured from Bruce's shell, so
-  it lists `/home/bruce/.local/bin`, `.cargo/bin`, `go/bin` and a Claude plugin directory ahead of
-  `/usr/bin`. The `github-runner` account can't enter `/home/bruce`, so host-side steps
-  (`actions/checkout`, post-job cleanup) print "Unexpected error attempting to determine if
-  executable file exists" for each one and fall through to `/usr/bin/git`. Nothing fails because of
-  it. The real failure is always a different line (usually a `##[error]Process completed with exit
-  code N` after `curl:`/`jq:`). Found 2026-09-15.
+  are noise, but the PATH that causes them isn't.** They are not the workspace-ownership `EACCES`
+  described above. The runner's saved `PATH` (`/home/github-runner/actions-runner-hams-com/.path`)
+  was captured from Bruce's shell, so it lists `/home/bruce/.local/bin`, `.cargo/bin`, `go/bin` and
+  Claude plugin directories ahead of `/usr/bin`. Only `/home/bruce/.local` and `.config` are mode
+  700, so the EACCES lines are just those entries, and `git` falls through to `/usr/bin/git`.
+  **`/home/bruce/.cargo/bin` and `go/bin` are reachable**: until hams_com `security-audit`'s own
+  toolchain steps landed (2026-09-15), both host-side `security-audit` jobs ran
+  `/home/bruce/.cargo/bin/cargo audit`, meaning Bruce's own rustup and cargo-audit. An earlier run
+  of this skill called the whole PATH harmless after reading one EACCES line. Check reachability as
+  the runner account instead: `sudo -n -u github-runner test -x <dir>`. A host-side job's
+  `[command]` log lines show which binary actually ran. `runsvc.sh` exports `.path` once at service
+  start, so editing it does nothing until `actions.runner.BrucePerens-hams_com.hams-devbox.service`
+  restarts (only while no job runs). Re-running `config.sh` from Bruce's shell regenerates it with his
+  PATH. Any new host-side job that needs cargo must provision it (`dtolnay/rust-toolchain@stable`)
+  and not rely on `.path`. See `night_shift_todo.md` for whether `.path` has been cleaned yet.
 - **`hams_com` has no repository secrets** (`gh secret list` is empty, as of 2026-09-14; no
   production Odoo exists yet). Every publish step on `main` (binary zips, .deb, .rpm, apt repo,
   Windows) will fail at `curl "$ODOO_URL/..."` with an empty URL once its build is green. That is
