@@ -477,9 +477,18 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `git archive origin/main daemons/hams_local_relay | tar -x -C <scratch>`, then
   `cargo fmt -- --check` inside the extracted crate. The archive carries `rust-toolchain.toml`, so
   the pinned rustfmt runs. Check the committed snapshot, not the shared working tree, which often
-  holds a peer's unformatted work in progress. `cargo +<channel>` can fail here ("no such command");
-  use `rustup run <channel> cargo fmt -- --check` to pick a toolchain explicitly. To fix, format the
-  snapshot and commit those blobs through a private index (see the shared-index note below).
+  holds a peer's unformatted work in progress. To pick a toolchain explicitly, prefer
+  `rustup run <channel> cargo fmt -- --check`: a `cargo +$ch` built from a shell variable silently
+  breaks when the variable holds more than one line, which is what a `grep` for `channel` in
+  `rust-toolchain.toml` returns, and cargo then reports a confusing "no such command". To fix,
+  format the snapshot and commit those blobs through a private index (see the shared-index note
+  below).
+  **On the ubuntu-22.04 leg, Clippy runs BEFORE Formatting, so a red clippy reports Formatting as
+  `skipped`.** Never read a skipped Formatting step as a passing one: every step after the failure
+  is skipped, so a rustfmt fix stays unverified until clippy is green on that leg. Found 2026-09-15,
+  when run 35030820868 verified `42e2833a` this way and a watcher polling only for the Formatting
+  step's conclusion got `skipped` and nearly recorded it as a result. Read the leg's failing step
+  list, not one step's conclusion.
   `run_linters.py` step 52 (`check_cargo_fmt.py`) runs the same check across every crate in both
   repos. The relay's own `cargo fmt --check` doesn't cover `ham_digital_modes`, a path dependency
   rather than a workspace member.
