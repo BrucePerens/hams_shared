@@ -39,6 +39,11 @@ night_shift_todo/critical/` alone tells you the most urgent open work, no file c
 Reprioritizing an item is a `git mv` between directories, which keeps the change visible in git
 history the same way a normal code change would be, rather than buried in a diff.
 
+Each priority directory holds an empty `.gitkeep`. Git doesn't track empty directories, so without
+it, removing the last to-do in a priority deleted the directory itself. That happened to `critical/`
+on 2026-09-16, and `ls night_shift_todo/critical/` then errored for every session. Don't remove
+the `.gitkeep` files, and don't count them as to-dos.
+
 A short `README.md` lives in `night_shift_todo/` itself for anyone who lands there directly without
 having loaded this skill first -- keep it in sync with this file if the convention changes, but this
 skill is the authoritative, fuller version.
