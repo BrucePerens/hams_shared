@@ -496,8 +496,10 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `MsQueue`/`SegQueue` API changed a lot. The crate never used those. Its only call was
   `crossbeam::scope`, and the 0.8 bump was a two-line change (hams_com `ed40b779`). Also re-check a
   standing "needs Bruce" item whenever a run has time, rather than copying it forward. That crate
-  needs a nightly toolchain and `cargo +nightly test --release` (see its `VENDORED.md`). None of its
-  tests call `decode`.
+  needs a nightly toolchain. `cargo +nightly test` passes in debug as well as `--release` since
+  arrayvec 0.3 -> 0.7 (2026-09-15, seventeenth check). None of its tests call `decode`, and
+  `decode` is seeded by the OS (`rand::weak_rng()`). To check a dependency bump there, compare
+  decoder output from fixed-seed scratch copies. Its `VENDORED.md` gives the procedure.
 - **A commit message saying "Fixed #1" closes GitHub issue or PR #1 when pushed.** GitHub reads
   `fix`/`fixes`/`fixed`/`close`/`closes`/`closed`/`resolve`/`resolves`/`resolved` followed by `#N`
   as a closing keyword, even when `#N` means an item in the commit's own list. Dependabot PR #1
