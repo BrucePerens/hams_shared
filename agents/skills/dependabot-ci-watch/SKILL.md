@@ -327,6 +327,25 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
     allow rule.
   - Never cancel a run that is already in progress on a publish step.
   - Record what you cancelled in `night_shift_todo.md`.
+- **The relay's transport-tool install scripts build pinned commits** (since 2026-09-15). Both
+  `daemons/hams_local_relay/install_relay_runtime_deps.sh` and `install_relay_runtime_deps_rpm.sh`
+  fetch `MERCURY_COMMIT`/`ARDOPCF_COMMIT` exactly. The Debian script also has
+  `HAMLIB_VERSION`/`HAMLIB_SHA256`. Before that, both scripts cloned the moving branch HEAD and
+  ignored `dependency_watch.json`, so CI built whatever upstream pushed that hour. That is how the
+  ubuntu:20.04 leg broke. **When you bump any of these pins in `dependency_watch.json`, update the
+  same constant in both scripts**, or CI keeps building the old commit. The Debian script
+  compiles a probe against the distribution's hamlib and builds static Hamlib from source only when
+  the probe fails. That happens on Ubuntu 20.04 (3.3) and 22.04 (4.3.1, no `rigerror2`). Debian 12
+  (4.5.4, the pi500 leg) and 24.04 use the system package. A new mercury call into a newer Hamlib
+  API belongs in the probe (`hamlib_probe.c` heredoc). On amd64 a second probe checks the default
+  compiler for `_mm256_loadu2_m128i` (GCC >= 10, used by mercury's vendored RaptorQ) and builds
+  mercury with `CC=gcc-10` on Ubuntu 20.04 (GCC 9.4). To reproduce a transport-tools CI leg, run
+  `install_debian_deps.sh` then `install_relay_runtime_deps.sh` in a `docker run --rm
+  --cpuset-cpus ... ubuntu:<version>` container (install `sudo git curl ca-certificates
+  build-essential` first). That reproduced both 20.04 failures locally.
+- **A step-less, runner-less `Security audit` job in `Build Server Daemons`** is the check-run
+  `rustsec/audit-check` creates itself. It mirrors the matrix `security-audit` jobs' result and has
+  no log of its own. Read the matrix job's `RustSec advisory check` step instead.
 - **`hams_com` has no repository secrets** (`gh secret list` is empty, as of 2026-09-14; no
   production Odoo exists yet). Every publish step on `main` (binary zips, .deb, .rpm, apt repo,
   Windows) will fail at `curl "$ODOO_URL/..."` with an empty URL once its build is green. That is
