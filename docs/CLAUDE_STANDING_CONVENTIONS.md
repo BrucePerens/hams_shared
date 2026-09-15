@@ -293,6 +293,17 @@ live elsewhere.
   the banned pattern. Prefer this over teaching the linter to distinguish "our code" from a safe
   exception case (fragile, easy to get subtly wrong) or granting a bypass tag at every site
   individually (harder to audit, doesn't eliminate the risky pattern — just tags it repeatedly).
+- **A shell loop that waits for a process must not be able to match itself.** Sessions wait for the
+  shared test runner (its lock is fail-fast) with loops like
+  `while pgrep -f "tools/test.py"; do sleep 15; done`, and **that loop never exits**. Claude runs a
+  command as `bash -c '<the whole loop>'`, so the waiting shell's own command line contains the
+  pattern and `pgrep -f` always finds it. It also matches every other session's identical loop, so
+  sessions end up waiting on each other forever. Bruce called this endemic after four sessions' loops
+  were found stuck at once on 2026-09-15. Match only the real target: anchor the pattern and filter by
+  owner, e.g. `while pgrep -u odoo -f "^python3 hams_shared/tools/test.py" >/dev/null; do sleep 15;
+  done`, or check a lock or PID file. The same trap applies to `pkill -f` and `ps | grep`. Also
+  recorded in `~/.claude/CLAUDE.md` (loaded by every session on the dev box, but not persistent) and
+  `hams_com/CLAUDE.md`.
 
 ## Related, more detailed treatments elsewhere
 
