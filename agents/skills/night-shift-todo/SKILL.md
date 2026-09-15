@@ -168,6 +168,18 @@ process instead: `pgrep -u odoo -f "^python3 hams_shared/tools/test.py"`. The sa
 any `pgrep -f` that waits on a command whose name also appears in the waiting script. To check
 that a queued run actually started, look for its log file, not for the waiter process.
 
+**Use the wait.** Another session's run can hold that lock for half an hour or more. Queue your own
+Odoo run in the background, then work items that never need the lock. On 2026-09-15 two of
+`night-shift-todo-worker`'s three items were verified without it while the third's run waited:
+- `hams_shared/tools/`: `python3 -m pytest test_<name>.py` from that directory.
+- `hams_com/daemons/<name>/`: `pytest` from the daemon's own directory with
+  `PYTHONPATH=/home/bruce/workspace/hams_com/daemons`, because `hams_config.py` lives there.
+  `pdns_sync` also needs dummy `PDNS_API_URL`/`PDNS_API_KEY`, which it reads at import.
+- Lint: `check_burn_list.py --scan-daemons-and-tools <dir>`.
+
+Choosing items this way also avoids collisions: `git status` in each repo shows which module
+directories other sessions have uncommitted work in.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
