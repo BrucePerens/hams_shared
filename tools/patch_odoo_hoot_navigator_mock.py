@@ -96,7 +96,9 @@ def main():
     # --apt-hook: run from DPkg::Post-Invoke after every dpkg run. A machine without Odoo, or a
     # web addon without hoot, is a silent no-op there. A changed mock structure still fails loudly
     # (apt reports "Problem executing scripts DPkg::Post-Invoke"), so the patch can't silently stop
-    # being applied.
+    # being applied. That failure makes every apt operation exit nonzero, not just Odoo's, until
+    # this script is fixed or the hook is removed (/etc/apt/apt.conf.d/99hams-odoo-hoot-navigator-patch).
+    # That is deliberate: a quietly unpatched Odoo would break every hoot test run instead.
     apt_hook = "--apt-hook" in sys.argv[1:]
     path = find_navigator_mock_path()
     if path is None or not os.path.exists(path):

@@ -500,7 +500,12 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   committed `night_shift_todo.md` with a plain `git commit`, and another session's already-staged
   Rust changes (199 of 201 lines) went in under a todo-only commit message and were pushed.
   `git commit -- <path>` doesn't fully protect you either: it commits the path's *working-tree*
-  content, including any other session's uncommitted edits to the same file. The safe pattern for
+  content, including any other session's uncommitted edits to the same file. This bit a second time
+  on 2026-09-15: a session used the private index below for `night_shift_todo.md`, then used plain
+  `git commit -- docs/BRUCE_ACTION_ITEMS.md` and pushed a peer's uncommitted edit under its own
+  message. Use the private index for every commit that touches a file other sessions edit, not
+  only the ones you think of as shared. At minimum, run `git diff HEAD -- <file>` first and confirm
+  every hunk is yours. The safe pattern for
   appending only your own text to a shared file is a private index:
   `git show HEAD:<file> > tmp; cat my_entry >> tmp; GIT_INDEX_FILE=idx git read-tree HEAD;
   GIT_INDEX_FILE=idx git update-index --add --cacheinfo 100644,$(git hash-object -w tmp),<file>;
