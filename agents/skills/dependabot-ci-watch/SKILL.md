@@ -450,7 +450,9 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   expected before deployment, not a new bug. Check `gh secret list` fresh, because it stops being
   true once Bruce creates them. **Read the publish step's last log line before calling it the
   expected failure.** The expected one is `curl: (3) URL rejected: No host part in the URL`
-  (exit 3). An exit 127 (`zip: command not found`, `jq: command not found`) means the job's
+  (exit 3). The `.deb` job's `ubuntu:22.04` container prints the same empty-URL error differently,
+  as `curl: (3) URL using bad/illegal format or missing URL`, because its curl is 7.81 and the
+  other containers have curl 8.x. This was reproduced locally on 2026-09-15. An exit 127 (`zip: command not found`, `jq: command not found`) means the job's
   container lacks a tool the publish script needs, and the leg could not publish even with
   secrets. build-windows hit exactly that on 2026-09-15, after hours of being written off as the
   no-secrets case. Fixed in hams_com `a4252487`. A new container job that runs
