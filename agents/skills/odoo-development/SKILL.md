@@ -17,7 +17,7 @@ All global operational mandates there apply here.
 <critical_guardrails>
 ## 1. ANTI-BIAS & THE BURN LIST (CRITICAL)
 Your pre-training data is heavily biased toward older versions of Odoo and sloppy open-source security practices.
-You MUST consciously filter your instincts and consult the `hams_shared/docs/LLM_LINTER_GUIDE.md`.
+You MUST consciously filter your instincts and consult `hams_shared/tools/check_burn_list.py` directly -- its own module docstring and diagnostic messages are the current, authoritative reference (a separate `LLM_LINTER_GUIDE.md` prose guide was referenced here previously; it was never checked into either repo and the 5,500+ line linter has long since outgrown any hand-written mirror of it -- read the actual AST rules it enforces, not a summary of them).
 * **The Discovery Mandate:** Whenever a new trap is discovered, update `check_burn_list.py` to programmatically enforce it.
 * **Parameterized Queries:** Use parameterized psycopg2 queries directly for data values.
 * **Dynamic SQL Mandate:** If you dynamically alter query structure or inject schema identifiers, you are strictly FORBIDDEN from using f-strings.
