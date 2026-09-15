@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 15
+version: 16
 ---
 
 # Dependabot & CI Build Watch
@@ -205,9 +205,10 @@ Rust's clippy surfacing lints an older one didn't, a newer linter/formatter vers
 own defaults, a newer test framework deprecating an API this codebase used), fix those too, in the
 same pass, without stopping to ask. Concretely: this project's own `rust-toolchain.toml` pins are
 meant to track real current stable (see `daemons/hams_local_relay/rust-toolchain.toml`'s own doc
-comment) -- when you bump one, immediately run `cargo clippy --release -- -D warnings` (matching
-CI's own "Clippy (warnings as errors)" step exactly) under the NEW toolchain and fix every new
-finding it surfaces, the same run, not as a separately-deferred follow-up. The same principle
+comment) -- when you bump one, immediately run `cargo clippy --release --all-targets -- -D warnings`
+(matching CI's own "Clippy (warnings as errors)" step exactly -- see the `--all-targets` note below;
+an earlier version of this line omitted that flag and was wrong) under the NEW toolchain and fix
+every new finding it surfaces, the same run, not as a separately-deferred follow-up. The same principle
 applies to a Dependabot dependency bump that changes a library's own deprecated-API surface, or any
 other case where fixing the reported thing reveals more of the same category of problem one level
 deeper -- keep going until the whole chain is actually clean, not just the one failure that was
@@ -298,7 +299,16 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
 - **`hams_local_relay` pins its compiler in `rust-toolchain.toml`**, and CI's `cargo clippy` runs
   under that pin, not under whatever `dtolnay/rust-toolchain@stable` installed. To reproduce CI's
   clippy locally, run it inside `daemons/hams_local_relay` with no `+toolchain` override, using a
-  scratch `CARGO_TARGET_DIR` so you don't disturb other sessions' builds. The three server daemon
+  scratch `CARGO_TARGET_DIR` so you don't disturb other sessions' builds.
+  **CI's exact invocation is `cargo clippy --release --all-targets -- -D warnings`** -- read
+  `build-relay.yml`'s "Clippy (warnings as errors)" step rather than trusting a remembered form.
+  `--all-targets` matters: it lints `#[cfg(test)]` code too, so **a clippy error that exists only in
+  test code IS a real CI failure**, not local hygiene. Plain `cargo clippy` (no `--all-targets`,
+  no `--tests`) never compiles test targets and will report clean on exactly that failure. An
+  earlier version of this file quoted CI's step without `--all-targets`, which would have led a run
+  to write off a test-only lint as harmless. The step runs on the ubuntu-22.04 leg only, so it is
+  often still queued hours after a relay push -- a committed test-only lint can sit unreported for
+  a long time, which makes checking it locally worthwhile rather than waiting for the leg. The three server daemon
   crates (`hams_relay_bridge`, `hams_data_relay`, `hams_simulated_band`) have NO pin: their CI
   uses the newest stable directly, so a new Rust release can turn them red with new lints. Check
   them with `cargo +stable clippy --release --all-targets -- -D warnings`.
