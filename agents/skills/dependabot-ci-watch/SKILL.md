@@ -430,7 +430,15 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   secrets. build-windows hit exactly that on 2026-09-15, after hours of being written off as the
   no-secrets case. Fixed in hams_com `a4252487`. A new container job that runs
   `publish_relay_*.sh` needs `zip` (binary script only) and `jq` (all four scripts) in its
-  prerequisites.
+  prerequisites. Two more non-`curl: (3)` publish failures, found the first time every build leg
+  went green (run 34932262419, 2026-09-15, fixed in hams_com `ff3f02b4`). (1) Exit 126
+  "/usr/bin/jq: Argument list too long": a base64 payload passed with `jq --arg`. The command line
+  is capped by ARG_MAX (2 MB on the dev box), and a zip, .deb or .rpm is larger. Always stream
+  base64 to a file and use `jq --rawfile`. This bug lived on in inline workflow steps and the
+  APT/YUM repo scripts after `publish_relay_binary.sh` was fixed, so grep `.github` for
+  `--arg .*base64` whenever you touch one. (2) `publish-linux-binary` refusing with "librade.so.0.1
+  not found next to ...": the `linux-binary` artifact must carry `librade.so.0.1` along with the
+  executable.
 - **The hams_com git index is shared too, not just the working tree.** On 2026-09-14 this run
   committed `night_shift_todo.md` with a plain `git commit`, and another session's already-staged
   Rust changes (199 of 201 lines) went in under a todo-only commit message and were pushed.
