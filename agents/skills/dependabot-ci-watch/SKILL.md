@@ -394,7 +394,14 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   production Odoo exists yet). Every publish step on `main` (binary zips, .deb, .rpm, apt repo,
   Windows) will fail at `curl "$ODOO_URL/..."` with an empty URL once its build is green. That is
   expected before deployment, not a new bug. Check `gh secret list` fresh, because it stops being
-  true once Bruce creates them.
+  true once Bruce creates them. **Read the publish step's last log line before calling it the
+  expected failure.** The expected one is `curl: (3) URL rejected: No host part in the URL`
+  (exit 3). An exit 127 (`zip: command not found`, `jq: command not found`) means the job's
+  container lacks a tool the publish script needs, and the leg could not publish even with
+  secrets. build-windows hit exactly that on 2026-09-15, after hours of being written off as the
+  no-secrets case. Fixed in hams_com `a4252487`. A new container job that runs
+  `publish_relay_*.sh` needs `zip` (binary script only) and `jq` (all four scripts) in its
+  prerequisites.
 - **The hams_com git index is shared too, not just the working tree.** On 2026-09-14 this run
   committed `night_shift_todo.md` with a plain `git commit`, and another session's already-staged
   Rust changes (199 of 201 lines) went in under a todo-only commit message and were pushed.
