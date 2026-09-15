@@ -518,8 +518,8 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   queues a full relay CI matrix on the dev box. Pushing your commit would push theirs too. If
   the list shows commits that aren't yours, commit locally and don't push. Use `ListAgents` and
   `SendMessage` to find the owner and agree that it pushes your commit along with its own. Note
-  that in `night_shift_todo.md`. This happened on 2026-09-15, eighth hourly check (hams_com
-  `afd538ff`).
+  that in your to-do's own file under `night_shift_todo/`. This happened on 2026-09-15, eighth hourly
+  check (hams_com `afd538ff`).
 - **Before recording a dependency bump as "breaking, needs Bruce", grep the codebase for its real
   call sites.** An advisory names the vulnerable APIs, and a changelog shows breaking changes, but
   neither tells you what this codebase calls. hams_com alerts #3/#4 (crossbeam in the vendored
