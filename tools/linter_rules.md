@@ -252,3 +252,30 @@ Odoo's `ast.literal_eval` parser requires valid, strict Python dictionary syntax
 **Rule:** Modules must NOT manually instantiate RabbitMQ connections (`pika.BlockingConnection` or `pika.SelectConnection`).
 **Reason:** Spawning ad-hoc RabbitMQ connections exhausts OS threads and TCP ports under high load.
 **Fix:** Use the global thread-safe RabbitMQ connection pool: `self.env['hams_rabbitmq.pool'].publish(exchange, routing_key, body)`
+
+## Service-account privilege hygiene (check_burn_list.py, added 2026-09-14)
+
+Added after the service-account minimum-privilege audit (Bruce: "make linter rules if it can").
+Each rule is a mechanical check that generalizes one confirmed finding; each was verified as a
+true negative on the fixed tree and a true positive on the real pre-fix file.
+
+* **No human administrator group on a service account.** A `res.users` record with
+  `is_service_account=True` whose `group_ids` references `base.group_system`,
+  `base.group_erp_manager` or any `<module>.group_*admin` / `group_*administrator` is an error.
+  **Reason:** the account silently inherits every future grant made to that human group (admin
+  wizards, admin-only `ir.rule`s, field-level secrets); `backup_management.user_backup_service_internal`
+  held `group_backup_admin` purely for two CRUD rows. **Fix:** give the account's own group the
+  specific `ir.model.access.csv` rows it actually exercises. A deliberate exception needs an
+  `audit-ignore-service-account-admin-group` comment inside the record citing the tracked reason.
+* **No two service accounts with identical grants.** Two `is_service_account=True` records in one
+  XML file whose `group_ids` sets are byte-identical is an error. **Reason:**
+  `pager_duty.user_pager_incident_creator` (reachable from daemon reports and inbound email) held
+  exactly `user_pager_service_internal`'s groups, so the separately named lower-trust identity gave
+  no privilege separation. **Fix:** merge them, or give the lower-trust one its own narrower group
+  (one ACL row, one rule) as `group_pager_incident_creator` now does.
+* **Every daemon key file must be registered.** Repo-level: each `ODOO_KEY_FILE=/opt/hams/etc/keys/*.key`
+  a systemd unit in `hams_shared/tools/infrastructure.py` reads must appear in `ham_init/hooks.py`'s
+  `daemons_to_register` list. **Reason:** that loop is the only place a `daemon.key.registry` row
+  is created in a real deployment; `pota.sync`/`sota.sync` and `code.review.sweep` had none and could
+  never authenticate, and the existing unittest that checked this was not being run. No-op outside a
+  `hams_com` checkout.

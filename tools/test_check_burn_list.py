@@ -5414,3 +5414,151 @@ def test_audit_ignore_ssti_is_a_recognized_tag_not_an_unauthorized_bypass():
     content = "x = 1  # audit-ignore-ssti: static developer-authored expression\n"
     errors, _warnings = _scan_file(content, "some_module.py")
     assert not any("UNAUTHORIZED BYPASS" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Service-account privilege rules (2026-09-14 service-account privilege audit)
+# ---------------------------------------------------------------------------
+
+_SVC_ACCOUNT_XML_HEAD = (
+    "<odoo>\n"
+    '    <data noupdate="0">\n'
+)
+_SVC_ACCOUNT_XML_TAIL = "    </data>\n</odoo>\n"
+
+
+def _svc_account_record(xml_id, login, groups_eval, extra=""):
+    return (
+        f'        <record id="{xml_id}" model="res.users">\n'
+        f"            <field name=\"name\">{xml_id}</field>\n"
+        f"            <field name=\"login\">{login}</field>\n"
+        f'            <field name="company_id" ref="base.main_company"/>\n'
+        f"            <field name=\"company_ids\" eval=\"[(4, ref('base.main_company'))]\"/>\n"
+        f"            <field name=\"notification_type\">email</field>\n"
+        f'            <field name="is_service_account" eval="True"/>\n'
+        f"{extra}"
+        f'            <field name="group_ids" eval="{groups_eval}"/>\n'
+        f"        </record>\n"
+    )
+
+
+def _svc_privilege_errors(xml):
+    errors, _warnings = _scan_file(xml, "security.xml")
+    return [e for e in errors if "CRITICAL SERVICE-ACCOUNT PRIVILEGE" in e]
+
+
+def test_service_account_holding_human_admin_group_is_flagged():
+    # Real pre-fix shape of backup_management/security/security.xml (2026-09-14 audit).
+    xml = _SVC_ACCOUNT_XML_HEAD + _svc_account_record(
+        "user_backup_service_internal",
+        "backup_service_internal",
+        "[(6, 0, [ref('backup_management.group_backup_admin'), ref('backup_management.group_backup_service_account'), ref('zero_sudo.group_mail_service')])]",
+    ) + _SVC_ACCOUNT_XML_TAIL
+    errors = _svc_privilege_errors(xml)
+    assert len(errors) == 1, errors
+    assert "group_backup_admin" in errors[0] and "human administrator" in errors[0]
+
+
+def test_service_account_with_only_its_own_group_is_not_flagged():
+    # The fixed shape of the same record.
+    xml = _SVC_ACCOUNT_XML_HEAD + _svc_account_record(
+        "user_backup_service_internal",
+        "backup_service_internal",
+        "[(6, 0, [ref('backup_management.group_backup_service_account'), ref('zero_sudo.group_mail_service')])]",
+    ) + _SVC_ACCOUNT_XML_TAIL
+    assert _svc_privilege_errors(xml) == []
+
+
+def test_service_account_admin_group_ignore_comment_is_honored_and_human_users_are_exempt():
+    xml = _SVC_ACCOUNT_XML_HEAD + _svc_account_record(
+        "user_something_service",
+        "something_service_internal",
+        "[(6, 0, [ref('mymodule.group_mymodule_admin')])]",
+        extra="            <!-- audit-ignore-service-account-admin-group: tracked in night_shift_todo.md -->\n",
+    ) + (
+        # A real human user record (no is_service_account) holding an admin group is fine.
+        '        <record id="a_human" model="res.users">\n'
+        '            <field name="name">A Human</field>\n'
+        '            <field name="login">a_human</field>\n'
+        '            <field name="company_id" ref="base.main_company"/>\n'
+        "            <field name=\"company_ids\" eval=\"[(4, ref('base.main_company'))]\"/>\n"
+        '            <field name="notification_type">email</field>\n'
+        "            <field name=\"group_ids\" eval=\"[(6, 0, [ref('base.group_system')])]\"/>\n"
+        "        </record>\n"
+    ) + _SVC_ACCOUNT_XML_TAIL
+    assert _svc_privilege_errors(xml) == []
+
+
+def test_two_service_accounts_with_identical_groups_are_flagged():
+    # Real pre-fix shape of pager_duty/security/security.xml (2026-09-14 audit).
+    groups = "[(6, 0, [ref('pager_duty.group_pager_service'), ref('base.group_user'), ref('website.group_multi_website')])]"
+    xml = (
+        _SVC_ACCOUNT_XML_HEAD
+        + _svc_account_record("user_pager_service_internal", "pager_service_internal", groups)
+        + _svc_account_record("user_pager_incident_creator", "pager_incident_creator", groups)
+        + _SVC_ACCOUNT_XML_TAIL
+    )
+    errors = _svc_privilege_errors(xml)
+    assert len(errors) == 1, errors
+    assert "user_pager_incident_creator" in errors[0] and "user_pager_service_internal" in errors[0]
+
+
+def test_two_service_accounts_with_different_groups_are_not_flagged():
+    xml = (
+        _SVC_ACCOUNT_XML_HEAD
+        + _svc_account_record(
+            "user_pager_service_internal",
+            "pager_service_internal",
+            "[(6, 0, [ref('pager_duty.group_pager_service'), ref('base.group_user'), ref('website.group_multi_website')])]",
+        )
+        + _svc_account_record(
+            "user_pager_incident_creator",
+            "pager_incident_creator",
+            "[(6, 0, [ref('pager_duty.group_pager_incident_creator'), ref('base.group_user'), ref('website.group_multi_website')])]",
+        )
+        + _SVC_ACCOUNT_XML_TAIL
+    )
+    assert _svc_privilege_errors(xml) == []
+
+
+def test_daemon_key_registration_flags_an_unregistered_key_and_passes_a_registered_one():
+    infra_src = (
+        "MANIFEST = {\n"
+        '    "static_files": [\n'
+        '        {"path": "/opt/hams/systemd/a.service", "content": """[Service]\n'
+        'Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/a_service_internal.key"\n"""},\n'
+        '        {"path": "/opt/hams/systemd/b.service", "content": """[Service]\n'
+        'Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/b_service_internal.key"\n"""},\n'
+        "    ]\n"
+        "}\n"
+    )
+    hooks_src = (
+        "def post_init_hook(env):\n"
+        "    daemons_to_register = [\n"
+        '        ("A", "mod.user_a", "/opt/hams/etc/keys/a_service_internal.key"),\n'
+        "    ]\n"
+        "    for name, xml_id, path in daemons_to_register:\n"
+        "        pass\n"
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        (root / "hams_shared" / "tools").mkdir(parents=True)
+        (root / "ham_init").mkdir()
+        (root / "hams_shared" / "tools" / "infrastructure.py").write_text(infra_src, encoding="utf-8")
+        (root / "ham_init" / "hooks.py").write_text(hooks_src, encoding="utf-8")
+        errors = check_burn_list.check_daemon_key_registration(str(root))
+        assert len(errors) == 1, errors
+        assert "b_service_internal.key" in errors[0] and "a_service_internal.key" not in errors[0]
+        # Register b too: clean.
+        (root / "ham_init" / "hooks.py").write_text(
+            hooks_src.replace(
+                '        ("A", "mod.user_a", "/opt/hams/etc/keys/a_service_internal.key"),\n',
+                '        ("A", "mod.user_a", "/opt/hams/etc/keys/a_service_internal.key"),\n'
+                '        ("B", "mod.user_b", "/opt/hams/etc/keys/b_service_internal.key"),\n',
+            ),
+            encoding="utf-8",
+        )
+        assert check_burn_list.check_daemon_key_registration(str(root)) == []
+    # Not a hams_com checkout (files absent): a silent no-op, never a false positive.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        assert check_burn_list.check_daemon_key_registration(tmpdir) == []

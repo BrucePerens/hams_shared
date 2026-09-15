@@ -11,7 +11,6 @@ Under the Zero-Sudo architecture, no Python code is allowed to use `sudo()`. Ins
 | `zero_sudo.mail_service_internal` | Central Mail Service Account | Can dispatch emails, read mail templates, and bypass mail tracking limits. Used for sending notification emails. |
 | `zero_sudo.odoo_facility_service_internal` | Odoo Facility Service Account | Highest level. Can interact with `ir.module.module` to install/upgrade Odoo applications. |
 | `zero_sudo.config_service_internal` | Central Configuration Service | Can read and mutate `ir.config_parameter` global system parameters. |
-| `zero_sudo.cache_invalidation_service_internal` | Central Cache Invalidation | Capable of triggering global ORM registry flushes and invalidating web controller caches. |
 
 ## Feature Modules
 

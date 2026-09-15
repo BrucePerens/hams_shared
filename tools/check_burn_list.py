@@ -3185,6 +3185,140 @@ def _xml_audit_lookback_start(node, fallback_lines=8):
     return scope.parent.lineno - 1
 
 
+# Service-account privilege audit, 2026-09-14 (bug-hunt, Bruce's own follow-up: "make linter
+# rules if it can"). Two of that audit's six findings generalize into cheap, low-noise, purely
+# mechanical checks over a single security/data XML file; both were confirmed against a real
+# reproduction (the pre-fix pager_duty/security/security.xml and backup_management/security/
+# security.xml, via `git show`) and against the fixed tree (zero hits), see
+# test_check_burn_list.py's service-account tests.
+_SERVICE_ACCOUNT_HUMAN_ADMIN_GROUP_RE = re.compile(
+    r"^(base\.group_system|base\.group_erp_manager|[a-z0-9_]+\.group_[a-z0-9_]*admin(istrator)?)$"
+)
+_SERVICE_ACCOUNT_ADMIN_GROUP_IGNORE = "audit-ignore-service-account-admin-group"
+
+
+def _service_account_records(root_node):
+    """Yields (record_node, xml_id, sorted tuple of group xml ids) for every
+    <record model="res.users"> in the tree whose is_service_account field is True and
+    that declares a group_ids field. refs are read from the field's own eval text
+    (`ref('mod.xid')`), which is the only shape this codebase's own security XML uses."""
+    for node in root_node.walk():
+        if node.tag != "record" or node.attrs.get("model") != "res.users":
+            continue
+        is_svc = False
+        group_refs = None
+        for child in node.children:
+            if child.tag != "field":
+                continue
+            fname = child.attrs.get("name")
+            if fname == "is_service_account" and child.attrs.get("eval") in ("True", "true", "1"):
+                is_svc = True
+            elif fname == "group_ids":
+                group_refs = tuple(sorted(set(re.findall(r"ref\('([^']+)'\)", child.attrs.get("eval", "")))))
+        if is_svc and group_refs is not None:
+            yield node, node.attrs.get("id", ""), group_refs
+
+
+def _xml_comment_precedes(node, marker):
+    """True when a `#comment` node carrying `marker` sits directly inside `node` (this
+    codebase's own convention places a justification comment inside the <record> body)."""
+    # A "#comment" node's own text lives under attrs["text"] in this parser's data model
+    # (see parse_odoo_xml's own comment handler), not under .text.
+    return any(
+        child.tag == "#comment" and marker in (child.attrs.get("text") or "")
+        for child in node.children
+    )
+
+
+def check_service_account_group_hygiene(root_node):
+    """Two mechanical service-account rules (finding #6 and finding #4 of the 2026-09-14
+    service-account privilege audit):
+
+    1. A service account (is_service_account=True) MUST NOT hold a human-facing administrator
+       group (base.group_system, base.group_erp_manager, or any `<module>.group_*admin` /
+       `group_*administrator`). Real instance: backup_management.user_backup_service_internal
+       held group_backup_admin purely for that group's CRUD rows, so every later admin-UI
+       grant (restore wizard, latest-snapshot board, field-level secrets, admin-only ir.rules)
+       was silently inherited by a daemon-key-bound account. The fix shape is always the
+       same: give the account's OWN group the specific rows it exercises. A deliberate
+       exception needs an `audit-ignore-service-account-admin-group` comment inside the record
+       citing the tracked reason.
+    2. Two distinct service accounts in one file MUST NOT declare byte-identical group_ids
+       sets. Real instance: pager_duty.user_pager_incident_creator (the identity reachable
+       from daemon reports and inbound email) held exactly user_pager_service_internal's
+       groups, so the separately named lower-trust identity bought no privilege reduction at
+       all. If two accounts genuinely need the same grant they are one account; if they
+       don't, the lower-trust one needs its own narrower group.
+    """
+    errors = []
+    seen = {}
+    for node, xml_id, group_refs in _service_account_records(root_node):
+        admin_hits = [g for g in group_refs if _SERVICE_ACCOUNT_HUMAN_ADMIN_GROUP_RE.match(g)]
+        if admin_hits and not _xml_comment_precedes(node, _SERVICE_ACCOUNT_ADMIN_GROUP_IGNORE):
+            errors.append(
+                f"Line {node.lineno}: CRITICAL SERVICE-ACCOUNT PRIVILEGE: service account "
+                f"'{xml_id}' holds human administrator group(s) {', '.join(admin_hits)}. A "
+                f"service account inherits every future admin-UI grant made to that group; give "
+                f"the account's own group the specific ir.model.access rows it actually "
+                f"exercises instead (see backup_management/security/security.xml, 2026-09-14), "
+                f"or add '{_SERVICE_ACCOUNT_ADMIN_GROUP_IGNORE}' in a comment inside the record "
+                f"citing the tracked justification."
+            )
+        if group_refs in seen:
+            errors.append(
+                f"Line {node.lineno}: CRITICAL SERVICE-ACCOUNT PRIVILEGE: service account "
+                f"'{xml_id}' declares exactly the same group_ids as '{seen[group_refs]}' "
+                f"({', '.join(group_refs)}). Two separately named accounts with identical "
+                f"grants give no privilege separation; either merge them or give the "
+                f"lower-trust one its own narrower group (see pager_duty/security/security.xml's "
+                f"group_pager_incident_creator, 2026-09-14)."
+            )
+        else:
+            seen[group_refs] = xml_id
+    return errors
+
+
+_DAEMON_KEY_FILE_RE = re.compile(r"ODOO_KEY_FILE=(/opt/hams/etc/keys/[a-zA-Z0-9_.-]+\.key)")
+_DAEMONS_TO_REGISTER_RE = re.compile(r"daemons_to_register\s*=\s*\[(.*?)\n\s*\]", re.DOTALL)
+_KEY_TUPLE_PATH_RE = re.compile(r'"(/opt/hams/etc/keys/[a-zA-Z0-9_.-]+\.key)"')
+
+
+def check_daemon_key_registration(target_dir):
+    """Repo-level rule (finding #5 of the 2026-09-14 service-account privilege audit): every
+    ODOO_KEY_FILE a systemd unit in hams_shared/tools/infrastructure.py reads MUST be registered
+    in ham_init/hooks.py's daemons_to_register list, because that loop is the only place a
+    daemon.key.registry row is ever created in a real deployment and a daemon whose key file has
+    no row can never authenticate. daemons/test_daemon_key_registration_coverage.py already
+    enforced exactly this, but it is a plain unittest nobody was running: it was FAILING on two
+    units (pota.sync/sota.sync as activator_data_service_internal, code.review.sweep) for an
+    unknown time, so both daemons were dead on arrival. This gate runs before every Odoo test run
+    on this box, so the same check here cannot go unrun. No-op unless both files exist under
+    target_dir (i.e. only meaningful for a hams_com checkout)."""
+    infra = os.path.join(target_dir, "hams_shared", "tools", "infrastructure.py")
+    hooks = os.path.join(target_dir, "ham_init", "hooks.py")
+    if not (os.path.isfile(infra) and os.path.isfile(hooks)):
+        return []
+    with open(infra, "r", encoding="utf-8") as f:
+        required = set(_DAEMON_KEY_FILE_RE.findall(f.read()))
+    with open(hooks, "r", encoding="utf-8") as f:
+        hooks_src = f.read()
+    m = _DAEMONS_TO_REGISTER_RE.search(hooks_src)
+    if not m:
+        return [
+            "ham_init/hooks.py: CRITICAL DAEMON KEY REGISTRATION: could not find the "
+            "daemons_to_register list -- did its shape change? check_daemon_key_registration() "
+            "and daemons/test_daemon_key_registration_coverage.py both depend on it."
+        ]
+    registered = set(_KEY_TUPLE_PATH_RE.findall(m.group(1)))
+    return [
+        f"ham_init/hooks.py: CRITICAL DAEMON KEY REGISTRATION: a systemd unit in "
+        f"hams_shared/tools/infrastructure.py reads ODOO_KEY_FILE={path} but nothing registers "
+        f"that key in daemons_to_register, so that daemon can never authenticate in a real "
+        f"deployment. Add a (\"<name>\", \"<module>.<xml_id>\", \"{path}\") entry."
+        for path in sorted(required - registered)
+    ]
+
+
 def scan_file(filepath, is_odoo_module=False):
     filename = os.path.basename(filepath)
     if filename == "check_burn_list.py":
@@ -3307,6 +3441,7 @@ def scan_file(filepath, is_odoo_module=False):
                 root_node = parse_odoo_html(content)
             else:
                 root_node = parse_odoo_xml(content)
+                errors_found.extend(check_service_account_group_hygiene(root_node))
 
             for node in root_node.walk():
                 if node.tag != "#comment":
@@ -5347,6 +5482,11 @@ def main():
                 f"  ❌ ERROR: Dangling Tour Target: '{target}' found in a JS tour but missing from all backend XML views. Tour will fatally timeout."
             )
             total_errors += 1
+
+    for err in check_daemon_key_registration(target_dir):
+        print(" 📄 ham_init/hooks.py")
+        print(f"  ❌ ERROR: {err}")
+        total_errors += 1
 
     # Always print a summary, even with zero findings -- a fully silent,
     # zero-byte-output exit was previously indistinguishable from the
