@@ -365,7 +365,16 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `91755340` with `key: ${{ matrix.os }}` / `key: ${{ matrix.container }}`. A new matrix job that
   varies `container:` needs the same `key:`. To see which cache a leg restored, read the rust-cache
   step's `Restored from cache key` line. `gh api repos/BrucePerens/hams_com/actions/caches` lists
-  the caches and when each was saved.
+  the caches and when each was saved. The cache also restores `~/.cargo/bin`, without cargo's
+  install metadata, so a plain `cargo install <tool>` step works once and then fails on every later
+  run with "binary `<tool>` already exists in destination" (exit 101). The `.deb` job hit this with
+  cargo-deb in run 34936877542. Guard every `cargo install` step with `command -v <tool> ||`
+  (hams_com `22f07cd4`).
+- **Check each packaging job's "baked N Hamlib rig model(s)" line, not just the build legs'.**
+  build.rs needs `rigctl`/`rotctl` (`libhamlib-utils`) at build time. With no rigctl it still builds,
+  but it bakes an empty table that refuses every named radio. `install_debian_deps.sh` now installs
+  it (hams_com `22f07cd4`). Before that, the build-linux legs only had rigctl through their test-only
+  wsjtx install, and the `.deb` job shipped "baked 0".
 - **Reproduce a failing container leg locally before calling a CI fix done, and keep going past
   the first error.** `build-raspbian` and `build-windows` each hid several failures in a row,
   because each failure stops the job at its first broken step. Stage the committed source with
