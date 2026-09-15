@@ -362,6 +362,13 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
     If a `night_shift_todo/` item names that pending run as its verification, send the item's
     `claimed_by` session the replacement run id and your commit hash. It may be following the
     cancelled run. This came up on 2026-09-15 with the mercury ed0681e7 bump.
+  - **To verify a relay commit, follow a commit, not a run id.** On a busy day the pending run is
+    replaced over and over: the mercury 7af6d188 check lost five pending runs in three hours before
+    one ran. A `gh run watch <id>` just ends with `cancelled`. Instead, poll `gh run list --workflow
+    build-relay.yml` every few minutes and stop at the first run that is `completed`, not
+    `cancelled`, and whose head passes `git merge-base --is-ancestor <your-commit> <headSha>`. Run
+    that in the background with a timeout of a few hours. Any later run carries your change, so
+    whichever one runs verifies it.
   - Record what you cancelled in `night_shift_history.md` (it's a completed action) or file a
     `night_shift_todo/` entry if cancelling it leaves something still needing a real re-run.
 - **The relay's transport-tool install scripts build pinned commits** (since 2026-09-15). Both
