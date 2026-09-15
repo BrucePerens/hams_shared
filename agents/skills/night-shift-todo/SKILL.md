@@ -4,11 +4,12 @@ description: >-
   Read and write the shared, structured to-do queue at hams_com/night_shift_todo/ -- one file per
   item, organized into critical/high/medium/low priority directories. Use this whenever checking
   for open work across hams_com/hams_open/hams_shared, filing a new to-do another session should
-  pick up, claiming an item before starting on it, reprioritizing one, or marking one done. Also
-  covers how this relates to night_shift_todo.md (now historical) and night_shift_history.md
-  (where completed items get summarized). Triggers: to-do, night shift todo, open items, what's
-  left, claim a task, file a task, priority queue.
-version: 1
+  pick up, claiming an item before starting on it, reprioritizing one, blocking one on a real
+  question for Bruce (see night-shift-questions), or marking one done. Also covers how this
+  relates to night_shift_todo.md (now historical) and night_shift_history.md (where completed
+  items get summarized). Triggers: to-do, night shift todo, open items, what's left, claim a task,
+  file a task, priority queue, blocked on a question.
+version: 2
 ---
 
 # Night-Shift To-Do Queue
@@ -54,8 +55,10 @@ Frontmatter, then free-form body:
 
 ```markdown
 ---
-status: open        # open | claimed | done
+status: open        # open | claimed | blocked | done
 claimed_by:          # session name (e.g. "workspace-87"), blank until claimed
+blocked_on:          # relative path to a night_shift_questions/open/*.md file, only when
+                     # status: blocked -- see "Blocked on a real question" below
 repo: hams_com       # hams_com | hams_open | hams_shared | cross-repo
 category: ci         # ci, dependency, security, feature, patent, infra, etc. -- free text, pick
                      # something a future `grep -l "category: ci"` would find useful
@@ -71,7 +74,8 @@ night_shift_todo.md entry -- this replaces that habit, not the writing quality.
 
 **Checking for open work**: read `critical/` first, then `high/`, `medium/`, `low/` -- `ls` each
 directory, then read files with `status: open` (skip ones already `status: claimed` by someone
-else, unless investigating whether a claim is stale -- see below).
+else, unless investigating whether a claim is stale -- see below; skip `status: blocked` items too
+unless you're specifically checking whether their blocking question was just answered).
 
 **Filing a new to-do** (something you found but aren't fixing yourself, or a real follow-up too
 large for the current session): create the file directly under the right priority directory with
@@ -91,6 +95,18 @@ structural guarantee instead of relying on everyone remembering to message first
 no longer appears to be running, or the `claimed_by` session hasn't touched it in a clearly long
 time, it's fine to pick it up -- but say so in the file's own body (append a line noting the prior
 claim looked abandoned) rather than silently overwriting the claim history.
+
+**Blocked on a real question**: if working an item (claimed or not yet claimed) surfaces a genuine
+judgment call only Bruce can make -- not something you should default on your own, see
+`night-shift-questions`'s own "what belongs here" section for the bar -- don't stall silently and
+don't guess. File the question in `night_shift_questions/open/` (that skill has the full format),
+set this item's own `status: blocked` and `blocked_on:` to the new question file's path, and move
+on to other unblocked work. Do NOT set `status: done` or delete the to-do while it's blocked, even
+if you've made real partial progress -- record the progress in the body and leave it blocked.
+`night-shift-todo-worker` (the scheduled task) checks `night_shift_questions/answered/` every run
+and automatically flips a blocked item back to `status: open` once its question is answered,
+appending a note on what was decided -- but any session noticing an answered question first should
+do the same unblocking immediately rather than waiting for the next scheduled run.
 
 **What "done" means**: an item is only complete once the fix is tested, committed, and pushed --
 all three, not just one or two. "I fixed it locally" isn't done. "I committed it" isn't done. Even
@@ -132,6 +148,14 @@ staged is yours on a box other sessions are actively writing to.
 - **`night-shift`** (`hams_shared/agents/skills/night-shift/SKILL.md`) is an autonomy-MODE skill
   (aggressive unattended execution directives), unrelated to to-do storage mechanics despite the
   similar name.
+- **`night-shift-questions`** (`hams_shared/agents/skills/night-shift-questions/SKILL.md`) is the
+  paired queue for questions only Bruce can answer -- a `status: blocked` item here points at a
+  file there via `blocked_on:`. Read that skill for the question-file format and the unblocking
+  workflow; this file only documents the to-do side of the link.
+- **`night-shift-todo-worker`** (a scheduled task, `~/.claude/scheduled-tasks/night-shift-todo-worker/`)
+  is the hourly automation that reads both queues: unblocks `night_shift_todo/` items whose
+  question just got answered, and works through open, unblocked items itself. See its own SKILL.md
+  for what it will and won't do unattended.
 
 ## Self-improvement
 
