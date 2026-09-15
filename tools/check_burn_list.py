@@ -3213,13 +3213,17 @@ _SERVICE_ACCOUNT_HUMAN_ADMIN_GROUP_RE = re.compile(
     r"^(base\.group_system|base\.group_erp_manager|[a-z0-9_]+\.group_[a-z0-9_]*admin(istrator)?)$"
 )
 _SERVICE_ACCOUNT_ADMIN_GROUP_IGNORE = "audit-ignore-service-account-admin-group"
+_GROUP_REMOVAL_COMMAND_RE = re.compile(r"\(\s*[23]\s*,\s*ref\('[^']+'\)\s*\)")
 
 
 def _service_account_records(root_node):
     """Yields (record_node, xml_id, sorted tuple of group xml ids) for every
     <record model="res.users"> in the tree whose is_service_account field is True and
     that declares a group_ids field. refs are read from the field's own eval text
-    (`ref('mod.xid')`), which is the only shape this codebase's own security XML uses."""
+    (`ref('mod.xid')`), which is the only shape this codebase's own security XML uses.
+    A ref inside a `(3, ref(...))` unlink or `(2, ref(...))` delete command removes that
+    group rather than granting it, so it is not counted. user_websites' provisioning account
+    uses `(3, ...)` to take back an administrator membership older databases already hold."""
     for node in root_node.walk():
         if node.tag != "record" or node.attrs.get("model") != "res.users":
             continue
@@ -3232,7 +3236,8 @@ def _service_account_records(root_node):
             if fname == "is_service_account" and child.attrs.get("eval") in ("True", "true", "1"):
                 is_svc = True
             elif fname == "group_ids":
-                group_refs = tuple(sorted(set(re.findall(r"ref\('([^']+)'\)", child.attrs.get("eval", "")))))
+                granting_eval = _GROUP_REMOVAL_COMMAND_RE.sub("", child.attrs.get("eval", ""))
+                group_refs = tuple(sorted(set(re.findall(r"ref\('([^']+)'\)", granting_eval))))
         if is_svc and group_refs is not None:
             yield node, node.attrs.get("id", ""), group_refs
 

@@ -5469,6 +5469,28 @@ def test_service_account_with_only_its_own_group_is_not_flagged():
     assert _svc_privilege_errors(xml) == []
 
 
+def test_service_account_unlinking_an_admin_group_is_not_flagged():
+    # user_websites' provisioning account: (3, ref(...)) removes a membership that databases
+    # created before the fix already hold. It grants nothing.
+    xml = _SVC_ACCOUNT_XML_HEAD + _svc_account_record(
+        "user_websites_service_account",
+        "sys_provisioner",
+        "[(4, ref('user_websites.group_user_websites_service_account')), (3, ref('user_websites.group_user_websites_administrator')), (4, ref('website.group_multi_website'))]",
+    ) + _SVC_ACCOUNT_XML_TAIL
+    assert _svc_privilege_errors(xml) == []
+
+
+def test_service_account_linking_an_admin_group_next_to_an_unlink_is_still_flagged():
+    xml = _SVC_ACCOUNT_XML_HEAD + _svc_account_record(
+        "user_websites_service_account",
+        "sys_provisioner",
+        "[(3, ref('website.group_multi_website')), (4, ref('user_websites.group_user_websites_administrator'))]",
+    ) + _SVC_ACCOUNT_XML_TAIL
+    errors = _svc_privilege_errors(xml)
+    assert len(errors) == 1, errors
+    assert "group_user_websites_administrator" in errors[0]
+
+
 def test_service_account_admin_group_ignore_comment_is_honored_and_human_users_are_exempt():
     xml = _SVC_ACCOUNT_XML_HEAD + _svc_account_record(
         "user_something_service",
