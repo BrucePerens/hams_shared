@@ -8,7 +8,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 10
+version: 11
 ---
 
 # Dependabot & CI Build Watch
@@ -489,6 +489,23 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `SendMessage` to find the owner and agree that it pushes your commit along with its own. Note
   that in `night_shift_todo.md`. This happened on 2026-09-15, eighth hourly check (hams_com
   `afd538ff`).
+- **Before recording a dependency bump as "breaking, needs Bruce", grep the codebase for its real
+  call sites.** An advisory names the vulnerable APIs, and a changelog shows breaking changes, but
+  neither tells you what this codebase calls. hams_com alerts #3/#4 (crossbeam in the vendored
+  `reference/ambe/imbe.rs`) stayed filed as Bruce's call for about 20 hourly runs, because crossbeam's
+  `MsQueue`/`SegQueue` API changed a lot. The crate never used those. Its only call was
+  `crossbeam::scope`, and the 0.8 bump was a two-line change (hams_com `ed40b779`). Also re-check a
+  standing "needs Bruce" item whenever a run has time, rather than copying it forward. That crate
+  needs a nightly toolchain and `cargo +nightly test --release` (see its `VENDORED.md`). None of its
+  tests call `decode`.
+- **A commit message saying "Fixed #1" closes GitHub issue or PR #1 when pushed.** GitHub reads
+  `fix`/`fixes`/`fixed`/`close`/`closes`/`closed`/`resolve`/`resolves`/`resolved` followed by `#N`
+  as a closing keyword, even when `#N` means an item in the commit's own list. Dependabot PR #1
+  (hams_com) was closed this way by unrelated commit `98b4d84e`. Dependabot then commented that
+  it would stop proposing that release. A closed Dependabot PR whose `closed` event has a
+  `commit_id` was closed by a commit, not by anyone deciding
+  (`gh api repos/BrucePerens/<repo>/issues/<n>/events`). In commit messages, number items as
+  "item 1" or "(1)", not "#1".
 
 ## Standing decisions from Bruce -- act on these, don't ask
 
