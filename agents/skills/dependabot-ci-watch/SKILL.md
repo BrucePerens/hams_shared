@@ -331,6 +331,10 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   - Run each `gh run cancel <id>` as its own simple command, not in a shell loop, so it matches the
     allow rule.
   - Never cancel a run that is already in progress on a publish step.
+  - `build-relay.yml`'s `concurrency:` group (`cancel-in-progress: false`) holds at most one
+    *pending* run. A newer push replaces the pending one, which then shows `cancelled` with 0
+    jobs. That is GitHub's behavior, not another session cancelling it. The in-progress run is
+    never touched.
   - Record what you cancelled in `night_shift_todo.md`.
 - **The relay's transport-tool install scripts build pinned commits** (since 2026-09-15). Both
   `daemons/hams_local_relay/install_relay_runtime_deps.sh` and `install_relay_runtime_deps_rpm.sh`
@@ -375,13 +379,23 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `install_relay_runtime_deps.sh` builds static 4.7.2 only for mercury, and the relay itself
   still links the distribution library. So relay code and tests must stick to what 3.3 has.
   Three differences surfaced on 2026-09-15, the first time that leg reached Run Tests:
-  (1) `rig_get_conf2` doesn't exist. The test binary fails to link with `undefined symbol`, while
-  the release build still links, because only a test called it. Use `rig_get_conf` with a buffer
-  of at least 128 bytes.
+  (1) `rig_get_conf2` doesn't exist, and not in Ubuntu 22.04's 4.3.1 either (the 22.04 leg hit
+  the same link error once its Formatting step passed). The test binary fails to link with
+  `undefined symbol`, while the release build still links, because only a test called it. Use
+  `rig_get_conf` with a buffer of at least 128 bytes.
   (2) Rig model numbers are `backend*100+n` (IC-7300 = 373), not 4.x's `backend*1000+n` (3073).
   build.rs bakes the matching table, so tests take the number from
   `hamlib::linked_hamlib_ic7300_model_id()` instead of a literal.
-  (3) The dummy rotator's azimuth range is -180..180, not -180..450.
+  (3) The dummy rotator's azimuth range is -180..180 (also in 4.3.1), not -180..450 (4.6.2+).
+  Distribution Hamlib versions: Ubuntu 20.04 3.3, 22.04 4.3.1, 24.04 4.5.5, Debian 12 4.5.4.
+  Each release's source tarball is on Hamlib's GitHub releases page, for checking API questions.
+  (4) Hamlib 4.3.1's dummy rig stores `rig_set_split_freq()` in a side field that
+  `rig_get_split_freq(rig, VFO_B)` never reads, because that call reads VFO B through `get_freq`.
+  The split-TX safety test therefore sets VFO B's frequency too. Upstream fixed the dummy by
+  4.5.5. The relay's `get_tx_freq()` is correct for real radios.
+  In a local container run, `callbook::tests::has_adequate_space_matches_a_real_independent_df_call`
+  fails if the disk under `/var/lib/docker` changes free space mid-run. It compares a sysinfo
+  reading against a later `df`. Check `df -h /var` before blaming code.
   To check a 3.3 question, the 3.3 source tarball is on the Hamlib GitHub releases page (tag
   `3.3`). A full `cargo test` for this leg runs in an `ubuntu:20.04` container: install
   `install_debian_deps.sh` and `install_relay_runtime_deps.sh`, then run cargo with a scratch
