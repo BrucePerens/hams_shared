@@ -168,6 +168,12 @@ process instead: `pgrep -u odoo -f "^python3 hams_shared/tools/test.py"`. The sa
 any `pgrep -f` that waits on a command whose name also appears in the waiting script. To check
 that a queued run actually started, look for its log file, not for the waiter process.
 
+**A waiter can lose the race.** Several sessions often queue behind the same run, and whichever
+polls first after it ends gets the lock. On 2026-09-15 a 20-second `sleep` lost to another
+session's run and would have waited out a second full run. Poll every few seconds, and wrap the
+launch in a retry: if the console shows `Another instance of test.py is already running`, go back
+to waiting instead of treating that as your test result.
+
 **Use the wait.** Another session's run can hold that lock for half an hour or more. Queue your own
 Odoo run in the background, then work items that never need the lock. On 2026-09-15 two of
 `night-shift-todo-worker`'s three items were verified without it while the third's run waited:
