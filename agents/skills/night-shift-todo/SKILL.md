@@ -200,6 +200,22 @@ Odoo run in the background, then work items that never need the lock. On 2026-09
   `pdns_sync` also needs dummy `PDNS_API_URL`/`PDNS_API_KEY`, which it reads at import.
 - Lint: `check_burn_list.py --scan-daemons-and-tools <dir>`.
 
+**Before queueing the Odoo run, expect two pre-flight halts that have nothing to do with your
+change** (2026-09-15, workspace-dc). The Semantic Anchor scan fails every run on repo-wide
+violations: about 170 "stacked anchors", plus missing targets under `docs/patent_disclosures/`.
+The burn list fails on hams_open's backlog. Either one aborts the run before a single test starts,
+after you've waited out the lock. Pass `HAMS_SKIP_ANCHOR_SCAN=1 HAMS_SKIP_BURN_LIST=1`, and cover
+what they skip yourself: `check_burn_list.py <module dir>` on each touched module, and a grep of the
+aborted log for your own anchor names. The log does list violations per file, so a new stacked
+anchor you added (for example, an `[@ANCHOR:]` line directly followed by `Verified by`) shows up
+there.
+
+**Relay commits: run `rustfmt --edition 2021 --check` on the exact files you touched.**
+`build-relay.yml` runs `cargo fmt -- --check`. `cargo fmt --check -- <file>` still reports the
+whole crate, so piping it through `head` can hide your own file's diffs behind other files. That
+happened on 2026-09-15 and needed a follow-up formatting commit. Don't run `cargo fmt` on the whole
+crate either: other sessions' uncommitted relay edits sit in the same tree.
+
 Choosing items this way also avoids collisions: `git status` in each repo shows which module
 directories other sessions have uncommitted work in.
 
