@@ -338,7 +338,11 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `HAMLIB_VERSION`/`HAMLIB_SHA256`. Before that, both scripts cloned the moving branch HEAD and
   ignored `dependency_watch.json`, so CI built whatever upstream pushed that hour. That is how the
   ubuntu:20.04 leg broke. **When you bump any of these pins in `dependency_watch.json`, update the
-  same constant in both scripts**, or CI keeps building the old commit. The Debian script
+  same constant in both scripts**, or CI keeps building the old commit. Hamlib has a second pin
+  site: `build-relay.yml`'s build-windows "Cross-build hamlib for mingw-w64" step carries the same
+  `HAMLIB_VERSION`/`HAMLIB_SHA256` and also builds that release natively, so build.rs's baked
+  `rigctl --list`/`rotctl --list` tables match the Hamlib the .exe links (since 2026-09-15; before
+  that it used unchecksummed 4.6.2 and Ubuntu's 4.5.5 `libhamlib-utils`). The Debian script
   compiles a probe against the distribution's hamlib and builds static Hamlib from source only when
   the probe fails. That happens on Ubuntu 20.04 (3.3) and 22.04 (4.3.1, no `rigerror2`). Debian 12
   (4.5.4, the pi500 leg) and 24.04 use the system package. A new mercury call into a newer Hamlib
