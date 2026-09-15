@@ -1298,6 +1298,25 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 52. check_cargo_fmt -- `cargo fmt -- --check` over the same crates step 36 lints. CI runs
+    # this check on only one relay leg, which can start hours after a push; on 2026-09-15 three
+    # rustfmt-only fix commits followed tested, clippy-clean relay feature commits. Check only,
+    # never a rewrite, since this runs in the shared working tree. Same reasoning as step 35:
+    # always scans the full repo, not a possibly-scoped `targets` list.
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_cargo_fmt.py"), dir_path],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

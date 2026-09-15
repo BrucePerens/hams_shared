@@ -460,6 +460,19 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   Formatting step specifically. In the shared working tree, another session may have formatted a
   file and not committed it. Compare `git hash-object` of the working-tree file against your own
   formatted copy before committing, so you don't overwrite someone's unrelated edits.
+- **Check relay formatting on every run; don't wait for CI.** Feature commits often land tested
+  and clippy-clean but not rustfmt-clean. There were three rustfmt-only fix commits on 2026-09-15
+  (`ff6bd117`, `984bf172`, `42e2833a`), and CI reports it only when the 22.04 leg reaches
+  Formatting, which can be hours later. Takes seconds:
+  `git archive origin/main daemons/hams_local_relay | tar -x -C <scratch>`, then
+  `cargo fmt -- --check` inside the extracted crate. The archive carries `rust-toolchain.toml`, so
+  the pinned rustfmt runs. Check the committed snapshot, not the shared working tree, which often
+  holds a peer's unformatted work in progress. `cargo +<channel>` can fail here ("no such command");
+  use `rustup run <channel> cargo fmt -- --check` to pick a toolchain explicitly. To fix, format the
+  snapshot and commit those blobs through a private index (see the shared-index note below).
+  `run_linters.py` step 52 (`check_cargo_fmt.py`) runs the same check across every crate in both
+  repos. The relay's own `cargo fmt --check` doesn't cover `ham_digital_modes`, a path dependency
+  rather than a workspace member.
 - **A step-less, runner-less `Security audit` job in `Build Server Daemons`** is the check-run
   `rustsec/audit-check` creates itself. It mirrors the matrix `security-audit` jobs' result and has
   no log of its own. Read the matrix job's `RustSec advisory check` step instead.

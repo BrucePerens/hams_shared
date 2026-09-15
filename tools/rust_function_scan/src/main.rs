@@ -264,7 +264,10 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
                 let new_prefix = qualify(prefix, &type_name(&imp.self_ty));
                 for ii in &imp.items {
                     if let syn::ImplItem::Fn(m) = ii {
-                        if has_test_attr(&m.attrs) || has_cfg_test(&m.attrs) || has_cfg_kani(&m.attrs) {
+                        if has_test_attr(&m.attrs)
+                            || has_cfg_test(&m.attrs)
+                            || has_cfg_kani(&m.attrs)
+                        {
                             continue;
                         }
                         let start = attrs_or_span_start_line(&m.attrs, m.sig.fn_token.span());
@@ -284,7 +287,10 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
                 for ti in &tr.items {
                     if let syn::TraitItem::Fn(m) = ti {
                         let Some(block) = &m.default else { continue };
-                        if has_test_attr(&m.attrs) || has_cfg_test(&m.attrs) || has_cfg_kani(&m.attrs) {
+                        if has_test_attr(&m.attrs)
+                            || has_cfg_test(&m.attrs)
+                            || has_cfg_kani(&m.attrs)
+                        {
                             continue;
                         }
                         let start = attrs_or_span_start_line(&m.attrs, m.sig.fn_token.span());
