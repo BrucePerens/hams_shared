@@ -118,6 +118,18 @@ exactly what's still missing (e.g. "committed as `<hash>`, not yet pushed: needs
 or "pushed as `<hash>`, CI run `<id>` still queued"). Only move it to `night_shift_history.md` and
 remove the file once all three are real.
 
+**A verification run shows the fix depends on another to-do**: this happens (2026-09-15: the GDPR
+export's ADIF-queue grant couldn't pass until every other installed module in the same `super()`
+chain had its grant too, because `hams_test` has every module installed). Claim the blocking to-do,
+fold it into the same work, and note in both files why. Don't close the first item as done on its
+own narrow test, and don't leave it waiting on an unclaimed sibling. A peer's claimed item is the
+exception: coordinate with that session instead.
+
+**A verification run fails in tests you didn't touch**: before committing, confirm each failure is
+unrelated (read its traceback) and already tracked (`grep -rl <test name> night_shift_todo`). File a
+to-do for any that isn't, after checking whether its owning session already filed one. Name the
+tracking to-dos in your commit or history entry so a later reader doesn't re-investigate them.
+
 **Completing one**: fold a real summary (what was found, what was fixed, commit hashes, test
 results -- the same standard `night_shift_todo.md` entries already held) into
 `night_shift_history.md` (append, matching that file's own existing convention), then remove the
