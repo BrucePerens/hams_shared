@@ -4,11 +4,12 @@ description: >-
   Check all three real hams.com/hams_open/hams_shared GitHub repos for open Dependabot
   security alerts and CI build failures, investigate each for real, fix what's safely
   fixable (and push it), message another active session if something is urgent, and record
-  everything durably in night_shift_todo.md. Also runs automatically once an hour (for now) as
+  genuinely open items in night_shift_todo.md and resolved ones in night_shift_history.md (never
+  a "nothing found" entry in either). Also runs automatically once an hour (for now) as
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 11
+version: 12
 ---
 
 # Dependabot & CI Build Watch
@@ -25,26 +26,28 @@ with context it needs to start work, so that it can start more efficiently, but 
 new, reusable fact worth knowing on every future run -- a new token/permission-scope limitation (the
 `workflow`-scope gap below was found and added exactly this way), a recurring CI failure's real root
 cause, a dependency-ecosystem quirk in one of these three repos, a faster way to check something --
-add it directly to THIS FILE as part of that run's own commit, not only to `night_shift_todo.md`.
-`night_shift_todo.md` is the durable historical record of what happened; this file is the durable
-OPERATING KNOWLEDGE the next run starts with, and the two serve different purposes -- a fact that
-would help every future run start faster or avoid rediscovering the same wall belongs here, edited
-directly, committed and pushed alongside whatever else that run did (matching the "keep this and the
-scheduled task's own prompt in sync" note at the bottom of this file). Don't let this file grow
-unbounded with one-off trivia, though -- only add something here if a FUTURE run would genuinely
-benefit from already knowing it, the same bar as any other durable-knowledge decision in this
-codebase.
+add it directly to THIS FILE as part of that run's own commit, not only to a durable-tracking file.
+See "Step 3" below for the real distinction between `night_shift_todo.md` (open, actionable to-dos
+only) and `night_shift_history.md` (the record of what already happened) -- THIS file is neither of
+those: it's the durable OPERATING KNOWLEDGE the next run starts with, a third, separate purpose,
+edited directly, committed and pushed alongside whatever else that run did (matching the "keep this
+and the scheduled task's own prompt in sync" note at the bottom of this file). Don't let this file
+grow unbounded with one-off trivia, though -- only add something here if a FUTURE run would
+genuinely benefit from already knowing it, the same bar as any other durable-knowledge decision in
+this codebase.
 
-**Three ways to act, not just one**: fix things yourself and push, record durably in
-`night_shift_todo.md`, or message another active Claude session directly (`ListAgents` to see
-what's running, `SendMessage` to reach one) if something is time-sensitive -- a real, currently-
-exploitable-shaped security exposure, or a build failure actively blocking other in-progress work
-you can see evidence of (e.g. a very recent commit clearly aimed at fixing something that then
-failed CI again). Don't message for routine/low-urgency findings -- the durable record is the
-right channel for those; messaging is an ADDITION to the durable record for urgent items, never a
-replacement for it (a chip or message alone is not durable -- see the
-`hams-durable-tracking-over-chips` convention, which is exactly why this all also goes into
-`night_shift_todo.md` regardless of whether you also messaged someone).
+**Three ways to act, not just one**: fix things yourself and push, record durably (in
+`night_shift_todo.md` if it's still open, `night_shift_history.md` if you finished it -- see "Step
+3" below for the real distinction), or message another active Claude session directly (`ListAgents`
+to see what's running, `SendMessage` to reach one) if something is time-sensitive -- a real,
+currently-exploitable-shaped security exposure, or a build failure actively blocking other
+in-progress work you can see evidence of (e.g. a very recent commit clearly aimed at fixing
+something that then failed CI again). Don't message for routine/low-urgency findings -- the durable
+record is the right channel for those; messaging is an ADDITION to the durable record for urgent
+items, never a replacement for it (a chip or message alone is not durable -- see the
+`hams-durable-tracking-over-chips` convention). This does NOT mean every run's own findings go into
+`night_shift_todo.md` regardless of outcome -- a resolved item's durable record is
+`night_shift_history.md`, and a "nothing found" run gets no durable-file entry at all.
 
 **Check `ListAgents` before starting substantive work, not just when something urgent comes up.**
 This skill runs both as an hourly scheduled task and as manual, on-demand sessions Bruce starts
@@ -548,19 +551,58 @@ credentials, and dismissing Dependabot alerts on GitHub. The macOS leg is no lon
 Bruce postponed it until the self-hosted Mac arrives, and hams_com `2520690c` sets `build-macos`
 to `if: false`. Don't report its skipped job as a failure.
 
-## Step 3: Record everything, always
+## Step 3: Record the RIGHT thing in the RIGHT file
 
-Whether or not anything needed fixing, append a dated entry to
-`/home/bruce/workspace/hams_com/night_shift_todo.md` (re-read the file fresh immediately before
-editing, append at the very end, since other work may be concurrently touching it) summarizing:
-what Dependabot alerts and CI failures currently exist across all three repos, what you fixed
-(with real commit hashes and test output), what you pushed, and what genuinely still needs
-Bruce's own input (named specifically, not vaguely). If truly nothing new was found (previous
-alerts/failures already resolved, no new ones), say that plainly and briefly rather than padding
-the entry -- a short "checked, nothing new" entry is the honest and correct output on a clean day,
-not a failure to find something. Do NOT use the `spawn_task` chip mechanism for anything found
-here -- Bruce has explicitly asked that this kind of tracking go directly into
-`night_shift_todo.md` instead.
+**Corrected 2026-09-15, after this skill had been dumping every single hourly check-in into
+`night_shift_todo.md` regardless of outcome, for days, with nobody actually pruning it back out.**
+Bruce's own words when he caught it: "the to-do list is for real to-dos, night_shift_history.md is
+more appropriate for completed actions... if it's an 'I woke up and found no problems', just
+delete those and tell the skill they are not worth archiving." The two files have DIFFERENT jobs,
+and this skill's own prior instruction (an earlier version of this file, and this section in
+particular) blurred them:
+
+- **`night_shift_todo.md` is for real, currently-open, actionable to-dos only.** Something a future
+  session (this skill's own next run, or a person) still needs to DO. If this run leaves nothing
+  actionable behind, it does not get an entry here, full stop -- not even a short one.
+- **`night_shift_history.md` is the durable record of what already happened** -- completed fixes,
+  resolved alerts, closed-out investigations. This is where a "found X, fixed it, verified with Y,
+  pushed as Z" writeup belongs once it's actually done, not `night_shift_todo.md`.
+
+Concretely, at the end of every run:
+
+1. **Nothing new, nothing changed, nothing to fix, nothing open** (the routine "checked, all
+   clear" case -- this is most hourly runs on a healthy day): **write nothing to either file.**
+   Do not create a "checked, nothing new" entry in `night_shift_todo.md` -- that was this skill's
+   own past mistake, and entries like that are not worth archiving into `night_shift_history.md`
+   either; the right move is to simply not write one. (If you want a record that the check
+   happened at all, that's what the scheduled task's own run log/notification already provides --
+   this skill does not need to duplicate that in a hand-maintained file.)
+2. **Something was found AND fully resolved this run** (a real alert or CI failure, investigated,
+   fixed, tested, committed, and pushed, with nothing left open): append that summary -- what was
+   wrong, what you changed, the real commit hash(es), and how you verified it -- directly to
+   `/home/bruce/workspace/hams_com/night_shift_history.md` (re-read fresh immediately before
+   editing, append at the end, purely additive -- never delete or rewrite another entry already
+   there). This is a completed action, which is exactly what that file is for.
+3. **Something genuinely still needs attention** -- a real alert or failure you couldn't safely
+   fix yourself, something that needs Bruce's own input (named specifically: which credential,
+   which decision, which tradeoff -- never vaguely), or a fix you started but couldn't finish this
+   run: THIS is what goes in `night_shift_todo.md`, as a real to-do entry, not a status report.
+4. **Close the loop on your OWN past `night_shift_todo.md` entries.** Before writing anything new,
+   grep `night_shift_todo.md` for this skill's own prior entries (`dependabot-and-ci-watch hourly
+   scheduled run`, or a specific alert/workflow name from an earlier run) that describe something
+   THIS run has now confirmed is actually resolved (a CI run you watched go green, an alert that's
+   gone from `gh`'s own listing, a "still Bruce's" item he's since handled). Don't leave a stale
+   open entry sitting there for some future cleanup pass to notice -- move it yourself: cut the
+   resolved section out of `night_shift_todo.md` and append it (with a one-line note on how you
+   confirmed it's resolved) to `night_shift_history.md`, in the same commit as this run's other
+   changes. This is the fix for a real, repeated failure mode: dozens of this skill's own past
+   entries sat in `night_shift_todo.md` long after the thing they described was actually done,
+   because writing the entry and closing it out were treated as two separate people's jobs and
+   nobody ever did the second half.
+
+Do NOT use the `spawn_task` chip mechanism for anything found here -- Bruce has explicitly asked
+that this kind of tracking go directly into the appropriate file (per the three cases above)
+instead.
 
 ## Constraints
 
