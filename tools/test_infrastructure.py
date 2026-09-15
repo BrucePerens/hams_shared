@@ -19,6 +19,7 @@ file covers the smaller units that logic actually lives in.
 """
 
 import builtins
+import inspect
 import os
 import shlex
 import shutil
@@ -1049,7 +1050,6 @@ class PostgresqlLockdownTests(unittest.TestCase):
         # provision_environment() itself is too host-dependent to execute
         # here (see this file's docstring), so check its source: the
         # blanket substitution must not come back inline.
-        import inspect
         source = inspect.getsource(infra.provision_environment)
         self.assertIn("_postgresql_lockdown_commands()", source)
         self.assertNotIn("pg_hba", source)
