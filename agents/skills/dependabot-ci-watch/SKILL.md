@@ -492,7 +492,7 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
 - **Before recording a dependency bump as "breaking, needs Bruce", grep the codebase for its real
   call sites.** An advisory names the vulnerable APIs, and a changelog shows breaking changes, but
   neither tells you what this codebase calls. hams_com alerts #3/#4 (crossbeam in the vendored
-  `reference/ambe/imbe.rs`) stayed filed as Bruce's call for about 20 hourly runs, because crossbeam's
+  `reference/ambe/imbe.rs`) stayed filed as Bruce's call from 2026-09-14 until the sixteenth hourly check on 2026-09-15, because crossbeam's
   `MsQueue`/`SegQueue` API changed a lot. The crate never used those. Its only call was
   `crossbeam::scope`, and the 0.8 bump was a two-line change (hams_com `ed40b779`). Also re-check a
   standing "needs Bruce" item whenever a run has time, rather than copying it forward. That crate
