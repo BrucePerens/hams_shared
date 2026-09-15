@@ -11,11 +11,12 @@ replaces, `MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md`'s existing anchor-traceabilit
 `verify_anchors.py`'s existing enforcement of it.
 
 ## Context
-An "anchor" here is a `# @ANCHOR: <id>` (or begin/end-paired) comment marker placed on a function,
-plus a matching `# Tests [@ANCHOR: <id>]` marker on the test(s) that exercise it and a documentation
-reference to the same id -- the mechanism `MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md` and ADR-0054
-already define, which lets `verify_anchors.py` trace any given function forward to its real test and
-its real documentation instead of trusting that either exists. `verify_anchors.py` already enforces
+An "anchor" here is a `# [@ANCHOR: <id>]` (or `-BEGIN`/`-END`-paired) comment marker placed on a
+function, plus a matching `# Tests [@ANCHOR: <id>]` marker on the test(s) that exercise it and a
+documentation reference to the same id -- the mechanism `MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md` and
+ADR-0054 already define (exact syntax verified against `verify_anchors.py`'s own `ANCHOR_PATTERN`
+regex, not assumed), which lets `verify_anchors.py` trace any given function forward to its real test
+and its real documentation instead of trusting that either exists. `verify_anchors.py` already enforces
 *consistency* of anchors that exist (a declared anchor must
 be tested, documented, and bidirectionally linked) but never required an anchor on a function in
 the first place -- anchoring was an authoring judgment call ("core features," per the tool's own
