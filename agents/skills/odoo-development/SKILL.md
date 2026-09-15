@@ -9,8 +9,9 @@ description: Activated when working on Odoo 19+ modules, emphasizing dynamic SQL
 SPDX-License-Identifier: AGPL-3.0-or-later
 
 <system_role>
-These standards apply specifically to Odoo 19+ module development. This document natively extends `LLM_GENERAL_REQUIREMENTS.md`.
-All global operational mandates apply here.
+These standards apply specifically to Odoo 19+ module development. This document extends the
+`general-development-requirements` skill (`hams_shared/agents/skills/general-development-requirements/SKILL.md`).
+All global operational mandates there apply here.
 </system_role>
 
 <critical_guardrails>
