@@ -2376,12 +2376,18 @@ def main():
         user_tmp = os.path.expanduser("~/tmp")
         os.makedirs(user_tmp, exist_ok=True)
         symlink_target = os.path.join(user_tmp, "test_progress.txt")
-        if os.path.lexists(symlink_target):
+        if os.path.lexists(symlink_target) and os.path.islink(symlink_target):
             os.remove(symlink_target)
-        try:
-            os.symlink(os.path.join(real_log_dir, "test_progress.txt"), symlink_target)
-        except OSError as e:
-            _logger.debug("Ignored OSError: %s", e)
+        # When the log directory IS ~/tmp (the default, and always the case for the odoo account
+        # under HAMS_ISOLATED_NS, where both resolve to /var/lib/odoo/tmp), the link would point
+        # at itself. That self-loop made every later progress write fail with "Too many levels of
+        # symbolic links" (found 2026-09-15). The progress file is written in place there, so no
+        # link is needed.
+        if os.path.realpath(user_tmp) != os.path.realpath(real_log_dir):
+            try:
+                os.symlink(os.path.join(real_log_dir, "test_progress.txt"), symlink_target)
+            except OSError as e:
+                _logger.debug("Ignored OSError: %s", e)
         try:
             os.chmod(real_log_dir, 0o777)
         except OSError as e:
