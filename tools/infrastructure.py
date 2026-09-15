@@ -3757,6 +3757,37 @@ def _role_exists(role_name):
 
 
 # [@ANCHOR: infrastructure:_create_odoo_role_if_missing]
+def _postgresql_lockdown_commands():
+    """
+    The shell commands provision_environment() runs to restrict PostgreSQL to
+    loopback. pg_hba.conf is deliberately left as Debian ships it.
+
+    This step used to run `sed -i 's/peer/trust/g'` over pg_hba.conf, which
+    turned `local all postgres peer` and `local all all peer` into `trust`:
+    any local OS account could then connect as any role, including the
+    superuser, which defeats the per-service OS accounts the zero-sudo
+    design relies on. Nothing needed it. Stock authentication already covers
+    every real connection path: Odoo and every daemon unit run as the `odoo`
+    OS user (peer over the socket), provisioning's own psql calls run as
+    `sudo -u postgres` (peer), and TCP clients -- test.py's
+    PGHOST=localhost, dx_firehose's asyncpg pool, pager_duty's pg_dump check
+    -- log in with the `odoo` role's password under the stock
+    `host ... 127.0.0.1/32 scram-sha-256` lines.
+    """
+    return [
+        [
+            "bash",
+            "-c",
+            "echo \"listen_addresses = '127.0.0.1, ::1'\" >> /etc/postgresql/*/main/postgresql.conf",
+        ],
+        [
+            "bash",
+            "-c",
+            "echo \"shared_preload_libraries = 'pg_stat_statements'\" >> /etc/postgresql/*/main/postgresql.conf",
+        ],
+    ]
+
+
 def _create_odoo_role_if_missing(run_cmd_func, db_pass):
     """
     Creates the `odoo` PostgreSQL role with the given password, IF it
@@ -4285,27 +4316,8 @@ def provision_environment(
 
         try:
             _logger.info("[*] Locking down PostgreSQL to local loopback...")
-            run_cmd_func(
-                [
-                    "bash",
-                    "-c",
-                    "sed -i 's/peer/trust/g' /etc/postgresql/*/main/pg_hba.conf",
-                ]
-            )
-            run_cmd_func(
-                [
-                    "bash",
-                    "-c",
-                    "echo \"listen_addresses = '127.0.0.1, ::1'\" >> /etc/postgresql/*/main/postgresql.conf",
-                ]
-            )
-            run_cmd_func(
-                [
-                    "bash",
-                    "-c",
-                    "echo \"shared_preload_libraries = 'pg_stat_statements'\" >> /etc/postgresql/*/main/postgresql.conf",
-                ]
-            )
+            for cmd in _postgresql_lockdown_commands():
+                run_cmd_func(cmd)
 
             if not is_isolated_ns:
                 run_cmd_func(["systemctl", "restart", "postgresql"])

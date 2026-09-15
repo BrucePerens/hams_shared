@@ -1027,5 +1027,34 @@ class AptPackagesManifestTests(unittest.TestCase):
         self.assertIn("early_prod", fitz_entries[0]["environments"])
 
 
+class PostgresqlLockdownTests(unittest.TestCase):
+    def test_does_not_loosen_pg_hba_authentication(self):
+        # Regression test: this step used to run `sed -i 's/peer/trust/g'`
+        # over pg_hba.conf, letting any local OS account connect as any
+        # PostgreSQL role, the superuser included. See
+        # _postgresql_lockdown_commands()'s docstring.
+        commands = infra._postgresql_lockdown_commands()
+        self.assertTrue(commands)
+        for cmd in commands:
+            text = " ".join(cmd)
+            self.assertNotIn("pg_hba", text)
+            self.assertNotIn("trust", text)
+
+    def test_still_binds_postgresql_to_loopback(self):
+        text = "\n".join(" ".join(cmd) for cmd in infra._postgresql_lockdown_commands())
+        self.assertIn("listen_addresses = '127.0.0.1, ::1'", text)
+        self.assertIn("shared_preload_libraries = 'pg_stat_statements'", text)
+
+    def test_provision_environment_uses_the_lockdown_commands_and_no_pg_hba_edit(self):
+        # provision_environment() itself is too host-dependent to execute
+        # here (see this file's docstring), so check its source: the
+        # blanket substitution must not come back inline.
+        import inspect
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn("_postgresql_lockdown_commands()", source)
+        self.assertNotIn("pg_hba", source)
+        self.assertNotIn("s/peer/trust", source)
+
+
 if __name__ == "__main__":
     unittest.main()
