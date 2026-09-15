@@ -157,6 +157,17 @@ staged is yours on a box other sessions are actively writing to.
   question just got answered, and works through open, unblocked items itself. See its own SKILL.md
   for what it will and won't do unattended.
 
+## Waiting for the shared Odoo test runner
+
+The dev box runs one `hams_shared/tools/test.py` at a time, and other sessions hold that lock for
+long stretches. On 2026-09-16 `night-shift-todo-worker` queued a run behind them with
+`while pgrep -f "tools/test.py"; do sleep 3; done; test.py ...`. That loop can never exit:
+`pgrep -f` matches the loop's own `bash -c` command line, which contains the same string. It sat
+for over an hour without launching, until a peer session noticed. Anchor the pattern to the real
+process instead: `pgrep -u odoo -f "^python3 hams_shared/tools/test.py"`. The same trap applies to
+any `pgrep -f` that waits on a command whose name also appears in the waiting script. To check
+that a queued run actually started, look for its log file, not for the waiter process.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
