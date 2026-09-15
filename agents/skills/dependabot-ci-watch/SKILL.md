@@ -315,6 +315,12 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `python3 hams_shared/tools/check_dependency_releases.py` (exit 1 means a pin is behind). It takes a
   few seconds. On 2026-09-15 (seventeenth check), a note saying "clear" had been copied forward for
   13 hours while mercury was behind again.
+  **Quick mercury bump check**: `gh api repos/Rhizomatica/mercury/compare/<old>...<new>` for the
+  file list, then clone at the new commit, `make`, run the binary with spawn_mercury()'s flags
+  (`-x null -p <port> -L <log>`, probe the control port with bash's `/dev/tcp`), and when the diff
+  touches `datalink_arq/` also run upstream's `make -C tests test` (Unity tests, about a minute;
+  it prints `=== All Tests Passed ===`). The relay sends no CONNECT/DISCONNECT itself (Pat's
+  `varahf://` client does), so ARQ changes matter through Pat, not mercury.rs.
 - **The hams_com working tree is shared with other live Claude sessions.** Commits and line
   numbers can change under you mid-run. `git fetch` and re-read before editing, find edit sites
   by content rather than stale line numbers, and `git add` only the specific files you changed.
