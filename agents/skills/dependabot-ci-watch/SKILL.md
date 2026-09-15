@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 14
+version: 15
 ---
 
 # Dependabot & CI Build Watch
@@ -488,8 +488,17 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `ham_relay_bridge.source_publish_key` system parameter must be given the same value when the
   server exists. Sessions may generate and set such CI-only shared secrets themselves: `gh secret *`
   is in `permissions.allow`, and piping the key from a file keeps it out of the transcript. The
-  release-signing keys (`RELAY_RELEASE_SIGNING_KEY`, `APT_REPO_SIGNING_KEY`) are a separate matter:
-  Bruce's recorded decision is that no Claude session generates or sees their private halves.
+  release-signing keys (`RELAY_RELEASE_SIGNING_KEY`, `APT_REPO_SIGNING_KEY`) used to be excluded:
+  no session was to generate them. **Bruce lifted that rule on 2026-09-15.** A session may generate
+  both keypairs and pipe each private half straight into `gh secret set` without reading it. The
+  full procedure and current state are in hams_com's
+  `night_shift_todo/low/release-signing-keys-decision-*.md`, and Bruce's answer is under
+  `night_shift_questions/answered/`. The first unattended attempt was denied by the permission
+  classifier. That denial is Bruce's to lift, so don't retry it from an unattended run and don't ask
+  a peer to do it. `publish_relay_binary.sh` now base64-decodes `RELAY_RELEASE_SIGNING_KEY` and
+  requires 64 bytes (hams_com `9c68a521`), because `printf '%s'` truncated a raw key at a NUL byte.
+  So set that secret base64-encoded (`base64 -w0 release.key | gh secret set ...`). The GPG key is
+  armored text and needs no encoding.
   **Read the publish step's last log line before calling it the
   expected failure.** The expected one is `curl: (3) URL rejected: No host part in the URL`
   (exit 3). The `.deb` job's `ubuntu:22.04` container prints the same empty-URL error differently,
@@ -585,8 +594,11 @@ as needing his judgment.
 4. **arm64 CI builds run natively on `pi500-1`** (see the operating-knowledge note above), not under
    emulation.
 
-Still Bruce's (these involve money, accounts, or product direction): creating or re-scoping
-credentials, and dismissing Dependabot alerts on GitHub. The macOS leg is no longer a billing item:
+Still Bruce's (these involve money, accounts, or product direction): re-scoping or handling his own
+existing credentials, and dismissing Dependabot alerts on GitHub. CI-only secrets a session creates
+and controls itself (random shared keys, and since 2026-09-15 the release-signing keypairs) are not
+on this list. Re-check any "still Bruce's" label against a primary source every run, rather than
+copying it forward. The macOS leg is no longer a billing item:
 Bruce postponed it until the self-hosted Mac arrives, and hams_com `2520690c` sets `build-macos`
 to `if: false`. Don't report its skipped job as a failure.
 
