@@ -348,6 +348,16 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `install_debian_deps.sh` then `install_relay_runtime_deps.sh` in a `docker run --rm
   --cpuset-cpus ... ubuntu:<version>` container (install `sudo git curl ca-certificates
   build-essential` first). That reproduced both 20.04 failures locally.
+- **`Swatinem/rust-cache` doesn't include the job container in its cache key.** The automatic key is
+  job id, OS family and architecture. Matrix legs of one job that differ only by `container:` used
+  to share one `target/` cache: `build-linux`'s ubuntu 20.04/22.04/24.04 legs, and `build-redhat`'s
+  fedora and rockylinux legs. Cargo's fingerprints don't track glibc, so an older-glibc leg reused
+  build scripts from a newer one and failed with `version 'GLIBC_2.3x' not found (required by
+  .../build-script-build)`. This first showed on 20.04 in run 34914239136. Fixed in hams_com
+  `91755340` with `key: ${{ matrix.os }}` / `key: ${{ matrix.container }}`. A new matrix job that
+  varies `container:` needs the same `key:`. To see which cache a leg restored, read the rust-cache
+  step's `Restored from cache key` line. `gh api repos/BrucePerens/hams_com/actions/caches` lists
+  the caches and when each was saved.
 - **A step-less, runner-less `Security audit` job in `Build Server Daemons`** is the check-run
   `rustsec/audit-check` creates itself. It mirrors the matrix `security-audit` jobs' result and has
   no log of its own. Read the matrix job's `RustSec advisory check` step instead.
