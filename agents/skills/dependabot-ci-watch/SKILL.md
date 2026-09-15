@@ -419,6 +419,15 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
 - **A step-less, runner-less `Security audit` job in `Build Server Daemons`** is the check-run
   `rustsec/audit-check` creates itself. It mirrors the matrix `security-audit` jobs' result and has
   no log of its own. Read the matrix job's `RustSec advisory check` step instead.
+- **`EACCES: permission denied, stat '/home/bruce/.local/bin/git'` lines in hams-devbox job logs
+  are noise.** They are not the workspace-ownership `EACCES` described above. The runner's saved
+  `PATH` (`/home/github-runner/actions-runner-hams-com/.path`) was captured from Bruce's shell, so
+  it lists `/home/bruce/.local/bin`, `.cargo/bin`, `go/bin` and a Claude plugin directory ahead of
+  `/usr/bin`. The `github-runner` account can't enter `/home/bruce`, so host-side steps
+  (`actions/checkout`, post-job cleanup) print "Unexpected error attempting to determine if
+  executable file exists" for each one and fall through to `/usr/bin/git`. Nothing fails because of
+  it. The real failure is always a different line (usually a `##[error]Process completed with exit
+  code N` after `curl:`/`jq:`). Found 2026-09-15.
 - **`hams_com` has no repository secrets** (`gh secret list` is empty, as of 2026-09-14; no
   production Odoo exists yet). Every publish step on `main` (binary zips, .deb, .rpm, apt repo,
   Windows) will fail at `curl "$ODOO_URL/..."` with an empty URL once its build is green. That is
