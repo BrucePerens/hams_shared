@@ -4,12 +4,13 @@ description: >-
   Check all three real hams.com/hams_open/hams_shared GitHub repos for open Dependabot
   security alerts and CI build failures, investigate each for real, fix what's safely
   fixable (and push it), message another active session if something is urgent, and record
-  genuinely open items in night_shift_todo.md and resolved ones in night_shift_history.md (never
-  a "nothing found" entry in either). Also runs automatically once an hour (for now) as
+  genuinely open items in the night_shift_todo/ priority queue and resolved ones in
+  night_shift_history.md (never a "nothing found" entry in either). Also runs automatically once an
+  hour (for now) as
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 12
+version: 13
 ---
 
 # Dependabot & CI Build Watch
@@ -27,26 +28,27 @@ new, reusable fact worth knowing on every future run -- a new token/permission-s
 `workflow`-scope gap below was found and added exactly this way), a recurring CI failure's real root
 cause, a dependency-ecosystem quirk in one of these three repos, a faster way to check something --
 add it directly to THIS FILE as part of that run's own commit, not only to a durable-tracking file.
-See "Step 3" below for the real distinction between `night_shift_todo.md` (open, actionable to-dos
-only) and `night_shift_history.md` (the record of what already happened) -- THIS file is neither of
-those: it's the durable OPERATING KNOWLEDGE the next run starts with, a third, separate purpose,
+See "Step 3" below for the real distinction between the `night_shift_todo/` priority queue (open,
+actionable to-dos only -- full convention in the `night-shift-todo` skill) and `night_shift_history.md`
+(the record of what already happened) -- THIS file is neither of those: it's the durable OPERATING
+KNOWLEDGE the next run starts with, a third, separate purpose,
 edited directly, committed and pushed alongside whatever else that run did (matching the "keep this
 and the scheduled task's own prompt in sync" note at the bottom of this file). Don't let this file
 grow unbounded with one-off trivia, though -- only add something here if a FUTURE run would
 genuinely benefit from already knowing it, the same bar as any other durable-knowledge decision in
 this codebase.
 
-**Three ways to act, not just one**: fix things yourself and push, record durably (in
-`night_shift_todo.md` if it's still open, `night_shift_history.md` if you finished it -- see "Step
-3" below for the real distinction), or message another active Claude session directly (`ListAgents`
-to see what's running, `SendMessage` to reach one) if something is time-sensitive -- a real,
-currently-exploitable-shaped security exposure, or a build failure actively blocking other
-in-progress work you can see evidence of (e.g. a very recent commit clearly aimed at fixing
-something that then failed CI again). Don't message for routine/low-urgency findings -- the durable
-record is the right channel for those; messaging is an ADDITION to the durable record for urgent
-items, never a replacement for it (a chip or message alone is not durable -- see the
-`hams-durable-tracking-over-chips` convention). This does NOT mean every run's own findings go into
-`night_shift_todo.md` regardless of outcome -- a resolved item's durable record is
+**Three ways to act, not just one**: fix things yourself and push, record durably (a new file in
+`night_shift_todo/<priority>/` if it's still open, an appended entry in `night_shift_history.md` if
+you finished it -- see "Step 3" below for the real distinction), or message another active Claude
+session directly (`ListAgents` to see what's running, `SendMessage` to reach one) if something is
+time-sensitive -- a real, currently-exploitable-shaped security exposure, or a build failure
+actively blocking other in-progress work you can see evidence of (e.g. a very recent commit clearly
+aimed at fixing something that then failed CI again). Don't message for routine/low-urgency
+findings -- the durable record is the right channel for those; messaging is an ADDITION to the
+durable record for urgent items, never a replacement for it (a chip or message alone is not durable
+-- see the `hams-durable-tracking-over-chips` convention). This does NOT mean every run's own
+findings get a to-do entry regardless of outcome -- a resolved item's durable record is
 `night_shift_history.md`, and a "nothing found" run gets no durable-file entry at all.
 
 **Check `ListAgents` before starting substantive work, not just when something urgent comes up.**
@@ -71,8 +73,8 @@ sitting in the same shared index. When you do find a real overlap: don't just pi
 arbitrarily -- coordinate on who keeps working which piece (per file/module is usually a clean
 split), reuse completed work across sessions rather than redoing it (a `git worktree diff` or
 patch export both sessions can apply is often faster than re-deriving from scratch), and record the
-coordination trail in `night_shift_todo.md` so it's not just two chat messages that vanish with the
-sessions.
+coordination trail in the to-do's own file under `night_shift_todo/` (or `night_shift_history.md`
+if it's already done) so it's not just two chat messages that vanish with the sessions.
 
 **When you decline to do something and another session is running, talk to that session before
 leaving it undone** (Bruce's instruction, 2026-09-14). Examples: holding off on a verification run,
@@ -101,9 +103,9 @@ gh api repos/BrucePerens/<repo>/dependabot/alerts --jq \
 ```
 
 For each open alert found:
-1. Check whether `night_shift_todo.md` already has an entry for this exact alert (grep for the
-   package name / alert number) -- if so and nothing has changed, skip it, don't re-report the
-   same thing every run.
+1. Check whether `night_shift_todo/` already has an entry for this exact alert (`grep -rl` across
+   the priority directories for the package name / alert number) -- if so and nothing has changed,
+   skip it, don't re-report the same thing every run.
 2. If new: investigate for real. Read the actual advisory
    (`gh api repos/BrucePerens/<repo>/dependabot/alerts/<number>`) for the real vulnerable version
    range and fixed version. Determine whether the vulnerable package is a direct or transitive
@@ -117,9 +119,13 @@ For each open alert found:
    appropriate), apply it, run the real affected test suite to confirm nothing broke, and commit
    it with a real, specific message ending `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`.
    If the fix requires a major version bump with real, non-trivial breaking-API changes, or
-   removing/replacing a dependency entirely, do NOT force it unilaterally -- record it clearly in
-   `night_shift_todo.md` as needing Bruce's own judgment call, with the specific tradeoff named
-   (not just "needs a decision").
+   removing/replacing a dependency entirely, do NOT force it unilaterally -- file it in
+   `night_shift_todo/` as needing Bruce's own judgment call, with the specific tradeoff named
+   (not just "needs a decision"). Before doing so, double-check the codebase's own actual usage
+   against the advisory's flagged APIs, not just whether the crate builds -- a real miss on
+   2026-09-15: an earlier run filed exactly this kind of "needs Bruce's call" note without checking
+   that the one real call site didn't even touch the flagged API, leaving a safe fix undone for a
+   day until another session checked more carefully and fixed it directly.
 4. You have permission to push these commits directly (Bruce handed this over 2026-09-14). **How
    push access actually works, so you don't hit the same wall a prior session did**: Bruce's own
    git identity normally authenticates over SSH with a hardware YubiKey (`ED25519-SK`), which
@@ -163,7 +169,7 @@ gh run list --repo BrucePerens/<repo> --limit 15 --json databaseId,name,status,c
 ```
 
 For each run with `conclusion: "failure"` on the main/default branch that's NOT already recorded
-in `night_shift_todo.md` (grep for the workflow name + rough date):
+in `night_shift_todo/` (grep the priority directories for the workflow name + rough date):
 1. Get the real failure log. First map which jobs/steps failed:
    `gh run view <databaseId> --repo BrucePerens/<repo> --json jobs --jq '.jobs[] | select(.conclusion=="failure") | "\(.databaseId) \(.name) [" + ([.steps[]|select(.conclusion=="failure")|.name]|join(", ")) + "]"'`
    then fetch each failing job's own log: `gh api repos/BrucePerens/<repo>/actions/jobs/<job_id>/logs`.
@@ -344,7 +350,8 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
     *pending* run. A newer push replaces the pending one, which then shows `cancelled` with 0
     jobs. That is GitHub's behavior, not another session cancelling it. The in-progress run is
     never touched.
-  - Record what you cancelled in `night_shift_todo.md`.
+  - Record what you cancelled in `night_shift_history.md` (it's a completed action) or file a
+    `night_shift_todo/` entry if cancelling it leaves something still needing a real re-run.
 - **The relay's transport-tool install scripts build pinned commits** (since 2026-09-15). Both
   `daemons/hams_local_relay/install_relay_runtime_deps.sh` and `install_relay_runtime_deps_rpm.sh`
   fetch `MERCURY_COMMIT`/`ARDOPCF_COMMIT` exactly. The Debian script also has
@@ -455,12 +462,23 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   start, so editing it does nothing until `actions.runner.BrucePerens-hams_com.hams-devbox.service`
   restarts (only while no job runs). Re-running `config.sh` from Bruce's shell regenerates it with his
   PATH. Any new host-side job that needs cargo must provision it (`dtolnay/rust-toolchain@stable`)
-  and not rely on `.path`. See `night_shift_todo.md` for whether `.path` has been cleaned yet.
-- **`hams_com` has no repository secrets** (`gh secret list` is empty, as of 2026-09-14; no
-  production Odoo exists yet). Every publish step on `main` (binary zips, .deb, .rpm, apt repo,
-  Windows) will fail at `curl "$ODOO_URL/..."` with an empty URL once its build is green. That is
-  expected before deployment, not a new bug. Check `gh secret list` fresh, because it stops being
-  true once Bruce creates them. **Read the publish step's last log line before calling it the
+  and not rely on `.path`. **`.path` was cleaned on 2026-09-15** to system directories only
+  (backup `.path.bak-2026-09-15` beside it), and `build-server-daemons.yml`'s host-side
+  `build-and-test` job got the same runner-rustup pre-step (it had been missed). If a job log
+  shows `/home/bruce/...` again, `.path` was regenerated, most likely by re-running `config.sh`
+  from Bruce's shell.
+- **`hams_com` has no `ODOO_URL` secret yet** (no production Odoo exists; `https://hams.com` timed
+  out on 2026-09-15). Every publish step on `main` (binary zips, .deb, .rpm, apt repo, Windows)
+  fails at `curl "$ODOO_URL/..."` with an empty URL once its build is green. That is expected before
+  deployment, not a new bug. Check `gh secret list` fresh. `HAMS_RELAY_SOURCE_PUBLISH_KEY` does
+  exist (set 2026-09-15). It is a random shared key a session generated; its only copy outside
+  GitHub is the file named after it in `~/.secrets/hams_com_ci/`, and the Odoo server's
+  `ham_relay_bridge.source_publish_key` system parameter must be given the same value when the
+  server exists. Sessions may generate and set such CI-only shared secrets themselves: `gh secret *`
+  is in `permissions.allow`, and piping the key from a file keeps it out of the transcript. The
+  release-signing keys (`RELAY_RELEASE_SIGNING_KEY`, `APT_REPO_SIGNING_KEY`) are a separate matter:
+  Bruce's recorded decision is that no Claude session generates or sees their private halves.
+  **Read the publish step's last log line before calling it the
   expected failure.** The expected one is `curl: (3) URL rejected: No host part in the URL`
   (exit 3). The `.deb` job's `ubuntu:22.04` container prints the same empty-URL error differently,
   as `curl: (3) URL using bad/illegal format or missing URL`, because its curl is 7.81 and the
@@ -489,7 +507,11 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   c=$(git commit-tree $(GIT_INDEX_FILE=idx git write-tree) -p HEAD -m "...")`. Then check
   `git diff --stat HEAD $c`, run `git update-ref refs/heads/main $c HEAD`, and put the new blob into
   the real index for that one path, so the shared index doesn't show your commit staged in reverse.
-  Also append the same entry to the working-tree file.
+  Also append the same entry to the working-tree file. This still applies to `night_shift_history.md`
+  (still one shared file multiple sessions append to) -- it's exactly the gap `night_shift_todo/`
+  was restructured to avoid for to-dos themselves: a normal `git add <your-new-file>` + `git commit
+  -- <your-new-file>` on your own dedicated to-do file has no equivalent risk, since there's no
+  other session's text sharing that same file to accidentally sweep in.
 - **Before pushing hams_com, run `git log --oneline origin/main..main`.** Another session may
   have committed on `main` and be holding the push on purpose. For example, a relay change can wait
   until a local test run finishes, because pushing anything under `daemons/hams_local_relay/**`
@@ -551,54 +573,52 @@ credentials, and dismissing Dependabot alerts on GitHub. The macOS leg is no lon
 Bruce postponed it until the self-hosted Mac arrives, and hams_com `2520690c` sets `build-macos`
 to `if: false`. Don't report its skipped job as a failure.
 
-## Step 3: Record the RIGHT thing in the RIGHT file
+## Step 3: Record the RIGHT thing in the RIGHT place
 
-**Corrected 2026-09-15, after this skill had been dumping every single hourly check-in into
-`night_shift_todo.md` regardless of outcome, for days, with nobody actually pruning it back out.**
-Bruce's own words when he caught it: "the to-do list is for real to-dos, night_shift_history.md is
-more appropriate for completed actions... if it's an 'I woke up and found no problems', just
-delete those and tell the skill they are not worth archiving." The two files have DIFFERENT jobs,
-and this skill's own prior instruction (an earlier version of this file, and this section in
-particular) blurred them:
+**Superseded 2026-09-15**: `night_shift_todo.md` (the single free-form file this section used to
+describe) is now historical -- it grew past 8,900 lines of prose, genuinely hard for any session to
+scan for "what's actually still open" without a full read-through. Real, currently-open to-dos now
+go in the structured queue at `hams_com/night_shift_todo/` (one file per item, in a
+`critical`/`high`/`medium`/`low` priority directory) instead. **Load the `night-shift-todo` skill
+for the full convention** (file naming, frontmatter, claiming, what "done" actually means) before
+filing or closing anything there -- this section only covers what's specific to
+`dependabot-ci-watch`'s own use of it.
 
-- **`night_shift_todo.md` is for real, currently-open, actionable to-dos only.** Something a future
-  session (this skill's own next run, or a person) still needs to DO. If this run leaves nothing
-  actionable behind, it does not get an entry here, full stop -- not even a short one.
-- **`night_shift_history.md` is the durable record of what already happened** -- completed fixes,
-  resolved alerts, closed-out investigations. This is where a "found X, fixed it, verified with Y,
-  pushed as Z" writeup belongs once it's actually done, not `night_shift_todo.md`.
+`night_shift_history.md`'s role is unchanged from before: the durable record of what already
+happened -- completed fixes, resolved alerts, closed-out investigations. Bruce's own words on the
+underlying distinction, which still holds: "the to-do list is for real to-dos, night_shift_history.md
+is more appropriate for completed actions... if it's an 'I woke up and found no problems', just
+delete those and tell the skill they are not worth archiving."
 
 Concretely, at the end of every run:
 
 1. **Nothing new, nothing changed, nothing to fix, nothing open** (the routine "checked, all
-   clear" case -- this is most hourly runs on a healthy day): **write nothing to either file.**
-   Do not create a "checked, nothing new" entry in `night_shift_todo.md` -- that was this skill's
-   own past mistake, and entries like that are not worth archiving into `night_shift_history.md`
-   either; the right move is to simply not write one. (If you want a record that the check
-   happened at all, that's what the scheduled task's own run log/notification already provides --
-   this skill does not need to duplicate that in a hand-maintained file.)
+   clear" case -- this is most hourly runs on a healthy day): **write nothing anywhere.** No new
+   file in `night_shift_todo/`, no entry in `night_shift_history.md`. (If you want a record that
+   the check happened at all, that's what the scheduled task's own run log/notification already
+   provides.)
 2. **Something was found AND fully resolved this run** (a real alert or CI failure, investigated,
-   fixed, tested, committed, and pushed, with nothing left open): append that summary -- what was
-   wrong, what you changed, the real commit hash(es), and how you verified it -- directly to
+   fixed, tested, committed, and pushed -- all three, per `night-shift-todo`'s own "what done
+   means" -- with nothing left open): append that summary -- what was wrong, what you changed, the
+   real commit hash(es), and how you verified it -- directly to
    `/home/bruce/workspace/hams_com/night_shift_history.md` (re-read fresh immediately before
-   editing, append at the end, purely additive -- never delete or rewrite another entry already
-   there). This is a completed action, which is exactly what that file is for.
-3. **Something genuinely still needs attention** -- a real alert or failure you couldn't safely
-   fix yourself, something that needs Bruce's own input (named specifically: which credential,
-   which decision, which tradeoff -- never vaguely), or a fix you started but couldn't finish this
-   run: THIS is what goes in `night_shift_todo.md`, as a real to-do entry, not a status report.
-4. **Close the loop on your OWN past `night_shift_todo.md` entries.** Before writing anything new,
-   grep `night_shift_todo.md` for this skill's own prior entries (`dependabot-and-ci-watch hourly
-   scheduled run`, or a specific alert/workflow name from an earlier run) that describe something
-   THIS run has now confirmed is actually resolved (a CI run you watched go green, an alert that's
-   gone from `gh`'s own listing, a "still Bruce's" item he's since handled). Don't leave a stale
-   open entry sitting there for some future cleanup pass to notice -- move it yourself: cut the
-   resolved section out of `night_shift_todo.md` and append it (with a one-line note on how you
-   confirmed it's resolved) to `night_shift_history.md`, in the same commit as this run's other
-   changes. This is the fix for a real, repeated failure mode: dozens of this skill's own past
-   entries sat in `night_shift_todo.md` long after the thing they described was actually done,
-   because writing the entry and closing it out were treated as two separate people's jobs and
-   nobody ever did the second half.
+   editing, append at the end, purely additive). This is a completed action, which is exactly what
+   that file is for.
+3. **Something genuinely still needs attention** -- a real alert or failure you couldn't safely fix
+   yourself, something that needs Bruce's own input (named specifically: which credential, which
+   decision, which tradeoff -- never vaguely), or a fix you started but couldn't finish this run:
+   file it as its own entry in `night_shift_todo/<priority>/`, per the `night-shift-todo` skill's
+   own file format. Pick the priority honestly -- a real, currently-exploitable-shaped security gap
+   is `critical`, a routine "needs Bruce's answer on X" is usually `low` or `medium`.
+4. **Close the loop on OPEN ITEMS THIS RUN CONFIRMS ARE RESOLVED.** Before writing anything new,
+   check `night_shift_todo/critical/`, `high/`, `medium/`, `low/` (a cheap `ls`, not a full
+   read-through) for items this run has now confirmed are actually done (a CI run you watched go
+   green, an alert that's gone from `gh`'s own listing, a "still Bruce's" item he's since handled).
+   Don't leave a stale claimed-but-actually-done item sitting there -- close it yourself: fold a
+   summary into `night_shift_history.md` and `git rm` the to-do file, in the same commit as this
+   run's other changes. This is the same failure mode the old single-file system had (entries
+   sitting open long after being done, because writing and closing were treated as separate jobs) --
+   the structured queue doesn't fix that on its own, the discipline still has to be applied.
 
 Do NOT use the `spawn_task` chip mechanism for anything found here -- Bruce has explicitly asked
 that this kind of tracking go directly into the appropriate file (per the three cases above)
