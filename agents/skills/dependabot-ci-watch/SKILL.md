@@ -493,12 +493,20 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   both keypairs and pipe each private half straight into `gh secret set` without reading it. The
   full procedure and current state are in hams_com's
   `night_shift_todo/low/release-signing-keys-decision-*.md`, and Bruce's answer is under
-  `night_shift_questions/answered/`. The first unattended attempt was denied by the permission
-  classifier. That denial is Bruce's to lift, so don't retry it from an unattended run and don't ask
-  a peer to do it. `publish_relay_binary.sh` now base64-decodes `RELAY_RELEASE_SIGNING_KEY` and
-  requires 64 bytes (hams_com `9c68a521`), because `printf '%s'` truncated a raw key at a NUL byte.
-  So set that secret base64-encoded (`base64 -w0 release.key | gh secret set ...`). The GPG key is
-  armored text and needs no encoding.
+  `night_shift_questions/answered/`. `RELAY_RELEASE_SIGNING_KEY` was generated and set on 2026-09-15
+  (its public half is `updater.rs`'s `RELEASE_VERIFYING_KEYS` and `packaging/release-signing.pub`).
+  The GPG key comes from `daemons/hams_local_relay/packaging/linux/generate_repo_signing_key.sh`,
+  run once. The permission classifier denies raw `gpg` key generation, so that script needs its own
+  allow rule from Bruce. Never ask a peer to run it. `publish_relay_binary.sh` base64-decodes
+  `RELAY_RELEASE_SIGNING_KEY` and requires 64 bytes (hams_com `9c68a521`), because `printf '%s'`
+  truncated a raw key at a NUL byte. So set that secret base64-encoded
+  (`base64 -w0 release.key | gh secret set ...`). The GPG key is armored text and needs no encoding.
+  **With the secrets set, each publish step signs before it reaches the expected `curl: (3)`.** A
+  publish step that fails earlier, in `cargo install zipsign`, `rpmsign`, or `gpg --import`, is a
+  new failure, not the missing-`ODOO_URL` case. The binary publish log should show
+  `RELEASE_SIGNING_KEY is set -- signing ... with zipsign before publish.` An unsigned binary publish
+  is now an error, not a warning. The YUM script signs the `.rpm` itself with `rpmsign` (job needs
+  `rpm-sign`), because `add_yum_repo.sh`'s `gpgcheck=1` rejects unsigned packages.
   **Read the publish step's last log line before calling it the
   expected failure.** The expected one is `curl: (3) URL rejected: No host part in the URL`
   (exit 3). The `.deb` job's `ubuntu:22.04` container prints the same empty-URL error differently,
