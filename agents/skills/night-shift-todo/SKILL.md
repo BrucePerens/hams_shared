@@ -216,6 +216,17 @@ whole crate, so piping it through `head` can hide your own file's diffs behind o
 happened on 2026-09-15 and needed a follow-up formatting commit. Don't run `cargo fmt` on the whole
 crate either: other sessions' uncommitted relay edits sit in the same tree.
 
+**Relay clippy: include test targets.** `build-relay.yml` runs `cargo clippy --release --all-targets
+-- -D warnings`. Plain `cargo clippy --release -- -D warnings` skips `#[cfg(test)]` code. On
+2026-09-15 that let five `await_holding_lock` errors in new `#[tokio::test]` bodies reach a
+commit. Run `cargo clippy --bin hams_local_relay --tests -- -D warnings`, and read only the
+findings in your own files, since peers' uncommitted edits compile in too.
+
+**A `.py` syntax check as bruce: use `ast.parse`, not `py_compile`.** Some modules'
+`__pycache__` directories are owned by `odoo` (`distributed_redis_cache/tests/` on 2026-09-15). There,
+`python3 -m py_compile` fails with `Permission denied` while writing the `.pyc` and never reports
+on the syntax.
+
 Choosing items this way also avoids collisions: `git status` in each repo shows which module
 directories other sessions have uncommitted work in.
 
