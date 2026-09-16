@@ -321,10 +321,22 @@ true of an unbundled `.test.js`, of a bundled suite whose tag no wrapper request
 whose `describe` block contains no `test()` call -- hoot reports all three as `Passed 0 tests`
 followed by `Test suite succeeded`, which is exactly what `browser_js()` waits for.
 
-`check_hoot_runner_coverage.py` now checks all of those mechanically, so the honest short version is:
-cite the checker, not just the run. And when writing up any verified result, prefer "these N tests
-ran and passed" over "the suite is green" -- the first is a claim about what executed, the second
-quietly implies coverage the run never measured.
+`check_hoot_runner_coverage.py` catches the first of those today: it flags a `*.test.js` on disk
+that no bundle lists. The other two -- a bundled suite whose tag no wrapper requests, and a
+`describe` block with no `test()` in it -- are written and tested but **not yet committed** as this
+is written, held with the `user_websites` wrapper that the first of them requires, because landing a
+linter red on a finding whose fix exists but isn't pushed hands every other session a failure they
+cannot act on. Check whether they have landed before relying on them; until they have, the
+cross-reference has to be done by hand.
+
+That caveat is itself the point of this section, caught by workspace-05 within the hour: the first
+version of this paragraph said the checker "now checks all of those mechanically", which was untrue
+at the moment it was pushed. A skill file asserting a guard that is not in the tree is exactly the
+documentation-nobody-re-derives failure the section is about, committed inside the section about it.
+
+When writing up any verified result, prefer "these N tests ran and passed" over "the suite is green"
+-- the first is a claim about what executed, the second quietly implies coverage the run never
+measured.
 
 ## Say so BEFORE filing, when two sessions are reading the same checker's output
 
