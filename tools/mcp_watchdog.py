@@ -124,7 +124,24 @@ def _run_legacy_bridge():
 def start_legacy_bridge():
     threading.Thread(target=_run_legacy_bridge, daemon=True).start()
 
+from starlette.responses import Response, JSONResponse
+
 mcp = FastMCP("Watchdog")
+
+@mcp.custom_route("/sse", methods=["POST"])
+async def _handle_sse_post_probe(request):
+    """Handle Antigravity client capability probe without raising 405."""
+    return Response(status_code=204)
+
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+async def _handle_oauth_probe(request):
+    """Handle Antigravity OAuth capability probe without raising 404."""
+    return JSONResponse({})
+
+@mcp.custom_route("/.well-known/oauth-protected-resource/sse", methods=["GET"])
+async def _handle_oauth_sse_probe(request):
+    """Handle Antigravity OAuth capability probe without raising 404."""
+    return JSONResponse({})
 
 # The one shared server instance (this box's real deployment: `--transport
 # sse --port 8767`) that every process-local `_QUEUES` dict must actually
