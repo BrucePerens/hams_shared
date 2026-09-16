@@ -90,6 +90,27 @@ git reset -q HEAD -- <the exact paths you committed>
 git status --porcelain <those paths>     # must be empty
 ```
 
+**4a. `git read-tree HEAD` captures a point in time, not a live reference -- re-run it immediately
+before `git commit`, not just before staging.** `git commit`'s parent always resolves to whatever
+`main` points to *at commit time*, but a private index built earlier keeps whatever tree
+`read-tree HEAD` saw back then. If a peer commits in the gap between your `read-tree HEAD` and your
+`git commit` -- staging several paths, writing a commit message, and running bug-hunt or test passes
+in between all take real time -- the resulting commit's tree (old base plus only your own adds) can
+be missing whatever that peer's commit *removed*, so it silently resurrects deleted content at the
+git-object level even though nothing ever reappears in the working tree. `git status` afterward
+shows exactly the file this produces: a path staged for deletion that was never present on disk,
+because the real, shared index (untouched by your private-index commit) still reflects the pre-peer
+state while `HEAD` has already moved past it. This happened for real on 2026-09-16: a private index
+staged 20+ minutes' worth of an ingestion refactor, a peer's closure commit deleted two
+`night_shift_todo/` files in the meantime, and the resulting commit resurrected both, caught only by
+reading its own `--stat` output line by line rather than trusting the commit to have done what was
+intended. The fix is procedural: run `git fetch`/`git log --oneline origin/main..main` (decision 7's
+own check) and `git read-tree HEAD` again right before the actual `git commit`, not only before the
+`git add` calls -- treat any gap long enough to plausibly overlap a peer's commit as long enough to
+redo it. If a commit already landed with this defect, don't amend it (decision 6) -- read its own `--stat`
+diff against its parent to find exactly what it wrongly added back, then make a new, ordinary
+corrective commit that removes just that.
+
 **5. Prefer structures where no two sessions share a file.** A commit touching only files no other
 session has any reason to edit carries none of this exposure, and a plain scoped `git add` of your
 own new file is then genuinely safe. This is the real reason the night-shift to-do queue is one file
