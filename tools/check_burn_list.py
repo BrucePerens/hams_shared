@@ -1149,6 +1149,10 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         "audit-ignore-outbound-fetch" in line_content
                         and "OUTBOUND FETCH" in msg
                     )
+                    or (
+                        "audit-ignore-retry-method" in line_content
+                        and "RETRY REPLAYS NON-IDEMPOTENT" in msg
+                    )
                 ):
                     return
             self.warnings.append((lineno, msg))
@@ -2944,11 +2948,112 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 "fixed and trusted, add '# audit-ignore-outbound-fetch' naming it.",
             )
 
+        _NON_IDEMPOTENT_RETRY_METHODS = ("POST", "PATCH")
+
+        @staticmethod
+        def _retry_literal_elements(node):
+            """The elements of a literal list/tuple/set, or None when `node` is not one."""
+            if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+                return node.elts
+            return None
+
+        def _retry_status_forcelist_has_5xx(self, node):
+            """True only when a literal status_forcelist visibly contains a status >= 500.
+
+            A name or an arbitrary call is not guessed at. `range(a, b)` with constant
+            bounds is read, because `status_forcelist=range(500, 600)` is a common spelling.
+            """
+            elements = self._retry_literal_elements(node)
+            if elements is not None:
+                return any(
+                    isinstance(e, ast.Constant)
+                    and isinstance(e.value, int)
+                    and not isinstance(e.value, bool)
+                    and e.value >= 500
+                    for e in elements
+                )
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "range"
+                and 1 <= len(node.args) <= 2
+                and all(
+                    isinstance(a, ast.Constant) and isinstance(a.value, int)
+                    for a in node.args
+                )
+            ):
+                return node.args[-1].value > 500
+            return False
+
+        def _check_retry_replays_non_idempotent_methods(self, node, func_name):
+            """Flag a urllib3 Retry that replays POST/PATCH when the server answers 5xx.
+
+            Real bug, hams_open 76dc5784: cloudflare_api.py mounted
+            Retry(status_forcelist=[..., 500, 502, ...], allowed_methods=[..., "POST", ...]).
+            A 5xx that arrives after the server already applied a POST gets the same POST
+            sent again, which created duplicate DNS records, firewall rules and tunnel routes.
+            It reads as thoroughness, and urllib3's own default allowed_methods (which leaves
+            POST out) has to be overridden to produce it.
+
+            Flagged: an `allowed_methods` literal containing "POST" or "PATCH", or
+            `allowed_methods=None` / an empty literal (urllib3 then retries EVERY method --
+            `_is_method_retryable` returns True when allowed_methods is falsy), together with
+            a literal `status_forcelist` holding a status >= 500. A name or call passed as
+            allowed_methods is deliberately not flagged: the fixed Cloudflare code passes
+            `sorted(IDEMPOTENT_METHODS)`, and guessing at names would be noise. Lowercase
+            entries are not flagged either, because urllib3 compares `method.upper()` against
+            the list, so "post" never matches anything.
+
+            Only the class name `Retry` (bare or qualified) is matched; a subclass such as
+            IdempotencyAwareRetry is exactly the recommended fix and is left alone.
+            """
+            if func_name != "Retry":
+                return
+            keywords = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+            methods = keywords.get("allowed_methods", keywords.get("method_whitelist"))
+            status = keywords.get("status_forcelist")
+            if methods is None or status is None:
+                return
+            if not self._retry_status_forcelist_has_5xx(status):
+                return
+
+            if isinstance(methods, ast.Constant) and methods.value is None:
+                replayed = "every method (allowed_methods=None)"
+            else:
+                elements = self._retry_literal_elements(methods)
+                if elements is None:
+                    return
+                if not elements:
+                    replayed = "every method (an empty allowed_methods)"
+                else:
+                    hits = [
+                        e.value
+                        for e in elements
+                        if isinstance(e, ast.Constant)
+                        and e.value in self._NON_IDEMPOTENT_RETRY_METHODS
+                    ]
+                    if not hits:
+                        return
+                    replayed = " and ".join(sorted(set(hits)))
+
+            self.add_warning(
+                node.lineno,
+                f"[%AUDIT] RETRY REPLAYS NON-IDEMPOTENT METHODS: this Retry re-sends {replayed} "
+                "on a 5xx. A 5xx can arrive after the server already applied the request, so "
+                "the replay duplicates whatever it created (hams_open 76dc5784: duplicate "
+                "Cloudflare DNS records and firewall rules). Keep allowed_methods to the "
+                "idempotent set and subclass Retry, overriding is_retry so POST/PATCH retry "
+                "on 429 only -- see cloudflare/utils/cloudflare_api.py IdempotencyAwareRetry. "
+                "If the endpoint is genuinely idempotent, add '# audit-ignore-retry-method' "
+                "saying why.",
+            )
+
         def visit_Call(self, node):
             self._check_forbidden_functions(node)
             func_name = getattr(node.func, "id", getattr(node.func, "attr", ""))
             self._check_i18n_messages(node, func_name)
             self._check_unguarded_outbound_fetch(node, func_name)
+            self._check_retry_replays_non_idempotent_methods(node, func_name)
 
             if func_name == "safe_patch_object" and node.args:
                 target = node.args[0]
@@ -5010,6 +5115,10 @@ def scan_file(filepath, is_odoo_module=False):
                 # halts the whole scan. Found immediately on the first real
                 # use, tagging zero_sudo's own local health-check poll.
                 "audit-ignore-outbound-fetch",
+                # The RETRY REPLAYS NON-IDEMPOTENT METHODS rule's escape hatch.
+                # Registered here for the same reason as the tag above: an
+                # unregistered tag is itself an UNAUTHORIZED BYPASS error.
+                "audit-ignore-retry-method",
                 # `_execute_gdpr_erasure()`'s own dedicated escape hatch,
                 # defined and enforced by
                 # hams_shared/tools/check_gdpr_erasure_uses_service_utility.py

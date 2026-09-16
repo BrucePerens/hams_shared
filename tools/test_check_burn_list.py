@@ -5959,3 +5959,127 @@ def test_a_url_variable_assigned_from_something_unverifiable_is_still_flagged():
         "    return requests.post(url, json=payload)\n"
     )
     assert _outbound_fetch_warnings(source)
+
+
+# ---------------------------------------------------------------------------
+# RETRY REPLAYS NON-IDEMPOTENT METHODS: a urllib3 Retry that re-sends POST or
+# PATCH on a 5xx. Real bug, hams_open 76dc5784 (duplicate Cloudflare DNS
+# records, firewall rules and tunnel routes).
+# ---------------------------------------------------------------------------
+
+
+def _retry_method_warnings(source, filepath="/tmp/some_module/utils/api_client.py"):
+    lines = source.splitlines()
+    _errors, warnings = check_ast_vulnerabilities(
+        filepath, source, lines, is_odoo_module=True
+    )
+    return [msg for _lineno, msg in warnings if "RETRY REPLAYS NON-IDEMPOTENT" in msg]
+
+
+def test_retry_rule_flags_the_real_pre_fix_cloudflare_call():
+    # Copied from the removed lines of hams_open 76dc5784
+    # (cloudflare/utils/cloudflare_api.py), not written from the rule's own model.
+    source = (
+        "retry_strategy = Retry(\n"
+        "    total=3,\n"
+        "    status_forcelist=[429, 500, 502, 503, 504],\n"
+        '    allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "DELETE", "PUT", "PATCH"],\n'
+        "    backoff_factor=1,\n"
+        ")\n"
+    )
+    warnings = _retry_method_warnings(source)
+    assert len(warnings) == 1
+    assert "PATCH and POST" in warnings[0]
+
+
+def test_retry_rule_does_not_flag_the_real_fixed_cloudflare_call():
+    source = (
+        "retry_strategy = IdempotencyAwareRetry(\n"
+        "    total=3,\n"
+        "    status_forcelist=IDEMPOTENT_RETRY_STATUSES,\n"
+        "    allowed_methods=sorted(IDEMPOTENT_METHODS),\n"
+        ")\n"
+    )
+    assert not _retry_method_warnings(source)
+
+
+def test_retry_rule_ignores_a_qualified_retry_with_only_idempotent_methods():
+    source = (
+        "r = urllib3.util.retry.Retry(status_forcelist=(500, 502),"
+        ' allowed_methods=("GET", "PUT", "DELETE"))\n'
+    )
+    assert not _retry_method_warnings(source)
+
+
+def test_retry_rule_flags_a_qualified_retry_with_post():
+    source = (
+        "r = urllib3.util.retry.Retry(status_forcelist={502}, allowed_methods={'POST'})\n"
+    )
+    assert _retry_method_warnings(source)
+
+
+def test_retry_rule_does_not_flag_post_retried_only_on_429():
+    # A 429 means the server refused the request, so nothing was applied.
+    source = "r = Retry(status_forcelist=[429], allowed_methods=['GET', 'POST'])\n"
+    assert not _retry_method_warnings(source)
+
+
+def test_retry_rule_flags_allowed_methods_none_which_retries_every_method():
+    # urllib3 2.x Retry._is_method_retryable returns True when allowed_methods is falsy.
+    source = "r = Retry(status_forcelist=[503], allowed_methods=None)\n"
+    warnings = _retry_method_warnings(source)
+    assert warnings and "every method" in warnings[0]
+
+
+def test_retry_rule_flags_an_empty_allowed_methods_literal():
+    source = "r = Retry(status_forcelist=[503], allowed_methods=[])\n"
+    assert _retry_method_warnings(source)
+
+
+def test_retry_rule_reads_a_constant_range_status_forcelist():
+    assert _retry_method_warnings(
+        "r = Retry(status_forcelist=range(500, 600), allowed_methods=['POST'])\n"
+    )
+    assert not _retry_method_warnings(
+        "r = Retry(status_forcelist=range(400, 500), allowed_methods=['POST'])\n"
+    )
+
+
+def test_retry_rule_does_not_guess_at_a_named_status_forcelist_or_methods():
+    assert not _retry_method_warnings(
+        "r = Retry(status_forcelist=STATUSES, allowed_methods=['POST'])\n"
+    )
+    assert not _retry_method_warnings(
+        "r = Retry(status_forcelist=[502], allowed_methods=METHODS)\n"
+    )
+
+
+def test_retry_rule_does_not_flag_default_allowed_methods():
+    # urllib3's own default allowed_methods leaves POST and PATCH out.
+    assert not _retry_method_warnings("r = Retry(total=3, status_forcelist=[502])\n")
+
+
+def test_retry_rule_does_not_flag_lowercase_method_names():
+    # urllib3 compares method.upper() against the list, so "post" never matches.
+    assert not _retry_method_warnings(
+        "r = Retry(status_forcelist=[502], allowed_methods=['get', 'post'])\n"
+    )
+
+
+def test_the_retry_method_tag_suppresses_the_finding():
+    source = (
+        "r = Retry(status_forcelist=[502], allowed_methods=['POST'])"
+        "  # audit-ignore-retry-method: endpoint keys on an idempotency token\n"
+    )
+    assert not _retry_method_warnings(source)
+
+
+def test_the_retry_method_tag_is_not_an_unauthorized_bypass(tmp_path):
+    # A new tag must also be in the sanctioned allow-list, or its first real
+    # use turns a warning into a scan-halting UNAUTHORIZED BYPASS error.
+    source = (
+        "r = Retry(status_forcelist=[502], allowed_methods=['POST'])"
+        "  # audit-ignore-retry-method: endpoint keys on an idempotency token\n"
+    )
+    errors, _warnings = _scan_file(source, "api_client.py")
+    assert not [e for e in errors if "UNAUTHORIZED" in str(e)]
