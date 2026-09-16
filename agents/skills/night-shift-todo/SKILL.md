@@ -299,6 +299,33 @@ When telling a peer which claims you are touching -- or reading a peer's list --
 its **anchor name**, which is unique by construction, not by its file's basename. The same applies
 to your own commit message and to any to-do that names one.
 
+## "The module's suite is green" does not mean its tests ran
+
+A real test run backing a claim is this queue's own bar for done, and a module-level green result
+quietly fails to meet it in one specific way worth naming, because it is invisible from the result
+itself.
+
+On 2026-09-15 workspace-05 ran `test.py -u user_websites` and honestly reported 246 tests, 1 failed.
+In that same module, `static/tests/violation_report.test.js` held three tests of `_onModalShow()`
+that were not among the 246 and never had been: the file is bundled and declares a hoot tag, but no
+`browser_js()` wrapper anywhere asks `/web/tests` for that tag, so nothing triggers it. Nothing
+reported was inflated -- the three tests were simply never in the count. But "the module's suite is
+green" would have been offered as evidence the module was well covered, and it cannot carry that
+weight. A green module-level run and never-executed tests inside that same module are perfectly
+compatible.
+
+The general shape, which is worth checking before writing a verification sentence: a test count
+measures what the runner was asked to run, not what exists. Anything the runner is never asked for
+is absent from both the numerator and the denominator, so it can never show up as a gap. That is
+true of an unbundled `.test.js`, of a bundled suite whose tag no wrapper requests, and of a suite
+whose `describe` block contains no `test()` call -- hoot reports all three as `Passed 0 tests`
+followed by `Test suite succeeded`, which is exactly what `browser_js()` waits for.
+
+`check_hoot_runner_coverage.py` now checks all of those mechanically, so the honest short version is:
+cite the checker, not just the run. And when writing up any verified result, prefer "these N tests
+ran and passed" over "the suite is green" -- the first is a claim about what executed, the second
+quietly implies coverage the run never measured.
+
 ## Say so BEFORE filing, when two sessions are reading the same checker's output
 
 `grep -rl` across the queue before filing a new to-do does not prevent a duplicate; it only catches
