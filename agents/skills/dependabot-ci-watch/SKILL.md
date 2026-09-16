@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 25
+version: 26
 ---
 
 # Dependabot & CI Build Watch
@@ -273,6 +273,17 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `WINEPREFIX: /tmp/wine-ci-prefix`), and rustup prints a harmless
   `error: $HOME differs from euid-obtained home directory` in every container leg. That rustup
   line is noise, not the failure -- keep reading.
+  **Two more log lines read like failures and are not.** Both surface from the obvious first move of
+  grepping a failing job's log for `error:`, and both cost run 31 (2026-09-16) real time.
+  (1) `cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find
+  tool "cc"` is the `cc` crate's probe running before the toolchain is on PATH; it does not mean the
+  build lost its compiler. The number that actually matters is the same build's own
+  `baked N Hamlib rig model(s)` line -- build-windows baked 312/57 and ubuntu:20.04 baked 230/31 in
+  the very logs carrying that warning. (2) `Error: Unable to find a match: wsjtx` in a
+  `build-redhat` leg is deliberate: both the Debian and RPM `Install Test-Only Dependencies
+  (sox, wsjtx)` steps end in `|| echo`, because the FT8 real-signal tests are `#[ignore]`d and gated
+  on `binary_exists()`, so a missing wsjtx skips them rather than failing the leg. Read down to the
+  real `##[error]` line before chasing either.
 - **The arm64 `build-linux` leg runs natively on the Raspberry Pi 500 runner `pi500-1`** (since
   2026-09-14; it used to run under QEMU emulation on the dev box, which broke whenever a reboot
   dropped the binfmt handlers). Facts: runner label `pi500-1`; Debian 12 bookworm, aarch64; jobs
