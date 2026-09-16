@@ -210,11 +210,58 @@ aborted log for your own anchor names. The log does list violations per file, so
 anchor you added (for example, an `[@ANCHOR:]` line directly followed by `Verified by`) shows up
 there.
 
-**Relay commits: run `rustfmt --edition 2021 --check` on the exact files you touched.**
-`build-relay.yml` runs `cargo fmt -- --check`. `cargo fmt --check -- <file>` still reports the
-whole crate, so piping it through `head` can hide your own file's diffs behind other files. That
-happened on 2026-09-15 and needed a follow-up formatting commit. Don't run `cargo fmt` on the whole
-crate either: other sessions' uncommitted relay edits sit in the same tree.
+**Relay commits: check formatting with the PINNED toolchain, not whatever `rustfmt` is on PATH.**
+An earlier version of this section said to run `rustfmt --edition 2021 --check` on the exact files
+touched. That is wrong in a way that passes silently: a bare `rustfmt` is whatever comes first on
+PATH, which on this box is `1.8.0-beta`, while `daemons/hams_local_relay/rust-toolchain.toml` pins
+`1.98.1`, whose rustfmt is `1.9.0-stable`. rustfmt's output genuinely differs between versions, so
+that check can pass locally and CI's still fail. Found 2026-09-15, after a session had already
+reported "rustfmt clean" on that basis (the result happened to hold; the method did not).
+
+`build-relay.yml` runs `cargo fmt -- --check` from inside `daemons/hams_local_relay`, where rustup
+applies the directory-scoped `rust-toolchain.toml` override. Run it the same way -- from that
+directory, as `cargo fmt`, so the pin takes effect. `cargo fmt --version` there should say
+`1.9.0-stable`, not the PATH one; if it doesn't, the override isn't applying and nothing else you
+check is meaningful.
+
+**And clippy: CI runs `cargo clippy --release --all-targets -- -D warnings`.** `--all-targets` is a
+superset of `--tests` (it lints benches and examples too), and `--release` changes which lints fire
+at all, since some are opt-level-dependent. `--bin hams_local_relay --tests` is not the same check.
+
+**The clean way to run both against what CI will actually see**, without the shared tree's
+uncommitted peer edits compiling in and without fighting the shared `target/`:
+
+```bash
+mkdir -p /tmp/ci/hams_com /tmp/ci/hams_open
+git -C ~/workspace/hams_com  archive origin/main daemons/hams_local_relay  | tar -x -C /tmp/ci/hams_com
+git -C ~/workspace/hams_open archive origin/main daemons/ham_digital_modes | tar -x -C /tmp/ci/hams_open
+cd /tmp/ci/hams_com/daemons/hams_local_relay
+export CARGO_TARGET_DIR=/tmp/ci/target
+cargo fmt -- --check
+cargo clippy --release --all-targets -- -D warnings
+```
+
+The sibling `hams_open` extraction is what makes the checked-in relative `ham_digital_modes`
+symlink resolve. The archive carries `rust-toolchain.toml`, so the pinned toolchain applies and
+auto-installs if absent. This checks the committed snapshot rather than the shared working tree,
+which is the thing CI will build. Budget a few minutes: the release clippy build took 3m40s on this
+box even with a warm registry.
+
+**Reading the result: relay CI runs report `cancelled` routinely, and it is not a failure.**
+`build-relay.yml`'s concurrency group holds at most one PENDING run, so every new push under
+`daemons/hams_local_relay/**` replaces the queued one. Following a run id therefore shows
+`cancelled` whenever anyone pushes relay code before yours starts. Follow the COMMIT instead: re-resolve
+the newest run whose head contains it, with `git merge-base --is-ancestor <your sha> <headSha>`.
+(Mechanism established by the `dependabot-ci-watch` run, 2026-09-16.)
+
+One trap when scripting that: `gh run list --json conclusion` returns `""`, not `null`, for a
+pending run, so jq's `//` does not substitute a placeholder. A space-separated line then collapses
+two spaces into one, `read` shifts every field left, and the pending run is silently skipped --
+which makes a watcher lock onto an older completed run and report a stale `cancelled` forever. Emit
+`@tsv` and test the conclusion for empty as well as null.
+
+**Also don't run `cargo fmt` on the whole crate in the shared tree** (as opposed to the extracted
+snapshot above): other sessions' uncommitted relay edits sit there and you would reformat them.
 
 **Relay clippy: include test targets.** `build-relay.yml` runs `cargo clippy --release --all-targets
 -- -D warnings`. Plain `cargo clippy --release -- -D warnings` skips `#[cfg(test)]` code. On
