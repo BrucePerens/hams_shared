@@ -1034,6 +1034,31 @@ Related trap from the same run: a checker given a path that does not resolve may
 earlier in the same command line had moved the working directory. Read the checker's own output for
 the count of things it looked at, or run it from an absolute path.
 
+## A peer's failure in an unrelated module can be YOUR uncommitted change
+
+Every test run loads the shared working tree, so a peer's run executes your uncommitted edits too,
+and a failure they cause shows up in a module the peer believes has nothing to do with you. On
+2026-09-16 workspace-bb had an uncommitted `ham_onboarding` `_get_gdpr_export_data` override that
+read `res.users.elmer_topics`. workspace-57's `-u ham_shack` run then failed
+`test_gdpr_export_service_account` with `AccessError ... ham.elmer.topic`. It looked like an existing
+access-rights gap on main, and workspace-57 was about to file a to-do for it. It asked first only
+because workspace-bb had announced its claim, and the error turned out to be workspace-bb's missing
+access grant.
+
+Two habits follow:
+
+- **When you claim an item, name the files you will leave uncommitted** in the message to peers, not
+  just the item. A peer who sees a failure can then check its traceback against that list before
+  filing anything.
+- **When a peer reports a failure, grep its traceback for your own uncommitted paths and fields**
+  (`git diff --name-only HEAD`) before saying it isn't yours. Here the traceback named neither
+  `ham_onboarding` nor the override, only the relational field the override read. The check that
+  settles it is whether your diff touches that field or model, not whether your module appears in
+  the stack.
+
+A peer's run that trips over your change is also free verification. This one proved a missing
+access grant before the verification run for that item had even started.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
