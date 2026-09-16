@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 18
+version: 19
 ---
 
 # Dependabot & CI Build Watch
@@ -341,9 +341,15 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   **Check a claimed CI fix against `origin/main`, never the working tree.** A peer's fix often
   exists only as uncommitted edits to the shared tree, so `grep`ping the file on disk shows the
   clean, fixed form while CI is still failing on the pushed, unfixed one. Read the pushed content
-  directly: `git show origin/main:<path> | grep -n <pattern>`. Found 2026-09-15, twentieth hourly
-  check, on the `offline_queue_test_lock` clippy failure -- the working tree had the async
+  directly: `git show origin/main:<path> | grep -n <pattern>`. Found 2026-09-16, twenty-sixth
+  hourly check, on the `offline_queue_test_lock` clippy failure -- the working tree had the async
   `tokio::sync::Mutex` fix and `origin/main` still had `std::sync::MutexGuard`.
+  **Don't write an ordinal ("the Nth hourly check") you haven't actually counted.** Several notes
+  in this file carry one, and it is easy to copy a plausible-looking number forward from whatever
+  the last note said. The real count comes from `list_task_runs` on the `dependabot-and-ci-watch`
+  task (`totalRuns`); its newest entry also gives this run's true `started_at`, which is the date
+  to write -- a run that starts at 00:2x UTC belongs to the next day from the one whose CI logs it
+  is reading. Both were wrong in this note's first draft.
   **A red clippy on the ubuntu-22.04 leg is everyone's problem, not just the owning feature's.**
   It fails every later relay run regardless of that run's own content, and because clippy runs
   before Formatting, no rustfmt check runs either while it's red. So when a to-do says a fix is
