@@ -799,6 +799,42 @@ before reading its silence as a pass. This is the same family as the entry above
 reporting `Passed 0 tests` then `Test suite succeeded`: a tool that was never asked about your code
 cannot report a problem with it.
 
+## Writing a new linter rule: its own tests prove almost nothing
+
+Bruce asks for bug patterns found while debugging to become linter rules rather than one-off fixes,
+so this comes up regularly. Two failures hit in one sitting, 2026-09-16, adding an SSRF
+outbound-fetch rule to `check_burn_list.py`. Both were invisible from a green test suite.
+
+**A rule's own passing tests say nothing about its false-positive rate.** The new rule shipped with
+14 tests, all passing, and reported 17 findings across the two repos. Reading those 17 sites found
+three defects in the rule, and twelve of the seventeen were its own noise:
+`requests.request(method, url, ...)` puts the URL in `args[1]` and the rule read `args[0]`, so it
+was examining the HTTP METHOD string (`"GET"` has no `://`, so every such call was "unverifiable"
+however carefully its URL was pinned); an f-string or concatenation led by an ALL_CAPS constant
+(`f"{CLOUDFLARE_API_BASE}{path}"`) fixes the host as firmly as a literal prefix; and a URL built on
+its own line and passed as a variable -- the commonest real spelling of a fixed URL in this
+codebase -- was judged on the bare `Name` alone. After fixing those: 5 findings, not 17.
+
+The tests could not have caught any of it, because they were written from the same mental model as
+the rule. **Scan both real repos and READ the sites before believing a new rule is ready**, and
+treat a large finding count as a hypothesis about the rule rather than about the code. A rule whose
+findings get resolved by suppression tags instead of by reading has become noise.
+
+**A new ignore tag means editing TWO places, and only one of them is where the rule lives.** The
+tag went into `add_warning`'s suppression list, which is the obvious half. It was never added to
+the sanctioned-tag allow-list (`valid_audits`, near the UNAUTHORIZED BYPASS check), so using it
+raised UNAUTHORIZED BYPASS -- an **error**, which halts the whole scan. Following the rule's own
+printed advice therefore turned a warning into a hard build break, on the first real use. Grep for
+an existing tag name (`audit-ignore-path`, say) and make sure your own appears everywhere it does.
+
+**Related, and worth deciding deliberately: severity.** This scan halts a run on its first error, so
+an error-level rule landing on existing call sites breaks every concurrent session's pre-flight
+until all of them are triaged. Land a new rule as an `[%AUDIT]` warning, triage the findings, then
+promote. And when triaging, remember a suppression can be the RIGHT answer rather than a deferred
+fix: `zero_sudo`'s `_poll_health_check` was tagged, not converted, because `urlopen_ssrf_safe`
+rejects loopback and private addresses -- exactly what a local daemon health check polls -- so the
+rule's own recommended fix would have broken it.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
