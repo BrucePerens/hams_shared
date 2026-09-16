@@ -46,7 +46,32 @@ the argument for checking it mechanically instead.
 
 import ast
 import os
+import re
 import sys
+
+# A hoot suite declares which tag triggers it with `describe.current.tags("name")`, and a Python
+# wrapper triggers it by asking /web/tests for `?tag=name`. Both are matched textually, which is
+# what makes this check cheap; see check_bundled_tag_is_triggered's own docstring for the limits
+# that buys.
+_TAG_DECLARATION_RE = re.compile(r'describe\.current\.tags\(\s*["\']([^"\']+)["\']')
+_TAG_REQUEST_RE = re.compile(r"[?&]tag=([A-Za-z0-9_.-]+)")
+# `test(` but not `.test(` or `mytest(` -- hoot's own test() call, not a substring of something else.
+_TEST_CALL_RE = re.compile(r"(?<![\w.])test\s*\(")
+
+_IGNORE_DIRS = {
+    ".git",
+    "node_modules",
+    "venv",
+    "env",
+    ".venv",
+    "__pycache__",
+    ".agents",
+    "agents",
+    "target",
+    "radae",
+    "site-packages",
+    ".claude",
+}
 
 
 def find_hoot_test_files(manifest_dict):
@@ -86,6 +111,110 @@ def find_unbundled_test_files(module_path, manifest_dict):
     return sorted(unbundled)
 
 
+def collect_requested_tags(repo_root):
+    """Every hoot tag any browser_js() wrapper under `repo_root` asks /web/tests for.
+
+    Collected across ALL scanned roots before any module is judged, because a wrapper and the
+    suite it triggers need not be in the same module -- and an untagged `/web/tests` run would
+    trigger everything, so it is reported separately rather than silently treated as coverage.
+    """
+    requested = set()
+    untagged_runners = []
+    for root, dirs, files in os.walk(repo_root):
+        dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
+        if os.path.basename(root) != "tests":
+            continue
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            path = os.path.join(root, f)
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    content = fh.read()
+            except (OSError, UnicodeDecodeError):
+                continue
+            if "browser_js(" not in content:
+                continue
+            requested.update(_TAG_REQUEST_RE.findall(content))
+            for url in re.findall(r"""["'](/web/tests[^"']*)["']""", content):
+                if "tag=" not in url:
+                    untagged_runners.append(path)
+    return requested, untagged_runners
+
+
+def check_bundled_tag_is_triggered(module_path, manifest_dict, requested_tags):
+    """Bundled, loadable, declares a tag -- and nothing ever asks for that tag.
+
+    The third face of the same silent pass, and the one this file's own docstring used to name as
+    not attempted: "a module with ten hoot test files and one runner that only covers one tag
+    currently passes -- that finer-grained gap is real but needs a JS-side tag cross-reference
+    this check doesn't attempt." This is that cross-reference. The module-level check above is
+    satisfied by a single runner, so a module can pass it while most of its suites never run.
+
+    Also flags a bundled file that declares a tag but contains no `test()` call at all: hoot
+    reports that identically to an empty run ("Passed 0 tests", then "Test suite succeeded"), so
+    a wrapper asking for that tag goes green having asserted nothing.
+
+    Textual matching, deliberately, which bounds what it can see: a tag built at runtime rather
+    than written as a literal, or a suite whose tests are all skipped at runtime, are both
+    invisible here. It finds the common, checkable case rather than attempting the general one.
+
+    No baseline accompanies this check, and that is a finding rather than an omission. A scan on
+    2026-09-15 found 18 bundled-but-untriggered tags across both repositories, and 17 of them are
+    in the 13 modules that already carry `# burn-ignore-hoot-runner-coverage` and have no hoot
+    runner of any kind -- the backlog `night_shift_todo/medium/hoot-runner-coverage-13-modules-
+    d5b7c88b.md` already tracks. Because this check runs after that skip, it never sees them, so
+    there is nothing to grandfather. The single remaining case was
+    `user_websites/static/tests/violation_report.test.js`: a module that HAS a runner, and
+    therefore passes the module-level check above, while three of its tests are triggered by
+    nothing. That is precisely the shape this cross-reference exists to catch and the older check
+    structurally cannot.
+    """
+    tests_dir = os.path.join(module_path, "static", "tests")
+    if not os.path.isdir(tests_dir):
+        return []
+
+    listed = set()
+    for bundle in (manifest_dict.get("assets") or {}).values():
+        if isinstance(bundle, (list, tuple)):
+            for entry in bundle:
+                if isinstance(entry, str):
+                    listed.add(os.path.basename(entry))
+
+    violations = []
+    for root, dirs, files in os.walk(tests_dir):
+        dirs[:] = [d for d in dirs if d not in ("tours", "__pycache__")]
+        for f in sorted(files):
+            if not f.endswith(".test.js") or f not in listed:
+                continue
+            try:
+                with open(os.path.join(root, f), "r", encoding="utf-8") as fh:
+                    content = fh.read()
+            except (OSError, UnicodeDecodeError):
+                continue
+            tags = _TAG_DECLARATION_RE.findall(content)
+            if not tags:
+                continue
+            if not _TEST_CALL_RE.search(content):
+                violations.append(
+                    f"🚨 EMPTY HOOT SUITE: {os.path.basename(module_path)}/{f} declares tag(s) "
+                    f"{', '.join(tags)} but contains no test() call. Hoot reports that exactly "
+                    f"like an empty run -- \"Passed 0 tests\", then \"Test suite succeeded\" -- "
+                    f"so any wrapper asking for it goes green having asserted nothing."
+                )
+                continue
+            untriggered = [t for t in tags if t not in requested_tags]
+            if untriggered:
+                violations.append(
+                    f"🚨 UNTRIGGERED HOOT SUITE: {os.path.basename(module_path)}/{f} declares "
+                    f"tag(s) {', '.join(untriggered)} that no browser_js() wrapper anywhere asks "
+                    f"/web/tests for, so these tests never run. Add a wrapper following "
+                    f"theme_hams/tests/test_s_ham_map_hoot.py's pattern, or remove the tag if the "
+                    f"suite is genuinely obsolete."
+                )
+    return violations
+
+
 def module_has_hoot_runner(module_path):
     tests_dir = os.path.join(module_path, "tests")
     if not os.path.isdir(tests_dir):
@@ -110,26 +239,30 @@ def main():
         print("Usage: check_hoot_runner_coverage.py <repository_root> [more_roots...]")
         sys.exit(1)
 
-    ignore_dirs = {
-        ".git",
-        "node_modules",
-        "venv",
-        "env",
-        ".venv",
-        "__pycache__",
-        ".agents",
-        "agents",
-        "target",
-        "radae",
-        "site-packages",
-        ".claude",
-    }
-
     violations = []
 
+    # Pass 1: every tag any wrapper asks for, across every scanned root, before judging any
+    # module -- a wrapper and the suite it triggers need not live in the same module.
+    requested_tags = set()
+    untagged_runners = []
+    for repo_root in sys.argv[1:]:
+        found, untagged = collect_requested_tags(repo_root)
+        requested_tags |= found
+        untagged_runners.extend(untagged)
+
+    # An untagged /web/tests run triggers every bundled suite, so while one exists, "no wrapper
+    # asks for this tag" is not evidence that a suite never runs. Report it rather than quietly
+    # suppressing the check or quietly ignoring it.
+    if untagged_runners:
+        print(
+            "[*] Untriggered-tag check skipped: these wrappers run /web/tests with no tag=, "
+            "which triggers every bundled suite: " + ", ".join(sorted(set(untagged_runners)))
+        )
+
+    # Pass 2: judge each module.
     for repo_root in sys.argv[1:]:
         for root, dirs, files in os.walk(repo_root):
-            dirs[:] = [d for d in dirs if d not in ignore_dirs]
+            dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
             if "__manifest__.py" not in files:
                 continue
 
@@ -175,6 +308,11 @@ def main():
                     f"precedent, or delete the file if it is genuinely obsolete."
                 )
 
+            if not untagged_runners:
+                violations.extend(
+                    check_bundled_tag_is_triggered(root, manifest_dict, requested_tags)
+                )
+
             hoot_test_files = find_hoot_test_files(manifest_dict)
             if not hoot_test_files:
                 continue
@@ -197,8 +335,9 @@ def main():
         sys.exit(1)
 
     print(
-        "[+] Hoot Runner Coverage Linter: every *.test.js on disk is bundled, and every module "
-        "with hoot unit tests has a runner."
+        "[+] Hoot Runner Coverage Linter: every *.test.js on disk is bundled, every bundled "
+        "suite's tag is asked for by a real wrapper, and every module with hoot unit tests has "
+        "a runner."
     )
 
 

@@ -227,5 +227,125 @@ class UnbundledHootSuiteTests(unittest.TestCase):
         self.assertNotIn("UNBUNDLED", out)
 
 
+
+_TAGGED_SUITE_JS = """
+describe("widget", () => {
+    describe.current.tags("fake_module_widget");
+    test("does a thing", () => { expect(1).toBe(1); });
+});
+"""
+
+_TAGGED_SUITE_NO_TESTS_JS = """
+describe("widget", () => {
+    describe.current.tags("fake_module_widget");
+});
+"""
+
+_WRAPPER_ASKING_FOR_TAG = """
+class TestWidgetHoot(HamsHttpCase):
+    def test_widget_hoot_suite_passes(self):
+        self.browser_js(
+            "/web/tests?headless&tag=fake_module_widget",
+            "", "", success_signal="[HOOT] Test suite succeeded",
+        )
+"""
+
+_WRAPPER_ASKING_FOR_ANOTHER_TAG = """
+class TestOtherHoot(HamsHttpCase):
+    def test_other_hoot_suite_passes(self):
+        self.browser_js(
+            "/web/tests?headless&tag=fake_module_something_else",
+            "", "", success_signal="[HOOT] Test suite succeeded",
+        )
+"""
+
+_UNTAGGED_WRAPPER = """
+class TestEverythingHoot(HamsHttpCase):
+    def test_everything(self):
+        self.browser_js(
+            "/web/tests?headless",
+            "", "", success_signal="[HOOT] Test suite succeeded",
+        )
+"""
+
+
+class UntriggeredHootTagTests(unittest.TestCase):
+    """The third face of the same silent pass, and the one this checker's own docstring used to
+    name as not attempted: a suite that is bundled, loadable and tagged, which nothing ever asks
+    /web/tests for. The module-level check is satisfied by a single runner, so a module can have
+    a runner and still never trigger most of its suites -- which is exactly how
+    user_websites/static/tests/violation_report.test.js went unexecuted.
+
+    Standalone rather than a subclass, for the reason UnbundledHootSuiteTests states.
+    """
+
+    setUp = CheckHootRunnerCoverageTests.setUp
+    tearDown = CheckHootRunnerCoverageTests.tearDown
+    _run = CheckHootRunnerCoverageTests._run
+    _run_with_argv = CheckHootRunnerCoverageTests._run_with_argv
+
+    def _module(self, wrapper=None, suite_js=_TAGGED_SUITE_JS):
+        mod = os.path.join(self.tmp, "fake_module")
+        _write(os.path.join(mod, "__manifest__.py"), _MANIFEST_WITH_TEST_JS)
+        _write(os.path.join(mod, "static", "tests", "widget.test.js"), suite_js)
+        _write(os.path.join(mod, "tests", "test_widget_hoot.py"), wrapper or _HOOT_RUNNER_PY)
+        return mod
+
+    def test_a_tag_no_wrapper_asks_for_is_flagged(self):
+        self._module(wrapper=_WRAPPER_ASKING_FOR_ANOTHER_TAG)
+        code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("UNTRIGGERED HOOT SUITE", out)
+        self.assertIn("fake_module_widget", out)
+
+    def test_a_tag_a_wrapper_does_ask_for_is_clean(self):
+        """The discriminating case: same suite, same module, one wrapper that asks for it."""
+        self._module(wrapper=_WRAPPER_ASKING_FOR_TAG)
+        code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 0)
+        self.assertNotIn("UNTRIGGERED", out)
+
+    def test_a_wrapper_in_a_different_module_still_counts(self):
+        """Tags are collected across every scanned root before any module is judged, because a
+        wrapper and the suite it triggers need not live in the same module."""
+        self._module(wrapper=_WRAPPER_ASKING_FOR_ANOTHER_TAG)
+        other = os.path.join(self.tmp, "other_module")
+        _write(os.path.join(other, "__manifest__.py"), _MANIFEST_NO_TEST_JS)
+        _write(os.path.join(other, "tests", "test_elsewhere_hoot.py"), _WRAPPER_ASKING_FOR_TAG)
+        code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 0)
+        self.assertNotIn("UNTRIGGERED", out)
+
+    def test_an_untagged_wrapper_suppresses_the_check_and_says_so(self):
+        """An untagged /web/tests run triggers every bundled suite, so while one exists, "no
+        wrapper asks for this tag" is not evidence a suite never runs. Report that rather than
+        either failing wrongly or silently ignoring it."""
+        self._module(wrapper=_UNTAGGED_WRAPPER)
+        code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 0)
+        self.assertIn("Untriggered-tag check skipped", out)
+
+    def test_a_tagged_suite_with_no_test_call_is_flagged(self):
+        """Hoot reports a describe block with no test() exactly like an empty run -- "Passed 0
+        tests", then "Test suite succeeded" -- so a wrapper asking for it goes green having
+        asserted nothing. Unlike a runtime skip, this one is textually checkable."""
+        self._module(wrapper=_WRAPPER_ASKING_FOR_TAG, suite_js=_TAGGED_SUITE_NO_TESTS_JS)
+        code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("EMPTY HOOT SUITE", out)
+
+    def test_an_unbundled_tagged_suite_is_not_double_reported(self):
+        """It is already reported as UNBUNDLED; reporting the same file twice would make the
+        real count harder to read, which is the failure this whole checker is about."""
+        mod = os.path.join(self.tmp, "fake_module")
+        _write(os.path.join(mod, "__manifest__.py"), _MANIFEST_NO_TEST_JS)
+        _write(os.path.join(mod, "tests", "test_widget_hoot.py"), _HOOT_RUNNER_PY)
+        _write(os.path.join(mod, "static", "tests", "orphan.test.js"), _TAGGED_SUITE_JS)
+        code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("UNBUNDLED HOOT SUITE", out)
+        self.assertNotIn("UNTRIGGERED HOOT SUITE", out)
+
+
 if __name__ == "__main__":
     unittest.main()
