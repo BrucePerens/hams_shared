@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 27
+version: 28
 ---
 
 # Dependabot & CI Build Watch
@@ -659,7 +659,11 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `Restart=always`/`RestartSec=15` (the unit GitHub's own `svc.sh install` generates has no
   `Restart=` line at all, which is why one killed job left CI dead for an hour; the journal later
   showed it restarting 15s after a second kill and draining the rest of the run green on its own),
-  and `OOMPolicy=continue`. **`OOMPolicy` is the one that matters most, and the reasoning behind it
+  and `OOMPolicy=continue`.
+  A drop-in file sitting on disk is not proof either setting is in force -- it needs a
+  `systemctl daemon-reload`. Confirm the loaded values with `systemctl show
+  actions.runner.BrucePerens-hams_com.hams-devbox.service -p OOMPolicy -p Restart -p NRestarts`.
+  **`OOMPolicy` is the one that matters most, and the reasoning behind it
   is the durable fact**: both times, the process the kernel actually killed was the job's own
   `docker` CLI child holding **10 MB**, with `oom_score_adj:500` -- the Actions runner sets 500 on a
   job's children on purpose so a runaway job is sacrificed first, but 500 adds half of total RAM to
@@ -726,7 +730,18 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   expected failure.** The expected one is `curl: (3) URL rejected: No host part in the URL`
   (exit 3). The `.deb` job's `ubuntu:22.04` container prints the same empty-URL error differently,
   as `curl: (3) URL using bad/illegal format or missing URL`, because its curl is 7.81 and the
-  other containers have curl 8.x. This was reproduced locally on 2026-09-15. An exit 127 (`zip: command not found`, `jq: command not found`) means the job's
+  other containers have curl 8.x. This was reproduced locally on 2026-09-15.
+  **On a day when every build leg is green, exactly six jobs still show `failure`, and that is
+  the whole expected picture**: `publish-source`, `publish-linux-binary`,
+  `publish-linux-aarch64-binary`, `build-linux-deb-package`, `build-redhat-rpm-package`, and
+  `build-windows`. The last is the trap -- build-windows publishes inside its own build job
+  (failing step `Package and publish binary`, not `Publish binary`), so a red build-windows
+  sitting among green build legs is not a build failure until you have read its last log line.
+  Read all six, not a sample: they are the only jobs that can hide a real failure on such a day,
+  and their publish paths differ (the `.deb` container's older curl, the `.rpm` job's `rpmsign`,
+  build-windows' own container prerequisites). Confirmed 2026-09-16, run 33, across runs
+  35056345011 and 35057629639: all six ended at a `curl: (3)` variant after the signing line.
+  An exit 127 (`zip: command not found`, `jq: command not found`) means the job's
   container lacks a tool the publish script needs, and the leg could not publish even with
   secrets. build-windows hit exactly that on 2026-09-15, after hours of being written off as the
   no-secrets case. Fixed in hams_com `a4252487`. A new container job that runs
