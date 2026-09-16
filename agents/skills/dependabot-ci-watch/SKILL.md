@@ -595,6 +595,15 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `gh api repos/BrucePerens/hams_com/actions/runners --jq '.runners[] | "\(.name) \(.status)"'`.
   Note that `gh run list` reports such a run as `queued` at the run level while some of its jobs
   already show `completed failure`, so read the job list, not the run's own status.
+  **Restarting the runner does not re-run the job the kill took down.** GitHub replays only the
+  jobs still `queued`; one already recorded `completed failure` stays failed, so whatever that leg
+  was the only leg able to verify is still unverified. Check which legs actually re-ran before
+  telling anyone a fix is confirmed -- this exact mistake was made and corrected on 2026-09-16 about
+  `339ab491`, whose 20.04 leg is the only one that can catch the Hamlib 3.x/4.x model-id split. The
+  cheap close is to let the next push under `daemons/hams_local_relay/**` carry it, since that run's
+  own legs verify the fix for free; `gh run rerun --job <id> --repo BrucePerens/hams_com` works too
+  once the run reaches `completed`, but re-triggers whatever step caused the OOM, so check `free -m`
+  for real swap headroom first.
   **The service now restarts itself** (`Restart=always`, `RestartSec=15`, via a drop-in at
   `/etc/systemd/system/actions.runner.BrucePerens-hams_com.hams-devbox.service.d/restart-on-oom.conf`,
   added the same run) -- the unit GitHub's own `svc.sh install` generates has no `Restart=` line at
