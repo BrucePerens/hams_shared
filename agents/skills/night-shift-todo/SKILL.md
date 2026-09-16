@@ -336,6 +336,29 @@ When writing up any verified result, prefer "these N tests ran and passed" over 
 -- the first is a claim about what executed, the second quietly implies coverage the run never
 measured.
 
+## A status outside the four defined values escapes every query, not just its own
+
+`status:` is `open`, `claimed`, `blocked` or `done`. Inventing a fifth does not merely fail to match
+a query for its own name -- it falls out of the complete set of them, which is a different and worse
+failure.
+
+Found 2026-09-15: one item sat at `status: in_progress`. A session grepping `status: open` for
+available work does not see it. A session grepping `status: blocked` to check whether a blocking
+question was answered does not see it either. `night-shift-todo-worker`'s two passes are exactly
+those two queries, so the scheduled automation cannot reach such an item at all, in either
+direction, and nothing reports that it was skipped. It is not visibly stuck; it is invisible.
+
+That item also held a real blocker -- an unapproved design doc -- recorded in `blocked_on:` as
+prose rather than as a path into `night_shift_questions/open/`. Both halves matter and they compound:
+even with the status corrected to `blocked`, the answered-question sweep walks each answered
+question's own `blocks:` list, so an item no question file names can never be unblocked by it. A
+`blocked_on:` that does not point at a question file is a note to a human, not a link the automation
+can follow, and should be paired with a real filed question if the blocker is a decision.
+
+So when a state genuinely isn't one of the four -- work started but not finished is the usual case --
+use `claimed` and say what is done and what is left in the body, which is what `claimed` is for.
+Reserve `blocked` for a real filed question, and point `blocked_on:` at its path.
+
 ## Gate the commit on the edit's exit status, not just on the edit asserting
 
 A guarded edit is only half of it, and the missing half produced a commit message asserting a change
