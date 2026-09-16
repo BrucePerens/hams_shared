@@ -26,10 +26,6 @@ Maps an externally-owned FQDN (e.g. a club's own `www.myclub.org`) onto an inter
 
 * **Mixin Unlink (Slug Cache Release):** `[@ANCHOR: edge_routing:COMM_mixin_unlink]`
 
-### 3. Domain-to-Record Resolution
-The actual routing entry point: resolves a custom domain all the way through to the record it fronts.
-* **Domain → Slug → Record Composition:** `[@ANCHOR: edge_routing:COMM_get_record_by_domain]`
-
 ## External Dependencies
 
 * `distributed_redis_cache` for the RAM-cached domain/slug resolution lookups.
