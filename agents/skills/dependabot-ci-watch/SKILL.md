@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 22
+version: 23
 ---
 
 # Dependabot & CI Build Watch
@@ -616,15 +616,28 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   own legs verify the fix for free; `gh run rerun --job <id> --repo BrucePerens/hams_com` works too
   once the run reaches `completed`, but re-triggers whatever step caused the OOM, so check `free -m`
   for real swap headroom first.
-  **The service now restarts itself** (`Restart=always`, `RestartSec=15`, via a drop-in at
-  `/etc/systemd/system/actions.runner.BrucePerens-hams_com.hams-devbox.service.d/restart-on-oom.conf`,
-  added the same run) -- the unit GitHub's own `svc.sh install` generates has no `Restart=` line at
-  all, which is why one killed job had left CI dead for an hour. Since that drop-in exists, a runner
-  that is *still* offline means something the restart policy cannot fix, so investigate rather than
-  just starting it. Restarting does not prevent the OOM itself: that is a real capacity problem
-  tracked in hams_com's `night_shift_todo/high/`, and the cheapest mitigation named there is that
-  `build-relay.yml`'s container jobs declare no memory limit, so a `make -j` inside one can still
-  take the whole host down. Two cautions: only start the service when no job is running on it (an
+  **The runner service now survives an OOM kill outright**, via a drop-in at
+  `/etc/systemd/system/actions.runner.BrucePerens-hams_com.hams-devbox.service.d/restart-on-oom.conf`
+  (its full text is also reproduced in hams_com's `docs/runbooks/06_ci_cd_pipeline.md`, since `/etc`
+  is not in git). It carries two settings, added an hour apart on 2026-09-16 and both confirmed live:
+  `Restart=always`/`RestartSec=15` (the unit GitHub's own `svc.sh install` generates has no
+  `Restart=` line at all, which is why one killed job left CI dead for an hour; the journal later
+  showed it restarting 15s after a second kill and draining the rest of the run green on its own),
+  and `OOMPolicy=continue`. **`OOMPolicy` is the one that matters most, and the reasoning behind it
+  is the durable fact**: both times, the process the kernel actually killed was the job's own
+  `docker` CLI child holding **10 MB**, with `oom_score_adj:500` -- the Actions runner sets 500 on a
+  job's children on purpose so a runaway job is sacrificed first, but 500 adds half of total RAM to
+  the kernel's score, making that 10 MB process the preferred victim under *any* global memory
+  pressure, whatever caused it (the other victim in the second report was a 5 GB Chrome renderer in
+  the Claude desktop app's own cgroup). systemd then defaults services to `OOMPolicy=stop`, which
+  stops the WHOLE unit when any process in its cgroup is OOM-killed -- so a job-scoped kill tore
+  down the entire runner. So **the expected shape of this problem is now a job failing with exit 137
+  while the runner stays online**; a runner that is genuinely *offline* means something neither
+  setting covers, and is worth investigating rather than just starting. Neither setting prevents the
+  OOM: that is a real capacity problem tracked in hams_com's `night_shift_todo/high/`. Its container
+  side is handled since hams_com `19aa0611` -- every job-level `container:` in `build-relay.yml`
+  carries `--memory=6g`, so an over-budget build is killed inside its own container instead of
+  starving the host. Two cautions: only start the service when no job is running on it (an
   OOM-killed service is safely dead, so that case is fine), and don't reap the memory hogs you find
   -- stray `rust-analyzer` instances held ~2.9 GB that run, and they may belong to a live peer
   session's editor.
