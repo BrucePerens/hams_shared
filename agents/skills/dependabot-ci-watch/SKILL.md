@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 32
+version: 33
 ---
 
 # Dependabot & CI Build Watch
@@ -286,13 +286,17 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   real `##[error]` line before chasing either.
 - **Reading a failed `Run Ignored FT8 Real-Signal Test` step** (`ft8_decode_fires_at_a_real_utc_slot_boundary`):
   in that step's log, each `Block size = 7680` line marks a new `Ft8Decoder`, which is a wall-clock
-  15s slot swap. The numbered `state:` lines are RADE frames from the feed. If a `Block size` line
-  falls between the first and last `state:` line, the feed crossed a slot boundary and the signal
-  was split, so it could not decode. Until 2026-09-16 the test did not prevent this, and the Pi
-  (feed time 3-13s) failed it in run 35090450429. The test now waits until just after a boundary
-  and asserts the feed stayed inside one slot. If that assertion fires, the pipeline ran slower
-  than real time: that is a throughput problem, not a flaky test (see hams_com `night_shift_todo/`,
-  "relay-decoder-pipeline-throughput-variance-on-pi500"). The Pi's throttling check is
+  15s slot swap. The numbered `state:` lines are RADE modem frames, 120ms of audio each, so the
+  test's 15s FT8 signal is exactly states 1-125. **Don't read the first-to-last `state:` span as the
+  feed time.** After the signal the test sends a 5ms silence chunk every 200ms while it waits for the
+  boundary, so states 126 onward arrive 4.8s apart and come from silence. A run of this skill on
+  2026-09-16 misread that span as a 13s feed on the Pi and filed a throughput problem that did not
+  exist: states 1-125 took 3.3s in every Pi run. If a `Block size` line falls between states 1 and
+  125, the feed crossed a slot boundary and the signal was split, so it could not decode. That is
+  how run 35090450429 failed (its feed started 1.4s before a boundary). The test now waits until
+  just after a boundary and asserts the feed stayed inside one slot, so that assertion firing
+  really would mean the pipeline ran slower than real time. For real per-stage Pi throughput, run
+  hams_com's `src/digital_decoder_timing_probe.rs` (see its module doc). The Pi's throttling check is
   `sudo -n vcgencmd get_throttled` over `ssh pi500-1` (plain `vcgencmd` cannot open `/dev/vcio`
   as `ai`); `0x0` means no throttling since boot.
 - **The arm64 `build-linux` leg runs natively on the Raspberry Pi 500 runner `pi500-1`** (since
