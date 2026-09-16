@@ -119,6 +119,17 @@ Ensure all dynamic data injected into the DOM is sanitized.
     * **Test Cursor Corruption:** Odoo 19 tests run in a single transaction.
     Calling `env.cr.commit()` or `env.cr.rollback()` inside a `test_` file will raise an `AssertionError`.
     If testing background loop functions, you MUST utilize the `RealTransactionCase`. You are strictly **FORBIDDEN** from using `odoo.tools.config.get('test_enable')` or similar checks to bypass logic during a test.
+    * **Loading-Flag Gates:** Gating runtime behaviour on Odoo's command-line loading flags --
+    `config['init']`, `config['update']`, `config['stop_after_init']`, or their `config.get(...)`
+    forms -- is banned outside test files. Odoo 19 sets them from the command line and never
+    clears them once loading finishes, so an Odoo started as `odoo -u some_module` that then goes
+    on to serve keeps them set for its entire lifetime, and anything gated on them never runs
+    again. That silently disabled `distributed_redis_cache`'s cache-invalidation poll for the
+    whole life of any server deployed with a one-step upgrade-and-restart. To ask "is this
+    registry still loading", use `registry.ready` (via `cls.pool` in a registry-composed model
+    class), which is False for exactly the install/upgrade window and True again once the process
+    is serving. Test files are exempt so a test can assert what the flags really are in its own
+    process, which is how that regression is reproduced with nothing patched.
     * **Controller Caching:** Using `@tools.ormcache` on an `@http.route` controller method is banned.
 </database_rules>
 
