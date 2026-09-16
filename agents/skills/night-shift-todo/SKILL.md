@@ -1059,6 +1059,36 @@ Two habits follow:
 A peer's run that trips over your change is also free verification. This one proved a missing
 access grant before the verification run for that item had even started.
 
+## Changing an existing `ir.rule` or other security record: it is noupdate
+
+Found 2026-09-16 (workspace-9b), narrowing `ham_events`' issue-report rule.
+
+`check_burn_list.py` requires every `<record>` in a security file to sit inside a
+`<data noupdate="1">` block. An upgrade (`-u`) never rewrites a noupdate record that already exists
+in the database: `_load_records` skips any row whose stored `noupdate` flag is set. So editing that
+rule's domain or permission flags in place changes a fresh install and nothing else. The shared
+test database, and any upgraded database, keep the old rule. When the old rule granted more access,
+Odoo ORs it with whatever you add for the same groups, and the narrowing silently does nothing.
+
+What worked:
+- Give the changed rule a NEW xml id, still inside the noupdate block.
+- Remove the old record with `<delete model="ir.rule" search="[('name', '=', '<old name>'), ...]"/>`.
+  Use `search=`, not `id=`: a missing id logs a WARNING with a traceback on every fresh install.
+  `unlink()` also removes the old `ir.model.data` row, so the old id can't come back.
+- Test the narrowed access as the restricted user. A test that passes only on a fresh database proves nothing about an upgraded one.
+
+Two related traps from the same item:
+- A rule with `(1, '=', 1)` for `base.group_user` covers administrators too, because they are in
+  that group. Narrow it and administrators lose access, unless a separate rule for
+  `base.group_system` (and each service group that reads the model) grants it back.
+- Fields declared `groups="base.group_system"` (for example `res.users.is_service_account`) can't
+  be read by any service account through the ORM, whatever its ACL. The record read fails with a
+  403 in HTTP tests. Read them with parameterized SQL, as `event.event.action_handoff_ncs()` does.
+
+And one about waiting: `pkill -f "<your waiter script name>"` matches the shell running `pkill` itself,
+the same trap this file documents for `pgrep -f`. It killed its own shell with exit 144. Stop a
+waiter by its PID, or use `pkill -f` with a pattern anchored the way the `pgrep` section describes.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
