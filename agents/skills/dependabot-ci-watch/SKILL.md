@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 21
+version: 22
 ---
 
 # Dependabot & CI Build Watch
@@ -580,6 +580,46 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `build-and-test` job got the same runner-rustup pre-step (it had been missed). If a job log
   shows `/home/bruce/...` again, `.path` was regenerated, most likely by re-running `config.sh`
   from Bruce's shell.
+- **An offline `hams-devbox` runner is usually an OOM kill, and it looks like a code failure in the
+  job log.** The dev box has 15.3 GB of RAM and 16 GB of swap, shared by a dozen concurrent Claude
+  sessions, an Odoo test server, and whatever CI container is compiling at the time. On 2026-09-16
+  (run 29 of the hourly task) the kernel's OOM killer killed the runner's own `docker` child while
+  the ubuntu:20.04 leg built Hamlib 4.7.2 from source, and the whole runner service died with it;
+  swap was 100% full (16,076 of 16,077 MB). **The failing job's log says nothing about memory** --
+  it ends with `##[error]Process completed with exit code 137` (SIGKILL) and
+  `##[error]The runner has received a shutdown signal`, which reads like someone stopped the runner
+  or like a broken build step. So whenever a step dies with exit 137, or a run sits `queued` with no
+  job starting, check the host before reading the step as a regression:
+  `systemctl status actions.runner.BrucePerens-hams_com.hams-devbox.service` (look for
+  `Result: oom-kill`), `sudo -n dmesg -T | grep -i oom-kill`, `free -m` (swap exhausted?), and
+  `gh api repos/BrucePerens/hams_com/actions/runners --jq '.runners[] | "\(.name) \(.status)"'`.
+  Note that `gh run list` reports such a run as `queued` at the run level while some of its jobs
+  already show `completed failure`, so read the job list, not the run's own status.
+  **The service now restarts itself** (`Restart=always`, `RestartSec=15`, via a drop-in at
+  `/etc/systemd/system/actions.runner.BrucePerens-hams_com.hams-devbox.service.d/restart-on-oom.conf`,
+  added the same run) -- the unit GitHub's own `svc.sh install` generates has no `Restart=` line at
+  all, which is why one killed job had left CI dead for an hour. Since that drop-in exists, a runner
+  that is *still* offline means something the restart policy cannot fix, so investigate rather than
+  just starting it. Restarting does not prevent the OOM itself: that is a real capacity problem
+  tracked in hams_com's `night_shift_todo/high/`, and the cheapest mitigation named there is that
+  `build-relay.yml`'s container jobs declare no memory limit, so a `make -j` inside one can still
+  take the whole host down. Two cautions: only start the service when no job is running on it (an
+  OOM-killed service is safely dead, so that case is fine), and don't reap the memory hogs you find
+  -- stray `rust-analyzer` instances held ~2.9 GB that run, and they may belong to a live peer
+  session's editor.
+- **Installer publishes never sign, and that is by design, not a wiring bug.**
+  `publish_relay_binary.sh` signs its zip with zipsign and logs
+  `RELEASE_SIGNING_KEY is set -- signing ... with zipsign before publish`, and an unsigned binary
+  publish is an error. `publish_relay_installer.sh` -- the `.deb`, `.rpm` and Windows `.exe` path to
+  `/shack/download/<platform>` -- has no signing code at all, and `build-relay.yml` never passes it
+  `RELEASE_SIGNING_KEY` (verified 2026-09-16 against `origin/main`: the secret appears only on the
+  four `publish_relay_binary.sh` steps). Its own header comment explains why: an installer is
+  already the single file an operator runs, so there is nothing to bundle and sign around. So the
+  absence of a signing line in an installer publish step's log is expected -- don't read it as a
+  regression against the binary-publish rule. OS-native installer signing (Authenticode, `.deb`/
+  `.rpm` signatures on the direct-download route) is a real, separate, already-documented gap:
+  hams_com `docs/proposals/blocked/RELAY_SUPPLY_CHAIN_SECURITY.md` section 1.5, "OS-native installer
+  signing -- a real gap zipsign does not cover".
 - **`hams_com` has no `ODOO_URL` secret yet** (no production Odoo exists; `https://hams.com` timed
   out on 2026-09-15). Every publish step on `main` (binary zips, .deb, .rpm, apt repo, Windows)
   fails at `curl "$ODOO_URL/..."` with an empty URL once its build is green. That is expected before
