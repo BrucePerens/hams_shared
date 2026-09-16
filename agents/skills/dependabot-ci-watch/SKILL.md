@@ -738,9 +738,11 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   (failing step `Package and publish binary`, not `Publish binary`), so a red build-windows
   sitting among green build legs is not a build failure until you have read its last log line.
   Read all six, not a sample: they are the only jobs that can hide a real failure on such a day,
-  and their publish paths differ (the `.deb` container's older curl, the `.rpm` job's `rpmsign`,
-  build-windows' own container prerequisites). Confirmed 2026-09-16, run 33, across runs
-  35056345011 and 35057629639: all six ended at a `curl: (3)` variant after the signing line.
+  and their publish paths genuinely differ: the binary jobs run `publish_relay_binary.sh` (which
+  signs with zipsign), the `.deb`/`.rpm` jobs run `publish_relay_installer.sh` (which never signs,
+  by design), and each container brings its own curl and its own prerequisites. Confirmed
+  2026-09-16, run 33, across runs 35056345011 and 35057629639: all six reached a `curl: (3)`
+  variant, the three binary ones after logging their zipsign signing line.
   An exit 127 (`zip: command not found`, `jq: command not found`) means the job's
   container lacks a tool the publish script needs, and the leg could not publish even with
   secrets. build-windows hit exactly that on 2026-09-15, after hours of being written off as the
