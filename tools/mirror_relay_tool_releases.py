@@ -27,6 +27,15 @@ Usage:
     python3 tools/mirror_relay_tool_releases.py --tool direwolf --tag 1.8.1 \\
         --odoo-url https://hams.com --publish-key "..."
 
+Refuses to publish anything it has not been told to trust. Neither la5nta/pat nor wb2osz/direwolf
+publishes a checksum or signature asset (checked 2026-09-13), so there is nothing upstream to verify
+against; instead every (tool, tag, platform, asset filename) must have a sha256 pinned in
+relay_tool_release_pins.json, recorded by a maintainer after reviewing that release. A download
+whose bytes don't match its pin, or that has no pin, stops the run before ANY platform is
+published, and the message prints the computed hash to review and add. This closes the gap where
+the script computed a sha256, printed it, and published regardless -- so a tampered or swapped
+upstream asset would have gone straight to every operator's "Download and install" click.
+
 Requires network access to api.github.com/github.com and to --odoo-url. Requires the same
 publish key CI uses for /api/relay_bridge/binary/publish and /api/relay_bridge/source/publish
 (this is the same publish service account/secret, not a new one -- see tool_publish_api.py's
@@ -37,6 +46,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import re
 import sys
 import urllib.error
@@ -57,6 +67,49 @@ ASSET_PATTERNS = {
     ("pat", "linux"): re.compile(r"^pat_.*_linux_amd64\.tar\.gz$"),
     ("direwolf", "windows"): re.compile(r"^direwolf-.*_x86_64\.zip$"),
 }
+
+
+DEFAULT_PINS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "relay_tool_release_pins.json")
+
+
+def pin_key(tool: str, tag: str, platform: str, filename: str) -> str:
+    """The key a release asset's reviewed sha256 is stored under in the pins file."""
+    return f"{tool}/{tag}/{platform}/{filename}"
+
+
+def load_pins(path: str) -> dict:
+    """Returns {pin_key: sha256}. A missing or malformed pins file is an error, not "no pins":
+    silently treating it as empty would look the same as an unreviewed release, but hide why."""
+    try:
+        with open(path, encoding="utf-8") as pins_file:
+            data = json.load(pins_file)
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"Cannot read release pins file {path}: {e}") from e
+    pins = data.get("pins") if isinstance(data, dict) else None
+    if not isinstance(pins, dict):
+        raise SystemExit(f"Release pins file {path} has no top-level \"pins\" object.")
+    return pins
+
+
+def verify_pinned_sha256(pins: dict, tool: str, tag: str, platform: str, filename: str,
+                         sha256: str, pins_path: str) -> None:
+    """Raises SystemExit unless `sha256` equals the reviewed pin for this exact asset."""
+    key = pin_key(tool, tag, platform, filename)
+    pinned = pins.get(key)
+    if pinned is None:
+        raise SystemExit(
+            f"No reviewed sha256 pin for {key}; refusing to publish it.\n"
+            f"  Downloaded sha256={sha256}\n"
+            f"  Review this release, then add \"{key}\": \"{sha256}\" under \"pins\" in {pins_path}."
+        )
+    if pinned.lower() != sha256.lower():
+        raise SystemExit(
+            f"sha256 MISMATCH for {key}; refusing to publish it.\n"
+            f"  pinned     {pinned}\n"
+            f"  downloaded {sha256}\n"
+            "  The upstream asset changed after it was reviewed. Do not update the pin without "
+            "finding out why."
+        )
 
 
 def fetch(url: str, accept_json: bool = False) -> bytes:
@@ -149,13 +202,19 @@ def main() -> int:
                               "e.g. '1.8.1') -- check the project's own GitHub Releases page.")
     parser.add_argument("--odoo-url", required=True)
     parser.add_argument("--publish-key", required=True)
+    parser.add_argument("--pins-file", default=DEFAULT_PINS_PATH,
+                         help="JSON file of reviewed sha256 pins (default: %(default)s).")
     args = parser.parse_args()
+    pins = load_pins(args.pins_file)
 
     platforms = [p for (t, p) in ASSET_PATTERNS if t == args.tool]
     print(f"Looking up {args.tool} release '{args.tag}' assets...")
     assets = find_release_assets(args.tool, args.tag)
     print(f"  found {len(assets)} asset(s): {', '.join(sorted(assets))}")
 
+    # Download and verify every platform before publishing any, so a mismatch on one platform
+    # can't leave hams.com serving a half-updated release.
+    verified = []
     for platform in platforms:
         pattern = ASSET_PATTERNS[(args.tool, platform)]
         matches = [name for name in assets if pattern.match(name)]
@@ -176,6 +235,10 @@ def main() -> int:
         binary_bytes = fetch(url)
         sha256 = hashlib.sha256(binary_bytes).hexdigest()
         print(f"  {len(binary_bytes)} bytes, sha256={sha256}")
+        verify_pinned_sha256(pins, args.tool, args.tag, platform, filename, sha256, args.pins_file)
+        verified.append((platform, binary_bytes, filename, url))
+
+    for platform, binary_bytes, filename, url in verified:
         publish(args.odoo_url, args.publish_key, args.tool, platform, args.tag,
                 binary_bytes, filename, url)
 

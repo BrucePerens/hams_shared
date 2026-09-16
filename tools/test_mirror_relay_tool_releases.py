@@ -110,5 +110,108 @@ class AssetPatternTests(unittest.TestCase):
         self.assertNotIn(("direwolf", "macos"), mirror.ASSET_PATTERNS)
 
 
+SHA_A = "a" * 64
+SHA_B = "b" * 64
+
+
+class VerifyPinnedSha256Tests(unittest.TestCase):
+    """Neither upstream publishes checksums, so the committed pins file is the only integrity check.
+    Before it existed the script printed a sha256 and published regardless."""
+
+    def test_a_matching_pin_passes(self):
+        pins = {mirror.pin_key("pat", "v1.0.0", "linux", "pat.tar.gz"): SHA_A}
+        mirror.verify_pinned_sha256(pins, "pat", "v1.0.0", "linux", "pat.tar.gz", SHA_A, "pins.json")
+
+    def test_a_pin_comparison_ignores_hex_case(self):
+        pins = {mirror.pin_key("pat", "v1.0.0", "linux", "pat.tar.gz"): SHA_A.upper()}
+        mirror.verify_pinned_sha256(pins, "pat", "v1.0.0", "linux", "pat.tar.gz", SHA_A, "pins.json")
+
+    def test_a_mismatched_hash_refuses_and_shows_both_hashes(self):
+        pins = {mirror.pin_key("pat", "v1.0.0", "linux", "pat.tar.gz"): SHA_A}
+        with self.assertRaises(SystemExit) as ctx:
+            mirror.verify_pinned_sha256(pins, "pat", "v1.0.0", "linux", "pat.tar.gz", SHA_B, "pins.json")
+        self.assertIn("MISMATCH", str(ctx.exception))
+        self.assertIn(SHA_A, str(ctx.exception))
+        self.assertIn(SHA_B, str(ctx.exception))
+
+    def test_a_missing_pin_refuses_and_prints_the_line_to_add(self):
+        with self.assertRaises(SystemExit) as ctx:
+            mirror.verify_pinned_sha256({}, "pat", "v1.0.0", "linux", "pat.tar.gz", SHA_B, "pins.json")
+        self.assertIn(f'"pat/v1.0.0/linux/pat.tar.gz": "{SHA_B}"', str(ctx.exception))
+
+    def test_a_pin_for_another_tag_does_not_cover_this_one(self):
+        pins = {mirror.pin_key("pat", "v0.9.0", "linux", "pat.tar.gz"): SHA_A}
+        with self.assertRaises(SystemExit):
+            mirror.verify_pinned_sha256(pins, "pat", "v1.0.0", "linux", "pat.tar.gz", SHA_A, "pins.json")
+
+
+class LoadPinsTests(unittest.TestCase):
+    def test_the_committed_pins_file_loads(self):
+        self.assertIsInstance(mirror.load_pins(mirror.DEFAULT_PINS_PATH), dict)
+
+    def test_a_missing_pins_file_is_an_error_not_an_empty_pin_set(self):
+        with self.assertRaises(SystemExit):
+            mirror.load_pins("/nonexistent/relay_tool_release_pins.json")
+
+    def test_a_pins_file_without_a_pins_object_is_an_error(self):
+        with mock.patch("builtins.open", mock.mock_open(read_data='{"other": {}}')):
+            with self.assertRaises(SystemExit):
+                mirror.load_pins("pins.json")
+
+
+class MainPublishesOnlyVerifiedReleasesTests(unittest.TestCase):
+    """main() must verify every platform before publishing any of them."""
+
+    PAT_ASSETS = {
+        "pat_1.0.0_windows_i386.zip": "https://x/win",
+        "pat_1.0.0_darwin_amd64.pkg": "https://x/mac",
+        "pat_1.0.0_linux_amd64.tar.gz": "https://x/linux",
+    }
+    BODIES = {"https://x/win": b"win bytes", "https://x/mac": b"mac bytes", "https://x/linux": b"linux bytes"}
+
+    def _pins_for(self, bodies):
+        names = {url: name for name, url in self.PAT_ASSETS.items()}
+        platform_of = {"https://x/win": "windows", "https://x/mac": "macos", "https://x/linux": "linux"}
+        return {
+            mirror.pin_key("pat", "v1.0.0", platform_of[url], names[url]): mirror.hashlib.sha256(body).hexdigest()
+            for url, body in bodies.items()
+        }
+
+    def _run_main(self, pins):
+        argv = ["mirror", "--tool", "pat", "--tag", "v1.0.0", "--odoo-url", "https://hams.test",
+                "--publish-key", "key", "--pins-file", "pins.json"]
+        with mock.patch.object(mirror.sys, "argv", argv), \
+                mock.patch.object(mirror, "load_pins", return_value=pins), \
+                mock.patch.object(mirror, "find_release_assets", return_value=dict(self.PAT_ASSETS)), \
+                mock.patch.object(mirror, "fetch", side_effect=lambda url: self.BODIES[url]), \
+                mock.patch.object(mirror, "publish") as publish_mock, \
+                mock.patch("builtins.print"):
+            try:
+                result = mirror.main()
+            except SystemExit as exc:
+                result = exc
+        return result, publish_mock
+
+    def test_all_platforms_pinned_and_matching_are_published(self):
+        result, publish_mock = self._run_main(self._pins_for(self.BODIES))
+        self.assertEqual(result, 0)
+        self.assertEqual(publish_mock.call_count, 3)
+
+    def test_one_tampered_platform_publishes_nothing(self):
+        pins = self._pins_for(self.BODIES)
+        tampered = dict(self.BODIES, **{"https://x/linux": b"original reviewed bytes"})
+        pins.update(self._pins_for({"https://x/linux": tampered["https://x/linux"]}))
+        result, publish_mock = self._run_main(pins)
+        self.assertIsInstance(result, SystemExit)
+        self.assertIn("MISMATCH", str(result))
+        publish_mock.assert_not_called()
+
+    def test_an_unpinned_release_publishes_nothing(self):
+        result, publish_mock = self._run_main({})
+        self.assertIsInstance(result, SystemExit)
+        self.assertIn("No reviewed sha256 pin", str(result))
+        publish_mock.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

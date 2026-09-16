@@ -1,0 +1,4 @@
+{
+  "_comment": "Reviewed sha256 pins for mirror_relay_tool_releases.py. Key: tool/tag/platform/asset-filename. Add an entry only after reviewing that upstream release; the script prints the exact line to add. Neither pat nor Direwolf publishes checksums upstream, so this file is the only integrity check.",
+  "pins": {}
+}
