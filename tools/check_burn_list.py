@@ -5614,7 +5614,14 @@ def main():
             and not is_ignored(os.path.relpath(os.path.join(root, d), target_dir))
         ]
         for file in files:
-            if file in ("check_burn_list.py", "LLM_LINTER_GUIDE.md"):
+            # test_check_burn_list.py for the same reason as the linter itself: its fixtures are
+            # deliberate violations (made-up bypass tags, TODOs, `noqa`, requests.get calls,
+            # unpaired anchor markers) held in strings, and the line-regex rules can't tell a
+            # string from code. Only a scan with --scan-daemons-and-tools reaches tools/, and
+            # from hams_com it never did (hams_shared is a symlink there, which os.walk doesn't
+            # follow), so from hams_open it halted every multi-module test.py run on 30-odd
+            # fixture lines. Its own code is still covered by pytest, which runs it.
+            if file in ("check_burn_list.py", "test_check_burn_list.py", "LLM_LINTER_GUIDE.md"):
                 continue
             filepath = os.path.join(root, file)
             if is_ignored(os.path.relpath(filepath, target_dir)):

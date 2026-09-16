@@ -285,7 +285,8 @@ class RealDeadFixtureTests(unittest.TestCase):
             '<?xml version="1.0" encoding="utf-8"?>\n'
             "<odoo>\n"
             '    <template id="elmer_directory" name="Elmer Directory">\n'
-            '        <!-- audit-ignore-view: Verified by [@ANCHOR: test_elmer_directory] -->\n'
+            # Split so check_burn_list doesn't read this fixture line as a real test anchor.
+            '        <!-- audit-ignore-view: Verified by [@ANCHOR' ': test_elmer_directory] -->\n'
             "        <t t-call=\"website.layout\">\n"
             '            <div id="wrap" class="container mt-5">\n'
             '                <div class="row" id="elmer_list"></div>\n'

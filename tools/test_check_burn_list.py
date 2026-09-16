@@ -6054,6 +6054,19 @@ def test_retry_rule_does_not_guess_at_a_named_status_forcelist_or_methods():
     )
 
 
+def test_the_linters_own_test_file_is_not_scanned_but_other_tools_tests_are(tmp_path):
+    # Its fixture strings are deliberate violations; see the skip in main()'s file loop.
+    fixture = 'content = "x = 1  # burn-' + 'ignore-made-up-tag-nobody-approved\\n"\n'
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "test_check_burn_list.py").write_text(fixture, encoding="utf-8")
+    (tools / "test_something_else.py").write_text(fixture, encoding="utf-8")
+    out = _run_main(tmp_path, extra_args=["--scan-daemons-and-tools"])
+    assert "test_check_burn_list.py" not in out
+    assert "test_something_else.py" in out
+    assert "UNAUTHORIZED BYPASS" in out
+
+
 def test_retry_rule_does_not_flag_default_allowed_methods():
     # urllib3's own default allowed_methods leaves POST and PATCH out.
     assert not _retry_method_warnings("r = Retry(total=3, status_forcelist=[502])\n")
