@@ -605,17 +605,20 @@ commit TAKES.
 `git commit -F - -- <paths>` was "the habit that actually holds". That is wrong, and correcting it
 here rather than quietly is the point: `git commit -- <path>` commits that path's WORKING-TREE
 content, so a peer's uncommitted edit to a file you also touched still rides along under your
-message. `dependabot-ci-watch`'s own operating-knowledge section had already recorded that, twice,
-before this run rediscovered half of it -- which makes this the fourth instance of one hazard, and
-the second time a session has written a partial fix for it into a skill.
+message. This had already been recorded twice before this run rediscovered half of it -- which makes
+this the fourth instance of one hazard, and the second time a session has written a partial fix for
+it into a skill.
 
-The recipe that does hold is the **private index** documented there (`GIT_INDEX_FILE`, either the
-`commit-tree` form or `read-tree` + scoped `add` + `commit`), together with its **resync step** --
-`git reset -q HEAD -- <the exact paths you committed>`, then confirm `git status --porcelain
-<paths>` is empty. The resync is the part people skip, because the commit already looks finished,
-and skipping it leaves the real index describing the pre-commit tree so that the next `git add -A`
-by ANY session reverts your commit. Read that section rather than a summary of it; this one is a
-pointer, deliberately not a second copy that can drift out of step with it.
+**The authoritative rule is now `hams_shared/docs/adrs/0099_shared_working_tree_commit_discipline.md`.**
+Read it before your first commit in a session; `hams_com/CLAUDE.md` points there too, so every
+session gets it regardless of which skill it is running. It carries all five recorded incidents as
+evidence and the six decisions that follow from them -- including the private `GIT_INDEX_FILE`
+mechanism in both forms and its **resynchronisation step**, which is mandatory and is the step
+that gets skipped, because the commit already looks finished by then.
+
+This paragraph is deliberately a pointer and not a summary. An earlier version of it pointed at
+`dependabot-ci-watch`'s operating notes, which have since become a pointer themselves -- a
+pointer to a pointer is the same drift this is trying to avoid, so it now names the ADR directly.
 
 The narrower rule that survives all of this, and the one to reach for first: **a commit touching
 only files no other session shares** -- your own new to-do file, your own new module -- has none of
