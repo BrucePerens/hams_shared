@@ -907,6 +907,27 @@ active Chromium processes` three times during one run about a browser nobody had
 exactly how every session learns to scroll past it -- and a genuine leak of twenty headless browsers
 would have hidden inside the same number on a quieter desktop day.
 
+## Two scripted-edit and commit traps that each passed their own check
+
+Both hit one `night-shift-todo-worker` run on 2026-09-16 (workspace-fc).
+
+**`str.replace` with an empty search string rewrites the whole file.** A Python edit computed the
+text to replace as a slice between two `s.index(...)` results. The slice came out empty, and
+`s.replace("", new)` inserts `new` between every character: a 1,189-line model file became 306,341
+lines. A syntax check caught it within a minute, before any test run imported it, and the file was
+restored from `git show HEAD:<path>`. That restore was safe only because the file had been confirmed
+free of peer edits before editing began. The guard this file already recommends -- assert the old
+text occurs exactly once -- would have caught it too, but only if it runs on the COMPUTED string:
+`assert old and s.count(old) == 1`. Prefer literal old text over index arithmetic.
+
+**A private-index `git add` cannot stage a deletion you have not made yet.** Closing an item is
+"append history, remove the to-do". Passing the to-do's path to the ADR-0099 private-index
+recipe (`GIT_INDEX_FILE=idx git add -A -- <paths>`) while the file is still on disk stages nothing
+for it, and the commit goes out with the history entry but without the removal -- while its message
+says the item is closed. Delete the file from the working tree first (or run
+`GIT_INDEX_FILE=idx git rm --cached <path>` and delete it afterwards), and read the commit's `--stat`
+for the deletion line before pushing.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
