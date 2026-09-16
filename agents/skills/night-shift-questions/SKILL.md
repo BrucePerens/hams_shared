@@ -103,13 +103,28 @@ establishes for to-dos.
 
 **Unblocking to-dos once a question is answered**: read the answered question's own `blocks:` list.
 For each path listed, open that `night_shift_todo/` file and: change `status: blocked` back to
-`status: open`, remove (or comment out, keeping history) the `blocked_on:` field, and append a note
+`status: open`, clear `claimed_by:` unless that session is still running (see below), remove (or
+comment out, keeping history) the `blocked_on:` field, and append a note
 to the to-do's own body pointing at the answered question's path and summarizing the decision, so
 whoever next works the to-do doesn't have to open a second file to know what changed. This is
 exactly what `night-shift-todo-worker` does automatically every run (see its own SKILL.md) -- but
 any session noticing an answered question with a live `blocks:` entry should do this immediately
 rather than waiting for the next scheduled run, the same "don't leave your own past entries stale"
 principle `dependabot-ci-watch` was corrected to follow for `night_shift_todo.md`.
+
+
+**Clear `claimed_by:` when you unblock, or you hand the queue an ambiguous item.** An item usually
+reaches `status: blocked` from `status: claimed` -- a session started it, hit a real decision, and
+filed a question -- so its `claimed_by:` is still populated while it waits. Flipping only the status
+back to `open` leaves `status: open` with `claimed_by: <a session that ended weeks ago>`, and
+`night-shift-todo-worker`'s Step 2 selects "open, unclaimed" items: a worker reading `status` takes
+it, a worker reading `claimed_by` skips it forever, and neither is wrong about what it read. Found
+2026-09-16 while verifying the fix to a related gap (see `night-shift-todo`'s own "A status outside
+the four defined values escapes every query"); same shape, one step further along the same path.
+
+So clear the field as part of the same edit. The exception is a live one: if the `claimed_by` session
+is still in `ListAgents`, leave it and message that session instead -- its answer just arrived and it
+may well want to resume its own item, which is the whole point of having filed the question.
 
 **A question with no answer for a long time**: that's fine and expected -- this queue exists
 precisely so nothing is lost or re-asked while Bruce is away. Don't re-file a duplicate of an
