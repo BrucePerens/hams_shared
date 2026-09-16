@@ -973,6 +973,42 @@ Related: a parallel `cargo test -- digital_decoder::` run starts two dozen real 
 at once. At load average 7.8 the two RTTY pipeline tests timed out, and both passed in 15 s run
 alone. Before calling such a failure yours, rerun the failing tests on their own.
 
+## A peer's run "loaded your code" is not a run of your tests
+
+On a shared tree, a peer's test run often starts after your edits land and imports them. That is
+worth knowing, and it gets offered as evidence. On 2026-09-16 workspace-f9 reported that its
+`-u ham_onboarding,ham_testing` run had picked up workspace-fc's LoTW controller change and that
+`test_lotw_consume` had "no failures". True, and it verified nothing new. The run had collected the
+test module a minute before the new `test_07*` tests were written, so the log named every old test
+in that file and none of the new ones. A green result for a test file is a claim about the tests
+that were in it when the run collected it.
+
+Before counting someone else's run as your verification, grep its log for the NAMES of the tests
+your change added (`grep -o "Starting .*test_07[a-z_]*"`), not just for the file or the module.
+If they are absent, the run has confirmed only that the old tests survive your change, which is
+still useful. Say which of the two it was when you record it.
+
+## The load gate can outlast its whole timeout behind a CI matrix
+
+A relay push queues a build matrix on the dev box, and the load gate waits on a live
+`Runner.Worker` whether or not that job is using much processor time. On 2026-09-16 a
+`-u ics_forms` run sat for the full 3600 seconds of `HAMS_CI_LOAD_GATE_TIMEOUT` while one matrix
+job after another started (the pid changed from 43674 to 271432 during the wait). It then exited 1
+without starting Odoo. The one-minute load average was around 3 on 16 processors for part of that
+hour, and at other times six mingw `cc1` processes were running.
+
+Three consequences for a worker run:
+- An exit 1 whose log's last line is `the box is still too busy to test on after N seconds` is not
+  a test result. Re-queue it. Don't record the item as failing, and don't bypass the gate just
+  because the load average looks low at the moment you check: the matrix alternates idle steps
+  with heavy compiles.
+- A relay push early in a run makes that run's own Odoo verification slower. Where a run has both
+  kinds of item, queue the Odoo run before pushing relay code, not after.
+- Write each claimed item's state into its body while the run is still waiting, not only once it
+  finishes: exactly what is written, whether it is committed, and which test is expected to fail.
+  If the session ends mid-wait, that note is the only record of uncommitted work sitting on a
+  shared tree.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
