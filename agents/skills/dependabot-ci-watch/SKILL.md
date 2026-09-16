@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 28
+version: 29
 ---
 
 # Dependabot & CI Build Watch
@@ -290,10 +290,12 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   run as the `ai` account, which has passwordless sudo; rustup is installed; there is no Docker,
   so that leg has `container: ""` and runs on the host. The runner is ephemeral (one job per
   just-in-time registration), re-minted continuously by `pi500-runner-jit-loop.service` on the dev
-  box. If the Pi picks up no jobs, check that service first (`systemctl status
-  pi500-runner-jit-loop`), then `gh api repos/BrucePerens/hams_com/actions/runners`. The Pi has an
+  box. If the Pi picks up no jobs, check that service first (`systemctl --user status
+  pi500-runner-jit-loop` -- it is a user unit of bruce's, so the plain system-level `systemctl`
+  reports "could not be found", which is not the service being gone), then `gh api repos/BrucePerens/hams_com/actions/runners`. The Pi has an
   outbound firewall (`pi500-egress`) allowing only ports 80/443/22, DNS and NTP, so a build step
   that needs another port will be dropped (logged as `pi500-egress-drop:` in the Pi's dmesg).
+  `pi500-1` showing `offline` in the runners API between jobs is normal for an ephemeral runner.
   `test-pi500-runner-smoke.yml` (workflow_dispatch) is a cheap check that the runner is alive.
   Security note: the runner's just-in-time config is visible in its process arguments on the Pi,
   so never paste `ps` command lines from that box into a record.
