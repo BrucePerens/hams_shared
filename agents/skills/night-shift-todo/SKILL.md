@@ -504,6 +504,41 @@ remaining test a statement about real behaviour. The same applies to a `#[cfg(te
 that one is legitimate, which is why the distinction is worth making deliberately rather than
 silencing the lint across the board.
 
+## Raise a new guard in an `else:` clause, not inside a broad `try:`
+
+Adding a check right after an existing call is the obvious placement and can be quietly wrong. Found
+2026-09-15 while landing the hoot empty-run guard in `HamsHttpCase.browser_js`.
+
+The `super()` call sat inside a `try:` whose `except Exception` was the TOUR-failure handler. An
+`AssertionError` raised in that body does reach the caller -- but only after being misclassified on
+the way out: the handler set `_hams_tour_failed` (which suppresses `tearDown`'s V8-log truncation),
+walked the `__context__` chain looking for a severed-websocket signature, screenshotted a browser
+that had completed perfectly normally, and only then re-raised. Every side effect wrong, final
+exception right. That combination is precisely what survives review, because the test outcome looks
+correct.
+
+`try/except/else` is the fix, and the reason is a language guarantee rather than a convention: the
+`else` block runs only when the body raised nothing, and **an exception raised inside `else` is not
+caught by that statement's own `except` handlers**. So a new guard surfaces as the clean failure it
+is. Before adding a check next to an existing call, read what the surrounding `except` actually
+DOES with an exception -- not merely whether it re-raises one.
+
+## A correctly-written test can leave no evidence in the log
+
+Decide what a PASSING run should look like before reading the log, or a correct result gets
+mistaken for a broken one.
+
+Landing the guard above, the run's log was grepped for the new assertion's own message. Zero hits,
+which read immediately as "the guard never fired" -- and it was wrong. The count was zero precisely
+BECAUSE the test wrapped the call in `assertRaises`, so the exception was caught and never logged.
+The better the test, the less residue it leaves. What actually settled it was the `odoo.tests.result`
+line plus the absence of those tests from the failure list.
+
+This is the same family as `test.py`'s headline counting ERROR-level log blocks rather than test
+outcomes: in both cases the log was read for a signal it was never going to carry. The habit that
+prevents it is cheap -- write down what a pass and a failure will each look like in the log, then
+read for that, rather than grepping for the string that happens to be on your mind.
+
 ## A scoped pathspec protects what you commit, not what a peer sweeps
 
 `git commit -- <pathspec>` is this file's standing advice for a shared tree, and it is necessary
