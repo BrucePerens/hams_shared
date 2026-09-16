@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 31
+version: 32
 ---
 
 # Dependabot & CI Build Watch
@@ -308,6 +308,9 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   that needs another port will be dropped (logged as `pi500-egress-drop:` in the Pi's dmesg).
   `pi500-1` showing `offline` in the runners API between jobs is normal for an ephemeral runner.
   `test-pi500-runner-smoke.yml` (workflow_dispatch) is a cheap check that the runner is alive.
+  The runners API also lists `Bruce_Thinkpad` (labels `Bruce_Thinkpad`, `windows`), a Windows
+  laptop runner set up the same just-in-time way (hams_com `docs/proposals/WINDOWS_QUALIFICATION.md`).
+  It showing `offline` is normal, and as of 2026-09-16 no workflow under `.github/` targets it.
   Security note: the runner's just-in-time config is visible in its process arguments on the Pi,
   so never paste `ps` command lines from that box into a record.
   Two failure shapes the first native runs hit (2026-09-14), worth recognizing immediately:
