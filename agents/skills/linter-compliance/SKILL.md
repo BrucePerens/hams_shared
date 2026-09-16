@@ -235,6 +235,87 @@ Auto-formatters and long attributes (like `model` or `inherit_id`) will wrap the
 To survive the UI parser, you MUST ensure your entire Parcel payload is wrapped exclusively inside a `python` markdown code block, which prevents the UI from evaluating the internal HTML/XML tags.
 </ci_cd_bypasses>
 
+## 6.5 Complete bypass-tag reference
+
+`check_burn_list.py` accepts a hyphenated tag only if it is on one of its allow-lists; any other
+`burn-ignore-*` or `audit-ignore-*` spelling is itself an **UNAUTHORIZED BYPASS** error. The tables
+above explain the common tags. This section lists every other tag the linter accepts, so the list
+is complete. `tools/test_linter_compliance_skill_drift.py` fails when the linter gains a tag this
+file does not mention, so add the tag here in the same change that adds it to the linter.
+
+Each tag is a narrow exception, not a general escape hatch. Put the reason (and, where a test
+backs it, the `[@ANCHOR: ...]`) after the tag on the same line.
+
+### Security and privilege exceptions
+
+| Tag | What it suppresses, and when it is legitimate |
+| :--- | :--- |
+| `# burn-ignore-financial` | CRITICAL FINANCIAL EXPOSURE: touching `account.move`, `account.payment`, `res.partner.bank`, `payment.token`, `payment.transaction`, `.bank_ids` or `.payment_token_ids`. Requires an anchor to the test covering the access. |
+| `# burn-ignore-csrf-token` | CRITICAL CSRF on an XML `<form method="post">` with no `csrf_token` input, for a form that genuinely does not post to an Odoo CSRF-checked route. |
+| `# burn-ignore-exec-own-source` | CRITICAL RCE on `exec()` when a `hams_shared/tools` test executes a function's source text extracted from this repository's own committed file, never external input. |
+| `# burn-ignore-legacy-protocol-hash` | WEAK CRYPTO on `hashlib.md5`/`sha1` when reproducing an existing external protocol's fixed algorithm for interoperability (for example Winlink's Secure Gateway Login challenge in `test_rmsgw_protocol.py`), not a token this codebase chooses. |
+| `# audit-ignore-weak-random` | WEAK CRYPTO on the `random` module for deliberately non-security, seedable output such as deterministic exam generation. Say why in a comment. |
+| `# burn-ignore-superuser-rejection-test` | The `SUPERUSER_ID` import ban, in a regression test proving a caller-supplied superuser identity is rejected. |
+| `# audit-ignore-superuser-bootstrap-for-service-uid-resolution` | The CRITICAL ZERO-SUDO check on `Environment(cr, SUPERUSER_ID, ...)`, only for a transient bootstrap that resolves a service account's uid and then drops to it (first used by `list_routes.py`). |
+| `audit-ignore-service-account-admin-group` | (XML comment inside the `res.users` record.) A service account granted a human administrator group such as `base.group_system`. Only for a reviewed case where the account's job genuinely needs it. |
+| `# audit-ignore-service-uid-cursorless` | CRITICAL FAST FAIL on the broad `try/except` around `_get_service_uid(...)`. Must be on the exact call line. Only `content_security_policy/models/ir_http.py`'s `_post_dispatch`, which runs on cursor-less routes. |
+| `# audit-ignore-ssti` | CRITICAL SSTI (`request.env` inside a QWeb template) for a static, developer-written expression with no reachable untrusted input. |
+| `# audit-ignore-gdpr-hand-rolled-unlink` | `check_gdpr_erasure_uses_service_utility.py`'s requirement to erase through `_erase_via_service_account`, for erasure that needs production-scale batching, savepoints and mid-loop commits (`user_websites`' page and blog erasure). |
+| `# audit-ignore-outbound-fetch` | [%AUDIT] OUTBOUND FETCH (possible SSRF) when the URL's host is genuinely fixed and trusted. Name the host. A local health-check poll to loopback is the usual case, since `urlopen_ssrf_safe` rejects loopback by design. |
+| `# burn-ignore-env` | CRITICAL HARDCODED CREDENTIAL DEFAULT on a credential environment-variable read whose literal fallback is genuinely safe, such as a test-only placeholder. Give the reason after the tag. |
+| `# audit-ignore-sql` | Accepted on a reviewed `cr.execute(...)` whose parameters are passed separately, with a test anchor. |
+
+### Network-hardcoding exceptions (loopback and literal addresses)
+
+The CRITICAL NETWORK HARDCODING rule exists because a service reaching another service through a
+hardcoded loopback address breaks across containers. These tags cover the cases where that concern
+does not apply. Pick the one that matches; they are deliberately distinct.
+
+| Tag | Legitimate use |
+| :--- | :--- |
+| `# burn-ignore-bind-address-default` | A daemon's own default listen address (loopback by default, widened by an environment variable). Lives in the one shared `resolve_bind_addr()`. |
+| `# burn-ignore-cloudflared-ingress` | A Cloudflare Tunnel ingress target: `cloudflared` runs on the same host as the services it fronts. |
+| `# burn-ignore-tunnel-peer-check` | Comparing an incoming request's transport peer to loopback to decide whether it came through our own tunnel (`_get_trusted_client_ip()`). |
+| `# burn-ignore-relay-loopback` | The allow-list of redirect hosts for a relay login, where `localhost` is the user's own `hams_local_relay`. |
+| `# burn-ignore-self-hosted-server` | A standalone verification script connecting to a server it started itself moments earlier. |
+| `# burn-ignore-local-debug-script` | A one-shot personal debugging script, never shipped or deployed, reaching a service on the same machine. |
+| `# burn-ignore-test-local-server` | A test's own fixture HTTP server on loopback, standing in for a device that really does live on the user's machine or LAN. |
+| `# burn-ignore-ssrf-test-value` | A private or loopback address used as attack-payload data in an SSRF-rejection test, never connected to. |
+| `# burn-ignore-unreachable-sentinel` | A loopback address with a reserved, closed port, used to force a real connection failure instead of mocking one. |
+
+### Dependency and soft-dependency exceptions
+
+| Tag | Legitimate use |
+| :--- | :--- |
+| `# burn-ignore-optional-oca-dep` | The `'model' in self.env` presence check for an optional OCA addon an administrator may install later (`hams_s3` and `storage.backend`). It does not cover `.sudo()` on the same line. |
+| `# burn-ignore-optional-cross-repo-dep` | The same presence check for a model from the other repository, where a real manifest dependency would stop `hams_open` installing on its own (`pager_duty` and `ham.dns.record`). |
+| `# burn-ignore-skiptest-soft-dependency` | The fast-fail rule against skipping a test when an import is missing, for a reviewed optional dependency. `hams_shared/tools/` scripts are already exempt. |
+| `# burn-ignore-pika` | Accepted on test lines that open a real RabbitMQ (`pika`) connection in `backup_management`'s tests. |
+
+### Test-fixture and linter-self-test exceptions
+
+The linter matches raw text in several rules, so a string describing a violation can trip the rule
+it describes. These tags cover that, and nothing else.
+
+| Tag | Legitimate use |
+| :--- | :--- |
+| `burn-ignore-anchor-example` | An `[@ANCHOR-BEGIN: ...]` example inside a docstring or fixture that is not a real, unterminated anchor marker. Exempts that line only. |
+| `burn-ignore-noqa-example` | A fixture string containing `# noqa`, in a test of the noqa ban itself. |
+| `burn-ignore-vendor-patch-text` | A string literal used as search-and-replace data for patching a vendored third-party file, or a linter fixture containing forbidden text. |
+| `# burn-ignore-test-daemon-thread` | `threading.Thread(..., daemon=True)` in a test that drives a real infinite-loop daemon function end to end. |
+| `# burn-ignore-test-tags` | `check_test_tags.py`'s required-tags check, for a test file that deliberately carries none. |
+
+### Odoo structure exceptions
+
+| Tag | Legitimate use |
+| :--- | :--- |
+| `# burn-ignore-company-scoped-loop` | N+1 `.search()` inside a loop that calls `.with_company(company)` per iteration, where a single grouped query would require widening the service account's company membership. |
+| `burn-ignore-global-rule` | An `ir.rule` with no `groups`, when a global rule is required because a group-scoped deny rule is OR-ed with other rules and can be outvoted (`ham_crm_security`'s `crm_lead_block_portal`). |
+| `burn-ignore-tour` | The view-tour mandate for a view with no UI tour. `audit-ignore-view` does not satisfy this on its own. |
+| `audit-ignore-view-resolution` | [%AUDIT] IMPLICIT VIEW RESOLUTION on an `ir.actions.act_window` with no explicit `view_id`/`view_ids`, when default resolution by model and type is intended. |
+| `burn-ignore-hoot-runner-coverage` | Grandfathers the modules that already registered `*.test.js` files with no Python `browser_js()` runner when that check was added. New modules must add a runner instead. |
+| `# burn-ignore-os-account-probe` | The fast-fail try/except ban around an operating-system account lookup (`pwd`/`grp`, `groupadd`/`useradd` existence checks) in provisioning and the test runner. These never touch Odoo. |
+
 <semantic_anchors>
 ## 7. ⚓ Semantic Anchors & UI Tour Mandate
 
