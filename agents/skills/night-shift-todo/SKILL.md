@@ -953,6 +953,26 @@ controller change landed before Odoo started and was loaded, but the peer's new 
 added a minute later and were absent from the run. Before telling a peer that your run covered their
 change, grep the log for their test names' `Starting` lines, not just for an absence of failures.
 
+## Formatting only your own relay files while peers have uncommitted edits in the same crate
+
+This file says not to run `cargo fmt` on the whole crate in the shared tree, and to check formatting
+on an extracted committed snapshot. That covers checking. It leaves no way to FIX a finding in
+your own files before committing, and the obvious per-file tools don't provide one. `rustfmt
+src/main.rs` formats every module that file declares, including the peer's `clublog.rs` and
+`lotw.rs`. `skip_children` is nightly-only. Hand-applying each diff hunk works, but it is slow and
+error-prone. Found 2026-09-16 (workspace-57), with a peer's uncommitted ClubLog work in the crate.
+
+What worked: copy the crate's `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rustfmt.toml`
+and `src/` to a scratch directory. Run `cargo fmt` there, where the pinned toolchain still applies
+(check `cargo fmt --version`). Then copy back ONLY the files you changed, and re-run
+`cargo fmt -- --check` in the shared tree, where the only remaining diffs should be the peer's
+files. `diff` each file before copying it back, because a peer may have edited the same file
+since you last looked.
+
+Related: a parallel `cargo test -- digital_decoder::` run starts two dozen real decoder pipelines
+at once. At load average 7.8 the two RTTY pipeline tests timed out, and both passed in 15 s run
+alone. Before calling such a failure yours, rerun the failing tests on their own.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
