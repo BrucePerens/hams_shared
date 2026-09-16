@@ -928,6 +928,31 @@ says the item is closed. Delete the file from the working tree first (or run
 `GIT_INDEX_FILE=idx git rm --cached <path>` and delete it afterwards), and read the commit's `--stat`
 for the deletion line before pushing.
 
+## Three traps from one worker run's verification (2026-09-16, workspace-f9)
+
+**The load gate's 900-second timeout ends a queued run, and a waiter loop that retries only on the
+lock message treats that as the result.** Continuous-integration jobs ran back to back for over 30
+minutes, with the load average near 1.3 on 16 processors, so the gate kept seeing a live
+`Runner.Worker`. Two queued runs each exited 1 after 900 seconds without starting Odoo. A waiter
+that retries on `Another instance of test.py is already running` does not retry on
+`still too busy to test on`, so it reports exit 1 as though the tests had failed. Pass
+`HAMS_CI_LOAD_GATE_TIMEOUT=3600` and retry on that message too. Don't reach for
+`HAMS_SKIP_CI_LOAD_GATE=1` just because the load looks low: the gate is checking for the build
+matrix, not only for load.
+
+**`cron.method_direct_trigger()` inside a `TransactionCase` cannot see the test's own rows.** It runs
+the job on a separate cursor, so a fixture row that was created but not committed is invisible.
+The log says `fully done (#loop 1; done 0; remaining 0)` and the assertion that the cron removed the
+row fails, though the code is correct. To test a cron's wiring in a transaction case, assert on
+`cron.code` and `cron.user_id`, then call the configured method as that user,
+`env[cron.model_id.model].with_user(cron.user_id)._method()`. Use `RealTransactionCase` if you need
+the real runner.
+
+**A run that started after a peer's edit has not necessarily loaded all of that edit.** A peer's
+controller change landed before Odoo started and was loaded, but the peer's new test methods were
+added a minute later and were absent from the run. Before telling a peer that your run covered their
+change, grep the log for their test names' `Starting` lines, not just for an absence of failures.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
