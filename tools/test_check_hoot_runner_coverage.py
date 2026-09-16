@@ -147,5 +147,85 @@ class CheckHootRunnerCoverageTests(unittest.TestCase):
         self.assertIn("fake_module_b", out)
 
 
+
+class UnbundledHootSuiteTests(unittest.TestCase):
+    """The same silent-pass failure as this file's other tests, in the other direction: a
+    *.test.js on disk that no bundle names. /web/tests loads only what a manifest lists, so the
+    wrapper's tag matches nothing, and hoot reports an empty run as "Test suite succeeded" --
+    exactly what browser_js() waits for. Six real files were in this state on 2026-09-15.
+
+    Deliberately NOT a subclass of CheckHootRunnerCoverageTests: inheriting it to reuse setUp and
+    _run_with_argv would re-run all of its tests under this class's name too, inflating the
+    reported count with duplicates. Overstating how much testing happened is the exact failure
+    this whole check exists to catch, so it would be a poor thing to do in its own test file.
+    """
+
+    setUp = CheckHootRunnerCoverageTests.setUp
+    tearDown = CheckHootRunnerCoverageTests.tearDown
+    _run = CheckHootRunnerCoverageTests._run
+    _run_with_argv = CheckHootRunnerCoverageTests._run_with_argv
+
+    def test_a_test_js_on_disk_that_no_bundle_lists_is_flagged(self):
+        mod = os.path.join(self.tmp, "fake_module")
+        _write(os.path.join(mod, "__manifest__.py"), _MANIFEST_WITH_TEST_JS)
+        _write(os.path.join(mod, "tests", "test_widget_hoot.py"), _HOOT_RUNNER_PY)
+        _write(os.path.join(mod, "static", "tests", "orphan.test.js"), "// never bundled\n")
+        code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("UNBUNDLED HOOT SUITE", out)
+        self.assertIn("orphan.test.js", out)
+
+    def test_a_bundled_test_js_on_disk_is_not_flagged(self):
+        """The discriminating case: same file on disk, but named in the manifest."""
+        mod = os.path.join(self.tmp, "fake_module")
+        _write(os.path.join(mod, "__manifest__.py"), _MANIFEST_WITH_TEST_JS)
+        _write(os.path.join(mod, "tests", "test_widget_hoot.py"), _HOOT_RUNNER_PY)
+        _write(os.path.join(mod, "static", "tests", "widget.test.js"), "// bundled\n")
+        code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 0)
+        self.assertNotIn("UNBUNDLED", out)
+
+    def test_a_tour_file_under_static_tests_tours_is_not_flagged(self):
+        """Tours live in web.assets_tests and are driven by start_tour, not by a hoot tag, so
+        they are not this check's business."""
+        mod = os.path.join(self.tmp, "fake_module")
+        _write(os.path.join(mod, "__manifest__.py"), _MANIFEST_WITH_TEST_JS)
+        _write(os.path.join(mod, "tests", "test_widget_hoot.py"), _HOOT_RUNNER_PY)
+        _write(os.path.join(mod, "static", "tests", "widget.test.js"), "// bundled\n")
+        _write(os.path.join(mod, "static", "tests", "tours", "a_tour.test.js"), "// a tour\n")
+        code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 0)
+        self.assertNotIn("UNBUNDLED", out)
+
+    def test_a_file_listed_in_some_other_bundle_is_not_flagged(self):
+        """Wired up on purpose, even if arguably in the wrong bundle. Deciding which bundle is
+        right needs the assets_unit_tests_setup reasoning ham_shack's manifest records at
+        length; this check only catches a file mentioned nowhere at all."""
+        mod = os.path.join(self.tmp, "fake_module")
+        _write(
+            os.path.join(mod, "__manifest__.py"),
+            "{\n"
+            "    'name': 'fake_module',\n"
+            "    'assets': {\n"
+            "        'web.assets_unit_tests': ['fake_module/static/tests/widget.test.js'],\n"
+            "        'web.assets_tests': ['fake_module/static/tests/elsewhere.test.js'],\n"
+            "    },\n"
+            "}\n",
+        )
+        _write(os.path.join(mod, "tests", "test_widget_hoot.py"), _HOOT_RUNNER_PY)
+        _write(os.path.join(mod, "static", "tests", "widget.test.js"), "// bundled\n")
+        _write(os.path.join(mod, "static", "tests", "elsewhere.test.js"), "// other bundle\n")
+        code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 0)
+        self.assertNotIn("UNBUNDLED", out)
+
+    def test_a_module_with_no_static_tests_directory_is_not_flagged(self):
+        mod = os.path.join(self.tmp, "fake_module")
+        _write(os.path.join(mod, "__manifest__.py"), _MANIFEST_NO_TEST_JS)
+        code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 0)
+        self.assertNotIn("UNBUNDLED", out)
+
+
 if __name__ == "__main__":
     unittest.main()

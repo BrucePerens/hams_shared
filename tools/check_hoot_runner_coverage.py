@@ -23,6 +23,25 @@ the module. It does not verify per-suite tag coverage (a module with ten
 hoot test files and one runner that only covers one tag currently passes)
 -- that finer-grained gap is real but needs a JS-side tag cross-reference
 this check doesn't attempt.
+
+Second check, added 2026-09-15: the SAME failure in the other direction.
+A *.test.js file can exist on disk, with a registered Python wrapper
+passing a matching tag=, and simply never be listed in any manifest
+bundle. /web/tests only loads what a manifest's web.assets_unit_tests
+names, so the wrapper's tag matches zero tests -- and Odoo's hoot runner
+reports a run with no tests as "no tests to run", then "Passed 0 tests",
+then "[HOOT] Test suite succeeded". That is character-for-character what
+browser_js() waits for, so the wrapper passes. A green suite that never
+executed an assertion is worse than a missing one, because it actively
+reports coverage that does not exist.
+
+That is not hypothetical here. A repo-wide scan on 2026-09-15 found six
+such files: five in ham_shack, each with its own registered wrapper, and
+theme_hams/static/tests/s_ham_map.test.js, whose four tests covered a
+screen-reader accessibility fallback and had never once run. ham_shack's
+own manifest already carried several comments warning about this exact
+trap, added one file at a time as each was discovered by hand -- which is
+the argument for checking it mechanically instead.
 """
 
 import ast
@@ -34,6 +53,37 @@ def find_hoot_test_files(manifest_dict):
     assets = manifest_dict.get("assets", {})
     unit_test_bundle = assets.get("web.assets_unit_tests", [])
     return [f for f in unit_test_bundle if isinstance(f, str) and f.endswith(".test.js")]
+
+
+def find_unbundled_test_files(module_path, manifest_dict):
+    """*.test.js files that exist under static/tests/ but appear in no manifest bundle.
+
+    Checks every bundle, not just web.assets_unit_tests: a test file listed anywhere in the
+    manifest is at least wired up on purpose, and deciding whether it sits in the RIGHT bundle
+    needs the assets_unit_tests_setup reasoning that ham_shack's own manifest comments record
+    at length. The failure this catches is cruder and unambiguous -- a file mentioned nowhere
+    at all.
+    """
+    tests_dir = os.path.join(module_path, "static", "tests")
+    if not os.path.isdir(tests_dir):
+        return []
+
+    listed = set()
+    for bundle in (manifest_dict.get("assets") or {}).values():
+        if not isinstance(bundle, (list, tuple)):
+            continue
+        for entry in bundle:
+            if isinstance(entry, str):
+                listed.add(os.path.basename(entry))
+
+    unbundled = []
+    for root, dirs, files in os.walk(tests_dir):
+        # tours/ live in web.assets_tests and are driven by start_tour, not by a hoot tag.
+        dirs[:] = [d for d in dirs if d not in ("tours", "__pycache__")]
+        for f in files:
+            if f.endswith(".test.js") and f not in listed:
+                unbundled.append(os.path.relpath(os.path.join(root, f), module_path))
+    return sorted(unbundled)
 
 
 def module_has_hoot_runner(module_path):
@@ -110,6 +160,21 @@ def main():
             if manifest_dict is None:
                 continue
 
+            mod_name_for_unbundled = os.path.basename(root)
+            unbundled = find_unbundled_test_files(root, manifest_dict)
+            if unbundled:
+                violations.append(
+                    f"🚨 UNBUNDLED HOOT SUITE: module '{mod_name_for_unbundled}' has "
+                    f"{len(unbundled)} *.test.js file(s) on disk that no bundle in its "
+                    f"__manifest__.py lists ({', '.join(unbundled)}). /web/tests only loads "
+                    f"what a manifest names, so any wrapper's tag= matches zero tests -- and "
+                    f"hoot reports an empty run as \"Test suite succeeded\", so that wrapper "
+                    f"PASSES while executing no assertions at all. Add each file (and any "
+                    f"source JS it imports that isn't already reachable) to "
+                    f"web.assets_unit_tests, following ham_shack/__manifest__.py's own "
+                    f"precedent, or delete the file if it is genuinely obsolete."
+                )
+
             hoot_test_files = find_hoot_test_files(manifest_dict)
             if not hoot_test_files:
                 continue
@@ -131,7 +196,10 @@ def main():
             print(v)
         sys.exit(1)
 
-    print("[+] Hoot Runner Coverage Linter: all modules with hoot unit tests have a runner.")
+    print(
+        "[+] Hoot Runner Coverage Linter: every *.test.js on disk is bundled, and every module "
+        "with hoot unit tests has a runner."
+    )
 
 
 if __name__ == "__main__":
