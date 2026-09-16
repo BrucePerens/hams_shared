@@ -4923,6 +4923,14 @@ def scan_file(filepath, is_odoo_module=False):
                 "audit-ignore-path",
                 "audit-ignore-sql",
                 "audit-ignore-weak-random",
+                # The OUTBOUND FETCH rule's own escape hatch. Registering it
+                # here is not paperwork: without it the tag is itself an
+                # UNAUTHORIZED BYPASS error, so following the rule's own
+                # advice ("add '# audit-ignore-outbound-fetch' naming the
+                # trusted host") turned a warning into a hard error that
+                # halts the whole scan. Found immediately on the first real
+                # use, tagging zero_sudo's own local health-check poll.
+                "audit-ignore-outbound-fetch",
                 # `_execute_gdpr_erasure()`'s own dedicated escape hatch,
                 # defined and enforced by
                 # hams_shared/tools/check_gdpr_erasure_uses_service_utility.py

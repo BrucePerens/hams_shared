@@ -5848,3 +5848,24 @@ def test_outbound_fetch_does_not_fire_outside_odoo_modules():
         "/tmp/daemons/thing/main.py", source, lines, is_odoo_module=False
     )
     assert not [msg for _lineno, msg in warnings if "OUTBOUND FETCH" in msg]
+
+
+def test_the_outbound_fetch_tag_is_itself_a_sanctioned_tag():
+    """Using the tag the rule recommends must not be an UNAUTHORIZED BYPASS.
+
+    Found on this rule's very first real use, tagging zero_sudo's own local
+    health-check poll: the tag was implemented in add_warning's suppression
+    list but never registered in the sanctioned-tag allow-list, so following
+    the rule's own printed advice turned a warning into a hard ERROR that
+    halts the entire scan. A rule that breaks the build when you do what it
+    says is worse than no rule.
+
+    The general shape, worth a test rather than a comment: introducing a new
+    ignore tag means touching TWO places, and only one of them is where the
+    rule itself lives.
+    """
+    source = "def f(url):\n    return requests.get(url)  # audit-ignore-outbound-fetch: fixed internal host\n"
+    errors, _warnings = _scan_file(
+        source, "some_module/models/importer.py", is_odoo_module=True
+    )
+    assert not any("UNAUTHORIZED BYPASS" in e for e in errors), errors
