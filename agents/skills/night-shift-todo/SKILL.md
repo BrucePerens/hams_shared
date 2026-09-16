@@ -409,6 +409,15 @@ import that module and call `_build_cross_repo_anchor_hash_index(source_root)` -
 strip the `COMM_` prefix, so the anchor `user_websites:COMM_res_users_write` is stored as
 `user_websites:res_users_write`.
 
+**The module-local store has its own full-hash recipe.** Claims under a module's own `claims/`
+directory (hams_com, e.g. `ham_club_management/claims/`) are checked by
+`check_claims_freshness.py <module>`, which also prints only 12 characters. Its
+`compute_function_hash(<path to the .py file>)` returns `{anchor_name: full sha256 hex}` for that
+file, keyed by the anchor exactly as written (no prefix stripping), so paste
+`sha256:<value>` straight into `code_hash:`. Run it only after confirming `git diff HEAD` on that
+`.py` file is empty, or a peer's uncommitted edit gets hashed into your claim (2026-09-16,
+workspace-98).
+
 ## Two claim files can share a basename across modules -- name the anchor, not the file
 
 `check_claims.py`'s output lists claims by path, and the eye reads the basename. On 2026-09-15
