@@ -199,3 +199,139 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# Tests [@ANCHOR: COMM_claim_retirement]
+
+class ClaimRetirementTests(unittest.TestCase):
+    """A claim whose anchored function was deliberately deleted or renamed is kept on purpose --
+    it holds the original finding -- but its anchor can no longer resolve. Before the retirement
+    convention, every such claim was reported as an orphan forever, and a gate that can never go
+    green stops being read."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_claim(self, relpath, frontmatter, body="Historical record.\n"):
+        path = os.path.join(self.tmp, relpath)
+        _write(path, "---\n%s---\n\n%s" % (frontmatter, body))
+        return path
+
+    def test_a_retired_claim_with_a_reason_is_skipped_not_orphaned(self):
+        self._write_claim(
+            os.path.join("claims", "gone.md"),
+            "anchor: my_module:deleted_function\n"
+            "code_hash: sha256:deadbeef\n"
+            "retired: 2026-09-15\n"
+            "retired_reason: deleted\n",
+        )
+        _init_git_repo(self.tmp)
+        problems, retired = ccf.scan_claims(self.tmp)
+        self.assertEqual(problems, [])
+        self.assertEqual(len(retired), 1)
+
+    def test_a_retired_claim_naming_a_live_successor_is_skipped(self):
+        self._write_claim(
+            os.path.join("claims", "new_name.md"),
+            "anchor: my_module:new_name\ncode_hash: not computable\n",
+        )
+        self._write_claim(
+            os.path.join("claims", "old_name.md"),
+            "anchor: my_module:old_name\n"
+            "code_hash: sha256:deadbeef\n"
+            "retired: 2026-09-15\n"
+            "superseded_by: new_name.md\n",
+        )
+        _init_git_repo(self.tmp)
+        problems, retired = ccf.scan_claims(self.tmp)
+        self.assertEqual(problems, [])
+        self.assertEqual(len(retired), 2 - 1)  # only old_name.md is retired
+
+    def test_a_successor_in_another_module_resolves_against_the_repo_root(self):
+        """The real case this exists for: a claim whose function moved to a different module, so
+        the successor is not a sibling file."""
+        self._write_claim(
+            os.path.join("other_module", "claims", "moved.md"),
+            "anchor: other_module:moved\ncode_hash: not computable\n",
+        )
+        self._write_claim(
+            os.path.join("my_module", "claims", "moved.md"),
+            "anchor: my_module:moved\n"
+            "code_hash: sha256:deadbeef\n"
+            "retired: 2026-09-15\n"
+            "superseded_by: other_module/claims/moved.md\n",
+        )
+        _init_git_repo(self.tmp)
+        problems, _retired = ccf.scan_claims(self.tmp)
+        self.assertEqual(problems, [])
+
+    def test_retired_alone_cannot_silence_an_orphan(self):
+        """The whole point of requiring one of the two fields: otherwise `retired:` is a one-line
+        way to hide a genuinely orphaned claim, which is what the checker exists to surface."""
+        self._write_claim(
+            os.path.join("claims", "sneaky.md"),
+            "anchor: my_module:vanished\ncode_hash: sha256:deadbeef\nretired: 2026-09-15\n",
+        )
+        _init_git_repo(self.tmp)
+        problems, retired = ccf.scan_claims(self.tmp)
+        self.assertEqual(len(retired), 1, "it is still counted as retired")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("neither 'superseded_by:' nor 'retired_reason:'", problems[0][1])
+
+    def test_a_superseded_by_typo_is_an_error(self):
+        self._write_claim(
+            os.path.join("claims", "old_name.md"),
+            "anchor: my_module:old_name\n"
+            "code_hash: sha256:deadbeef\n"
+            "retired: 2026-09-15\n"
+            "superseded_by: no_such_claim.md\n",
+        )
+        _init_git_repo(self.tmp)
+        problems, _retired = ccf.scan_claims(self.tmp)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("names no existing claim file", problems[0][1])
+
+    def test_a_successor_that_is_itself_retired_is_an_error(self):
+        """Otherwise a chain of retirements hides the claim just as effectively as a typo."""
+        self._write_claim(
+            os.path.join("claims", "middle.md"),
+            "anchor: my_module:middle\n"
+            "code_hash: sha256:deadbeef\n"
+            "retired: 2026-09-15\n"
+            "retired_reason: deleted\n",
+        )
+        self._write_claim(
+            os.path.join("claims", "oldest.md"),
+            "anchor: my_module:oldest\n"
+            "code_hash: sha256:deadbeef\n"
+            "retired: 2026-09-15\n"
+            "superseded_by: middle.md\n",
+        )
+        _init_git_repo(self.tmp)
+        problems, _retired = ccf.scan_claims(self.tmp)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("is itself retired", problems[0][1])
+
+    def test_a_live_claim_is_unaffected_by_the_new_field(self):
+        _write(os.path.join(self.tmp, "mod.py"),
+               "def foo(x):\n    # [@ANCHOR: my_module:foo]\n    return x + 1\n")
+        real_hash = ccf.compute_function_hash(
+            os.path.join(self.tmp, "mod.py"))["my_module:foo"]
+        self._write_claim(
+            os.path.join("claims", "foo.md"),
+            "anchor: my_module:foo\ncode_hash: sha256:%s\n" % real_hash,
+        )
+        _init_git_repo(self.tmp)
+        problems, retired = ccf.scan_claims(self.tmp)
+        self.assertEqual(problems, [])
+        self.assertEqual(retired, [])
+
+    def test_check_claims_still_returns_only_problems(self):
+        """Its long-standing callers pass its result straight to a list comparison."""
+        # _init_git_repo commits, so the repo needs at least one file to commit.
+        _write(os.path.join(self.tmp, "README.md"), "no claims here\n")
+        _init_git_repo(self.tmp)
+        self.assertEqual(ccf.check_claims(self.tmp), [])

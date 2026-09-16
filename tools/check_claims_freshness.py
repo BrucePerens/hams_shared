@@ -84,6 +84,81 @@ def parse_claim_frontmatter(content):
     return fields
 
 
+# [@ANCHOR: check_claims_freshness:COMM_claim_retirement]
+def check_retirement(fields, claim_path, search_roots=()):
+    """Classify a claim's retirement. Returns `(is_retired, problem_or_None)`.
+
+    A claim documents one anchored function. When that function is deliberately deleted or
+    renamed, the claim is kept on purpose -- it holds the original finding, often a tier-1
+    security one -- but its `anchor:` can no longer resolve, so every freshness checker reported
+    it as an "orphaned claim" forever. Three real claims were in exactly that state, against one
+    genuine finding, and a gate that can never go green stops being read: the real orphan hiding
+    among the permanent ones stops being noticed. There was also no way to fix it from inside the
+    claim, because dropping `anchor:` only trades the error for "missing required frontmatter".
+
+    The convention, therefore, is a `retired:` date plus a statement of WHICH kind of retirement
+    it is, because a reviewer must be able to tell a deliberate retirement from an accidental
+    orphan (bug classes 40 and 45 both manifest as exactly this symptom):
+
+        retired: 2026-09-15
+        superseded_by: _create_odoo_role_if_missing.md   # renamed or moved: name the live claim
+        retired_reason: deleted                          # or: the code is simply gone
+
+    Exactly one of the two is required. `retired:` alone is refused, so this cannot become a
+    one-line way to silence a real orphan -- the author has to say which case it is, and when
+    they say "superseded", the successor is verified to exist and to not itself be retired, so a
+    typo or a retirement chain cannot quietly hide a claim forever.
+
+    `superseded_by` is resolved relative to the retired claim's own directory first (the common
+    case is a renamed function's sibling claim), then relative to each of `search_roots` (for a
+    successor that moved to another module's claims directory).
+    """
+    if "retired" not in fields:
+        return False, None
+
+    superseded = fields.get("superseded_by")
+    reason = fields.get("retired_reason")
+    if not superseded and not reason:
+        return True, (
+            "'retired:' with neither 'superseded_by:' nor 'retired_reason:' -- a retirement must "
+            "say which kind it is, so it can't be used to silence a genuinely orphaned claim; "
+            "name the live successor claim, or give a reason such as 'retired_reason: deleted'"
+        )
+
+    if superseded:
+        resolved, tried = _resolve_superseded_by(claim_path, superseded, search_roots)
+        if resolved is None:
+            return True, (
+                f"superseded_by '{superseded}' names no existing claim file (looked in: "
+                f"{', '.join(tried)}) -- a typo here hides this claim forever"
+            )
+        try:
+            with open(resolved, "r", encoding="utf-8") as f:
+                successor = parse_claim_frontmatter(f.read())
+        except (OSError, UnicodeDecodeError):
+            successor = None
+        if successor is not None and "retired" in successor:
+            return True, (
+                f"superseded_by '{superseded}' is itself retired -- point at the live claim that "
+                "documents the current code, not at another retired one"
+            )
+
+    return True, None
+
+
+def _resolve_superseded_by(claim_path, value, search_roots):
+    """Returns `(resolved_path_or_None, paths_tried)` for a `superseded_by:` value."""
+    tried = []
+    candidates = [os.path.join(os.path.dirname(claim_path), value)]
+    candidates.extend(os.path.join(root, value) for root in search_roots)
+    for candidate in candidates:
+        normalized = os.path.normpath(candidate)
+        tried.append(normalized)
+        if os.path.isfile(normalized):
+            return normalized, tried
+    return None, tried
+
+
 def compute_function_hash(filepath):
     """Returns {anchor_name: sha256_hex} for every function in `filepath` carrying a real BASE
     anchor declaration (not a Tests/Verified-by/Triggers link to one) within its own span."""
@@ -126,8 +201,20 @@ def build_anchor_hash_index(repo_root):
 
 def check_claims(repo_root):
     """Returns a list of (claim_path, problem) for every claims/*.md file whose own recorded
-    hash doesn't match the anchor's current code, or whose anchor no longer exists at all."""
+    hash doesn't match the anchor's current code, or whose anchor no longer exists at all.
+
+    Thin wrapper over `scan_claims`, kept because it is this module's long-standing entry point.
+    """
+    return scan_claims(repo_root)[0]
+
+
+def scan_claims(repo_root):
+    """Returns `(problems, retired)`: the same (claim_path, problem) list `check_claims` returns,
+    plus the paths of every claim deliberately retired (see COMM_claim_retirement). A retired
+    claim is not hash-checked -- its anchor is gone on purpose -- but is reported as a non-failing
+    count, so retirements stay visible instead of disappearing."""
     problems = []
+    retired = []
     anchor_hashes = None  # computed lazily, only if a claim file actually exists
 
     for claim_path in _git_tracked_files(repo_root, ".md"):
@@ -165,6 +252,16 @@ def check_claims(repo_root):
             problems.append(
                 (claim_path, "missing required frontmatter fields 'anchor' and/or 'code_hash'")
             )
+            continue
+
+        # Checked before the hash, deliberately: a retired claim's anchor is gone on purpose, so
+        # every check below it would report a permanent, unfixable failure. See
+        # COMM_claim_retirement.
+        is_retired, retirement_problem = check_retirement(fields, claim_path, (repo_root,))
+        if is_retired:
+            retired.append(claim_path)
+            if retirement_problem:
+                problems.append((claim_path, retirement_problem))
             continue
 
         recorded = fields["code_hash"]
@@ -206,7 +303,7 @@ def check_claims(repo_root):
                 )
             )
 
-    return problems
+    return problems, retired
 
 
 def main():
@@ -215,7 +312,15 @@ def main():
     args = parser.parse_args()
 
     repo_root = os.path.abspath(args.directory)
-    problems = check_claims(repo_root)
+    problems, retired = scan_claims(repo_root)
+
+    if retired:
+        print(
+            f"[*] {len(retired)} retired claim(s) skipped (see COMM_claim_retirement) -- kept as "
+            "historical record, not checked against current code:"
+        )
+        for claim_path in retired:
+            print(f"    - {os.path.relpath(claim_path, repo_root)}")
 
     if problems:
         print("[!] CI/CD FAILURE: Stale or Orphaned Function Claims Detected (ADR 0091):")
