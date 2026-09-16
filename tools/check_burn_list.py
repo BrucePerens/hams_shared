@@ -17,6 +17,16 @@ import os
 import re
 import sys
 import ast
+
+# Odoo's command-line loading flags. Odoo 19 sets these in `odoo/tools/config.py` and never
+# clears them: nothing in `odoo/modules/loading.py`, `odoo/orm/registry.py`,
+# `odoo/service/server.py` or `odoo/cli/server.py` resets them once `load_modules()` returns
+# (older Odoo reset `tools.config[kind] = {}` there; this version does not). So any runtime
+# behaviour gated on them stays gated for the entire life of a process started with `-i`/`-u`,
+# including one that goes on to serve -- which is how `distributed_redis_cache`'s cache
+# invalidation poll came to be disabled forever on any server deployed with a one-step
+# upgrade-and-restart (2026-09-15). `registry.ready` is the honest form of the same question.
+_ODOO_LOADING_FLAGS = ("init", "update", "stop_after_init")
 import argparse
 import xml.parsers.expat
 import html.parser
@@ -2662,6 +2672,17 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         node.lineno,
                         "CRITICAL ARCHITECTURE: Probing `config['test_enable']` to evade execution is strictly forbidden.",
                     )
+                if (
+                    val == "config"
+                    and isinstance(node.slice, ast.Constant)
+                    and node.slice.value in _ODOO_LOADING_FLAGS
+                    # A test may assert what these flags really are in its own process, which is
+                    # how the distributed_redis_cache regression is reproduced without patching
+                    # anything (tests/test_poll_gate.py). Asserting a premise is the opposite of
+                    # gating behaviour on it.
+                    and not self.filename.startswith("test_")
+                ):
+                    self.add_error(node.lineno, "CRITICAL ARCHITECTURE: Gating runtime behaviour on the loading flags (`init`/`update`/`stop_after_init`) is forbidden -- Odoo 19 never clears them once loading finishes, so a server started with `-u` keeps them set for its whole lifetime and the gated code never runs again. Ask `registry.ready` whether the registry is still loading instead.")
             self.generic_visit(node)
 
         def visit_Call(self, node):
@@ -2769,6 +2790,14 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             node.lineno,
                             "CRITICAL ARCHITECTURE: Probing `config.get('test_enable')` to evade execution is strictly forbidden.",
                         )
+                    if (
+                        node.args
+                        and isinstance(node.args[0], ast.Constant)
+                        and node.args[0].value in _ODOO_LOADING_FLAGS
+                        # See the visit_Subscript twin for why test files are exempt.
+                        and not self.filename.startswith("test_")
+                    ):
+                        self.add_error(node.lineno, "CRITICAL ARCHITECTURE: Gating runtime behaviour on the loading flags (`init`/`update`/`stop_after_init`) is forbidden -- Odoo 19 never clears them once loading finishes, so a server started with `-u` keeps them set for its whole lifetime and the gated code never runs again. Ask `registry.ready` whether the registry is still loading instead.")
 
             if func_name == "Environment" or (
                 isinstance(node.func, ast.Attribute) and node.func.attr == "Environment"

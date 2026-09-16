@@ -5630,3 +5630,60 @@ def test_credential_default_rule_is_suppressed_by_burn_ignore_env():
     errors, _warnings = _scan_file(line, "tools/some_tool.py", is_odoo_module=False)
     assert not any(_CRED_DEFAULT_MSG in e for e in errors)
     assert not any("UNAUTHORIZED BYPASS" in e for e in errors)
+
+
+# The loading-flag gate ban (`config['update']` / `config.get('update')` and their `init` /
+# `stop_after_init` siblings), added 2026-09-15 alongside the distributed_redis_cache fix it
+# generalizes: Odoo 19 never clears those flags after loading, so a server started with `-u` and
+# left serving keeps them set for its whole lifetime and any behaviour gated on them never runs
+# again. See _ODOO_LOADING_FLAGS in check_burn_list.py for the source trace.
+
+
+def test_gating_on_config_update_subscript_is_forbidden():
+    source = "if config['update']:\n    return\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("loading flags" in e for e in errors)
+
+
+def test_gating_on_config_get_update_is_forbidden():
+    source = "if config.get('update'):\n    return\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("loading flags" in e for e in errors)
+
+
+def test_gating_on_config_get_init_is_forbidden():
+    source = "if config.get('init'):\n    return\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("loading flags" in e for e in errors)
+
+
+def test_gating_on_config_get_stop_after_init_is_forbidden():
+    source = "if config.get('stop_after_init'):\n    return\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("loading flags" in e for e in errors)
+
+
+def test_the_replacement_registry_ready_gate_is_not_flagged():
+    """The rule must not fire on the fix it exists to point people toward, or it would push
+    them straight back to the flags."""
+    source = "if registry.ready:\n    poll_and_clear_local_cache(env)\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("loading flags" in e for e in errors)
+
+
+def test_reading_an_unrelated_config_key_is_not_flagged():
+    source = "value = config.get('db_host')\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("loading flags" in e for e in errors)
+
+
+def test_a_test_file_may_assert_what_the_loading_flags_really_are():
+    """Exempting test files is what lets the regression be reproduced honestly: tests/
+    test_poll_gate.py asserts that its own process really was started with `-u`, with nothing
+    patched, so the test genuinely stands in for the production shape. Asserting a premise is the
+    opposite of gating behaviour on it."""
+    source = "assert config.get('update')\n"
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_poll_gate.py"
+    )
+    assert not any("loading flags" in e for e in errors)

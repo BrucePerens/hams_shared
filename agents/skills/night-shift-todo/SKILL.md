@@ -230,6 +230,41 @@ on the syntax.
 Choosing items this way also avoids collisions: `git status` in each repo shows which module
 directories other sessions have uncommitted work in.
 
+## Ask the peer before picking an item in a module they have uncommitted work in
+
+`git status` showing another session's edits in a module is not by itself a reason to skip an
+item there, and it is not a reason to proceed either -- ask. On 2026-09-15 `night-shift-todo-worker`
+(workspace-80) wanted `high/user-id-by-slug-live-stale-cache-and-missing-filters-384ddb2f.md`, which
+touches `user_websites/models/res_users.py` and `sql_views.py`, while workspace-cc had uncommitted
+work in that module's data XML, `blog_post.py` and security XML for its own claimed item. No file
+overlap at all -- but `test.py -u user_websites` installs the whole module, so each session's
+verification run would have been testing the other's in-flight edits, and a failure would have been
+unattributable. One `SendMessage` settled it in a single round trip: workspace-cc confirmed its
+edits were coherent rather than half-finished, said its own run had been queued for the lock since
+14:58, and asked that the item be left until its commit landed, with an explicit "if my run doesn't
+get the lock within the hour, go ahead without me" fallback so the asking session could not end up
+blocked indefinitely. Ask that question, and ask for that fallback, rather than guessing either way.
+
+**Queue behind the peer you just agreed with, don't race them.** Waiting for the lock is a race --
+whoever polls first after a run ends wins it (this file's own "A waiter can lose the race"). Having
+agreed to let workspace-cc go first, workspace-80's waiter had to actually implement that: wait out
+whatever run is live, then watch for a run whose command line contains the peer's modules, wait that
+one out too, and only then take the lock -- with a deadline so an agreement never becomes an
+indefinite stall. Put that waiter in a script FILE rather than an inline `bash -c` loop, which also
+sidesteps the self-matching `pgrep` trap this file documents above: a file's own command line is
+just `bash <path>` and cannot contain the pattern.
+
+## A fix that changes behaviour under test will be refused by the burn list
+
+Worth knowing before designing one. Working the `distributed_redis_cache` poll-gate item on
+2026-09-15, the first draft kept the suite's existing behaviour by excluding test processes from the
+new gate (`not tools.config.get("test_enable")`). `check_burn_list.py` rejected that outright, by
+AST and by regex, as the test-evasion pattern it exists to forbid -- correctly: a gate that reads
+`test_enable` leaves the production path untested by construction. The honest fix was to let the
+suite take on the real behaviour, which here meant every HTTP request and cron dispatch polling
+Redis exactly as a serving worker does. Run `check_burn_list.py <module>` early, while the design
+is still cheap to change, rather than after the tests are written.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
