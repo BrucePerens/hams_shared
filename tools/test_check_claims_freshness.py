@@ -6,12 +6,15 @@
 Unit tests for check_claims_freshness.py.
 """
 
+import contextlib
 import hashlib
+import io
 import os
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 import check_claims_freshness as ccf  # noqa: E402
 
@@ -336,10 +339,6 @@ class ClaimRetirementTests(unittest.TestCase):
 
 class TestMainRejectsAMissingDirectory(unittest.TestCase):
     def test_a_nonexistent_directory_is_an_error_not_a_success(self):
-        from unittest import mock
-        import contextlib
-        import io
-
         missing = os.path.join(tempfile.mkdtemp(), "no_such_module")
         out = io.StringIO()
         with mock.patch("sys.argv", ["check_claims_freshness.py", missing]), contextlib.redirect_stdout(out):
@@ -349,10 +348,6 @@ class TestMainRejectsAMissingDirectory(unittest.TestCase):
         self.assertIn("is not a directory", out.getvalue())
 
     def test_an_existing_directory_with_no_claims_still_succeeds(self):
-        from unittest import mock
-        import contextlib
-        import io
-
         out = io.StringIO()
         with mock.patch("sys.argv", ["check_claims_freshness.py", tempfile.mkdtemp()]), contextlib.redirect_stdout(out):
             rc = ccf.main()
