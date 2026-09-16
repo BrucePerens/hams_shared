@@ -599,9 +599,27 @@ because the peer had not yet made the matching edits to `models/__init__.py` and
 session had uncommitted work in them.
 
 Staging explicit paths feels like scoping, and it is not: it controls what you ADD, never what the
-commit TAKES. The habit that actually holds is a pathspec on the COMMIT itself --
-`git commit -F - -- <paths>` -- which ignores everything else in the index by construction, whoever
-put it there and whenever.
+commit TAKES.
+
+**A pathspec on the commit is the minimum, and it is NOT sufficient.** This section first said
+`git commit -F - -- <paths>` was "the habit that actually holds". That is wrong, and correcting it
+here rather than quietly is the point: `git commit -- <path>` commits that path's WORKING-TREE
+content, so a peer's uncommitted edit to a file you also touched still rides along under your
+message. `dependabot-ci-watch`'s own operating-knowledge section had already recorded that, twice,
+before this run rediscovered half of it -- which makes this the fourth instance of one hazard, and
+the second time a session has written a partial fix for it into a skill.
+
+The recipe that does hold is the **private index** documented there (`GIT_INDEX_FILE`, either the
+`commit-tree` form or `read-tree` + scoped `add` + `commit`), together with its **resync step** --
+`git reset -q HEAD -- <the exact paths you committed>`, then confirm `git status --porcelain
+<paths>` is empty. The resync is the part people skip, because the commit already looks finished,
+and skipping it leaves the real index describing the pre-commit tree so that the next `git add -A`
+by ANY session reverts your commit. Read that section rather than a summary of it; this one is a
+pointer, deliberately not a second copy that can drift out of step with it.
+
+The narrower rule that survives all of this, and the one to reach for first: **a commit touching
+only files no other session shares** -- your own new to-do file, your own new module -- has none of
+this exposure, which is exactly why `night_shift_todo/` was restructured into one file per item.
 
 `git diff --cached --name-only` does not save you here either, and it is worth understanding why.
 Run immediately after your own `git add`, it shows a correct picture; the peer's `git rm` can land
