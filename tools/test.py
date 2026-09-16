@@ -226,6 +226,15 @@ print = functools.partial(print, flush=True)
 
 _logger = logging.getLogger(__name__)
 
+# Odoo's own real pass/fail verdict, e.g. "odoo.tests.result: 0 failed, 0 error(s) of 77 tests
+# when loading database 'hams_test'" -- FailureExtractor.process_line() matches this
+# unconditionally (see its own comment) so finish_and_write() can report it as authoritative,
+# instead of the "N issue(s) detected" headline that used to come from a raw ERROR-log-line
+# count with no relation to whether the suite actually passed.
+_ODOO_RESULT_PATTERN = re.compile(
+    r"odoo\.tests\.result:\s*(?P<failed>\d+) failed, (?P<errors>\d+) error\(s\) of (?P<total>\d+) tests"
+)
+
 
 class _PostForkSafeLog:
     """Fork-safe stand-in for _logger, for use ONLY inside a subprocess.Popen
@@ -444,6 +453,16 @@ class FailureExtractor:
         self.current_block = []
         self._written = False
         self.aborted = False
+        # Real bug found and fixed 2026-09-15 (test-py-headline-contradicts-odoo-result-a33308da):
+        # the closing headline used to report `len(grouped_blocks)` -- a count of captured
+        # ERROR-level log-line blocks -- as "issues detected", with no relation to whether the
+        # suite actually passed. A test that deliberately provokes an ERROR-level log line on a
+        # path it then asserts correctly raises (a very normal thing for a test to do) produced a
+        # false "N issue(s) detected" on a run Odoo's own `odoo.tests.result:` line reported as
+        # fully green. Odoo's own line is captured here (matched, not blocked, wherever it
+        # appears in the stream -- there can be more than one on a multi-module `-u a,b` run) so
+        # `finish_and_write()` can report it as the authoritative pass/fail signal instead.
+        self.odoo_result_lines = []
 
         if not disable_atexit:
             atexit.register(self.finish_and_write)
@@ -521,6 +540,21 @@ class FailureExtractor:
 
         is_log_line = self.log_prefix_pattern.match(line_clean)
         line_lower = line_clean.lower()
+
+        # See __init__'s own comment on self.odoo_result_lines: capture Odoo's own real
+        # pass/fail verdict regardless of the "safe log level" classification below (it's
+        # always an INFO line already, so this is redundant with `is_safe` today, but the
+        # extraction must not depend on that classification never changing).
+        odoo_result_match = _ODOO_RESULT_PATTERN.search(line_clean)
+        if odoo_result_match:
+            self.odoo_result_lines.append(
+                {
+                    "failed": int(odoo_result_match.group("failed")),
+                    "errors": int(odoo_result_match.group("errors")),
+                    "total": int(odoo_result_match.group("total")),
+                    "raw": line_clean.strip(),
+                }
+            )
 
         if "odoo.schema: column \"name\" does not exist" in line_clean:
             return
@@ -717,17 +751,72 @@ class FailureExtractor:
         # above for the full atexit-ordering argument) -- the try/except was masking an
         # AttributeError that could never actually occur.
         a = self.aborted
+
+        # See __init__'s own comment on self.odoo_result_lines: the headline used to be
+        # `num_failures` (a raw ERROR-log-line-block count) alone, which false-positives on
+        # any suite that deliberately provokes and correctly asserts on an ERROR-level log
+        # line -- e.g. daemon_key_manager's own test_write_secure_env_file_* tests. When
+        # Odoo's own `odoo.tests.result:` line(s) were captured this run, report THOSE counts
+        # as the authoritative pass/fail signal (real bug found and fixed 2026-09-15,
+        # test-py-headline-contradicts-odoo-result-a33308da) -- `num_failures`'s captured
+        # blocks are still surfaced, but as context, never as a contradiction of Odoo's own
+        # verdict in the same log.
+        odoo_total_failed = sum(r["failed"] for r in self.odoo_result_lines)
+        odoo_total_errors = sum(r["errors"] for r in self.odoo_result_lines)
+        odoo_total_tests = sum(r["total"] for r in self.odoo_result_lines)
+        odoo_ran = len(self.odoo_result_lines) > 0
+
+        # Real bug found and fixed alongside the above: under HAMS_ISOLATED_NS=1,
+        # self.output_path (where the file actually gets written, see __init__) is
+        # /mnt/real_tmp/filtered_test.txt -- a private-mount-namespace path this process
+        # will tear down on exit -- while self.display_path (what got printed here) is built
+        # from the outside-visible base directory and is NOT guaranteed to still hold this
+        # run's content by the time a session outside the namespace goes looking for it.
+        # Say so plainly instead of asserting a path that may not resolve to anything.
+        path_note = self.display_path
+        if self.output_path != self.display_path:
+            path_note = (
+                f"{self.display_path} (best-effort outside-namespace path -- this run wrote "
+                f"to {self.output_path}, inside a private mount namespace this process tears "
+                "down on exit; if that path is empty or missing, the extracted blocks below "
+                "are the only copy)"
+            )
+
         if a:
             print(
                 "🛑 TEST RUN ABORTED: Did not complete due to pre-flight linter errors."
             )
+        elif odoo_ran and (odoo_total_failed or odoo_total_errors):
+            print(
+                f"🚨 TEST RUN COMPLETE: Odoo reports {odoo_total_failed} failed, "
+                f"{odoo_total_errors} error(s) of {odoo_total_tests} tests."
+            )
+            if num_failures:
+                print(
+                    f"📄 {num_failures} captured ERROR-level log block(s) for context -- "
+                    f"saved to: {path_note}"
+                )
+        elif odoo_ran:
+            print(
+                f"🎉 TEST RUN COMPLETE: Odoo reports 0 failed, 0 error(s) of "
+                f"{odoo_total_tests} tests -- the suite passed."
+            )
+            if num_failures:
+                print(
+                    f"ℹ️  {num_failures} ERROR-level log block(s) were captured during this "
+                    "run (e.g. a test deliberately asserting on an error path) but did not "
+                    f"affect the pass/fail result above -- saved to: {path_note}"
+                )
         elif num_failures == 0:
             print("🎉 TEST RUN COMPLETE: No test failures or system crashes detected.")
         else:
             print(
-                f"🚨 TEST RUN COMPLETE: {num_failures} issue(s) detected (test failures or system crashes)!"
+                f"🚨 TEST RUN COMPLETE: {num_failures} issue(s) detected (test failures or "
+                "system crashes)! No odoo.tests.result line was found in this run's log to "
+                "cross-check against -- this count is from captured ERROR-level log blocks "
+                "only."
             )
-            print(f"📄 Failure details extracted and saved to: {self.display_path}")
+            print(f"📄 Failure details extracted and saved to: {path_note}")
         print("==========================================================\n")
 
 

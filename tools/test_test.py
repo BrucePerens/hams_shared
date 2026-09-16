@@ -320,6 +320,96 @@ class FailureExtractorAttributeGuardTests(unittest.TestCase):
         self.assertIn("TEST RUN ABORTED", buf.getvalue())
 
 
+class FailureExtractorOdooResultHeadlineTests(unittest.TestCase):
+    """test-py-headline-contradicts-odoo-result-a33308da: the closing headline used to
+    report `len(grouped_blocks)` -- a count of captured ERROR-level log-line blocks -- as
+    "N issue(s) detected", with no relation to whether the suite actually passed. Any test
+    that deliberately provokes an ERROR-level log line on a path it then asserts correctly
+    raises (a normal thing for a test to do -- daemon_key_manager's own
+    test_write_secure_env_file_* tests are a real example) produced a false positive on a
+    run Odoo's own `odoo.tests.result:` line reported as fully green. These tests exercise
+    process_line()'s real parsing of that line and finish_and_write()'s real headline
+    output with it, using the same real-instantiation pattern as
+    FailureExtractorAttributeGuardTests above.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        real_expanduser = os.path.expanduser
+
+        def fake_expanduser(path):
+            if path.startswith("~/"):
+                return os.path.join(self.tmp, path[2:])
+            if path == "~":
+                return self.tmp
+            return real_expanduser(path)
+
+        patcher = patch.object(_test_runner.os.path, "expanduser", side_effect=fake_expanduser)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _make_extractor(self):
+        return _test_runner.FailureExtractor(self.tmp, disable_atexit=True)
+
+    def test_process_line_parses_a_real_odoo_result_line(self):
+        extractor = self._make_extractor()
+        extractor.process_line(
+            "2026-09-16 00:01:11,636 168210 INFO hams_test odoo.tests.result: "
+            "0 failed, 0 error(s) of 77 tests when loading database 'hams_test' \n"
+        )
+        self.assertEqual(
+            extractor.odoo_result_lines,
+            [{"failed": 0, "errors": 0, "total": 77, "raw": extractor.odoo_result_lines[0]["raw"]}],
+        )
+
+    def test_green_odoo_result_overrides_a_false_positive_error_block_count(self):
+        # Real reproduction of the bug: a test deliberately logs an ERROR-level line (which
+        # gets captured into a block, exactly like daemon_key_manager's own
+        # test_write_secure_env_file_* tests do for the PermissionError/OSError they assert
+        # on), but the suite as a whole still passes according to Odoo's own result line.
+        extractor = self._make_extractor()
+        extractor.process_line(
+            "2026-09-16 00:00:01,000 1 ERROR hams_test some.module: a deliberately provoked error\n"
+        )
+        extractor.process_line(
+            "2026-09-16 00:00:02,000 1 INFO hams_test odoo.tests.result: "
+            "0 failed, 0 error(s) of 16 tests when loading database 'hams_test' \n"
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            extractor.finish_and_write()
+        output = buf.getvalue()
+        self.assertIn("Odoo reports 0 failed, 0 error(s) of 16 tests -- the suite passed", output)
+        self.assertNotIn("issue(s) detected", output)
+
+    def test_real_odoo_failure_is_reported_using_odoo_s_own_counts(self):
+        extractor = self._make_extractor()
+        extractor.process_line(
+            "2026-09-16 00:00:01,000 1 INFO hams_test odoo.tests.result: "
+            "2 failed, 1 error(s) of 50 tests when loading database 'hams_test' \n"
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            extractor.finish_and_write()
+        self.assertIn("Odoo reports 2 failed, 1 error(s) of 50 tests", buf.getvalue())
+
+    def test_no_odoo_result_line_falls_back_to_the_old_block_count_behavior(self):
+        # A run that never reaches Odoo's own result line (e.g. a pre-flight crash) has
+        # nothing to cross-check against -- the fallback must say so explicitly rather than
+        # silently pretending it's still authoritative.
+        extractor = self._make_extractor()
+        extractor.process_line(
+            "2026-09-16 00:00:01,000 1 ERROR hams_test some.module: a real crash\n"
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            extractor.finish_and_write()
+        output = buf.getvalue()
+        self.assertIn("issue(s) detected", output)
+        self.assertIn("No odoo.tests.result line was found", output)
+
+
 class StartJulesDaemonsInjectionTests(unittest.TestCase):
     """start_jules_daemons() builds a Python script as an f-string and runs it
     via `sudo -E python3 -c <script>` -- base_dir and $USER used to be embedded
