@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 16
+version: 17
 ---
 
 # Dependabot & CI Build Watch
@@ -338,6 +338,20 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   by content rather than stale line numbers, and `git add` only the specific files you changed.
   If a peer session is working the same failures (`ListAgents`, then a short `SendMessage`
   naming who takes which item), split the work rather than both editing the same workflow file.
+  **Check a claimed CI fix against `origin/main`, never the working tree.** A peer's fix often
+  exists only as uncommitted edits to the shared tree, so `grep`ping the file on disk shows the
+  clean, fixed form while CI is still failing on the pushed, unfixed one. Read the pushed content
+  directly: `git show origin/main:<path> | grep -n <pattern>`. Found 2026-09-15, twentieth hourly
+  check, on the `offline_queue_test_lock` clippy failure -- the working tree had the async
+  `tokio::sync::Mutex` fix and `origin/main` still had `std::sync::MutexGuard`.
+  **A red clippy on the ubuntu-22.04 leg is everyone's problem, not just the owning feature's.**
+  It fails every later relay run regardless of that run's own content, and because clippy runs
+  before Formatting, no rustfmt check runs either while it's red. So when a to-do says a fix is
+  held pending something else, check whether unrelated relay commits have landed since
+  (`git log --oneline <fix-was-diagnosed-at>..origin/main -- daemons/hams_local_relay/`) -- if
+  they have, the hold is now costing other sessions, and that's worth a `SendMessage` to the
+  owner suggesting it split the fix into its own commit. Don't edit files a peer has asked you
+  not to touch; say what you found instead.
 - The scheduled task's own prompt (`~/.claude/scheduled-tasks/dependabot-and-ci-watch/SKILL.md`)
   still says hams_com pushes are blocked by the missing `workflow` scope and unpushed commit
   `a723508b`. That is stale as of 2026-09-14: the scope was granted and `a723508b` is pushed.
