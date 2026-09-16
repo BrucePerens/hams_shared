@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 19
+version: 20
 ---
 
 # Dependabot & CI Build Watch
@@ -462,7 +462,15 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `rig_get_conf` with a buffer of at least 128 bytes.
   (2) Rig model numbers are `backend*100+n` (IC-7300 = 373), not 4.x's `backend*1000+n` (3073).
   build.rs bakes the matching table, so tests take the number from
-  `hamlib::linked_hamlib_ic7300_model_id()` instead of a literal.
+  `hamlib::linked_hamlib_model_id(backend, n)` (and its `..._ic7300_...`/`..._ft847_...` wrappers)
+  instead of a literal. **Any bare model-id literal in relay test code is wrong by construction**
+  -- it can only be right on one side of the 3.x/4.x split. A second instance surfaced on
+  2026-09-16 (run 35034581568, job 104614049499) after the first was fixed: the FT-847 in
+  `set_ptt_returns_promptly_when_the_serial_port_is_wedged` was written `1001`, which is 101 on
+  3.3, so `rig_init()` returned NULL and the test panicked with "Failed to allocate Hamlib RIG
+  memory context". When a 20.04 test failure mentions that message, check the model id first.
+  A `rigctl --list | grep <model>` in a throwaway `ubuntu:20.04` container resolves the real
+  number in under a minute, without building anything. Fixed in hams_com `339ab491`.
   (3) The dummy rotator's azimuth range is -180..180 (also in 4.3.1), not -180..450 (4.6.2+).
   Distribution Hamlib versions: Ubuntu 20.04 3.3, 22.04 4.3.1, 24.04 4.5.5, Debian 12 4.5.4.
   Each release's source tarball is on Hamlib's GitHub releases page, for checking API questions.
