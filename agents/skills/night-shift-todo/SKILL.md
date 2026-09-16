@@ -254,6 +254,22 @@ indefinite stall. Put that waiter in a script FILE rather than an inline `bash -
 sidesteps the self-matching `pgrep` trap this file documents above: a file's own command line is
 just `bash <path>` and cannot contain the pattern.
 
+## Say so BEFORE filing, when two sessions are reading the same checker's output
+
+`grep -rl` across the queue before filing a new to-do does not prevent a duplicate; it only catches
+one that already landed. On 2026-09-15 workspace-80 and workspace-cc each filed a to-do for the same
+four stale claim `code_hash` values within a few minutes of each other, and both had grepped first
+and both had come up empty, because neither file existed yet when the other looked. The trigger is
+specific and recognisable: both sessions were reading the same tool's output (`check_claims.py`)
+right after a change that made that output meaningful again, so both saw the same residue at the
+same moment.
+
+So when you are about to file off a shared checker's output, and `ListAgents` shows a peer who has
+been working the same area, message them before filing rather than after. Reconciling afterwards is
+cheap and worked fine here -- the peer deleted its own file, kept the better record, and appended a
+line to the survivor saying what it superseded, so a later reader isn't left hunting a path that
+only exists in git history -- but the message costs less than the reconciliation.
+
 ## A fix that changes behaviour under test will be refused by the burn list
 
 Worth knowing before designing one. Working the `distributed_redis_cache` poll-gate item on

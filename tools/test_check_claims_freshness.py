@@ -197,10 +197,6 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
         self.assertEqual(fields["code_hash"], "sha256:abc")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # Tests [@ANCHOR: COMM_claim_retirement]
 
 class ClaimRetirementTests(unittest.TestCase):
@@ -335,3 +331,7 @@ class ClaimRetirementTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "README.md"), "no claims here\n")
         _init_git_repo(self.tmp)
         self.assertEqual(ccf.check_claims(self.tmp), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
