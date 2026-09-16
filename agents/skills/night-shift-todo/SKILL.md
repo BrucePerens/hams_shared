@@ -504,6 +504,79 @@ remaining test a statement about real behaviour. The same applies to a `#[cfg(te
 that one is legitimate, which is why the distinction is worth making deliberately rather than
 silencing the lint across the board.
 
+## After deleting a caller, ask what still calls the callee
+
+A deletion that "has a replacement" needs one more question than it looks like, and the cost of
+skipping it is silent. Found 2026-09-15, while scoping the eQSL half of the central-credential
+retirement -- the item was about to repeat a mistake already shipped for LoTW two weeks earlier.
+
+`ham.qso.sync_qsl_batch()` is the only code in hams_com that marks a QSO confirmed. hams_com
+`8fb785bc` retired the LoTW sync daemon, which contained its only `"lotw"` caller. The replacement
+was real and was verified: `hams_local_relay`'s `lotw.rs` genuinely does download confirmations
+locally, without sending the password to hams.com, which is the whole point of ADR-0095. But the
+relay's Odoo-side receiver records the confirmation into a log table and stops -- its own comment
+says it exists to record the report, "not to interpret or correlate it against a logbook QSO" -- and
+nothing reads those rows. So confirmations have not reached any logbook since. Nothing errors, and
+every `test_qsl_sync*.py` still passes, because those tests call `sync_qsl_batch` directly. **They
+verify the function works. Nothing verified that anything calls it.** That distinction is the whole
+bug, and it is invisible from a green suite.
+
+Parity was measured against the component that had been built (the download layer) rather than
+against the specific call the deletion removed (the application layer). The question that catches it
+is narrow, mechanical, and answers itself in one grep: **after this deletion, what still calls the
+thing I am deleting a caller of?** Ask it of every deletion whose justification is "the replacement
+exists," and ask it about the callee, not about the feature.
+
+**The document trap underneath it is worth recognising separately, because the document was not
+stale.** `LOTW_RELAY_INTEGRATION.md` §3 has exactly two bullets, adjacent lines in one list: "Done,
+2026-09-14: retire the daemon" and "Add ingestion for `lotw_confirmation_received` into
+`ham_logbook`'s QSL/QSO sync surface. **Still open.**" Both bullets were accurate. Only their
+ordering was load-bearing, and nothing in the list encoded that one was a prerequisite for the
+other. A checklist where the items are true but the sequence matters looks exactly like a checklist
+where it does not. When marking one bullet done, read its siblings and ask whether any of them had
+to come first.
+
+## `blocked_on:` may point at a to-do, not only at a question
+
+The `night-shift-questions` pairing assumes `blocked_on:` names a `night_shift_questions/open/*.md`
+file, and the answered-question sweep walks each answered question's `blocks:` list to find items to
+reopen. That covers an item waiting on a DECISION. It does not cover an item waiting on a piece of
+ENGINEERING that has to exist first, which is a real and different state -- found 2026-09-15, when
+the eQSL retirement turned out to be gated on building the confirmation-ingestion leg above.
+
+Filing a question there would have been wrong: the question queue's own bar is a genuine judgment
+call, and "someone must build the thing this deletion depends on" is not one. Leaving it `open` with
+a prose blocker is the shape this skill's companion already forbids, because it reads as available
+work and gets claimed before its body reveals the gate. `claimed` would have parked it behind a
+session that was about to end.
+
+So point `blocked_on:` at the blocking **to-do's** path and say plainly in both files that this is
+what has been done. The trade is explicit and must be written down: no sweep will ever reopen such
+an item, because no question governs it -- **whoever closes the blocking to-do is responsible for
+flipping it back to `open`**, and the blocker file should carry a reciprocal section saying so by
+path. State that in the blocked item too, so a reader who arrives at it first is not left waiting
+for automation that is never coming.
+
+## Two scheduled workers on one schedule converge on the same item
+
+`night-shift-todo-worker` can be running more than once concurrently -- two of its runs were live
+together on 2026-09-15, both hourly, both having just read the same `ls` of `high/`. Both had
+independently picked the same top-of-queue item, and both were minutes from claiming it. One
+`SendMessage` caught it.
+
+This is not the same hazard as a human-driven session colliding with a worker: two workers execute
+the SAME selection procedure against the SAME queue, so they do not merely sometimes collide, they
+converge by construction, and the priority ordering that makes the queue useful is exactly what
+guarantees it. `ListAgents` does not separate them -- both appear as ordinary `workspace-NN` rows.
+
+Two consequences for how a run should behave. First, survey and claim must be as close to one step
+as possible: read the directory, pick, claim, commit, push, and only THEN start investigating. Every
+minute spent reading an item's body before claiming it is a minute another worker can spend claiming
+it. Second, when `ListAgents` shows a peer whose name follows the same `workspace-NN` pattern and
+the queue is the shared one, assume a same-schedule sibling until told otherwise and say what you are
+about to take before you take it -- the message costs less than the reconciliation, which is the
+same conclusion this file already reaches for two sessions reading one checker's output.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
