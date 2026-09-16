@@ -3756,7 +3756,6 @@ def _role_exists(role_name):
     return res.returncode == 0 and res.stdout.strip() == "1"
 
 
-# [@ANCHOR: infrastructure:_create_odoo_role_if_missing]
 def _postgresql_lockdown_commands():
     """
     The shell commands provision_environment() runs to restrict PostgreSQL to
@@ -3788,6 +3787,7 @@ def _postgresql_lockdown_commands():
     ]
 
 
+# [@ANCHOR: infrastructure:_create_odoo_role_if_missing]
 def _create_odoo_role_if_missing(run_cmd_func, db_pass):
     """
     Creates the `odoo` PostgreSQL role with the given password, IF it
