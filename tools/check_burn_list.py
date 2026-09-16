@@ -2741,11 +2741,25 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 return "://" in node.value
             if isinstance(node, ast.JoinedStr):
                 first = node.values[0] if node.values else None
-                return (
+                if (
                     isinstance(first, ast.Constant)
                     and isinstance(first.value, str)
                     and "://" in first.value
-                )
+                ):
+                    return True
+                # An f-string LED BY an ALL_CAPS constant fixes the host just
+                # as firmly as a literal prefix does, and this is the common
+                # real shape: ham_relay_bridge's Cloudflare client writes
+                # f"{CLOUDFLARE_API_BASE}{path}". The leading position is what
+                # matters, exactly as for a literal -- a constant appearing
+                # later (f"{base}{CLOUDFLARE_API_BASE}") does not fix the host.
+                if isinstance(first, ast.FormattedValue):
+                    inner = first.value
+                    if isinstance(inner, ast.Name) and inner.id.isupper():
+                        return True
+                    if isinstance(inner, ast.Attribute) and inner.attr.isupper():
+                        return True
+                return False
             # A module-level constant, by this codebase's own ALL_CAPS
             # naming convention -- CLUBLOG_URL, CLOUDFLARE_API_BASE. Read
             # as a NAME, not resolved: a local variable deliberately named
@@ -2756,6 +2770,39 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 return node.id.isupper()
             if isinstance(node, ast.Attribute):
                 return node.attr.isupper()
+            # `"https://host" + path` fixes the host exactly as firmly as the
+            # f-string spelling of the same thing, and for the same reason:
+            # concatenation can only extend what the leading term already
+            # decided. Recurses on the LEFT operand only -- the right one can
+            # never move the host.
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                return self._outbound_url_arg_is_literal(node.left)
+            return False
+
+        def _outbound_url_arg_is_literal_following_assignments(self, node):
+            """`_outbound_url_arg_is_literal`, plus one hop through a local name.
+
+            Building the URL on its own line and passing the variable is the
+            most common real spelling of a perfectly fixed URL -- both
+            ham_training's Gemini calls do exactly that with a
+            literal-prefixed f-string one line above. Judging the bare `url`
+            Name alone reports them as unverifiable, which is a false positive
+            that would be resolved by a suppression tag, and a rule resolved
+            by tags rather than by reading the code is how a linter becomes
+            noise.
+
+            ONE hop, and deliberately no further: `self.assignments` is a
+            file-wide, last-definition-wins map with no scope or flow
+            awareness (see its own use elsewhere in this visitor), so chasing
+            it transitively would start inventing conclusions. One hop covers
+            the real shape and stops well short of that.
+            """
+            if self._outbound_url_arg_is_literal(node):
+                return True
+            if isinstance(node, ast.Name):
+                assigned = self.assignments.get(node.id)
+                if assigned is not None and self._outbound_url_arg_is_literal(assigned):
+                    return True
             return False
 
         def _check_unguarded_outbound_fetch(self, node, func_name):
@@ -2841,8 +2888,18 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             if not matched:
                 return
 
-            if node.args:
-                url_arg = node.args[0]
+            # requests.request() is request(method, url, ...) -- the URL is
+            # its SECOND positional argument. Reading args[0] there examines
+            # the HTTP METHOD string as though it were the URL, which can
+            # never match the literal test (no "://" in "GET"), so every
+            # requests.request() call was reported unverifiable regardless of
+            # how firmly its URL was pinned. It failed safe, and it was still
+            # wrong: ham_relay_bridge's Cloudflare client is exactly this
+            # shape and could not have been cleared by any amount of care at
+            # the call site.
+            url_index = 1 if matched == "requests.request()" else 0
+            if len(node.args) > url_index:
+                url_arg = node.args[url_index]
             else:
                 for kw in node.keywords:
                     if kw.arg in ("url", "fullurl"):
@@ -2852,7 +2909,9 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             # No URL argument at all (e.g. a Request object built
             # elsewhere, or **kwargs): this checker cannot see the host, so
             # it is exactly the case the rule is for.
-            if url_arg is not None and self._outbound_url_arg_is_literal(url_arg):
+            if url_arg is not None and self._outbound_url_arg_is_literal_following_assignments(
+                url_arg
+            ):
                 return
 
             self.add_warning(

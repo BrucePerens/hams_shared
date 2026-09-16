@@ -5869,3 +5869,63 @@ def test_the_outbound_fetch_tag_is_itself_a_sanctioned_tag():
         source, "some_module/models/importer.py", is_odoo_module=True
     )
     assert not any("UNAUTHORIZED BYPASS" in e for e in errors), errors
+
+
+def test_requests_request_reads_its_url_from_the_SECOND_argument():
+    """`requests.request(method, url, ...)` -- the URL is args[1].
+
+    The first draft read args[0], which is the HTTP METHOD. "GET" contains
+    no "://", so the literal test could never pass and every
+    requests.request() call was reported unverifiable no matter how firmly
+    its URL was pinned. It failed safe and was still wrong: ham_relay_bridge's
+    Cloudflare client is exactly this shape.
+    """
+    safe = "def f(method, path):\n    return requests.request(method, 'https://api.cloudflare.com/v4' + path)\n"
+    assert not _outbound_fetch_warnings(safe)
+    unsafe = "def f(method, url):\n    return requests.request(method, url)\n"
+    assert _outbound_fetch_warnings(unsafe)
+
+
+def test_an_fstring_led_by_an_uppercase_constant_is_not_flagged():
+    # The real shape in ham_relay_bridge/models/cloudflare_dns.py.
+    source = (
+        "CLOUDFLARE_API_BASE = 'https://api.cloudflare.com/client/v4'\n"
+        "\n"
+        "def f(method, path):\n"
+        "    return requests.request(method, f'{CLOUDFLARE_API_BASE}{path}')\n"
+    )
+    assert not _outbound_fetch_warnings(source)
+
+
+def test_an_fstring_whose_constant_is_not_first_IS_still_flagged():
+    # Leading position is the whole point: a constant later in the string
+    # does not fix the host, exactly as for a literal prefix.
+    source = (
+        "API = '/client/v4'\n"
+        "\n"
+        "def f(base):\n"
+        "    return requests.get(f'{base}{API}')\n"
+    )
+    assert _outbound_fetch_warnings(source)
+
+
+def test_a_url_built_on_its_own_line_then_passed_is_not_flagged():
+    # The real shape in ham_training/models/ham_training_ai.py, and the most
+    # common spelling of a perfectly fixed URL anywhere in this codebase.
+    source = (
+        "def f(model, key, payload):\n"
+        "    url = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}'\n"
+        "    return requests.post(url, json=payload)\n"
+    )
+    assert not _outbound_fetch_warnings(source)
+
+
+def test_a_url_variable_assigned_from_something_unverifiable_is_still_flagged():
+    # The assignment hop must not become a way to launder a tainted URL
+    # through one extra line.
+    source = (
+        "def f(record, payload):\n"
+        "    url = record.callback_url\n"
+        "    return requests.post(url, json=payload)\n"
+    )
+    assert _outbound_fetch_warnings(source)
