@@ -66,6 +66,17 @@ Strictly adheres to Zero-Sudo architecture using dedicated service accounts:
 
 * **WAF Caller Authorization:** `[@ANCHOR: cloudflare:COMM_check_waf_caller_authorized]` -- gates `action_pull_waf_rules`/`action_push_waf_rules` on every call, regardless of `@distributed_cache()` state.
 
+**Outbound API request safety:**
+* **Idempotency-Aware Retry:** `[@ANCHOR: cloudflare:COMM_idempotency_aware_retry]` -- decides whether a
+  failed Cloudflare API call may be replayed. The shared `requests` session retries the transient
+  server-side failures (500/502/503/504) and rate limiting (429) for `HEAD`, `GET`, `OPTIONS`, `PUT`
+  and `DELETE`, because repeating one of those cannot change the result beyond what the first attempt
+  already did. `POST` and `PATCH` are retried on 429 only: a rate-limit refusal is rejected before
+  Cloudflare applies it, whereas a 5xx carries no such guarantee and may arrive after a DNS record,
+  a firewall access rule or a tunnel route has already been created -- replaying it would create a
+  duplicate. `allowed_methods` stays restricted to the idempotent set as well, so urllib3's own
+  read-error handling keeps refusing to replay a `POST` whose response was lost in transit.
+
 **Custom domain (`edge.routing.domain`) Cloudflare integration:**
 * **Domain Create:** `[@ANCHOR: cloudflare:COMM_domain_create]` -- provisions a Cloudflare custom hostname for the matching website.
 
