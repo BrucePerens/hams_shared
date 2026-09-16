@@ -2465,6 +2465,26 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                                 node.lineno,
                                 "CRITICAL ZERO-SUDO VIOLATION: Using .with_user(SUPERUSER_ID) is a sudo bypass cheat. Query for a designated service account ID instead.",
                             )
+                        elif (
+                            isinstance(arg0, ast.Call)
+                            and isinstance(arg0.func, ast.Attribute)
+                            and arg0.func.attr == "ref"
+                            and arg0.args
+                            and isinstance(arg0.args[0], ast.Constant)
+                            and arg0.args[0].value in ("base.user_admin", "base.user_root")
+                            and "/tests/" not in self.filepath.replace("\\", "/")
+                        ):
+                            # Found 2026-09-16: pager_duty's post_init_hook
+                            # registered its daemon key as base.user_admin,
+                            # which the with_user(1)/SUPERUSER_ID checks above
+                            # never saw because the admin is reached through
+                            # an xmlid. Module code acts as a narrowly scoped
+                            # service account; tests may still impersonate
+                            # the administrator to exercise admin paths.
+                            self.add_error(
+                                node.lineno,
+                                f"CRITICAL ZERO-SUDO VIOLATION: Using .with_user(env.ref('{arg0.args[0].value}')) runs module code as the administrator. Resolve a designated service account with zero_sudo.security.utils._get_service_uid() instead.",
+                            )
                     caller = node.func.value
                     if isinstance(caller, ast.Name) and caller.id == "env":
                         self.add_error(

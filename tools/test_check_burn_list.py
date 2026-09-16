@@ -2379,6 +2379,36 @@ def test_with_user_of_superuser_id_name_is_a_sudo_bypass_cheat():
     assert any("with_user(SUPERUSER_ID)" in e and "ZERO-SUDO" in e for e in errors)
 
 
+def test_with_user_of_admin_xmlid_in_module_code_is_a_sudo_bypass_cheat():
+    # The real pre-fix line from pager_duty/hooks.py.
+    source = (
+        'env["daemon.key.registry"].with_user(env.ref("base.user_admin"))'
+        '.register_daemon(daemon_name="x")\n'
+    )
+    errors, _warnings = _dict_findings(source, filepath="/tmp/pager_duty/hooks.py")
+    assert any("base.user_admin" in e and "ZERO-SUDO" in e for e in errors)
+
+
+def test_with_user_of_root_xmlid_in_module_code_is_a_sudo_bypass_cheat():
+    source = "record = self.env['ham.qso'].with_user(self.env.ref('base.user_root'))\n"
+    errors, _warnings = _dict_findings(source)
+    assert any("base.user_root" in e and "ZERO-SUDO" in e for e in errors)
+
+
+def test_with_user_of_admin_xmlid_in_a_test_is_allowed():
+    source = "record = self.env['ham.qso'].with_user(self.env.ref('base.user_admin'))\n"
+    errors, _warnings = _dict_findings(
+        source, filepath="/tmp/some_module/tests/test_admin_path.py"
+    )
+    assert not any("base.user_admin" in e for e in errors)
+
+
+def test_with_user_of_a_service_account_xmlid_is_allowed():
+    source = "record = self.env['ham.qso'].with_user(self.env.ref('pager_duty.user_pager_service_internal'))\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("ZERO-SUDO" in e for e in errors)
+
+
 def test_with_user_called_directly_on_bare_env_name_is_an_orm_error():
     source = "record = env.with_user(service_uid)\n"
     errors, _warnings = _dict_findings(source)
