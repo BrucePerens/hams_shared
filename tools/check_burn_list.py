@@ -1060,6 +1060,24 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
             }
 
+            # Names bound to a RobotFileParser instance, so OUTBOUND FETCH can
+            # match its `.read()` (where the fetch happens) rather than its
+            # constructor (which is harmless, and which the correct
+            # `.parse()`-on-a-safely-fetched-body pattern also uses). Both the
+            # bare and the qualified spelling are collected -- real code in
+            # this repo uses `urllib.robotparser.RobotFileParser()`, an
+            # Attribute, which a Name-only match would miss entirely.
+            self._robotfileparser_names = set()
+            for n in ast.walk(tree):
+                if not isinstance(n, ast.Assign) or not isinstance(n.value, ast.Call):
+                    continue
+                called = n.value.func
+                if getattr(called, "id", getattr(called, "attr", "")) != "RobotFileParser":
+                    continue
+                for target in n.targets:
+                    if isinstance(target, ast.Name):
+                        self._robotfileparser_names.add(target.id)
+
             self.has_ham_base = False
             if self.filepath:
                 current = os.path.abspath(self.filepath)
@@ -1127,6 +1145,10 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     )
                     or ("audit-ignore-i18n" in line_content and "I18N" in msg)
                     or ("audit-ignore-path" in line_content and "PATH TRAVERSAL" in msg)
+                    or (
+                        "audit-ignore-outbound-fetch" in line_content
+                        and "OUTBOUND FETCH" in msg
+                    )
                 ):
                     return
             self.warnings.append((lineno, msg))
@@ -2685,10 +2707,169 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     self.add_error(node.lineno, "CRITICAL ARCHITECTURE: Gating runtime behaviour on the loading flags (`init`/`update`/`stop_after_init`) is forbidden -- Odoo 19 never clears them once loading finishes, so a server started with `-u` keeps them set for its whole lifetime and the gated code never runs again. Ask `registry.ready` whether the registry is still loading instead.")
             self.generic_visit(node)
 
+        _OUTBOUND_REQUESTS_VERBS = (
+            "get",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "head",
+            "options",
+            "request",
+        )
+
+        def _outbound_url_arg_is_literal(self, node):
+            """True when the URL a fetch is aimed at is fixed in the source.
+
+            The SSRF risk this rule exists for is a fetch aimed at a URL
+            that some caller, record field or HTTP parameter supplies -- a
+            private address (169.254.169.254, 127.0.0.1, an internal 10.x
+            host) reached from a server with network standing the caller
+            does not have. A URL written literally in the source is not
+            that: it names a fixed vendor host the author chose (Stripe,
+            Cloudflare), and no request can redirect it elsewhere.
+
+            Three shapes count as fixed, and the second is the one worth
+            explaining. An f-string is safe ONLY when its literal scheme +
+            host prefix comes first, e.g. f"https://api.stripe.com/{path}"
+            -- there the interpolation can only extend the path of a host
+            the source already chose. f"{base}/charges" is NOT safe by this
+            rule even though it looks similar: `base` decides the host, and
+            this checker cannot see where `base` came from.
+            """
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                return "://" in node.value
+            if isinstance(node, ast.JoinedStr):
+                first = node.values[0] if node.values else None
+                return (
+                    isinstance(first, ast.Constant)
+                    and isinstance(first.value, str)
+                    and "://" in first.value
+                )
+            # A module-level constant, by this codebase's own ALL_CAPS
+            # naming convention -- CLUBLOG_URL, CLOUDFLARE_API_BASE. Read
+            # as a NAME, not resolved: a local variable deliberately named
+            # in caps would pass. That is an accepted false negative for a
+            # rule whose job is to find the obviously-tainted sites, not to
+            # prove the safe ones safe.
+            if isinstance(node, ast.Name):
+                return node.id.isupper()
+            if isinstance(node, ast.Attribute):
+                return node.attr.isupper()
+            return False
+
+        def _check_unguarded_outbound_fetch(self, node, func_name):
+            """Outbound HTTP on a URL this checker cannot see the host of.
+
+            Real bug shape, fixed three separate times before anything
+            mechanical looked for a fourth: `ham_repeater_dir`'s
+            `fetch_and_stage_repeaters_from_url` fetched a caller-supplied
+            URL with `requests.get()` and read its robots.txt through
+            `RobotFileParser.read()` (plain `urlopen` underneath), neither
+            with any private-address check; the same shape had already been
+            fixed in `binary_downloader` and in `pager_duty`
+            (hams_open `c37ef63d`).
+
+            The fix is `zero_sudo.daemon.ssrf_safe_fetch.urlopen_ssrf_safe`,
+            which validates and PINS the connection to a safe address on
+            every hop, including redirect targets, rather than trusting a
+            second independently-timed DNS lookup.
+
+            Deliberately a WARNING rather than an error, and the reason is
+            about blast radius rather than severity: this is a repo-wide
+            scan that halts a run on its first error, so an error-level rule
+            landing on the ~33 existing call sites would break every
+            session's pre-flight on this shared box until all of them were
+            triaged. Warn first, triage, then promote. Most existing sites
+            call a fixed vendor host and will pass on the literal-URL test
+            above without anyone touching them.
+            """
+            # Module code only. A test may legitimately fetch its own local
+            # mock server, and daemons/ and tools/ are outside the Odoo
+            # security model this rule is about.
+            if not self.is_odoo_module:
+                return
+            normalised = self.filepath.replace("\\", "/")
+            if "/tests/" in normalised or "/tools/" in normalised:
+                return
+
+            url_arg = None
+            matched = None
+
+            if isinstance(node.func, ast.Attribute):
+                receiver = getattr(node.func.value, "id", "")
+                if (
+                    receiver == "requests"
+                    and node.func.attr in self._OUTBOUND_REQUESTS_VERBS
+                ):
+                    matched = f"requests.{node.func.attr}()"
+                elif node.func.attr == "urlopen":
+                    matched = "urlopen()"
+                elif (
+                    node.func.attr == "read"
+                    and getattr(node.func.value, "id", "") in self._robotfileparser_names
+                ):
+                    # `.read()` is where RobotFileParser actually fetches, and
+                    # it is the only part of it that is ever unsafe. An
+                    # earlier draft flagged the CONSTRUCTOR instead, which
+                    # was wrong in both directions against real code:
+                    # ham_repeater_dir's own already-fixed
+                    # ham_repeater_import_candidate.py builds a
+                    # `RobotFileParser()` and feeds it `.parse()` on a body
+                    # already fetched through `urlopen_ssrf_safe` -- the
+                    # correct pattern, which the constructor rule would have
+                    # demanded a suppression tag for -- while missing the
+                    # unsafe form entirely whenever it is written qualified
+                    # (`urllib.robotparser.RobotFileParser()`), an Attribute
+                    # rather than a Name. Matching `.read()` on a tracked
+                    # receiver name gets both cases right.
+                    self.add_warning(
+                        node.lineno,
+                        "[%AUDIT] OUTBOUND FETCH: RobotFileParser.read() fetches robots.txt "
+                        "itself, with no private-address check and no SSRF-safe variant. "
+                        "Fetch it through zero_sudo.daemon.ssrf_safe_fetch.urlopen_ssrf_safe "
+                        "and hand the body to .parse() instead -- see "
+                        "ham_repeater_dir/models/ham_repeater_import_candidate.py for the "
+                        "worked form. If this URL genuinely cannot be attacker-influenced, "
+                        "add '# audit-ignore-outbound-fetch' naming the trusted host.",
+                    )
+                    return
+            elif isinstance(node.func, ast.Name):
+                if node.func.id == "urlopen":
+                    matched = "urlopen()"
+
+            if not matched:
+                return
+
+            if node.args:
+                url_arg = node.args[0]
+            else:
+                for kw in node.keywords:
+                    if kw.arg in ("url", "fullurl"):
+                        url_arg = kw.value
+                        break
+
+            # No URL argument at all (e.g. a Request object built
+            # elsewhere, or **kwargs): this checker cannot see the host, so
+            # it is exactly the case the rule is for.
+            if url_arg is not None and self._outbound_url_arg_is_literal(url_arg):
+                return
+
+            self.add_warning(
+                node.lineno,
+                f"[%AUDIT] OUTBOUND FETCH: {matched} on a URL this scan cannot see the host of "
+                "-- an SSRF risk if any part of it comes from a caller, a record field or an "
+                "HTTP parameter, since the server can reach private addresses the caller "
+                "cannot. Use zero_sudo.daemon.ssrf_safe_fetch.urlopen_ssrf_safe, which "
+                "validates and pins every hop including redirects. If the host is genuinely "
+                "fixed and trusted, add '# audit-ignore-outbound-fetch' naming it.",
+            )
+
         def visit_Call(self, node):
             self._check_forbidden_functions(node)
             func_name = getattr(node.func, "id", getattr(node.func, "attr", ""))
             self._check_i18n_messages(node, func_name)
+            self._check_unguarded_outbound_fetch(node, func_name)
 
             if func_name == "safe_patch_object" and node.args:
                 target = node.args[0]

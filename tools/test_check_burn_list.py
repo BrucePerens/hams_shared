@@ -5687,3 +5687,164 @@ def test_a_test_file_may_assert_what_the_loading_flags_really_are():
         source, filepath="/tmp/some_module/tests/test_poll_gate.py"
     )
     assert not any("loading flags" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# OUTBOUND FETCH: requests/urlopen/RobotFileParser on a URL whose host this
+# scan cannot see. Real bug shape, fixed three times by hand before anything
+# mechanical looked for a fourth (ham_repeater_dir's
+# fetch_and_stage_repeaters_from_url, binary_downloader, pager_duty).
+# ---------------------------------------------------------------------------
+
+
+def _outbound_fetch_warnings(source, filepath="/tmp/some_module/models/importer.py"):
+    # A warning, not an error, so read the warnings channel. See
+    # _check_unguarded_outbound_fetch's own docstring for why this rule is
+    # warning-level: an error halts this repo-wide scan on its first hit,
+    # which would break every session's pre-flight on a shared box until all
+    # ~33 existing call sites were triaged.
+    lines = source.splitlines()
+    _errors, warnings = check_ast_vulnerabilities(
+        filepath, source, lines, is_odoo_module=True
+    )
+    return [msg for _lineno, msg in warnings if "OUTBOUND FETCH" in msg]
+
+
+def test_requests_get_on_a_variable_url_is_flagged():
+    source = "def f(url):\n    return requests.get(url, timeout=10)\n"
+    assert _outbound_fetch_warnings(source)
+
+
+def test_requests_post_on_a_variable_url_is_flagged():
+    source = "def f(url, body):\n    return requests.post(url, json=body)\n"
+    assert _outbound_fetch_warnings(source)
+
+
+def test_requests_get_on_a_literal_url_is_not_flagged():
+    # The common real shape across this codebase: a fixed vendor host the
+    # author chose. No request can redirect it elsewhere, so it is not the
+    # risk this rule exists for.
+    source = "def f():\n    return requests.get('https://api.stripe.com/v1/charges')\n"
+    assert not _outbound_fetch_warnings(source)
+
+
+def test_an_fstring_url_with_a_literal_scheme_and_host_first_is_not_flagged():
+    source = "def f(path):\n    return requests.get(f'https://api.stripe.com/{path}')\n"
+    assert not _outbound_fetch_warnings(source)
+
+
+def test_an_fstring_url_whose_host_is_interpolated_IS_flagged():
+    # The distinction that makes the f-string exemption safe rather than a
+    # hole: here the interpolated value decides the HOST, not just the path,
+    # and this checker cannot see where `base` came from.
+    source = "def f(base):\n    return requests.get(f'{base}/charges')\n"
+    assert _outbound_fetch_warnings(source)
+
+
+def test_a_module_level_constant_url_is_not_flagged():
+    source = "CLUBLOG_URL = 'https://clublog.org/putlogs.php'\n\ndef f():\n    return requests.post(CLUBLOG_URL)\n"
+    assert not _outbound_fetch_warnings(source)
+
+
+def test_an_uppercase_attribute_url_is_not_flagged():
+    source = "def f():\n    return requests.get(config.CLOUDFLARE_API_BASE)\n"
+    assert not _outbound_fetch_warnings(source)
+
+
+def test_urlopen_on_a_variable_url_is_flagged_both_bare_and_qualified():
+    bare = "def f(url):\n    return urlopen(url)\n"
+    qualified = "def f(url):\n    return urllib.request.urlopen(url)\n"
+    assert _outbound_fetch_warnings(bare)
+    assert _outbound_fetch_warnings(qualified)
+
+
+def test_a_url_passed_only_as_a_keyword_is_still_examined():
+    assert _outbound_fetch_warnings("def f(u):\n    return requests.get(url=u)\n")
+    assert not _outbound_fetch_warnings(
+        "def f():\n    return requests.get(url='https://api.stripe.com/v1')\n"
+    )
+
+
+def test_a_fetch_with_no_visible_url_argument_is_flagged():
+    # A Request object built elsewhere: the host is decided somewhere this
+    # scan cannot see, which is precisely the case the rule is for.
+    source = "def f(req):\n    return urlopen(req)\n"
+    assert _outbound_fetch_warnings(source)
+
+
+def test_robotfileparser_read_is_flagged():
+    source = "def f(url):\n    rp = RobotFileParser(url)\n    rp.read()\n"
+    warnings = _outbound_fetch_warnings(source)
+    assert warnings
+    assert any("RobotFileParser.read()" in w for w in warnings)
+
+
+def test_robotfileparser_read_is_flagged_when_the_class_is_written_qualified():
+    # The spelling real code in this repo actually uses. An earlier draft of
+    # this rule matched the constructor as a bare ast.Name and missed this
+    # entirely -- the false negative that mattered most, since it is the
+    # form the unsafe site would be written in.
+    source = (
+        "def f(url):\n"
+        "    rp = urllib.robotparser.RobotFileParser(url)\n"
+        "    rp.read()\n"
+    )
+    assert any("RobotFileParser.read()" in w for w in _outbound_fetch_warnings(source))
+
+
+def test_the_already_fixed_safe_robotfileparser_pattern_is_not_flagged():
+    # Regression test against the REAL fixed code, not a synthetic example:
+    # ham_repeater_dir/models/ham_repeater_import_candidate.py fetches
+    # robots.txt through urlopen_ssrf_safe and hands the body to .parse().
+    # That is the pattern this rule tells people to adopt, so flagging it
+    # would make the rule argue against its own fix. An earlier draft did
+    # exactly that by matching the constructor.
+    source = (
+        "def f(url):\n"
+        "    rp = urllib.robotparser.RobotFileParser()\n"
+        "    request = urllib.request.Request(url)\n"
+        "    with urlopen_ssrf_safe(request, CTX, timeout=T) as response:\n"
+        "        rp.parse(response.read().decode().splitlines())\n"
+    )
+    assert not [w for w in _outbound_fetch_warnings(source) if "RobotFileParser" in w]
+
+
+def test_an_unrelated_objects_read_is_not_mistaken_for_robotfileparser():
+    source = "def f(path):\n    fh = open(path)\n    return fh.read()\n"
+    assert not [w for w in _outbound_fetch_warnings(source) if "RobotFileParser" in w]
+
+
+def test_the_audit_ignore_tag_suppresses_an_outbound_fetch_finding():
+    source = "def f(url):\n    return requests.get(url)  # audit-ignore-outbound-fetch: fixed internal host\n"
+    assert not _outbound_fetch_warnings(source)
+
+
+def test_the_outbound_fetch_tag_does_not_suppress_an_unrelated_finding():
+    # add_warning's own long-standing hazard: a purpose-specific tag must
+    # suppress only its own rule. Verified against a real different rule
+    # rather than asserted in the abstract.
+    source = "def f(d):\n    return {'message': 'Invalid platform'}  # audit-ignore-outbound-fetch\n"
+    lines = source.splitlines()
+    _errors, warnings = check_ast_vulnerabilities(
+        "/tmp/some_module/models/importer.py", source, lines, is_odoo_module=True
+    )
+    assert any("I18N" in msg for _lineno, msg in warnings)
+
+
+def test_outbound_fetch_does_not_fire_in_test_files_or_tools():
+    # A test may legitimately fetch its own local mock server, and tools/ is
+    # outside the Odoo security model this rule is about.
+    source = "def f(url):\n    return requests.get(url)\n"
+    assert not _outbound_fetch_warnings(
+        source, filepath="/tmp/some_module/tests/test_importer.py"
+    )
+    assert not _outbound_fetch_warnings(source, filepath="/tmp/hams_shared/tools/thing.py")
+
+
+def test_outbound_fetch_does_not_fire_outside_odoo_modules():
+    source = "def f(url):\n    return requests.get(url)\n"
+    lines = source.splitlines()
+    _errors, warnings = check_ast_vulnerabilities(
+        "/tmp/daemons/thing/main.py", source, lines, is_odoo_module=False
+    )
+    assert not [msg for _lineno, msg in warnings if "OUTBOUND FETCH" in msg]
