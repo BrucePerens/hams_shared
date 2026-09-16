@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 17
+version: 18
 ---
 
 # Dependabot & CI Build Watch
@@ -355,7 +355,10 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
 - The scheduled task's own prompt (`~/.claude/scheduled-tasks/dependabot-and-ci-watch/SKILL.md`)
   still says hams_com pushes are blocked by the missing `workflow` scope and unpushed commit
   `a723508b`. That is stale as of 2026-09-14: the scope was granted and `a723508b` is pushed.
-  This file is authoritative; check `gh auth status` fresh.
+  This file is authoritative; check `gh auth status` fresh. That prompt also described the retired
+  single-file `night_shift_todo.md` throughout, which would have sent a scheduled run to write in
+  the wrong place; a correction block naming the structured `night_shift_todo/` queue was inserted
+  ahead of its Step 3 on 2026-09-15, so that drift is handled without rewriting all 72 lines.
 - **Before calling a failure a regression, check that the fix is actually in the run's head
   commit**: `git merge-base --is-ancestor <fix-commit> <run's headSha>`. The single `hams-devbox`
   runner often has several runs queued, so runs on commits from before a fix keep reporting the
