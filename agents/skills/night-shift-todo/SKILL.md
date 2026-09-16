@@ -1075,7 +1075,11 @@ What worked:
 - Remove the old record with `<delete model="ir.rule" search="[('name', '=', '<old name>'), ...]"/>`.
   Use `search=`, not `id=`: a missing id logs a WARNING with a traceback on every fresh install.
   `unlink()` also removes the old `ir.model.data` row, so the old id can't come back.
-- Test the narrowed access as the restricted user. A test that passes only on a fresh database proves nothing about an upgraded one.
+- Test the narrowed access as the restricted user. Know what that test can prove, though:
+  `test.py` drops and recreates its database on every run (`DROP DATABASE IF EXISTS` in
+  `test.py`), so a green run proves the fresh-install path only. It says nothing about whether the
+  `<delete>` and the new ids behave on an upgraded database. The 2026-09-16 change was not verified
+  on an upgrade. To verify one, install the module at the old commit and then `-u` it at the new one.
 
 Two related traps from the same item:
 - A rule with `(1, '=', 1)` for `base.group_user` covers administrators too, because they are in
