@@ -254,6 +254,32 @@ indefinite stall. Put that waiter in a script FILE rather than an inline `bash -
 sidesteps the self-matching `pgrep` trap this file documents above: a file's own command line is
 just `bash <path>` and cannot contain the pattern.
 
+## Two linter/claims tools whose default invocation silently reports nonsense
+
+Both cost a run several tool calls on 2026-09-15 before the output was recognised as an artifact of
+how they were called rather than a real finding.
+
+**`check_function_test_anchors.py <module dir>` reports every function in the module as new.** Its
+`--baseline` default is a filename that does not exist (`function_test_anchor_baseline.json`, with
+no repo suffix), so it loads an empty baseline and nothing is grandfathered; and its keys are
+relative to the directory passed, so `user_websites/models/res_users.py::X` in the real baseline
+never matches `models/res_users.py::X` from a module-scoped run. Run it from the repo root with the
+real baseline:
+`python3 hams_shared/tools/check_function_test_anchors.py . --baseline hams_shared/tools/function_test_anchor_baseline_hams_open.json`
+(or `_hams_com.json`). Then read only the findings in files you touched -- peers' uncommitted work
+shows up too.
+
+**`check_claims_freshness.py` can never check a centralized claim**, and does not pretend to: it
+skips everything under `docs/bug_hunt_claims/` by design, because its freshness model assumes the
+claim and the anchored code share one git repo. Pointed at `hams_com` it reported over 1100
+false "orphaned claim" lines the first time anyone tried. The tool for the centralized store is
+`python3 agents/skills/bug-hunt/check_claims.py --claims-dir docs/bug_hunt_claims/hams_open
+--source-root /home/bruce/workspace/hams_open`, run from the `hams_com` root. Its console output
+truncates hashes to 12 characters; to get a full `code_hash` to paste into a claim's frontmatter,
+import that module and call `_build_cross_repo_anchor_hash_index(source_root)` -- note its keys
+strip the `COMM_` prefix, so the anchor `user_websites:COMM_res_users_write` is stored as
+`user_websites:res_users_write`.
+
 ## Two claim files can share a basename across modules -- name the anchor, not the file
 
 `check_claims.py`'s output lists claims by path, and the eye reads the basename. On 2026-09-15
