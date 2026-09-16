@@ -584,6 +584,41 @@ outcomes: in both cases the log was read for a signal it was never going to carr
 prevents it is cheap -- write down what a pass and a failure will each look like in the log, then
 read for that, rather than grepping for the string that happens to be on your mind.
 
+## `git add <paths>` then a BARE `git commit` takes the peer's staged work too
+
+The section below records a peer's broad `git add` carrying off one session's staged change. This
+is the same collision from the other side, and it is the more dangerous direction because the
+damage is not confined to a misleading commit message.
+
+2026-09-16: a run staged its own files with `git add <explicit paths>`, wrote a careful message,
+and ran a bare `git commit`. A bare commit takes the WHOLE INDEX. The shared index already held a
+peer's `git rm` of two files (a revert Bruce had asked it for), so those deletions went out inside
+a commit whose message never mentions them -- **and the tree that was pushed could not import**,
+because the peer had not yet made the matching edits to `models/__init__.py` and
+`ir.model.access.csv`. It was holding off on those four files precisely because the committing
+session had uncommitted work in them.
+
+Staging explicit paths feels like scoping, and it is not: it controls what you ADD, never what the
+commit TAKES. The habit that actually holds is a pathspec on the COMMIT itself --
+`git commit -F - -- <paths>` -- which ignores everything else in the index by construction, whoever
+put it there and whenever.
+
+`git diff --cached --name-only` does not save you here either, and it is worth understanding why.
+Run immediately after your own `git add`, it shows a correct picture; the peer's `git rm` can land
+in the seconds between that and the commit, exactly as a careful commit message is being written.
+The check is a snapshot of a shared resource, and the interval is the hazard -- the same reasoning
+the section below already gives for putting the edit, add and commit in one `&&` chain.
+
+**Recovering, when it has already been pushed.** Do not rewrite published history for this. Ask
+first whether the tree you just pushed is CONSISTENT: a swept deletion usually is not, because its
+owner had not yet landed the references to it. Forward-fix the inconsistency (remove the dangling
+import, the orphaned ACL rows) rather than restoring the files, if the deletion was the outcome the
+peer actually wanted -- restoring them to tidy up your own commit fights a decision someone else
+made deliberately. Then tell the peer immediately, precisely: which of their changes you carried,
+what you repaired, and what is still theirs to land. A peer's revert that is half-committed by
+someone else's accident is a broken build for every session until its other half arrives, so that
+message is urgent rather than courteous.
+
 ## A scoped pathspec protects what you commit, not what a peer sweeps
 
 `git commit -- <pathspec>` is this file's standing advice for a shared tree, and it is necessary
