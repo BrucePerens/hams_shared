@@ -123,3 +123,5 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   infrastructure becomes a fallback for when direct relay-to-relay connectivity genuinely isn't
   available rather than the default path, and IPv6 is a first-class connectivity preference given how
   much less it relies on NAT than IPv4.
+* [ADR 0099: Commit Discipline in a Working Tree Shared by Concurrent Agents](0099_shared_working_tree_commit_discipline.md)
+  The development box runs many agent sessions against one checkout, so they share the git index and the `main` reference; a bare `git commit` takes whatever another session happened to stage. Bans bare/`-a`/`-A` staging and unscoped history rewriting on shared `main`, establishes a private `GIT_INDEX_FILE` (with its mandatory resynchronisation step) as the standard mechanism, and requires re-checking `origin/main..main` immediately before every push.

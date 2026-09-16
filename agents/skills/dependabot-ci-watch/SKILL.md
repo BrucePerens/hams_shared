@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 24
+version: 25
 ---
 
 # Dependabot & CI Build Watch
@@ -716,41 +716,49 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `--arg .*base64` whenever you touch one. (2) `publish-linux-binary` refusing with "librade.so.0.1
   not found next to ...": the `linux-binary` artifact must carry `librade.so.0.1` along with the
   executable.
-- **The hams_com git index is shared too, not just the working tree.** On 2026-09-14 this run
-  committed `night_shift_todo.md` with a plain `git commit`, and another session's already-staged
-  Rust changes (199 of 201 lines) went in under a todo-only commit message and were pushed.
-  `git commit -- <path>` doesn't fully protect you either: it commits the path's *working-tree*
-  content, including any other session's uncommitted edits to the same file. This bit a second time
-  on 2026-09-15: a session used the private index below for `night_shift_todo.md`, then used plain
-  `git commit -- docs/BRUCE_ACTION_ITEMS.md` and pushed a peer's uncommitted edit under its own
-  message. Use the private index for every commit that touches a file other sessions edit, not
-  only the ones you think of as shared. At minimum, run `git diff HEAD -- <file>` first and confirm
-  every hunk is yours. The safe pattern for
-  appending only your own text to a shared file is a private index:
-  `git show HEAD:<file> > tmp; cat my_entry >> tmp; GIT_INDEX_FILE=idx git read-tree HEAD;
-  GIT_INDEX_FILE=idx git update-index --add --cacheinfo 100644,$(git hash-object -w tmp),<file>;
-  c=$(git commit-tree $(GIT_INDEX_FILE=idx git write-tree) -p HEAD -m "...")`. Then check
-  `git diff --stat HEAD $c`, run `git update-ref refs/heads/main $c HEAD`, and put the new blob into
-  the real index for that one path, so the shared index doesn't show your commit staged in reverse.
-  Also append the same entry to the working-tree file. This still applies to `night_shift_history.md`
-  (still one shared file multiple sessions append to) -- it's exactly the gap `night_shift_todo/`
-  was restructured to avoid for to-dos themselves: a normal `git add <your-new-file>` + `git commit
-  -- <your-new-file>` on your own dedicated to-do file has no equivalent risk, since there's no
-  other session's text sharing that same file to accidentally sweep in.
-  **The resync is not cosmetic, and it applies to the short form of this pattern too.**
-  `GIT_INDEX_FILE=idx git read-tree HEAD; GIT_INDEX_FILE=idx git add <paths>;
-  GIT_INDEX_FILE=idx git commit` is a simpler way to get the same isolation and is tempting for a
-  commit that both appends to a shared file and deletes one of your own. It works -- and it leaves
-  the REAL `.git/index` still describing the pre-commit tree, because nothing ever touched it.
-  Found 2026-09-15 doing exactly that: `git status` afterwards showed `MM night_shift_history.md`
-  and, for a to-do file the commit had removed, `AD` -- added in the index, deleted in the working
-  tree. Neither is a display quirk. The next `git add -A` or `git commit -a` by ANY session on this
-  tree stages the index's stale view and reverts your commit, and the `AD` entry specifically would
-  resurrect a file you deliberately deleted. Resync the affected paths immediately, scoped so other
-  sessions' staged work is untouched: `git reset -q HEAD -- <the exact paths you committed>`, then
-  confirm `git status --porcelain <paths>` is empty. Do this whichever variant you used; the
-  `commit-tree` recipe above names the same step, and it is the step easiest to skip because the
-  commit already looks finished.
+- **The hams_com git index is shared too, not just the working tree, and the rule for that now
+  lives in an ADR.** Read `hams_shared/docs/adrs/0099_shared_working_tree_commit_discipline.md`
+  before your first commit of a run: it is the authoritative statement of how to commit here (never
+  a bare `git commit`/`-a`/`-A`; `git commit -- <path>` is NOT the safe form, because it commits
+  that path's working-tree content including a peer's uncommitted edits; use a private
+  `GIT_INDEX_FILE`, and do its mandatory resynchronisation step afterwards, which is the step people
+  skip). It is deliberately not restated here -- two copies of a procedure are how the two copies
+  drift apart. The ADR was written 2026-09-16 (run 30) precisely because this material had lived
+  only in this skill's operating notes, so sessions running a different skill kept rediscovering the
+  same failure; if you find a new instance, add it to the ADR, not here.
+  What is specific to THIS skill, and worth knowing before you read a CI failure:
+  **a shared-index accident can push an uncompilable tree, and it looks like a code regression.**
+  On 2026-09-16 a peer's staged `git rm` of `daemons/hams_local_relay/src/offline_records.rs` rode
+  out under an unrelated commit, leaving `main.rs` declaring a module with no file; two more heads
+  were pushed on top, and both queued a full relay matrix that could only fail at compilation. So
+  when several consecutive heads fail, check whether the pushed tree even builds before attributing
+  it to any commit's own content -- the relay formatting check above is the fastest way.
+  **You cannot tell which session made a commit from its authorship.** Every session on this box
+  commits as `BrucePerens <bruce@perens.com>`, so a commit's author, its subject line, and even its
+  topical similarity to work you saw a session doing are all worthless as identification. On
+  2026-09-16 a run guessed an owner that way and messaged the wrong session twice. If you need to
+  know whose a commit is, ask on `ListAgents`'s live sessions rather than inferring it -- and expect
+  that sometimes nobody claims it, because the session that made it has already exited.
+  **Check a claimed CI fix against `origin/main`, never the working tree.** A peer's fix often
+  exists only as uncommitted edits to the shared tree, so `grep`ping the file on disk shows the
+  clean, fixed form while CI is still failing on the pushed, unfixed one. Read the pushed content
+  directly: `git show origin/main:<path> | grep -n <pattern>`. Found 2026-09-16, twenty-sixth
+  hourly check, on the `offline_queue_test_lock` clippy failure -- the working tree had the async
+  `tokio::sync::Mutex` fix and `origin/main` still had `std::sync::MutexGuard`.
+  **Don't write an ordinal ("the Nth hourly check") you haven't actually counted.** Several notes
+  in this file carry one, and it is easy to copy a plausible-looking number forward from whatever
+  the last note said. The real count comes from `list_task_runs` on the `dependabot-and-ci-watch`
+  task (`totalRuns`); its newest entry also gives this run's true `started_at`, which is the date
+  to write -- a run that starts at 00:2x UTC belongs to the next day from the one whose CI logs it
+  is reading. Both were wrong in this note's first draft.
+  **A red clippy on the ubuntu-22.04 leg is everyone's problem, not just the owning feature's.**
+  It fails every later relay run regardless of that run's own content, and because clippy runs
+  before Formatting, no rustfmt check runs either while it's red. So when a to-do says a fix is
+  held pending something else, check whether unrelated relay commits have landed since
+  (`git log --oneline <fix-was-diagnosed-at>..origin/main -- daemons/hams_local_relay/`) -- if
+  they have, the hold is now costing other sessions, and that's worth a `SendMessage` to the
+  owner suggesting it split the fix into its own commit. Don't edit files a peer has asked you
+  not to touch; say what you found instead.
 - **Before pushing hams_com, run `git log --oneline origin/main..main`.** Another session may
   have committed on `main` and be holding the push on purpose. For example, a relay change can wait
   until a local test run finishes, because pushing anything under `daemons/hams_local_relay/**`
