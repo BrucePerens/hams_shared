@@ -651,6 +651,20 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   was restructured to avoid for to-dos themselves: a normal `git add <your-new-file>` + `git commit
   -- <your-new-file>` on your own dedicated to-do file has no equivalent risk, since there's no
   other session's text sharing that same file to accidentally sweep in.
+  **The resync is not cosmetic, and it applies to the short form of this pattern too.**
+  `GIT_INDEX_FILE=idx git read-tree HEAD; GIT_INDEX_FILE=idx git add <paths>;
+  GIT_INDEX_FILE=idx git commit` is a simpler way to get the same isolation and is tempting for a
+  commit that both appends to a shared file and deletes one of your own. It works -- and it leaves
+  the REAL `.git/index` still describing the pre-commit tree, because nothing ever touched it.
+  Found 2026-09-15 doing exactly that: `git status` afterwards showed `MM night_shift_history.md`
+  and, for a to-do file the commit had removed, `AD` -- added in the index, deleted in the working
+  tree. Neither is a display quirk. The next `git add -A` or `git commit -a` by ANY session on this
+  tree stages the index's stale view and reverts your commit, and the `AD` entry specifically would
+  resurrect a file you deliberately deleted. Resync the affected paths immediately, scoped so other
+  sessions' staged work is untouched: `git reset -q HEAD -- <the exact paths you committed>`, then
+  confirm `git status --porcelain <paths>` is empty. Do this whichever variant you used; the
+  `commit-tree` recipe above names the same step, and it is the step easiest to skip because the
+  commit already looks finished.
 - **Before pushing hams_com, run `git log --oneline origin/main..main`.** Another session may
   have committed on `main` and be holding the push on purpose. For example, a relay change can wait
   until a local test run finishes, because pushing anything under `daemons/hams_local_relay/**`
