@@ -589,6 +589,87 @@ class ProvisionSystemdOverrideTests(_TmpDirTestCase):
         self.assertEqual(os.stat(override_file).st_mode & 0o777, 0o644)
 
 
+class ProvisionModeEnvFileTests(_TmpDirTestCase):
+    """load_and_prompt_env() must not carry saved *.env values across test-mode and production
+    provisioning (night_shift_todo provisioning-test-mode-env-dir-leak). Real files in a temporary
+    directory stand in for /opt/hams/etc: glob is pointed at them, so the reader, the setdefault
+    ordering and the mode marker all run for real."""
+
+    def setUp(self):
+        super().setUp()
+        self.safe_patch("infrastructure.os.path.exists", return_value=True)
+        real_glob = infra.glob.glob
+        self.safe_patch(
+            "infrastructure.glob.glob",
+            side_effect=lambda pattern: real_glob(os.path.join(self.tmp, "*.env")),
+        )
+        os.environ.pop("HAMS_ALLOW_PROVISION_MODE_SWITCH", None)
+
+    def _write(self, name, text):
+        with open(os.path.join(self.tmp, name), "w") as f:
+            f.write(text)
+
+    def _prod_files(self):
+        self._write("db.env", "DB_NAME=hams_prod\nDB_PASS=prod-generated-secret\nDB_HOST=prod-db\n")
+        self._write("core.env", "DOMAIN=hams.com\nHAMS_PROVISION_MODE=prod\n")
+
+    def test_a_test_run_refuses_env_files_saved_by_production(self):
+        # Tests [@ANCHOR: infrastructure:_refuse_env_files_from_other_provision_mode]
+        self._prod_files()
+        with self.assertRaisesRegex(RuntimeError, "HAMS_ALLOW_PROVISION_MODE_SWITCH"):
+            infra.load_and_prompt_env({}, is_test=True)
+
+    def test_an_explicit_switch_to_test_uses_test_defaults_not_production_values(self):
+        self._prod_files()
+        env_vars = {}
+        with patch.dict(os.environ, {"HAMS_ALLOW_PROVISION_MODE_SWITCH": "1"}):
+            infra.load_and_prompt_env(env_vars, is_test=True)
+        self.assertEqual(env_vars["DB_NAME"], "hams_test")
+        self.assertEqual(env_vars["DB_PASS"], "odoo")
+        self.assertEqual(env_vars["DB_HOST"], "postgres")
+        self.assertNotEqual(env_vars["DOMAIN"], "hams.com")
+        self.assertEqual(env_vars["HAMS_PROVISION_MODE"], "test")
+
+    def test_a_production_run_refuses_env_files_saved_by_a_test_run(self):
+        self._write("db.env", "DB_NAME=hams_test\nDB_PASS=odoo\n")
+        self._write("odoo.env", "ODOO_ADMIN_PASSWORD=admin\n")
+        self._write("core.env", "DOMAIN=test.invalid\nHAMS_PROVISION_MODE=test\n")
+        with self.assertRaisesRegex(RuntimeError, "'test' mode"):
+            infra.load_and_prompt_env({"DOMAIN": "hams.com"}, is_test=False)
+
+        env_vars = {"DOMAIN": "hams.com"}
+        with patch.dict(os.environ, {"HAMS_ALLOW_PROVISION_MODE_SWITCH": "1"}):
+            infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(env_vars["DB_NAME"], "hams_prod")
+        self.assertNotEqual(env_vars["DB_PASS"], "odoo")
+        self.assertNotEqual(env_vars["ODOO_ADMIN_PASSWORD"], "admin")
+        self.assertEqual(env_vars["HAMS_PROVISION_MODE"], "prod")
+
+    def test_same_mode_reprovisioning_keeps_saved_values(self):
+        self._prod_files()
+        env_vars = {}
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(env_vars["DB_PASS"], "prod-generated-secret")
+        self.assertEqual(env_vars["DOMAIN"], "hams.com")
+        self.assertEqual(env_vars["HAMS_PROVISION_MODE"], "prod")
+
+    def test_files_from_before_the_marker_existed_are_still_read(self):
+        self._write("db.env", "DB_NAME=legacy_db\n")
+        env_vars = {}
+        infra.load_and_prompt_env(env_vars, is_test=True)
+        self.assertEqual(env_vars["DB_NAME"], "legacy_db")
+        self.assertEqual(env_vars["HAMS_PROVISION_MODE"], "test")
+
+    def test_the_mode_is_persisted_to_core_env(self):
+        env_vars = {}
+        infra.load_and_prompt_env(env_vars, is_test=True)
+        out = os.path.join(self.tmp, "written")
+        self.safe_patch("infrastructure.apply_permissions")
+        infra.write_env_files(out, env_vars, MagicMock())
+        with open(os.path.join(out, "core.env")) as f:
+            self.assertIn("HAMS_PROVISION_MODE=test\n", f.read())
+
+
 class LoadAndPromptEnvTests(_SafePatchTestCase):
     """load_and_prompt_env() no longer prompts interactively -- these confirm
     the replacement non-interactive contract: DOMAIN has no safe default and

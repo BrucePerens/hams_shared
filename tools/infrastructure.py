@@ -618,6 +618,7 @@ MANIFEST = {
             "GEMINI_API_KEY",
             "GEMINI_MODEL",
             "PLAYWRIGHT_BROWSERS_PATH",
+            "HAMS_PROVISION_MODE",
         ],
     },
     "static_files": [
@@ -3517,6 +3518,49 @@ def generate_secure_password(length=32):
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
+# [@ANCHOR: infrastructure:_refuse_env_files_from_other_provision_mode]
+def _refuse_env_files_from_other_provision_mode(file_vars, is_test, env_dir):
+    """
+    Keeps test-mode and production provisioning from inheriting each other's saved values.
+
+    load_and_prompt_env() reads every *.env under env_dir with setdefault before it applies either
+    mode's defaults, so values saved by one mode win in the other: a test run on a box once
+    provisioned for production picked up DB_NAME=hams_prod, DB_HOST, the generated secrets, DOMAIN
+    and ODOO_URL, and a production run after a test run would pick up DB_PASS=odoo and
+    ODOO_ADMIN_PASSWORD=admin.
+
+    A separate test-mode directory does not fix that on its own. write_env_files() persists both
+    modes into /opt/hams/etc because every systemd unit reads its EnvironmentFile from there, so a
+    test run reading a different directory would then overwrite production's generated secrets
+    with test defaults. Instead each run records its mode (HAMS_PROVISION_MODE, in core.env), and a
+    run in the other mode stops here. HAMS_ALLOW_PROVISION_MODE_SWITCH=1 lets it proceed, and then
+    nothing from the old files is used: the switch starts from that mode's own defaults and freshly
+    generated secrets, and write_env_files() replaces the old files.
+
+    Files written before this marker existed carry no mode and are read as before.
+    _refuse_if_unsafe_test_db_drop still guards that case's most destructive outcome.
+    """
+    requested = "test" if is_test else "prod"
+    recorded = file_vars.get("HAMS_PROVISION_MODE")
+    if not recorded or recorded == requested:
+        return file_vars
+    if os.environ.get("HAMS_ALLOW_PROVISION_MODE_SWITCH") != "1":
+        raise RuntimeError(
+            f"{env_dir} was provisioned in {recorded!r} mode, and this run is {requested!r} mode. "
+            f"Reusing its saved values would carry {recorded} settings and secrets into a "
+            f"{requested} deployment. To switch this box to {requested} mode, starting from "
+            f"{requested} defaults and replacing the saved files, rerun with "
+            "HAMS_ALLOW_PROVISION_MODE_SWITCH=1."
+        )
+    _logger.warning(
+        "[!] Switching %s from %s to %s provisioning; ignoring its saved values.",
+        env_dir,
+        recorded,
+        requested,
+    )
+    return {}
+
+
 def load_and_prompt_env(env_vars, is_test):
     """
     Populate env_vars for provisioning, non-interactively.
@@ -3546,6 +3590,7 @@ def load_and_prompt_env(env_vars, is_test):
     before provision.py runs), not a new provisioning path.
     """
     env_dir = "/opt/hams/etc"
+    file_vars = {}
     if os.path.exists(env_dir):
         for env_file in glob.glob(os.path.join(env_dir, "*.env")):
             try:
@@ -3554,9 +3599,13 @@ def load_and_prompt_env(env_vars, is_test):
                         line = line.strip()
                         if line and not line.startswith("#") and "=" in line:
                             key, val = line.split("=", 1)
-                            env_vars.setdefault(key.strip(), val.strip())
+                            file_vars.setdefault(key.strip(), val.strip())
             except OSError as e:
                 _logger.warning("Failed to read %s: %s", env_file, e)
+    file_vars = _refuse_env_files_from_other_provision_mode(file_vars, is_test, env_dir)
+    for key, val in file_vars.items():
+        env_vars.setdefault(key, val)
+    env_vars["HAMS_PROVISION_MODE"] = "test" if is_test else "prod"
 
     if is_test:
         env_vars.setdefault("ODOO_URL", "http://odoo:8069")
@@ -3955,6 +4004,11 @@ def _refuse_if_unsafe_test_db_drop(db_name):
     then run `dropdb --if-exists <db_name>` -- and this project's own
     conventions describe exactly this kind of shared, persistent dev box,
     not strictly separate per-environment machines.
+
+    Since 2026-09-16 this is the second layer rather than the only one:
+    _refuse_env_files_from_other_provision_mode stops a test run from reading
+    env files a production run recorded. This guard still covers files saved
+    before that mode marker existed, which carry no mode and are read as before.
     """
     if db_name == "hams_prod":
         raise RuntimeError(
