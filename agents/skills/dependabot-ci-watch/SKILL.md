@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 26
+version: 27
 ---
 
 # Dependabot & CI Build Watch
@@ -423,8 +423,21 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
     one ran. A `gh run watch <id>` just ends with `cancelled`. Instead, poll `gh run list --workflow
     build-relay.yml` every few minutes and stop at the first run that is `completed`, not
     `cancelled`, and whose head passes `git merge-base --is-ancestor <your-commit> <headSha>`. Run
-    that in the background with a timeout of a few hours. Any later run carries your change, so
-    whichever one runs verifies it.
+    that in the background. Any later run carries your change, so whichever one runs verifies it.
+    **Use the `Monitor` tool for that wait, not `Bash` with `run_in_background`.** The Bash tool's
+    own `timeout` parameter is capped at 600000 ms -- ten minutes -- so "background it for a few
+    hours" (what this note said until 2026-09-16) is not something that tool can do, and a watcher
+    written that way dies long before the leg it is waiting for reaches the queue's front. `Monitor`
+    takes `timeout_ms` up to 3600000 (one hour), or `persistent: true` for the rest of the session.
+    Write the loop so it prints exactly one line and exits when it finds the verifying run, and so
+    a failed `gh` call can't kill it (`|| true` on the poll). On 2026-09-16 the ubuntu-22.04 leg of
+    the run verifying `42ce3373` was still queued forty minutes after the push, behind four other
+    legs on the single `hams-devbox` runner -- an hour is the right order of magnitude for this
+    wait, not ten minutes.
+    Also, never stop your own watcher with `pkill -f <script name>`: the CLAUDE.md self-match trap
+    applies to this exactly, because your `bash -c` command line contains the pattern, so the
+    `pkill` kills the shell running it and whatever else was chained after it never executes. Give
+    the watcher its own deadline, or use `TaskStop`.
   - Record what you cancelled in `night_shift_history.md` (it's a completed action) or file a
     `night_shift_todo/` entry if cancelling it leaves something still needing a real re-run.
 - **The relay's transport-tool install scripts build pinned commits** (since 2026-09-15). Both
