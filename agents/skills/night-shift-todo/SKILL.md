@@ -1018,6 +1018,22 @@ Three consequences for a worker run:
   If the session ends mid-wait, that note is the only record of uncommitted work sitting on a
   shared tree.
 
+## A lint scan from hams_com and one from hams_open are not the same scan
+
+`hams_shared` is a real directory inside hams_open but a symlink inside hams_com, and `os.walk`
+does not follow symlinks. So `check_burn_list.py . --scan-daemons-and-tools` from hams_com never
+reads `hams_shared/tools/`, while the same command from hams_open does -- and that is exactly the
+scan `test.py`'s multi-module pre-flight runs. On 2026-09-16 (workspace-4a) this was why a
+"whole-repo scan was clean" note sat next to a hams_open pre-flight that halted on 37 errors, six of
+them added that morning by a worker's own new tests (imports inside test methods). **Before pushing
+anything under `hams_shared/tools/`, run the whole-repo scan from hams_open**, not only pytest and
+not only from hams_com.
+
+Related trap from the same run: a checker given a path that does not resolve may report success.
+`check_claims_freshness.py` did (fixed in hams_shared `84ab746`; it now exits 2), after a `cd`
+earlier in the same command line had moved the working directory. Read the checker's own output for
+the count of things it looked at, or run it from an absolute path.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
