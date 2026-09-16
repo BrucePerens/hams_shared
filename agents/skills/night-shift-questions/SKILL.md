@@ -5,8 +5,8 @@ description: >-
   -- one file per question, in open/ or answered/. Use this whenever a to-do needs a real decision
   only Bruce can make (before blocking it), when checking what's waiting for his answer, when
   recording his answer, or when unblocking a to-do whose question just got answered. Pairs with
-  the night-shift-todo skill; read that one too if you haven't already. Triggers: question queue,
-  ask Bruce, blocked on a decision, needs Bruce's input, unblock a to-do.
+  the night-watch skill (Part 2, the to-do queue); read that one too if you haven't already.
+  Triggers: question queue, ask Bruce, blocked on a decision, needs Bruce's input, unblock a to-do.
 version: 1
 ---
 
@@ -15,8 +15,8 @@ version: 1
 Bruce's own instruction, 2026-09-15, describing what he wanted after `night-shift-todo` shipped:
 "I'd like to automate the pipeline more. Something queues questions for me and has them always
 ready. Something handles to-dos, including ones unblocked by the resolved questions." This skill is
-the questions half of that; `night-shift-todo` is the to-dos half; the `night-shift-todo-worker`
-scheduled task (see its own SKILL.md) is the automation that ties them together.
+the questions half of that; the `night-watch` skill's Part 2 is the to-dos half; the night-watch
+agent (woken hourly by a scheduled task, see that skill) is the automation that ties them together.
 
 **The problem this solves**: a session hits something only Bruce can decide -- a security-design
 tradeoff (self-service revoke vs. admin-only), a product direction, a credential/business step,
@@ -40,12 +40,12 @@ night_shift_questions/
 
 A question's state is which directory it's in -- not a field to parse. `ls
 night_shift_questions/open/` alone tells Bruce (or any session) exactly what's waiting, the same
-directory-encodes-state discipline `night-shift-todo` already uses for priority.
+directory-encodes-state discipline the to-do queue (`night-watch` Part 2) already uses for priority.
 
 ## File format
 
 One file per question, named `<slug>-<8-hex-chars>.md` (same random-suffix convention as
-`night-shift-todo`, for the same reason -- a shared working tree, collision avoidance). Frontmatter,
+the to-do queue, for the same reason -- a shared working tree, collision avoidance). Frontmatter,
 then free-form body:
 
 ```markdown
@@ -64,7 +64,7 @@ answered_at:               # filled in when moved to answered/
 State the actual question so a cold reader (Bruce, days later, no memory of the session that
 asked) can answer it without re-reading anything else. Include enough context to be self-contained:
 what triggered this, what's already been investigated, why it's a real decision and not something
-the session could reasonably default on its own (see night-shift-todo's own escalation criteria --
+the session could reasonably default on its own (see `night-watch` Part 2's escalation criteria --
 this is the same bar).
 
 ## Options considered
@@ -107,19 +107,19 @@ For each path listed, open that `night_shift_todo/` file and: change `status: bl
 comment out, keeping history) the `blocked_on:` field, and append a note
 to the to-do's own body pointing at the answered question's path and summarizing the decision, so
 whoever next works the to-do doesn't have to open a second file to know what changed. This is
-exactly what `night-shift-todo-worker` does automatically every run (see its own SKILL.md) -- but
+exactly what the night-watch agent does automatically every pass (see the `night-watch` skill) -- but
 any session noticing an answered question with a live `blocks:` entry should do this immediately
 rather than waiting for the next scheduled run, the same "don't leave your own past entries stale"
-principle `dependabot-ci-watch` was corrected to follow for `night_shift_todo.md`.
+principle the CI watch (now `night-watch` Part 1) was corrected to follow for `night_shift_todo.md`.
 
 
 **Clear `claimed_by:` when you unblock, or you hand the queue an ambiguous item.** An item usually
 reaches `status: blocked` from `status: claimed` -- a session started it, hit a real decision, and
 filed a question -- so its `claimed_by:` is still populated while it waits. Flipping only the status
 back to `open` leaves `status: open` with `claimed_by: <a session that ended weeks ago>`, and
-`night-shift-todo-worker`'s Step 2 selects "open, unclaimed" items: a worker reading `status` takes
+the night-watch agent selects "open, unclaimed" items: a worker reading `status` takes
 it, a worker reading `claimed_by` skips it forever, and neither is wrong about what it read. Found
-2026-09-16 while verifying the fix to a related gap (see `night-shift-todo`'s own "A status outside
+2026-09-16 while verifying the fix to a related gap (see `night-watch`'s "A status outside
 the four defined values escapes every query"); same shape, one step further along the same path.
 
 So clear the field as part of the same edit. The exception is a live one: if the `claimed_by` session
@@ -135,13 +135,13 @@ costs nothing.
 
 - **A real judgment call**: a design tradeoff with no clearly-correct default, a product/business
   decision, something needing a credential or account only Bruce has, a security posture choice
-  with real consequences either way. This is the same bar `night-shift-todo`'s own "claim before
+  with real consequences either way. This is the same bar `night-watch` Part 2's "claim before
   you start" workflow and this codebase's standing `hams-dont-be-too-cautious-about-originating-
   work` memory already draw between "originate it yourself" and "this needs his input."
 - **NOT here**: anything with a reasonable default already stated somewhere (a proposal doc's own
   "smaller, safer first build," an existing ADR, a precedent elsewhere in the codebase) -- build
   against the default per that same standing memory, don't manufacture a question to avoid
-  deciding. NOT a routine to-do with no open question at all (that's `night-shift-todo`, not this).
+  deciding. NOT a routine to-do with no open question at all (that's the to-do queue in `night-watch`, not this).
   NOT something `docs/BRUCE_ACTION_ITEMS.md` already covers well (a pure external action -- create
   an account, click a button, log into a website -- with no engineering decision attached); this
   queue is for decisions, that file is for outside-the-codebase actions Bruce alone can perform.
@@ -174,7 +174,7 @@ blocker in the most natural way — as a sentence.
 
 `blocked_on:` is read by the answered-question sweep, which walks each answered question's own
 `blocks:` list. A blocker that no question file names can never unblock anything, so the item stays
-blocked no matter what Bruce decides. `night-shift-todo`'s own "A status outside the four defined
+blocked no matter what Bruce decides. `night-watch`'s "A status outside the four defined
 values escapes every query" names the same shape one step earlier in the path.
 
 The second item was the more dangerous of the two: `status: open` carrying a prose `blocked_on:`.
@@ -192,6 +192,6 @@ two above were two halves of one unanswered fact, and they now come back to `ope
 
 ## Self-improvement
 
-Same convention as `night-shift-todo`/`dependabot-ci-watch`: if a run discovers a new, reusable
+Same convention as `night-watch`: if a run discovers a new, reusable
 fact about actually using this queue, add it directly to this file as part of that run's own
 commit.
