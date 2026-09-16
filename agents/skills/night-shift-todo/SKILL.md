@@ -504,6 +504,29 @@ remaining test a statement about real behaviour. The same applies to a `#[cfg(te
 that one is legitimate, which is why the distinction is worth making deliberately rather than
 silencing the lint across the board.
 
+## A scoped pathspec protects what you commit, not what a peer sweeps
+
+`git commit -- <pathspec>` is this file's standing advice for a shared tree, and it is necessary
+but not sufficient. A pathspec constrains what YOUR commit takes. It has no bearing at all on what
+someone ELSE's broad `git add` takes, and anything you have left staged is fair game for it.
+
+Real collision, 2026-09-15: one session had `git add`-ed a to-do file and was composing a scoped
+commit when a peer committed with a broad add. The peer's commit -- titled for an entirely unrelated
+claim -- carried the first session's 37-line change to a different file, and the first session's own
+pathspec commit then reported `nothing to commit`, which is the only reason anyone noticed. Nothing
+was lost: the content was correct and it was pushed. But the commit message now describes about a
+third of its own diff, and a later reader looking for what that commit changed will be misled.
+
+The exposure is purely the interval between `git add` and `git commit`, and the interval is not
+short -- writing a careful commit message is exactly the kind of pause that loses this race. So put
+the edit, the `git add` and the `git commit` in ONE `&&` chain. This file already recommends a single
+chain for a different reason (gating the commit on the edit's exit status, so a partial edit cannot
+be committed); the two reasons compound and one chain satisfies both.
+
+Distinct from the private-index hazard `dependabot-ci-watch` documents (hams_shared `133d8ae`):
+there, a private `GIT_INDEX_FILE` left the real index holding a stale view. Here both sessions used
+the real index entirely correctly. The shared resource that collided was time.
+
 ## After deleting a caller, ask what still calls the callee
 
 A deletion that "has a replacement" needs one more question than it looks like, and the cost of
