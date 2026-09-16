@@ -336,6 +336,37 @@ When writing up any verified result, prefer "these N tests ran and passed" over 
 -- the first is a claim about what executed, the second quietly implies coverage the run never
 measured.
 
+## Gate the commit on the edit's exit status, not just on the edit asserting
+
+A guarded edit is only half of it, and the missing half produced a commit message asserting a change
+that was never made -- on 2026-09-15, in the middle of a run whose whole subject was artifacts whose
+text nobody re-derives.
+
+The edit itself was correct practice: a Python block that asserts the old text is present before
+writing, so a line-wrap mismatch cannot silently write nothing. The assertion fired exactly as
+designed, and no bad write happened. The shell around it was the gap -- the `git add`/`git commit`
+line was a SEPARATE statement rather than part of the same `&&` chain, so the block's non-zero exit
+did not gate it. One of the two files had already been written before the assertion aborted the
+block, so `git add` staged real content, the commit succeeded, and its message described both
+changes. A true-looking commit that overclaimed by one file.
+
+Put the edit and the commit in one `&&` chain, so a failed or partial edit cannot be committed.
+
+Three forms of the same hazard, worth recognising together:
+
+- **A tool that reports success for doing nothing.** `sed -i` with a pattern matching nothing exits
+  0. So does a hoot run with no tests (`Passed 0 tests`, then `Test suite succeeded`). Assert on the
+  thing actually changing, not on the command returning.
+- **A guard that fires but does not stop what follows.** The case above. An assertion protects the
+  file; only chaining protects the commit.
+- **Checking the diff you got rather than the diff you claimed.** `git diff --cached --name-only`
+  before committing should match what the message says. That one line would have caught it.
+
+A related shell trap, hit while writing this very section: a heredoc ends at its delimiter wherever
+that appears at the start of a line, INCLUDING inside content that quotes a heredoc as an example.
+Writing `PYEOF` inside a `<<'PYEOF'` block closes it early and hands the remainder to bash. Use a
+distinctive delimiter, or write the script to a file first.
+
 ## Say so BEFORE filing, when two sessions are reading the same checker's output
 
 `grep -rl` across the queue before filing a new to-do does not prevent a duplicate; it only catches
