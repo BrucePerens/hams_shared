@@ -338,6 +338,18 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   by content rather than stale line numbers, and `git add` only the specific files you changed.
   If a peer session is working the same failures (`ListAgents`, then a short `SendMessage`
   naming who takes which item), split the work rather than both editing the same workflow file.
+  **You cannot tell which session made a commit from its authorship.** Every session on this box
+  commits as `BrucePerens <bruce@perens.com>`, so a commit's author, its subject line, and even its
+  topical similarity to work you saw a session doing are all worthless as identification. On
+  2026-09-16 a run guessed an owner that way and messaged the wrong session twice. If you need to
+  know whose a commit is, ask on `ListAgents`'s live sessions rather than inferring it -- and expect
+  that sometimes nobody claims it, because the session that made it has already exited.
+  Relatedly, `git log --oneline origin/main..main` coming back empty is only true at the instant you
+  run it: a peer can commit into the shared tree between that check and your `git push`, and your
+  push then carries their commit too. It happened the same run. That is harmless for a to-do note,
+  but it would publish a relay change someone was deliberately holding, so re-run the check
+  immediately before pushing rather than once at the start, and tell the owner if you find you
+  pushed something of theirs.
   **Check a claimed CI fix against `origin/main`, never the working tree.** A peer's fix often
   exists only as uncommitted edits to the shared tree, so `grep`ping the file on disk shows the
   clean, fixed form while CI is still failing on the pushed, unfixed one. Read the pushed content
