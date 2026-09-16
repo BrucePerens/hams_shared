@@ -761,6 +761,44 @@ The general shape, which recurs: when closing something means writing to a share
 AND removing a shared marker, the removal is the operation that can detect a race and the append is
 the one that cannot. Order and gate accordingly.
 
+## "Copy X exactly" is a snapshot of X, not a live reference
+
+A to-do that says to mirror an existing implementation was written when that implementation looked
+a particular way. On a tree this many sessions write to, that can stop being true within the hour.
+
+2026-09-16: `high/clublog-event-odoo-receiver-missing` said to build a ClubLog receiver "copying the
+eQSL/LoTW pair exactly". About thirty minutes before it was claimed, `7417a92f` added a whole
+confirmation-APPLICATION leg to both of those models -- `time_on`, an `apply_state` selection,
+`applied_at`, `apply_error`, a `_cron_apply_confirmations()`, two cron records and a
+`ham_logbook.group_logbook_sync_service` ACL. Following the instruction literally would have copied
+every bit of it into a model that can never use any of it, because ClubLog's real API is push-only
+and emits no confirmation event at all: a sweep, a cron and four fields with no caller. That is the
+same infrastructure-without-a-caller shape the item two entries above it in the same queue existed
+to FIX, which is the part worth noticing -- the bug would have been introduced by obeying the to-do.
+
+So before mirroring anything, read the template's own recent history (`git log -p --since=1.week
+<path>`), not just its current state, and ask which parts of it are load-bearing for YOUR case.
+A peer's one-line heads-up settled this one in the same minute the divergence was found
+independently, which is the other lesson: when a to-do names a template, the session that most
+recently changed that template is worth a message before you copy it.
+
+## A checker can report nothing because it never looked
+
+`check_claims_freshness.py` builds its anchor index from **git-tracked `.py` files only**. A claim
+whose anchored function lives in a file you have created but not yet staged produces no output at
+all -- not "validated", and not "orphaned claim" either. Both the reassuring result and the alarming
+one are absent, and absence reads exactly like success.
+
+Found 2026-09-16 while adding two new claims files alongside a new model: the tool was run, printed
+nothing about them, and only a second run AFTER the commit actually exercised them. Had the
+`code_hash` values been wrong, the pre-commit run would have said nothing either.
+
+So run claim-freshness checks **after** the files are tracked, and treat "the checker said nothing
+about my new thing" as a question rather than an answer -- confirm the tool can see the file at all
+before reading its silence as a pass. This is the same family as the entry above on a hoot run
+reporting `Passed 0 tests` then `Test suite succeeded`: a tool that was never asked about your code
+cannot report a problem with it.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
