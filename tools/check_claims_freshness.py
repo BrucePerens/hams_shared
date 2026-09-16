@@ -312,6 +312,12 @@ def main():
     args = parser.parse_args()
 
     repo_root = os.path.abspath(args.directory)
+    # A path that isn't a directory walks nothing and would otherwise print SUCCESS. On
+    # 2026-09-16 a run from the wrong working directory passed a module name that didn't
+    # resolve, and the reassuring result was read as the six stale claims being fixed.
+    if not os.path.isdir(repo_root):
+        print(f"[!] ERROR: {args.directory!r} is not a directory (resolved to {repo_root}).")
+        return 2
     problems, retired = scan_claims(repo_root)
 
     if retired:
