@@ -226,12 +226,24 @@ class ResourceMonitorHelperTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertTrue(any("meminfo" in msg for msg in cm.output))
 
-    def test_get_chrome_count_warns_and_returns_zero_on_a_real_pgrep_failure(self):
-        with patch.object(_test_runner.subprocess, "run", side_effect=OSError("pgrep missing")):
+    def test_get_chrome_count_warns_and_returns_zero_on_a_real_counting_failure(self):
+        """Renamed and rewired 2026-09-16: this used to assert the failure of
+        `subprocess.run(["pgrep", "-c", "-f", "chrom"])`, which was the whole
+        implementation. That box-wide substring match counted the developer's
+        own desktop browser, so the counting method changed (see
+        `TestBrowserCountTests`) -- but the property this test was written to
+        protect did not, and is kept rather than dropped with the old
+        implementation: a counting failure must WARN and degrade to zero, never
+        raise into the monitor thread and never fail silently."""
+        with patch.object(
+            _test_runner,
+            "count_test_browser_processes",
+            side_effect=OSError("/proc unreadable"),
+        ):
             with self.assertLogs(_test_runner.__name__, level="WARNING") as cm:
                 result = self.monitor.get_chrome_count()
         self.assertEqual(result, 0)
-        self.assertTrue(any("pgrep" in msg for msg in cm.output))
+        self.assertTrue(any("test browser processes" in msg for msg in cm.output))
 
 
 class ResolveRepoLayoutTests(unittest.TestCase):
@@ -786,6 +798,183 @@ class CiLoadGateWaitTests(unittest.TestCase):
         self.assertEqual(timeout, _test_runner.CI_LOAD_GATE_DEFAULT_TIMEOUT_SECONDS)
         self.assertIn("HAMS_CI_LOAD_GATE_RATIO", buf.getvalue())
         self.assertIn("HAMS_CI_LOAD_GATE_TIMEOUT", buf.getvalue())
+
+
+class TestBrowserCountTests(unittest.TestCase):
+    """`count_test_browser_processes()` replaced a box-wide
+    `pgrep -c -f chrom`, which on a developer box with a desktop session was
+    wrong in both directions. Measured 2026-09-16 with no test running: 27
+    matching processes, 17 of them Bruce's own interactive Google Chrome and 8
+    the Claude desktop application's Electron shell. The monitor duly printed
+    "POSSIBLE BROWSER LEAK: 42 active Chromium processes" about a browser
+    nobody had leaked -- and a real leak of twenty headless test browsers would
+    equally have hidden inside that number on a quieter desktop day.
+
+    Odoo's own ChromeBrowser._chrome_start() always passes
+    `--remote-debugging-port`, and adds `--headless` unless watch mode is on.
+    """
+
+    def _proc(self, base, entries, collapsed=False):
+        """`collapsed=True` writes the command line the way Chromium actually
+        writes it -- see test_chromiums_real_collapsed_argv_is_counted."""
+        for pid, cmdline in entries:
+            d = os.path.join(base, str(pid))
+            os.makedirs(d)
+            with open(os.path.join(d, "cmdline"), "w", encoding="utf-8") as fh:
+                if collapsed:
+                    fh.write(" ".join(cmdline) + "\0")
+                else:
+                    fh.write("\0".join(cmdline) + "\0")
+        os.makedirs(os.path.join(base, "self"), exist_ok=True)
+
+    def test_chromiums_real_collapsed_argv_is_counted(self):
+        """Chromium rewrites its own argv in place to set the process title,
+        collapsing the whole command line into a single NUL-separated element.
+        Measured 2026-09-16 against a real headless chromium on this box: every
+        one of its processes had exactly ONE element, several hundred
+        characters long.
+
+        The first version of this counter split on NUL and took element zero as
+        the executable, which for those processes is the tail of a
+        `--user-data-dir` path -- so it counted a live headless browser as
+        ZERO, while the box-wide method it replaced said 41. Its unit tests all
+        passed, because they built their fixtures the way /proc is documented
+        to work rather than the way Chromium actually writes it. Only running a
+        real browser found it, which is why this fixture is a verbatim excerpt
+        of one.
+        """
+        real = (
+            "/usr/lib/chromium/chromium --type=renderer --top-chrome-webui "
+            "--crashpad-handler-pid=2638436 --noerrdialogs "
+            "--user-data-dir=/tmp/tmp.q3btHLah2S --no-sandbox "
+            "--remote-debugging-port=9333 --ozone-platform=headless "
+            "--lang=en-US --renderer-client-id=5"
+        )
+        with tempfile.TemporaryDirectory() as base:
+            self._proc(base, [(601, [real])], collapsed=True)
+            self.assertEqual(
+                _test_runner.count_test_browser_processes(proc_root=base), 1
+            )
+
+    def test_a_collapsed_argv_that_is_not_a_browser_is_still_rejected(self):
+        """The bash wrapper that launched the measurement above had the browser
+        command in its own command line and was correctly rejected, because its
+        executable is /bin/bash."""
+        with tempfile.TemporaryDirectory() as base:
+            self._proc(
+                base,
+                [(602, ["/bin/bash -c /usr/bin/chromium --headless "
+                        "--remote-debugging-port=9333"])],
+                collapsed=True,
+            )
+            self.assertEqual(
+                _test_runner.count_test_browser_processes(proc_root=base), 0
+            )
+
+    def test_a_desktop_browser_is_not_counted(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._proc(
+                base,
+                [
+                    (101, ["/opt/google/chrome/chrome"]),
+                    (102, ["/opt/google/chrome/chrome", "--type=renderer",
+                           "--crashpad-handler-pid=101"]),
+                    (103, ["/usr/lib/claude-desktop/chrome-sandbox",
+                           "--type=utility"]),
+                ],
+            )
+            self.assertEqual(
+                _test_runner.count_test_browser_processes(proc_root=base), 0
+            )
+
+    def test_a_headless_test_browser_is_counted(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._proc(
+                base,
+                [
+                    (201, ["/usr/bin/chromium", "--headless",
+                           "--remote-debugging-port=9222",
+                           "--user-data-dir=/tmp/odoo_chrome_x"]),
+                    (202, ["/usr/bin/chromium", "--type=renderer",
+                           "--headless"]),
+                    (203, ["/opt/google/chrome/chrome"]),  # the human's
+                ],
+            )
+            self.assertEqual(
+                _test_runner.count_test_browser_processes(proc_root=base), 2
+            )
+
+    def test_watch_mode_is_counted_even_though_it_is_not_headless(self):
+        """`--pause-on-fail` runs the browser with a visible window, but
+        ChromeBrowser still drives it over the DevTools protocol, so the
+        debugging port is present in both modes and is the signal that covers
+        watch mode."""
+        with tempfile.TemporaryDirectory() as base:
+            self._proc(
+                base,
+                [(301, ["/usr/bin/chromium", "--remote-debugging-port=9222"])],
+            )
+            self.assertEqual(
+                _test_runner.count_test_browser_processes(proc_root=base), 1
+            )
+
+    def test_a_non_browser_holding_a_debugging_port_is_not_counted(self):
+        """The switch alone is not enough -- the binary must be a browser."""
+        with tempfile.TemporaryDirectory() as base:
+            self._proc(
+                base, [(401, ["node", "inspect", "--remote-debugging-port=9222"])]
+            )
+            self.assertEqual(
+                _test_runner.count_test_browser_processes(proc_root=base), 0
+            )
+
+    def test_a_script_whose_own_text_mentions_a_browser_does_not_count_itself(self):
+        """Matching the whole command line rather than the binary would count
+        this very kind of process -- a script checking for browsers, whose
+        `-c` argument necessarily contains both the word and the switch. That
+        is the `pgrep -f` self-matching trap wearing a different hat, and it
+        has sprung on this repository three times."""
+        with tempfile.TemporaryDirectory() as base:
+            self._proc(
+                base,
+                [
+                    (402, ["python3", "-c",
+                           "count chromium procs with --headless set"]),
+                    (403, ["/bin/sh", "-c",
+                           "pgrep -f 'chrom.*--remote-debugging-port'"]),
+                ],
+            )
+            self.assertEqual(
+                _test_runner.count_test_browser_processes(proc_root=base), 0
+            )
+
+    def test_the_browser_binary_alone_without_a_switch_is_not_counted(self):
+        """A bare `chrome` with no DevTools switch is a human's browser."""
+        with tempfile.TemporaryDirectory() as base:
+            self._proc(base, [(404, ["/usr/bin/chromium"])])
+            self.assertEqual(
+                _test_runner.count_test_browser_processes(proc_root=base), 0
+            )
+
+    def test_an_unreadable_proc_counts_zero_rather_than_raising(self):
+        self.assertEqual(
+            _test_runner.count_test_browser_processes(
+                proc_root="/nonexistent-proc-for-this-test"
+            ),
+            0,
+        )
+
+    def test_a_process_that_exits_mid_scan_is_skipped(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._proc(
+                base,
+                [(501, ["/usr/bin/chromium", "--headless",
+                        "--remote-debugging-port=9222"])],
+            )
+            os.makedirs(os.path.join(base, "502"))  # no cmdline file
+            self.assertEqual(
+                _test_runner.count_test_browser_processes(proc_root=base), 1
+            )
 
 
 class CiLoadGateOrderingTests(unittest.TestCase):

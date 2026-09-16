@@ -300,6 +300,68 @@ global_vclock = VirtualClockThread()
 global_vclock.start()
 
 
+# A test browser is identified by the switches Odoo's own ChromeBrowser always
+# passes, not by the word "chrome" appearing somewhere in a command line. See
+# ResourceMonitorThread.get_chrome_count()'s docstring for why the difference
+# matters on a box with a desktop session.
+TEST_BROWSER_SWITCHES = ("--remote-debugging-port", "--headless")
+
+
+def count_test_browser_processes(proc_root="/proc"):
+    """Number of live browser processes that belong to an Odoo test run."""
+    count = 0
+    try:
+        entries = os.listdir(proc_root)
+    except OSError as e:
+        _logger.debug("Ignored OSError listing %s: %s", proc_root, e)
+        return 0
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(
+                os.path.join(proc_root, entry, "cmdline"),
+                "r",
+                encoding="utf-8",
+                errors="replace",
+            ) as fh:
+                # /proc cmdline is NUL-separated; a space join is enough to
+                # substring-match switches and keeps them from running together.
+                raw = fh.read()
+        except OSError as e:
+            # Exited between the listing and the read. Normal on a busy box.
+            _logger.debug("Ignored OSError reading cmdline for %s: %s", entry, e)
+            continue
+        # /proc cmdline is NUL-separated -- EXCEPT that Chromium rewrites its
+        # own argv in place to set the process title, collapsing the whole
+        # command line into argv[0] with spaces. Measured 2026-09-16 against a
+        # real headless chromium on this box: every one of its processes had
+        # exactly ONE NUL-separated element, several hundred characters long.
+        # An earlier draft of this function split on NUL and took element zero
+        # as the executable, which for those processes was the tail of a
+        # `--user-data-dir` path -- so it counted a live headless browser as
+        # zero. That draft's unit tests all passed, because they built their
+        # fixtures the way /proc is documented to work rather than the way
+        # Chromium actually writes it; only running a real browser found it.
+        text = raw.replace("\0", " ").strip()
+        if not text:
+            continue  # a kernel thread
+        # The BINARY must be a browser, not merely some process whose command
+        # line happens to mention one. Matching anywhere in the text would
+        # count `python3 -c "...chrom... --headless..."` -- including a script
+        # that is itself checking for browsers -- which is the self-matching
+        # trap `pgrep -f` has sprung on this repository three times, wearing a
+        # different hat. Both real `bash -c` wrappers around the measurement
+        # above were rejected by exactly this check.
+        executable = text.split()[0]
+        if "chrom" not in os.path.basename(executable).lower():
+            continue
+        arguments = text[len(executable) :]
+        if any(switch in arguments for switch in TEST_BROWSER_SWITCHES):
+            count += 1
+    return count
+
+
 class ResourceMonitorThread(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
@@ -315,14 +377,41 @@ class ResourceMonitorThread(threading.Thread):
         return None
 
     def get_chrome_count(self):
+        """Count the browsers THIS test run is responsible for.
+
+        This used to be `pgrep -c -f chrom`, a box-wide substring match, and on
+        a developer box with a desktop session that is wrong in both
+        directions. Measured 2026-09-16 with no test running at all: 27
+        matching processes, of which 17 were Bruce's own interactive Google
+        Chrome and 8 were the Claude desktop application's Electron shell --
+        both Chromium, neither anything a test leaked. A real run then tipped
+        the count past the threshold and printed "POSSIBLE BROWSER LEAK: 42
+        active Chromium processes detected!" three times, about a browser
+        nobody had leaked. Equally, and worse, a genuine leak of twenty
+        headless test browsers would have hidden inside that same number on a
+        day the desktop count happened to be low.
+
+        An alert that fires when nothing is wrong trains every session to
+        ignore it, which costs more than having no alert at all.
+
+        Odoo's own ChromeBrowser._chrome_start() always passes
+        `--remote-debugging-port` (it drives the browser over the DevTools
+        protocol) and adds `--headless` unless watch mode is on, so requiring
+        either one separates a test's browser from a human's with no
+        dependence on which user launched it. Reads /proc directly rather than
+        shelling out, for the same reason the continuous-integration load gate
+        does: a `pgrep -f` whose pattern appears in some other session's own
+        command line matches that instead, and this repository has been bitten
+        by that three times.
+        """
         try:
-            res = subprocess.run(
-                ["pgrep", "-c", "-f", "chrom"], capture_output=True, text=True
+            return count_test_browser_processes()
+        except Exception as e:  # audit-ignore-catch-all
+            _logger.warning(
+                "ResourceMonitorThread: could not count test browser processes, "
+                "browser-leak alerts disabled for this cycle: %s",
+                e,
             )
-            if res.returncode == 0:
-                return int(res.stdout.strip())
-        except Exception as e: # audit-ignore-catch-all
-            _logger.warning("ResourceMonitorThread: could not count Chromium processes via pgrep, browser-leak alerts disabled for this cycle: %s", e)
         return 0
 
     def run(self):
@@ -348,7 +437,9 @@ class ResourceMonitorThread(threading.Thread):
 
                 if chrome_count > 40:
                     alerts.append(
-                        f"POSSIBLE BROWSER LEAK: {chrome_count} active Chromium processes detected!"
+                        f"POSSIBLE BROWSER LEAK: {chrome_count} live test-browser "
+                        f"processes detected (Chromium with --headless or "
+                        f"--remote-debugging-port; a desktop browser is not counted)!"
                     )
 
                 if alerts:

@@ -872,6 +872,41 @@ fix: `zero_sudo`'s `_poll_health_check` was tagged, not converted, because `urlo
 rejects loopback and private addresses -- exactly what a local daemon health check polls -- so the
 rule's own recommended fix would have broken it.
 
+## Fixtures built from documented behaviour pass while the code is wrong
+
+A unit-test suite written from the same mental model as the code under test cannot contradict that
+model. This file already says as much about a new linter rule's own tests; here is the same failure
+in a much narrower place, found 2026-09-16 while replacing `test.py`'s browser-leak counter.
+
+`/proc/<pid>/cmdline` is NUL-separated. That is true, documented, and what every fixture in the new
+tests was built from. **Chromium does not write it that way**: it rewrites its own argv in place to
+set the process title, so every one of its processes holds the entire command line in a SINGLE
+NUL-separated element, several hundred characters long. A counter that split on NUL and took element
+zero as the executable therefore read the tail of a `--user-data-dir` path as the program name, and
+counted a live headless browser as **zero** -- while nine unit tests passed.
+
+Only launching a real `chromium --headless --remote-debugging-port=...` and counting it found this.
+That took one command and eight seconds. The numbers, worth keeping because they show the bug in
+both directions at once: with a real headless browser running the broken counter said 0 and the
+box-wide `pgrep -c -f chrom` it replaced said 41; after the fix, 7 and 41; with no test browser at
+all, 0 and 29 -- those 29 being the developer's own desktop Chrome and the Claude desktop
+application's Electron shell, which is what the old alert had been firing on.
+
+Two habits follow, and the second is the one that costs nothing:
+
+- **When a fixture encodes an external format, build at least one case from a real observation**, not
+  from the specification. Paste an actual excerpt in, and say in the test where it came from.
+- **Exercise a process-inspection or environment-probing helper against the real thing once**, even
+  when its logic is fully unit-tested. This is the same shape as this file's own "a checker can
+  report nothing because it never looked" and "a green module-level run and never-executed tests are
+  perfectly compatible": the tool did run, and its silence was not evidence.
+
+Related and worth stating plainly, since a monitor is easy to leave alone: **an alert that fires
+when nothing is wrong is worse than no alert.** The old counter shouted `POSSIBLE BROWSER LEAK: 42
+active Chromium processes` three times during one run about a browser nobody had leaked, which is
+exactly how every session learns to scroll past it -- and a genuine leak of twenty headless browsers
+would have hidden inside the same number on a quieter desktop day.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
