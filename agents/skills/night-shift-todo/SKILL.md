@@ -96,6 +96,17 @@ documents for avoiding duplicate work (real collision, 2026-09-14: two sessions 
 started an identical rust-toolchain bump because neither checked first) -- applied here as a
 structural guarantee instead of relying on everyone remembering to message first.
 
+**`claimed_by:` is not unique over time -- session names get REUSED.** On 2026-09-16 a
+`night-shift-todo-worker` run came up as `workspace-05` and found that name already written into
+this very skill file and into an open to-do's body, describing a *different*, long-ended session
+from the previous day. So "claimed by workspace-NN, and `ListAgents` shows a live workspace-NN"
+does not establish that the live session is the one that made the claim -- it may be a new session
+that happened to be handed the same name. `ListAgents` prints a short id alongside each name
+(`workspace-05 [ebda75]`); record that id in `claimed_by:` as well when claiming, and when judging
+whether a claim is stale, compare the id rather than the name. Where only a bare name is recorded
+(every claim written before this convention), treat a name match as suggestive, not conclusive, and
+send one `SendMessage` to ask rather than either taking the item or leaving it indefinitely.
+
 **A claim looking stale**: if you find an item `status: claimed` by a session that (per `ListAgents`)
 no longer appears to be running, or the `claimed_by` session hasn't touched it in a clearly long
 time, it's fine to pick it up -- but say so in the file's own body (append a line noting the prior
@@ -209,6 +220,40 @@ what they skip yourself: `check_burn_list.py <module dir>` on each touched modul
 aborted log for your own anchor names. The log does list violations per file, so a new stacked
 anchor you added (for example, an `[@ANCHOR:]` line directly followed by `Verified by`) shows up
 there.
+
+## A third pre-flight check has NO skip flag, and it blocks every session, not just yours
+
+The section above names two pre-flight halts to expect (the Semantic Anchor scan and the burn list)
+and gives the environment variables that skip them. There is a third, and it behaves differently in
+the way that matters most on a shared box: **the Init Imports Linter has no skip flag at all.**
+
+It fails if any `.py` file in a module's `models/` (or `tests/`) directory is not imported by that
+directory's `__init__.py`:
+
+```
+File 'qsl_confirmation_apply.py' in '.../ham_relay_bridge/models' is never imported in its __init__.py
+```
+
+That is one error and a hard halt, before any test runs. Two consequences follow, and the second is
+the expensive one:
+
+- It is a **repo-wide** check, so a half-written file in one module aborts a run targeting a
+  completely different module. On 2026-09-16 a new, not-yet-wired helper file in `ham_relay_bridge`
+  aborted a peer session's `-u ham_shack` run, and would have aborted every other session's run too
+  for as long as it sat there.
+- Unlike the anchor scan and the burn list, there is no `HAMS_SKIP_*` escape, so a peer cannot work
+  around it. Their only options are to wait for you or to work out whose file it is.
+
+So: **wire a new `.py` file into its `__init__.py` in the same edit that creates it**, not later at
+commit time. The window between creating the file and wiring it is a window in which nobody on the
+box can run a test. If the file defines no Odoo model (a plain helper module imported by the models
+beside it), it still has to be listed -- say so in a comment above the import, since `models/` is
+otherwise read as a list of model files.
+
+The generalisation worth carrying: before assuming a pre-flight check is skippable because the two
+documented ones are, check. And when a peer reports that their unrelated run is failing on your
+file, treat it as the higher-priority interrupt -- it is costing every concurrent session, not just
+the one that told you.
 
 **Relay commits: check formatting with the PINNED toolchain, not whatever `rustfmt` is on PATH.**
 An earlier version of this section said to run `rustfmt --edition 2021 --check` on the exact files
