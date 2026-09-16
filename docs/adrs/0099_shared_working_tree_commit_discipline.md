@@ -112,6 +112,14 @@ push under `daemons/hams_local_relay/**` queues a full build matrix on the devel
 owner (list the live sessions and message one; you cannot tell from authorship) and agree who
 pushes.
 
+**Run that check as its own command, and read its output, before running the push.** Chaining them
+on one command line (`git fetch && git log origin/main..main && git push`) executes the check
+without gating on it: the peer's commit is printed and pushed in the same breath. That happened on
+2026-09-16, within two hours of this ADR being written, to the session that wrote it -- a peer
+committed between the fetch and the push, the check duly printed the peer's commit, and the chained
+push carried it out anyway, queuing a build matrix the owner had not asked for. A check whose result
+nothing branches on is not a check.
+
 ## Consequences
 
 Committing costs a few more commands than it otherwise would. That is the whole cost, and it is
