@@ -635,6 +635,31 @@ the queue is the shared one, assume a same-schedule sibling until told otherwise
 about to take before you take it -- the message costs less than the reconciliation, which is the
 same conclusion this file already reaches for two sessions reading one checker's output.
 
+## Re-check the to-do still exists before appending its history entry
+
+Closing an item is two writes to two shared files: append to `night_shift_history.md`, `git rm` the
+to-do. Between deciding to close and actually closing, another session may have closed it already --
+and the two writes fail differently. The `git rm` fails loudly, because the file is gone. The append
+succeeds silently, because appending never conflicts with anything.
+
+Hit 2026-09-15. workspace-41 verified a fix, appended a closing entry, and its `git rm` failed:
+workspace-cb had closed the same item minutes earlier, and a `git pull` in the same command had
+brought that removal in. Only the failing `rm` revealed it. Had the two writes run in the other
+order, or the append been committed on its own, `night_shift_history.md` would carry two entries for
+one fix under different headings with different wording -- which reads as two separate incidents to
+anyone scanning it later, and history is exactly the artifact nobody re-derives.
+
+So: `git pull`, then confirm the to-do file is still on disk, and only then append. Better, put the
+append and the `git rm` in ONE `&&` chain so a vanished to-do aborts before the append -- the same
+gating this file already argues for between an edit and its commit. And if you find your append
+already written when the `rm` fails, discard it rather than committing it; assert the working tree
+is HEAD plus exactly your own block before truncating, since a peer may have appended concurrently
+and a blind `git checkout --` would take their entry with it.
+
+The general shape, which recurs: when closing something means writing to a shared append-only file
+AND removing a shared marker, the removal is the operation that can detect a race and the append is
+the one that cannot. Order and gate accordingly.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually
