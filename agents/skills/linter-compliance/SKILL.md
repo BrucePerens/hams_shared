@@ -246,6 +246,49 @@ These documentation references MUST be placed inline, immediately adjacent to th
 3. **The View-Tour Mandate:** Every `<template>` or `<record model="ir.ui.view">` MUST contain a UI Tour link.
 4. **Tour Validation:** The corresponding JavaScript tour file MUST contain the matching anchor and explicitly utilize the `trigger:` keyword to prove it evaluates the DOM.
 </semantic_anchors>
+## 7.5 🥾 Hoot unit suites: a green wrapper must mean tests actually ran
+
+A hoot suite that executes ZERO tests is reported by hoot exactly like a passing one. Its runner
+prints `Passed 0 tests` and then `Test suite succeeded`, and `Test suite succeeded` is precisely the
+string `HamsHttpCase.browser_js()` waits for. So a Python wrapper over an empty suite passes, every
+time, while testing nothing. Five `ham_shack` suites did that for weeks; when they were finally
+bundled (hams_com `bb25842d`) 24 tests ran for the first time and 6 of them failed -- assertions that
+had never once been executed against the code they describe.
+
+Four ways a suite ends up empty, three of them static and one only visible at runtime:
+
+1. The `*.test.js` file is not listed in any manifest's `web.assets_unit_tests` bundle. `/web/tests`
+   only loads what a manifest names.
+2. It is bundled, but no `browser_js()` wrapper ever asks for the tag its `describe` declares.
+3. Its `describe` block contains no `test()` call at all.
+4. Every test in it is skipped at runtime.
+
+`check_hoot_runner_coverage.py` catches the first three mechanically. **Cite the checker, not just a
+green run** -- a module-level "the suite is green" result cannot distinguish a passing suite from an
+absent one, because a suite the runner was never asked for is missing from both the numerator and
+the denominator. Prefer "these N tests ran and passed" over "the suite is green": the first is a
+claim about what executed, the second implies coverage the run never measured.
+
+### The `expect_empty=True` escape hatch -- use it deliberately, never weaken the check
+
+`browser_js()` fails on a run that executed zero tests. A deliberately-skipped suite will therefore
+start failing its wrapper. **That is the guard working, not a false positive**: a green wrapper over
+an all-skipped suite is the same false coverage claim, just self-inflicted.
+
+Two legitimate ways out, in order of preference:
+
+1. **Delete the wrapper along with the skip.** If a suite is not meant to run, a Python wrapper
+   asserting that it succeeded is claiming something untrue. This is almost always the right answer.
+2. **Pass `expect_empty=True` to `browser_js()`** where an empty run is genuinely intended. It must
+   be stated explicitly at the call site, so the claim "this suite is expected to execute nothing"
+   is visible in review rather than inferred from a silence.
+
+What is NOT acceptable: removing or loosening the guard, broadening it to tolerate empty runs
+generally, or reaching for the nearest workaround because the failure arrived at an inconvenient
+moment. This is the same standing rule this codebase applies to every failing test -- fix the code,
+never weaken the test -- and the guard exists precisely because the failure it reports is otherwise
+invisible.
+
 ## 7. Shebang Usage & `__manifest__.py` Formatting
 Shebangs (`#!/usr/bin/env python3`) are strictly prohibited in standard Odoo module files (e.g., `models/`, `controllers/`, `__init__.py`, `__manifest__.py`).
 They can interfere with packaging and execution expectations inside standard Odoo modules.
