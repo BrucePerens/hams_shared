@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 20
+version: 21
 ---
 
 # Dependabot & CI Build Watch
@@ -485,6 +485,37 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `3.3`). A full `cargo test` for this leg runs in an `ubuntu:20.04` container: install
   `install_debian_deps.sh` and `install_relay_runtime_deps.sh`, then run cargo with a scratch
   `CARGO_TARGET_DIR`. The build takes about 7 minutes, the tests about 5.
+- **Ubuntu 22.04's Hamlib 4.3.1 registers only the FIRST rig backend a process asks for**, unless
+  `rig_load_all_backends()` is called first. This is a *different* bug from the model-id split
+  above, and it looks exactly like it in a log -- both surface as `rig_init()` returning NULL and
+  the relay's own "Failed to allocate Hamlib RIG memory context". Don't conflate them. Confirmed
+  with a throwaway C probe linked against each distribution's own libhamlib, which is the fast way
+  to settle any question like this (about two minutes per version, no Rust build): under 4.3.1,
+  `rig_init(1)` (dummy) succeeds and a following `rig_init(1001)` (FT-847) returns NULL with
+  `rig_check_backend: rig model 1001 not found and rig count=41`; after one
+  `rig_load_all_backends()`, dummy, FT-847 and IC-7300 all succeed. Version-specific: 3.3 (20.04),
+  4.5.4 (Debian 12, the pi500 leg), 4.5.5 (24.04) and the dev box's own 4.6.2 all load a second
+  backend on demand, so **only the 22.04 leg can ever catch this, and a green local run proves
+  nothing about it**. Both `rig_load_all_backends()` and `rot_load_all_backends()` exist and return
+  `RIG_OK` on all four versions including 3.3, so calling them is safe everywhere -- check that
+  before adding any Hamlib call, since 3.3 predates a lot of the 4.x API. Fixed in hams_com
+  `5983fd93` (`hamlib::load_all_backends_once()`, a `std::sync::Once` called under
+  `HAMLIB_CALL_LOCK` by both `RadioInterface::new` and `RotatorInterface::new`).
+  **When a CI fix comes with a new regression test, prove the test is a guard**: run it once with
+  the production fix removed and confirm it fails, in the same container, before committing. The
+  first draft of this one called the loader itself instead of going through
+  `RadioInterface::new()`, which would have passed with the fix deleted -- and, because the loader
+  is a process-wide `Once` and the test sorted first under `--test-threads=1`, would also have
+  pre-registered every backend and stopped the ORIGINAL failing test from catching the regression.
+  A test that only passes after the fix is not the same thing as a test that fails without it.
+  The general lesson, which is why this is worth keeping: the 22.04 leg spent a long time red at
+  `Clippy`, so `Run Tests` never ran there. **The first time a CI leg gets past a long-standing
+  earlier failure, treat its later steps as untested code paths, not as regressions** -- expect new
+  failures and budget for them, rather than assuming a failure on a leg that "used to be fine" is a
+  regression from the most recent commit.
+- **`build-raspbian` was retired in hams_com `775892a3`** (2026-09-16): the 32-bit armv7
+  cross-compile leg is gone, replaced by the native arm64 `build-linux` leg on `pi500-1`. Notes in
+  this file that mention `build-raspbian` are history now; don't go looking for that job.
 - **Wine GUI installers need a virtual display in CI.** Inno Setup's `innosetup-*.exe
   /VERYSILENT` still creates a window. With no X display it exits 1 without printing anything
   under `WINEDEBUG=-all`. Pass `/LOG="C:\x.log"` and read the log from the Wine prefix to see the
