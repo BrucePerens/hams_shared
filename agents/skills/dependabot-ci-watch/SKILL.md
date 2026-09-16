@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 29
+version: 30
 ---
 
 # Dependabot & CI Build Watch
@@ -516,6 +516,13 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `rig_get_split_freq(rig, VFO_B)` never reads, because that call reads VFO B through `get_freq`.
   The split-TX safety test therefore sets VFO B's frequency too. Upstream fixed the dummy by
   4.5.5. The relay's `get_tx_freq()` is correct for real radios.
+  (5) Hamlib's CW queue (`fifo_morse`, `resetFIFO`) and the dummy backend's `stop_morse` both
+  first appear in **4.6**. On 3.3, 4.3.1, 4.5.4 and 4.5.5, `rig_send_morse` is synchronous, and
+  `rig_stop_morse` against the dummy backend returns `-RIG_ENAVAIL` (-11). So a relay test written and
+  passed on the dev box's 4.6.2 that expects a working `rig_stop_morse` fails on the 22.04, 24.04 and
+  pi500 legs (run 35082588535, 2026-09-16). The dev box's own Hamlib is newer than every CI leg
+  except build-windows, so any Hamlib behavior a new test relies on needs a check against the
+  4.3.1/4.5.x tag sources (`raw.githubusercontent.com/Hamlib/Hamlib/<tag>/src/rig.c`, one `curl`).
   In a local container run, `callbook::tests::has_adequate_space_matches_a_real_independent_df_call`
   fails if the disk under `/var/lib/docker` changes free space mid-run. It compares a sysinfo
   reading against a later `df`. Check `df -h /var` before blaming code.
