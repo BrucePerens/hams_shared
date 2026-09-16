@@ -10,7 +10,7 @@ description: >-
   a scheduled task (dependabot-and-ci-watch); this skill is the same work, invokable on demand
   in a fresh session. Triggers: dependabot, security alert, CI failure, build failure, check for
   vulnerabilities, check the build.
-version: 23
+version: 24
 ---
 
 # Dependabot & CI Build Watch
@@ -566,6 +566,18 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   `run_linters.py` step 52 (`check_cargo_fmt.py`) runs the same check across every crate in both
   repos. The relay's own `cargo fmt --check` doesn't cover `ham_digital_modes`, a path dependency
   rather than a workspace member.
+  **This check also catches a missing-file build break, not just formatting, and far earlier than
+  CI does.** On 2026-09-16 (run 30) it failed with ``failed to resolve mod `offline_records` `` --
+  `main.rs` on `origin/main` declared a module whose file had been deleted, so the relay could not
+  compile at all. Cause: a commit used `git add <paths>` and then a BARE `git commit`, which takes
+  the whole shared index, and so carried another session's staged `git rm` of that file, unmentioned
+  in its message. Two heads were pushed on top before anyone noticed. So when this check reports
+  anything other than a formatting diff, read the actual message rather than assuming rustfmt: an
+  unresolved `mod` means the pushed tree is uncompilable and every queued run on it is doomed.
+  The right response is to cancel those queued runs (they can only burn a full matrix on Bruce's
+  laptop ahead of a run that can pass) and to make sure nobody records a fix as verified by a run
+  whose head cannot build -- `git merge-base --is-ancestor <fix> <headSha>` is necessary but not
+  sufficient for that.
 - **A step-less, runner-less `Security audit` job in `Build Server Daemons`** is the check-run
   `rustsec/audit-check` creates itself. It mirrors the matrix `security-audit` jobs' result and has
   no log of its own. Read the matrix job's `RustSec advisory check` step instead.
