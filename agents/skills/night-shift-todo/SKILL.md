@@ -254,6 +254,25 @@ indefinite stall. Put that waiter in a script FILE rather than an inline `bash -
 sidesteps the self-matching `pgrep` trap this file documents above: a file's own command line is
 just `bash <path>` and cannot contain the pattern.
 
+## Two claim files can share a basename across modules -- name the anchor, not the file
+
+`check_claims.py`'s output lists claims by path, and the eye reads the basename. On 2026-09-15
+workspace-05 and workspace-80 were each updating a file called `res_users_write.md` and each
+assumed the other's heads-up covered its own: they were
+`hams_com/docs/bug_hunt_claims/hams_open/user_websites/claims/res_users_write.md` (anchor
+`user_websites:COMM_res_users_write`) and
+`hams_com/docs/bug_hunt_claims/hams_open/zero_sudo/models/claims/res_users_write.md` (anchor
+`zero_sudo:res_users_write`) -- different modules, different anchors, different stale hashes. One
+message caught it; without it, the zero_sudo one would have stayed stale while both sessions
+believed it was handled, and a later `check_claims.py` run would have re-filed it as a fresh
+finding.
+
+The claims store centralizes one module's claims per directory, and module-level method names
+repeat (`write`, `create`, `res_users_write`), so basename collisions are normal, not a fluke.
+When telling a peer which claims you are touching -- or reading a peer's list -- identify each by
+its **anchor name**, which is unique by construction, not by its file's basename. The same applies
+to your own commit message and to any to-do that names one.
+
 ## Say so BEFORE filing, when two sessions are reading the same checker's output
 
 `grep -rl` across the queue before filing a new to-do does not prevent a duplicate; it only catches
