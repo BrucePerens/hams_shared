@@ -417,6 +417,46 @@ suite take on the real behaviour, which here meant every HTTP request and cron d
 Redis exactly as a serving worker does. Run `check_burn_list.py <module>` early, while the design
 is still cheap to change, rather than after the tests are written.
 
+## A new anchor must satisfy two separate checks, and the obvious fix for one breaks the other
+
+`verify_anchors.py` reports on a new `[@ANCHOR:]` in two different sections of one long run, and a
+session that fixes the first finding and stops has not finished:
+
+- **Test linkage**: some test must carry `// Tests [@ANCHOR: name]`.
+- **Documentation coverage**: some Markdown under `docs/stories/` or `docs/journeys/` must reference
+  it — and there, the reference MUST carry the module prefix, `[@ANCHOR: hams_local_relay:name]`.
+  An unprefixed reference in a manual is read as `global:name` and reported separately as "missing
+  from operational source code," which looks like a completely different problem from the one you
+  were fixing. The tool's own diagnostic says so, several hundred lines away from the finding.
+
+The trap is in fixing the first one. The cheapest way to give an unlinked function test linkage is
+to add a second `// Tests [@ANCHOR:]` line above a test that already exercises it — and two anchor
+lines adjacent in a file is exactly what the **stacked anchors** check forbids. So the fix converts
+a "no test linkage" finding into a "stacked anchors" finding, in a different section of the report,
+and a session that re-greps only for its own anchor NAMES will not see it: stacked anchors are
+reported by file and line number, never by name. Grep the report for your FILE, not just your
+anchor names.
+
+The real fix is one anchor per test. If a function has no test of its own, that is usually the
+report telling you something true — write the test. On 2026-09-15 this produced a genuinely better
+suite: the function in question (a direct UDP DNS query) had only ever been exercised through a
+higher-level decision, and giving it its own test covered the socket path on its own for the first
+time.
+
+## Let clippy's dead-code pass tell you a refactor left a layer behind
+
+`cargo clippy --tests -- -D warnings` treats `dead_code` as an error, and on a refactor that is a
+feature rather than an obstacle. Splitting a function so a caller could do part of its work once
+instead of per-iteration (2026-09-15, the ACME propagation wait) left two production wrappers that
+nothing called any more — invisible in a passing test suite, because the TESTS still called them.
+
+Reach for deletion, not `#[allow(dead_code)]`. Wrappers kept alive only by their own tests are worse
+than useless: the suite goes green while exercising a path production no longer takes. Deleting them
+and moving the tests onto the function production actually calls took one pass and made every
+remaining test a statement about real behaviour. The same applies to a `#[cfg(test)]`-only builder —
+that one is legitimate, which is why the distinction is worth making deliberately rather than
+silencing the lint across the board.
+
 ## Self-improvement
 
 Same convention as `dependabot-ci-watch`: if a run discovers a new, reusable fact about actually

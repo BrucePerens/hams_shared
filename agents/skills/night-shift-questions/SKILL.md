@@ -146,6 +146,50 @@ costs nothing.
   an account, click a button, log into a website -- with no engineering decision attached); this
   queue is for decisions, that file is for outside-the-codebase actions Bruce alone can perform.
 
+## An action-shaped blocker still belongs here when its result selects a design
+
+The "what belongs here vs. what doesn't" section sends a pure external action to
+`docs/BRUCE_ACTION_ITEMS.md`, and that is right for "create an account" or "click a button in a
+vendor's console." But it is easy to over-apply, and the cost of getting it wrong is silent.
+
+The case, 2026-09-15: a to-do was blocked on measuring whether a browser certificate exception
+granted in one tab applies to a different origin's later `fetch()`. That is an action — someone has
+to open a browser — so it looks like it belongs in the action-items file. It does not, because the
+*result* selects between two very different builds (a modest `localStorage`/`window.open` mechanism
+versus a whole local certificate authority), and building the smaller one speculatively would waste
+the entire effort if the answer came back the other way. That is a decision with real tradeoffs,
+reached through a measurement.
+
+The mechanical reason this matters more than the taxonomy: `docs/BRUCE_ACTION_ITEMS.md` has no
+`blocks:` list. Nothing sweeps it, so nothing it records can ever flip a to-do back to `open`. Route
+a blocker there and the to-do waits forever even after Bruce does the thing. **Ask which file can
+unblock the to-do, not which file the blocker superficially resembles.** When an action's output is
+an input to a decision, file the question here and put the recipe for performing the action inside
+it — Bruce gets both in one place, and the sweep can reach the to-do afterwards.
+
+## A prose `blocked_on:` is unreachable, and `status: open` with one is worse
+
+Two real items found in the same pass, 2026-09-15, both from sessions that recorded a genuine
+blocker in the most natural way — as a sentence.
+
+`blocked_on:` is read by the answered-question sweep, which walks each answered question's own
+`blocks:` list. A blocker that no question file names can never unblock anything, so the item stays
+blocked no matter what Bruce decides. `night-shift-todo`'s own "A status outside the four defined
+values escapes every query" names the same shape one step earlier in the path.
+
+The second item was the more dangerous of the two: `status: open` carrying a prose `blocked_on:`.
+That reads as available work to every session scanning the queue, so it gets claimed, and only then
+does its body reveal the real fix is gated on someone else's unanswered question — wasting a claim
+and, on a shared tree, possibly a verification run too. `open` and `blocked_on:` contradict each
+other; if a `blocked_on:` is real, the status is `blocked`.
+
+When fixing one of these, keep the prose. It is usually the most precise statement of the blocker
+anyone has written, and it is what the question file should be written from. Move it into the item's
+body as a quote rather than deleting it with the frontmatter field.
+
+One question can name several to-dos in its `blocks:` list, and should when they share a fix — the
+two above were two halves of one unanswered fact, and they now come back to `open` together.
+
 ## Self-improvement
 
 Same convention as `night-shift-todo`/`dependabot-ci-watch`: if a run discovers a new, reusable
