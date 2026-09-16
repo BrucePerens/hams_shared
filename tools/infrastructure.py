@@ -1102,65 +1102,6 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
-            "path": "/opt/hams/systemd/lotw.eqsl.sync.service",
-            "content": """\
-[Unit]
-Description=Ham Radio Automated QSL Sync Daemon
-After=network.target
-
-[Service]
-# ADR-0070 OS-Level Daemon Restriction
-ProtectSystem=strict
-ProtectHome=read-only
-PrivateTmp=true
-PrivateDevices=true
-NoNewPrivileges=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
-Type=simple
-User=odoo
-WorkingDirectory=/opt/hams/daemons/lotw_eqsl_sync
-
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
-# Real, dedicated service account for this daemon -- previously guessed as
-# logbook_api_service_internal (the READ-ONLY public-API proxy account),
-# which cannot even authenticate to ham.qso.sync_qsl_batch() (hardcoded to
-# require ham_logbook.user_logbook_sync_service specifically) or write
-# lotw_last_sync/eqsl_last_sync back to res.users (that account's own ACL
-# is read-only). See night_shift_todo.md's "Follow-up, 2026-09-14" entry
-# and its closure below for the real investigation.
-Environment="ODOO_USER=logbook_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/logbook_sync_service_internal.key"
-Environment="POLL_INTERVAL=86400"
-Environment="PYTHONPATH=/opt/hams/daemons"
-Environment="DAEMON_ARGS="
-
-# Smoketest Resource Verification
-ExecStartPre=/usr/bin/python3 /opt/hams/daemons/lotw_eqsl_sync/main.py --start-test
-
-# Execution via system Python
-ExecStart=/usr/bin/python3 /opt/hams/daemons/lotw_eqsl_sync/main.py $DAEMON_ARGS
-
-Restart=always
-RestartSec=60
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=lotw.eqsl.sync
-
-[Install]
-WantedBy=multi-user.target
-""",
-            "owner": "root:root",
-            "mode": "644",
-            "environments": ["prod", "test"],
-        },
-        {
             "path": "/opt/hams/systemd/clublog.sync.service",
             "content": """\
 [Unit]

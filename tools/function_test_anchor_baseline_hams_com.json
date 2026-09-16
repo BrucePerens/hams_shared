@@ -98,8 +98,6 @@
   "daemons/ised_canada_sync/main.py::process_ised_archive",
   "daemons/ised_canada_sync/main.py::run_sync",
   "daemons/ised_canada_sync/main.py::sync_updates_to_odoo",
-  "daemons/lotw_eqsl_sync/main.py::main_loop",
-  "daemons/lotw_eqsl_sync/main.py::parse_adif_to_qsl_list",
   "daemons/ncvec_sync/main.py::get_content_hash",
   "daemons/ncvec_sync/main.py::get_pool_details",
   "daemons/ncvec_sync/main.py::load_explanation_cache",
