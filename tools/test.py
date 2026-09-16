@@ -2291,6 +2291,238 @@ def _test_runner_lock_path():
     return os.environ.get("HAMS_TEST_LOCK_PATH") or "/tmp/hams_odoo_test_runner.lock"
 
 
+# --------------------------------------------------------------------------
+# Continuous-integration load gate
+# --------------------------------------------------------------------------
+#
+# The development box hosts the `actions.runner.BrucePerens-hams_com.hams-devbox`
+# self-hosted GitHub Actions runner as well as this test suite, and a relay
+# build matrix compiles Hamlib and Rust on every push under
+# `daemons/hams_local_relay/**`. On 2026-09-15 three separate `test.py -u
+# ham_shack` runs of identical code failed DIFFERENT `TestShackSwBehaviorTour`
+# tests -- test_01, 01b, 02, 03b, 04 -- each at the ten-second "wait for
+# shack_sw.js's own registration to exist" step, while `rustc` held about 750
+# percent of the processor. A second run the same evening, with the load
+# average near 23 on sixteen cores, additionally failed four plain `url_open`
+# tests on the test client's own ten-second read timeout even though the server
+# answered 200, each of them the first request after `Generating routing map`.
+#
+# None of those were code regressions, and each cost a re-run plus the time
+# somebody spent reading it as one. This gate exists so that a run which is
+# going to be starved says so up front instead of producing a plausible-looking
+# false failure half an hour later.
+#
+# Two signals, both read locally -- deliberately NOT `gh run list`, which would
+# put a network round trip and an authentication dependency on the front of
+# every invocation, including offline ones:
+#
+#   1. A live `Runner.Worker` process. The runner's `Runner.Listener` runs
+#      permanently and means nothing; a `Runner.Worker` exists only while a job
+#      is actually executing, which makes it an exact signal rather than a
+#      heuristic.
+#   2. The one-minute load average over a threshold. This is what catches the
+#      case the runner check cannot see at all, and which the to-do's own
+#      second evidence paragraph is explicit about: two peer sessions running
+#      `cargo build` by hand loaded the box just as badly as continuous
+#      integration did, and no runner process was involved.
+#
+# The process scan reads /proc directly rather than shelling out to `pgrep -f`.
+# That is not a style preference: this repository has been bitten three separate
+# times by a `pgrep -f` pattern matching the very shell that ran it, and a
+# `pgrep -f Runner.Worker` inside a script whose own command line mentions
+# Runner.Worker is the same trap one step removed.
+
+CI_LOAD_GATE_RUNNER_COMM = "Runner.Worker"
+
+# Default threshold as a multiple of the processor count. One means "the box is
+# fully committed". Sixteen cores here: the failing runs sat near 23 and a
+# healthy box with a job running sits near 8 to 11, so 16 separates them with
+# room on both sides.
+CI_LOAD_GATE_DEFAULT_LOAD_RATIO = 1.0
+
+# How long to wait for the box to quieten before giving up, in seconds. Bounded
+# on purpose. The systemwide single-instance lock below is fail-fast for the
+# reason its own comment gives -- queueing behind a hung holder just relocates
+# the hang -- and the same reasoning caps this: a session that cannot start
+# within the window is better off being told, so it can do something that does
+# not need the box, than blocked indefinitely.
+CI_LOAD_GATE_DEFAULT_TIMEOUT_SECONDS = 900
+
+CI_LOAD_GATE_POLL_SECONDS = 15
+
+
+def find_runner_worker_processes(proc_root="/proc"):
+    """Return a list of live GitHub Actions job processes, as dicts with
+    `pid`, `comm` and `uid`.
+
+    Reads /proc directly. A process that exits between the listing and the
+    read is skipped rather than raising, which is the normal case on a busy
+    box and not an error worth reporting.
+    """
+    found = []
+    try:
+        entries = os.listdir(proc_root)
+    except OSError as e:
+        # /proc unreadable (an unusual container, or a hardened mount). Report
+        # nothing found rather than failing the run: the load-average signal
+        # below still applies, and refusing to test because a diagnostic is
+        # unavailable would be worse than the problem this gate solves.
+        _logger.debug("CI load gate: could not list %s: %s", proc_root, e)
+        return found
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        comm_path = os.path.join(proc_root, entry, "comm")
+        try:
+            with open(comm_path, "r", encoding="utf-8", errors="replace") as fh:
+                comm = fh.read().strip()
+        except OSError as e:
+            _logger.debug("Ignored OSError reading %s: %s", comm_path, e)
+            continue
+        if comm != CI_LOAD_GATE_RUNNER_COMM:
+            continue
+        try:
+            uid = os.stat(os.path.join(proc_root, entry)).st_uid
+        except OSError as e:
+            _logger.debug("Ignored OSError stat-ing %s: %s", entry, e)
+            uid = None
+        found.append({"pid": int(entry), "comm": comm, "uid": uid})
+    return found
+
+
+def evaluate_ci_load_gate(runner_workers, load_average_1min, cpu_count, load_ratio):
+    """Decide whether the box is too busy to start an Odoo test run.
+
+    Deliberately pure: it takes the two measurements rather than making them,
+    so the decision can be tested at its boundaries without a loaded machine
+    and without mocking /proc. Returns `(busy, reason)`, where `reason` is the
+    human-readable sentence printed to the operator and is empty when not busy.
+    """
+    threshold = max(1.0, float(cpu_count) * float(load_ratio))
+    if runner_workers:
+        pids = ", ".join(str(p["pid"]) for p in sorted(runner_workers, key=lambda p: p["pid"]))
+        return (
+            True,
+            "a self-hosted continuous-integration job is running "
+            "(%s process%s: pid %s)"
+            % (
+                CI_LOAD_GATE_RUNNER_COMM,
+                "" if len(runner_workers) == 1 else "es",
+                pids,
+            ),
+        )
+    if load_average_1min is not None and load_average_1min > threshold:
+        return (
+            True,
+            "the one-minute load average is %.2f, above the %.2f threshold "
+            "for this %d-processor box" % (load_average_1min, threshold, cpu_count),
+        )
+    return (False, "")
+
+
+def _ci_load_gate_settings():
+    """Read the gate's three environment overrides, ignoring unparseable values.
+
+    A malformed override falls back to the default rather than aborting: this
+    is a guard against a false test failure, and refusing to run because
+    somebody typed a threshold wrong would be a worse failure than the one it
+    prevents. The fallback is logged so it is not silent.
+    """
+    ratio = CI_LOAD_GATE_DEFAULT_LOAD_RATIO
+    raw_ratio = os.environ.get("HAMS_CI_LOAD_GATE_RATIO")
+    if raw_ratio:
+        try:
+            ratio = float(raw_ratio)
+        except ValueError:
+            print(
+                "[!] HAMS_CI_LOAD_GATE_RATIO=%r is not a number; using the default %.2f"
+                % (raw_ratio, ratio)
+            )
+    timeout = CI_LOAD_GATE_DEFAULT_TIMEOUT_SECONDS
+    raw_timeout = os.environ.get("HAMS_CI_LOAD_GATE_TIMEOUT")
+    if raw_timeout:
+        try:
+            timeout = float(raw_timeout)
+        except ValueError:
+            print(
+                "[!] HAMS_CI_LOAD_GATE_TIMEOUT=%r is not a number; using the default %d"
+                % (raw_timeout, timeout)
+            )
+    return ratio, timeout
+
+
+def wait_for_ci_load_to_subside(sleep_func=None, now_func=None):
+    """Block until the box is quiet enough to test on, or give up.
+
+    Returns True when it is safe to proceed and False when the wait timed out.
+    The caller exits on False; this function does not, so that it stays
+    testable.
+
+    MUST be called BEFORE the systemwide single-instance lock is acquired.
+    Waiting while holding that lock would stop every other session on the box
+    from testing for the whole duration of somebody else's build matrix, which
+    converts a local delay into a box-wide one.
+    """
+    if os.environ.get("HAMS_SKIP_CI_LOAD_GATE") == "1":
+        print(
+            "[*] Skipping the continuous-integration load gate "
+            "(HAMS_SKIP_CI_LOAD_GATE=1 -- tour and url_open timeouts under load are "
+            "on you)."
+        )
+        return True
+
+    # `test.py --help` starts no Odoo and loads nothing, so making somebody wait
+    # out a build matrix to read the usage text would be a pure regression. The
+    # argument parser lives several hundred lines below the lock, so this is
+    # checked against sys.argv directly rather than against parsed arguments.
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+        return True
+
+    sleep_func = sleep_func or time.sleep
+    now_func = now_func or time.monotonic
+    ratio, timeout = _ci_load_gate_settings()
+    cpu_count = os.cpu_count() or 1
+
+    def measure():
+        try:
+            load_1min = os.getloadavg()[0]
+        except OSError as e:  # no /proc/loadavg
+            _logger.debug("Ignored OSError reading load average: %s", e)
+            load_1min = None
+        return evaluate_ci_load_gate(
+            find_runner_worker_processes(), load_1min, cpu_count, ratio
+        )
+
+    busy, reason = measure()
+    if not busy:
+        return True
+
+    deadline = now_func() + timeout
+    print(
+        "[*] Waiting for the box to quieten before starting Odoo: %s.\n"
+        "    Browser tours and url_open tests fail on their own ten-second timeouts "
+        "under this load,\n"
+        "    and those failures read exactly like code regressions. Waiting up to "
+        "%d seconds; set\n"
+        "    HAMS_SKIP_CI_LOAD_GATE=1 to proceed anyway, or HAMS_CI_LOAD_GATE_TIMEOUT "
+        "to change the wait." % (reason, int(timeout))
+    )
+    while now_func() < deadline:
+        sleep_func(CI_LOAD_GATE_POLL_SECONDS)
+        busy, reason = measure()
+        if not busy:
+            print("[*] The box is quiet again; proceeding.")
+            return True
+    print(
+        "🛑 ERROR: the box is still too busy to test on after %d seconds: %s.\n"
+        "    Not starting Odoo, because the run would most likely produce false "
+        "timeout failures.\n"
+        "    Re-run when it is quiet, raise HAMS_CI_LOAD_GATE_TIMEOUT, or set "
+        "HAMS_SKIP_CI_LOAD_GATE=1 to override." % (int(timeout), reason)
+    )
+    return False
+
+
 def main():
     global _single_instance_lock
     audio_sink_before = (
@@ -2343,6 +2575,17 @@ def main():
     if os.environ.get("HAMS_TEST_LOCK_HELD") == "1":
         _single_instance_lock = None
     else:
+        # The continuous-integration load gate runs HERE, strictly before the
+        # single-instance lock is acquired, and the ordering is load-bearing.
+        # Waiting for a relay build matrix to finish while already holding the
+        # box-wide lock would stop every other session from testing for the
+        # whole wait, turning one session's delay into everybody's. Process C
+        # (HAMS_TEST_LOCK_HELD=1) is exempt for free by sitting in this same
+        # else-branch: its parent already gated, and re-gating a run that is
+        # already under way would be both redundant and, once its own Odoo
+        # server is loading the box, self-defeating.
+        if not wait_for_ci_load_to_subside():
+            sys.exit(1)
         lock_file_path = _test_runner_lock_path()
         os.environ.setdefault("HAMS_TEST_LOCK_PATH", lock_file_path)
         # Making this a single systemwide path (instead of the old per-user

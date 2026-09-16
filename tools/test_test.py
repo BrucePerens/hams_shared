@@ -540,5 +540,276 @@ class RemoveStaleFilestoreTests(unittest.TestCase):
             )
 
 
+class CiLoadGateDecisionTests(unittest.TestCase):
+    """`evaluate_ci_load_gate()` is deliberately pure -- it takes the two
+    measurements rather than making them -- so every boundary below is
+    exercised without a loaded machine and without mocking /proc.
+
+    The numbers come from the real incident recorded in
+    `night_shift_todo/medium/odoo-tours-vs-relay-ci-load-contention-4f9f03c6.md`:
+    a sixteen-processor box, healthy near a load average of 8 to 11 even with a
+    continuous-integration job running, and near 23 when browser tours and
+    url_open tests began failing on their own ten-second timeouts.
+    """
+
+    def test_a_running_runner_worker_is_busy_whatever_the_load_says(self):
+        busy, reason = _test_runner.evaluate_ci_load_gate(
+            [{"pid": 2486284, "comm": "Runner.Worker", "uid": 1002}],
+            0.1,
+            16,
+            1.0,
+        )
+        self.assertTrue(busy)
+        # The message must name what was busy, not merely that something was:
+        # the operator's next action differs completely between "continuous
+        # integration is building" and "a peer is compiling by hand".
+        self.assertIn("2486284", reason)
+        self.assertIn("Runner.Worker", reason)
+
+    def test_several_runner_workers_are_all_named_and_pluralised(self):
+        busy, reason = _test_runner.evaluate_ci_load_gate(
+            [
+                {"pid": 222, "comm": "Runner.Worker", "uid": 1002},
+                {"pid": 111, "comm": "Runner.Worker", "uid": 1002},
+            ],
+            0.1,
+            16,
+            1.0,
+        )
+        self.assertTrue(busy)
+        self.assertIn("processes", reason)
+        # Sorted, so the message is stable across /proc listing order.
+        self.assertIn("111, 222", reason)
+
+    def test_high_load_with_no_runner_is_busy(self):
+        """The case the runner check cannot see at all. On 2026-09-15 two peer
+        sessions running cargo by hand put the load near 23 with no
+        continuous-integration job involved, and the same tours failed."""
+        busy, reason = _test_runner.evaluate_ci_load_gate([], 23.0, 16, 1.0)
+        self.assertTrue(busy)
+        self.assertIn("23.0", reason)
+        self.assertIn("16", reason)
+
+    def test_a_quiet_box_is_not_busy(self):
+        busy, reason = _test_runner.evaluate_ci_load_gate([], 8.77, 16, 1.0)
+        self.assertFalse(busy)
+        self.assertEqual(reason, "")
+
+    def test_the_threshold_is_exclusive_at_exactly_the_processor_count(self):
+        """A load average equal to the processor count means fully committed
+        but not oversubscribed, and is allowed. One tick above is not."""
+        self.assertFalse(_test_runner.evaluate_ci_load_gate([], 16.0, 16, 1.0)[0])
+        self.assertTrue(_test_runner.evaluate_ci_load_gate([], 16.01, 16, 1.0)[0])
+
+    def test_the_ratio_scales_the_threshold(self):
+        # Ratio 2.0 on sixteen processors tolerates a load of 32.
+        self.assertFalse(_test_runner.evaluate_ci_load_gate([], 23.0, 16, 2.0)[0])
+        # Ratio 0.5 refuses at 9.
+        self.assertTrue(_test_runner.evaluate_ci_load_gate([], 9.0, 16, 0.5)[0])
+
+    def test_the_threshold_never_falls_below_one(self):
+        """os.cpu_count() can return None, in which case the caller passes 1;
+        a zero or negative ratio must not produce a gate that refuses a
+        completely idle box."""
+        self.assertFalse(_test_runner.evaluate_ci_load_gate([], 0.5, 1, 0.0)[0])
+        self.assertTrue(_test_runner.evaluate_ci_load_gate([], 1.5, 1, 0.0)[0])
+
+    def test_an_unavailable_load_average_is_not_treated_as_busy(self):
+        """No /proc/loadavg is a missing diagnostic, not evidence of load.
+        Refusing to test because a measurement is unavailable would be a worse
+        failure than the false timeouts this gate exists to prevent."""
+        self.assertFalse(_test_runner.evaluate_ci_load_gate([], None, 16, 1.0)[0])
+
+
+class CiLoadGateProcessScanTests(unittest.TestCase):
+    """`find_runner_worker_processes()` reads /proc directly rather than
+    shelling out to `pgrep -f`. That is not a style preference: a
+    `pgrep -f Runner.Worker` run from a script whose own command line contains
+    the string matches itself, which is the same trap that left a waiting loop
+    in this repository spinning for over an hour."""
+
+    def _fake_proc(self, base, entries):
+        for pid, comm in entries:
+            d = os.path.join(base, str(pid))
+            os.makedirs(d)
+            with open(os.path.join(d, "comm"), "w", encoding="utf-8") as fh:
+                fh.write(comm + "\n")
+        # Non-numeric entries are what a real /proc is mostly made of.
+        for name in ("self", "cpuinfo", "loadavg"):
+            os.makedirs(os.path.join(base, name), exist_ok=True)
+
+    def test_finds_workers_and_ignores_the_permanent_listener(self):
+        """`Runner.Listener` runs for as long as the runner service is
+        enabled and says nothing about whether a job is executing. Only
+        `Runner.Worker` does, which is what makes this an exact signal rather
+        than a heuristic."""
+        with tempfile.TemporaryDirectory() as base:
+            self._fake_proc(
+                base,
+                [
+                    (1974088, "Runner.Listener"),
+                    (2486284, "Runner.Worker"),
+                    (999, "python3"),
+                ],
+            )
+            found = _test_runner.find_runner_worker_processes(proc_root=base)
+            self.assertEqual([p["pid"] for p in found], [2486284])
+
+    def test_an_unreadable_proc_reports_nothing_rather_than_raising(self):
+        found = _test_runner.find_runner_worker_processes(
+            proc_root="/nonexistent-proc-for-this-test"
+        )
+        self.assertEqual(found, [])
+
+    def test_a_process_that_exits_mid_scan_is_skipped_not_fatal(self):
+        """The normal case on a busy box: the directory is listed, then the
+        process is gone before its comm can be read."""
+        with tempfile.TemporaryDirectory() as base:
+            self._fake_proc(base, [(2486284, "Runner.Worker")])
+            os.makedirs(os.path.join(base, "4242"))  # a pid with no comm file
+            found = _test_runner.find_runner_worker_processes(proc_root=base)
+            self.assertEqual([p["pid"] for p in found], [2486284])
+
+
+class CiLoadGateWaitTests(unittest.TestCase):
+    """`wait_for_ci_load_to_subside()` returns rather than exiting, so the
+    wait loop itself is testable. Time is injected, so none of these sleep."""
+
+    def setUp(self):
+        for var in (
+            "HAMS_SKIP_CI_LOAD_GATE",
+            "HAMS_CI_LOAD_GATE_RATIO",
+            "HAMS_CI_LOAD_GATE_TIMEOUT",
+        ):
+            os.environ.pop(var, None)
+
+    def _run(self, busy_sequence, timeout="60"):
+        """Drive the gate through a scripted sequence of busy/not-busy
+        measurements, with a fake clock that advances one poll interval per
+        sleep so the deadline is reached deterministically."""
+        os.environ["HAMS_CI_LOAD_GATE_TIMEOUT"] = timeout
+        clock = {"t": 0.0}
+        calls = {"sleeps": 0}
+        seq = iter(busy_sequence)
+
+        def fake_sleep(seconds):
+            calls["sleeps"] += 1
+            clock["t"] += seconds
+
+        def fake_now():
+            return clock["t"]
+
+        def fake_evaluate(workers, load, cpus, ratio):
+            try:
+                busy = next(seq)
+            except StopIteration:
+                busy = False
+            return (busy, "a fabricated reason") if busy else (False, "")
+
+        buf = io.StringIO()
+        with patch.object(_test_runner, "evaluate_ci_load_gate", fake_evaluate), \
+                patch.object(_test_runner, "find_runner_worker_processes", lambda **kw: []), \
+                contextlib.redirect_stdout(buf):
+            ok = _test_runner.wait_for_ci_load_to_subside(
+                sleep_func=fake_sleep, now_func=fake_now
+            )
+        return ok, calls["sleeps"], buf.getvalue()
+
+    def test_a_quiet_box_proceeds_immediately_without_sleeping(self):
+        ok, sleeps, out = self._run([False])
+        self.assertTrue(ok)
+        self.assertEqual(sleeps, 0)
+        self.assertEqual(out, "")
+
+    def test_it_waits_and_then_proceeds_once_the_box_quietens(self):
+        ok, sleeps, out = self._run([True, True, False])
+        self.assertTrue(ok)
+        self.assertEqual(sleeps, 2)
+        self.assertIn("Waiting for the box to quieten", out)
+        self.assertIn("quiet again", out)
+
+    def test_it_gives_up_at_the_timeout_and_names_what_was_busy(self):
+        """Bounded on purpose, matching the single-instance lock's own
+        fail-fast reasoning: a session told it cannot start can go and do
+        something that does not need the box."""
+        ok, sleeps, out = self._run([True] * 100, timeout="30")
+        self.assertFalse(ok)
+        self.assertIn("still too busy", out)
+        self.assertIn("a fabricated reason", out)
+        # 30-second budget, 15-second poll: two sleeps, then the deadline.
+        self.assertEqual(sleeps, 2)
+
+    def test_the_skip_flag_bypasses_the_gate_entirely(self):
+        """Every other pre-flight check in this file has a HAMS_SKIP_ escape
+        except the init-imports linter, whose absence of one is a documented
+        problem rather than a precedent."""
+        os.environ["HAMS_SKIP_CI_LOAD_GATE"] = "1"
+        buf = io.StringIO()
+        called = {"n": 0}
+
+        def must_not_be_called(*a, **kw):
+            called["n"] += 1
+            return []
+
+        with patch.object(
+            _test_runner, "find_runner_worker_processes", must_not_be_called
+        ), contextlib.redirect_stdout(buf):
+            ok = _test_runner.wait_for_ci_load_to_subside()
+        self.assertTrue(ok)
+        self.assertEqual(called["n"], 0)
+        self.assertIn("HAMS_SKIP_CI_LOAD_GATE=1", buf.getvalue())
+
+    def test_help_never_waits_because_it_starts_no_odoo(self):
+        """Reading the usage text loads nothing and tests nothing, so making
+        somebody wait out a build matrix for it would be a pure regression."""
+        buf = io.StringIO()
+        called = {"n": 0}
+
+        def must_not_be_called(*a, **kw):
+            called["n"] += 1
+            return []
+
+        with patch.object(_test_runner.sys, "argv", ["test.py", "--help"]), \
+                patch.object(
+                    _test_runner, "find_runner_worker_processes", must_not_be_called
+                ), contextlib.redirect_stdout(buf):
+            self.assertTrue(_test_runner.wait_for_ci_load_to_subside())
+        self.assertEqual(called["n"], 0)
+
+    def test_a_malformed_override_falls_back_to_the_default_and_says_so(self):
+        os.environ["HAMS_CI_LOAD_GATE_RATIO"] = "not-a-number"
+        os.environ["HAMS_CI_LOAD_GATE_TIMEOUT"] = "also-not"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ratio, timeout = _test_runner._ci_load_gate_settings()
+        self.assertEqual(ratio, _test_runner.CI_LOAD_GATE_DEFAULT_LOAD_RATIO)
+        self.assertEqual(timeout, _test_runner.CI_LOAD_GATE_DEFAULT_TIMEOUT_SECONDS)
+        self.assertIn("HAMS_CI_LOAD_GATE_RATIO", buf.getvalue())
+        self.assertIn("HAMS_CI_LOAD_GATE_TIMEOUT", buf.getvalue())
+
+
+class CiLoadGateOrderingTests(unittest.TestCase):
+    """The gate must run BEFORE the box-wide single-instance lock is acquired.
+    Waiting out somebody else's build matrix while holding that lock would stop
+    every other session on the box from testing for the whole wait, converting
+    one session's delay into everybody's.
+
+    Asserted against the source text because the ordering is a property of
+    main(), which cannot be called in a unit test without starting a real Odoo
+    run. A source assertion is a weak test in general; here it is the only one
+    that can fail if somebody moves the call, which is the regression worth
+    catching."""
+
+    def test_the_gate_call_precedes_the_flock_acquisition(self):
+        source = io.open(_TEST_PY_PATH, encoding="utf-8").read()
+        gate_at = source.index("if not wait_for_ci_load_to_subside():")
+        lock_at = source.index("fcntl.flock(_single_instance_lock")
+        self.assertLess(
+            gate_at,
+            lock_at,
+            "the continuous-integration load gate must run before the systemwide "
+            "test lock is taken, or a wait blocks every other session on the box",
+        )
+
 if __name__ == "__main__":
     unittest.main()

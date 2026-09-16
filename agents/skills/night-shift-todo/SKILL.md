@@ -221,6 +221,43 @@ aborted log for your own anchor names. The log does list violations per file, so
 anchor you added (for example, an `[@ANCHOR:]` line directly followed by `Verified by`) shows up
 there.
 
+## A load gate now runs BEFORE the lock, so a busy box delays you instead of failing you
+
+Added 2026-09-16 by `night-shift-todo-worker` (workspace-cb), closing
+`night_shift_todo/medium/odoo-tours-vs-relay-ci-load-contention-4f9f03c6.md` option (a).
+
+`test.py` now refuses to start Odoo while the box is already loaded, because a starved run does not
+merely go slowly -- it produces failures that look exactly like code regressions. The recorded
+evidence: three `test.py -u ham_shack` runs of identical code each failed a DIFFERENT
+`TestShackSwBehaviorTour` test at the same ten-second wait step while `rustc` held about 750 percent
+of the processor, and a later run near load 23 additionally failed four plain `url_open` tests on
+the test client's own ten-second read timeout although the server answered 200.
+
+Two signals, both read locally (no `gh run list`, so no network on the front of every invocation):
+a live `Runner.Worker` process, which exists only while a continuous-integration job is actually
+executing -- `Runner.Listener` runs permanently and means nothing -- and the one-minute load average
+above the processor count. The second is what catches a peer running `cargo build` by hand, which
+the runner check cannot see at all.
+
+What this changes for a session queueing a run:
+
+- **It waits up to 900 seconds and then exits 1**, naming what was busy (a pid, or the load figure).
+  That is a different failure from the lock's "Another instance of test.py is already running", and
+  it is not a reason to retry in a tight loop -- it means the box is genuinely loaded.
+- **Three environment overrides**: `HAMS_SKIP_CI_LOAD_GATE=1` bypasses it entirely,
+  `HAMS_CI_LOAD_GATE_TIMEOUT=<seconds>` changes the wait, and `HAMS_CI_LOAD_GATE_RATIO=<float>`
+  scales the load threshold (default 1.0, i.e. the processor count). Unlike the Init Imports Linter
+  below, this one deliberately HAS an escape hatch, for exactly the reason that section gives.
+- **The gate runs strictly before the systemwide lock is taken**, and that ordering is load-bearing
+  rather than incidental: waiting out somebody else's build matrix while holding the box-wide lock
+  would stop every other session from testing for the whole wait. A source-order assertion in
+  `test_test.py` fails if anyone moves the call. Process C (`HAMS_TEST_LOCK_HELD=1`) is exempt.
+- `test.py --help` is exempt, so reading the usage text never waits.
+
+So the count of pre-flight halts is now four, and this is the only one that can be a DELAY rather
+than an immediate abort. If a queued run seems to be doing nothing, read its first line before
+assuming it hung: `[*] Waiting for the box to quieten before starting Odoo` is this gate working.
+
 ## A third pre-flight check has NO skip flag, and it blocks every session, not just yours
 
 The section above names two pre-flight halts to expect (the Semantic Anchor scan and the burn list)
