@@ -829,6 +829,112 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         mock_run_cmd_func.assert_not_called()
 
 
+class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
+    """Tests [@ANCHOR: infrastructure:_provision_cache_manager_role]
+
+    night_shift_todo/low/cache-manager-odoo-password-fallback-0ea55461.md: no automated
+    provisioning flow ever called scripts/provision_cache_manager_db_role.py, so cache_manager.py's
+    own "odoo"/"odoo" fallback was the normal case on every deployment, not an edge case. This is
+    the automated-provisioning half of that fix -- see cache_manager.py's own _require_db_credentials
+    for the daemon-side half that refuses to start without it.
+    """
+
+    def _env_path(self):
+        return os.path.join(self.tmp, "keys", "cache_manager_db.env")
+
+    def test_creates_when_the_role_is_absent_and_alters_when_present(self):
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra, "_role_exists", return_value=False)
+        self.safe_patch_object(infra, "apply_permissions")
+        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=self._env_path())
+        create_sql = run_cmd.call_args_list[0].kwargs["input"]
+        self.assertIn("CREATE ROLE", create_sql)
+        self.assertNotIn("ALTER ROLE", create_sql)
+
+        run_cmd.reset_mock()
+        self.safe_patch_object(infra, "_role_exists", return_value=True)
+        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=self._env_path())
+        alter_sql = run_cmd.call_args_list[0].kwargs["input"]
+        self.assertIn("ALTER ROLE", alter_sql)
+        self.assertNotIn("CREATE ROLE", alter_sql)
+
+    def test_never_splices_role_name_db_name_or_password_into_the_sql_text(self):
+        # Same SQL-injection class already fixed once for _create_odoo_role_if_missing
+        # (see that test class's own docstring) -- role_name/db_name go through psql's
+        # :"var" identifier substitution, the generated password through :'var' literal
+        # substitution, neither ever f-string-interpolated directly into the SQL text.
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra, "_role_exists", return_value=False)
+        self.safe_patch_object(infra, "apply_permissions")
+        malicious_db = 'x"; DROP DATABASE hams_prod; --'
+        infra._provision_cache_manager_role(
+            run_cmd, malicious_db, role_name="cache_manager_ro", env_file=self._env_path()
+        )
+        role_sql = run_cmd.call_args_list[0].kwargs["input"]
+        grant_sql = run_cmd.call_args_list[1].kwargs["input"]
+        self.assertIn(':"role_name"', role_sql)
+        self.assertIn(":'db_pass'", role_sql)
+        self.assertIn(':"db_name"', grant_sql)
+        self.assertIn(':"role_name"', grant_sql)
+        self.assertNotIn(malicious_db, grant_sql)
+        for call in run_cmd.call_args_list:
+            self.assertNotIn("-c", call.args[0])
+
+    def test_grant_is_connect_only_no_table_privilege(self):
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra, "_role_exists", return_value=False)
+        self.safe_patch_object(infra, "apply_permissions")
+        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=self._env_path())
+        grant_sql = run_cmd.call_args_list[1].kwargs["input"]
+        self.assertIn("GRANT CONNECT ON DATABASE", grant_sql)
+        self.assertNotIn("ALL PRIVILEGES", grant_sql)
+        self.assertNotIn("SELECT", grant_sql)
+
+    def test_writes_an_owner_only_env_file_and_hands_ownership_to_odoo(self):
+        # Real bug found and fixed while writing this function: os.open()'s own mode
+        # argument only ever governs a brand-new file's initial permissions, and this
+        # function's own author (running as root during provisioning) never actually
+        # verified the daemon's own OS user (odoo) could read the result -- it could
+        # not, since the file was left root:root while the daemon's own load_dotenv()
+        # call runs as the unprivileged odoo user (unlike cache_manager.env, loaded by
+        # systemd's EnvironmentFile= as root before it drops to User=odoo). Caught by
+        # actually running this function end-to-end against a real local Postgres
+        # instance and reading the result back as the odoo user, not by this mocked
+        # test alone -- this test pins the fix so it can't silently regress.
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra, "_role_exists", return_value=False)
+        mock_apply_permissions = self.safe_patch_object(infra, "apply_permissions")
+        env_path = self._env_path()
+
+        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=env_path)
+
+        mock_apply_permissions.assert_called_once_with(env_path, "odoo:odoo", 0o600)
+        with open(env_path) as f:
+            content = f.read()
+        self.assertIn("DB_NAME=hams_test\n", content)
+        self.assertIn("DB_USER=cache_manager_ro\n", content)
+        self.assertRegex(content, r"DB_PASS=\S{20,}\n")
+        mode = os.stat(env_path).st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
+    def test_rotated_password_differs_from_whatever_a_prior_call_wrote(self):
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra, "_role_exists", return_value=False)
+        self.safe_patch_object(infra, "apply_permissions")
+        env_path = self._env_path()
+
+        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=env_path)
+        with open(env_path) as f:
+            first_pass = [l for l in f if l.startswith("DB_PASS=")][0]
+
+        self.safe_patch_object(infra, "_role_exists", return_value=True)
+        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=env_path)
+        with open(env_path) as f:
+            second_pass = [l for l in f if l.startswith("DB_PASS=")][0]
+
+        self.assertNotEqual(first_pass, second_pass)
+
+
 class RoleExistsTests(_SafePatchTestCase):
     def test_never_splices_role_name_into_a_shell_or_sql_string(self):
         malicious_name = "x'; DROP TABLE pg_roles; --"
