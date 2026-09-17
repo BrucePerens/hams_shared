@@ -96,7 +96,7 @@ python3 .../night_watch_agent.py release --ref <ref>
 
 1. Run `ListAgents` (it prints your own name and ref first) and `night_watch_agent.py show`.
 2. **A recorded agent whose ref is in the live list**: it exists. If its `state` is `working` and
-   `minutes_since_last_active` is under 90, it is awake -- do nothing. Otherwise `SendMessage` it
+   `minutes_since_last_active` is under 45, it is awake -- do nothing. Otherwise `SendMessage` it
    one line: `night-watch wake-up: run a pass per the night-watch skill.` Then stop. Either way
    leave no trace: no commit, no file, no history entry.
 3. **No agent recorded, or its ref is not in the live list**: there is no agent. Become it:
@@ -111,7 +111,7 @@ python3 .../night_watch_agent.py release --ref <ref>
 1. `heartbeat --state working`. If it exits 4, another session has taken over: stop acting as the
    agent and say so in one line.
 2. Run "A run, in order" above. Heartbeat `working` again whenever you start a new item or a long
-   wait, so a slow Odoo run does not look like a dead agent (90 minutes is the wake threshold).
+   wait, so a slow Odoo run does not look like a dead agent (45 minutes is the wake threshold).
 3. At the end of the pass, `heartbeat --state idle` and end the turn. An idle interactive agent is
    woken by the next alarm's message. Don't `release` at the end of a pass; release only when this
    session is deliberately handing the role off.
@@ -166,7 +166,7 @@ findings get a to-do entry regardless of outcome -- a resolved item's durable re
 `night_shift_history.md`, and a "nothing found" run gets no durable-file entry at all.
 
 **Check `ListAgents` before starting substantive work, not just when something urgent comes up.**
-This skill runs both as an hourly scheduled task and as manual, on-demand sessions Bruce starts
+This skill runs both as a half-hourly (every-30-minutes) scheduled task and as manual, on-demand sessions Bruce starts
 himself -- on a shared dev box, that means multiple sessions can genuinely be working the same
 CI/dependency backlog at the same moment, all with standing authorization to act autonomously. Real
 collision, 2026-09-14: two sessions independently started the identical rust-toolchain 1.98.1 bump
@@ -2127,6 +2127,16 @@ authoritative. Keep the two consistent when the wake-up protocol changes. The fo
 `dependabot-and-ci-watch` task's prompt file may still sit on disk under
 `~/.claude/scheduled-tasks/`, but that task is no longer scheduled -- don't treat its stale text as
 current.
+
+**Cadence changed to every 30 minutes (from hourly), Bruce's instruction, 2026-09-17**, given during
+a live night-watch run when `list_scheduled_tasks` showed no task actually registered despite the
+`night-shift-todo-worker` prompt file existing on disk -- the file and the live registration had
+drifted apart. Recreated via `create_scheduled_task` with `taskId: night-shift-todo-worker` (same id,
+so it lands back at the same path) and `cronExpression: */30 * * * *`. The wake threshold above (was
+90 minutes) is now 45, keeping the same ~1.5x-the-cadence margin rather than diluting the
+responsiveness gain by leaving it fixed while the alarm fires twice as often. If `list_scheduled_tasks`
+ever again shows nothing where this section says something should be running, that is the signal to
+recreate it, not to assume the file on disk means it is live.
 
 This skill lives in `hams_shared` (public) because it holds no proprietary content; it applies to
 all three repositories. The queue and history files it writes live in private `hams_com`.
