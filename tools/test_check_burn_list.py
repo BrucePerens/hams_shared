@@ -1444,6 +1444,86 @@ def test_get_service_uid_escape_hatch_still_recognized_when_the_call_is_line_wra
     assert not any("_get_service_uid MUST NOT be wrapped" in e for e in errors)
 
 
+def test_raw_zero_sudo_sql_call_in_a_try_without_savepoint_is_flagged():
+    # night_shift_todo/low/linter-rule-raw-sql-raise-without-savepoint-8f551159.md: the
+    # zero_sudo_* Postgres procedures RAISE EXCEPTION -- calling one via raw cr.execute()
+    # inside a try/except with no `with cr.savepoint():` around it leaves the transaction
+    # poisoned for whatever runs next in it even once the exception is caught. This is the
+    # shape the Fable round-2 review found five times across edge_routing before each was
+    # fixed by hand (all five now go through zero_sudo.security.utils's own, correctly
+    # savepoint-protected _get_service_uid()/_get_service_env() instead of calling raw SQL
+    # directly -- this rule exists to catch it if raw SQL like this reappears).
+    source = (
+        "try:\n"
+        "    self.env.cr.execute('SELECT zero_sudo_get_service_uid(%s)', (xml_id,))\n"
+        "    uid = self.env.cr.fetchone()[0]\n"
+        "except Exception:  # audit-ignore-catch-all\n"
+        "    uid = None\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("RAW SQL WITHOUT SAVEPOINT" in e for e in errors)
+
+
+def test_raw_zero_sudo_sql_call_inside_a_savepoint_is_not_flagged():
+    # zero_sudo/models/security_utils.py's own _get_service_uid() is exactly this shape --
+    # the canonical correct pattern this rule must never flag.
+    source = (
+        "try:\n"
+        "    with self.env.cr.savepoint():\n"
+        "        self.env.cr.execute('SELECT zero_sudo_get_service_uid(%s)', (xml_id,))\n"
+        "        uid = self.env.cr.fetchone()[0]\n"
+        "except psycopg2.errors.RaiseException as e:\n"
+        "    raise AccessError('resolution failed') from e\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("RAW SQL WITHOUT SAVEPOINT" in e for e in errors)
+
+
+def test_raw_zero_sudo_sql_call_without_savepoint_is_not_flagged_with_the_audit_tag():
+    source = (
+        "try:\n"
+        "    self.env.cr.execute('SELECT zero_sudo_get_service_uid(%s)', (xml_id,))  # audit-ignore-sql-savepoint: cannot raise here, see ADR\n"
+        "    uid = self.env.cr.fetchone()[0]\n"
+        "except Exception:  # audit-ignore-catch-all\n"
+        "    uid = None\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("RAW SQL WITHOUT SAVEPOINT" in e for e in errors)
+
+
+def test_a_plain_select_that_merely_contains_zero_sudo_as_a_table_name_is_not_flagged():
+    # Real false positive an early version of this rule produced (caught before landing) on
+    # zero_sudo/tests/test_facility.py's own INSERT INTO zero_sudo_noisy_table (name)
+    # VALUES (...) -- a plain scratch test table, not a raising procedure; the "(" there
+    # opens an INSERT column list, not a function call. Requiring "select" immediately
+    # before the identifier (the real call shape) excludes this without narrowing away any
+    # genuine zero_sudo_* procedure call, which is always a SELECT.
+    source = (
+        "try:\n"
+        "    self.cr.execute(\"INSERT INTO zero_sudo_noisy_table (name) VALUES ('x')\")\n"
+        "    self.cr.execute('SELECT count(1) FROM zero_sudo_noisy_table')\n"
+        "except Exception:  # audit-ignore-catch-all\n"
+        "    pass\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("RAW SQL WITHOUT SAVEPOINT" in e for e in errors)
+
+
+def test_a_raw_sql_call_not_naming_a_zero_sudo_procedure_is_not_flagged():
+    # This rule is deliberately scoped to the known zero_sudo_* raising-procedure family
+    # (see this rule's own comment in check_burn_list.py for why), not a generic
+    # "any SELECT <function>(" heuristic -- an ordinary, never-raising built-in aggregate
+    # call must not be flagged just because it also sits in an unprotected try.
+    source = (
+        "try:\n"
+        "    self.env.cr.execute('SELECT count(1) FROM some_table')\n"
+        "except Exception:  # audit-ignore-catch-all\n"
+        "    pass\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("RAW SQL WITHOUT SAVEPOINT" in e for e in errors)
+
+
 def test_except_base_exception_is_forbidden_without_the_audit_tag():
     # Bug-hunt fix, 2026-09-11: the catch-all check only ever matched bare `except:` and
     # `except Exception`, missing `except BaseException` entirely -- a strictly WORSE

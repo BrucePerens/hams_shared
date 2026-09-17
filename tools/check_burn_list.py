@@ -1931,6 +1931,63 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                                 lineno,
                                 "CRITICAL FAST FAIL: _get_service_uid MUST NOT be wrapped in a try/except block. It must fail fast if the service account is missing. If this call site is a response-middleware hook that may legitimately run on a cursor-less/database-free route, add '# audit-ignore-service-uid-cursorless' with a comment citing the evidence, plus a tracing anchor.",
                             )
+
+            # night_shift_todo/low/linter-rule-raw-sql-raise-without-savepoint-8f551159.md:
+            # a raw-SQL call to a Postgres procedure that can RAISE EXCEPTION, made inside a
+            # try whose handler recovers, still poisons the transaction for whatever the SAME
+            # transaction runs next unless the call sits inside `with <cursor>.savepoint():` --
+            # zero_sudo/models/security_utils.py's own _get_service_uid() is the canonical
+            # correctly-protected example this rule is modeled on. Deliberately scoped to the
+            # zero_sudo_* procedures specifically (zero_sudo/data/postgres_procedures.xml is
+            # the only place in either repo defining a Postgres function with RAISE EXCEPTION,
+            # confirmed by grep, not assumed) rather than a generic "SELECT <anything>(" match
+            # -- that broader shape also matches ordinary, never-raising built-in aggregates
+            # (count(), sum(), ...), which a real full-codebase run against this rule showed
+            # produces overwhelming false positives. Widen this list if a new raising-procedure
+            # family is ever added elsewhere, with the same grep-first discipline. The match
+            # requires "select" immediately before the identifier (the real call shape, e.g.
+            # "SELECT zero_sudo_get_service_uid(%s)") rather than a bare `zero_sudo_\w+\(`
+            # scan -- a real full-codebase run caught that looser version false-positiving on
+            # zero_sudo/tests/test_facility.py's own "INSERT INTO zero_sudo_noisy_table
+            # (name) VALUES (...)" (a plain scratch test table, not a procedure -- the "("
+            # there opens an INSERT column list, not a function call). First: collect every
+            # node covered by a savepoint `with` block inside this try, so a genuinely
+            # protected call is never flagged.
+            savepoint_protected_ids = set()
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.With) and any(
+                    isinstance(item.context_expr, ast.Call)
+                    and isinstance(getattr(item.context_expr, "func", None), ast.Attribute)
+                    and item.context_expr.func.attr == "savepoint"
+                    for item in sub.items
+                ):
+                    for protected in ast.walk(sub):
+                        savepoint_protected_ids.add(id(protected))
+            for child in ast.walk(node):
+                if (
+                    isinstance(child, ast.Call)
+                    and isinstance(getattr(child, "func", None), ast.Attribute)
+                    and child.func.attr == "execute"
+                    and getattr(
+                        child.func.value, "attr", getattr(child.func.value, "id", "")
+                    )
+                    in ("cr", "_cr")
+                    and id(child) not in savepoint_protected_ids
+                    and child.args
+                    and isinstance(child.args[0], ast.Constant)
+                    and isinstance(child.args[0].value, str)
+                    and re.search(
+                        r"(?i)\bselect\s+zero_sudo_\w+\s*\(", child.args[0].value
+                    )
+                ):
+                    lineno = getattr(child, "lineno", node.lineno)
+                    line_content = self.node_span_text(child)
+                    if "audit-ignore-sql-savepoint" not in line_content:
+                        self.add_error(
+                            lineno,
+                            "CRITICAL RAW SQL WITHOUT SAVEPOINT: this cr.execute(...) calls what looks like a Postgres function that can RAISE EXCEPTION, inside a try block, without 'with <cursor>.savepoint():' around it. A caught exception here still poisons the whole transaction for whatever runs next in it -- see zero_sudo/models/security_utils.py's own _get_service_uid() for the correct pattern. If this call genuinely cannot raise (e.g. a plain, non-raising SELECT that only happens to match this heuristic), add '# audit-ignore-sql-savepoint' with a comment citing the evidence.",
+                        )
+
             for handler in node.handlers:
                 if (
                     isinstance(handler.type, ast.Name)
