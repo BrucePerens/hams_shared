@@ -101,7 +101,7 @@ def _handle_bridge_conn(conn):
         conn.close()
 
 def _run_legacy_bridge():
-    if not hasattr(socket, "AF_UNIX"):
+    if sys.platform == "win32":
         logger.info("[legacy bridge] AF_UNIX not supported on this platform; legacy socket bridge disabled.")
         return
     if os.path.exists(_BRIDGE_SOCK_PATH):
@@ -220,7 +220,7 @@ _BaseEventHandler = pyinotify.ProcessEvent if pyinotify else object
 
 class DummyNotifier:
     def stop(self):
-        pass
+        """No inotify watcher was ever started (pyinotify unavailable), so there is nothing to stop."""
 
 
 class WatchdogEventHandler(_BaseEventHandler):
