@@ -46,23 +46,23 @@ make. A `status: blocked` to-do points into it.
    step 2 that could not be fixed this run become queue items at an honest priority; an urgent one
    also gets a `SendMessage` to the session it affects.
 
-   **How many items, and when to stop, depends on who is asking for the pass:**
-   - **A cron-fired pass with no human present** (see "The night-watch agent" below) has nobody to
-     course-correct it if it goes deep on something that needed judgment, so it stays bounded: up to
-     three open, unclaimed items (fewer if any needs real time), then record and heartbeat idle. The
-     backlog still drains -- the next alarm picks up where this one left off.
-   - **An interactive session Bruce is actively directing** (told to start working the queue, or
-     told "keep working the queue" again after finishing a batch) has no reason to stop at three and
-     wait to be re-prompted -- Bruce, 2026-09-16, after being asked repeatedly: keep going, one item
-     at a time, each finished for real (or correctly blocked/recorded) before starting the next,
-     until the queue is genuinely empty, everything left needs Bruce's own judgment call, or Bruce
-     says to stop. There is no special mechanism that makes this automatic (a plain instruction
-     embedded in a skill is not a persistent background loop by itself) -- it works because the
-     agent keeps reading and re-following this file's own procedure across many consecutive tool
-     rounds in the same session, the same way it would follow any other standing instruction here.
-     A large, product-judgment-shaped item (a whole new feature, a design with real open questions)
-     is still not something to rush through just to empty the queue -- skip it, or convert the real
-     open questions into a `night_shift_questions/open/` entry, rather than forcing a shallow "done."
+   **No per-run item cap. Work the queue until it is genuinely empty, or every remaining item
+   needs Bruce's own judgment call, or Bruce says to stop.** Bruce, 2026-09-16, correcting an
+   earlier draft of this rule that capped a pass at three items: the hourly alarm's only job is to
+   make sure step 2 (CI/dependabot) gets re-checked periodically, not to bound how much of the
+   queue gets worked once the agent is up. So one pass is: Orient, Watch, Unblock, then keep
+   claiming and finishing queue items back to back -- not stopping after a fixed count and waiting
+   to be woken again -- until nothing open and unclaimed is left, or everything left is a real
+   product-judgment call (a whole new feature, a design with open questions) rather than a bounded
+   fix. Convert a genuine judgment call into a `night_shift_questions/open/` entry and move on to
+   the next item, rather than skipping the whole queue over one large item. Only then record,
+   improve this file if warranted, and heartbeat idle (see "The night-watch agent" below) -- an
+   interactive session being actively told "keep working the queue" follows the exact same rule,
+   there is no separate, more bounded mode for it. There is no special mechanism that makes
+   continuing automatic (a plain instruction embedded in a skill is not a persistent background loop
+   by itself) -- it works because the agent keeps reading and re-following this file's own procedure
+   across many consecutive tool rounds in the same session, the same way it follows any other
+   standing instruction here.
 5. **Record** (see "Recording" below). A run that found nothing and worked nothing leaves no trace.
 6. **Improve this file** with anything a future run would genuinely benefit from knowing (see
    "Self-improvement").
