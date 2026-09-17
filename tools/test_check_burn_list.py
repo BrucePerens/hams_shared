@@ -1524,6 +1524,101 @@ def test_a_raw_sql_call_not_naming_a_zero_sudo_procedure_is_not_flagged():
     assert not any("RAW SQL WITHOUT SAVEPOINT" in e for e in errors)
 
 
+def test_get_param_patch_with_fixed_return_value_is_flagged_in_an_http_case():
+    # night_shift_todo/low/lint-rule-get-param-mock-must-fall-through-bd8524b6.md: a
+    # return_value on a get_param patch answers EVERY config key with that same value, not
+    # just the one the test cares about -- the exact ham_club_management/tests/
+    # test_club_dues_stripe_webhook.py incident this rule exists to catch (a return_value=False
+    # zeroed a request-size limit and turned a real request into a spurious 413).
+    source = (
+        "class TestX(HttpCase):\n"
+        "    def setUp(self):\n"
+        "        self.safe_patch(\n"
+        "            'odoo.addons.ham_base.models.ir_config_parameter.IrConfigParameter.get_param',\n"
+        "            return_value=False,\n"
+        "        )\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("TEST FALLTHROUGH" in e for e in errors)
+
+
+def test_get_param_patch_with_a_non_fallthrough_side_effect_is_flagged_in_an_http_case():
+    # The scoped-but-still-broken shape: the side_effect only answers for real for the one
+    # key it names, returning its OWN default for every other key instead of calling through
+    # to the real get_param -- the exact test_club_dues_stripe_onboarding.py incident (broke
+    # database.secret, CSRF 500s on every page-rendering test).
+    source = (
+        "class TestX(HttpCase):\n"
+        "    def setUp(self):\n"
+        "        self.safe_patch(\n"
+        "            'odoo.addons.ham_base.models.ir_config_parameter.IrConfigParameter.get_param',\n"
+        "            side_effect=lambda key, default=False: (\n"
+        "                'x' if key == 'some.key' else default\n"
+        "            ),\n"
+        "        )\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("TEST FALLTHROUGH" in e for e in errors)
+
+
+def test_get_param_patch_with_a_real_fallthrough_side_effect_is_not_flagged():
+    # The safe shape: the side_effect's own else-branch calls through to the real,
+    # unpatched get_param for any key it doesn't recognize, rather than returning a
+    # made-up default.
+    source = (
+        "class TestX(HttpCase):\n"
+        "    def setUp(self):\n"
+        "        orig = self.env['ir.config_parameter'].get_param\n"
+        "        self.safe_patch(\n"
+        "            'odoo.addons.ham_base.models.ir_config_parameter.IrConfigParameter.get_param',\n"
+        "            side_effect=lambda key, default=False: (\n"
+        "                'x' if key == 'some.key' else orig(key, default)\n"
+        "            ),\n"
+        "        )\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("TEST FALLTHROUGH" in e for e in errors)
+
+
+def test_get_param_patch_is_not_flagged_outside_an_http_case():
+    # Deliberately scoped to HttpCase-family tests (self.in_real_transaction_case also
+    # covers HamsHttpCase/HttpCase) -- a plain TransactionCase test with no page rendering
+    # involved doesn't carry the same CSRF/request-layer blast radius this rule exists for.
+    source = (
+        "class TestX(SomeOtherBase):\n"
+        "    def setUp(self):\n"
+        "        self.safe_patch(\n"
+        "            'odoo.addons.ham_base.models.ir_config_parameter.IrConfigParameter.get_param',\n"
+        "            return_value=False,\n"
+        "        )\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("TEST FALLTHROUGH" in e for e in errors)
+
+
+def test_get_param_patch_with_return_value_is_not_flagged_with_the_audit_tag():
+    source = (
+        "class TestX(HttpCase):\n"
+        "    def setUp(self):\n"
+        "        self.safe_patch(  # audit-ignore-get-param-fallthrough: intentional, see ADR\n"
+        "            'odoo.addons.ham_base.models.ir_config_parameter.IrConfigParameter.get_param',\n"
+        "            return_value=False,\n"
+        "        )\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("TEST FALLTHROUGH" in e for e in errors)
+
+
+def test_a_patch_of_an_unrelated_target_is_not_flagged():
+    source = (
+        "class TestX(HttpCase):\n"
+        "    def setUp(self):\n"
+        "        self.safe_patch('some.other.thing', return_value=False)\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert not any("TEST FALLTHROUGH" in e for e in errors)
+
+
 def test_except_base_exception_is_forbidden_without_the_audit_tag():
     # Bug-hunt fix, 2026-09-11: the catch-all check only ever matched bare `except:` and
     # `except Exception`, missing `except BaseException` entirely -- a strictly WORSE

@@ -3112,6 +3112,57 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             self._check_unguarded_outbound_fetch(node, func_name)
             self._check_retry_replays_non_idempotent_methods(node, func_name)
 
+            # night_shift_todo/low/lint-rule-get-param-mock-must-fall-through-bd8524b6.md:
+            # a get_param patch whose replacement can return for an unmatched key without
+            # calling through to the real get_param breaks EVERY other config lookup in the
+            # process, not just the one key the test cares about -- including keys Odoo's own
+            # HTTP layer needs (database.secret for CSRF, request-size limits, ...). Found
+            # twice in ham_club_management: a return_value=False mock zeroed a request-size
+            # limit (spurious 413); a side_effect scoped to one key still broke
+            # database.secret's own fallback (CSRF 500s on every page-rendering test,
+            # including the 404 ones). Scoped to HttpCase-family tests (self.in_real_
+            # transaction_case also covers HamsHttpCase/HttpCase, not just
+            # RealTransactionCase -- see visit_ClassDef) since that's where a broken
+            # fallback actually breaks page rendering, not a plain TransactionCase.
+            if (
+                func_name in ("safe_patch", "patch")
+                and self.in_real_transaction_case
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and "get_param" in node.args[0].value
+            ):
+                line_content = self.node_span_text(node)
+                if "audit-ignore-get-param-fallthrough" not in line_content:
+                    for kw in node.keywords:
+                        if kw.arg == "return_value":
+                            # A fixed return_value applies to EVERY key, by definition --
+                            # there is no way for this shape to fall through correctly.
+                            self.add_error(
+                                node.lineno,
+                                "CRITICAL TEST FALLTHROUGH: A get_param patch with a fixed return_value answers EVERY config key with that same value, including keys Odoo's own HTTP layer needs (database.secret, request-size limits, ...) -- not just the one this test cares about. Use ir.config_parameter's own set_param() to set the real parameter for the key under test instead (ham_base/models/ir_config_parameter.py), or a side_effect that falls through to the real get_param for every other key. If this really is meant to answer every key (rare), add '# audit-ignore-get-param-fallthrough' with a comment explaining why.",
+                            )
+                        elif kw.arg == "side_effect" and isinstance(kw.value, ast.Lambda):
+                            body = kw.value.body
+                            if isinstance(body, ast.IfExp):
+                                orelse = body.orelse
+                                # Any call at all in the else-branch, not just a literal
+                                # `x.get_param(...)` attribute call -- realistic fallthrough
+                                # code captures the original bound method in a local variable
+                                # BEFORE patching (referencing self.env[...].get_param directly
+                                # inside the lambda would call the mock itself, once patched),
+                                # so the actual call site is usually a bare Name call like
+                                # `orig(key, default)`, not an attribute call. A bare
+                                # Name/Constant orelse (just returning `default` or a fixed
+                                # value) is what this rule exists to catch; any call is treated
+                                # as a real fallthrough attempt.
+                                falls_through = isinstance(orelse, ast.Call)
+                                if not falls_through:
+                                    self.add_error(
+                                        node.lineno,
+                                        "CRITICAL TEST FALLTHROUGH: This get_param side_effect returns its own default for every OTHER key instead of calling through to the real get_param -- including keys Odoo's own HTTP layer needs (database.secret, request-size limits, ...). Use ir.config_parameter's own set_param() to set the real parameter for the key under test instead (ham_base/models/ir_config_parameter.py), or fall through to the real (unpatched) get_param for any key this test doesn't care about. If this really is meant to answer every key (rare), add '# audit-ignore-get-param-fallthrough' with a comment explaining why.",
+                                    )
+
             if func_name == "safe_patch_object" and node.args:
                 target = node.args[0]
                 target_attr = getattr(target, "attr", "")
