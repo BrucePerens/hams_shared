@@ -47,7 +47,7 @@ Only a *special* user (`odoo_facility_service_internal`) may possess `base.group
 Use `hashlib.sha256` and the `secrets` module.
 * **RPC Bearer Tokens:** The use of the Odoo facility to allocate RPC bearer tokens (`res.users.apikeys`) will immediately break the build.
 The `daemon_key_manager` must be the only facility used, and is the only module allowed to internally allocate keys.
-* **Sandbox Evasion & AI Cheating:** You are strictly **FORBIDDEN** from using `os.environ.get("IN_JULES_VM")` or `JULES_SESSION_ID` to skip tests or alter behavior when running inside the AI evaluation sandbox. Tests must execute authentically. Any attempt to bypass tests using these environment variables will fatally fail the build.
+* **Sandbox Evasion & AI Cheating:** You are strictly **FORBIDDEN** from checking any environment variable to detect the AI evaluation sandbox and skip tests or alter behavior based on it. Tests must execute authentically. Any attempt to bypass tests this way will fatally fail the build.
 </critical_guardrails>
 - <frontend_standards>
 ## 4. 🎨 XML, QWeb, and UI Elements

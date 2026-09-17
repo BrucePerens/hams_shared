@@ -153,7 +153,7 @@ def get_module(path):
                 return parts[1]
             return parts[0]
 
-    # 4. Fallback for isolated test environments (e.g. Jules ~/tmp)
+    # 4. Fallback for isolated test environments (e.g. an isolated namespace's ~/tmp)
     parts = abs_path.split(os.sep)
     if "daemons" in parts:
         idx = parts.index("daemons")

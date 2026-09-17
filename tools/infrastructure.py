@@ -1103,65 +1103,6 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
-            "path": "/opt/hams/systemd/clublog.sync.service",
-            "content": """\
-[Unit]
-Description=Ham Radio ClubLog Upload Sync Daemon
-After=network.target
-
-[Service]
-# ADR-0070 OS-Level Daemon Restriction
-ProtectSystem=strict
-ProtectHome=read-only
-PrivateTmp=true
-PrivateDevices=true
-NoNewPrivileges=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
-Type=simple
-User=odoo
-WorkingDirectory=/opt/hams/daemons/clublog_sync
-
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
-EnvironmentFile=-/opt/hams/etc/clublog.env
-# Real, dedicated service account for this daemon -- previously guessed as
-# logbook_api_service_internal (the READ-ONLY public-API proxy account, an
-# unrelated consumer), which cannot write clublog_last_sync/clublog_qso_upload_status
-# back to Odoo (that account's own ACL is read-only, and it was never
-# provisioned via daemon.key.registry for this daemon at all). See
-# night_shift_todo.md's "Follow-up, 2026-09-14" entry and its closure below.
-Environment="ODOO_USER=clublog_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/clublog_sync_service_internal.key"
-Environment="POLL_INTERVAL=86400"
-Environment="PYTHONPATH=/opt/hams/daemons"
-Environment="DAEMON_ARGS="
-
-# Smoketest Resource Verification
-ExecStartPre=/usr/bin/python3 /opt/hams/daemons/clublog_sync/main.py --start-test
-
-# Execution via system Python
-ExecStart=/usr/bin/python3 /opt/hams/daemons/clublog_sync/main.py $DAEMON_ARGS
-
-Restart=always
-RestartSec=60
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=clublog.sync
-
-[Install]
-WantedBy=multi-user.target
-""",
-            "owner": "root:root",
-            "mode": "644",
-            "environments": ["prod", "test"],
-        },
-        {
             "path": "/opt/hams/systemd/amsat.tle.sync.service",
             "content": """\
 [Unit]
@@ -4110,7 +4051,7 @@ def provision_environment(
                 "[!] DIAGNOSTIC FOR AI: The sibling repository could not be cloned due to GitHub authentication restrictions in this headless VM."
             )
             _logger.error(
-                "    If required modules are not present, tests will crash. Document this in JULES_ISSUES.md."
+                "    If required modules are not present, tests will crash. Document this in hams_helpdesk/docs/KNOWN_TEST_ISSUES.md."
             )
 
     env_vars["HAMS_COM_DIR"] = hams_com_dir

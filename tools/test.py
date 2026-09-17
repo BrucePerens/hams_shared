@@ -1641,30 +1641,6 @@ def rebuild_db(db_name):
     # Get the working directory where data is saved
     subprocess.run(["redis-cli", "CONFIG", "GET", "dir"], check=False, env=env)
     subprocess.run(["redis-cli", "CONFIG", "GET", "dbfilename"], check=False, env=env)
-    is_jules = bool(os.environ.get("IN_JULES_VM")) or bool(
-        os.environ.get("JULES_SESSION_ID")
-    )
-    if is_jules:
-        try:
-            subprocess.run(["rabbitmqctl", "stop_app"], check=False)
-            subprocess.run(["rabbitmqctl", "reset"], check=False)
-            subprocess.run(["rabbitmqctl", "start_app"], check=False)
-            subprocess.run(
-                [
-                    "sudo",
-                    "systemctl",
-                    "stop",
-                    "dx.firehose.service",
-                    "adif.processor.service",
-                    "qrz.scraper.service",
-                ],
-                check=False,
-            )
-            subprocess.run(["pkill", "-f", "dx_firehose.py"], check=False)
-            subprocess.run(["pkill", "-f", "adif_processor.py"], check=False)
-            subprocess.run(["pkill", "-f", "qrz_scraper.py"], check=False)
-        except Exception as e:  # audit-ignore-catch-all
-            _logger.warning("Daemon flush exception: %s", e)
 
     try:
         psql_cmd = infrastructure.get_pg_bin("psql")
@@ -2199,53 +2175,6 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     sys.exit(ret)
 
 
-def start_jules_daemons(base_dir):
-    print("[*] Clearing port 8075 bindings...")
-    subprocess.run(["fuser", "-k", "8075/tcp"], check=False)
-
-    print("[*] Provisioning Jules environment via infrastructure.py...")
-    # Real fix, 2026-09-12 (bug class 47 shape, flagged in night_shift_todo.md as
-    # "no live exploitation path found" but never actually closed): the three
-    # interpolated values below used to be embedded as raw f-string text inside
-    # single quotes -- a value containing a quote or backslash (e.g. a `base_dir`
-    # or `$USER` with an embedded `'`) would break out of the string literal and
-    # inject arbitrary Python into a script this function then runs as root via
-    # `sudo -E python3 -c`. `!r` (repr) produces a properly escaped Python string
-    # literal regardless of what the value contains, closing the injection shape
-    # without needing to first decide whether this Jules-VM-only path is kept.
-    tools_dir = os.path.join(base_dir, "hams_shared", "tools")
-    jules_user = os.environ.get("USER", "odoo")
-    script = f"""import sys, os, subprocess
-sys.path.insert(0, {tools_dir!r})
-import infrastructure
-def _safe_run(cmd, **kw):
-    return subprocess.run(cmd, check=True, **kw)
-orig_user = {jules_user!r}
-env_vars = dict(os.environ)
-env_vars["REPO_ROOT"] = {base_dir!r}
-env_vars["HOME"] = os.path.expanduser('~/tmp')
-env_vars["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
-os.environ["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
-infrastructure.provision_environment(_safe_run, env_vars, orig_user, skip_apt=True, is_test=True)"""
-
-    cmd = ["sudo", "-E", sys.executable, "-c", script]
-    run_env = os.environ.copy()
-    run_env["HOME"] = os.path.expanduser("~/tmp")
-    run_env["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
-    subprocess.run(
-        ["mkdir", "-p", f"{os.path.expanduser('~/tmp')}/.gnupg"], check=False
-    )
-    subprocess.run(
-        ["chmod", "700", f"{os.path.expanduser('~/tmp')}/.gnupg"], check=False
-    )
-    subprocess.run(cmd, check=True, env=run_env)
-
-    pg_socket = "/var/run/postgresql"
-    if not os.path.exists(pg_socket):
-        pg_socket = "/tmp"
-    os.environ["PGHOST"] = pg_socket
-
-
 def check_host_apt_packages():
     """
     Verifies all required host packages are installed on Debian/Ubuntu systems
@@ -2751,27 +2680,7 @@ def main():
 
     os.environ.setdefault("HAMS_KEYS_DIR", "/opt/hams/etc/keys")
 
-    is_jules = bool(os.environ.get("IN_JULES_VM")) or bool(
-        os.environ.get("JULES_SESSION_ID")
-    )
-
-    if is_jules:
-        existing_args = os.environ.get("ODOO_TEST_CHROME_ARGS", "")
-        if "--no-sandbox" not in existing_args:
-            os.environ["ODOO_TEST_CHROME_ARGS"] = (
-                f"{existing_args} --no-sandbox --disable-dev-shm-usage".strip()
-            )
-
-        if os.geteuid() != 0:
-            print("[*] Elevating privileges for Jules provisioning...")
-            exec_cmd = ["sudo", "-H", "-E", sys.executable] + sys.argv
-            os.execvpe("sudo", exec_cmd, os.environ)
-
-    if (
-        os.environ.get("HAMS_ISOLATED_NS") != "1"
-        and not os.environ.get("IN_JULES_VM")
-        and not os.environ.get("JULES_SESSION_ID")
-    ):
+    if os.environ.get("HAMS_ISOLATED_NS") != "1":
         if "--internal-ns-init" not in sys.argv:
             check_host_apt_packages()
 
@@ -2948,9 +2857,6 @@ def main():
     if args.pause_on_fail:
         os.environ["HAMS_PAUSE_ON_FAIL"] = "1"
 
-    if is_jules:
-        start_jules_daemons(base_dir)
-
     python_exec = "/usr/bin/python3"
     odoo_bin = "/usr/bin/odoo"
     addons_path = get_addons_path(base_dir)
@@ -3097,11 +3003,6 @@ def main():
             "0",
         ]
 
-        if is_jules:
-            os.environ["HOME"] = "/var/lib/odoo"
-            os.environ["XDG_DATA_HOME"] = "/var/lib/odoo/.local/share"
-            cmd = ["sudo", "-E", "-u", "odoo"] + cmd
-
         rc = run_cmd(cmd, extractor)
         sys.exit(rc)
 
@@ -3141,11 +3042,6 @@ def main():
             "0",
         ]
 
-        if is_jules:
-            os.environ["HOME"] = "/var/lib/odoo"
-            os.environ["XDG_DATA_HOME"] = "/var/lib/odoo/.local/share"
-            cmd = ["sudo", "-E", "-u", "odoo"] + cmd
-
         rc_odoo = run_cmd(cmd, extractor)
         if rc_odoo != 0:
             final_rc = rc_odoo
@@ -3184,11 +3080,6 @@ def main():
                 "--limit-memory-hard",
                 "0",
             ]
-
-            if is_jules:
-                os.environ["HOME"] = "/var/lib/odoo"
-                os.environ["XDG_DATA_HOME"] = "/var/lib/odoo/.local/share"
-                cmd = ["sudo", "-E", "-u", "odoo"] + cmd
 
             rc = run_cmd(cmd, extractor)
             if rc != 0:
@@ -3264,16 +3155,10 @@ def main():
                 print(f"[+] Coverage report written to {coverage_json_path}")
 
     print("[*] Cleaning up Chrome temporary directories...")
-    if is_jules:
-        subprocess.run(
-            ["sudo", "sh", "-c", "rm -rf /tmp/*_chrome_odoo /var/tmp/*_chrome_odoo"],
-            capture_output=True,
-        )
-    else:
-        subprocess.run(
-            ["sh", "-c", "rm -rf /tmp/*_chrome_odoo /var/tmp/*_chrome_odoo"],
-            capture_output=True,
-        )
+    subprocess.run(
+        ["sh", "-c", "rm -rf /tmp/*_chrome_odoo /var/tmp/*_chrome_odoo"],
+        capture_output=True,
+    )
 
     if audio_sink_before and "dummy" not in audio_sink_before.lower():
         audio_sink_after = get_default_audio_sink_name()

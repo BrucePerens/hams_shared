@@ -149,14 +149,9 @@ class MainModeDispatchTests(unittest.TestCase):
         # already-isolated invocation -- see
         # hams-odoo-test-runner-sudo-and-polkit); HAMS_TEST_LOCK_HELD=1
         # skips the single-instance lock's real file acquisition.
-        # IN_JULES_VM/JULES_SESSION_ID are explicitly cleared so this test
-        # doesn't depend on whatever the real ambient environment happens
-        # to have set.
         env_overrides = {
             "HAMS_ISOLATED_NS": "1",
             "HAMS_TEST_LOCK_HELD": "1",
-            "IN_JULES_VM": "",
-            "JULES_SESSION_ID": "",
         }
         # main()'s very first real-filesystem check is is_git_checkout_root()
         # ORed with a literal os.path.isfile("<cwd>/tools/test.py") check --
@@ -420,45 +415,6 @@ class FailureExtractorOdooResultHeadlineTests(unittest.TestCase):
         output = buf.getvalue()
         self.assertIn("issue(s) detected", output)
         self.assertIn("No odoo.tests.result line was found", output)
-
-
-class StartJulesDaemonsInjectionTests(unittest.TestCase):
-    """start_jules_daemons() builds a Python script as an f-string and runs it
-    via `sudo -E python3 -c <script>` -- base_dir and $USER used to be embedded
-    as raw f-string text inside single quotes, so a value containing a quote
-    could break out of the string literal and inject arbitrary code into a
-    script that runs as root. Fixed via `!r` (repr) escaping; these tests never
-    let a real `sudo`/`mkdir`/`chmod`/script-execution happen -- subprocess.run
-    is mocked throughout, and the assertions are against the generated script
-    text itself."""
-
-    def test_a_base_dir_and_user_containing_a_quote_do_not_break_out_of_the_generated_script(self):
-        malicious = "/tmp/evil'; os.system('touch /tmp/pwned'); x = '"
-        calls = []
-
-        def fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            return MagicMock(returncode=0)
-
-        with patch.object(_test_runner.subprocess, "run", side_effect=fake_run), \
-                patch.dict(os.environ, {"USER": malicious}):
-            _test_runner.start_jules_daemons(malicious)
-
-        sudo_calls = [c for c in calls if c and c[0] == "sudo"]
-        self.assertEqual(
-            len(sudo_calls), 1,
-            "expected exactly one `sudo -E <python> -c <script>` invocation",
-        )
-        script = sudo_calls[0][-1]
-
-        # Pre-fix, the unescaped quote in `malicious` breaks the string literal
-        # boundary, and the payload becomes real top-level statements -- this
-        # compile() call raises SyntaxError against the pre-fix code (the broken-
-        # out `x = '...'` never finds its matching close-quote) or, if it happens
-        # to parse, the injected os.system(...) call would appear as bare,
-        # executable source rather than inert string data.
-        compile(script, "<generated-jules-script>", "exec")
-        self.assertNotIn("os.system('touch /tmp/pwned')\n", script)
 
 
 class RemoveStaleFilestoreTests(unittest.TestCase):

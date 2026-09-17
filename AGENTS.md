@@ -2,7 +2,7 @@
 
 <system_role>
 This document configures the behavior, context, and boundaries for any Large Language Model (LLM), or AI; interacting with this repository.
-For example: gemini.google.com and jules.google.com.
+For example: gemini.google.com.
 </system_role>
 
 <persona_and_boundaries>
