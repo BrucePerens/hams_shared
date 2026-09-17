@@ -577,6 +577,30 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
     the watcher its own deadline, or use `TaskStop`.
   - Record what you cancelled in `night_shift_history.md` (it's a completed action) or file a
     `night_shift_todo/` entry if cancelling it leaves something still needing a real re-run.
+- **A transport tool's version-probe flag is part of what a pin bump can break.** The relay finds
+  each tool by running it and matching a banner (`mercury::probe_mercury_installed`,
+  `probe_ardopcf_version`, `probe_direwolf_version`). mercury `a85ea0ba` (2026-09-17) added `-V` and
+  in the same commit stopped printing its `Rhizomatica Mercury Version` banner for `-h`, so bumping
+  the pin alone would have made every relay report a working mercury as not installed -- and
+  `spawn_mercury_and_wait_for_mercury_ready_against_the_real_built_binary` SKIPS itself when no
+  mercury is discoverable, so CI would have stayed green on it. The probe now runs `-V`, which older
+  builds also answer (they print the banner before rejecting the unknown flag; the probe ignores the
+  exit status). So when bumping any transport tool's pin, diff its CLI/usage handling as well as its
+  protocol code, and grep the relay for the flag the probe uses. More generally: a test that skips
+  itself when the tool is absent cannot report that the tool became undetectable -- the fake-binary
+  test is what guards that, so make the fake mimic the new real binary's flag behaviour rather than
+  answering every argument.
+- **`$RUNNER_TEMP` is not unique per job on the persistent hams-devbox runner.** A fixed path under
+  it (`$RUNNER_TEMP/pip-audit-venv`) was found half-removed by the second matrix leg two seconds
+  after the first leg finished, which surfaced as `No module named pip.__main__` on one leg while the
+  other passed (run 35248460489). Use `mktemp -d "$RUNNER_TEMP/<name>.XXXXXX"`, pass the path on
+  through `$GITHUB_ENV`, and remove it in an `if: always()` step.
+- **The runner's system Python is PEP 668 externally managed**, so `pip install --user <tool>` in a
+  host-side job exits 1 with `error: externally-managed-environment` before the tool ever runs. That
+  is what `Python Dependency Audit` did on every run from 2026-09-08 (when it moved to self-hosted)
+  to 2026-09-17. Install such a tool into a virtual environment instead. hams_open's copy of that
+  workflow runs on `ubuntu-latest` and is unaffected, so a green run there says nothing about the
+  hams_com one.
 - **The relay's transport-tool install scripts build pinned commits** (since 2026-09-15). Both
   `daemons/hams_local_relay/install_relay_runtime_deps.sh` and `install_relay_runtime_deps_rpm.sh`
   fetch `MERCURY_COMMIT`/`ARDOPCF_COMMIT` exactly. The Debian script also has
