@@ -40,12 +40,29 @@ make. A `status: blocked` to-do points into it.
    a to-do still `status: blocked`, flip it to `open`, clear `claimed_by:` unless that session is
    live, remove `blocked_on:`, and append a note naming the answered question and its decision.
    Commit and push each. Cheap; do it every run.
-4. **Work the queue** (Part 2): `critical/`, then `high/`, `medium/`, `low/`. Up to three open,
-   unclaimed items per run (fewer if they need real time). Claim, commit, and push the claim BEFORE
-   investigating. Finish for real (tested, committed, pushed -- all three) or record exact progress,
-   or file a real question and block the item. CI or security findings from step 2 that could not be
-   fixed this run become queue items at an honest priority; an urgent one also gets a
-   `SendMessage` to the session it affects.
+4. **Work the queue** (Part 2): `critical/`, then `high/`, `medium/`, `low/`. Claim, commit, and push
+   the claim BEFORE investigating. Finish for real (tested, committed, pushed -- all three) or
+   record exact progress, or file a real question and block the item. CI or security findings from
+   step 2 that could not be fixed this run become queue items at an honest priority; an urgent one
+   also gets a `SendMessage` to the session it affects.
+
+   **How many items, and when to stop, depends on who is asking for the pass:**
+   - **A cron-fired pass with no human present** (see "The night-watch agent" below) has nobody to
+     course-correct it if it goes deep on something that needed judgment, so it stays bounded: up to
+     three open, unclaimed items (fewer if any needs real time), then record and heartbeat idle. The
+     backlog still drains -- the next alarm picks up where this one left off.
+   - **An interactive session Bruce is actively directing** (told to start working the queue, or
+     told "keep working the queue" again after finishing a batch) has no reason to stop at three and
+     wait to be re-prompted -- Bruce, 2026-09-16, after being asked repeatedly: keep going, one item
+     at a time, each finished for real (or correctly blocked/recorded) before starting the next,
+     until the queue is genuinely empty, everything left needs Bruce's own judgment call, or Bruce
+     says to stop. There is no special mechanism that makes this automatic (a plain instruction
+     embedded in a skill is not a persistent background loop by itself) -- it works because the
+     agent keeps reading and re-following this file's own procedure across many consecutive tool
+     rounds in the same session, the same way it would follow any other standing instruction here.
+     A large, product-judgment-shaped item (a whole new feature, a design with real open questions)
+     is still not something to rush through just to empty the queue -- skip it, or convert the real
+     open questions into a `night_shift_questions/open/` entry, rather than forcing a shallow "done."
 5. **Record** (see "Recording" below). A run that found nothing and worked nothing leaves no trace.
 6. **Improve this file** with anything a future run would genuinely benefit from knowing (see
    "Self-improvement").
