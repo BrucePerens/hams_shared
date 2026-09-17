@@ -96,9 +96,19 @@ python3 .../night_watch_agent.py release --ref <ref>
 
 1. Run `ListAgents` (it prints your own name and ref first) and `night_watch_agent.py show`.
 2. **A recorded agent whose ref is in the live list**: it exists. If its `state` is `working` and
-   `minutes_since_last_active` is under 45, it is awake -- do nothing. Otherwise `SendMessage` it
-   one line: `night-watch wake-up: run a pass per the night-watch skill.` Then stop. Either way
-   leave no trace: no commit, no file, no history entry.
+   `minutes_since_last_active` is under 45, it is awake -- `SendMessage` it the one-line periodic
+   reminder below, then stop. Otherwise `SendMessage` it the wake-up line instead, then stop.
+   Either way leave no trace beyond the message itself: no commit, no file, no history entry.
+   - **Awake (periodic reminder)**: `night-watch periodic check-in: if it has been a while since
+     you last ran Part 1 (CI/dependabot), do that now, then continue where you were.` This exists
+     because "awake and working" only proves the agent hasn't stalled -- it says nothing about
+     whether Part 1 has been re-checked recently. Bruce, 2026-09-16: "the hourly alarm's only job
+     is to make sure step 2 (CI/dependabot) gets re-checked periodically" -- a message that queues
+     silently until the agent's next tool round (see below) is how that actually happens once the
+     agent is mid-way through a long queue item, not just at the start of a pass. Don't turn this
+     into a demand to drop what you're doing: the agent decides, on seeing it, whether a fresh
+     Part 1 pass is due yet or it just ran one.
+   - **Stale**: `night-watch wake-up: run a pass per the night-watch skill.`
 3. **No agent recorded, or its ref is not in the live list**: there is no agent. Become it:
    `claim --name <your name> --ref <your ref> --force` (force only after `ListAgents` has shown the
    recorded ref is gone), then run a pass yourself as the agent (below). A scheduled session is
@@ -2137,6 +2147,12 @@ so it lands back at the same path) and `cronExpression: */30 * * * *`. The wake 
 responsiveness gain by leaving it fixed while the alarm fires twice as often. If `list_scheduled_tasks`
 ever again shows nothing where this section says something should be running, that is the signal to
 recreate it, not to assume the file on disk means it is live.
+
+Same conversation, Bruce's own follow-up: the awake case used to do nothing at all, which meant the
+alarm's own stated job ("make sure step 2 gets re-checked periodically") only actually happened
+while the agent was stalled -- a healthy, busy agent deep in one to-do item for hours would never be
+reminded to re-check CI/dependabot until it happened to finish that item on its own. Fixed by having
+the awake case send a periodic reminder too, not just the stale case a wake-up.
 
 This skill lives in `hams_shared` (public) because it holds no proprietary content; it applies to
 all three repositories. The queue and history files it writes live in private `hams_com`.
