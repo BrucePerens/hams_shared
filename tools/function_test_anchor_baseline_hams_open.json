@@ -26,7 +26,6 @@
   "database_management/models/db_stats.py::DatabaseQueryStat.action_reset_stats",
   "database_management/models/db_stats.py::DatabaseQueryStat.init",
   "distributed_redis_cache/daemons/cache_manager.py::main",
-  "edge_routing/models/domain.py::EdgeRoutingDomain.get_target_slug_by_domain",
   "edge_routing/models/domain.py::EdgeRoutingDomain.push_all_to_pager_duty",
   "edge_routing/models/res_users.py::ResUsersEdgeRouting.get_record_by_slug",
   "edge_routing/models/routing_mixin.py::EdgeRoutingMixin._generate_unique_slug",
