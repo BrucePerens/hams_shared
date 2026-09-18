@@ -220,6 +220,18 @@ workflows (`gh api repos/BrucePerens/hams_shared/actions/workflows --jq .total_c
 conventions (env-var ordering for `sudo -u odoo` test runs, worktree symlink gotchas,
 secret-handling rules) before doing anything else -- they apply to any fix you make here.
 
+**On this box, plain `grep` is a shell function wrapping `ugrep` (via the Claude Code binary),
+not GNU grep** -- `type grep` shows it. For a simple substring/basic-regex search this is
+invisible, but a heavier extended-regex pattern (e.g. a bounded repetition like `.{0,80}` used to
+grab surrounding context) can hit ugrep's own complexity limit and fail with `ugrep: error: ...
+exceeds complexity limits`, printing nothing and, if stderr is redirected to `/dev/null` as usual,
+looking exactly like "zero matches" instead of "the command errored." Found live, 2026-09-17/18: a
+context-extraction grep across the bug-hunt claims corpus silently reported 0 results this way,
+while a plain substring grep on the very same files found hundreds. If a `grep` command's result
+looks suspiciously empty for a pattern that should obviously match, redo it once with `command grep`
+(real GNU grep 3.11) before trusting the "no matches" conclusion, especially for anything beyond a
+plain keyword or basic regex.
+
 ### Step 1: Check Dependabot alerts
 
 For each of the three repos, run:
