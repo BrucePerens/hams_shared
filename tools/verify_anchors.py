@@ -78,6 +78,35 @@ def _clean(name):
     return name.replace("COMM_", "").replace("PRI_", "")
 
 
+def _classification_prefix(own_prefix, prev_line):
+    """Returns the text this anchor's classification (Tests/Verified by/Triggers/base
+    declaration) should actually be judged against: `own_prefix` itself, unless it carries no
+    real signal (empty, or just a bare comment marker like `#`/`//`), in which case falls back to
+    `prev_line`'s own tail (comment marker stripped) -- the text immediately before it wrapped
+    onto the previous physical line.
+
+    Ports `check_function_test_anchors.py`'s own `_is_base_anchor_declaration(..., prev_line=...)`
+    fallback (added there 2026-09-13 for exactly this reason) into this sibling tool, which never
+    had it despite that function's own docstring claiming to mirror this one's classification
+    exactly. Confirmed live, 2026-09-17, that the two tools genuinely diverged without it: a
+    same-line-empty-prefix reference wrapped from the line above --
+    `ham_shack/tests/test_station_timeshare_security.py:53-54` and
+    `ham_shack/tests/test_operator_chat_friends_api.py:122-123`, both
+    `# ...(see` / `# [@ANCHOR: ham_operator_friendship_create_authz]) -- ...` -- is correctly
+    recognized as a reference (not a base declaration) by `_is_base_anchor_declaration`, but was
+    silently miscounted as a SECOND real base declaration here, each reported as a false
+    `CRITICAL CI/CD FAILURE: Duplicate Semantic Anchors detected` against the function's own real
+    declaration in `ham_shack/models/ham_operator_friendship.py`. Only consulted when `own_prefix`
+    carries no same-line signal -- a real same-line marker always wins on its own terms first, so
+    this can only ever turn an already-ambiguous case into a correctly-classified reference, never
+    override a real same-line declaration or reference (matching `_is_base_anchor_declaration`'s
+    own guarantee exactly)."""
+    bare_comment_marker = bool(re.fullmatch(r"(#|//|/\*|\*)+", own_prefix))
+    if (own_prefix and not bare_comment_marker) or not prev_line:
+        return own_prefix
+    return re.sub(r"^\s*(#|//|/\*|\*)+", "", prev_line).strip()
+
+
 def _ends_with_marker(prefix, marker):
     """True if `prefix` ends with the exact word/phrase `marker`, as a standalone token --
     not merely as a trailing substring glued onto a longer word.
@@ -276,8 +305,9 @@ def _process_file_for_anchors(
     """
     mod = get_module(full_path)
     rel_path = os.path.relpath(full_path, repo_root)
+    lines = content.splitlines()
 
-    for line_num, line in enumerate(content.splitlines(), 1):
+    for line_num, line in enumerate(lines, 1):
         matches = list(pattern.finditer(line))
         if not matches:
             continue
@@ -310,6 +340,13 @@ def _process_file_for_anchors(
             own_prefix = line[prev_end:match.start()].strip()
             prev_end = match.end()
 
+            # Fallback to the previous physical line's own tail only for the first anchor on
+            # this line -- the wrapped-comment shape `_classification_prefix` exists for is
+            # specifically "this line has no same-line signal, the real one is on the line
+            # above", which only makes sense for whichever anchor actually starts the line.
+            prev_line = lines[line_num - 2] if match is matches[0] and line_num > 1 else ""
+            class_prefix = _classification_prefix(own_prefix, prev_line)
+
             anchor_name = match.group(1)
             explicit_mod = mod
 
@@ -319,15 +356,15 @@ def _process_file_for_anchors(
 
             anchor = f"{explicit_mod}:{anchor_name}"
 
-            if _ends_with_marker(own_prefix, "Tests"):
+            if _ends_with_marker(class_prefix, "Tests"):
                 # LLM NOTE: Matches `# Tests [@ANCHOR: COMM_target]`
                 # Used in test files to explicitly state what feature is being tested.
                 tests_links.setdefault(full_path, []).append((anchor, line_num))
                 tests_links_set.setdefault(anchor, []).append(loc_str)
                 code_anchors.setdefault(anchor, []).append(loc_str)
 
-            elif _ends_with_marker(own_prefix, "Verified by") or _ends_with_marker(
-                own_prefix, "Tested by"
+            elif _ends_with_marker(class_prefix, "Verified by") or _ends_with_marker(
+                class_prefix, "Tested by"
             ):
                 # LLM NOTE: Matches `# # Verified by [@ANCHOR: COMM_test_method_name]`
                 # Used in source files to point to the test that verifies it.
@@ -348,8 +385,8 @@ def _process_file_for_anchors(
                 if "audit-ignore-view" in own_prefix and full_path.endswith(".xml"):
                     audit_ignore_links.setdefault(anchor, []).append(loc_str)
 
-            elif _ends_with_marker(own_prefix, "Triggers") or _ends_with_marker(
-                own_prefix, "Triggered by"
+            elif _ends_with_marker(class_prefix, "Triggers") or _ends_with_marker(
+                class_prefix, "Triggered by"
             ):
                 # LLM NOTE: Matches `# Triggers [@ANCHOR: COMM_target_feature]`
                 # Documents architectural handoffs between modules or daemons.
@@ -359,7 +396,7 @@ def _process_file_for_anchors(
                 # Documentation-only anchors, ignored in code logic tracing.
                 pass
 
-            elif re.search(r"\b(See|and|also|or|to)\b$", own_prefix, re.IGNORECASE):
+            elif re.search(r"\b(See|and|also|or|to)\b$", class_prefix, re.IGNORECASE):
                 # Conversational/Inline references, ignored in logic tracing.
                 pass
 

@@ -259,6 +259,90 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         *_rest, duplicates, _lines = self._scan()
         self.assertEqual(duplicates, [])
 
+    # ---- previous-line lookback parity with check_function_test_anchors.py (2026-09-17 fix) ----
+    #
+    # Real, live divergence found and fixed: check_function_test_anchors.py's own
+    # _is_base_anchor_declaration gained a prev_line lookback 2026-09-13 for a comment that wraps
+    # its referencing word onto the line BEFORE a same-line-prefix-empty anchor -- but this
+    # module's own _process_file_for_anchors, despite that function's docstring claiming to mirror
+    # it exactly, never got the same fix. Confirmed against the real repo: hams_com
+    # ham_shack/tests/test_station_timeshare_security.py:53-54 and
+    # ham_shack/tests/test_operator_chat_friends_api.py:122-123 (both `# ...(see` /
+    # `# [@ANCHOR: ham_operator_friendship_create_authz]) -- ...`) were each reported as a false
+    # "Duplicate Semantic Anchors" CI failure against the function's real declaration in
+    # ham_shack/models/ham_operator_friendship.py, purely from this gap.
+
+    def test_a_wrapped_conversational_reference_is_not_a_base_declaration(self):
+        _write(
+            os.path.join(self.tmp, "mod_a", "tests", "test_foo.py"),
+            "# some prose ending in (see\n# [@ANCHOR: COMM_x]) -- go through the real flow instead\n",
+        )
+        code_anchors, anchor_locations, *_rest = self._scan()
+        self.assertNotIn("mod_a:COMM_x", anchor_locations)
+        self.assertNotIn("mod_a:COMM_x", code_anchors)
+
+    def test_a_wrapped_tests_link_is_captured_as_a_tests_link_not_a_base_declaration(self):
+        _write(
+            os.path.join(self.tmp, "mod_a", "tests", "test_foo.py"),
+            "# Tests\n# [@ANCHOR: COMM_x]\n",
+        )
+        code_anchors, _locs, _tests_links, tests_links_set, *_rest = self._scan()
+        self.assertIn("mod_a:COMM_x", tests_links_set)
+
+    def test_a_wrapped_verified_by_link_is_captured_as_a_verified_by_link(self):
+        _write(
+            os.path.join(self.tmp, "mod_a", "models", "foo.py"),
+            "# # Verified by\n# [@ANCHOR: COMM_x]\n",
+        )
+        *_rest, verified_by_links, _audit_ignore, _cross_refs, _dups, _lines = self._scan()
+        self.assertIn("mod_a:COMM_x", verified_by_links)
+
+    def test_a_wrapped_triggers_link_is_captured_as_a_cross_reference(self):
+        _write(
+            os.path.join(self.tmp, "mod_a", "models", "foo.py"),
+            "# Triggers\n# [@ANCHOR: mod_b:COMM_x]\n",
+        )
+        *_rest, _verified, cross_references, _dups, _lines = self._scan()
+        self.assertIn("mod_b:COMM_x", cross_references)
+
+    def test_a_wrapped_reference_does_not_falsely_duplicate_the_real_base_declaration(self):
+        # The exact live shape: a real base declaration in one file, and elsewhere a wrapped
+        # conversational reference to the same anchor -- must never be flagged as a second
+        # declaration of it.
+        _write(os.path.join(self.tmp, "mod_a", "models", "foo.py"), "# [@ANCHOR: COMM_x]\n")
+        _write(
+            os.path.join(self.tmp, "mod_a", "tests", "test_bar.py"),
+            "# some prose ending in (see\n# [@ANCHOR: COMM_x]) -- elsewhere\n",
+        )
+        *_rest, duplicates, _lines = self._scan()
+        self.assertEqual(duplicates, [])
+
+    def test_a_real_same_line_declaration_is_not_overridden_by_the_previous_line(self):
+        # The lookback must never win over a real same-line signal -- a genuine base declaration
+        # immediately below unrelated prose (not itself a Tests/Verified-by/conversational marker)
+        # stays a base declaration.
+        _write(
+            os.path.join(self.tmp, "mod_a", "models", "foo.py"),
+            "# Some unrelated context here.\n# [@ANCHOR: COMM_x]\n",
+        )
+        code_anchors, anchor_locations, *_rest = self._scan()
+        self.assertIn("mod_a:COMM_x", anchor_locations)
+
+    def test_the_lookback_only_applies_to_the_first_anchor_on_a_line(self):
+        # A second anchor sharing a line with a first one is classified by the text BETWEEN them,
+        # never by the line above -- the lookback exists for "this whole line has no signal of its
+        # own", not for an anchor that merely has little text immediately before it mid-line.
+        _write(
+            os.path.join(self.tmp, "mod_a", "models", "foo.py"),
+            "# Tests\n# [@ANCHOR: COMM_x][@ANCHOR: COMM_y]\n",
+        )
+        code_anchors, anchor_locations, *_rest = self._scan()
+        # The first anchor on the line correctly falls back to "# Tests" on the line above.
+        self.assertNotIn("mod_a:COMM_x", anchor_locations)
+        # The second, with nothing but the first anchor's own closing bracket before it, must NOT
+        # also inherit the line-above fallback -- it stays a (spurious but real) base declaration.
+        self.assertIn("mod_a:COMM_y", anchor_locations)
+
     def test_a_real_begin_end_pair_with_body_between_does_not_produce_adjacent_anchor_lines(self):
         # The real practical question this widening raises: does a normal
         # multi-line anchor (content between BEGIN and END, the whole
