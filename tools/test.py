@@ -2778,7 +2778,7 @@ def main():
             # doesn't). Scoped to only the two variables --pause-on-fail
             # actually needs, and only when that flag is set -- normal
             # headless test runs are unaffected.
-            if os.environ.get("HAMS_PAUSE_ON_FAIL") == "1":  # burn-ignore-env
+            if os.environ.get("HAMS_PAUSE_ON_FAIL") == "1":
                 if os.environ.get("DISPLAY"):
                     systemd_run_args.append(f"--setenv=DISPLAY={os.environ['DISPLAY']}")
                 systemd_run_args.append("--setenv=XDG_SESSION_TYPE=x11")

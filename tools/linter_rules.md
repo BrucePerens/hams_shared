@@ -90,8 +90,8 @@ You MUST use Vanilla JS or modern OWL components.
 * **DOM XSS:** Passing template literals (backtick strings) into `.innerHTML` or `.bindPopup` is flagged.
 Ensure all dynamic data injected into the DOM is sanitized.
 * **Deprecated Services:** `useService('company')` is banned.
-* **OWL `rpc` Service Deprecation:** The raw `useService('rpc')` method is banned in Odoo 19 frontend components. You MUST use `useService('orm')` which securely handles batching, caching, and model security, unless explicitly burning this rule for a custom controller.
-* **The /web/ Asset & Login Mandate:** While general routing has moved to `/odoo`, core static assets (`/web/assets/`), images (`/web/image`), and the authentication endpoint (`/web/login`) MUST remain under the `/web` path. You are strictly FORBIDDEN from refactoring these specific paths to `/odoo`. The Cloudflare and Caching modules rely on `/web/assets/` for edge caching. If necessary, use `# burn-ignore-route` to bypass linters for these valid exceptions.
+* **OWL `rpc` Service Deprecation:** The raw `useService('rpc')` method is banned in Odoo 19 frontend components. You MUST use `useService('orm')` which securely handles batching, caching, and model security, unless explicitly burning this rule with `# burn-ignore-rpc-non-orm` for a custom, non-ORM controller route.
+* **The /web/ Routing Deprecation:** `/web` (bare, or `/web#...` hash-routing) is deprecated and forcefully redirected to `/odoo` in Odoo 19, losing query parameters. This IS enforced: any `/web/...` or `/web#...` string literal in a `.py`/`.js` file is flagged, except sub-paths already known to be legitimate, non-deprecated Odoo routes (`login`, `signup`, `assets`, `static`, `tests`, `database`, `image`, `session`, `dataset`, `content`). A literal outside that allowlist that is genuinely not a navigation target to the deprecated entrypoint (e.g. a cache-control prefix classifier) may use `# burn-ignore-route: <reason>`; a literal that IS a legitimate, undocumented `/web/` sub-route should instead be added to the allowlist in `check_burn_list.py` directly.
 
 > **NOTICE (UI TOURS):** All strict architectural mandates, workarounds, and syntax rules required to write stable UI Tours are maintained in **`hams_shared/docs/adrs/0081_ui_testability_and_tour_friendly_design.md`** (ADR 0081). You MUST consult that document for all tour-related directives.
 </javascript_standards>
@@ -118,7 +118,8 @@ The AST parser physically reads your test files to verify the assertions exist.
 | `ir.ui.view` | `<!-- audit-ignore-view: Tested by [@ANCHOR: example_name] -->` | MUST be placed on the EXACT same line as the `<record>` or `<template>` node. Test MUST execute `get_view` or `url_open`. |
 
 | I18N Strings | `# audit-ignore-i18n: Tested by [@ANCHOR: example_name]` | Safely ignore headless API translations (ADR-0065). |
-| Legacy Web Routes | `# burn-ignore-route` | Explicitly permits the use of native `/web` routing prefixes (like `/web/login` or `/web/assets`) instead of the Odoo 19 `/odoo` prefix in tests and controllers. |
+| `/web/...` Routing | `# burn-ignore-route: <reason>` | Only for a `/web/...` or `/web#...` string literal that is flagged by the routing-deprecation check but is genuinely not a navigation target to the deprecated bare `/web` entrypoint (e.g. a cache-control prefix classifier). Do NOT use this for a legitimate, undocumented `/web/` sub-route -- add it to the allowlist in `check_burn_list.py` instead. |
+| `useService('rpc')` | `# burn-ignore-rpc-non-orm: <reason>` | Only for a raw `rpc` service call whose target is a custom, non-ORM HTTP controller route, which `useService('orm')` cannot reach. |
 
 ### 🚨 Critical Formatting & Placement Rules for Bypasses
 1. **The Python Formatter (`# fmt: skip`) Trap:** The Black code formatter will wrap long lines and detach your inline linter comments, causing the AST linter to fail.

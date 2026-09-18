@@ -773,7 +773,14 @@ ODOO_ERROR_RULES = [
         # /web backend-UI-entrypoint redirect this rule exists to catch --
         # confirmed as the only real repo-wide usage of the /web/dataset
         # prefix, ham_base/tests/test_impersonate.py's own real RPC call.
-        re.compile(r"['\"]/web/(?!login\b|signup\b|assets\b|static\b|tests\b|database\b|image\b|session\b|dataset\b)[^'\"]*['\"]"),
+        # content added 2026-09-17: /web/content is Odoo 19 core's own real,
+        # current generic ir.attachment binary-serving route (odoo/addons/
+        # web/controllers/binary.py's own @http.route, lines 63-67),
+        # unrelated to the bare /web backend-UI-entrypoint redirect --
+        # confirmed as the only real repo-wide usage of the /web/content
+        # prefix, caching/static/src/sw/sw.js's own service-worker
+        # fetch-interception passthrough.
+        re.compile(r"['\"]/web/(?!login\b|signup\b|assets\b|static\b|tests\b|database\b|image\b|session\b|dataset\b|content\b)[^'\"]*['\"]"),
         "CRITICAL ROUTING DEPRECATION: /web is deprecated and forcefully redirected to /odoo in Odoo 19, losing the query parameters! Use /odoo instead.",
     ),
     (
@@ -4835,11 +4842,26 @@ def scan_file(filepath, is_odoo_module=False):
                 "burn-ignore-tour",
                 "burn-ignore-csrf-token",
                 "burn-ignore-sudo",
-                "burn-ignore-route",
                 # Suppresses CRITICAL HARDCODED CREDENTIAL DEFAULT (GENERAL_ERROR_RULES) for a
                 # credential env read whose literal fallback is genuinely safe, e.g. a
                 # test-only placeholder. Always give the reason after the tag.
                 "burn-ignore-env",
+                # Suppresses CRITICAL ROUTING DEPRECATION (below) for a /web/... string literal
+                # that is not actually a navigation target to the deprecated bare /web/
+                # entrypoint -- e.g. a cache-control prefix classifier that must match every
+                # /web/* sub-route, including ones already excluded by this rule's own
+                # login/signup/assets/static/tests/database/image/session/dataset allowlist.
+                # A literal that IS a legitimate, undocumented /web/ sub-route (like /web/image/
+                # or /web/session/) should instead be added to that allowlist directly. Always
+                # give the reason after the tag.
+                "burn-ignore-route",
+                # Suppresses CRITICAL OWL DEPRECATION ("the raw 'rpc' service is deprecated...
+                # unless explicitly burning this rule for a non-ORM controller") for a
+                # useService("rpc") call whose target is a custom HTTP controller route (e.g.
+                # /api/v1/...), not an ORM model method -- useService("orm") only calls
+                # /web/dataset/call_kw/... and cannot reach a custom controller, so there is no
+                # non-deprecated equivalent to migrate to. Always give the reason after the tag.
+                "burn-ignore-rpc-non-orm",
                 "burn-ignore-test-tags",
                 "burn-ignore-pika",
                 "burn-ignore-introspection",

@@ -842,6 +842,43 @@ def test_web_session_route_is_not_flagged_as_deprecated_routing():
     assert _routing_deprecation_errors(source) == []
 
 
+def test_web_content_route_is_not_flagged_as_deprecated_routing():
+    # Real false positive found 2026-09-17: /web/content is Odoo's own
+    # standard generic ir.attachment binary-serving route
+    # (odoo/addons/web/controllers/binary.py's own @http.route), unrelated
+    # to the deprecated backend web-client entrypoint this rule targets --
+    # confirmed as the only /web/content usage anywhere in the repo, in
+    # caching/static/src/sw/sw.js's service-worker fetch passthrough.
+    source = "if (url.pathname.startsWith('/web/content/')) return;\n"
+    assert _routing_deprecation_errors(source, filename="test_widget.js") == []
+
+
+def _rpc_deprecation_errors(source, filename="test_widget.js"):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = str(Path(tmpdir) / filename)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(source)
+        errors, _warnings = scan_file(filepath, is_odoo_module=True)
+    return [e for e in errors if "OWL DEPRECATION" in e]
+
+
+def test_raw_rpc_service_is_flagged_as_deprecated():
+    source = 'this.rpc = useService("rpc");\n'
+    errors = _rpc_deprecation_errors(source)
+    assert len(errors) == 1
+
+
+def test_raw_rpc_service_with_burn_ignore_rpc_non_orm_is_not_flagged():
+    # A raw rpc call to a custom, non-ORM HTTP controller route has no
+    # useService('orm') equivalent to migrate to (orm only reaches
+    # /web/dataset/call_kw/..., never an arbitrary controller route).
+    source = (
+        'this.rpc = useService("rpc");  '
+        "// burn-ignore-rpc-non-orm: calls a custom controller route\n"
+    )
+    assert _rpc_deprecation_errors(source) == []
+
+
 # parse_odoo_html()/OdooHTMLParser had zero coverage despite being a real, independent
 # structural parser (not part of the AST security-rule visitor above) -- other rule functions
 # in this file walk the XMLNode tree it builds, so a bug here would silently corrupt every one
