@@ -42,21 +42,39 @@ screen-reader accessibility fallback and had never once run. ham_shack's
 own manifest already carried several comments warning about this exact
 trap, added one file at a time as each was discovered by hand -- which is
 the argument for checking it mechanically instead.
+
+Fourth check, added 2026-09-18: the reverse of check_bundled_tag_is_triggered.
+That one catches a declared tag nothing requests; this one catches a
+REQUESTED tag nothing declares -- a browser_js() wrapper asking /web/tests
+for a tag= that no describe.current.tags(...) anywhere writes. hoot reports
+the resulting empty run identically to a genuine pass, so a typo in a
+wrapper's own tag= (the realistic failure -- see
+check_wrapper_requests_declared_tag's own docstring) passes forever while
+the suite it meant to run never runs at all. Found 2026-09-15 while landing
+the empty-run guard (zero_sudo/tests/test_hoot_empty_run_guard.py, hams_open
+cdc3dfc1): that guard's own test deliberately requests a nonexistent tag,
+and this checker stayed clean at the time -- there was no reverse check to
+catch it.
 """
 
 import ast
 import os
 import re
 import sys
+from urllib.parse import unquote
 
 # A hoot suite declares which tag triggers it with `describe.current.tags("name")`, and a Python
 # wrapper triggers it by asking /web/tests for `?tag=name`. Both are matched textually, which is
 # what makes this check cheap; see check_bundled_tag_is_triggered's own docstring for the limits
 # that buys.
 _TAG_DECLARATION_RE = re.compile(r'describe\.current\.tags\(\s*["\']([^"\']+)["\']')
-_TAG_REQUEST_RE = re.compile(r"[?&]tag=([A-Za-z0-9_.-]+)")
+_TAG_REQUEST_RE = re.compile(r"[?&]tag=([A-Za-z0-9_.+%-]+)")
 # `test(` but not `.test(` or `mytest(` -- hoot's own test() call, not a substring of something else.
 _TEST_CALL_RE = re.compile(r"(?<![\w.])test\s*\(")
+# check_wrapper_requests_declared_tag's own documented, deliberate exception: a wrapper
+# whose tag= genuinely matches nothing on purpose (proving the empty-run guard fires, for
+# example) carries this comment, with a real reason, adjacent to the browser_js() call.
+_UNDECLARED_TAG_EXEMPTION_RE = re.compile(r"#\s*hoot-tag-intentionally-undeclared:\s*(\S.*)")
 
 _IGNORE_DIRS = {
     ".git",
@@ -111,6 +129,17 @@ def find_unbundled_test_files(module_path, manifest_dict):
     return sorted(unbundled)
 
 
+def _split_requested_tags(raw_match):
+    """A single `tag=` value can request several suites at once, joined by a literal `+` (hoot's
+    own multi-tag separator), which may itself be percent-encoded as `%2B` inside a Python string
+    literal. Decoding first, then splitting, matters: splitting on a bare `+` before decoding
+    would treat an encoded `%2B` as an ordinary tag character instead of a separator and silently
+    merge two real tags into one bogus one, while decoding after collecting individual matches
+    (rather than before) would be too late to split on the `+` it produces.
+    """
+    return [t for t in unquote(raw_match).split("+") if t]
+
+
 def collect_requested_tags(repo_root):
     """Every hoot tag any browser_js() wrapper under `repo_root` asks /web/tests for.
 
@@ -135,11 +164,36 @@ def collect_requested_tags(repo_root):
                 continue
             if "browser_js(" not in content:
                 continue
-            requested.update(_TAG_REQUEST_RE.findall(content))
+            for raw in _TAG_REQUEST_RE.findall(content):
+                requested.update(_split_requested_tags(raw))
             for url in re.findall(r"""["'](/web/tests[^"']*)["']""", content):
                 if "tag=" not in url:
                     untagged_runners.append(path)
     return requested, untagged_runners
+
+
+def collect_declared_tags(repo_root):
+    """Every hoot tag any describe.current.tags(...) call declares, across every *.test.js file
+    under `repo_root`.
+
+    Collected the same way `collect_requested_tags` collects its side of the cross-reference --
+    across ALL scanned roots before any wrapper is judged, since a suite and the wrapper that
+    triggers it need not live in the same repository.
+    """
+    declared = set()
+    for root, dirs, files in os.walk(repo_root):
+        dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
+        for f in files:
+            if not f.endswith(".test.js"):
+                continue
+            path = os.path.join(root, f)
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    content = fh.read()
+            except (OSError, UnicodeDecodeError):
+                continue
+            declared.update(_TAG_DECLARATION_RE.findall(content))
+    return declared
 
 
 def check_bundled_tag_is_triggered(module_path, manifest_dict, requested_tags):
@@ -215,6 +269,97 @@ def check_bundled_tag_is_triggered(module_path, manifest_dict, requested_tags):
     return violations
 
 
+def check_wrapper_requests_declared_tag(repo_root, declared_tags):
+    """A browser_js() wrapper asking /web/tests for a tag= that no describe.current.tags(...)
+    anywhere declares.
+
+    The reverse of check_bundled_tag_is_triggered: that one catches a declared tag nothing
+    requests, this one catches a REQUESTED tag nothing declares. The realistic failure is a typo
+    in a wrapper's own tag= -- hoot reports the resulting empty run identically to a genuine pass
+    ("Passed 0 tests", then "Test suite succeeded"), so the wrapper goes green forever while the
+    suite it meant to run never runs at all.
+
+    One deliberate exception exists: zero_sudo/tests/test_hoot_empty_run_guard.py must request a
+    tag that matches nothing, to prove HamsHttpCase.browser_js()'s own empty-run guard actually
+    fires. So this cannot simply flag every undeclared tag -- it needs a single, tested,
+    centralized exception rather than a loosened rule or a scattered ignore. A wrapper's file is
+    exempted only when it carries BOTH `expect_empty=True` on a browser_js() call AND a
+    `# hoot-tag-intentionally-undeclared: <reason>` comment with a real reason; carrying only one
+    of the two is itself suspicious (an undocumented deliberate empty run, or a documented one
+    that HamsHttpCase's own guard would still fail) and reported as its own finding rather than
+    silently passed or silently exempted.
+
+    File-level, not per-call: like every other check in this module, this matches textually
+    across a whole file's content rather than parsing which browser_js() call a given tag= or
+    expect_empty= belongs to. A file with several browser_js() calls, only one of which is the
+    deliberate empty-run case, would need its own exemption comment to read clearly as covering
+    that specific call, but would not be mis-flagged by this simplification -- it would just be
+    exempted a little more broadly than strictly necessary, matching this file's own established
+    "finds the common, checkable case rather than attempting the general one" philosophy.
+    """
+    violations = []
+    for root, dirs, files in os.walk(repo_root):
+        dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
+        if os.path.basename(root) != "tests":
+            continue
+        for f in sorted(files):
+            if not f.endswith(".py"):
+                continue
+            path = os.path.join(root, f)
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    content = fh.read()
+            except (OSError, UnicodeDecodeError):
+                continue
+            if "browser_js(" not in content:
+                continue
+
+            requested_here = set()
+            for raw in _TAG_REQUEST_RE.findall(content):
+                requested_here.update(_split_requested_tags(raw))
+            undeclared = sorted(t for t in requested_here if t not in declared_tags)
+            if not undeclared:
+                continue
+
+            has_expect_empty = "expect_empty=True" in content
+            exemption_match = _UNDECLARED_TAG_EXEMPTION_RE.search(content)
+            has_reason = bool(exemption_match and exemption_match.group(1).strip())
+
+            if has_expect_empty and has_reason:
+                continue  # documented, deliberate -- the empty-run guard's own shape.
+
+            rel_path = os.path.relpath(path, repo_root)
+            if has_expect_empty and not has_reason:
+                violations.append(
+                    f"🚨 UNDOCUMENTED EMPTY HOOT RUN: {rel_path} passes expect_empty=True but "
+                    f"has no `# hoot-tag-intentionally-undeclared: <reason>` comment explaining "
+                    f"why -- a bare expect_empty=True is itself suspicious without a reason on "
+                    f"record. Requested tag(s) with no matching describe(): "
+                    f"{', '.join(undeclared)}."
+                )
+            elif has_reason and not has_expect_empty:
+                violations.append(
+                    f"🚨 UNDECLARED HOOT TAG WITHOUT expect_empty: {rel_path} carries a "
+                    f"`# hoot-tag-intentionally-undeclared:` comment but no browser_js() call "
+                    f"there passes expect_empty=True, so an empty run still fails "
+                    f"HamsHttpCase's own empty-run guard. Requested tag(s) with no matching "
+                    f"describe(): {', '.join(undeclared)}."
+                )
+            else:
+                violations.append(
+                    f"🚨 REQUESTED HOOT TAG NEVER DECLARED: {rel_path} asks /web/tests for "
+                    f"tag(s) {', '.join(undeclared)} that no describe.current.tags(...) "
+                    f"anywhere declares -- a typo, or a suite that was renamed or removed. "
+                    f"hoot reports the resulting empty run identically to a real pass, so this "
+                    f"wrapper passes forever without ever running the suite it meant to. If "
+                    f"this is genuinely deliberate (proving an empty-run guard fires, for "
+                    f"example), pass expect_empty=True on the browser_js() call AND add a "
+                    f"`# hoot-tag-intentionally-undeclared: <reason>` comment explaining why, "
+                    f"following zero_sudo/tests/test_hoot_empty_run_guard.py's own pattern."
+                )
+    return violations
+
+
 def module_has_hoot_runner(module_path):
     tests_dir = os.path.join(module_path, "tests")
     if not os.path.isdir(tests_dir):
@@ -241,14 +386,17 @@ def main():
 
     violations = []
 
-    # Pass 1: every tag any wrapper asks for, across every scanned root, before judging any
-    # module -- a wrapper and the suite it triggers need not live in the same module.
+    # Pass 1: every tag any wrapper asks for, and every tag any suite declares, across every
+    # scanned root, before judging any module or wrapper -- neither side of either cross-
+    # reference needs to live in the same module, or even the same repository, as its match.
     requested_tags = set()
+    declared_tags = set()
     untagged_runners = []
     for repo_root in sys.argv[1:]:
         found, untagged = collect_requested_tags(repo_root)
         requested_tags |= found
         untagged_runners.extend(untagged)
+        declared_tags |= collect_declared_tags(repo_root)
 
     # An untagged /web/tests run triggers every bundled suite, so while one exists, "no wrapper
     # asks for this tag" is not evidence that a suite never runs. Report it rather than quietly
@@ -258,6 +406,12 @@ def main():
             "[*] Untriggered-tag check skipped: these wrappers run /web/tests with no tag=, "
             "which triggers every bundled suite: " + ", ".join(sorted(set(untagged_runners)))
         )
+
+    # A wrapper requesting a tag no suite declares is judged per-repo-root (like Pass 2's
+    # module-level checks below), not once globally, since its own violation message reports a
+    # path relative to the root it was found under.
+    for repo_root in sys.argv[1:]:
+        violations.extend(check_wrapper_requests_declared_tag(repo_root, declared_tags))
 
     # Pass 2: judge each module.
     for repo_root in sys.argv[1:]:
@@ -336,8 +490,8 @@ def main():
 
     print(
         "[+] Hoot Runner Coverage Linter: every *.test.js on disk is bundled, every bundled "
-        "suite's tag is asked for by a real wrapper, and every module with hoot unit tests has "
-        "a runner."
+        "suite's tag is asked for by a real wrapper, every wrapper's requested tag is declared "
+        "by a real suite, and every module with hoot unit tests has a runner."
     )
 
 
