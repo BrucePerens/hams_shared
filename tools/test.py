@@ -625,6 +625,23 @@ class FailureExtractor:
 
         self.current_context = context_name
 
+    def append_diagnostic(self, text):
+        """Record runner-authored diagnostic text so it reaches the failure log.
+
+        Callers must use this instead of poking ``capturing``/``current_block``
+        directly: leaving ``capturing`` False with a non-empty ``current_block``
+        breaks the invariant ``finish_and_write`` relies on, and the text was
+        silently dropped. If a block is already being captured the text joins
+        it (its normal flush still applies); otherwise it becomes its own
+        captured block under the current context.
+        """
+        if self.capturing:
+            self.current_block.append(text)
+            return
+        self.captured_blocks.append((self.current_context, [text]))
+        if len(self.captured_blocks) > 50:
+            self.captured_blocks = self.captured_blocks[-50:]
+
     def process_line(self, line):
         line_clean = re.sub(r"\x1b\[[0-9;]*m", "", line)
         if self.test_start_pattern.search(line_clean):
@@ -1182,14 +1199,12 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                             "the test process...\n"
                         )
                         if extractor:
-                            extractor.capturing = True
-                            extractor.current_block.append(
+                            extractor.append_diagnostic(
                                 "\n[!] DIAGNOSTIC FOR AI (HARD TIMEOUT, UNRECOVERABLE):\n"
                                 "    The test runner timed out repeatedly and killing headless "
                                 "chrome did not un-stick it -- the process is force-killed and "
                                 "this run is reported as a failure.\n\n"
                             )
-                            extractor.capturing = False
                         robust_reap(process.pid)
                         force_killed = True
                         break
@@ -1199,14 +1214,12 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                     )
 
                     if extractor:
-                        extractor.capturing = True
-                        extractor.current_block.append(
+                        extractor.append_diagnostic(
                             "\n[!] DIAGNOSTIC FOR AI (HARD TIMEOUT):\n"
                             "    The test runner timed out because the framework stopped producing output for 60 seconds.\n"
                             "    If this occurred during a UI tour, it means a `trigger:` selector failed to match any element in the DOM.\n"
                             "    Review your frontend JavaScript selectors, specifically avoiding pseudo-selectors like `:contains`.\n\n"
                         )
-                        extractor.capturing = False
 
                     print(
                         "[*] [DEBUG-RUNNER] Killing headless chrome to un-hang the test framework..."

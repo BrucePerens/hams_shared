@@ -19,6 +19,7 @@ main(), not an exhaustive suite of the whole file.
 import contextlib
 import importlib.util
 import io
+import inspect
 import itertools
 import os
 import shutil
@@ -325,6 +326,40 @@ class FailureExtractorAttributeGuardTests(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             extractor.finish_and_write()
         self.assertIn("TEST RUN ABORTED", buf.getvalue())
+
+    def _written_text(self, extractor):
+        extractor.finish_and_write()
+        with open(extractor.output_path) as f:
+            return f.read()
+
+    def test_append_diagnostic_reaches_the_failure_log_when_not_capturing(self):
+        # Regression: run_cmd's hard-timeout branches used to set capturing=True,
+        # append to current_block, then capturing=False (block never cleared), so
+        # finish_and_write's `capturing and current_block` flush never fired and
+        # the diagnostic was silently absent from the report.
+        extractor = _test_runner.FailureExtractor(self.tmp, disable_atexit=True)
+        extractor.set_context("Starting test_hung")
+        extractor.append_diagnostic("DIAGNOSTIC FOR AI (HARD TIMEOUT): tour hung\n")
+        self.assertFalse(extractor.capturing)
+        self.assertEqual(extractor.current_block, [])
+        self.assertIn("DIAGNOSTIC FOR AI (HARD TIMEOUT): tour hung", self._written_text(extractor))
+
+    def test_append_diagnostic_joins_a_block_already_being_captured(self):
+        extractor = _test_runner.FailureExtractor(self.tmp, disable_atexit=True)
+        extractor.capturing = True
+        extractor.current_block.append("Traceback (most recent call last):\n")
+        extractor.append_diagnostic("DIAGNOSTIC FOR AI: joined\n")
+        self.assertTrue(extractor.capturing)
+        text = self._written_text(extractor)
+        self.assertIn("Traceback (most recent call last):", text)
+        self.assertIn("DIAGNOSTIC FOR AI: joined", text)
+
+    def test_run_cmd_does_not_poke_extractor_capture_state_directly(self):
+        # The invariant lives inside FailureExtractor; outside code must go
+        # through its methods.
+        src = inspect.getsource(_test_runner.run_cmd)
+        self.assertNotIn("extractor.capturing", src)
+        self.assertNotIn("extractor.current_block", src)
 
 
 class FailureExtractorOdooResultHeadlineTests(unittest.TestCase):
