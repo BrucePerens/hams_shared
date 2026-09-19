@@ -17,6 +17,7 @@ hams_s3/views/res_config_settings_views.xml) -- as fixtures, so a
 future change that reintroduces either bug fails a real test instead of
 requiring another manual before/after diff.
 """
+import re
 import subprocess
 import sys
 import tempfile
@@ -6308,3 +6309,55 @@ def test_the_retry_method_tag_is_not_an_unauthorized_bypass(tmp_path):
     )
     errors, _warnings = _scan_file(source, "api_client.py")
     assert not [e for e in errors if "UNAUTHORIZED" in str(e)]
+
+
+# Tags that predate the "every allow-listed tag carries a justification comment"
+# convention. Frozen: this set may only shrink (document a tag, then delete it here).
+_LEGACY_UNDOCUMENTED_BYPASS_TAGS = frozenset({
+    "burn-ignore-financial",
+    "burn-ignore-tour",
+    "burn-ignore-csrf-token",
+    "burn-ignore-sudo",
+    "burn-ignore-test-tags",
+    "burn-ignore-pika",
+    "burn-ignore-introspection",
+})
+
+
+def _allow_listed_bypass_tags():
+    """Yield (tag, has_justification_comment_directly_above) for every tag in the
+    UNAUTHORIZED BYPASS allow-list, parsed from check_burn_list.py's own source."""
+    lines = Path(check_burn_list.__file__).read_text().split("\n")
+    start = next(
+        i for i, ln in enumerate(lines)
+        if 'if re.search(r"burn-ignore-[A-Za-z]", line) and not any(' in ln
+    )
+    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "]")
+    found = []
+    for i in range(start, end):
+        m = re.match(r'^\s+"(burn-ignore-[a-z0-9-]+)",', lines[i])
+        if m:
+            found.append((m.group(1), lines[i - 1].strip().startswith("#")))
+    return found
+
+
+def test_every_allow_listed_bypass_tag_carries_a_justification_comment():
+    # burn-ignore-env / burn-ignore-route sat in the allow-list for weeks with no
+    # comment and no consumer, and docs called them "accepted markers" nothing
+    # enforced. Every tag now needs a comment saying what it suppresses; only the
+    # frozen legacy set is exempt.
+    tags = _allow_listed_bypass_tags()
+    assert len(tags) > 20, "allow-list parse found too few tags; the parser is stale"
+    undocumented = {t for t, documented in tags if not documented}
+    assert undocumented <= _LEGACY_UNDOCUMENTED_BYPASS_TAGS, (
+        f"allow-listed bypass tag(s) without a justification comment: "
+        f"{sorted(undocumented - _LEGACY_UNDOCUMENTED_BYPASS_TAGS)}"
+    )
+
+
+def test_legacy_undocumented_tag_set_only_lists_tags_still_undocumented():
+    documented = {t for t, ok in _allow_listed_bypass_tags() if ok}
+    assert not (documented & _LEGACY_UNDOCUMENTED_BYPASS_TAGS), (
+        "these tags are now documented; remove them from the frozen legacy set: "
+        f"{sorted(documented & _LEGACY_UNDOCUMENTED_BYPASS_TAGS)}"
+    )
