@@ -431,6 +431,74 @@ class HookFailureSummaryTests(_TmpDirTestCase):
         self.assertIsNone(infra.render_hook_failure_summary())
 
 
+class ExecuteHooksTests(_TmpDirTestCase):
+    """execute_hooks() is the dispatcher that runs MANIFEST["directories"]
+    entries' post_provision_hooks for a given environment. Bug found
+    2026-09-18: this function existed and was exercised in isolation by
+    nothing, but was never actually called from provision_environment (or
+    anywhere else in real provisioning) -- apply_production_directories()
+    creates the directories but never runs their hooks, so hook_generate_ssl
+    and hook_clear_pycache silently never ran during a real provisioning
+    run. These tests call the real execute_hooks() (not a mock of it) with a
+    mocked run_cmd_func, matching HookGenerateSslTests'/HookClearPycacheTests'
+    own boundary, and assert the real, observable effects of the hooks it
+    dispatches to -- proving the dispatch itself works, not just the hooks
+    in isolation (already covered above)."""
+
+    def test_prod_environment_actually_generates_ssl_certs_and_clears_pycache(self):
+        ssl_dir = os.path.join(self.tmp, "opt/hams/nginx/ssl")
+        pycache_dir = os.path.join(self.tmp, "opt/hams/pycache")
+        os.makedirs(ssl_dir)
+        os.makedirs(pycache_dir)
+        with open(os.path.join(pycache_dir, "stale.pyc"), "w") as f:
+            f.write("x")
+
+        fullchain = os.path.join(ssl_dir, "fullchain.pem")
+
+        def fake_run_cmd(cmd):
+            with open(fullchain, "w") as f:
+                f.write("cert")
+            with open(os.path.join(ssl_dir, "privkey.pem"), "w") as f:
+                f.write("key")
+
+        mock_run = MagicMock(side_effect=fake_run_cmd)
+
+        infra.execute_hooks("prod", mock_run, {"DOMAIN": "hams.com"}, dest_dir=self.tmp)
+
+        # hook_generate_ssl really ran, against the real, correctly
+        # dest_dir-joined MANIFEST directory path.
+        mock_run.assert_called_once()
+        self.assertIn("openssl", mock_run.call_args[0][0])
+        self.assertTrue(os.path.exists(os.path.join(ssl_dir, "lotw_root.pem")))
+
+        # hook_clear_pycache really ran too.
+        self.assertEqual(os.listdir(pycache_dir), [])
+
+    def test_docker_environment_only_touches_deploy_ssl_not_opt_hams_nginx(self):
+        deploy_ssl = os.path.join(self.tmp, "deploy/ssl")
+        os.makedirs(deploy_ssl)
+        fullchain = os.path.join(deploy_ssl, "fullchain.pem")
+
+        def fake_run_cmd(cmd):
+            with open(fullchain, "w") as f:
+                f.write("cert")
+            with open(os.path.join(deploy_ssl, "privkey.pem"), "w") as f:
+                f.write("key")
+
+        mock_run = MagicMock(side_effect=fake_run_cmd)
+        infra.execute_hooks("docker", mock_run, {}, dest_dir=self.tmp)
+
+        self.assertTrue(os.path.exists(os.path.join(deploy_ssl, "lotw_root.pem")))
+        # /opt/hams/nginx/ssl's directory entry is prod-only -- "docker"
+        # must not touch it.
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "opt/hams/nginx/ssl")))
+
+    def test_an_environment_with_no_hooked_directories_runs_no_hooks(self):
+        mock_run = MagicMock()
+        infra.execute_hooks("nonexistent_env", mock_run, {}, dest_dir=self.tmp)
+        mock_run.assert_not_called()
+
+
 class KopiaReleaseArchTests(_SafePatchTestCase):
     def test_maps_known_debian_architectures_to_kopias_own_asset_names(self):
         self.assertEqual(infra._kopia_release_arch({"DEB_TARGET_ARCH_CPU": "amd64"}), "x64")
@@ -1313,6 +1381,42 @@ class PostgresqlLockdownTests(unittest.TestCase):
         self.assertIn("_postgresql_lockdown_commands()", source)
         self.assertNotIn("pg_hba", source)
         self.assertNotIn("s/peer/trust", source)
+
+
+class ProvisionEnvironmentHookWiringTests(unittest.TestCase):
+    """provision_environment() itself is too host-dependent to execute here
+    (see this file's docstring, and PostgresqlLockdownTests'
+    test_provision_environment_uses_the_lockdown_commands_and_no_pg_hba_edit
+    above for the established pattern this follows), so this checks its
+    source instead of running it. Bug found 2026-09-18: execute_hooks() was
+    defined and covered by ExecuteHooksTests above in isolation, but nothing
+    in provision_environment (or anywhere else in production) ever called
+    it, so hook_generate_ssl/hook_clear_pycache silently never ran during a
+    real provisioning run despite being attached to MANIFEST["directories"]
+    entries via post_provision_hooks."""
+
+    def test_provision_environment_calls_execute_hooks_for_prod_and_test(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn('execute_hooks("prod", run_cmd_func, env_vars)', source)
+        self.assertIn('execute_hooks("test", run_cmd_func, env_vars)', source)
+
+    def test_execute_hooks_runs_after_the_directories_it_hooks_against_are_created(self):
+        # apply_production_directories() is what actually creates the
+        # MANIFEST["directories"] paths on disk -- execute_hooks() must run
+        # after it, not before, or the hooks would fire against
+        # directories that don't exist yet.
+        source = inspect.getsource(infra.provision_environment)
+        dirs_prod_idx = source.index(
+            'apply_production_directories(run_cmd_func, environment="prod")'
+        )
+        hooks_prod_idx = source.index('execute_hooks("prod", run_cmd_func, env_vars)')
+        self.assertLess(dirs_prod_idx, hooks_prod_idx)
+
+        dirs_test_idx = source.index(
+            'apply_production_directories(run_cmd_func, environment="test")'
+        )
+        hooks_test_idx = source.index('execute_hooks("test", run_cmd_func, env_vars)')
+        self.assertLess(dirs_test_idx, hooks_test_idx)
 
 
 if __name__ == "__main__":

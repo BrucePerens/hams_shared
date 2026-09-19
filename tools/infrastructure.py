@@ -4412,6 +4412,27 @@ def provision_environment(
         apply_production_directories(run_cmd_func, environment="prod")
         apply_production_directories(run_cmd_func, environment="test")
 
+        # Bug found 2026-09-18: execute_hooks() was defined but had no tests
+        # of its own and, worse, was never actually called from real
+        # provisioning -- apply_production_directories() above creates the
+        # directories in
+        # MANIFEST["directories"] but never runs their post_provision_hooks,
+        # so hook_generate_ssl (self-signed cert generation for
+        # /opt/hams/nginx/ssl and /deploy/ssl) and hook_clear_pycache
+        # (/opt/hams/pycache) silently never ran during a real provisioning
+        # run. Called here, right after the directories it hooks against are
+        # actually created, matching provision_static_files()'s own
+        # prod-then-test call pair immediately above and below in this
+        # function. hook_generate_ssl already records its own failures via
+        # record_hook_failure(); hook_clear_pycache's own failure modes are
+        # already non-raising by construction (shutil.rmtree(ignore_errors=
+        # True), safe_remove()'s internal OSError swallow), matching how
+        # hook_install_odoo_key/hook_install_pg_key are likewise called
+        # unwrapped from provision_static_files()'s own hook loop.
+        _logger.info("[*] Running post-provision directory hooks...")
+        execute_hooks("prod", run_cmd_func, env_vars)
+        execute_hooks("test", run_cmd_func, env_vars)
+
         try:
             _logger.info("[*] Locking down RabbitMQ to local loopback...")
             os.makedirs("/etc/rabbitmq", exist_ok=True)
