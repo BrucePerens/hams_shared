@@ -100,9 +100,11 @@ Full walk-through, including how to add an offline tour to another module:
 """
 
 import argparse
+import contextlib
 import ctypes
 import errno
 import json
+import logging
 import os
 import pwd
 import signal
@@ -112,6 +114,15 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# Named explicitly rather than by `__name__`: this file runs as `__main__` in
+# three of its four roles (--broker, --shim, --parent-forwarders) and as an
+# imported module in the fourth (test.py's `setup()`), and one logger name
+# keeps the whole harness filterable as a unit. Nothing here configures
+# logging, so with no handler installed the debug records below emit nothing at
+# all -- they exist so a failing teardown can be seen when someone asks for it,
+# not to add output to a passing run.
+_logger = logging.getLogger("offline_browser_ns")
 
 # A /30 inside 10.0.0.0/8. Only ever configured inside test.py's own
 # network namespace, so it cannot collide with anything on the host or in a
@@ -159,8 +170,15 @@ def _prctl_die_with_parent():
     try:
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
         libc.prctl(1, signal.SIGKILL, 0, 0, 0)  # PR_SET_PDEATHSIG
-    except OSError:
-        pass
+    except OSError as exc:
+        # Also used as a `preexec_fn`, i.e. this can run in a forked child
+        # before exec. That is safe for logging: CPython runs
+        # PyOS_AfterFork_Child() (which reinitialises the logging module's own
+        # locks) before it calls preexec_fn. Deliberately debug-level and a
+        # single call -- losing PR_SET_PDEATHSIG is not fatal, the process is
+        # still reaped by the normal cleanup path, and this must not start
+        # writing to a stderr that Odoo is reading.
+        _logger.debug("PR_SET_PDEATHSIG could not be armed (libc load failed): %s", exc)
 
 
 def _run_ip(*args, check=True):
@@ -224,19 +242,33 @@ class TcpForwarder:
             live, self._live = list(self._live), set()
         try:
             listener.close()
-        except OSError:
-            pass
+        except OSError as exc:
+            _logger.debug(
+                "forwarder %s: closing the listener on %s:%s failed: %s",
+                self.name,
+                self.bind_host,
+                self.bind_port,
+                exc,
+            )
         for sock in live:
             # shutdown() before close() so the peer sees the reset now rather
-            # than whenever the last reference happens to be dropped.
+            # than whenever the last reference happens to be dropped. Both of
+            # these routinely fail with ENOTCONN/EBADF because the peer already
+            # went away -- that is the expected case, not an error, so it is
+            # logged and stepped over rather than allowed to abandon the rest
+            # of the list. "Go offline" must tear down EVERY live connection.
             try:
                 sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
+            except OSError as exc:
+                _logger.debug(
+                    "forwarder %s: shutdown of a live connection failed: %s", self.name, exc
+                )
             try:
                 sock.close()
-            except OSError:
-                pass
+            except OSError as exc:
+                _logger.debug(
+                    "forwarder %s: closing a live connection failed: %s", self.name, exc
+                )
 
     def _accept_loop(self):
         while True:
@@ -260,16 +292,32 @@ class TcpForwarder:
             )
             upstream.settimeout(None)
             client.settimeout(None)
-        except OSError:
+        except OSError as exc:
+            # The expected shape of "the gateway is down": the upstream
+            # connect() is refused, and the client is dropped so the browser
+            # sees a prompt ECONNREFUSED rather than a hang.
+            _logger.debug(
+                "forwarder %s: connect to %s:%s failed, dropping the client: %s",
+                self.name,
+                self.dst_host,
+                self.dst_port,
+                exc,
+            )
             try:
                 client.close()
-            except OSError:
-                pass
+            except OSError as close_exc:
+                _logger.debug(
+                    "forwarder %s: closing the client socket failed: %s", self.name, close_exc
+                )
             if upstream is not None:
                 try:
                     upstream.close()
-                except OSError:
-                    pass
+                except OSError as close_exc:
+                    _logger.debug(
+                        "forwarder %s: closing the upstream socket failed: %s",
+                        self.name,
+                        close_exc,
+                    )
             return
         with self._lock:
             if not self._running:
@@ -277,8 +325,12 @@ class TcpForwarder:
                 for sock in (client, upstream):
                     try:
                         sock.close()
-                    except OSError:
-                        pass
+                    except OSError as exc:
+                        _logger.debug(
+                            "forwarder %s: closing a socket that raced with stop() failed: %s",
+                            self.name,
+                            exc,
+                        )
                 return
             self._live.add(client)
             self._live.add(upstream)
@@ -300,14 +352,18 @@ class TcpForwarder:
                 if not data:
                     break
                 dst.sendall(data)
-        except OSError:
-            pass
+        except OSError as exc:
+            # Normal end of a forwarded connection once stop() has closed the
+            # pair out from under this thread, and the only way "go offline"
+            # can be immediate. Ending the pump is the handling; the log just
+            # records which end went first.
+            _logger.debug("forwarder pump ended: %s", exc)
         finally:
             for sock in (src, dst):
                 try:
                     sock.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    _logger.debug("forwarder pump: shutdown of a pumped socket failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +393,11 @@ class _RelayStubHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):  # noqa: N802 (BaseHTTPRequestHandler's own naming)
+    # The camel-cased name is BaseHTTPRequestHandler's own dispatch convention
+    # (`do_` + the HTTP method), not a style choice: http.server looks the
+    # method up by that exact spelling, so renaming it would silently stop the
+    # relay stand-in from answering GETs at all.
+    def do_GET(self):
         self.server.record_request(self.path)
         if self.path == "/__offline_probe":
             self._send(RELAY_PROBE_BODY, "text/plain")
@@ -367,7 +427,17 @@ class _RelayStubHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, log_format, *args):
-        pass  # real failures surface through the tour's own assertions
+        """Send the access log to the module logger instead of stderr.
+
+        BaseHTTPRequestHandler's default writes a line to stderr per request.
+        In the broker that stderr is inherited from test.py, so the default
+        would interleave relay chatter into the test output for no gain: real
+        failures surface through the tour's own assertions, and the authoritative
+        record of what the relay was asked for is `requests_seen`, which
+        `{"cmd": "status"}` returns. The same lazy %-formatting the base class
+        uses, so nothing is formatted unless a handler actually wants it.
+        """
+        _logger.debug(log_format, *args)
 
 
 class _RelayStubServer(ThreadingHTTPServer):
@@ -482,26 +552,40 @@ class _Broker:
             try:
                 libc = ctypes.CDLL("libc.so.6", use_errno=True)
                 libc.prctl(1, signal.SIGKILL, 0, 0, 0)
-            except OSError:
-                pass
+            except OSError as exc:
+                # Post-fork, pre-exec; see _prctl_die_with_parent() for why a
+                # single debug record is safe here. A browser that misses
+                # PR_SET_PDEATHSIG is still killed by kill_chrome()/the
+                # broker's own teardown, so this is not worth aborting for.
+                _logger.debug(
+                    "browser PR_SET_PDEATHSIG could not be armed (libc load failed): %s", exc
+                )
 
         # Keep the browser's own stderr: when a headless Chrome refuses to
         # start inside the nested namespace, this file is the only place that
         # says why -- Odoo sees nothing but a missing DevToolsActivePort and
         # turns that into a SkipTest.
         log_path = self.config.get("log_file")
-        log_handle = None
-        if log_path:
-            log_handle = open(log_path, "ab", buffering=0)  # noqa: SIM115 - lives with the browser
-        proc = subprocess.Popen(  # noqa: PLW1509 - preexec_fn is how we drop to `odoo`
-            cmd,
-            stdout=log_handle or subprocess.DEVNULL,
-            stderr=log_handle or subprocess.DEVNULL,
-            env=env,
-            preexec_fn=preexec,
-        )
-        if log_handle is not None:
-            log_handle.close()
+        # ExitStack rather than a bare open(): this handle only has to live
+        # long enough for Popen to dup() it onto the browser's stdout/stderr,
+        # and the stack closes our copy on the way out of the block -- on the
+        # Popen-raises path too, where the old explicit close() was skipped and
+        # leaked the descriptor. `preexec_fn` is not incidental here either: it
+        # is how the browser is dropped from the broker's root to `odoo`, so it
+        # cannot be traded for the usual user=/group= arguments, which
+        # subprocess applies without also running initgroups the way preexec()
+        # above does.
+        with contextlib.ExitStack() as log_stack:
+            log_handle = (
+                log_stack.enter_context(open(log_path, "ab", buffering=0)) if log_path else None
+            )
+            proc = subprocess.Popen(
+                cmd,
+                stdout=log_handle or subprocess.DEVNULL,
+                stderr=log_handle or subprocess.DEVNULL,
+                env=env,
+                preexec_fn=preexec,
+            )
         with self._chrome_lock:
             self._chromes.append(proc)
 
@@ -544,9 +628,18 @@ class _Broker:
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                pass
-        except OSError:
-            pass
+                # A browser that is still there after SIGKILL is a genuine
+                # anomaly (uninterruptible sleep, or a kernel that has not
+                # reaped it yet), and it will hold the nested namespace open.
+                # Worth a warning, but not worth raising out of teardown:
+                # PR_SET_PDEATHSIG still collects it when the broker exits.
+                _logger.warning(
+                    "the browser (pid %s) did not exit within 5s of SIGKILL", proc.pid
+                )
+        except OSError as exc:
+            # ProcessLookupError (already reaped) is the common case and is
+            # exactly what "the browser is gone" looks like from here.
+            _logger.debug("terminating the browser (pid %s) failed: %s", proc.pid, exc)
 
     # -- control socket -----------------------------------------------------
 
@@ -624,7 +717,23 @@ class _Broker:
                             port_file_body,
                             launched_forwarder,
                         ) = self.launch_chrome(request.get("argv") or [], request.get("env"))
-                    except Exception as exc:  # noqa: BLE001 - reported to the caller
+                    # Why the tag on the next line: this is precisely the "must
+                    # continue past failure" case the rule names, and it does
+                    # not swallow anything -- the failure is logged here AND
+                    # returned to the shim, which prints it to the stderr Odoo
+                    # reads. Narrowing is what would be unsafe: launch_chrome
+                    # parses caller-supplied JSON (argv, env) and can raise
+                    # OSError, ValueError, KeyError, IndexError, RuntimeError,
+                    # subprocess.SubprocessError, TypeError or AttributeError,
+                    # and any type left off such a list would escape this
+                    # thread, leave the shim waiting with no reply, and reach
+                    # Odoo as a missing DevToolsActivePort -- i.e. a silent
+                    # unittest.SkipTest, the one outcome
+                    # docs/OFFLINE_BROWSER_NAMESPACE_TESTING.md calls the worst
+                    # available. A diagnosed refusal beats a test that quietly
+                    # did not run.
+                    except Exception as exc:  # audit-ignore-catch-all: launch_chrome's real exception surface spans caller-supplied JSON parsing, pwd, os, subprocess and this module's own RuntimeErrors, and is not enumerable from here; the reason is spelled out in full above.
+                        _logger.warning("the offline-namespace browser launch failed: %s", exc)
                         self._reply(conn, {"ok": False, "error": str(exc)})
                         continue
                     self._reply(
@@ -645,8 +754,11 @@ class _Broker:
                     return
                 else:
                     self._reply(conn, {"ok": False, "error": f"unknown cmd {cmd!r}"})
-        except OSError:
-            pass
+        except OSError as exc:
+            # The test process went away mid-conversation (the ordinary end of
+            # a control connection). Fall through to the `finally`, which is
+            # what actually has to happen: kill the browser it launched.
+            _logger.debug("the offline-namespace control connection ended: %s", exc)
         finally:
             if launched is not None:
                 self.kill_chrome(launched)
@@ -656,8 +768,8 @@ class _Broker:
                 self._chromes = [p for p in self._chromes if p.poll() is None]
             try:
                 conn.close()
-            except OSError:
-                pass
+            except OSError as exc:
+                _logger.debug("closing the offline-namespace control connection failed: %s", exc)
 
     def _wait_for_shim_eof(self, conn, reader, proc):
         """Return once either the browser exits or the shim goes away."""
@@ -666,8 +778,11 @@ class _Broker:
         def watch_eof():
             try:
                 reader.read()  # blocks until the shim closes the socket
-            except OSError:
-                pass
+            except OSError as exc:
+                # A reset instead of a clean EOF means the same thing the EOF
+                # would have: the shim is gone. Signal `done` either way --
+                # skipping it would leave the browser running.
+                _logger.debug("the shim connection was reset rather than closed: %s", exc)
             done.set()
 
         threading.Thread(target=watch_eof, daemon=True, name="shim-eof").start()
@@ -683,8 +798,10 @@ class _Broker:
     def _reply(conn, payload):
         try:
             conn.sendall((json.dumps(payload) + "\n").encode())
-        except OSError:
-            pass
+        except OSError as exc:
+            # The caller hung up before reading its reply. Nothing to recover:
+            # the connection's own teardown path already handles the browser.
+            _logger.debug("could not send a reply on the control socket: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -785,8 +902,11 @@ def _run_shim(argv):
     def _on_signal(_sig, _frame):
         try:
             sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
+        except OSError as exc:
+            # Already closed, or the broker went first. Either way the broker
+            # sees EOF and kills the browser, so still exit(0) -- Odoo reads a
+            # non-zero exit from its "Chrome" as a browser crash.
+            _logger.debug("the shim's control socket was already down at signal time: %s", exc)
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _on_signal)
@@ -838,8 +958,11 @@ def _run_shim(argv):
         if not os.path.exists(link):
             try:
                 os.symlink(os.path.join(ns_profile, "chrome_debug.log"), link)
-            except OSError:
-                pass
+            except OSError as exc:
+                # Cosmetic: without it Odoo's read_log() finds no browser log
+                # to attach to a failure report, but the run itself is
+                # unaffected, so never let it stop the launch.
+                _logger.debug("could not link Odoo's chrome_debug.log to the browser's: %s", exc)
         with open(os.path.join(odoo_profile, "DevToolsActivePort"), "w", encoding="utf-8") as fh:
             fh.write(response.get("devtools_active_port_body") or f"{devtools_port}\n")
 
@@ -878,8 +1001,13 @@ def setup(work_dir, chrome_binary=None, odoo_user="odoo"):
     os.makedirs(work_dir, exist_ok=True)
     try:
         os.chmod(work_dir, 0o777)
-    except OSError:
-        pass
+    except OSError as exc:
+        # Best-effort: the directory only has to be traversable by the
+        # unprivileged `odoo` user. If it already is (the usual case on a
+        # re-run, where we do not own it), the run is fine; if it is not, the
+        # failure surfaces loudly a moment later when the shim cannot reach
+        # the control socket.
+        _logger.debug("could not widen permissions on %s: %s", work_dir, exc)
     ctl_sock = os.path.join(work_dir, "offline_ns_ctl.sock")
     ready_file = os.path.join(work_dir, "offline_ns_ready")
     parent_ready = os.path.join(work_dir, "offline_ns_parent_ready")
@@ -919,7 +1047,11 @@ def setup(work_dir, chrome_binary=None, odoo_user="odoo"):
     # 1. The namespace holder / broker. `unshare -n` with no -f execs straight
     #    into python, so the pid we get back IS the process holding the new
     #    namespace -- which is what `ip link set ... netns <pid>` needs.
-    broker = subprocess.Popen(  # noqa: PLW1509
+    #    `preexec_fn` is load-bearing in both Popen calls below: it arms
+    #    PR_SET_PDEATHSIG in the child, which is the guarantee that neither the
+    #    broker nor the forwarders can outlive test.py and strand a namespace
+    #    or a veth end. There is no subprocess argument that does this.
+    broker = subprocess.Popen(
         ["unshare", "-n", sys.executable, me, "--broker", "--config", config_path],
         preexec_fn=_prctl_die_with_parent,
     )
@@ -941,8 +1073,11 @@ def setup(work_dir, chrome_binary=None, odoo_user="odoo"):
         try:
             if os.readlink(f"/proc/{broker.pid}/ns/net") != my_netns:
                 break
-        except OSError:
-            pass
+        except OSError as exc:
+            # /proc/<pid>/ns/net is briefly unreadable while `unshare` execs
+            # python. Keep polling until the deadline below decides; the
+            # broker.poll() check above is what catches a broker that died.
+            _logger.debug("the broker's network namespace is not readable yet: %s", exc)
         if time.monotonic() > deadline:
             raise RuntimeError("the offline-namespace broker never entered its own network namespace")
         time.sleep(0.02)
@@ -961,7 +1096,7 @@ def setup(work_dir, chrome_binary=None, odoo_user="odoo"):
     subprocess.run(["ip", "link", "set", VETH_PARENT, "up"], check=True)
 
     # 3. Parent-side forwarders (CDP out, Odoo HTTP in).
-    parent = subprocess.Popen(  # noqa: PLW1509
+    parent = subprocess.Popen(
         [sys.executable, me, "--parent-forwarders", "--ready-file", parent_ready],
         preexec_fn=_prctl_die_with_parent,
     )
@@ -992,11 +1127,21 @@ def setup(work_dir, chrome_binary=None, odoo_user="odoo"):
                 try:
                     proc.terminate()
                     proc.wait(timeout=5)
-                except (subprocess.TimeoutExpired, OSError):
+                except (subprocess.TimeoutExpired, OSError) as exc:
+                    _logger.debug(
+                        "the offline-namespace process %s did not terminate cleanly, "
+                        "killing it: %s",
+                        proc.pid,
+                        exc,
+                    )
                     try:
                         proc.kill()
-                    except OSError:
-                        pass
+                    except OSError as kill_exc:
+                        # Already gone (ProcessLookupError) is the common case.
+                        # This runs from test.py's teardown `finally`, which
+                        # still has Redis, RabbitMQ and the veth to reap, so
+                        # nothing here may raise out of cleanup.
+                        _logger.debug("killing process %s failed: %s", proc.pid, kill_exc)
         subprocess.run(["ip", "link", "del", VETH_PARENT], check=False, capture_output=True)
 
     return env_additions, cleanup
