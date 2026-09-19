@@ -50,6 +50,7 @@ if "--mcp" in sys.argv:
     builtins.print = _mcp_print
 
 import infrastructure
+import offline_browser_ns
 
 import argparse
 import atexit
@@ -2120,11 +2121,40 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     # spawned below runs -- tell that child (Process C) not to attempt its
     # own, now-redundant-and-otherwise-self-deadlocking acquisition.
     os.environ["HAMS_TEST_LOCK_HELD"] = "1"
+
+    # OPT-IN ONLY. Without --offline-isolation nothing below runs and the test
+    # process sees exactly the environment it has always seen: one network
+    # namespace, loopback only, browser and werkzeug server side by side.
+    #
+    # With it, the browser is moved into a nested network namespace whose only
+    # route to the Odoo test server can be cut mid-test, so a tour can express
+    # the situation a real offline operator is in (hams.com unreachable, the
+    # local relay on loopback still reachable). See
+    # hams_shared/tools/offline_browser_ns.py and
+    # hams_shared/docs/OFFLINE_BROWSER_NAMESPACE_TESTING.md.
+    offline_ns_cleanup = None
+    if "--offline-isolation" in sys_args:
+        print("[*] Setting up the nested offline browser namespace...")
+        offline_env, offline_ns_cleanup = offline_browser_ns.setup(
+            os.path.join(os.path.expanduser("~/tmp"), "offline_ns"),
+            odoo_user="odoo",
+        )
+        os.environ.update(offline_env)
+        print(
+            f"[*] Offline browser namespace ready (control socket "
+            f"{offline_env['HAMS_OFFLINE_NS_CTL']})."
+        )
+
     ret = 1
     try:
         test_cmd = [sys.executable, os.path.abspath(__file__)] + sys_args
         ret = subprocess.run(test_cmd, preexec_fn=preexec_odoo).returncode
     finally:
+        if offline_ns_cleanup is not None:
+            try:
+                offline_ns_cleanup()
+            except Exception as e:  # audit-ignore-catch-all: teardown must never mask `ret`
+                _logger.warning("Failed to tear down the offline browser namespace: %s", e)
         # 7. Graceful Ephemeral Teardown — wait and escalate to SIGKILL
         for proc_name, proc in [
             ("RabbitMQ", rmq_proc),
@@ -2852,6 +2882,17 @@ def main():
         action="store_true",
         help="Pause the browser indefinitely on tour failure (exposes port 9222).",
     )
+    parser.add_argument(
+        "--offline-isolation",
+        action="store_true",
+        help=(
+            "Run the browser in a nested network namespace whose route to the Odoo test "
+            "server can be cut mid-test, and run ONLY the tests tagged 'offline_isolation'. "
+            "Lets a tour express a real offline operator's situation: hams.com unreachable, "
+            "the local relay on loopback still reachable. Opt-in; ordinary runs are "
+            "unaffected. See hams_shared/docs/OFFLINE_BROWSER_NAMESPACE_TESTING.md."
+        ),
+    )
     args = parser.parse_args()
 
     if args.pause_on_fail:
@@ -2882,6 +2923,18 @@ def main():
 
     mod_string = "base," + ",".join(install_modules)
     test_tags = ",".join([f"/{m}" for m in target_modules])
+
+    # Odoo's own tag selector treats a spec with no tag part ("/ham_shack") as
+    # implicitly requiring the 'standard' tag (odoo/tests/tag_selector.py:
+    # "including /module:class.method implicitly requires 'standard'"), so a
+    # class tagged @tagged("-standard", "offline_isolation") is simply never
+    # collected by an ordinary run -- no skipTest, nothing to go wrong, and no
+    # change at all to what `test.py -u <module>` runs today. Selecting those
+    # tests therefore means asking for that tag by name, and only for it:
+    # running every other tour through the offline namespace's forwarders
+    # would put unrelated tests at the mercy of this mechanism for no gain.
+    if args.offline_isolation:
+        test_tags = ",".join([f"offline_isolation/{m}" for m in target_modules])
 
     # Not under base_dir: a real test run found setup_namespace_and_run_tests()
     # mounts the repo checkout read-only inside the isolated sandbox. And not
