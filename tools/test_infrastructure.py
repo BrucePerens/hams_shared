@@ -54,6 +54,11 @@ class _TmpDirTestCase(_SafePatchTestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        # _hook_failures is module-level state shared by every test in this
+        # process -- reset it before and after each test so one test's
+        # recorded failures can never leak into another's assertions.
+        infra.reset_hook_failures()
+        self.addCleanup(infra.reset_hook_failures)
 
 
 def _write_os_release(path, id_line=None, codename_line=None):
@@ -344,6 +349,19 @@ class HookInstallKopiaBinaryTests(_TmpDirTestCase):
             {"KOPIA_ARCH": "arm64"}, self.tmp, archive_path, mock_run
         )  # must not raise
         self.assertFalse(os.path.exists(archive_path))
+        # Bug-hunt fix (2026-09-18, night_shift_todo
+        # provisioning-silent-hook-failures-summary-328e3e45.md): swallowing the
+        # failure used to be the end of the story -- provisioning reported plain
+        # success even with no kopia binary installed. Now the failure must also
+        # be recorded for the end-of-run summary, not just logged and forgotten.
+        failures = infra.get_hook_failures()
+        self.assertEqual(len(failures), 1)
+        name, msg = failures[0]
+        self.assertEqual(name, "hook_install_kopia_binary")
+        self.assertIn("simulated tar failure", msg)
+        summary = infra.render_hook_failure_summary()
+        self.assertIn("DEGRADED", summary)
+        self.assertIn("hook_install_kopia_binary", summary)
 
     def test_an_unresolvable_architecture_is_swallowed_too_not_raised(self):
         # hook_install_kopia_binary's own try/except covers _kopia_release_arch's
@@ -357,6 +375,60 @@ class HookInstallKopiaBinaryTests(_TmpDirTestCase):
             {"DEB_TARGET_ARCH_CPU": "riscv64"}, self.tmp, archive_path, MagicMock()
         )  # must not raise
         self.assertFalse(os.path.exists(archive_path))
+
+
+class HookFailureSummaryTests(_TmpDirTestCase):
+    """Tests for the end-of-run hook-failure summary mechanism itself
+    (night_shift_todo provisioning-silent-hook-failures-summary-328e3e45.md):
+    non-fatal hook failures must be collected across a run and surfaced in
+    one prominent summary, without aborting the run for any single one."""
+
+    def test_two_failing_hooks_both_appear_in_the_end_of_run_summary(self):
+        archive_path = os.path.join(self.tmp, "kopia.tar.gz")
+        with open(archive_path, "w") as f:
+            f.write("fake archive bytes")
+        infra.hook_install_kopia_binary(
+            {"KOPIA_ARCH": "arm64"},
+            self.tmp,
+            archive_path,
+            MagicMock(side_effect=RuntimeError("simulated tar failure")),
+        )
+
+        ssl_dir = os.path.join(self.tmp, "ssl")
+        os.makedirs(ssl_dir, exist_ok=True)
+        infra.hook_generate_ssl(
+            {},
+            self.tmp,
+            ssl_dir,
+            MagicMock(side_effect=RuntimeError("simulated openssl failure")),
+        )
+
+        failures = infra.get_hook_failures()
+        names = [name for name, _ in failures]
+        self.assertEqual(len(failures), 2)
+        self.assertIn("hook_install_kopia_binary", names)
+        self.assertIn("hook_generate_ssl", names)
+
+        summary = infra.render_hook_failure_summary()
+        self.assertIn("DEGRADED", summary)
+        self.assertIn("hook_install_kopia_binary", summary)
+        self.assertIn("hook_generate_ssl", summary)
+        self.assertIn("simulated tar failure", summary)
+        self.assertIn("simulated openssl failure", summary)
+
+        self.assertTrue(infra.print_hook_failure_summary())
+
+    def test_a_clean_run_with_no_hook_failures_produces_no_degraded_marker(self):
+        self.assertEqual(infra.get_hook_failures(), [])
+        self.assertIsNone(infra.render_hook_failure_summary())
+        self.assertFalse(infra.print_hook_failure_summary())
+
+    def test_reset_hook_failures_clears_prior_recordings(self):
+        infra.record_hook_failure("some_hook", RuntimeError("boom"))
+        self.assertEqual(len(infra.get_hook_failures()), 1)
+        infra.reset_hook_failures()
+        self.assertEqual(infra.get_hook_failures(), [])
+        self.assertIsNone(infra.render_hook_failure_summary())
 
 
 class KopiaReleaseArchTests(_SafePatchTestCase):

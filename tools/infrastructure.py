@@ -188,6 +188,82 @@ def apply_permissions(path, owner_str, mode_int):
     _apply(path)
 
 
+# [@ANCHOR: infrastructure:hook_failure_tracking]
+# Bug-hunt fix (2026-09-18, from night_shift_todo
+# provisioning-silent-hook-failures-summary-328e3e45.md): several
+# provisioning hooks and inline steps below (hook_install_kopia_binary,
+# download_file, hook_generate_ssl, hook_build_rust_daemons, the RabbitMQ
+# bindings step, etc.) deliberately swallow their own failures with
+# `except Exception` + a log line, on the theory that one optional step
+# failing shouldn't abort a whole provisioning run. That theory is right,
+# but until now nothing ever surfaced those swallowed failures anywhere a
+# human or an automated caller would actually see them -- provisioning
+# reported plain success even when, say, the kopia backup binary never
+# got installed. This module-level list plus the three functions below
+# it are the "middle ground" the to-do asked for: collect every non-fatal
+# failure as it happens, then print one impossible-to-miss summary at the
+# end of the run without aborting it.
+_hook_failures = []
+
+
+def reset_hook_failures():
+    """Clears the run-scoped list of recorded non-fatal hook failures.
+    Call this once at the start of a provisioning run (provision_environment
+    does) so failures from an earlier run -- or an earlier test -- don't
+    leak into this run's summary."""
+    _hook_failures.clear()
+
+
+def record_hook_failure(name, exc):
+    """Records a non-fatal failure for the end-of-run summary rendered by
+    render_hook_failure_summary(). `name` identifies the failed step (a
+    hook function's name, or a short label for an inline provisioning
+    step such as "rabbitmq_bindings"); `exc` is the exception that was
+    swallowed. Call sites keep their own existing _logger.warning call
+    too -- this only adds the step to the summary, it doesn't replace
+    per-call logging."""
+    _hook_failures.append((name, str(exc)))
+
+
+def get_hook_failures():
+    """Returns a shallow copy of the failures recorded so far this run."""
+    return list(_hook_failures)
+
+
+def render_hook_failure_summary():
+    """Builds the prominent end-of-run banner listing every hook failure
+    recorded via record_hook_failure() since the last reset_hook_failures()
+    call, or returns None if there were none. Provisioning does not abort
+    for these (see hook_install_kopia_binary and friends), but this makes
+    them impossible to miss in the run's own output even though the run
+    continued."""
+    if not _hook_failures:
+        return None
+    lines = [
+        "=" * 72,
+        "[!] PROVISIONING DEGRADED -- {} non-fatal step(s) failed and were "
+        "skipped:".format(len(_hook_failures)),
+    ]
+    for name, msg in _hook_failures:
+        lines.append(f"    - {name}: {msg}")
+    lines.append("=" * 72)
+    return "\n".join(lines)
+
+
+def print_hook_failure_summary():
+    """Prints render_hook_failure_summary()'s banner via _logger.error (so
+    it survives logging configs that suppress INFO) if there were any
+    recorded failures. Returns True if the run is degraded (there was at
+    least one), False otherwise -- callers use this to decide on a
+    DEGRADED exit code."""
+    summary = render_hook_failure_summary()
+    if summary is None:
+        return False
+    for line in summary.splitlines():
+        _logger.error(line)
+    return True
+
+
 def download_file(url, path, mode, env_vars):
     ua = env_vars.get(
         "SYSTEM_USER_AGENT",
@@ -199,6 +275,7 @@ def download_file(url, path, mode, env_vars):
             data = response.read()
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("Network partition fallback safety hit fetching %s: %s", url, e)
+        record_hook_failure(f"download_file:{url}", e)
         data = b""
 
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
@@ -235,6 +312,7 @@ def hook_generate_ssl(env_vars, dest_dir, path, run_cmd_func):
             )
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("Failed to generate SSL certs: %s", e)
+            record_hook_failure("hook_generate_ssl", e)
         if os.path.exists(fullchain):
             shutil.copy2(fullchain, lotw)
 
@@ -352,6 +430,7 @@ def hook_install_kopia_binary(env_vars, dest_dir, path, run_cmd_func):
         run_cmd_func(["chmod", "+x", os.path.join(target_dir, "kopia")])
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("Kopia binary install failed: %s", e)
+        record_hook_failure("hook_install_kopia_binary", e)
     safe_remove(path)
 
 
@@ -378,6 +457,7 @@ def hook_build_rust_daemons(env_vars, dest_dir, path, run_cmd_func):
                 run_cmd_func(["cargo", "build", "--release", "--manifest-path", manifest_path])
             except Exception as e:  # audit-ignore-catch-all
                 _logger.warning("Rust daemon build failed for %s: %s", crate, e)
+                record_hook_failure(f"hook_build_rust_daemons:{crate}", e)
 
 
 MANIFEST = {
@@ -4044,6 +4124,7 @@ def provision_environment(
     run_cmd_func, env_vars, orig_user, os_id=None, skip_apt=False, is_test=False
 ):
     _logger.info("[*] Provision version 1")
+    reset_hook_failures()
     os_id = os_id or get_os_identifier()
     repo_root = env_vars.get("REPO_ROOT", "/app")
     # Inject safe testing defaults for provisioning context so .env files populate
@@ -4286,6 +4367,35 @@ def provision_environment(
 
         provision_static_files(run_cmd_func, env_vars, environment="prod")
         provision_static_files(run_cmd_func, env_vars, environment="test")
+
+        is_isolated_ns_early = os.environ.get("HAMS_ISOLATED_NS") == "1"
+        if (
+            not is_test
+            and not is_isolated_ns_early
+            and any(name == "hook_install_kopia_binary" for name, _ in get_hook_failures())
+        ):
+            # Per the to-do's own "middle ground" direction: kopia is the one
+            # hook this run treats as FATAL rather than merely recorded, and
+            # only on a real production run (never --test, never
+            # HAMS_ISOLATED_NS=1, which is how test.py provisions for its own
+            # test suite -- see its own `provision_environment(...,
+            # is_test=True)` call). A box with no working backup tool is a
+            # real, no-good silent gap in production; in test mode it's just
+            # noise from a sandbox with no network access. This check reads
+            # get_hook_failures() rather than raising from inside
+            # hook_install_kopia_binary itself, so that hook's own
+            # never-raises contract (pinned by a test in
+            # HookInstallKopiaBinaryTests) stays intact regardless of which
+            # environment it runs in.
+            print_hook_failure_summary()
+            _logger.error(
+                "[!] FATAL: the kopia backup binary failed to install and this "
+                "is a real production provisioning run -- refusing to report "
+                "success with no working backup tool. See the summary above "
+                "for the real cause."
+            )
+            sys.exit(3)
+
         provision_systemd_override(run_cmd_func, env_vars, environment="prod")
         provision_systemd_override(run_cmd_func, env_vars, environment="test")
 
@@ -4293,6 +4403,7 @@ def provision_environment(
             run_cmd_func(["usermod", "-a", "-G", "hams_com", "odoo"])
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to add odoo to hams_com group: %s", e)
+            record_hook_failure("usermod_odoo_hams_com_group", e)
 
         is_isolated_ns = os.environ.get("HAMS_ISOLATED_NS") == "1"
         is_test_env = is_isolated_ns or is_test
@@ -4326,6 +4437,7 @@ def provision_environment(
                     )
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to configure RabbitMQ bindings: %s", e)
+            record_hook_failure("rabbitmq_bindings", e)
 
         try:
             _logger.info("[*] Locking down PostgreSQL to local loopback...")
@@ -4359,6 +4471,7 @@ def provision_environment(
                 _provision_cache_manager_role(run_cmd_func, db_name)
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to configure PostgreSQL settings: %s", e)
+            record_hook_failure("postgresql_settings", e)
 
         _logger.info("[*] Writing environment configuration files...")
         write_env_files("/opt/hams/etc", env_vars, run_cmd_func)
@@ -4387,6 +4500,7 @@ def provision_environment(
                             os.symlink(src, dst)
         except OSError as e:
             _logger.warning("Failed to link systemd units: %s", e)
+            record_hook_failure("systemd_unit_linking", e)
 
         if not is_isolated_ns:
             initialize_odoo_database(run_cmd_func, hams_community_dir, hams_com_dir)
@@ -4395,6 +4509,18 @@ def provision_environment(
             _logger.info(
                 "[*] Skipping systemd smoketest inside isolated unshare namespace."
             )
+
+        # End-of-run summary for the to-do's "middle ground": none of the
+        # non-fatal failures recorded above aborted this run, but they must
+        # not be silently missable either. Print the summary unconditionally
+        # (so a human skimming output sees it in test mode too), but only
+        # turn it into a non-zero exit code for a real production run --
+        # test.py's own provisioning call (is_test=True, HAMS_ISOLATED_NS=1)
+        # must keep exiting 0 on a clean run even if some host-dependent step
+        # legitimately can't succeed in a sandbox, or provisioning-based
+        # tests would start failing for reasons unrelated to what they test.
+        if print_hook_failure_summary() and not is_test_env:
+            sys.exit(2)
 
     except subprocess.CalledProcessError as e:
         _logger.error("Failed to provision system packages: %s", e)
