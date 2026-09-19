@@ -53,6 +53,21 @@ from check_function_test_anchors import (  # noqa: E402
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 FIELD_RE = re.compile(r"^([a-zA-Z_]+):\s*(.+?)\s*$", re.MULTILINE)
 
+# Wired into run_linters.py as a real, hard-blocking gate 2026-09-18 (Bruce's own decision, via
+# AskUserQuestion, answered in hams_com/night_shift_questions/answered/
+# wire-check-claims-freshness-into-ci-fa45dba0.md), with these three top-level directories
+# excluded for now: `ingest/`, `ics_forms/`, and `ics_training/` all have another session's real,
+# active, in-progress work landing throughout this same night (see hams_com/night_shift_todo/
+# medium/check-claims-freshness-never-wired-into-ci-1e71bfb6.md's own history), and re-checking
+# their claims before that work settles would flag transient churn, not a real regression. Every
+# other stale-claim finding outside these three was triaged to 0 the same session this gate was
+# turned on. A hardcoded exclusion set, not a CLI flag: matches the existing convention this
+# tool family already uses for the identical "live, in-progress pipeline directory" situation --
+# check_absolute_paths.py's own `ignore_dirs` already excludes `ics_training/` for the same
+# reason. Remove this once that other session's work lands and settles, and a fresh
+# check_claims_freshness.py run is confirmed clean there too (not assumed).
+EXCLUDED_TOP_LEVEL_DIRS = {"ingest", "ics_forms", "ics_training"}
+
 
 def _git_tracked_files(repo_root, suffix):
     try:
@@ -241,6 +256,12 @@ def scan_claims(repo_root):
         # majority of them centralized-store claims for hams_open/hams_shared code.
         rel = os.path.relpath(claim_path, repo_root)
         if rel.split(os.sep)[:2] == ["docs", "bug_hunt_claims"]:
+            continue
+        # See EXCLUDED_TOP_LEVEL_DIRS's own comment: an exact top-level path-component match,
+        # not `startswith`, so a hypothetically-named `ingest_foo/` module (or anything else that
+        # merely starts with one of these names) is NOT swept in by accident -- only a claim
+        # actually rooted under `ingest/`, `ics_forms/`, or `ics_training/` themselves.
+        if rel.split(os.sep)[0] in EXCLUDED_TOP_LEVEL_DIRS:
             continue
         try:
             with open(claim_path, "r", encoding="utf-8") as f:

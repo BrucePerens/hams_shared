@@ -1317,6 +1317,32 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 53. check_claims_freshness -- ADR 0091's own real, named follow-on ("not yet wired into
+    # run_linters.py as of this ADR... a real, named follow-on, not forgotten"), finally wired in
+    # 2026-09-18: Bruce's own decision, via AskUserQuestion (hams_com/night_shift_questions/
+    # answered/wire-check-claims-freshness-into-ci-fa45dba0.md), after a same-session triage pass
+    # brought the real stale-claim backlog to 0 everywhere outside `ingest/`, `ics_forms/`, and
+    # `ics_training/` (hams_com/night_shift_todo/medium/
+    # check-claims-freshness-never-wired-into-ci-1e71bfb6.md's own "Triage progress" section).
+    # Those three directories are excluded from the checker's own scan (see
+    # check_claims_freshness.py's EXCLUDED_TOP_LEVEL_DIRS), not scoped here, since another
+    # session has real, active, in-progress work landing throughout them this same night. Always
+    # scans `repo_root` (not the possibly-scoped `targets`), same reasoning as step 38: a claim
+    # documents one function anywhere in the repo, not a property of any single target module.
+    res = subprocess.run(
+        [python_exec, os.path.join(dir_path, "tools", "check_claims_freshness.py"), repo_root],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

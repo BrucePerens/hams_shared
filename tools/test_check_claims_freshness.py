@@ -193,6 +193,54 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
         index = ccf.build_anchor_hash_index(self.tmp)
         self.assertEqual(index["my_module:foo"], real_hash)
 
+    def test_a_stale_claim_under_an_excluded_top_level_dir_is_not_flagged(self):
+        """EXCLUDED_TOP_LEVEL_DIRS (ingest/, ics_forms/, ics_training/): another session has
+        real, active, in-progress work landing throughout these directories the same night this
+        gate was wired into run_linters.py (2026-09-18), so a stale claim there is expected
+        churn, not a real gap -- see check_claims_freshness.py's own EXCLUDED_TOP_LEVEL_DIRS
+        comment for the full history."""
+        _write(os.path.join(self.tmp, "ingest", "mod.py"), self._function_source())
+        _write(
+            os.path.join(self.tmp, "ingest", "claims", "foo.md"),
+            "---\nanchor: my_module:foo\ncode_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000\n---\n\n1. Returns x + 1.\n",
+        )
+        _init_git_repo(self.tmp)
+        problems = ccf.check_claims(self.tmp)
+        self.assertEqual(problems, [])
+
+    def test_a_stale_claim_outside_any_excluded_dir_is_still_flagged(self):
+        """The exclusion is scoped to the three named top-level directories only -- a stale claim
+        anywhere else in the same repo must still be caught."""
+        _write(os.path.join(self.tmp, "ingest", "mod.py"), self._function_source())
+        _write(
+            os.path.join(self.tmp, "ingest", "claims", "foo.md"),
+            "---\nanchor: my_module:foo\ncode_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000\n---\n\n1. Returns x + 1.\n",
+        )
+        _write(
+            os.path.join(self.tmp, "mymod", "mod.py"),
+            "def bar(x):\n    # [@ANCHOR: mymod:bar]\n    return x + 2\n",
+        )
+        _write(
+            os.path.join(self.tmp, "mymod", "claims", "bar.md"),
+            "---\nanchor: mymod:bar\ncode_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000\n---\n\n1. Returns x + 2.\n",
+        )
+        _init_git_repo(self.tmp)
+        problems = ccf.check_claims(self.tmp)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("mymod", problems[0][0])
+
+    def test_a_directory_merely_starting_with_an_excluded_name_is_not_excluded(self):
+        """Exact top-level path-component match only -- `ingest_foo/` must not be swept in by a
+        `startswith` accident."""
+        _write(os.path.join(self.tmp, "ingest_foo", "mod.py"), self._function_source())
+        _write(
+            os.path.join(self.tmp, "ingest_foo", "claims", "foo.md"),
+            "---\nanchor: my_module:foo\ncode_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000\n---\n\n1. Returns x + 1.\n",
+        )
+        _init_git_repo(self.tmp)
+        problems = ccf.check_claims(self.tmp)
+        self.assertEqual(len(problems), 1)
+
     def test_parse_claim_frontmatter_handles_quoted_values(self):
         content = '---\nanchor: "my_module:foo"\ncode_hash: \'sha256:abc\'\n---\nbody\n'
         fields = ccf.parse_claim_frontmatter(content)
