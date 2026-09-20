@@ -120,6 +120,13 @@ def _repo_roots():
     sibling = orb._find_sibling_repo(repo_root)
     if sibling:
         roots.append(sibling)
+    # Extra addon roots (os.pathsep-separated), used by test_odoo_mypy_plugin.py to point the
+    # plugin at a fixture addon built under tempfile.TemporaryDirectory() instead of inside a repo
+    # root, where concurrent repo-scanning checkers (check_init_imports.py in test.py's pre-flight)
+    # would see the half-built fixture and abort unrelated test runs. Unset in normal use.
+    for extra in os.environ.get("ODOO_MYPY_PLUGIN_EXTRA_ROOTS", "").split(os.pathsep):
+        if extra:
+            roots.append(os.path.realpath(extra))
     return roots
 
 

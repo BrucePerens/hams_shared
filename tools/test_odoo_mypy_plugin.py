@@ -12,11 +12,14 @@ something a pure-Python unit test of this plugin's helper functions could observ
 the rest of this tool family's test suite (builds the real hams_com/hams_open registry once per
 run); run it deliberately, not as part of a tight edit-test loop.
 
-The fixture is written into hams_com/_test_scratch_mypy_plugin/ (gitignored) for the duration of
-each test and removed in tearDown -- it has to live under a real repo root for
-odoo_mypy_plugin.py's own path-based fullname resolution to find it (same resolution the real
-tool uses in production), but must not become a permanent, spurious 47th contributor to res.users
-in ordinary odoo_registry_builder.py runs.
+The fixture is written into a tempfile.mkdtemp() directory for the duration of each test and
+removed in tearDown, and that directory is handed to the plugin (a mypy subprocess) as an extra
+addon root via ODOO_MYPY_PLUGIN_EXTRA_ROOTS, so odoo_mypy_plugin.py's own path-based fullname
+resolution still finds it. It used to be written into hams_com/_test_scratch_mypy_plugin/, but
+that put a half-built, unimported addon inside the repo root where any concurrent repo-scanning
+checker saw it -- notably check_init_imports.py in test.py's pre-flight, which aborted unrelated
+Odoo test runs by other sessions with "File 'relational_probe.py' ... is never imported" whenever
+run_linters.py's step 27 (this suite) was running at the same time.
 
 These tests were intermittently flaky (mypy producing empty/wrong output, or a plain "No such
 file or directory" for a hams_com-only path) specifically when run via run_linters.py, never when
@@ -141,7 +144,8 @@ def _find_hams_open():
 
 _HAMS_COM_DIR = _find_hams_com()
 _HAMS_OPEN_DIR = _find_hams_open()
-_SCRATCH_DIR = os.path.join(_HAMS_COM_DIR, "_test_scratch_mypy_plugin") if _HAMS_COM_DIR else None
+_SCRATCH_PKG_NAME = "_test_scratch_mypy_plugin"
+_SIBLINGS_PKG_NAME = "_test_scratch_mypy_plugin_class_siblings"
 
 
 @unittest.skipUnless(_HAMS_COM_DIR, "hams_com sibling repo not found -- plugin needs both repos")
@@ -160,21 +164,25 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         # docstring for the real root cause, a _find_hams_com() bug); this
         # isolation is kept as an independently-justified improvement.
         self._cache_dir = tempfile.mkdtemp(prefix="odoo_mypy_plugin_test_cache_")
-        self._ini_path = os.path.join(_HAMS_COM_DIR, "_test_scratch_mypy.ini")
+        # Fixture root outside any repo (see module docstring); realpath so it matches the plugin's own
+        # realpath() of the same directory.
+        self._scratch_root = os.path.realpath(tempfile.mkdtemp(prefix="odoo_mypy_plugin_test_scratch_"))
+        self._scratch_dir = os.path.join(self._scratch_root, _SCRATCH_PKG_NAME)
+        self._ini_path = os.path.join(self._scratch_root, "mypy.ini")
         _write(
             self._ini_path,
             "[mypy]\n"
             "ignore_missing_imports = True\n"
             "check_untyped_defs = True\n"
             "follow_imports = silent\n"
-            "mypy_path = hams_shared/tools/odoo_type_stubs\n"
-            "plugins = hams_shared/tools/odoo_mypy_plugin.py\n",
+            f"mypy_path = {os.path.join(_HAMS_COM_DIR, 'hams_shared', 'tools', 'odoo_type_stubs')}\n"
+            f"plugins = {os.path.join(_HAMS_COM_DIR, 'hams_shared', 'tools', 'odoo_mypy_plugin.py')}\n",
         )
-        _write(os.path.join(_SCRATCH_DIR, "__init__.py"), "from . import models\n")
-        _write(os.path.join(_SCRATCH_DIR, "__manifest__.py"), "{'name': 'mypy plugin test scratch', 'description': 'Scratch fixture for test_odoo_mypy_plugin.py, not a real module.', 'depends': []}\n")
-        _write(os.path.join(_SCRATCH_DIR, "models", "__init__.py"), "from . import res_users_probe\n")
+        _write(os.path.join(self._scratch_dir, "__init__.py"), "from . import models\n")
+        _write(os.path.join(self._scratch_dir, "__manifest__.py"), "{'name': 'mypy plugin test scratch', 'description': 'Scratch fixture for test_odoo_mypy_plugin.py, not a real module.', 'depends': []}\n")
+        _write(os.path.join(self._scratch_dir, "models", "__init__.py"), "from . import res_users_probe\n")
         _write(
-            os.path.join(_SCRATCH_DIR, "models", "res_users_probe.py"),
+            os.path.join(self._scratch_dir, "models", "res_users_probe.py"),
             "from odoo import models\n"
             "\n"
             "\n"
@@ -194,7 +202,7 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         # res.users model. probe_real_cross_module_via_relational only resolves if the returned
         # type is the FULL merged res.users, not just whatever a single file declares.
         _write(
-            os.path.join(_SCRATCH_DIR, "models", "relational_probe.py"),
+            os.path.join(self._scratch_dir, "models", "relational_probe.py"),
             "from odoo import models, fields\n"
             "\n"
             "\n"
@@ -212,7 +220,7 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         # Phase 2 step 4 (env['some.model'] resolution): same real cross-module method, reached
         # via self.env['res.users'] instead of a Many2one field.
         _write(
-            os.path.join(_SCRATCH_DIR, "models", "env_probe.py"),
+            os.path.join(self._scratch_dir, "models", "env_probe.py"),
             "from odoo import models\n"
             "\n"
             "\n"
@@ -236,7 +244,7 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         # test exercises the real _get_seo_fields resolution end to end, not just a shape
         # that resembles it.
         _write(
-            os.path.join(_SCRATCH_DIR, "models", "mixin_probe.py"),
+            os.path.join(self._scratch_dir, "models", "mixin_probe.py"),
             "from odoo import models\n"
             "\n"
             "\n"
@@ -257,10 +265,7 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         )
 
     def tearDown(self):
-        if os.path.isdir(_SCRATCH_DIR):
-            shutil.rmtree(_SCRATCH_DIR)
-        if os.path.exists(self._ini_path):
-            os.remove(self._ini_path)
+        shutil.rmtree(self._scratch_root, ignore_errors=True)
         shutil.rmtree(self._cache_dir, ignore_errors=True)
 
     def _run_mypy(self, *files):
@@ -276,6 +281,7 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
                 self._cache_dir,
             ],
             cwd=_HAMS_COM_DIR,
+            env={**os.environ, "ODOO_MYPY_PLUGIN_EXTRA_ROOTS": self._scratch_root},
             capture_output=True,
             text=True,
             timeout=120,
@@ -283,13 +289,13 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         return result.stdout
 
     def test_real_cross_file_inherit_method_resolves_when_sibling_is_explicitly_passed(self):
-        probe = os.path.join(_SCRATCH_DIR, "models", "res_users_probe.py")
+        probe = os.path.join(self._scratch_dir, "models", "res_users_probe.py")
         sibling = os.path.join(_HAMS_COM_DIR, "ham_dns", "models", "res_users.py")
         output = self._run_mypy(probe, sibling)
         self.assertNotIn("_provision_personal_dns_zone", output, output)
 
     def test_a_genuinely_nonexistent_method_is_still_flagged(self):
-        probe = os.path.join(_SCRATCH_DIR, "models", "res_users_probe.py")
+        probe = os.path.join(self._scratch_dir, "models", "res_users_probe.py")
         sibling = os.path.join(_HAMS_COM_DIR, "ham_dns", "models", "res_users.py")
         output = self._run_mypy(probe, sibling)
         self.assertIn("_this_method_genuinely_does_not_exist_anywhere", output, output)
@@ -302,7 +308,7 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         # un-analyzed sibling and this method wrongly reports as missing --
         # confirmed empirically earlier the same session this test was
         # written (single-file case predates the fix and fails without it).
-        probe = os.path.join(_SCRATCH_DIR, "models", "res_users_probe.py")
+        probe = os.path.join(self._scratch_dir, "models", "res_users_probe.py")
         output = self._run_mypy(probe)
         self.assertNotIn("_provision_personal_dns_zone", output, output)
 
@@ -318,24 +324,24 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         # _resolve_model_instance docstring for the deeper reason: the officially-declared
         # named_generic_type path assumes an import chain that Odoo's string-based model
         # references never create).
-        probe = os.path.join(_SCRATCH_DIR, "models", "relational_probe.py")
+        probe = os.path.join(self._scratch_dir, "models", "relational_probe.py")
         output = self._run_mypy(probe)
         self.assertNotIn("_provision_personal_dns_zone", output, output)
 
     def test_a_genuinely_nonexistent_method_via_a_relational_field_is_still_flagged(self):
-        probe = os.path.join(_SCRATCH_DIR, "models", "relational_probe.py")
+        probe = os.path.join(self._scratch_dir, "models", "relational_probe.py")
         output = self._run_mypy(probe)
         self.assertIn("_this_method_genuinely_does_not_exist_anywhere", output, output)
 
     # --- Phase 2 step 4: env['some.model'] resolution ---
 
     def test_env_getitem_resolves_to_the_full_merged_model_without_the_sibling_passed(self):
-        probe = os.path.join(_SCRATCH_DIR, "models", "env_probe.py")
+        probe = os.path.join(self._scratch_dir, "models", "env_probe.py")
         output = self._run_mypy(probe)
         self.assertNotIn("_provision_personal_dns_zone", output, output)
 
     def test_a_genuinely_nonexistent_method_via_env_getitem_is_still_flagged(self):
-        probe = os.path.join(_SCRATCH_DIR, "models", "env_probe.py")
+        probe = os.path.join(self._scratch_dir, "models", "env_probe.py")
         output = self._run_mypy(probe)
         self.assertIn("_this_method_genuinely_does_not_exist_anywhere", output, output)
 
@@ -354,14 +360,14 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
 
     @unittest.skipUnless(_HAMS_OPEN_DIR, "hams_open sibling repo not found -- the real mixin lives there")
     def test_a_mixin_only_method_resolves_via_the_contributors_own_extra_inherit_target(self):
-        probe = os.path.join(_SCRATCH_DIR, "models", "mixin_probe.py")
+        probe = os.path.join(self._scratch_dir, "models", "mixin_probe.py")
         mixin_sibling = os.path.join(_HAMS_OPEN_DIR, "user_websites_seo", "models", "seo_metadata_mixin.py")
         output = self._run_mypy(probe, mixin_sibling)
         self.assertNotIn("_get_seo_fields", output, output)
 
     @unittest.skipUnless(_HAMS_OPEN_DIR, "hams_open sibling repo not found -- the real mixin lives there")
     def test_a_genuinely_nonexistent_mixin_method_is_still_flagged(self):
-        probe = os.path.join(_SCRATCH_DIR, "models", "mixin_probe.py")
+        probe = os.path.join(self._scratch_dir, "models", "mixin_probe.py")
         mixin_sibling = os.path.join(_HAMS_OPEN_DIR, "user_websites_seo", "models", "seo_metadata_mixin.py")
         output = self._run_mypy(probe, mixin_sibling)
         self.assertIn("_this_mixin_method_genuinely_does_not_exist_anywhere", output, output)
@@ -396,9 +402,6 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
         self.assertNotIn("_check_proxy_ownership_write", output, output)
 
 
-_SCRATCH_DIR_SIBLINGS = os.path.join(_HAMS_COM_DIR, "_test_scratch_mypy_plugin_class_siblings") if _HAMS_COM_DIR else None
-
-
 @unittest.skipUnless(_HAMS_COM_DIR, "hams_com sibling repo not found -- plugin needs both repos")
 class OdooMypyPluginClassSiblingsRegressionTests(unittest.TestCase):
     """Regression coverage for the real bug found and fixed this session in
@@ -415,27 +418,29 @@ class OdooMypyPluginClassSiblingsRegressionTests(unittest.TestCase):
 
     def setUp(self):
         self._cache_dir = tempfile.mkdtemp(prefix="odoo_mypy_plugin_siblings_test_cache_")
-        self._ini_path = os.path.join(_HAMS_COM_DIR, "_test_scratch_mypy_siblings.ini")
+        self._scratch_root = os.path.realpath(tempfile.mkdtemp(prefix="odoo_mypy_plugin_siblings_test_scratch_"))
+        self._scratch_dir = os.path.join(self._scratch_root, _SIBLINGS_PKG_NAME)
+        self._ini_path = os.path.join(self._scratch_root, "mypy.ini")
         _write(
             self._ini_path,
             "[mypy]\n"
             "ignore_missing_imports = True\n"
             "check_untyped_defs = True\n"
             "follow_imports = silent\n"
-            "mypy_path = hams_shared/tools/odoo_type_stubs\n"
-            "plugins = hams_shared/tools/odoo_mypy_plugin.py\n",
+            f"mypy_path = {os.path.join(_HAMS_COM_DIR, 'hams_shared', 'tools', 'odoo_type_stubs')}\n"
+            f"plugins = {os.path.join(_HAMS_COM_DIR, 'hams_shared', 'tools', 'odoo_mypy_plugin.py')}\n",
         )
-        _write(os.path.join(_SCRATCH_DIR_SIBLINGS, "__init__.py"), "from . import models\n")
+        _write(os.path.join(self._scratch_dir, "__init__.py"), "from . import models\n")
         _write(
-            os.path.join(_SCRATCH_DIR_SIBLINGS, "__manifest__.py"),
+            os.path.join(self._scratch_dir, "__manifest__.py"),
             "{'name': 'mypy plugin class-siblings regression scratch', 'description': 'Scratch fixture for test_odoo_mypy_plugin.py, not a real module.', 'depends': []}\n",
         )
         _write(
-            os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "__init__.py"),
+            os.path.join(self._scratch_dir, "models", "__init__.py"),
             "from . import primary_model, mixin_model, combiner\n",
         )
         _write(
-            os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "primary_model.py"),
+            os.path.join(self._scratch_dir, "models", "primary_model.py"),
             "from odoo import models\n"
             "\n"
             "\n"
@@ -446,7 +451,7 @@ class OdooMypyPluginClassSiblingsRegressionTests(unittest.TestCase):
             "        return 1\n",
         )
         _write(
-            os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "mixin_model.py"),
+            os.path.join(self._scratch_dir, "models", "mixin_model.py"),
             "from odoo import models\n"
             "\n"
             "\n"
@@ -457,7 +462,7 @@ class OdooMypyPluginClassSiblingsRegressionTests(unittest.TestCase):
             "        return 2\n",
         )
         _write(
-            os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "combiner.py"),
+            os.path.join(self._scratch_dir, "models", "combiner.py"),
             "from odoo import models\n"
             "\n"
             "\n"
@@ -476,16 +481,14 @@ class OdooMypyPluginClassSiblingsRegressionTests(unittest.TestCase):
         )
 
     def tearDown(self):
-        if os.path.isdir(_SCRATCH_DIR_SIBLINGS):
-            shutil.rmtree(_SCRATCH_DIR_SIBLINGS)
-        if os.path.exists(self._ini_path):
-            os.remove(self._ini_path)
+        shutil.rmtree(self._scratch_root, ignore_errors=True)
         shutil.rmtree(self._cache_dir, ignore_errors=True)
 
     def _run_mypy(self, *files):
         result = subprocess.run(
             [sys.executable, "-m", "mypy", *files, "--config-file", self._ini_path, "--cache-dir", self._cache_dir],
             cwd=_HAMS_COM_DIR,
+            env={**os.environ, "ODOO_MYPY_PLUGIN_EXTRA_ROOTS": self._scratch_root},
             capture_output=True,
             text=True,
             timeout=120,
@@ -493,21 +496,21 @@ class OdooMypyPluginClassSiblingsRegressionTests(unittest.TestCase):
         return result.stdout
 
     def test_a_class_contributing_via_list_inherit_to_two_models_gets_both_siblings(self):
-        combiner = os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "combiner.py")
-        primary = os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "primary_model.py")
-        mixin = os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "mixin_model.py")
+        combiner = os.path.join(self._scratch_dir, "models", "combiner.py")
+        primary = os.path.join(self._scratch_dir, "models", "primary_model.py")
+        mixin = os.path.join(self._scratch_dir, "models", "mixin_model.py")
         output = self._run_mypy(combiner, primary, mixin)
         self.assertNotIn("real_only_here", output, output)
         self.assertNotIn("mixin_only_here", output, output)
 
     def test_get_additional_deps_pulls_in_both_targets_without_either_sibling_passed(self):
-        combiner = os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "combiner.py")
+        combiner = os.path.join(self._scratch_dir, "models", "combiner.py")
         output = self._run_mypy(combiner)
         self.assertNotIn("real_only_here", output, output)
         self.assertNotIn("mixin_only_here", output, output)
 
     def test_a_genuinely_nonexistent_method_on_the_dual_contributor_is_still_flagged(self):
-        combiner = os.path.join(_SCRATCH_DIR_SIBLINGS, "models", "combiner.py")
+        combiner = os.path.join(self._scratch_dir, "models", "combiner.py")
         output = self._run_mypy(combiner)
         self.assertIn("_this_method_genuinely_does_not_exist_anywhere", output, output)
 
