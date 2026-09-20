@@ -2216,6 +2216,173 @@ WantedBy=timers.target
             "environments": ["prod", "test"],
         },
         {
+            # Callbook DNS service, phase 1 (docs/proposals/CALLBOOK_DNS_SERVICE.md). Second
+            # PowerDNS instance serving only callbook.<DOMAIN> from its own SQLite file. Loopback
+            # only: nothing is public until phase 2 delegates the zone and picks the public
+            # listener (the main pdns already holds port 53 on every address).
+            "path": "/opt/hams/etc/pdns-callbook.conf",
+            "content": """\
+launch=gsqlite3
+gsqlite3-database=/var/lib/powerdns/callbook/callbook.sqlite3
+gsqlite3-dnssec=no
+local-address=127.0.0.1
+local-port=5301
+api=yes
+api-key={PDNS_API_KEY}
+webserver=yes
+webserver-address=127.0.0.1
+webserver-port=8082
+webserver-allow-from=127.0.0.0/8,::1/128
+loglevel=4
+""",
+            "owner": "pdns:pdns",
+            "mode": "640",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/var/lib/powerdns/callbook",
+            "owner": "pdns:pdns",
+            "provision_mode": "775",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/pdns.callbook.service",
+            "content": """\
+[Unit]
+Description=PowerDNS Authoritative Server, callbook zone (loopback only)
+After=network.target
+
+[Service]
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+Type=simple
+User=pdns
+Group=pdns
+# Group-writable database files, so the exporter (SupplementaryGroups=pdns) can replace rows.
+UMask=0002
+RuntimeDirectory=pdns-callbook
+ReadWritePaths=/var/lib/powerdns/callbook
+ExecStart=/usr/sbin/pdns_server --daemon=no --guardian=no --config-dir=/opt/hams/etc --config-name=callbook --socket-dir=/run/pdns-callbook
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pdns.callbook
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/callbook.dns.export.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Callbook DNS Zone Exporter (One-Shot)
+After=network.target pdns.callbook.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/powerdns/callbook
+Type=oneshot
+User=odoo
+SupplementaryGroups=pdns
+UMask=0002
+WorkingDirectory=/opt/hams/daemons/callbook_dns_export
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=callbook_dns_export_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_dns_export_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="CALLBOOK_DNS_DB=/var/lib/powerdns/callbook/callbook.sqlite3"
+Environment="CALLBOOK_PDNS_API_URL=http://127.0.0.1:8082/api/v1/servers/localhost"
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/callbook_dns_export/main.py
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=callbook.dns.export
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/callbook.dns.export.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio Callbook DNS Zone Export, Nightly
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Response rate limiting in front of the callbook PowerDNS instance. Loopback listener
+            # until phase 2 chooses the public address (binding port 53 needs
+            # CAP_NET_BIND_SERVICE, and the main pdns already owns 53 on every address).
+            "path": "/opt/hams/systemd/callbook.dns.rrl.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Callbook DNS Response Rate Limiter
+After=network.target pdns.callbook.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/callbook_dns_export
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="CALLBOOK_DNS_LISTEN=127.0.0.1:5300"
+Environment="CALLBOOK_DNS_UPSTREAM=127.0.0.1:5301"
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/callbook_dns_export/rrl_proxy.py
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=callbook.dns.rrl
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             "path": "/opt/hams/systemd/ised.canada.sync.service",
             "content": """\
 [Unit]
