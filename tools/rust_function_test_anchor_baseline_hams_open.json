@@ -4,7 +4,5 @@
   "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::cheb_poly_eval_fixed_i64",
   "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::div_round_i128_fn",
   "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::panic",
-  "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::q_mul_i128",
-  "daemons/ham_digital_modes/src/wspr_sync.rs::evidence_to_symbol_values_windowed_clean_reference",
-  "daemons/ham_digital_modes/src/wspr_sync.rs::extract_impossible_tone_evidence"
+  "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::q_mul_i128"
 ]
