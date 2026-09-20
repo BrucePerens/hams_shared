@@ -119,6 +119,7 @@ The AST parser physically reads your test files to verify the assertions exist.
 
 | I18N Strings | `# audit-ignore-i18n: Tested by [@ANCHOR: example_name]` | Safely ignore headless API translations (ADR-0065). |
 | `/web/...` Routing | `# burn-ignore-route: <reason>` | Only for a `/web/...` or `/web#...` string literal that is flagged by the routing-deprecation check but is genuinely not a navigation target to the deprecated bare `/web` entrypoint (e.g. a cache-control prefix classifier). Do NOT use this for a legitimate, undocumented `/web/` sub-route -- add it to the allowlist in `check_burn_list.py` instead. |
+| Local `import` | `# burn-ignore-optional-import: <reason>` | Only for a function-local import of an optional dependency, inside an `if "x" in self.env.registry` / `in ...env` presence check or a `try` catching `ImportError`. Reason required; suppresses only the LOCAL IMPORT rule. Never use `noqa`. |
 | `useService('rpc')` | `# burn-ignore-rpc-non-orm: <reason>` | Only for a raw `rpc` service call whose target is a custom, non-ORM HTTP controller route, which `useService('orm')` cannot reach. |
 
 ### 🚨 Critical Formatting & Placement Rules for Bypasses

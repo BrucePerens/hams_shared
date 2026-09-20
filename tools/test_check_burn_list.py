@@ -6361,3 +6361,63 @@ def test_legacy_undocumented_tag_set_only_lists_tags_still_undocumented():
         "these tags are now documented; remove them from the frozen legacy set: "
         f"{sorted(documented & _LEGACY_UNDOCUMENTED_BYPASS_TAGS)}"
     )
+
+
+_OPTIONAL_IMPORT_GATED = (
+    "class T:\n"
+    "    def m(self):\n"
+    "        if 'bus.bus' in self.env.registry:\n"
+    "            from odoo.addons.bus.models.bus import BusBus  # burn-ignore-optional-import: bus addon may be absent\n"
+)
+
+
+def _local_import_errors(source):
+    errors, _warnings = _scan_file(source, "test_x.py")
+    return [e for e in errors if "LOCAL IMPORT" in str(e)]
+
+
+def test_optional_import_tag_exempts_a_registry_gated_local_import():
+    assert _local_import_errors(_OPTIONAL_IMPORT_GATED) == []
+
+
+def test_optional_import_tag_requires_a_reason():
+    source = _OPTIONAL_IMPORT_GATED.replace(": bus addon may be absent", "")
+    assert _local_import_errors(source)
+
+
+def test_optional_import_tag_requires_a_presence_gate():
+    source = (
+        "class T:\n"
+        "    def m(self):\n"
+        "        from odoo.addons.bus.models.bus import BusBus  # burn-ignore-optional-import: because\n"
+    )
+    assert _local_import_errors(source)
+
+
+def test_optional_import_tag_accepts_a_try_except_importerror_gate():
+    source = (
+        "class T:\n"
+        "    def m(self):\n"
+        "        try:\n"
+        "            import optional_mod  # burn-ignore-optional-import: may be absent\n"
+        "        except ImportError:\n"
+        "            optional_mod = None\n"
+    )
+    assert _local_import_errors(source) == []
+
+
+def test_optional_import_tag_does_not_excuse_an_unrelated_finding_on_the_line():
+    source = (
+        "class T:\n"
+        "    def m(self):\n"
+        "        if 'x' in self.env.registry:\n"
+        "            import pickle  # burn-ignore-optional-import: may be absent\n"
+    )
+    errors, _warnings = _scan_file(source, "test_x.py")
+    assert any("pickle" in str(e) for e in errors)
+
+
+def test_noqa_is_still_forbidden_next_to_the_optional_import_tag():
+    source = _OPTIONAL_IMPORT_GATED.replace("BusBus  #", "BusBus  # noqa: PLC0415 #")
+    errors, _warnings = _scan_file(source, "test_x.py")
+    assert any("noqa" in str(e) for e in errors)

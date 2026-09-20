@@ -1002,6 +1002,20 @@ ACT_WINDOW_VIEW_REFS = set()
 # -------------------------------------------------------------------------
 
 
+def _ancestors(tree, target):
+    """Enclosing AST nodes of `target` (innermost first); [] if not found."""
+    def walk(node, chain):
+        if node is target:
+            return chain
+        for child in ast.iter_child_nodes(node):
+            found = walk(child, [node] + chain)
+            if found is not None:
+                return found
+        return None
+
+    return walk(tree, []) or []
+
+
 def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
     errors = []
     warnings = []
@@ -1846,9 +1860,43 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             )
             self.generic_visit(node)
 
+        def _is_gated_optional_import(self, node):
+            """True for a local import carrying `# burn-ignore-optional-import: <reason>`
+            that is also provably gated on the dependency actually being present: lexically
+            inside an `if "x" in <...>.registry` / `in <...>.env` presence check, or a
+            `try` whose handler catches ImportError. The tag needs a non-empty reason and is
+            honoured ONLY for the LOCAL IMPORT rule -- it suppresses nothing else on the line.
+            """
+            line = self.lines[node.lineno - 1] if node.lineno <= len(self.lines) else ""
+            if not re.search(r"burn-ignore-optional-import:\s*\S", line):
+                return False
+            for parent in _ancestors(tree, node):
+                if isinstance(parent, ast.If):
+                    for cmp in ast.walk(parent.test):
+                        if (
+                            isinstance(cmp, ast.Compare)
+                            and any(isinstance(op, ast.In) for op in cmp.ops)
+                            and re.search(
+                                r"\.(registry|env)$", ast.unparse(cmp.comparators[0])
+                            )
+                        ):
+                            return True
+                elif isinstance(parent, ast.Try):
+                    for handler in parent.handlers:
+                        names = {
+                            n.id
+                            for n in ast.walk(handler.type or ast.Constant(None))
+                            if isinstance(n, ast.Name)
+                        }
+                        if names & {"ImportError", "ModuleNotFoundError"}:
+                            return True
+            return False
+
         def visit_Import(self, node):
 
-            if getattr(self, "current_method", None):
+            if getattr(self, "current_method", None) and not (
+                self._is_gated_optional_import(node)
+            ):
                 self.add_error(
                     node.lineno,
                     "LOCAL IMPORT: Imports inside functions/methods are strictly forbidden.",
@@ -2058,7 +2106,9 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
         def visit_ImportFrom(self, node):
 
-            if getattr(self, "current_method", None):
+            if getattr(self, "current_method", None) and not (
+                self._is_gated_optional_import(node)
+            ):
                 self.add_error(
                     node.lineno,
                     "LOCAL IMPORT: Imports inside functions/methods are strictly forbidden.",
@@ -4980,6 +5030,14 @@ def scan_file(filepath, is_odoo_module=False):
                 # question (see hams_s3/models/res_config_settings.py's own
                 # comment). First used there.
                 "burn-ignore-optional-oca-dep",
+                # A function-local import of a module that may genuinely not be installed
+                # (e.g. `odoo.addons.bus.*` when the `bus` addon is absent), which cannot be
+                # hoisted to module level without an ImportError. Suppresses ONLY the
+                # LOCAL IMPORT rule, and only when the import is lexically inside an
+                # `if "x" in ....registry`/`in ....env` presence check or a `try` catching
+                # ImportError (see TaintVisitor._is_gated_optional_import); requires a
+                # non-empty `: <reason>`. Use instead of a bare `# burn-ignore` or `# noqa`.
+                "burn-ignore-optional-import",
                 # `'ham.dns.record' in self.env` (pager_duty/models/
                 # pager_check.py's update_lets_encrypt_domains(), asked
                 # about directly and answered by Bruce 2026-09-12): a
