@@ -2142,6 +2142,71 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
+            # Licensed HamCall index (ADR-0092): hand-delivered by K6BP, never published,
+            # used only to validate callsigns behind the scenes. Operator steps are in
+            # daemons/hamcall_idx_sync/README.md ("Placing the licensed file").
+            "path": "/opt/hams/hamcall",
+            "owner": "hams_com:hams_com",
+            "provision_mode": "750",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
+        {
+            # HamCall licensed-index sync (ADR-0092), a ONE-SHOT service with NO TIMER on
+            # purpose. Bruce, 2026-09-20: no automatic updates for now. The daemon runs once
+            # when the licensed hamcall.idx is placed at /opt/hams/hamcall/hamcall.idx and
+            # again by hand when a new file is dropped in:
+            #     systemctl start hamcall.idx.sync.service
+            # It exits 1 with the path and the operator step if the file is absent, so a
+            # timer on a host without the file would fail every run. To add scheduled updates
+            # later, add a hamcall.idx.sync.timer entry modeled on au.callsign.sync.timer
+            # (OnCalendar=daily, Persistent=true, RandomizedDelaySec=15m); the whole-file
+            # SHA-256 short-circuit makes an unchanged day cheap. Read-only on purpose:
+            # the daemon only reads the file and talks to Odoo.
+            "path": "/opt/hams/systemd/hamcall.idx.sync.service",
+            "content": """\
+[Unit]
+Description=HamCall Licensed Index Presence Sync (One-Shot, manual start)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/hamcall_idx_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=hamcall_verify_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/hamcall_verify_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="HAMCALL_IDX_PATH=/opt/hams/hamcall/hamcall.idx"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/hamcall_idx_sync/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hamcall.idx.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             # Independent cadence from fcc.uls.sync deliberately -- that
             # daemon polls continuously (Restart=always/RestartSec=10, cheap
             # per-attempt thanks to its own ETag/Last-Modified short-circuit)
