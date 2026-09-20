@@ -969,3 +969,98 @@ class SiblingRepoScanningIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BaselineRatchetTests(unittest.TestCase):
+    """The baseline ratchet: findings already recorded in a baseline file are grandfathered, any
+    finding NOT in it still fails, and with no baseline nothing is grandfathered."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.baseline = os.path.join(self.tmp, "baseline.json")
+        self.saved = (va._BASELINE, set(va._CURRENT_FINDINGS))
+        va._CURRENT_FINDINGS.clear()
+
+    def tearDown(self):
+        va._BASELINE = self.saved[0]
+        va._CURRENT_FINDINGS.clear()
+        va._CURRENT_FINDINGS.update(self.saved[1])
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _fixture(self, anchors):
+        target = os.path.join(self.tmp, "fixture")
+        shutil.rmtree(target, ignore_errors=True)
+        _write(os.path.join(target, "mod_a", "__manifest__.py"), "{}\n")
+        body = "".join(f"# [@ANCHOR: COMM_{a}]\nclass C_{a}:\n    pass\n\n" for a in anchors)
+        _write(os.path.join(target, "mod_a", "models", "foo.py"), body)
+        return target
+
+    def _run(self, target, *flags):
+        r = subprocess.run(
+            [sys.executable, _SCRIPT, target, "--baseline", self.baseline, *flags],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return r.returncode, r.stdout + r.stderr
+
+    def test_load_returns_none_for_a_missing_file_and_round_trips_a_saved_one(self):
+        self.assertIsNone(va.load_baseline(self.baseline))
+        va.save_baseline(self.baseline, {"doc_gap|b:x", "duplicate|a:y"})
+        self.assertEqual(va.load_baseline(self.baseline), {"doc_gap|b:x", "duplicate|a:y"})
+
+    def test_is_grandfathered_records_every_finding_but_only_passes_baselined_ones(self):
+        va._BASELINE = {"doc_gap|m:old"}
+        self.assertTrue(va._is_grandfathered("doc_gap", "m:old"))
+        self.assertFalse(va._is_grandfathered("doc_gap", "m:new"))
+        self.assertFalse(va._is_grandfathered("no_test_link", "m:old"))
+        self.assertEqual(
+            va._CURRENT_FINDINGS,
+            {"doc_gap|m:old", "doc_gap|m:new", "no_test_link|m:old"},
+        )
+
+    def test_no_baseline_grandfathers_nothing(self):
+        va._BASELINE = None
+        self.assertFalse(va._is_grandfathered("doc_gap", "m:old"))
+
+    def test_documentation_gap_report_skips_a_baselined_anchor_only(self):
+        source_anchors = {
+            "mod_a:COMM_old": ["./mod_a/models/foo.py:1"],
+            "mod_a:COMM_new": ["./mod_a/models/foo.py:9"],
+        }
+        va._BASELINE = {"doc_gap|mod_a:COMM_old"}
+        self.assertTrue(
+            va._report_documentation_gaps(source_anchors, {}, {}, {}, [], self.tmp)
+        )
+        va._BASELINE = {"doc_gap|mod_a:COMM_old", "doc_gap|mod_a:COMM_new"}
+        self.assertFalse(
+            va._report_documentation_gaps(source_anchors, {}, {}, {}, [], self.tmp)
+        )
+
+    def test_end_to_end_baseline_lets_current_gaps_pass_but_fails_a_new_one(self):
+        target = self._fixture(["old_one"])
+        code, _ = self._run(target)
+        self.assertEqual(code, 1, "the fixture must fail with no baseline present")
+
+        code, out = self._run(target, "--generate-baseline")
+        self.assertEqual(code, 0, out)
+        recorded = va.load_baseline(self.baseline)
+        self.assertIn("doc_gap|mod_a:COMM_old_one", recorded)
+
+        code, out = self._run(target)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("Code Feature", out)
+
+        target = self._fixture(["old_one", "brand_new"])
+        code, out = self._run(target)
+        self.assertEqual(code, 1, out)
+        self.assertIn("COMM_brand_new", out)
+        self.assertNotIn("Code Feature 'mod_a:COMM_old_one'", out)
+
+    def test_a_fixed_finding_is_reported_as_a_shrinkable_baseline_entry(self):
+        target = self._fixture(["old_one"])
+        self._run(target, "--generate-baseline")
+        va.save_baseline(self.baseline, va.load_baseline(self.baseline) | {"doc_gap|mod_a:gone"})
+        code, out = self._run(target)
+        self.assertEqual(code, 0, out)
+        self.assertIn("1 baseline entries no longer occur", out)

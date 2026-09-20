@@ -1524,14 +1524,12 @@ def check_linters(
         print(res_init.stdout)
 
     if os.environ.get("HAMS_SKIP_ANCHOR_SCAN") == "1":
-        # Narrow, explicit escape hatch: verify_anchors.py's own ADR-0055
-        # doc-coverage rule has no baseline/grandfather mechanism (unlike
-        # check_function_test_anchors.py's ratchet) -- a large pre-existing
-        # backlog anywhere in either repo halts EVERY test run, for every
-        # module, regardless of what's actually being tested. This is for
-        # verifying a specific, unrelated change against real Odoo tests
-        # without being blocked by that backlog; it does not touch the
-        # check's own enforcement and must never be set by default in CI.
+        # Narrow, explicit escape hatch. verify_anchors.py now has its own
+        # baseline ratchet (anchor_baseline_<repo>.json beside it: only
+        # findings NOT already recorded there fail), so a routine run no
+        # longer needs this switch and setting it also hides NEW gaps. It
+        # remains only for an emergency where the scan itself is broken; it
+        # must never be set by default in CI.
         print(
             "[*] Skipping Semantic Anchor scan (HAMS_SKIP_ANCHOR_SCAN=1 -- "
             "explicit opt-out, not a default; see this block's own comment)."

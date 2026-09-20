@@ -37,6 +37,7 @@ RULES OF TRACEABILITY:
    still has to read both and decide.
 """
 
+import json
 import os
 import re
 import sys
@@ -72,6 +73,67 @@ ANCHOR_PATTERN = re.compile(r"\[@ANCHOR(?:-BEGIN|-END)?:\s*([a-zA-Z0-9_:]+)\s*\]
 CODE_ISLANDS_UNDER_DOCS = [
     "docs/proposals/patent_disclosures/filed_applications/_pipeline",
 ]
+
+# Ratchet (baseline) for the pre-existing backlog. Every per-finding check has a kind: ADR-0055
+# documentation coverage ("doc_gap"), source-without-test-link ("no_test_link"), duplicate base
+# anchors ("duplicate"), a doc pointing at code that no longer exists ("missing_target"),
+# "orphan_test", "audit_ignore", "ux_doc", "stacked" (keyed by file), "cross_ref" and
+# "broken_test_binding". The first several had large pre-existing backlogs, so the scan failed on every run and callers had to set HAMS_SKIP_ANCHOR_SCAN=1, which
+# also hid NEW gaps. A baseline file (`anchor_baseline_<repo>.json` beside this script, same
+# convention as `js_function_test_anchor_baseline_<repo>.json`) records the findings that existed
+# when it was generated ("<kind>|<anchor>" keys); only findings NOT in it fail. With no baseline
+# loaded (the default for a scratch fixture) nothing is grandfathered, so behavior is unchanged.
+# Regenerate with `--generate-baseline` (only ever to record a genuine shrink; never to hide a
+# new gap). Findings stay grandfathered per anchor name, so a baselined anchor that gets a second
+# definition is still a duplicate of a *baselined* name; fixing an anchor and re-running with
+# `--generate-baseline` shrinks the floor.
+_BASELINE = None  # set of "<kind>|<anchor>" keys, or None when no ratchet is active
+_CURRENT_FINDINGS = set()  # every primary finding seen this run, grandfathered or not
+
+
+def _finding_key(kind, anchor):
+    return f"{kind}|{anchor}"
+
+
+def _is_grandfathered(kind, anchor):
+    """Record a primary finding; True if the loaded baseline already contains it."""
+    key = _finding_key(kind, anchor)
+    _CURRENT_FINDINGS.add(key)
+    return _BASELINE is not None and key in _BASELINE
+
+
+def load_baseline(path):
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return set(json.load(f))
+
+
+def save_baseline(path, keys):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(sorted(keys), f, indent=2)
+        f.write("\n")
+
+
+def _baseline_repo_name(primary_dirs, enclosing_repo_dir):
+    """hams_com or hams_open: first ancestor (or self) of a scan target with that name, else the
+    enclosing checkout's basename."""
+    for d in primary_dirs:
+        cur = os.path.abspath(d)
+        while True:
+            if os.path.basename(cur) in ("hams_com", "hams_open"):
+                return os.path.basename(cur)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    return os.path.basename(enclosing_repo_dir)
+
+
+def _default_baseline_path(repo_name):
+    return os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), f"anchor_baseline_{repo_name}.json"
+    )
 
 
 def _clean(name):
@@ -556,7 +618,8 @@ def _report_duplicates(duplicates, primary_dirs, repo_root, explicit_non_primary
             is_primary(p, primary_dirs, repo_root, explicit_non_primary)
             for p in prior_locs
         ):
-            actual_duplicates.append(dup)
+            if not _is_grandfathered("duplicate", anchor):
+                actual_duplicates.append(dup)
 
     if actual_duplicates:
         print("\n[!] CI/CD FAILURE: Duplicate Semantic Anchors detected:")
@@ -615,6 +678,8 @@ def _report_missing_cross_refs(
             ):
                 continue
 
+            if _is_grandfathered("cross_ref", anchor):
+                continue
             if not has_errors:
                 print(
                     "\n[!] CI/CD FAILURE: ADR-0055 Strict Module-Bound Cross-Reference Violation:"
@@ -659,6 +724,8 @@ def _report_missing_tests(
                 ):
                     continue
 
+                if _is_grandfathered("broken_test_binding", anchor):
+                    continue
                 if not has_errors:
                     print(
                         "\n[!] CI/CD FAILURE: ADR-0054 Strict Module-Bound Linkage Violation:"
@@ -735,6 +802,8 @@ def _report_bidirectional_orphans(
             ]
             if not primary_locs:
                 continue
+            if _is_grandfathered("no_test_link", anchor):
+                continue
             if not reported:
                 print(
                     "\n[!] CI/CD FAILURE: ADR-0054 Bidirectional Disconnect (Source Missing Test Link):"
@@ -762,6 +831,8 @@ def _report_bidirectional_orphans(
                 if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)
             ]
             if not primary_locs:
+                continue
+            if _is_grandfathered("orphan_test", anchor):
                 continue
             if not reported:
                 print(
@@ -842,6 +913,8 @@ def _report_unverified_audit_ignore_claims(
             ]
             if not primary_locs:
                 continue
+            if _is_grandfathered("audit_ignore", anchor):
+                continue
             if not reported:
                 print(
                     "\n[!] CI/CD FAILURE: ADR-0054 Unverified 'audit-ignore-view' Claim:"
@@ -904,6 +977,8 @@ def _report_documentation_gaps(
             ]
             if not primary_locs:
                 continue
+            if _is_grandfathered("doc_gap", anchor):
+                continue
             if not reported:
                 print(
                     "\n[!] CI/CD FAILURE: ADR-0055 Documentation Coverage Gap Detected:"
@@ -931,6 +1006,8 @@ def _report_documentation_gaps(
                 if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)
             ]
             if not primary_locs:
+                continue
+            if _is_grandfathered("missing_target", anchor):
                 continue
             if not reported:
                 print(
@@ -975,10 +1052,13 @@ def _report_dummy_blocks(all_anchor_lines, primary_dirs, repo_root, explicit_non
             consecutive_blocks.append(current_block)
             
         if consecutive_blocks:
+            rel_path = os.path.relpath(filepath, repo_root)
+            # Keyed by file, not line span: line numbers shift with any unrelated edit.
+            if _is_grandfathered("stacked", rel_path):
+                continue
             if not has_errors:
                 print("\n[!] CI/CD FAILURE: Dummy Test / Stacked Anchors Detected:")
                 has_errors = True
-            rel_path = os.path.relpath(filepath, repo_root)
             print(f"    - Stacked anchors found in '{rel_path}'")
             for block in consecutive_blocks:
                 print(f"      -> Lines {block[0]} to {block[-1]} have anchors right next to each other.")
@@ -1010,6 +1090,8 @@ def _report_missing_ux_docs(
                 if is_primary(loc, primary_dirs, repo_root, explicit_non_primary)
             ]
             if not primary_locs:
+                continue
+            if _is_grandfathered("ux_doc", anchor):
                 continue
             if not has_errors:
                 print(
@@ -1104,7 +1186,23 @@ def main():
     print("[*] Scanning documentation and codebase for Semantic Anchors...")
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-    args = sys.argv[1:]
+    global _BASELINE
+    argv = sys.argv[1:]
+    generate_baseline = "--generate-baseline" in argv
+    baseline_override = None
+    args = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--generate-baseline":
+            pass
+        elif argv[i] == "--baseline" and i + 1 < len(argv):
+            baseline_override = argv[i + 1]
+            i += 1
+        elif argv[i].startswith("--baseline="):
+            baseline_override = argv[i].split("=", 1)[1]
+        else:
+            args.append(argv[i])
+        i += 1
     if not args:
         args = ["."]
 
@@ -1133,6 +1231,11 @@ def main():
     # exist. `os.path.dirname(repo_root)` is the actual enclosing hams_com/hams_open checkout
     # that `_add_sibling_repo_target` needs.
     enclosing_repo_dir = os.path.dirname(repo_root)
+    baseline_path = baseline_override or _default_baseline_path(
+        _baseline_repo_name(primary_dirs, enclosing_repo_dir)
+    )
+    _BASELINE = None if generate_baseline else load_baseline(baseline_path)
+    _CURRENT_FINDINGS.clear()
     target_dirs, sibling_warning = _add_sibling_repo_target(enclosing_repo_dir, target_dirs)
     if sibling_warning:
         print(
@@ -1326,9 +1429,24 @@ def main():
         )
     )
 
+    if generate_baseline:
+        save_baseline(baseline_path, _CURRENT_FINDINGS)
+        print(
+            f"[*] Baseline written: {len(_CURRENT_FINDINGS)} pre-existing findings recorded at "
+            f"{baseline_path}"
+        )
+        sys.exit(0)
+
     if any(errs):
         sys.exit(1)
     else:
+        if _BASELINE is not None:
+            print(
+                f"\n[*] Ratchet: {len(_CURRENT_FINDINGS & _BASELINE)} pre-existing findings "
+                f"grandfathered by {os.path.basename(baseline_path)}; "
+                f"{len(_BASELINE - _CURRENT_FINDINGS)} baseline entries no longer occur "
+                "(regenerate with --generate-baseline to shrink the floor)."
+            )
         print(
             f"\n[+] SUCCESS: Verified {len(code_anchors)} Semantic Anchors and {len(contract_anchors)} API Contracts. (Module Bounds Secure & Explicit Targeting Profile Operational)"
         )
