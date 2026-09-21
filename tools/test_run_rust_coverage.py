@@ -337,16 +337,16 @@ class RealCargoLlvmCovAcceptanceTest(unittest.TestCase):
             with open(output_path, "r", encoding="utf-8") as f:
                 report = json.load(f)
 
-            decode_key = "daemons/ham_digital_modes/src/ambe/decode.rs"
+            decode_key = "daemons/ham_digital_modes/src/ambe/float/mbe_synthesis.rs"
             self.assertIn(
                 decode_key,
                 report["files"],
-                "expected decode.rs to appear under its real repo-relative path",
+                "expected mbe_synthesis.rs to appear under its real repo-relative path",
             )
             self.assertGreater(
                 len(report["files"][decode_key]["executed_lines"]),
                 0,
-                "decode.rs is exercised by real tests -- expected at least some executed lines",
+                "mbe_synthesis.rs is exercised by real tests -- expected at least some executed lines",
             )
 
 
