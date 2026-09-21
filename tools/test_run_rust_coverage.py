@@ -291,6 +291,55 @@ class FindRepoRootTests(unittest.TestCase):
         self.assertIsNone(rrc.find_repo_root(nested))
 
 
+class RunLlvmCovLitterTests(unittest.TestCase):
+    """The instrumented build dir and profraw files must live in a temp dir removed after the run
+    (success or failure), unless the caller passes an explicit --target-dir."""
+
+    def _run_with_fake_cargo(self, exit_code, target_dir=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_bin = os.path.join(tmp, "bin")
+            os.makedirs(fake_bin)
+            seen = os.path.join(tmp, "seen.txt")
+            fake = os.path.join(fake_bin, "cargo")
+            with open(fake, "w", encoding="utf-8") as f:
+                f.write(
+                    "#!/bin/sh\n"
+                    'mkdir -p "$CARGO_LLVM_COV_TARGET_DIR"; touch "$CARGO_LLVM_COV_TARGET_DIR/x.profraw"\n'
+                    f'echo "$CARGO_LLVM_COV_TARGET_DIR" > {seen}\n'
+                    f'echo "$LLVM_PROFILE_FILE" >> {seen}\n'
+                    "while [ $# -gt 0 ]; do [ \"$1\" = --output-path ] && echo SF:a.rs > \"$2\"; shift; done\n"
+                    f"exit {exit_code}\n"
+                )
+            os.chmod(fake, 0o755)
+            old_path = os.environ["PATH"]
+            os.environ["PATH"] = fake_bin + os.pathsep + old_path
+            try:
+                rrc.run_llvm_cov_lcov(tmp, target_dir=target_dir)
+            finally:
+                os.environ["PATH"] = old_path
+            with open(seen, "r", encoding="utf-8") as f:
+                lines = f.read().split()
+            return lines[0], lines[1], (target_dir and os.path.exists(target_dir))
+
+    def test_temp_target_dir_and_profile_dir_are_removed_on_success(self):
+        target, profile, _ = self._run_with_fake_cargo(0)
+        self.assertFalse(os.path.exists(target))
+        self.assertTrue(profile.startswith(os.path.dirname(os.path.dirname(target))))
+
+    def test_temp_target_dir_is_removed_on_failure(self):
+        target, _, _ = self._run_with_fake_cargo(1)
+        self.assertFalse(os.path.exists(target))
+
+    def test_explicit_target_dir_is_kept(self):
+        keep = tempfile.mkdtemp(prefix="rrc_keep_")
+        try:
+            target, _, exists = self._run_with_fake_cargo(0, target_dir=keep)
+            self.assertEqual(target, keep)
+            self.assertTrue(exists)
+        finally:
+            shutil.rmtree(keep, ignore_errors=True)
+
+
 class RealCargoLlvmCovAcceptanceTest(unittest.TestCase):
     """The real end-to-end acceptance test: runs cargo llvm-cov against this repo's own real
     ham_digital_modes crate (skipped if that crate isn't checked out where expected, e.g. running

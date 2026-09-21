@@ -41,6 +41,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -64,19 +65,30 @@ def find_repo_root(start_dir):
         current = parent
 
 
-def run_llvm_cov_lcov(crate_dir, release=True):
+def run_llvm_cov_lcov(crate_dir, release=True, target_dir=None):
     """Runs `cargo llvm-cov` for the crate at `crate_dir`, real test suite included, and returns
     the raw LCOV text. Returns None on any real build/test failure -- a coverage report from a
     crate that doesn't even build cleanly would be actively misleading, not a degraded-but-useful
-    partial result."""
+    partial result.
+
+    Litter control (standing rule: tests and tools clean up after themselves): unless the caller
+    passes an explicit `target_dir` (kept, never deleted), the instrumented build directory
+    (`cargo llvm-cov`'s own default, `<crate>/target/llvm-cov-target`, is inside the repo) and
+    every `*.profraw` live in a private temp directory that is removed on every exit path.
+    LLVM_PROFILE_FILE also points into that directory, so any instrumented process that does not
+    get cargo-llvm-cov's own value cannot drop `default_*.profraw` into the current directory."""
     with tempfile.NamedTemporaryFile(suffix=".lcov", delete=False) as tmp:
         lcov_path = tmp.name
+    scratch = tempfile.mkdtemp(prefix="rust_coverage_")
+    env = dict(os.environ)
+    env["CARGO_LLVM_COV_TARGET_DIR"] = target_dir or os.path.join(scratch, "llvm-cov-target")
+    env["LLVM_PROFILE_FILE"] = os.path.join(scratch, "profraw", "default_%m_%p.profraw")
     try:
         cmd = ["cargo", "llvm-cov"]
         if release:
             cmd.append("--release")
         cmd.extend(["--remap-path-prefix", "--lcov", "--output-path", lcov_path])
-        proc = subprocess.run(cmd, cwd=crate_dir, capture_output=True, text=True)
+        proc = subprocess.run(cmd, cwd=crate_dir, capture_output=True, text=True, env=env)
         if proc.returncode != 0:
             print(proc.stdout, file=sys.stderr)
             print(proc.stderr, file=sys.stderr)
@@ -84,6 +96,7 @@ def run_llvm_cov_lcov(crate_dir, release=True):
         with open(lcov_path, "r", encoding="utf-8") as f:
             return f.read()
     finally:
+        shutil.rmtree(scratch, ignore_errors=True)
         try:
             os.unlink(lcov_path)
         except OSError as e:
@@ -168,6 +181,12 @@ def main():
         action="store_true",
         help="Use a debug build instead of --release (faster to build, slower to run)",
     )
+    parser.add_argument(
+        "--target-dir",
+        default=None,
+        help="Keep the instrumented build here (reused across runs, never deleted); default is a "
+        "private temp directory removed when the run ends",
+    )
     args = parser.parse_args()
 
     repo_root = args.repo_root or find_repo_root(args.crate_dir)
@@ -178,7 +197,7 @@ def main():
         )
         return 1
 
-    lcov_text = run_llvm_cov_lcov(args.crate_dir, release=not args.debug_build)
+    lcov_text = run_llvm_cov_lcov(args.crate_dir, release=not args.debug_build, target_dir=args.target_dir)
     if lcov_text is None:
         print(f"[!] ERROR: cargo llvm-cov failed for {args.crate_dir}", file=sys.stderr)
         return 1
