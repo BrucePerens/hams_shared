@@ -469,7 +469,18 @@ MANIFEST = {
             "shell": "/bin/bash",
             "add_to_users": ["odoo"],
             "environments": ["prod", "test"],
-        }
+        },
+        {
+            # daemons/localhost_cert_renewal (ADR 0100): the dedicated account that owns the
+            # shared localhost.hams.com certificate's private key. odoo joins its group so the
+            # relay-bridge endpoint can read the served copy (files are 0640); nothing else can.
+            "user": "localhost_cert",
+            "group": "localhost_cert",
+            "home": "/opt/hams/etc/localhost_cert_renewal",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "environments": ["prod", "test"],
+        },
     ],
     "directories": [
         {
@@ -497,6 +508,13 @@ MANIFEST = {
             "path": "/opt/hams/etc/relay_cert_renew",
             "owner": "odoo:odoo",
             "provision_mode": "700",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/etc/localhost_cert_renewal",
+            "owner": "localhost_cert:localhost_cert",
+            "provision_mode": "750",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
@@ -1370,6 +1388,67 @@ Description=Check Relay Wildcard Cert For Renewal Twice Daily
 [Timer]
 OnCalendar=*-*-* 03,15:00:00
 RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/localhost.cert.renewal.service",
+            "content": """\
+[Unit]
+Description=Shared localhost.hams.com TLS Certificate Renewal (ADR 0100)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/etc/localhost_cert_renewal
+Type=oneshot
+# A dedicated account owns the shared certificate's private key (ADR-0095 credential locality);
+# hams_com is only for traversing /opt/hams to reach the daemon code and its own directory.
+User=localhost_cert
+Group=localhost_cert
+SupplementaryGroups=hams_com
+WorkingDirectory=/opt/hams/daemons/localhost_cert_renewal
+UMask=0027
+
+Environment="LOCALHOST_CERT_BASE_DIR=/opt/hams/etc/localhost_cert_renewal"
+
+# Smoketest Resource Verification
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/localhost_cert_renewal/main.py --start-test
+
+# A nonzero exit (failed or backing-off renewal, or 14 days or fewer left) fails this unit, which
+# the pager_duty "Systemd Failed Services Tracker" check turns into an operator alert.
+ExecStart=/usr/bin/python3 /opt/hams/daemons/localhost_cert_renewal/main.py
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=localhost.cert.renewal
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/localhost.cert.renewal.timer",
+            "content": """\
+[Unit]
+Description=Check The Shared localhost.hams.com Certificate For Renewal Daily
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=2h
 Persistent=true
 
 [Install]
