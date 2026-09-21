@@ -13,8 +13,13 @@ import socket
 import queue as stdlib_queue
 import threading
 import functools
-import pyinotify
 import psutil
+# inotify exists only on Linux. Elsewhere (the Windows ingestion machine) the watchdog uses its polling
+# path. This is a platform check, not an import fallback: on Linux a missing pyinotify still fails.
+if sys.platform == "linux":
+    import pyinotify
+else:
+    pyinotify = None
 import logging
 from mcp.server.fastmcp import FastMCP
 from mcp.client.session import ClientSession
@@ -213,7 +218,15 @@ def get_fsize(path):
     except OSError:
         return 0
 
-class WatchdogEventHandler(pyinotify.ProcessEvent):
+_BaseEventHandler = pyinotify.ProcessEvent if pyinotify else object
+
+
+class DummyNotifier:
+    def stop(self):
+        """No inotify watcher was ever started (pyinotify unavailable), so there is nothing to stop."""
+
+
+class WatchdogEventHandler(_BaseEventHandler):
     def __init__(self, file_changed_event, changed_agents_set, expected_file=None):
         self.file_changed_event = file_changed_event
         self.changed_agents_set = changed_agents_set
@@ -370,15 +383,18 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
     file_changed_event = asyncio.Event()
     changed_agents_set = set()
     
-    wm = pyinotify.WatchManager()
-    handler = WatchdogEventHandler(file_changed_event, changed_agents_set)
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-    notifier = pyinotify.AsyncioNotifier(wm, loop, default_proc_fun=handler)
-    # rec=True and auto_add=True will recursively watch existing and automatically watch new directories
-    wm.add_watch(brain_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE, rec=True, auto_add=True)
+    if pyinotify:
+        wm = pyinotify.WatchManager()
+        handler = WatchdogEventHandler(file_changed_event, changed_agents_set)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+        notifier = pyinotify.AsyncioNotifier(wm, loop, default_proc_fun=handler)
+        # rec=True and auto_add=True will recursively watch existing and automatically watch new directories
+        wm.add_watch(brain_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE, rec=True, auto_add=True)
+    else:
+        notifier = DummyNotifier()
 
     persisted = load_persisted_states(self_agent_id) or {}
     current_states = {}
@@ -449,6 +465,9 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
             sleep_timeout = max(0.1, min_time_until_stall)
         if max_wait_timeout is not None:
             sleep_timeout = min(sleep_timeout, max(0.1, max_wait_timeout))
+        if not pyinotify:
+            sleep_timeout = min(sleep_timeout, 2.0)
+            
         try:
             await asyncio.wait_for(file_changed_event.wait(), timeout=sleep_timeout)
             file_changed_event.clear()
@@ -459,6 +478,16 @@ async def wait_for_agent_state_change(target_agent_ids: list[str] = None, stall_
             logger.debug("wait_for_agent_state_change: poll timeout reached, re-evaluating state")
 
         now = time.time()
+        
+        if not pyinotify:
+            # Active polling fallback: check transcripts for mtime/fsize changes
+            for aid in list(tracked_agents):
+                tpath = os.path.join(brain_dir, aid, ".system_generated", "logs", "transcript.jsonl")
+                cur_mtime = get_mtime(tpath)
+                cur_fsize = get_fsize(tpath)
+                st = current_states.get(aid)
+                if st is None or cur_mtime != st["mtime"] or cur_fsize != st["fsize"]:
+                    changed_agents_set.add(aid)
         
         # Process newly changed agents from inotify
         if changed_agents_set:
@@ -625,19 +654,22 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
     file_changed_event = asyncio.Event()
     changed_agents_set = set()
     
-    wm = pyinotify.WatchManager()
-    handler = WatchdogEventHandler(file_changed_event, changed_agents_set, expected_file=expected_file)
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-    notifier = pyinotify.AsyncioNotifier(wm, loop, default_proc_fun=handler)
-    
-    wm.add_watch(brain_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE, rec=True, auto_add=True)
-    if expected_file:
-        expected_dir = os.path.dirname(expected_file)
-        if os.path.exists(expected_dir):
-            wm.add_watch(expected_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE | pyinotify.IN_MOVED_TO)
+    if pyinotify:
+        wm = pyinotify.WatchManager()
+        handler = WatchdogEventHandler(file_changed_event, changed_agents_set, expected_file=expected_file)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+        notifier = pyinotify.AsyncioNotifier(wm, loop, default_proc_fun=handler)
+        
+        wm.add_watch(brain_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE, rec=True, auto_add=True)
+        if expected_file:
+            expected_dir = os.path.dirname(expected_file)
+            if os.path.exists(expected_dir):
+                wm.add_watch(expected_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE | pyinotify.IN_MOVED_TO)
+    else:
+        notifier = DummyNotifier()
             
     transcript_path = os.path.join(brain_dir, target_agent_id, ".system_generated", "logs", "transcript.jsonl")
     
@@ -680,6 +712,8 @@ async def wait_for_result(target_agent_id: str, expected_file: str = None, timeo
                 
         # Wait for events
         time_left = max(0.1, timeout_secs - (now - start_time))
+        if not pyinotify:
+            time_left = min(time_left, 1.0)
         try:
             await asyncio.wait_for(file_changed_event.wait(), timeout=time_left)
             file_changed_event.clear()
@@ -764,13 +798,16 @@ async def wait_for_all_complete(
             
     if len(completed) < len(agent_ids):
         event = asyncio.Event()
-        wm = pyinotify.WatchManager()
-        loop = asyncio.get_running_loop()
-        changed_set = set()
+        if pyinotify:
+            wm = pyinotify.WatchManager()
+            loop = asyncio.get_running_loop()
+            changed_set = set()
 
-        handler = WatchdogEventHandler(event, changed_set)
-        notifier = pyinotify.AsyncioNotifier(wm, loop, default_proc_fun=handler)
-        wm.add_watch(brain_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE, rec=True, auto_add=True)
+            handler = WatchdogEventHandler(event, changed_set)
+            notifier = pyinotify.AsyncioNotifier(wm, loop, default_proc_fun=handler)
+            wm.add_watch(brain_dir, pyinotify.IN_MODIFY | pyinotify.IN_CREATE, rec=True, auto_add=True)
+        else:
+            notifier = DummyNotifier()
 
         start_time = time.time()
         timeout_secs = timeout_mins * 60
