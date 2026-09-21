@@ -264,6 +264,15 @@ class ProvisionEnvPropagationTests(ProvisionTestCase):
         self.assertEqual(env_vars["REPO_ROOT"], provision.repo_root)
         self.assertEqual(env_vars["DEBIAN_FRONTEND"], "noninteractive")
 
+class ProvisionHoldOdooTests(ProvisionTestCase):
+    def test_hold_odoo_flag_is_forwarded_to_provision_environment(self):
+        mock_infra, _ = self.run_provision(["--hold-odoo"], os_id="debian")
+        self.assertIs(mock_infra.provision_environment.call_args.kwargs["hold_odoo"], True)
+
+    def test_hold_odoo_defaults_to_off(self):
+        mock_infra, _ = self.run_provision([], os_id="debian")
+        self.assertIs(mock_infra.provision_environment.call_args.kwargs["hold_odoo"], False)
+
 
 if __name__ == "__main__":
     unittest.main()

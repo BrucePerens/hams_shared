@@ -1244,6 +1244,58 @@ class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
         ]
         self.assertTrue(init_calls, "expected the actual `odoo -i ...` init call to still run")
 
+    def test_database_name_is_used_for_the_module_install_not_a_hardcoded_one(self):
+        # Regression test: the install used "-d hams_test" even on a production run, whose
+        # empty, already-provisioned database is DB_NAME (default hams_prod).
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra.os, "listdir", return_value=["ham_base"])
+        self.safe_patch_object(
+            infra.os.path, "exists",
+            side_effect=lambda p: p.endswith("__manifest__.py") or p in ("/a", "/b"),
+        )
+        self.safe_patch_object(infra.os.path, "isdir", return_value=True)
+        infra.initialize_odoo_database(run_cmd, "/a", "/b", db_name="hams_prod")
+        install = [c.args[0] for c in run_cmd.call_args_list if "--stop-after-init" in c.args[0]][0]
+        self.assertEqual(install[install.index("-d") + 1], "hams_prod")
+
+    def test_database_name_defaults_to_the_test_database(self):
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra.os, "listdir", return_value=["ham_base"])
+        self.safe_patch_object(
+            infra.os.path, "exists",
+            side_effect=lambda p: p.endswith("__manifest__.py") or p in ("/a", "/b"),
+        )
+        self.safe_patch_object(infra.os.path, "isdir", return_value=True)
+        infra.initialize_odoo_database(run_cmd, "/a", "/b")
+        install = [c.args[0] for c in run_cmd.call_args_list if "--stop-after-init" in c.args[0]][0]
+        self.assertEqual(install[install.index("-d") + 1], "hams_test")
+
+
+class HoldOdooTests(unittest.TestCase):
+    """provision_environment() is too host-dependent to execute here, so these read its source,
+    like the neighbouring tests. The behaviour being pinned: with hold_odoo the database module
+    install and the service smoketest (which starts Odoo and every daemon) are both skipped."""
+
+    def test_hold_odoo_parameter_exists_and_defaults_to_false(self):
+        param = inspect.signature(infra.provision_environment).parameters["hold_odoo"]
+        self.assertIs(param.default, False)
+
+    def test_hold_branch_comes_before_and_excludes_the_init_and_smoketest_calls(self):
+        source = inspect.getsource(infra.provision_environment)
+        hold_idx = source.index("if hold_odoo:")
+        elif_idx = source.index("elif not is_isolated_ns:", hold_idx)
+        init_idx = source.index("initialize_odoo_database(\n", hold_idx)
+        smoke_idx = source.index("run_post_provision_smoketest(has_hams_com", hold_idx)
+        # The init and smoketest calls sit inside the elif of the hold check, never
+        # unconditionally after it.
+        self.assertLess(hold_idx, elif_idx)
+        self.assertLess(elif_idx, init_idx)
+        self.assertLess(init_idx, smoke_idx)
+
+    def test_the_database_install_receives_db_name_from_env_vars(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn('db_name=env_vars.get("DB_NAME", "hams_test")', source)
+
 
 class LoadAndPromptEnvRabbitmqUserDefaultTests(unittest.TestCase):
     def test_rmq_user_defaults_to_a_real_non_guest_service_account(self):

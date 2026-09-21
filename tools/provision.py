@@ -55,6 +55,12 @@ def provision():
     parser = argparse.ArgumentParser(description="Standalone Environment Provisioning Script")
     parser.add_argument("--test", action="store_true", help="Smoke-test all daemons and stop them after")
     parser.add_argument("--force-reset", action="store_true", help="Completely destroy the existing database, filestore, and cache before provisioning")
+    parser.add_argument(
+        "--hold-odoo",
+        action="store_true",
+        help="Prepare the box (packages, accounts, env files, code, empty database, units) but do NOT "
+        "install the Odoo modules into the database and do NOT start Odoo or any daemon",
+    )
     args, _ = parser.parse_known_args()
 
     if os_id not in ("ubuntu", "debian"):
@@ -138,7 +144,9 @@ def provision():
         run_sys(["equivs-build", "python3-pypdf2.control"], cwd="/tmp")
         run_sys(["dpkg", "-i", "/tmp/python3-pypdf2_1.0_all.deb"])
 
-    infrastructure.provision_environment(run_sys, env_vars, orig_user, os_id, is_test=args.test)
+    infrastructure.provision_environment(
+        run_sys, env_vars, orig_user, os_id, is_test=args.test, hold_odoo=args.hold_odoo
+    )
 
     domain = env_vars.get("DOMAIN", "hams.com")
     _logger.info(f"""

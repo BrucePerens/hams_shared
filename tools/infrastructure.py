@@ -3646,8 +3646,14 @@ def provision_systemd_override(run_cmd_func, env_vars, environment="prod", dest_
 
 
 # [@ANCHOR: infrastructure:initialize_odoo_database]
-def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
-    _logger.info("[*] Initializing Odoo database with custom modules...")
+def initialize_odoo_database(
+    run_cmd_func, hams_open_dir, hams_com_dir, db_name="hams_test"
+):
+    # db_name used to be the literal "hams_test" here even on a production run, where
+    # provision_environment() had just created (and chowned) an empty database named
+    # DB_NAME (default "hams_prod"), so every module was installed into a different,
+    # stray database and the production one stayed empty. The caller now passes DB_NAME.
+    _logger.info("[*] Initializing Odoo database %s with custom modules...", db_name)
     modules = set()
     for d in filter(None, [hams_open_dir, hams_com_dir]):
         if os.path.exists(d):
@@ -3706,7 +3712,7 @@ def initialize_odoo_database(run_cmd_func, hams_open_dir, hams_com_dir):
     cmd = [
         "sudo", "-u", "odoo", "odoo",
         "-c", "/etc/odoo/odoo.conf",
-        "-d", "hams_test",
+        "-d", db_name,
         "-i", mod_string,
         "--stop-after-init",
         "--without-demo=all",
@@ -4434,7 +4440,13 @@ def _refuse_if_unsafe_test_db_drop(db_name):
 
 
 def provision_environment(
-    run_cmd_func, env_vars, orig_user, os_id=None, skip_apt=False, is_test=False
+    run_cmd_func,
+    env_vars,
+    orig_user,
+    os_id=None,
+    skip_apt=False,
+    is_test=False,
+    hold_odoo=False,
 ):
     _logger.info("[*] Provision version 1")
     reset_hook_failures()
@@ -4836,8 +4848,25 @@ def provision_environment(
             _logger.warning("Failed to link systemd units: %s", e)
             record_hook_failure("systemd_unit_linking", e)
 
-        if not is_isolated_ns:
-            initialize_odoo_database(run_cmd_func, hams_community_dir, hams_com_dir)
+        if hold_odoo:
+            # Prepare-only run (provision.py --hold-odoo): everything above (packages, accounts,
+            # env files, directories, code, PostgreSQL role and empty database, RabbitMQ user,
+            # systemd units linked but not enabled) is done, but Odoo is neither run nor
+            # initialised. initialize_odoo_database() installs every custom module into the
+            # database (a direct `odoo -i` command, so masking the odoo unit would not stop it)
+            # and run_post_provision_smoketest() starts Odoo and every daemon. A later normal run
+            # (without --hold-odoo) does both; this run is safe to repeat.
+            _logger.warning(
+                "[*] --hold-odoo: NOT initialising the Odoo database or starting Odoo and the "
+                "daemons. Re-run provision.py without --hold-odoo to finish."
+            )
+        elif not is_isolated_ns:
+            initialize_odoo_database(
+                run_cmd_func,
+                hams_community_dir,
+                hams_com_dir,
+                db_name=env_vars.get("DB_NAME", "hams_test"),
+            )
             run_post_provision_smoketest(has_hams_com, is_test_env=is_test_env)
         else:
             _logger.info(
