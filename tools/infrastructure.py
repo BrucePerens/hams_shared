@@ -515,7 +515,9 @@ MANIFEST = {
             "path": "/opt/hams/etc/localhost_cert_renewal",
             "owner": "localhost_cert:localhost_cert",
             "provision_mode": "750",
-            "runtime_mount": "rw",
+            # The renewal daemon runs on the host as localhost_cert; the Odoo tier only reads the
+            # served copy (ham_relay_bridge's shared_tls_cert_bundle route), so it never needs rw.
+            "runtime_mount": "ro",
             "environments": ["prod", "test"],
         },
         {
