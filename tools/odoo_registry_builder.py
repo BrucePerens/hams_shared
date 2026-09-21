@@ -49,22 +49,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-# Deliberately module-level (not inside find_odoo_core_addons_path(), where
-# this used to live) so it satisfies check_burn_list.py's LOCAL IMPORT rule
-# without changing behavior: this stays a genuine, documented optional
-# dependency (see find_odoo_core_addons_path()'s own docstring) because this
-# module's whole purpose is static AST analysis that must keep working in
-# an environment without Odoo installed -- only the addon-path lookup
-# degrades (returns None, "core coverage unavailable here") rather than the
-# whole registry build crashing. The try/except ImportError itself is a
-# separate, already-tracked check_burn_list.py finding (CRITICAL FAST FAIL:
-# soft dependencies) left alone here on purpose: removing it would force a
-# hard failure exactly where graceful degradation is the documented,
-# correct behavior.
-try:
-    import odoo
-except ImportError:
-    odoo = None
+import odoo  # a hard dependency: a missing Odoo install stops the program (fast-fail policy)
 
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}
@@ -172,14 +157,13 @@ def find_odoo_core_addons_path():
     crash the whole registry build over it.
     """
     candidates = []
-    if odoo is not None:
-        # __file__ can genuinely be None here (confirmed directly on this
-        # box: this install resolves as a namespace-style package) --
-        # __path__ is the real fallback for that case, not a guess.
-        if getattr(odoo, "__file__", None):
-            candidates.append(os.path.join(os.path.dirname(odoo.__file__), "addons"))
-        for p in getattr(odoo, "__path__", []) or []:
-            candidates.append(os.path.join(p, "addons"))
+    # __file__ can genuinely be None here (confirmed directly on this
+    # box: this install resolves as a namespace-style package) --
+    # __path__ is the real fallback for that case, not a guess.
+    if getattr(odoo, "__file__", None):
+        candidates.append(os.path.join(os.path.dirname(odoo.__file__), "addons"))
+    for p in getattr(odoo, "__path__", []) or []:
+        candidates.append(os.path.join(p, "addons"))
     # Last resort: the real, confirmed install location on this box and
     # other common Debian/Ubuntu packaging locations, same "don't just
     # trust the Python import, also check where it really lives" pattern

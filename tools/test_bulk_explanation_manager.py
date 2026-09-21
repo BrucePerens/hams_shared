@@ -11,12 +11,10 @@ injection, so a MagicMock stands in for the real Odoo client and no
 live Odoo connection is needed at all. The obstacle is the module's
 own top-level import block: it does
 `sys.path.append("../../../hams_com/daemons")` then
-`from hams_config import get_odoo_client`, guarded with
-`except ImportError: get_odoo_client = None` -- with a comment
-claiming this makes a bare `import bulk_explanation_manager` safe in a
-hams_open-only checkout. On this machine, though, a sibling hams_com
-checkout genuinely exists, so the import doesn't raise ImportError --
-it finds hams_config.py, which then raises `KeyError: 'ODOO_URL'` at
+`from hams_config import get_odoo_client` (unguarded since the
+fast-fail policy removed the old `except ImportError` fallback, so a
+hams_open-only checkout stops with ImportError). On this machine a
+sibling hams_com checkout exists, so the import finds hams_config.py, which then raises `KeyError: 'ODOO_URL'` at
 its own module level (real env var it expects to be set), and that
 propagates straight through: confirmed empirically that a plain
 `import bulk_explanation_manager` crashes uncaught on this dev

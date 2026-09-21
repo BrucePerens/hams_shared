@@ -9,6 +9,7 @@ import logging
 import io
 import unittest
 import importlib
+import importlib.util
 import subprocess
 import threading
 import time
@@ -104,13 +105,12 @@ def run_tests(module_names: str, ctx: Context) -> str:
             modules = [m.strip() for m in module_names.split(",") if m.strip()]
             suite = unittest.TestSuite()
             for mod_name in modules:
-                try:
-                    test_module = importlib.import_module(
-                        f"odoo.addons.{mod_name}.tests"
-                    )
-                except ImportError:
+                # find_spec() reports whether the addon has a tests package at all (plenty
+                # do not) without an exception handler around an import.
+                if importlib.util.find_spec(f"odoo.addons.{mod_name}.tests") is None:
                     print(f"No tests found for module {mod_name}")
                     continue
+                test_module = importlib.import_module(f"odoo.addons.{mod_name}.tests")
 
                 # Discover tests in the module
                 mod_suite = unittest.defaultTestLoader.discover(
@@ -301,14 +301,9 @@ def reload_test_files(module_names: str) -> str:
         try:
             modules = [m.strip() for m in module_names.split(",") if m.strip()]
             for mod_name in modules:
-                try:
-                    test_module = importlib.import_module(
-                        f"odoo.addons.{mod_name}.tests"
-                    )
-                    importlib.reload(test_module)
-                    print(f"Reloaded tests for {mod_name}")
-                except ImportError:
-                    print(f"Failed to reload tests for {mod_name}")
+                test_module = importlib.import_module(f"odoo.addons.{mod_name}.tests")
+                importlib.reload(test_module)
+                print(f"Reloaded tests for {mod_name}")
         except Exception:  # audit-ignore-catch-all
             # Same real bug as run_tests/update_modules above.
             _logger.exception("Error reloading test files:")

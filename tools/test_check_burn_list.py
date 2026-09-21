@@ -1294,56 +1294,53 @@ def test_except_importerror_is_a_forbidden_soft_dependency():
     assert any("Soft dependencies" in e for e in errors)
 
 
-def test_except_importerror_with_skiptest_soft_dependency_tag_is_allowed():
-    # Bug-hunt fix, 2026-09-11: `burn-ignore-skiptest-soft-dependency` is documented (in the
-    # checker's own tag registry) and already used by real files (e.g.
-    # ham_shack/tests/test_verify_noise_xx_handshake_wrapper.py) specifically to exempt a
-    # try/except ImportError gate for a genuinely optional test-only dependency -- but the
-    # check never actually looked for the tag, so every file using it was silently still
-    # flagged, blocking those modules' entire test suite via the pre-flight linter gate.
-    source = (
-        "try:  # burn-ignore-skiptest-soft-dependency: optional test-only dependency\n"
-        "    import optional_thing\n"
-        "except ImportError:  # burn-ignore-skiptest-soft-dependency: see try: above\n"
-        "    optional_thing = None\n"
-    )
-    errors, _warnings = _dict_findings(source)
+_SOFT_IMPORT_SOURCE = "try:\n    import optional_thing\nexcept ImportError:\n    optional_thing = None\n"
+
+
+def test_except_importerror_is_flagged_in_every_kind_of_path():
+    # Fast-fail policy: no directory is excluded (tools/, tests/, daemons/, modules).
+    for path in (
+        "/tmp/some_module/models/res_users.py",
+        "/tmp/hams_shared/tools/some_script.py",
+        "/tmp/some_module/tests/test_x.py",
+        "/tmp/daemons/some_daemon/main.py",
+    ):
+        errors, _warnings = _dict_findings(_SOFT_IMPORT_SOURCE, filepath=path)
+        assert any("Soft dependencies" in e for e in errors), path
+
+
+def test_except_importerror_cannot_be_exempted_by_any_tag():
+    for tag in (
+        "burn-ignore-skiptest-soft-dependency",
+        "burn-ignore-optional-import: may be absent",
+        "audit-ignore-catch-all: reason",
+    ):
+        source = (
+            f"try:  # {tag}\n"
+            "    import optional_thing\n"
+            f"except ImportError:  # {tag}\n"
+            "    optional_thing = None\n"
+        )
+        errors, _warnings = _dict_findings(source)
+        assert any("Soft dependencies" in e for e in errors), tag
+
+
+def test_soft_import_handler_variants_are_all_flagged():
+    for handler in (
+        "except ImportError as e:",
+        "except ModuleNotFoundError:",
+        "except (ImportError, ValueError):",
+        "except (ModuleNotFoundError, OSError) as e:",
+        "except builtins.ImportError:",
+    ):
+        source = f"try:\n    import optional_thing\n{handler}\n    optional_thing = None\n"
+        errors, _warnings = _dict_findings(source)
+        assert any("Soft dependencies" in e for e in errors), handler
+
+
+def test_a_string_literal_mentioning_except_importerror_is_not_flagged():
+    errors, _warnings = _dict_findings('FIXTURE = "try:\\n    import x\\nexcept ImportError:\\n    pass"\n')
     assert not any("Soft dependencies" in e for e in errors)
-
-
-def test_except_importerror_is_still_forbidden_via_ast_outside_tools():
-    # Companion to the tools/ exclusion test below: confirms the AST-based visit_Try check
-    # (check_ast_vulnerabilities) still fires for a real Odoo module / daemon path, not just
-    # the GENERAL_ERROR_RULES text-based twin exercised by _scan_file below.
-    source = "try:\n    import optional_thing\nexcept ImportError:\n    optional_thing = None\n"
-    errors, _warnings = _dict_findings(source, filepath="/tmp/some_module/models/res_users.py")
-    assert any("Soft dependencies" in e for e in errors)
-
-
-def test_except_importerror_soft_dependency_is_allowed_in_tools_dir_ast():
-    # hams_shared/tools/ 326-finding discovery, 2026-09-12: a standalone dev CLI script (e.g.
-    # odoo_registry_builder.py, whose own docstring documents deliberate graceful degradation
-    # when Odoo isn't importable) isn't a long-running Odoo module or daemon, so the rule's own
-    # rationale ("Modules and daemons must fast-fail") doesn't describe it. Covers the AST-based
-    # visit_Try check (check_ast_vulnerabilities), gated on the literal "/tools/" path segment.
-    source = "try:\n    import optional_thing\nexcept ImportError:\n    optional_thing = None\n"
-    errors, _warnings = _dict_findings(source, filepath="/tmp/hams_shared/tools/some_script.py")
-    assert not any("Soft dependencies" in e for e in errors)
-
-
-def test_except_importerror_soft_dependency_is_allowed_in_tools_dir_text_rule():
-    # Same exclusion, but for the GENERAL_ERROR_RULES text-based twin of the AST rule above
-    # (the one that fires per raw source line rather than per AST Try node) -- both had to be
-    # updated since they duplicate the same check via two different mechanisms.
-    source = "try:\n    import optional_thing\nexcept ImportError:\n    optional_thing = None\n"
-    errors, _warnings = _scan_file(source, "tools/some_script.py", is_odoo_module=False)
-    assert not any("Soft dependencies" in e for e in errors)
-
-
-def test_except_importerror_soft_dependency_text_rule_still_fires_outside_tools():
-    source = "try:\n    import optional_thing\nexcept ImportError:\n    optional_thing = None\n"
-    errors, _warnings = _scan_file(source, "some_module/models/res_users.py", is_odoo_module=True)
-    assert any("Soft dependencies" in e for e in errors)
 
 
 def test_catch_all_keyerror_is_forbidden_by_default():
@@ -6363,61 +6360,25 @@ def test_legacy_undocumented_tag_set_only_lists_tags_still_undocumented():
     )
 
 
-_OPTIONAL_IMPORT_GATED = (
-    "class T:\n"
-    "    def m(self):\n"
-    "        if 'bus.bus' in self.env.registry:\n"
-    "            from odoo.addons.bus.models.bus import BusBus  # burn-ignore-optional-import: bus addon may be absent\n"
-)
-
-
 def _local_import_errors(source):
     errors, _warnings = _scan_file(source, "test_x.py")
     return [e for e in errors if "LOCAL IMPORT" in str(e)]
 
 
-def test_optional_import_tag_exempts_a_registry_gated_local_import():
-    assert _local_import_errors(_OPTIONAL_IMPORT_GATED) == []
+def test_a_local_import_is_forbidden_even_when_gated_and_tagged_as_optional():
+    # The old `burn-ignore-optional-import` tag is gone: no gate, tag or reason exempts a
+    # function-local import.
+    for gate in (
+        "        if 'bus.bus' in self.env.registry:\n            ",
+        "        ",
+    ):
+        source = (
+            "class T:\n    def m(self):\n"
+            f"{gate}from odoo.addons.bus.models.bus import BusBus  # burn-ignore-optional-import: bus may be absent\n"
+        )
+        assert _local_import_errors(source), gate
 
 
-def test_optional_import_tag_requires_a_reason():
-    source = _OPTIONAL_IMPORT_GATED.replace(": bus addon may be absent", "")
-    assert _local_import_errors(source)
+def test_the_optional_import_tag_is_not_in_the_bypass_allow_list():
+    assert "burn-ignore-optional-import" not in {t for t, _ok in _allow_listed_bypass_tags()}
 
-
-def test_optional_import_tag_requires_a_presence_gate():
-    source = (
-        "class T:\n"
-        "    def m(self):\n"
-        "        from odoo.addons.bus.models.bus import BusBus  # burn-ignore-optional-import: because\n"
-    )
-    assert _local_import_errors(source)
-
-
-def test_optional_import_tag_accepts_a_try_except_importerror_gate():
-    source = (
-        "class T:\n"
-        "    def m(self):\n"
-        "        try:\n"
-        "            import optional_mod  # burn-ignore-optional-import: may be absent\n"
-        "        except ImportError:\n"
-        "            optional_mod = None\n"
-    )
-    assert _local_import_errors(source) == []
-
-
-def test_optional_import_tag_does_not_excuse_an_unrelated_finding_on_the_line():
-    source = (
-        "class T:\n"
-        "    def m(self):\n"
-        "        if 'x' in self.env.registry:\n"
-        "            import pickle  # burn-ignore-optional-import: may be absent\n"
-    )
-    errors, _warnings = _scan_file(source, "test_x.py")
-    assert any("pickle" in str(e) for e in errors)
-
-
-def test_noqa_is_still_forbidden_next_to_the_optional_import_tag():
-    source = _OPTIONAL_IMPORT_GATED.replace("BusBus  #", "BusBus  # noqa: PLC0415 #")
-    errors, _warnings = _scan_file(source, "test_x.py")
-    assert any("noqa" in str(e) for e in errors)

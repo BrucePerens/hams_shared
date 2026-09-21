@@ -249,45 +249,6 @@ GENERAL_ERROR_RULES = [
         "CRITICAL OWL SYNTAX: Iterating directly over `state.X` in a t-foreach can crash if the array is uninitialized in useState(). Use a fallback like `t-foreach=\"state.X || []\"` or ensure strict initialization in the component.",
     ),
     (
-        # Excludes hams_shared/tools/ (2026-09-12, the hams_shared/tools/ 326-finding
-        # discovery, same shape as the sibling CRITICAL TENANT LEAK and CRITICAL
-        # ARCHITECTURE: Native patch decorators exclusions above): this rule's own message
-        # says "Modules and daemons must fast-fail" -- daemons are deliberately NOT excluded
-        # here, only tools/, because the rule's rationale (a long-running Odoo module or
-        # daemon silently degrading instead of crashing on a missing dependency) genuinely
-        # doesn't describe a one-shot standalone dev CLI script. Confirmed live, all 10
-        # findings, zero real bugs:
-        #   - list_routes.py: `try: import odoo... except ImportError as e: print(...);
-        #     sys.exit(1)` -- this already fails fast, it just prints a friendlier message
-        #     than a bare traceback before exiting non-zero.
-        #   - bulk_explanation_manager.py: an optional import of hams_com's own
-        #     daemons/hams_config.py, whose own comment already documents why (hams_shared is
-        #     shared with hams_open, which has no sibling hams_com checkout) -- main() still
-        #     calls sys.exit(1) with a clear message if the import failed and the tool is
-        #     actually invoked, the same "optional cross-repo dependency" shape already
-        #     precedented by burn-ignore-optional-cross-repo-dep elsewhere in this file.
-        #   - test_mcp_server.py (an MCP tool server for running Odoo tests, not itself a
-        #     unit test suite despite its filename): `importlib.import_module(f"odoo.addons.
-        #     {mod}.tests")` inside `except ImportError: print(...); continue` is a normal
-        #     "does this addon even have a tests package" existence probe, not a masked bug --
-        #     plenty of real addons have no tests subpackage at all.
-        #   - odoo_registry_builder.py: find_odoo_core_addons_path()'s own docstring says
-        #     "Returns None (not a hard failure) if Odoo isn't importable in the current
-        #     environment -- callers should treat that as 'core coverage unavailable here',
-        #     not crash the whole registry build over it" -- deliberate, documented graceful
-        #     degradation for a static-analysis tool that must also run without Odoo
-        #     installed.
-        #   - test_check_burn_list.py: a meta-test's own fixture string, `source = "try:\n
-        #     import optional_thing\nexcept ImportError:\n    optional_thing = None\n"`,
-        #     feeding this exact checker a deliberately bad-looking snippet to verify the
-        #     checker itself still catches it in a real Odoo/daemon file -- not a real
-        #     violation, the same "test fixture string trips a text-based regex" class as the
-        #     /tmp and TransactionCase exclusions above.
-        r"^(?!.*(?:^|/)tools/).*\.py$",
-        re.compile(r"except\s+ImportError\s*:"),
-        "CRITICAL FAST FAIL: Soft dependencies (try/except ImportError) are forbidden. Modules and daemons must fast-fail on missing dependencies. If Odoo, use manifest external_dependencies.",
-    ),
-    (
         # Anchored to the START of the basename (`(?:^|/)`), not a bare
         # substring search -- `test_.*\.py$` alone false-positived on
         # daemons/event_sync/sm3cer_contest_sync.py, a real PRODUCTION sync
@@ -1860,43 +1821,9 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             )
             self.generic_visit(node)
 
-        def _is_gated_optional_import(self, node):
-            """True for a local import carrying `# burn-ignore-optional-import: <reason>`
-            that is also provably gated on the dependency actually being present: lexically
-            inside an `if "x" in <...>.registry` / `in <...>.env` presence check, or a
-            `try` whose handler catches ImportError. The tag needs a non-empty reason and is
-            honoured ONLY for the LOCAL IMPORT rule -- it suppresses nothing else on the line.
-            """
-            line = self.lines[node.lineno - 1] if node.lineno <= len(self.lines) else ""
-            if not re.search(r"burn-ignore-optional-import:\s*\S", line):
-                return False
-            for parent in _ancestors(tree, node):
-                if isinstance(parent, ast.If):
-                    for cmp in ast.walk(parent.test):
-                        if (
-                            isinstance(cmp, ast.Compare)
-                            and any(isinstance(op, ast.In) for op in cmp.ops)
-                            and re.search(
-                                r"\.(registry|env)$", ast.unparse(cmp.comparators[0])
-                            )
-                        ):
-                            return True
-                elif isinstance(parent, ast.Try):
-                    for handler in parent.handlers:
-                        names = {
-                            n.id
-                            for n in ast.walk(handler.type or ast.Constant(None))
-                            if isinstance(n, ast.Name)
-                        }
-                        if names & {"ImportError", "ModuleNotFoundError"}:
-                            return True
-            return False
-
         def visit_Import(self, node):
 
-            if getattr(self, "current_method", None) and not (
-                self._is_gated_optional_import(node)
-            ):
+            if getattr(self, "current_method", None):
                 self.add_error(
                     node.lineno,
                     "LOCAL IMPORT: Imports inside functions/methods are strictly forbidden.",
@@ -2044,30 +1971,21 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         )
 
             for handler in node.handlers:
-                if (
-                    isinstance(handler.type, ast.Name)
-                    and handler.type.id == "ImportError"
-                ):
-                    # Mirrors the identical tools/ exclusion added to this same rule's
-                    # GENERAL_ERROR_RULES text-based twin (see that entry's own comment for
-                    # the full per-file evidence, 2026-09-12): the rule's own message says
-                    # "Modules and daemons must fast-fail" -- daemons are deliberately still
-                    # covered, only a standalone hams_shared/tools/ dev CLI script is excluded,
-                    # since the rule's rationale (a long-running module/daemon silently
-                    # degrading) doesn't describe a one-shot tool that either already fails
-                    # fast with a friendlier message (list_routes.py, sys.exit(1)) or
-                    # documents genuine, deliberate optional-dependency graceful degradation
-                    # (odoo_registry_builder.py's find_odoo_core_addons_path() docstring).
-                    in_tools_dir = "/tools/" in self.filepath.replace("\\", "/")
-                    if (
-                        not in_tools_dir
-                        and "burn-ignore-skiptest-soft-dependency"
-                        not in self.node_span_text(node)
-                    ):
-                        self.add_error(
-                            node.lineno,
-                            "CRITICAL FAST FAIL: Soft dependencies (try/except ImportError) are forbidden. Modules and daemons must fast-fail on missing dependencies. If Odoo, use manifest external_dependencies.",
-                        )
+                # Fast-fail policy: no exception handler may catch a failed import, anywhere
+                # (modules, daemons, tests, tools, scripts). There is deliberately no exemption
+                # marker and no excluded directory. A missing dependency must stop the program
+                # with the interpreter's own ImportError; declare it in the manifest
+                # `external_dependencies` / requirements file instead of falling back.
+                handler_names = {
+                    n.id if isinstance(n, ast.Name) else n.attr
+                    for n in ast.walk(handler.type or ast.Constant(None))
+                    if isinstance(n, (ast.Name, ast.Attribute))
+                }
+                if handler_names & {"ImportError", "ModuleNotFoundError"}:
+                    self.add_error(
+                        handler.lineno,
+                        "CRITICAL FAST FAIL: Soft dependencies (try/except ImportError or ModuleNotFoundError) are forbidden, with no exemption anywhere. Programs, tests and tools must fast-fail on a missing dependency. If Odoo, use manifest external_dependencies; otherwise add it to the requirements file and import it at the top of the file.",
+                    )
                 is_catch_all = handler.type is None or (
                     isinstance(handler.type, ast.Name)
                     and handler.type.id in ("Exception", "BaseException")
@@ -2106,9 +2024,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
         def visit_ImportFrom(self, node):
 
-            if getattr(self, "current_method", None) and not (
-                self._is_gated_optional_import(node)
-            ):
+            if getattr(self, "current_method", None):
                 self.add_error(
                     node.lineno,
                     "LOCAL IMPORT: Imports inside functions/methods are strictly forbidden.",
@@ -5030,14 +4946,6 @@ def scan_file(filepath, is_odoo_module=False):
                 # question (see hams_s3/models/res_config_settings.py's own
                 # comment). First used there.
                 "burn-ignore-optional-oca-dep",
-                # A function-local import of a module that may genuinely not be installed
-                # (e.g. `odoo.addons.bus.*` when the `bus` addon is absent), which cannot be
-                # hoisted to module level without an ImportError. Suppresses ONLY the
-                # LOCAL IMPORT rule, and only when the import is lexically inside an
-                # `if "x" in ....registry`/`in ....env` presence check or a `try` catching
-                # ImportError (see TaintVisitor._is_gated_optional_import); requires a
-                # non-empty `: <reason>`. Use instead of a bare `# burn-ignore` or `# noqa`.
-                "burn-ignore-optional-import",
                 # `'ham.dns.record' in self.env` (pager_duty/models/
                 # pager_check.py's update_lets_encrypt_domains(), asked
                 # about directly and answered by Bruce 2026-09-12): a

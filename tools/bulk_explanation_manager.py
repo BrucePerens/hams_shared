@@ -11,15 +11,11 @@ import logging
 
 # This tool administers the NCVEC exam question pool, a hams_com-specific
 # concern -- it has no purpose in a hams_open-only checkout, which won't
-# have a sibling hams_com repo for this import to find. Guarded so merely
-# importing this module (e.g. a linter or another script globbing tools/*.py)
-# doesn't hard-crash there; main() below still fails clearly if actually run
-# without hams_com available.
+# have a sibling hams_com repo for this import to find. Fast-fail policy: the
+# import is unguarded, so running (or importing) this tool without hams_com
+# stops with the interpreter's own ImportError.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../hams_com/daemons")))
-try:
-    from hams_config import get_odoo_client
-except ImportError:
-    get_odoo_client = None
+from hams_config import get_odoo_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("bulk_explanation_manager")
@@ -134,14 +130,6 @@ if __name__ == "__main__":
     parser.add_argument("--file", type=str, default=os.path.expanduser("~/workspace/tmp/pending_explanations.json"), help="File path to use for export")
     
     args = parser.parse_args()
-
-    if get_odoo_client is None:
-        logger.error(
-            "This tool administers hams_com's NCVEC exam question pool and requires a "
-            "sibling hams_com checkout (../../../hams_com/daemons/hams_config.py) -- "
-            "none was found here. Not applicable in a hams_open-only checkout."
-        )
-        sys.exit(1)
 
     client = get_odoo_client(logger)
     

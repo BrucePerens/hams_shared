@@ -119,7 +119,6 @@ The AST parser physically reads your test files to verify the assertions exist.
 
 | I18N Strings | `# audit-ignore-i18n: Tested by [@ANCHOR: example_name]` | Safely ignore headless API translations (ADR-0065). |
 | `/web/...` Routing | `# burn-ignore-route: <reason>` | Only for a `/web/...` or `/web#...` string literal that is flagged by the routing-deprecation check but is genuinely not a navigation target to the deprecated bare `/web` entrypoint (e.g. a cache-control prefix classifier). Do NOT use this for a legitimate, undocumented `/web/` sub-route -- add it to the allowlist in `check_burn_list.py` instead. |
-| Local `import` | `# burn-ignore-optional-import: <reason>` | Only for a function-local import of an optional dependency, inside an `if "x" in self.env.registry` / `in ...env` presence check or a `try` catching `ImportError`. Reason required; suppresses only the LOCAL IMPORT rule. Never use `noqa`. |
 | `useService('rpc')` | `# burn-ignore-rpc-non-orm: <reason>` | Only for a raw `rpc` service call whose target is a custom, non-ORM HTTP controller route, which `useService('orm')` cannot reach. |
 
 ### 🚨 Critical Formatting & Placement Rules for Bypasses
@@ -228,7 +227,7 @@ Odoo's `ast.literal_eval` parser requires valid, strict Python dictionary syntax
                 * **Thread Blocking:** `time.sleep()` in main application code is banned..
                 If used in a background daemon for rate-limiting, it MUST be appended with `# audit-ignore-sleep`.
                 * **Thread Spawning:** `threading.Thread` is banned as a DoS vector. Use `concurrent.futures.ThreadPoolExecutor`.
-                * **Import Error Evasion:** Wrapping imports in `try...except ImportError` blocks is strictly forbidden to prevent soft dependencies (ADR-0073).
+                * **Import Error Evasion:** Wrapping imports in `try...except ImportError` (or `ModuleNotFoundError`) is strictly forbidden to prevent soft dependencies (ADR-0073). No exemption tag exists and no directory is excluded.
                 Modules and daemons must fast-fail on missing dependencies. If Odoo, use manifest `external_dependencies`.
                 * **Dynamic Data-Type Introspection Banned:** The use of `hasattr()` or `getattr(..., 'column_type')` to dynamically check for fields, methods, or database columns at runtime is strictly forbidden ("CRITICAL AI LAZINESS"). You MUST rely on explicit schema contracts and hard dependencies. If a module requires a method or field from another module, declare it in the `depends` array of your `__manifest__.py`.
                 * **Hallucinatory sys.path Manipulation:** You MUST NOT use `sys.path.append` or `sys.path.insert` to resolve sibling imports using `..` or to redundantly append the script directory (using `__file__`).

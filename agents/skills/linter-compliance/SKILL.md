@@ -178,7 +178,7 @@ Ensure all dynamic data injected into the DOM is sanitized.
         * **Thread Blocking:** `time.sleep()` in main application code is banned..
         If used in a background daemon for rate-limiting, it MUST be appended with `# audit-ignore-sleep`.
         * **Thread Spawning:** `threading.Thread` is banned as a DoS vector. Use `concurrent.futures.ThreadPoolExecutor`.
-        * **Import Error Evasion:** Wrapping imports in `try...except ImportError` blocks is strictly forbidden (ADR-0073).
+        * **Import Error Evasion:** Wrapping imports in `try...except ImportError` (or `ModuleNotFoundError`) is strictly forbidden (ADR-0073). No exemption tag exists and no directory (tools, tests, scripts) is excluded; a function-local import is likewise never exempt.
         You MUST declare dependencies in `__manifest__.py` and let the system fail-fast.
         * **Dynamic Data-Type Introspection Banned:** The use of `hasattr()` or `getattr(..., 'column_type')` to dynamically check for fields, methods, or database columns at runtime is strictly forbidden ("CRITICAL AI LAZINESS"). You MUST rely on explicit schema contracts and hard dependencies. If a module requires a method or field from another module, declare it in the `depends` array of your `__manifest__.py`.
         * **Hallucinatory sys.path Manipulation:** You MUST NOT use `sys.path.append` or `sys.path.insert` to resolve sibling imports using `..` or to redundantly append the script directory (using `__file__`).
@@ -292,9 +292,8 @@ does not apply. Pick the one that matches; they are deliberately distinct.
 | Tag | Legitimate use |
 | :--- | :--- |
 | `# burn-ignore-optional-oca-dep` | The `'model' in self.env` presence check for an optional OCA addon an administrator may install later (`hams_s3` and `storage.backend`). It does not cover `.sudo()` on the same line. |
-| `# burn-ignore-optional-import: <reason>` | A function-local `import` / `from ... import` of a module that may not be installed (for example `odoo.addons.bus.*` in a test that runs with or without the `bus` addon). Suppresses only the LOCAL IMPORT rule, and only when the import sits inside an `if "x" in self.env.registry` (or `in ...env`) presence check or a `try` that catches `ImportError`. The reason is required. It does not replace `noqa`, which stays banned, and does not suppress any other finding on the line. |
 | `# burn-ignore-optional-cross-repo-dep` | The same presence check for a model from the other repository, where a real manifest dependency would stop `hams_open` installing on its own (`pager_duty` and `ham.dns.record`). |
-| `# burn-ignore-skiptest-soft-dependency` | The fast-fail rule against skipping a test when an import is missing, for a reviewed optional dependency. `hams_shared/tools/` scripts are already exempt. |
+| `# burn-ignore-skiptest-soft-dependency` | The fast-fail rule against skipping a test (`skipTest`) when an optional binary or module is missing, for a reviewed case. It does NOT exempt `try/except ImportError` / `ModuleNotFoundError`, which no tag or directory can exempt. |
 | `# burn-ignore-pika` | Accepted on test lines that open a real RabbitMQ (`pika`) connection in `backup_management`'s tests. |
 
 ### Test-fixture and linter-self-test exceptions
