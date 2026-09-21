@@ -1417,6 +1417,17 @@ class AptPackagesManifestTests(unittest.TestCase):
         )
         self.assertIn("early_prod", fitz_entries[0]["environments"])
 
+    def test_python3_dotenv_is_installed_for_distributed_redis_caches_external_dependency(self):
+        # distributed_redis_cache's manifest declares python-dotenv as an external dependency, so
+        # Odoo will not install that module without it. The first real release provision on a
+        # fresh production server (2026-09-21) failed here because nothing installed it.
+        entries = [
+            pkg for pkg in infra.MANIFEST["apt_packages"]
+            if pkg.get("debian_name") == "python3-dotenv"
+        ]
+        self.assertTrue(entries, "expected an apt_packages MANIFEST entry installing python3-dotenv")
+        self.assertIn("early_prod", entries[0]["environments"])
+
 
 class PostgresqlLockdownTests(unittest.TestCase):
     def test_does_not_loosen_pg_hba_authentication(self):

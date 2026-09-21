@@ -3264,6 +3264,14 @@ WantedBy=multi-user.target
             "debian_name": "python3-asyncpg",
             "environments": ["early_prod"],
         },
+        # distributed_redis_cache's manifest declares python-dotenv as an external dependency,
+        # and Odoo refuses to install that module without it. The dev box had it incidentally, so
+        # the first real release provision (2026-09-21) was the first to hit the gap.
+        {
+            "name": "python3-dotenv",
+            "debian_name": "python3-dotenv",
+            "environments": ["early_prod"],
+        },
         {"name": "black", "debian_name": "black", "environments": ["early_prod"]},
         {
             "name": "python3-psutil",
