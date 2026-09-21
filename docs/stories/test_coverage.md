@@ -120,8 +120,6 @@
 
 - Coverage for COMM_test_coherent_cache_signal: [@ANCHOR: zero_sudo:COMM_test_coherent_cache_signal]
 
-- Coverage for COMM_test_coherent_cache_signal_single: [@ANCHOR: zero_sudo:COMM_test_coherent_cache_signal_single]
-
 - Coverage for COMM_test_privilege_escalation_block_sql: [@ANCHOR: zero_sudo:COMM_test_privilege_escalation_block_sql]
 
 - Coverage for COMM_test_coherent_cache_signal_batch: [@ANCHOR: zero_sudo:COMM_test_coherent_cache_signal_batch]
