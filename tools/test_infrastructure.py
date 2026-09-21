@@ -129,6 +129,18 @@ class FormatEnvTests(unittest.TestCase):
     def test_substitutes_a_real_variable(self):
         self.assertEqual(infra.format_env("host={DOMAIN}", {"DOMAIN": "hams.com"}), "host=hams.com")
 
+    def test_the_key_bootstrapper_unit_names_the_real_database(self):
+        # The unit template once said DB=${DB_NAME}; format_env() turned that into "$hams_prod",
+        # a shell variable that does not exist, so the service silently fell back to the
+        # hams_test database and failed on the first real production release (2026-09-21).
+        entry = next(
+            item for item in infra.MANIFEST["static_files"]
+            if item.get("path") == "/opt/hams/systemd/hams.daemon.keys.service"
+        )
+        text = infra.format_env(entry["content"], {"DB_NAME": "hams_prod"})
+        self.assertIn('DB=hams_prod;', text)
+        self.assertNotIn("$hams_prod", text)
+
     def test_a_missing_variable_now_raises_instead_of_silently_degrading(self):
         # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
         # LAZINESS: Catch-all KeyError): this used to silently return the unformatted

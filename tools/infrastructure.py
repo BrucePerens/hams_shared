@@ -798,7 +798,7 @@ Environment="HAMS_KEYS_DIR=/opt/hams/etc/keys"
 EnvironmentFile=-/opt/hams/etc/odoo.env
 EnvironmentFile=-/opt/hams/etc/core.env
 EnvironmentFile=-/opt/hams/etc/db.env
-ExecStart=/bin/bash -c "DB=${DB_NAME}; if [ -z \\"$$DB\\" ]; then DB=hams_test; fi; echo \\"env['daemon.key.registry'].action_force_provision_all(); env.cr.commit()\\" | /usr/bin/python3 /usr/bin/odoo shell -c /etc/odoo/odoo.conf -d $$DB --no-http"
+ExecStart=/bin/bash -c "DB={DB_NAME}; if [ -z \\"$$DB\\" ]; then DB=hams_test; fi; echo \\"env['daemon.key.registry'].action_force_provision_all(); env.cr.commit()\\" | /usr/bin/python3 /usr/bin/odoo shell -c /etc/odoo/odoo.conf -d $$DB --no-http"
 RemainAfterExit=yes
 
 [Install]
