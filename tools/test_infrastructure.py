@@ -1278,7 +1278,8 @@ class RustToolchainPackageTests(unittest.TestCase):
             for p in infra.MANIFEST["apt_packages"]
             if "early_prod" in p["environments"]
         ]
-        self.assertIn("cargo", names)
+        # Debian's own plain cargo (1.85) is too old for the daemons' dependencies; cargo-web is 1.96.
+        self.assertIn("cargo-web", names)
 
 
 class HoldOdooTests(unittest.TestCase):

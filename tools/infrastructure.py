@@ -3135,7 +3135,10 @@ WantedBy=multi-user.target
         {"name": "nginx", "debian_name": "nginx", "environments": ["early_prod"]},
         # hook_build_rust_daemons() runs `cargo build`; without this a fresh box (no rustup)
         # reports PROVISIONING DEGRADED and the three Rust daemons are never built.
-        {"name": "cargo", "debian_name": "cargo", "environments": ["early_prod"]},
+        # Debian 13's plain `cargo` is 1.85, too old for the daemons' dependencies (icu_* crates need
+        # 1.86); Debian's security-maintained cargo-web/rustc-web (1.96) replace it and provide
+        # /usr/bin/cargo, so the hook's plain `cargo` command works.
+        {"name": "cargo", "debian_name": "cargo-web", "environments": ["early_prod"]},
         {
             "name": "redis-server",
             "debian_name": "redis-server",
