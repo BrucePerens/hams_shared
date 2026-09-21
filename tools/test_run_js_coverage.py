@@ -16,7 +16,13 @@ import unittest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from run_js_coverage import parse_bundle_module_offsets, resolve_addon_static_path  # noqa: E402
+from run_js_coverage import (  # noqa: E402
+    line_hits_for_script,
+    map_coverage_records,
+    merge_file_reports,
+    parse_bundle_module_offsets,
+    resolve_addon_static_path,
+)
 
 
 def _module_header(filepath, lines):
@@ -174,6 +180,101 @@ class ResolveAddonStaticPathTests(unittest.TestCase):
 
     def test_returns_none_for_a_path_with_no_module_segment(self):
         self.assertIsNone(resolve_addon_static_path("/just_one_segment.js", ["/tmp"]))
+
+
+def _fn(*ranges):
+    return {"ranges": [{"startOffset": a, "endOffset": b, "count": c} for a, b, c in ranges]}
+
+
+class LineHitsForScriptTests(unittest.TestCase):
+    def test_nested_block_count_overrides_enclosing_function(self):
+        text = "function f() {\n  if (x) {\n    a();\n  }\n  b();\n}\n"
+        # line 3 ("    a();") starts at offset 15+11=26; the inner block is never taken.
+        inner_start = text.index("    a();")
+        inner_end = text.index("  }\n  b()")
+        hits = line_hits_for_script(
+            text, [_fn((0, len(text), 1), (inner_start, inner_end, 0))]
+        )
+        self.assertEqual(hits[1], 1)
+        self.assertEqual(hits[3], 0)
+        self.assertEqual(hits[5], 1)
+
+    def test_blank_lines_are_not_reported_and_uncovered_lines_are_absent(self):
+        text = "a\n\n   \nb\n"
+        hits = line_hits_for_script(text, [_fn((0, 2, 1))])
+        self.assertEqual(hits, {1: 1})
+
+    def test_offsets_are_utf16_code_units(self):
+        # U+1F600 is one code point but two UTF-16 units: "b" on line 2 starts at offset 3 (a code-point count would say 2).
+        text = "\U0001F600\nb\n"
+        hits = line_hits_for_script(text, [_fn((3, 4, 7))])
+        self.assertEqual(hits, {2: 7})
+
+    def test_unsorted_ranges_still_apply_outer_before_inner(self):
+        text = "a\nb\nc\n"
+        hits = line_hits_for_script(text, [_fn((2, 3, 0)), _fn((0, 6, 4))])
+        self.assertEqual(hits, {1: 4, 2: 0, 3: 4})
+
+
+class MapCoverageRecordsTests(unittest.TestCase):
+    def _addons(self, tmp):
+        d = os.path.join(tmp, "addons", "mod_a", "static", "src")
+        os.makedirs(d)
+        open(os.path.join(d, "x.js"), "w", encoding="utf-8").write("l1\nl2\nl3\n")
+        return os.path.join(tmp, "addons")
+
+    def test_bundle_lines_map_to_source_file_lines(self):
+        body = "l1\nl2\nl3\n"
+        bundle = "// noise\n" + _module_header("/mod_a/static/src/x.js", 3) + body
+        start = len("// noise\n" + _module_header("/mod_a/static/src/x.js", 3))
+        record = {
+            "scripts": [
+                {
+                    "url": "http://h/web/assets/1/debug/web.assets_backend.js",
+                    # l1 and l3 run, l2 does not.
+                    "functions": [_fn((0, len(bundle), 1), (start + 3, start + 6, 0))],
+                }
+            ],
+            "bundles": {"http://h/web/assets/1/debug/web.assets_backend.js": bundle},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            addons = self._addons(tmp)
+            out = map_coverage_records([record], [addons], tmp)
+        entry = out["files"]["addons/mod_a/static/src/x.js"]
+        self.assertEqual(entry["executed_lines"], [1, 3])
+        self.assertEqual(entry["missing_lines"], [2])
+        self.assertEqual(out["unresolved"], [])
+
+    def test_unresolved_module_is_reported_not_dropped_silently(self):
+        bundle = _module_header("/gone/static/y.js", 1) + "z\n"
+        record = {
+            "scripts": [{"url": "u", "functions": [_fn((0, len(bundle), 1))]}],
+            "bundles": {"u": bundle},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            out = map_coverage_records([record], [tmp], tmp)
+        self.assertEqual(out["files"], {})
+        self.assertEqual(out["unresolved"], ["/gone/static/y.js"])
+
+    def test_minified_bundle_without_headers_is_reported_as_a_gap(self):
+        record = {
+            "scripts": [{"url": "http://h/a.min.js", "functions": [_fn((0, 5, 1))]}],
+            "bundles": {"http://h/a.min.js": "/* /web/x.js */\nvar a=1;\n"},
+        }
+        out = map_coverage_records([record], [], "/")
+        self.assertEqual(out["files"], {})
+        self.assertEqual(out["unresolved"], ["(no module headers: http://h/a.min.js)"])
+
+    def test_script_without_bundle_body_is_skipped(self):
+        record = {"scripts": [{"url": "u", "functions": []}], "bundles": {}}
+        out = map_coverage_records([record], [], "/")
+        self.assertEqual(out, {"files": {}, "unresolved": []})
+
+    def test_merge_prefers_executed_over_missing(self):
+        a = {"f.js": {"executed_lines": [1], "missing_lines": [2, 3]}}
+        b = {"f.js": {"executed_lines": [2], "missing_lines": [1, 3]}}
+        merged = merge_file_reports([a, b])
+        self.assertEqual(merged["f.js"], {"executed_lines": [1, 2], "missing_lines": [3]})
 
 
 if __name__ == "__main__":

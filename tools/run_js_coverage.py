@@ -30,20 +30,20 @@ follows, repeated for every module Odoo's own asset bundler concatenated. This i
 `parse_bundle_module_offsets()` below parses; it needs no source-map library and no heuristics,
 since the format is fixed and already emitted by Odoo core itself.
 
-**What this script does NOT yet do, named honestly rather than glossed over**: actually collect a
-live V8 coverage report. That half (a `Profiler.enable`/`startPreciseCoverage` call immediately
-before `super().start_tour(...)` and `Profiler.takePreciseCoverage` immediately after, both via
-`self.browser._websocket_request(...)` -- the same method `ChromeBrowser` already uses internally,
-no second CDP connection needed -- gated behind an opt-in env var mirroring `start_hams_browser()`'s
-own existing `HAMS_PAUSE_ON_FAIL` convention) is real, separate implementation work inside
-`zero_sudo/tests/common.py`'s `HamsHttpCase.start_tour()`, not attempted in this pass: that file is
-this codebase's single most widely-shared test-harness file, already touched once this same session
-for a real, verified, narrow fix (the `--pause-on-fail` Wayland regression) -- a second, larger
-change to its live-collection behavior deserves its own dedicated verification pass against a real
-tour run, not a blind addition alongside an unrelated parser utility.
+**Live collection** lives in `zero_sudo/tests/common.py` (`_patched_chrome_init` /
+`_patched_chrome_stop`), opt-in via `HAMS_JS_COVERAGE_DIR=<dir>`: when set, every tour/browser
+Chrome enables `Profiler.startPreciseCoverage` (call counts, detailed block ranges) right after it
+starts, and takes the result just before Chrome stops, writing one JSON record per browser
+(`{"test": id, "scripts": [{"url", "functions"}], "bundles": {url: body_text}}`) into that
+directory. Run the tour under `debug=assets` (`HAMS_TOUR_TOUR_DEBUG=assets`) so the bundle bodies
+carry the module headers this script parses. `map_coverage_records()` below then turns those
+records into `{"files": {relpath: {"executed_lines": [...], "missing_lines": [...]}}}`.
+Line granularity is V8 block coverage sampled at each line's first non-blank character, so a
+comment or closing-brace line inside an executed range counts as executed.
 """
 
 import argparse
+import bisect
 import json
 import os
 import re
@@ -101,12 +101,132 @@ def resolve_addon_static_path(addon_relative_path, addons_path_dirs):
     return None
 
 
+def _utf16_len(text):
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def line_hits_for_script(text, functions):
+    """Turns one script's V8 `functions` coverage (each with `ranges` of `startOffset`/`endOffset`
+    in UTF-16 code units and a `count`) into `{line_number: count}` for every non-blank line of
+    `text` covered by at least one range. Ranges are applied outer to inner (start ascending, end
+    descending) so a nested block's own count overrides its enclosing function's, as V8 specifies.
+    A line takes the count of the innermost range containing its first non-blank character."""
+    line_numbers = []
+    first_offsets = []
+    offset = 0
+    for number, line in enumerate(text.split("\n"), start=1):
+        stripped = line.lstrip()
+        if stripped:
+            line_numbers.append(number)
+            first_offsets.append(offset + _utf16_len(line[: len(line) - len(stripped)]))
+        offset += _utf16_len(line) + 1
+    counts = [None] * len(line_numbers)
+    ranges = [r for fn in functions for r in fn.get("ranges", [])]
+    ranges.sort(key=lambda r: (r["startOffset"], -r["endOffset"]))
+    for r in ranges:
+        lo = bisect.bisect_left(first_offsets, r["startOffset"])
+        hi = bisect.bisect_left(first_offsets, r["endOffset"])
+        for i in range(lo, hi):
+            counts[i] = r["count"]
+    return {n: c for n, c in zip(line_numbers, counts) if c is not None}
+
+
+def merge_file_reports(reports):
+    """Unions several `{relpath: {"executed_lines", "missing_lines"}}` maps: a line executed in
+    any report is executed, and is removed from `missing_lines`."""
+    executed = {}
+    seen = {}
+    for report in reports:
+        for path, entry in report.items():
+            executed.setdefault(path, set()).update(entry["executed_lines"])
+            seen.setdefault(path, set()).update(entry["executed_lines"], entry["missing_lines"])
+    return {
+        path: {
+            "executed_lines": sorted(executed[path]),
+            "missing_lines": sorted(seen[path] - executed[path]),
+        }
+        for path in sorted(seen)
+    }
+
+
+def map_coverage_record(record, addons_path_dirs, repo_root):
+    """Maps one collected record (see the module docstring) to `{relpath: {"executed_lines",
+    "missing_lines"}}`. Scripts with no bundle body, and modules whose addon path does not resolve
+    to a file under an addons directory, are skipped (the second kind is listed under the
+    returned second value, `unresolved`, so a gap is reported rather than hidden)."""
+    files = {}
+    unresolved = set()
+    for script in record.get("scripts", []):
+        text = record.get("bundles", {}).get(script["url"])
+        if text is None:
+            continue
+        hits = line_hits_for_script(text, script["functions"])
+        modules = parse_bundle_module_offsets(text)
+        if not modules:
+            # Minified bundle (no debug=assets, or debug lost on a redirect): no module headers,
+            # so there is nothing to map. Reported, never silently dropped.
+            unresolved.add(f"(no module headers: {script['url']})")
+            continue
+        for start, end, addon_path in modules:
+            real = resolve_addon_static_path(addon_path, addons_path_dirs)
+            if real is None:
+                unresolved.add(addon_path)
+                continue
+            rel = os.path.relpath(real, repo_root)
+            entry = files.setdefault(rel, {"executed": set(), "missing": set()})
+            for line in range(start, end + 1):
+                if line in hits:
+                    bucket = "executed" if hits[line] > 0 else "missing"
+                    entry[bucket].add(line - start + 1)
+    report = {
+        rel: {
+            "executed_lines": sorted(e["executed"]),
+            "missing_lines": sorted(e["missing"] - e["executed"]),
+        }
+        for rel, e in files.items()
+    }
+    return report, sorted(unresolved)
+
+
+def map_coverage_records(records, addons_path_dirs, repo_root):
+    """Maps and merges many records into the final `{"files": ...}` document plus the sorted list
+    of unresolved addon paths."""
+    reports = []
+    unresolved = set()
+    for record in records:
+        report, missing = map_coverage_record(record, addons_path_dirs, repo_root)
+        reports.append(report)
+        unresolved.update(missing)
+    return {"files": merge_file_reports(reports), "unresolved": sorted(unresolved)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "bundle_file", help="Path to a saved debug-mode asset bundle body (e.g. via curl/url_open)"
+        "bundle_file",
+        nargs="?",
+        help="Path to a saved debug-mode asset bundle body (e.g. via curl/url_open); prints its module offsets",
     )
+    parser.add_argument(
+        "--coverage-dir",
+        help="Directory of records written under HAMS_JS_COVERAGE_DIR; prints the mapped per-file report",
+    )
+    parser.add_argument(
+        "--addons-path", default="", help="Comma-separated addons directories, for --coverage-dir"
+    )
+    parser.add_argument("--repo-root", default=os.getcwd(), help="Paths are reported relative to this")
     args = parser.parse_args()
+    if args.coverage_dir:
+        records = []
+        for name in sorted(os.listdir(args.coverage_dir)):
+            if name.endswith(".json"):
+                with open(os.path.join(args.coverage_dir, name), "r", encoding="utf-8") as f:
+                    records.append(json.load(f))
+        addons = [d for d in args.addons_path.split(",") if d]
+        print(json.dumps(map_coverage_records(records, addons, args.repo_root), indent=2))
+        return 0
+    if not args.bundle_file:
+        parser.error("give a bundle_file or --coverage-dir")
     with open(args.bundle_file, "r", encoding="utf-8") as f:
         bundle_text = f.read()
     modules = parse_bundle_module_offsets(bundle_text)
