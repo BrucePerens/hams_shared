@@ -43,6 +43,7 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -197,6 +198,9 @@ def _launch_headless_chrome(port, user_data_dir, log_file):
         ],
         stdout=log_file,
         stderr=log_file,
+        # Chrome's own runtime dir (com.google.Chrome.XXXX, singleton socket) goes under TMPDIR;
+        # keep it inside the profile dir that main() removes so nothing lingers in /tmp.
+        env={**os.environ, "TMPDIR": user_data_dir},
     )
 
 
@@ -224,12 +228,22 @@ def main():
         except OSError as e:
             print(f"  ❌ ERROR: Could not read {fp}: {e}")
 
+    # The Chrome profile is ~2 MB per run and was never removed, so every pre-commit/CI run
+    # leaked a directory into /tmp. Always remove it, on success, failure and early return.
     user_data_dir = tempfile.mkdtemp(prefix="owl_template_check_")
+    try:
+        return _check_with_chrome(args, user_data_dir, xml_files, xml_file_contents)
+    finally:
+        shutil.rmtree(user_data_dir, ignore_errors=True)
+
+
+def _check_with_chrome(args, user_data_dir, xml_files, xml_file_contents):
     log_path = os.path.join(user_data_dir, "chrome.log")
     log_file = open(log_path, "wb")
     try:
         proc = _launch_headless_chrome(args.port, user_data_dir, log_file)
     except RuntimeError as e:
+        log_file.close()
         print(f"[!] ERROR: {e} -- cannot verify Owl templates without a real browser.")
         return 1
     try:

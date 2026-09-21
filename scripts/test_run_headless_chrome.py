@@ -24,6 +24,8 @@ Chrome (e.g. an Odoo test.py tour run), or it will kill that too. Run
 this file in isolation.
 """
 
+import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -72,6 +74,10 @@ def _spawn_real_headless_chrome(tmp_dir):
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        # Chrome also writes its own runtime dir (com.google.Chrome.XXXX with the singleton
+        # socket) under TMPDIR, and is SIGKILLed by this test, so point TMPDIR inside the
+        # profile dir this test removes afterwards instead of leaking into the shared /tmp.
+        env={**os.environ, "TMPDIR": tmp_dir},
     )
     p = psutil.Process(proc.pid)
     deadline = time.time() + 10.0
@@ -83,6 +89,8 @@ def _spawn_real_headless_chrome(tmp_dir):
 class ReapHeadlessChromesTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        # Cleanups run after tearDown, i.e. after the chrome process is reaped.
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     def tearDown(self):
         # Best-effort: if a test somehow left a real chrome process

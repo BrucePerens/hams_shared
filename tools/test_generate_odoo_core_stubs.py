@@ -244,6 +244,10 @@ class GenerateStaleStubWipeTests(unittest.TestCase):
 
     def setUp(self):
         self._tmp = tempfile.mkdtemp(prefix="generate_odoo_core_stubs_test_")
+        # Registered as a cleanup (not tearDown) so it runs AFTER cleanups added later in a
+        # test (LIFO), e.g. the chmod restore in the removal-failure test. A tearDown rmtree
+        # ran before that restore, silently failed on the 0o000 directory and leaked it.
+        self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
         self._target = os.path.join(self._tmp, "odoo", "addons")
         self._patches = [
             patch.object(gen, "_GENERATED_ADDONS_ROOT", self._target),
@@ -254,9 +258,6 @@ class GenerateStaleStubWipeTests(unittest.TestCase):
         for p in self._patches:
             p.start()
             self.addCleanup(p.stop)
-
-    def tearDown(self):
-        shutil.rmtree(self._tmp, ignore_errors=True)
 
     def test_a_first_run_with_no_existing_stub_directory_does_not_raise(self):
         self.assertFalse(os.path.exists(self._target))

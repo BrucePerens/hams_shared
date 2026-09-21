@@ -34,3 +34,14 @@ You are authorized to bypass this hook (`git commit --no-verify`) once you have 
 If you've worked through the known task list AND a round of review-fix-coverage-review turns up nothing further worth doing, cross-browser testing is a standing next fallback: re-run this project's real browser-driven tests and manual verification passes (Playwright etc.) against engines other than the default Chromium -- Firefox and WebKit in particular -- since browser-specific bugs (API availability gaps, timing differences, rendering quirks) are a real, distinct bug class this project's test suite mostly exercises against one engine only.
 
 You have standing authorization to install "major facilities" needed for real dev/test work during an unattended session -- not just small `apt-get` packages, but larger installs like additional browser engines, alternate language toolchains, or similar substantial dependencies -- without asking first. Report what you installed and why when you report the work.
+
+## Temp-File and Scratch Hygiene (/tmp is a separate 2.7 GB partition and has filled repeatedly)
+
+Every agent brief that runs tests, builds, browsers, or experiments carries this checklist:
+
+1. Scratch work goes under your session scratchpad (`mktemp -d -p <scratchpad>`), never `/tmp`, and never a hardcoded `/tmp/...` path.
+2. Delete your scratch subdirectory when the task ends AND on failure (use `trap 'rm -rf "$W"' EXIT` in shell scripts); check `df -h /tmp` before starting and after finishing.
+3. Tests clean up after themselves: `tempfile.TemporaryDirectory()` or `self.addCleanup(shutil.rmtree, path, ignore_errors=True)` in Python (never bare `mkdtemp()`, `NamedTemporaryFile(delete=False)`, or a `tearDown` rmtree that a later-registered `addCleanup` such as a chmod restore must precede); the `tempfile` crate's `TempDir` in Rust (removes on drop even when an assertion panics; a trailing `remove_dir_all` is skipped on failure).
+4. Kill what you start: background loops, servers, headless Chrome, `nohup` jobs; confirm with an anchored `pgrep -u <you> -f "^<cmd>"`.
+5. Remove temporary git worktrees (`git worktree remove`), archives, and per-run `CARGO_TARGET_DIR`s when done.
+6. Measure, do not guess: snapshot `find /tmp -mindepth 1 -maxdepth 3 -printf '%p %u %s\n'` before and after a suite; the diff should be empty apart from other users' files.
