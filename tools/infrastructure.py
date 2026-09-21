@@ -3133,6 +3133,9 @@ WantedBy=multi-user.target
             "environments": ["early_prod"],
         },
         {"name": "nginx", "debian_name": "nginx", "environments": ["early_prod"]},
+        # hook_build_rust_daemons() runs `cargo build`; without this a fresh box (no rustup)
+        # reports PROVISIONING DEGRADED and the three Rust daemons are never built.
+        {"name": "cargo", "debian_name": "cargo", "environments": ["early_prod"]},
         {
             "name": "redis-server",
             "debian_name": "redis-server",

@@ -1271,6 +1271,16 @@ class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
         self.assertEqual(install[install.index("-d") + 1], "hams_test")
 
 
+class RustToolchainPackageTests(unittest.TestCase):
+    def test_cargo_is_installed_by_provisioning_because_the_rust_daemon_hook_needs_it(self):
+        names = [
+            p.get("debian_name", p["name"])
+            for p in infra.MANIFEST["apt_packages"]
+            if "early_prod" in p["environments"]
+        ]
+        self.assertIn("cargo", names)
+
+
 class HoldOdooTests(unittest.TestCase):
     """provision_environment() is too host-dependent to execute here, so these read its source,
     like the neighbouring tests. The behaviour being pinned: with hold_odoo the database module
