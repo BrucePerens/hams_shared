@@ -116,6 +116,30 @@ python3 .../night_watch_agent.py release --ref <ref>
 4. If `claim` exits 3 without `--force` because another cron run claimed a moment earlier, re-run
    step 1 rather than forcing: that session is the agent now.
 
+**A cron-fired session cannot do steps 1-2 as written (found 2026-09-21).** In a scheduled-task run
+there is no `ListAgents` tool (`ToolSearch` for it finds nothing). `SendMessage` to another session,
+and the older `mcp__ccd_session_mgmt__send_message`, both refuse with "Messaging another session is
+unavailable in unattended sessions". So the alarm can neither check the recorded ref's liveness nor
+deliver the reminder or wake-up line. What that run could see: `list_sessions` and `get_session` (from
+the `ccd_session_mgmt` tools) show sessions by title and `isRunning`, but they use a different id
+space from the `ref`, so they are circumstantial, not identity. That run found the recorded agent idle for 128
+minutes and claimed the role with `--force`, recording its own session id prefix (`local_...`) as
+the ref, since no `ListAgents` ref was available. Until this is fixed, expect every alarm to fall
+through to step 3, and check `show`'s `claimed_at` history to tell whether a live interactive agent
+is being displaced each time. A displaced agent's next `heartbeat` exits 4, so it stands down rather
+than both working. Fixing this needs a wake path that works from an unattended session (or an
+interactive agent that polls on its own schedule). That is a design choice for Bruce, not something
+to improvise in an alarm run.
+
+**The hams_com shared `main` often lags `origin/main`** (it was 9 to 12 commits behind on
+2026-09-21). Its reflog shows peers moving it with `reset: moving to origin/main` without updating
+the working tree. `git status -sb` showing `[behind N]` therefore means a commit built from
+`read-tree HEAD` is based on a stale tree. Build queue commits from `git read-tree origin/main`
+(after `git fetch`) and push `<commit>:refs/heads/main` directly. If you have already committed on
+the stale local `main`, rebuild the commits on `origin/main`, push those, and put the local ref back
+with a guarded `git update-ref refs/heads/main <old> <yours>`. That restores exactly the state you
+found, and needs no rebase or reset.
+
 **What the agent does on a pass** (the start of its session, or a wake-up message):
 
 1. `heartbeat --state working`. If it exits 4, another session has taken over: stop acting as the
