@@ -2251,7 +2251,19 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 ReadWritePaths=/opt/hams/spool /opt/hams/downloads
-Type=simple
+# Real bug found live on hams1, 2026-09-22: this was Type=simple with
+# Restart=always/RestartSec=10 -- but run_sync() (main.py) processes every
+# configured download once per invocation and exits; it was never meant to
+# be a persistent service. That combination meant systemd restarted it
+# every 10 seconds, forever, all day (confirmed live: restart counter over
+# 5000) -- hammering data.fcc.gov with a fresh batch of requests every 10
+# seconds continuously, which is very likely what got this box's IP
+# rate-limited/blocked by Akamai in the first place, independent of
+# whatever else was also wrong with the request shape. A "Daily Sync
+# Daemon" belongs on Type=oneshot triggered by its own .timer (see
+# fcc.uls.sync.timer), the same shape every other daily sync daemon in
+# this codebase already uses, not Restart=always.
+Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/fcc_uls_sync
 
@@ -2269,14 +2281,27 @@ Environment="DAEMON_ARGS="
 # Execution via system Python
 ExecStart=/usr/bin/python3 /opt/hams/daemons/fcc_uls_sync/main.py $DAEMON_ARGS
 
-Restart=always
-RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=fcc.uls.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/fcc.uls.sync.timer",
+            "content": """\
+[Unit]
+Description=Run the FCC ULS Daily Sync Once a Day
+
+[Timer]
+OnCalendar=*-*-* 05:00:00
+RandomizedDelaySec=1h
+Persistent=true
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
@@ -4822,6 +4847,17 @@ def provision_environment(
                     # already the provisioned cache path; only the
                     # `playwright` package itself was ever missing.
                     "playwright",
+                    # hams_config.py's smart_download() now imports curl_cffi
+                    # unconditionally (this codebase's fail-fast policy forbids
+                    # a try/except-guarded soft import for its optional
+                    # `impersonate` parameter) -- real gap found live on
+                    # hams1, 2026-09-22: fcc.uls.sync needed a real
+                    # browser-TLS-fingerprint impersonation library to get
+                    # past Akamai's bot detection (plain `requests`, and even
+                    # real `curl` with matching headers, both still got 403).
+                    # No Debian package exists for it, matching the other
+                    # entries in this list.
+                    "curl_cffi",
                     "--ignore-installed",
                     "typing_extensions",
                     "--break-system-packages",
