@@ -4185,9 +4185,19 @@ def load_and_prompt_env(env_vars, is_test):
         if "ODOO_ADMIN_PASSWORD" not in env_vars:
             env_vars["ODOO_ADMIN_PASSWORD"] = generate_secure_password()
 
-        env_vars.setdefault("SMTP_HOST", "smtp.mailgun.org")
+        # Bruce, 2026-09-22: this used to default to smtp.mailgun.org -- stale from an
+        # earlier provider, never actually configured deliberately. hams.com sends outbound
+        # mail through Amazon SES (daemons/ses_inbound_mail_ingest handles the inbound half
+        # of the same account), whose SMTP endpoint is region-specific
+        # (email-smtp.<region>.amazonaws.com); AWS_REGION defaults to us-east-1 to match
+        # that daemon's own default. SMTP_USER/SMTP_PASS for SES are an IAM access key id and
+        # its SigV4-derived SMTP password (see hams_shared/tools/derive_ses_smtp_password.py),
+        # not an email address -- "none" as a SMTP_PASS placeholder still fails closed exactly
+        # as it did for the old default.
+        env_vars.setdefault("AWS_REGION", "us-east-1")
+        env_vars.setdefault("SMTP_HOST", f"email-smtp.{env_vars['AWS_REGION']}.amazonaws.com")
         env_vars.setdefault("SMTP_PORT", "587")
-        env_vars.setdefault("SMTP_USER", f"postmaster@{domain}")
+        env_vars.setdefault("SMTP_USER", "none")
         env_vars.setdefault("SMTP_PASS", "none")
 
         env_vars.setdefault("GEMINI_API_KEY", "none")
@@ -4770,6 +4780,22 @@ def provision_environment(
                     "telnetlib3",
                     "mcp",
                     "adif-io",
+                    # au_callsign_sync/main.py's `from playwright.sync_api
+                    # import ...` is a real runtime dependency (the ACMA
+                    # scraper), not test-only -- confirmed live on hams1,
+                    # 2026-09-22: au.callsign.sync.service crashed with
+                    # ModuleNotFoundError on every run, nothing anywhere
+                    # installed this package. No Debian package exists
+                    # (`apt-cache search python3-playwright` returns
+                    # nothing), so pip is the only path, matching the other
+                    # entries in this same list. The browser binary itself
+                    # is NOT installed here -- the daemon's own
+                    # scrape_acma_spa() already self-installs Chromium into
+                    # /opt/hams/cache/ms-playwright on every run ("JIT
+                    # Self-Healing", its own log line), idempotent and
+                    # already the provisioned cache path; only the
+                    # `playwright` package itself was ever missing.
+                    "playwright",
                     "--ignore-installed",
                     "typing_extensions",
                     "--break-system-packages",

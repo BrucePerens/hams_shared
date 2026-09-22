@@ -949,9 +949,17 @@ class LoadAndPromptEnvTests(_SafePatchTestCase):
     def test_previously_prompted_values_fall_back_to_their_old_defaults(self):
         env_vars = {"DOMAIN": "hams.com"}
         infra.load_and_prompt_env(env_vars, is_test=False)
-        self.assertEqual(env_vars["SMTP_HOST"], "smtp.mailgun.org")
+        # Bruce, 2026-09-22: hams.com sends outbound mail through Amazon SES, not
+        # Mailgun -- the old smtp.mailgun.org default was stale from an earlier
+        # provider and never actually configured deliberately. SES's SMTP endpoint
+        # is region-specific; AWS_REGION defaults to us-east-1 to match
+        # daemons/ses_inbound_mail_ingest's own default for the same account.
+        self.assertEqual(env_vars["AWS_REGION"], "us-east-1")
+        self.assertEqual(env_vars["SMTP_HOST"], "email-smtp.us-east-1.amazonaws.com")
         self.assertEqual(env_vars["SMTP_PORT"], "587")
-        self.assertEqual(env_vars["SMTP_USER"], "postmaster@hams.com")
+        # SES authenticates with an IAM access key id (as SMTP_USER), not an email
+        # address -- "none" fails closed exactly as it did for the old default.
+        self.assertEqual(env_vars["SMTP_USER"], "none")
         self.assertEqual(env_vars["SMTP_PASS"], "none")
         self.assertEqual(env_vars["GEMINI_API_KEY"], "none")
         self.assertEqual(env_vars["GEMINI_MODEL"], "gemini-2.5-pro")
