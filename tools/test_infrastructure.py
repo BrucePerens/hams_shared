@@ -1527,6 +1527,25 @@ class AptPackagesManifestTests(unittest.TestCase):
         self.assertTrue(entries, "expected an apt_packages MANIFEST entry installing python3-dotenv")
         self.assertIn("early_prod", entries[0]["environments"])
 
+    def test_python3_feedparser_is_installed_for_wa7bnm_contest_syncs_real_runtime_dependency(self):
+        # wa7bnm_contest_sync.py's `import feedparser` is a module-level,
+        # unconditional import in real daemon code, not test code --
+        # confirmed live on hams1, 2026-09-22:
+        # wa7bnm.contest.sync.service crashed with ModuleNotFoundError on
+        # every run, because feedparser had only ever been installed under
+        # `if is_test:` further down in provision_environment() (grouped
+        # there with other daemons' genuinely test-only dependencies).
+        entries = [
+            pkg for pkg in infra.MANIFEST["apt_packages"]
+            if pkg.get("debian_name") == "python3-feedparser"
+        ]
+        self.assertTrue(
+            entries,
+            "expected an apt_packages MANIFEST entry installing python3-feedparser "
+            "for wa7bnm_contest_sync.py's real feedparser dependency",
+        )
+        self.assertIn("early_prod", entries[0]["environments"])
+
 
 class SystemdUnitPathTests(unittest.TestCase):
     """A path in ReadWritePaths= that does not exist stops the service before it starts (systemd

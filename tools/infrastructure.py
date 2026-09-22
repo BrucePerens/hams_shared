@@ -3362,6 +3362,22 @@ WantedBy=multi-user.target
             "debian_name": "python3-psutil",
             "environments": ["early_prod"],
         },
+        # wa7bnm_contest_sync.py's own module-level `import feedparser` is a
+        # real runtime dependency, not a test-only one -- confirmed live on
+        # hams1, 2026-09-22: wa7bnm.contest.sync.service crashed with
+        # ModuleNotFoundError on every run, because this package had only
+        # ever been installed under `if is_test:` further down in this same
+        # file (grouped there with flask/flask-cors/aiohttp for OTHER
+        # daemons' own test suites -- a real miscategorization for this one,
+        # since this daemon needs it to run at all, in prod, not just to
+        # test itself). Installed here instead so prod actually gets it; the
+        # is_test-gated install becomes a harmless duplicate for test boxes
+        # rather than the only place either environment could get it.
+        {
+            "name": "python3-feedparser",
+            "debian_name": "python3-feedparser",
+            "environments": ["early_prod"],
+        },
         {
             "name": "python3-ephem",
             "debian_name": "python3-ephem",
