@@ -457,7 +457,7 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   just after a boundary and asserts the feed stayed inside one slot, so that assertion firing
   really would mean the pipeline ran slower than real time. For real per-stage Pi throughput, run
   hams_com's `src/digital_decoder_timing_probe.rs` (see its module doc). The Pi's throttling check is
-  `sudo -n vcgencmd get_throttled` over `ssh pi500-1` (plain `vcgencmd` cannot open `/dev/vcio`
+  `sudo -n vcgencmd get_throttled` over `ssh -i ~/.secrets/pi500-1/ai_ed25519 -o IdentitiesOnly=yes ai@pi500-1` (plain `vcgencmd` cannot open `/dev/vcio`
   as `ai`); `0x0` means no throttling since boot.
 - **The arm64 `build-linux` leg runs natively on the Raspberry Pi 500 runner `pi500-1`** (since
   2026-09-14; it used to run under QEMU emulation on the dev box, which broke whenever a reboot

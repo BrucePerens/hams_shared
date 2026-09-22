@@ -10,15 +10,17 @@ parts that only apply when several agents on different machines write to the sam
 
 ## The three repositories and their keys
 
-| Repository | Visibility | ssh host alias on bruce-yoga |
+| Repository | Visibility | key file on bruce-yoga (`%USERPROFILE%\.ssh\hams_deploy\`) |
 | --- | --- | --- |
-| `hams_com` | private | `github-hams-com` |
-| `hams_open` | public | `github-hams-open` |
-| `hams_shared` (a submodule of `hams_open`, at `hams_open/hams_shared`) | public | `github-hams-shared` |
+| `hams_com` | private | `hams_com` |
+| `hams_open` | public | `hams_open` |
+| `hams_shared` (a submodule of `hams_open`, at `hams_open/hams_shared`) | public | `hams_shared` |
 
-GitHub allows a deploy key on only one repository, so each repository has its own key. `devbox_tools/bruce_yoga_git_setup.sh` in `hams_com`
-installs the keys and sets each checkout's `origin` to its alias. Commits from this machine are authored `Gemini (bruce-yoga)`, so a reader
-can tell them from the Claude sessions' commits.
+GitHub allows a deploy key on only one repository, so each repository has its own key. Every remote is the ordinary
+`git@github.com:BrucePerens/<repository>.git`; each checkout is told which key to use with its own setting,
+`git config core.sshCommand "ssh -i <key file> -o IdentitiesOnly=yes"`. There are no ssh host aliases and `~/.ssh/config` is not used.
+`devbox_tools/bruce_yoga_git_setup.ps1` (Windows) or `.sh` in `hams_com` installs the keys and sets that up. Commits from this machine are authored
+`Gemini (bruce-yoga)`, so a reader can tell them from the Claude sessions' commits. Push with `git push origin HEAD:main`.
 
 Never write a private key, token or password into any repository. `hams_open` and `hams_shared` are public; do not put proprietary,
 patent or business material in them (it belongs in `hams_com`).
@@ -36,7 +38,7 @@ patent or business material in them (it belongs in `hams_com`).
   enough if another session may have edited the same file; check `git diff -- path` first. Never `git add -A` or `git commit -a`.
 * Before every push: `git fetch origin && git rebase origin/main` (on your own commits only), rerun the tests that cover what you changed, then
   `git push origin HEAD:main`. If the push is rejected, fetch and rebase again; never force-push and never rewrite commits that are already pushed.
-* A change to `hams_shared` is two commits: the change inside `hams_open/hams_shared` (push to the `hams_shared` repository), then a second commit in
+* A change to `hams_shared` is two commits: the change inside `hams_open/hams_shared` (push it from inside `hams_open/hams_shared`), then a second commit in
   `hams_open` that moves its `hams_shared` pointer (push to `hams_open`). Do them in that order.
 * Do not delete other people's branches, stashes or files.
 
