@@ -2403,7 +2403,17 @@ loglevel=4
         {
             "path": "/var/lib/powerdns/callbook",
             "owner": "pdns:pdns",
-            "provision_mode": "775",
+            # setgid (leading 2): callbook_dns_export runs as User=odoo with
+            # SupplementaryGroups=pdns, not User=pdns, so a file it creates
+            # here only lands group=pdns if this directory's own group is
+            # inherited -- setgid is what makes that automatic. Without it,
+            # new files land group=odoo and pdns.callbook.service (running
+            # as User=pdns Group=pdns, no supplementary groups) gets zero
+            # access to its own database. Found live on hams1, 2026-09-22,
+            # after fixing the group ownership by hand and still hitting
+            # "attempt to write a readonly database" on every publish after
+            # the first, once a WAL-mode connection had already been opened.
+            "provision_mode": "2775",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
@@ -4768,6 +4778,22 @@ def provision_environment(
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to add odoo to hams_com group: %s", e)
             record_hook_failure("usermod_odoo_hams_com_group", e)
+
+        # Bug found live on hams1, 2026-09-22: pdns.callbook.service reads its
+        # config from /opt/hams/etc/pdns-callbook.conf (see the "directories"
+        # manifest entry for that path), but /opt/hams itself is 0750
+        # hams_com:hams_com -- without this, the pdns system account (created
+        # by the pdns-server/pdns-backend-sqlite3 packages, never a member of
+        # hams_com on its own) cannot even traverse into /opt/hams/etc to
+        # read it, regardless of the file's own permissions. Found because
+        # pdns.callbook.service had been crash-looping every ~5s since boot
+        # ("Unable to open /opt/hams/etc/pdns-callbook.conf") on a box that
+        # had never had provisioning re-run since this feature was added.
+        try:
+            run_cmd_func(["usermod", "-a", "-G", "hams_com", "pdns"])
+        except Exception as e:  # audit-ignore-catch-all
+            _logger.warning("[*] Failed to add pdns to hams_com group: %s", e)
+            record_hook_failure("usermod_pdns_hams_com_group", e)
 
         is_isolated_ns = os.environ.get("HAMS_ISOLATED_NS") == "1"
         is_test_env = is_isolated_ns or is_test
