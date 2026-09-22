@@ -3804,6 +3804,7 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
 
     started_services = []
     already_active_services = []
+    start_failures = []
 
     for svc in services_to_test:
         res_active = subprocess.run(
@@ -3843,7 +3844,16 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
                 _logger.error(
                     "--- LOGS FOR %s ---\n%s\n-------------------", svc, logs.stdout
                 )
-                sys.exit(1)
+                # Keep going and start the rest, so one run reports every service that will not
+                # start. Stopping at the first cost a full provisioning run per problem on the
+                # first production release (2026-09-21).
+                start_failures.append(svc)
+
+    if start_failures:
+        _logger.error(
+            "[!] %d service(s) failed to start: %s", len(start_failures), ", ".join(start_failures)
+        )
+        sys.exit(1)
 
     _logger.info("[*] Waiting for services to stabilize (5 seconds)...")
     time.sleep(5)
