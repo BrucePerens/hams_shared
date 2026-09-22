@@ -1350,12 +1350,14 @@ EnvironmentFile=-/opt/hams/etc/redis.env
 EnvironmentFile=-/opt/hams/etc/rabbitmq.env
 EnvironmentFile=-/opt/hams/etc/pdns.env
 EnvironmentFile=-/opt/hams/etc/odoo.env
-# TODO(bruce): AWS credentials for this service account are not yet
-# provisioned -- see docs/proposals/EMAIL_SEND_RECEIVE.md's "Also not
-# yet a real, persistent home" section. This needs a real IAM identity
-# for the `odoo` user (or an EnvironmentFile= line here sourcing one),
-# not a copy of the dev box's personal SSO session. --start-test warns
-# rather than failing until this is resolved.
+# Real IAM identity for the `odoo` user, resolved 2026-09-22 --
+# AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY for the dedicated
+# ses-inbound-mail-ingest-service IAM user (S3 read/delete/tag on
+# incoming/*, write on processed/*+failed/*, scoped to
+# hams-com-inbound-mail only -- see docs/proposals/EMAIL_SEND_RECEIVE.md).
+# One-time provisioning, same convention as localhost_cert_renewal's
+# cloudflare.ini: a person places this file, the daemon never touches it.
+EnvironmentFile=-/opt/hams/etc/aws.env
 Environment="ODOO_USER=mail_ingest_service_internal"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/mail_ingest_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
