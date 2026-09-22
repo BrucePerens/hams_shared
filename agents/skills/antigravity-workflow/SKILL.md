@@ -15,3 +15,5 @@ description: Workflow and git commit mandates for the Antigravity agent working 
 4. **Turbo Mode Compliance:** If the user is operating in "turbo mode", prioritize execution velocity. Do not block execution by asking for permission or feedback on plans unless it is an absolutely critical, dangerous, or irreversible architectural decision.
 5. **Python Dependencies:** Use Debian (or Ubuntu) packages (e.g., `apt install python3-xyz`) for Python utilities preferentially over pip, to avoid externally managed environment conflicts.
 6. **Ephemeral Files:** Any scratch files, test scripts, or ephemeral files you create during execution MUST be placed in a `tmp/` directory within the repository. You should create this directory if it doesn't exist. Git is configured to ignore it.
+
+7. **Multi-machine check-in and course hand-off:** on bruce-yoga, follow `hams_shared/agents/skills/gemini-checkin/SKILL.md` for the deploy-key check-in routine, checking in skills and lessons, and sending finished courses to hams.com.
