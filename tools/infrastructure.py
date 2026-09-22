@@ -4160,7 +4160,16 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault("WS_PORT", "8080")
         env_vars.setdefault("PYTHONPYCACHEPREFIX", "/tmp/pycache")
         env_vars.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/opt/hams/playwright")
-        env_vars.setdefault("SYSTEM_USER_AGENT", "HAMS/1.0")
+        # Bruce, 2026-09-22: "HAMS/1.0" alone carries no way for a server
+        # operator to reach us -- polite bot etiquette (and Bruce's own
+        # explicit intent) is to self-identify with real contact info, so a
+        # site that wants to allowlist or complain about this traffic can.
+        # Real gap found live on hams1: the actual deployed value had never
+        # included this at all, despite Bruce believing it already did.
+        env_vars.setdefault(
+            "SYSTEM_USER_AGENT",
+            "HamsComSyncDaemon/1.0 (+https://hams.com; bruce@perens.com; +1-510-473-7367)",
+        )
 
         if "DB_PASS" not in env_vars:
             env_vars["DB_PASS"] = generate_secure_password()
