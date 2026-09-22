@@ -273,13 +273,35 @@ def main():
             f"--http-port={port}",
             "--log-level=test",
         ]
-        env_pairs = [f"{key}={value}" for key, value in service_env.items()]
+        # Security fix (2026-09-22): this used to build `env_pairs = [f"{key}={value}" ...]`
+        # and hand each one to `sudo ... env -i` as its own literal argv element. `service_env`
+        # is the REAL running odoo.service's environment (get_odoo_service_env() above) -- per
+        # infrastructure.py's env_groups manifest that's DB_PASS, POSTGRES_PASSWORD,
+        # ODOO_ADMIN_PASSWORD, ODOO_SERVICE_PASSWORD, RMQ_PASS, PDNS_API_KEY,
+        # CLOUDFLARE_API_TOKEN, CLOUDFLARE_TUNNEL_TOKEN, BRIDGE_API_KEY, SMTP_PASS,
+        # HAMS_CRYPTO_KEY, GEMINI_API_KEY -- i.e. essentially every production secret on the
+        # box, all of it. Any argv element is visible to every other user who can run `ps aux`
+        # or read `/proc/<pid>/cmdline` for the `sudo`/`env`/`odoo` processes this spawns, for
+        # as long as they run -- this tool was leaking the whole secret set on every diagnostic
+        # run. Fixed the same way as the HAMS_CRYPTO_KEY leak found live on hams1 the same day:
+        # pass the values through `subprocess.run`'s own `env=` kwarg (goes straight into the
+        # child's environment via execve's envp, never becomes an argv token anywhere), and use
+        # sudo's `--preserve-env=<names>` (names only -- not secret -- to relay exactly those
+        # vars from THIS process's env into the target user's, instead of `env -i KEY=VALUE`
+        # spelling every value out on the command line).
+        # `env=service_env` below replaces (not merges into) the child's environment, so `sudo`
+        # itself must be found by absolute path -- `service_env` is odoo.service's own
+        # environment and has no reason to contain a PATH usable for locating `sudo` (systemd
+        # services commonly have no PATH set at all), matching odoo_cmd's own absolute
+        # "/usr/bin/odoo" above rather than relying on a PATH search.
+        preserve_names = ",".join(service_env.keys())
         try:
             result = subprocess.run(
-                ["sudo", "-u", args.os_user, "env", "-i"] + env_pairs + odoo_cmd,
+                ["/usr/bin/sudo", "-u", args.os_user, f"--preserve-env={preserve_names}"] + odoo_cmd,
                 capture_output=True,
                 text=True,
                 timeout=args.timeout,
+                env=service_env,
             )
             output = result.stdout + result.stderr
             returncode = result.returncode
