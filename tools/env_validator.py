@@ -13,8 +13,6 @@ import os
 import sys
 import smtplib
 import socket
-import urllib.request
-from urllib.error import URLError, HTTPError
 import glob
 import logging
 
@@ -92,37 +90,28 @@ def check_smtp():
 
 
 def check_gemini():
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print_warning("GEMINI", "GEMINI_API_KEY is not set. AI features will be disabled.")
-        return
-
-    # Bug-hunt fix (2026-09-10, bug class 51: secret-in-url-or-log): the API
-    # key used to be carried in the URL's own query string
-    # (?key=<api_key>), a real exposure vector distinct from the request
-    # being HTTPS (any intermediate proxy/CDN access log records the full
-    # request URL, unlike headers, which most access-log formats omit).
-    # Empirically confirmed generativelanguage.googleapis.com accepts the
-    # key via the x-goog-api-key header identically to ?key= (same 400 for
-    # a bogus key either way, vs. 403 with neither) -- switched to the
-    # header, matching this bug class's own fix guidance ("pass credentials
-    # via a header ... never a query string").
-    url = "https://generativelanguage.googleapis.com/v1beta/models"
-    req = urllib.request.Request(url, method="GET", headers={"x-goog-api-key": api_key})
-    try:
-        with urllib.request.urlopen(req, timeout=5) as response:
-            if response.status != 200:
-                print_warning("GEMINI", f"Unexpected status code {response.status} when verifying API key.")
-    except HTTPError as e:
-        if e.code in (400, 401, 403):
-            print_warning("GEMINI", f"API Key verification failed ({e.code}): Invalid or expired GEMINI_API_KEY.")
-        else:
-            print_warning("GEMINI", f"API Key verification failed with HTTP {e.code}: {e.reason}")
-    except URLError as e:
-        print_warning("GEMINI", f"Network error when verifying API key: {e.reason}")
-    except Exception as e:  # audit-ignore-catch-all: non-fatal per module docstring -- other checks and the final sys.exit(0) must still run.
-        logging.exception("Unexpected error during API key verification: %s", e)
-        print_warning("GEMINI", f"Unexpected error during API key verification: {e}")
+    # Bruce, 2026-09-22: AI features now reach Gemini through an MCP
+    # server/interface rather than this process calling
+    # generativelanguage.googleapis.com directly with a GEMINI_API_KEY, so
+    # a direct HTTP key-verification check here no longer reflects how the
+    # deployment actually works -- it was failing on every startup
+    # (env_validator's own "GEMINI WARNING" noise) purely because the key
+    # this check verified was never meant to still be live. Two runtime
+    # modules (ham_onboarding/models/res_users_verification.py,
+    # ham_repeater_dir/models/ham_repeater_import.py) still read
+    # GEMINI_API_KEY directly for their own AI calls as of this change --
+    # migrating those to the MCP path is a separate, larger change this
+    # commit does not make; this function only stops validating a startup
+    # precondition that no longer applies.
+    if os.environ.get("GEMINI_API_KEY"):
+        print_warning(
+            "GEMINI",
+            "GEMINI_API_KEY is set but is no longer how this deployment reaches "
+            "Gemini (AI features route through an MCP interface now). Startup no "
+            "longer verifies this key; if it's still referenced by "
+            "res_users_verification.py or ham_repeater_import.py, migrating those "
+            "call sites to the MCP path is tracked separately.",
+        )
 
 
 def main():
