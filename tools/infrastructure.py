@@ -271,11 +271,16 @@ def download_file(url, path, mode, env_vars):
     )
     req = urllib.request.Request(url, headers={"User-Agent": ua})
     try:
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
             data = response.read()
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("Network partition fallback safety hit fetching %s: %s", url, e)
         record_hook_failure(f"download_file:{url}", e)
+        # A failed fetch must never destroy a copy that is already installed: on 2026-09-21 a
+        # timed-out fetch truncated the good PostgreSQL package key to zero bytes, so every later
+        # apt step failed until the next run. Keep the existing file and report the failure.
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return
         data = b""
 
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
@@ -595,6 +600,13 @@ MANIFEST = {
         },
         {
             "path": "/opt/hams/spool/adif_queue",
+            "owner": "hams_com:hams_com",
+            "provision_mode": "770",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/spool/adif_uploads",
             "owner": "hams_com:hams_com",
             "provision_mode": "770",
             "runtime_mount": "rw",
@@ -960,7 +972,10 @@ CapabilityBoundingSet=
 # same set backup_management/models/utils.py's validate_backup_path()
 # already treats as legitimate backup/restore destinations at the
 # application layer, plus pgBackRest's own state/log directories.
-ReadWritePaths=/var/lib/odoo/backups /var/lib/odoo/backup_repo /var/backups/global /opt/hams/backup /opt/hams/etc/keys /mnt/backup /var/lib/pgbackrest /var/log/pgbackrest
+# A leading "-" means "skip if the directory does not exist": a fresh server has none of the optional
+# destinations yet (no external backup disk is mounted), and without it systemd refuses to start
+# the service at all (status 226/NAMESPACE, found on the first production release, 2026-09-21).
+ReadWritePaths=/var/lib/odoo/backups -/var/lib/odoo/backup_repo -/var/backups/global -/opt/hams/backup /opt/hams/etc/keys -/mnt/backup /var/lib/pgbackrest /var/log/pgbackrest
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/backup_worker
@@ -2768,7 +2783,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/hams_com/docs/code_review_reports
+ReadWritePaths=-/opt/hams/hams_com/docs/code_review_reports
 Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/code_review_sweep

@@ -227,6 +227,15 @@ class DownloadFileTests(_TmpDirTestCase):
         with open(dest, "rb") as f:
             self.assertEqual(f.read(), b"")
 
+    def test_a_network_failure_keeps_a_copy_that_is_already_installed(self):
+        dest = os.path.join(self.tmp, "downloaded.bin")
+        with open(dest, "wb") as f:
+            f.write(b"good existing key")
+        self.safe_patch_object(infra.urllib.request, "urlopen", side_effect=OSError("simulated timeout"))
+        infra.download_file("https://example.invalid/file", dest, 0o644, {})
+        with open(dest, "rb") as f:
+            self.assertEqual(f.read(), b"good existing key")
+
     def test_the_configured_user_agent_env_var_is_sent(self):
         captured = {}
 
@@ -1439,6 +1448,38 @@ class AptPackagesManifestTests(unittest.TestCase):
         ]
         self.assertTrue(entries, "expected an apt_packages MANIFEST entry installing python3-dotenv")
         self.assertIn("early_prod", entries[0]["environments"])
+
+
+class SystemdUnitPathTests(unittest.TestCase):
+    """A path in ReadWritePaths= that does not exist stops the service before it starts (systemd
+    status 226/NAMESPACE) unless it has a leading "-". The first production release hit this on
+    three services (2026-09-21), and it only shows on a fresh server that lacks those directories."""
+
+    def _tokens(self):
+        import re
+        for entry in infra.MANIFEST["static_files"]:
+            text = entry.get("content") or ""
+            for match in re.finditer(r"^(ReadWritePaths|ReadOnlyPaths|BindPaths)=(.*)$", text, re.M):
+                for token in match.group(2).split():
+                    yield entry["path"].rsplit("/", 1)[-1], token
+
+    def test_every_required_path_under_opt_hams_is_a_provisioned_directory(self):
+        directories = {item["path"] for item in infra.MANIFEST["directories"]}
+        missing = [
+            (unit, token) for unit, token in self._tokens()
+            if token.startswith("/opt/hams") and token not in directories
+        ]
+        self.assertEqual(missing, [], "these paths are required by a unit but nothing creates them")
+
+    def test_paths_a_fresh_server_lacks_are_marked_optional(self):
+        by_unit = {}
+        for unit, token in self._tokens():
+            by_unit.setdefault(unit, []).append(token)
+        backup = by_unit["backup.worker.service"]
+        for path in ("/var/lib/odoo/backup_repo", "/var/backups/global", "/opt/hams/backup", "/mnt/backup"):
+            self.assertIn("-" + path, backup)
+        self.assertIn("-/opt/hams/hams_com/docs/code_review_reports", by_unit["code.review.sweep.service"])
+        self.assertTrue(any(item["path"] == "/opt/hams/spool/adif_uploads" for item in infra.MANIFEST["directories"]))
 
 
 class PostgresqlLockdownTests(unittest.TestCase):
