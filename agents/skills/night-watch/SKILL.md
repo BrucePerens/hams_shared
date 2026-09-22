@@ -69,15 +69,16 @@ make. A `status: blocked` to-do points into it.
    "Self-improvement").
 7. **Fast-merge and worktree sweep** (ADR-0102). Cheap, run every cycle regardless of what else
    happened above:
-   - `python3 hams_shared/tools/night_watch_review_and_merge.py` -- approves and merges any open PR
-     whose head branch starts with `night-shift/` on hams_com or hams_shared, using a credential
-     dedicated to this one job (`~/.secrets/hams_com_ci/NIGHT_WATCH_REVIEWER_GITHUB_PAT`, never the
-     identity that opened the PR -- GitHub refuses self-approval). This is night-watch's own
-     branch-naming convention for anything it wants fast-merged without waiting for Bruce: open the
-     PR from a branch named `night-shift/<slug>`, push it, and this step picks it up next cycle. A
-     PR from any other branch (in particular `hams_helpdesk` ticket-triage's own `ai-triage/*`
-     branches) is never matched and always needs Bruce's real review instead -- do not rename a
-     branch to `night-shift/*` to route around that; the exclusion is deliberate.
+   - **Currently non-functional, confirmed live 2026-09-22 -- do not run this step, it will just log
+     failures.** `python3 hams_shared/tools/night_watch_review_and_merge.py` was meant to approve and
+     merge any open PR whose head branch starts with `night-shift/`, using a credential dedicated to
+     this one job. It can't: a fine-grained PAT authenticates as the GitHub *account* that created it,
+     not a separate bot identity, and every credential on this box is the same account
+     (`BrucePerens`) that opens the PR in the first place -- GitHub's self-approval block applies
+     regardless of which token attempts the review. See ADR-0102 decision 4 and
+     `night_shift_todo/medium/night-watch-fast-merge-path-cannot-self-approve-same-account-pat-b91af4d3.md`.
+     Until a real second GitHub identity exists, open the PR as usual (from a `night-shift/<slug>`
+     branch is still fine, that convention is harmless) and it waits for Bruce like everything else.
    - `python3 hams_shared/tools/sweep_orphan_worktrees.py <hams_com repo root> <hams_shared repo
      root>` -- prunes worktrees whose directory is already gone, removes ones that are clean and
      fully pushed and idle for hours, and flags (never force-deletes) anything else as a
