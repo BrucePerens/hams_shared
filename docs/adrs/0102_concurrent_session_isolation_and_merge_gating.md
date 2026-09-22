@@ -57,9 +57,15 @@ own hook -- so it is backed by decision 3, which is enforced server-side and can
      make this requirement conditional on which branch opened the PR -- which is exactly why it must stay
      unconditionally on rather than being narrowed per-source.
    - `required_status_checks` requires the burn-list linter (`.github/workflows/burn-list-lint.yml`) on
-     both repos. The full `hams_shared/tools/test.py` Odoo suite is a tracked follow-up, not a blocker: it
-     needs a self-hosted runner matching this dev box's Postgres/`odoo`-user environment, real
-     infrastructure work, not a settings change.
+     `hams_com`, where it's live. **Not yet enabled on `hams_shared`**: that repo has zero self-hosted
+     runners registered to it (confirmed live via the GitHub API) -- `hams-devbox` is registered only at
+     the `hams_com` repo level, and GitHub does not share repo-scoped runners across unrelated personal
+     repos (that needs an organization, which these are not). Requiring a check with no runner able to
+     ever run it would deadlock every future `hams_shared` PR, so `hams_shared` currently has
+     `enforce_admins: true` and the required review only, no required status check, until a runner is
+     registered there too (see the tracked follow-up). The full `hams_shared/tools/test.py` Odoo suite as
+     a check (on either repo) is a further, separate follow-up: it needs a runner matching this dev box's
+     Postgres/`odoo`-user environment, real infrastructure work, not a settings change.
 
 **4. A dedicated local script gives trusted autonomous work (night-watch) a fast merge path, without
 running any agent through GitHub Actions** (standing policy: AI agents do not run in GitHub Actions).
