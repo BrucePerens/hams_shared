@@ -3383,6 +3383,21 @@ WantedBy=multi-user.target
             "debian_name": "python3-ephem",
             "environments": ["early_prod"],
         },
+        # daemons/ses_inbound_mail_ingest/main.py shells out to the `aws` CLI
+        # (its own docstring explains why: no other daemon here depends on
+        # boto3). Real gap found live on hams1, 2026-09-22:
+        # ses.inbound.mail.ingest.service had been failing with zero journal
+        # output for its own unit name, traced to a plain, unhandled
+        # `FileNotFoundError: [Errno 2] No such file or directory: 'aws'`
+        # crashing the whole process before any logging happened -- the `aws`
+        # binary was never installed on this box at all, a more basic gap
+        # than the credentials-not-provisioned one already tracked in this
+        # daemon's own systemd unit comment.
+        {
+            "name": "awscli",
+            "debian_name": "awscli",
+            "environments": ["early_prod"],
+        },
         {
             "name": "python3-ldap3",
             "debian_name": "python3-ldap3",

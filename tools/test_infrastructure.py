@@ -1554,6 +1554,23 @@ class AptPackagesManifestTests(unittest.TestCase):
         )
         self.assertIn("early_prod", entries[0]["environments"])
 
+    def test_awscli_is_installed_for_ses_inbound_mail_ingests_real_runtime_dependency(self):
+        # Real gap found live on hams1, 2026-09-22: daemons/ses_inbound_mail_ingest/main.py
+        # shells out to the `aws` CLI, but nothing in this MANIFEST ever installed it --
+        # ses.inbound.mail.ingest.service crashed with an unhandled FileNotFoundError
+        # ('aws' not found), before any of the daemon's own logging ran, which is why
+        # journalctl showed zero entries for the unit despite StandardError=journal.
+        entries = [
+            pkg for pkg in infra.MANIFEST["apt_packages"]
+            if pkg.get("debian_name") == "awscli"
+        ]
+        self.assertTrue(
+            entries,
+            "expected an apt_packages MANIFEST entry installing awscli for "
+            "ses_inbound_mail_ingest's real `aws` CLI dependency",
+        )
+        self.assertIn("early_prod", entries[0]["environments"])
+
 
 class SystemdUnitPathTests(unittest.TestCase):
     """A path in ReadWritePaths= that does not exist stops the service before it starts (systemd
