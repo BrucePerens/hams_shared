@@ -21,6 +21,7 @@ file covers the smaller units that logic actually lives in.
 import builtins
 import inspect
 import os
+import re
 import shlex
 import shutil
 import tempfile
@@ -1578,7 +1579,6 @@ class SystemdUnitPathTests(unittest.TestCase):
     three services (2026-09-21), and it only shows on a fresh server that lacks those directories."""
 
     def _tokens(self):
-        import re
         for entry in infra.MANIFEST["static_files"]:
             text = entry.get("content") or ""
             for match in re.finditer(r"^(ReadWritePaths|ReadOnlyPaths|BindPaths)=(.*)$", text, re.M):

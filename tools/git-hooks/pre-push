@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# ADR-0102: client-side early warning for a non-fast-forward push to main, backed by (not a
+# substitute for) server-side branch protection (enforce_admins: true, allow_force_pushes: false).
+# A session can edit or delete this hook; it cannot edit GitHub's own rules. This just fails fast
+# and locally, before spending a network round trip on a push the server would reject anyway.
+#
+# Installed by ../install_git_hooks.sh into .git/hooks/pre-push, which every worktree of a repo
+# shares (hooks live in the common .git directory, not per-worktree) -- install once per repo.
+
+set -euo pipefail
+
+remote_name="$1"
+protected_ref="refs/heads/main"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$remote_ref" = "$protected_ref" ] || continue
+
+    # Deleting the branch: local_sha is all zeros. Never allowed for main; branch protection
+    # (allow_deletions: false) already refuses this server-side, but fail fast locally too.
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        echo "pre-push: refusing to delete $protected_ref" >&2
+        exit 1
+    fi
+
+    # Branch doesn't exist on the remote yet: nothing to fast-forward against.
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+        continue
+    fi
+
+    git fetch -q "$remote_name" "${protected_ref#refs/heads/}"
+    current_remote_sha=$(git rev-parse "$remote_name/${protected_ref#refs/heads/}")
+
+    if ! git merge-base --is-ancestor "$current_remote_sha" "$local_sha"; then
+        cat >&2 <<EOF
+pre-push: refusing a non-fast-forward push to $protected_ref.
+
+$remote_name/${protected_ref#refs/heads/} has moved to $current_remote_sha since your branch was
+built on $remote_sha -- a peer likely pushed in the meantime. Fetch and rebase/merge before
+pushing again. This is never solved by --force: main also refuses force pushes server-side.
+EOF
+        exit 1
+    fi
+done
+
+exit 0
