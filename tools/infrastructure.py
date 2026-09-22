@@ -761,7 +761,7 @@ MANIFEST = {
             "HAMS_CRYPTO_KEY",
             "CLOUDFLARE_TUNNEL_TOKEN",
             "PYTHONPYCACHEPREFIX",
-            "WS_PORT",
+            "DX_FIREHOSE_WS_PORT",
             "GEMINI_API_KEY",
             "GEMINI_MODEL",
             "PLAYWRIGHT_BROWSERS_PATH",
@@ -1079,7 +1079,7 @@ EnvironmentFile=-/opt/hams/etc/redis.env
 EnvironmentFile=-/opt/hams/etc/rabbitmq.env
 EnvironmentFile=-/opt/hams/etc/pdns.env
 EnvironmentFile=-/opt/hams/etc/odoo.env
-Environment="WS_PORT=8765"
+Environment="DX_FIREHOSE_WS_PORT=8765"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -3501,7 +3501,7 @@ WantedBy=multi-user.target
         "DB_PORT": "5432",
         "RMQ_PORT": "5672",
         "REDIS_PORT": "6379",
-        "WS_PORT": "8765",
+        "DX_FIREHOSE_WS_PORT": "8765",
         "RMQ_USER": "guest",
         "RMQ_PASS": "guest",
         "PLAYWRIGHT_BROWSERS_PATH": "/opt/hams/cache/ms-playwright",
@@ -4182,7 +4182,14 @@ def load_and_prompt_env(env_vars, is_test):
         # RMQ_PASS does.
         env_vars.setdefault("RMQ_USER", "hams_rabbitmq")
         env_vars.setdefault("PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones")
-        env_vars.setdefault("WS_PORT", "8080")
+        # Real bug found live on hams1, 2026-09-22: this generic "WS_PORT" key (8080) had
+        # nothing to do with dx_firehose's own actual port (8765, its own code default) --
+        # it collided with hams_data_relay's own default bind address instead, and won over
+        # dx.firehose.service's unit-level Environment="WS_PORT=8765" override because both
+        # were set to the SAME env var name in the SAME shared core.env file. Renamed to a
+        # daemon-specific key (see dx_firehose/main.py) so this can't collide with anything
+        # else's port default again, regardless of EnvironmentFile=/Environment= ordering.
+        env_vars.setdefault("DX_FIREHOSE_WS_PORT", "8765")
         env_vars.setdefault("PYTHONPYCACHEPREFIX", "/tmp/pycache")
         env_vars.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/opt/hams/playwright")
         # Bruce, 2026-09-22: "HAMS/1.0" alone carries no way for a server
