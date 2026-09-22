@@ -439,6 +439,41 @@ def hook_install_kopia_binary(env_vars, dest_dir, path, run_cmd_func):
     safe_remove(path)
 
 
+# [@ANCHOR: infrastructure:hook_create_pdns_sqlite_schema]
+_PDNS_SQLITE_SCHEMA_PATH = "/usr/share/pdns-backend-sqlite3/schema/schema.sqlite3.sql"
+
+
+def hook_create_pdns_sqlite_schema(env_vars, dest_dir, path, run_cmd_func):
+    """Creates the main PowerDNS instance's gsqlite3 database (empty:
+    zones are created via the API, not by this schema load) from the
+    pdns-backend-sqlite3 package's own reference schema. Found missing
+    live on hams1, 2026-09-22: nothing in this codebase ever created
+    this file, so pdns.service could bind port 53 (no schema needed for
+    that) but its API returned 404 for every zone -- there was no
+    database for it to have created any in. Idempotent: skips if the
+    file already exists, matching every other hook here."""
+    db_path = os.path.join(path, "pdns.sqlite3")
+    if os.path.exists(db_path):
+        return
+    schema = _PDNS_SQLITE_SCHEMA_PATH
+    if not os.path.exists(schema):
+        _logger.warning("pdns-backend-sqlite3's own schema file is missing: %s", schema)
+        record_hook_failure(
+            "hook_create_pdns_sqlite_schema",
+            FileNotFoundError(schema),
+        )
+        return
+    try:
+        # run_cmd_func passes **kwargs straight through to subprocess.run(),
+        # which takes a real file object for stdin -- not a path.
+        with open(schema, "rb") as schema_fh:
+            run_cmd_func(["sqlite3", db_path], stdin=schema_fh)
+        apply_permissions(db_path, "pdns:pdns", 0o664)
+    except Exception as e:  # audit-ignore-catch-all
+        _logger.warning("Failed to create PowerDNS sqlite schema: %s", e)
+        record_hook_failure("hook_create_pdns_sqlite_schema", e)
+
+
 def hook_daemons_perms(env_vars, dest_dir, path, run_cmd_func):
     target = path
     if os.path.exists(target):
@@ -742,7 +777,15 @@ MANIFEST = {
             "environments": ["early_prod"],
         },
         {
-            "path": "/opt/hams/etc/pdns_gsqlite3.conf",
+            # Bug found live on hams1, 2026-09-22: this file must be named
+            # to match systemd_pdns_override's `--config-name=gsqlite3`
+            # (PowerDNS resolves that to `<config-dir>/pdns-<name>.conf`,
+            # confirmed empirically against this same box's callbook
+            # instance -- a dash, not the underscore this path used to
+            # have, which meant pdns_server could never find this file at
+            # all regardless of the (also missing, until now)
+            # systemd_pdns_override pointing --config-dir at its directory.
+            "path": "/opt/hams/etc/pdns-gsqlite3.conf",
             "content": """\
 launch=gsqlite3
 gsqlite3-database=/var/lib/powerdns/pdns.sqlite3
@@ -751,7 +794,7 @@ local-address=0.0.0.0
 api=yes
 api-key={PDNS_API_KEY}
 webserver=yes
-webserver-address=localhost
+webserver-address=127.0.0.1
 webserver-port=8081
 webserver-allow-from=127.0.0.0/8,::1/128
 dnsupdate=yes
@@ -2401,6 +2444,22 @@ loglevel=4
             "environments": ["prod"],
         },
         {
+            # Created by the pdns-server/pdns-backend-sqlite3 packages'
+            # postinst, so this entry doesn't create the directory itself --
+            # only its post_provision_hooks. Found live on hams1,
+            # 2026-09-22: nothing in this codebase ever created
+            # pdns.sqlite3 (the main instance's gsqlite3 database, distinct
+            # from the callbook one below), so pdns.service could bind
+            # port 53 but its REST API returned 404 for every zone -- no
+            # database existed for it to have created any zone in.
+            "path": "/var/lib/powerdns",
+            "owner": "pdns:pdns",
+            "provision_mode": "755",
+            "runtime_mount": "rw",
+            "environments": ["prod"],
+            "post_provision_hooks": [hook_create_pdns_sqlite_schema],
+        },
+        {
             "path": "/var/lib/powerdns/callbook",
             "owner": "pdns:pdns",
             # setgid (leading 2): callbook_dns_export runs as User=odoo with
@@ -3419,6 +3478,26 @@ WantedBy=multi-user.target
             "TimeoutStopSec": "15",
         },
     },
+    # Bug found live on hams1, 2026-09-22: pdns.service ships as a plain OS
+    # package unit with no override, so it always ran with the package's own
+    # default /etc/powerdns/pdns.conf (an unconfigured stock template --
+    # `launch=` blank, no real backend, no API) instead of this project's
+    # real gsqlite3-backed config below. pdns_sync's busy-loop (Connection
+    # refused against the API, forever) traced back to this: the API was
+    # never enabled because pdns.service was never told to load the config
+    # that enables it. ExecStart as a two-item list clears the packaged
+    # unit's own ExecStart= (systemd's documented idiom for overriding
+    # rather than appending) before setting the real one.
+    "systemd_pdns_override": {
+        "Service": {
+            "ExecStart": [
+                "",
+                "/usr/sbin/pdns_server --guardian=no --daemon=no --disable-syslog "
+                "--log-timestamp=no --write-pid=no --config-dir=/opt/hams/etc "
+                "--config-name=gsqlite3",
+            ],
+        },
+    },
 }
 
 
@@ -3640,17 +3719,30 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
 
 
 # [@ANCHOR: infrastructure:provision_systemd_override]
-def provision_systemd_override(run_cmd_func, env_vars, environment="prod", dest_dir=""):
+def provision_systemd_override(
+    run_cmd_func,
+    env_vars,
+    environment="prod",
+    dest_dir="",
+    manifest_key="systemd_odoo_override",
+    unit_name="odoo",
+):
+    """Writes a systemd drop-in override for `<unit_name>.service` from
+    `MANIFEST[manifest_key]`. Defaults match this function's original,
+    odoo-only behavior exactly -- generalized (2026-09-22) to also cover
+    pdns.service's own override (see systemd_pdns_override's comment for
+    why that one exists) rather than duplicating this whole function for
+    one more unit."""
     if environment not in ["prod", "test"]:
         return
-    override_data = MANIFEST.get("systemd_odoo_override")
+    override_data = MANIFEST.get(manifest_key)
     if not override_data:
         return
 
     override_dir = (
-        os.path.join(dest_dir, "etc/systemd/system/odoo.service.d".lstrip("/"))
+        os.path.join(dest_dir, f"etc/systemd/system/{unit_name}.service.d".lstrip("/"))
         if dest_dir
-        else "/etc/systemd/system/odoo.service.d"
+        else f"/etc/systemd/system/{unit_name}.service.d"
     )
     os.makedirs(override_dir, exist_ok=True)
     override_file = os.path.join(override_dir, "override.conf")
@@ -4772,6 +4864,10 @@ def provision_environment(
 
         provision_systemd_override(run_cmd_func, env_vars, environment="prod")
         provision_systemd_override(run_cmd_func, env_vars, environment="test")
+        provision_systemd_override(
+            run_cmd_func, env_vars, environment="prod",
+            manifest_key="systemd_pdns_override", unit_name="pdns",
+        )
 
         try:
             run_cmd_func(["usermod", "-a", "-G", "hams_com", "odoo"])

@@ -286,6 +286,51 @@ class HookGenerateSslTests(_TmpDirTestCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "lotw_root.pem")))
 
 
+class HookCreatePdnsSqliteSchemaTests(_TmpDirTestCase):
+    def test_creates_schema_via_sqlite3_stdin_when_no_db_exists_yet(self):
+        db_path = os.path.join(self.tmp, "pdns.sqlite3")
+        schema_path = os.path.join(self.tmp, "schema.sqlite3.sql")
+        with open(schema_path, "w") as f:
+            f.write("CREATE TABLE domains (id INTEGER);")
+        self.safe_patch(
+            "infrastructure.os.path.exists",
+            side_effect=lambda p: p in (schema_path,),
+        )
+        self.safe_patch("infrastructure._PDNS_SQLITE_SCHEMA_PATH", schema_path)
+        self.safe_patch("infrastructure.apply_permissions")
+        mock_run = MagicMock()
+        infra.hook_create_pdns_sqlite_schema({}, "", self.tmp, mock_run)
+
+        mock_run.assert_called_once()
+        (cmd,), kwargs = mock_run.call_args
+        self.assertEqual(cmd, ["sqlite3", db_path])
+        self.assertIn("stdin", kwargs)
+        infra.apply_permissions.assert_called_once_with(db_path, "pdns:pdns", 0o664)
+
+    def test_does_nothing_when_the_database_already_exists(self):
+        db_path = os.path.join(self.tmp, "pdns.sqlite3")
+        with open(db_path, "w") as f:
+            f.write("existing db")
+        mock_run = MagicMock()
+        infra.hook_create_pdns_sqlite_schema({}, "", self.tmp, mock_run)
+        mock_run.assert_not_called()
+
+    def test_missing_packaged_schema_file_is_a_recorded_failure_not_a_raise(self):
+        # A path that genuinely doesn't exist, rather than trusting this
+        # box's own real pdns-backend-sqlite3 install state (which does
+        # have the real schema file, so patching only os.path.exists
+        # would still resolve the real _PDNS_SQLITE_SCHEMA_PATH to True).
+        self.safe_patch(
+            "infrastructure._PDNS_SQLITE_SCHEMA_PATH",
+            os.path.join(self.tmp, "does-not-exist.sql"),
+        )
+        mock_run = MagicMock()
+        infra.hook_create_pdns_sqlite_schema({}, "", self.tmp, mock_run)  # must not raise
+        mock_run.assert_not_called()
+        names = [name for name, _ in infra.get_hook_failures()]
+        self.assertIn("hook_create_pdns_sqlite_schema", names)
+
+
 class HookClearPycacheTests(_TmpDirTestCase):
     def test_removes_every_entry_under_the_pycache_dir(self):
         pycache = os.path.join(self.tmp, "pycache")
@@ -748,6 +793,39 @@ class ProvisionSystemdOverrideTests(_TmpDirTestCase):
 
         self.assertEqual(mode_during_write, 0o644)
         self.assertEqual(os.stat(override_file).st_mode & 0o777, 0o644)
+
+    def test_pdns_override_writes_to_its_own_unit_dir_with_cleared_execstart(self):
+        # Generalized 2026-09-22 to also cover pdns.service (see
+        # systemd_pdns_override's own comment) -- this pins that the
+        # manifest_key/unit_name parameters actually route to a distinct
+        # file, and that ExecStart's two-item list produces the
+        # clear-then-set idiom systemd requires to override rather than
+        # append to a packaged unit's own ExecStart=.
+        infra.provision_systemd_override(
+            MagicMock(),
+            {},
+            environment="prod",
+            dest_dir=self.tmp,
+            manifest_key="systemd_pdns_override",
+            unit_name="pdns",
+        )
+        override_file = os.path.join(
+            self.tmp, "etc/systemd/system/pdns.service.d/override.conf"
+        )
+        self.assertTrue(os.path.exists(override_file))
+        with open(override_file) as f:
+            content = f.read()
+        lines = content.splitlines()
+        self.assertIn("[Service]", lines)
+        execstart_lines = [ln for ln in lines if ln.startswith("ExecStart=")]
+        self.assertEqual(execstart_lines[0], "ExecStart=")
+        self.assertIn("--config-name=gsqlite3", execstart_lines[1])
+        # The odoo override must be untouched by this call.
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(self.tmp, "etc/systemd/system/odoo.service.d/override.conf")
+            )
+        )
 
 
 class ProvisionModeEnvFileTests(_TmpDirTestCase):
