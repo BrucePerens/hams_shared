@@ -90,27 +90,33 @@ def check_smtp():
 
 
 def check_gemini():
-    # Bruce, 2026-09-22: AI features now reach Gemini through an MCP
-    # server/interface rather than this process calling
-    # generativelanguage.googleapis.com directly with a GEMINI_API_KEY, so
-    # a direct HTTP key-verification check here no longer reflects how the
-    # deployment actually works -- it was failing on every startup
-    # (env_validator's own "GEMINI WARNING" noise) purely because the key
-    # this check verified was never meant to still be live. Two runtime
-    # modules (ham_onboarding/models/res_users_verification.py,
-    # ham_repeater_dir/models/ham_repeater_import.py) still read
-    # GEMINI_API_KEY directly for their own AI calls as of this change --
-    # migrating those to the MCP path is a separate, larger change this
-    # commit does not make; this function only stops validating a startup
-    # precondition that no longer applies.
+    # Bruce, 2026-09-22 (corrected from an earlier, wrong "MCP" description
+    # in this same comment once the real mechanism was confirmed): AI
+    # features are moving to shelling out to the Antigravity CLI (`agy`,
+    # a subprocess invocation over stdin/stdout, logged in under the
+    # flat-rate `ai` account -- see agents/skills/avoiding-api-costs/
+    # SKILL.md's Pattern A and ham_repeater_dir/models/
+    # ham_repeater_import.py's AGY_COMMAND for the established shape)
+    # rather than calling generativelanguage.googleapis.com directly with
+    # a GEMINI_API_KEY. A direct HTTP key-verification check here no
+    # longer reflects how the deployment is meant to work -- it was
+    # failing on every startup (env_validator's own "GEMINI WARNING"
+    # noise) purely because the key this check verified is being retired,
+    # not because it rotted. Two runtime modules still read GEMINI_API_KEY
+    # directly for their own AI calls as of this change --
+    # ham_repeater_dir/models/ham_repeater_import.py is mid-migration to
+    # agy as of this same date; ham_onboarding/models/
+    # res_users_verification.py has not started yet. Migrating either is a
+    # separate, larger change this commit does not make; this function
+    # only stops validating a startup precondition that no longer applies.
     if os.environ.get("GEMINI_API_KEY"):
         print_warning(
             "GEMINI",
             "GEMINI_API_KEY is set but is no longer how this deployment reaches "
-            "Gemini (AI features route through an MCP interface now). Startup no "
-            "longer verifies this key; if it's still referenced by "
-            "res_users_verification.py or ham_repeater_import.py, migrating those "
-            "call sites to the MCP path is tracked separately.",
+            "Gemini (AI features are moving to the Antigravity CLI, agy, run as a "
+            "subprocess). Startup no longer verifies this key; if it's still "
+            "referenced by res_users_verification.py or ham_repeater_import.py, "
+            "migrating those call sites to agy is tracked separately.",
         )
 
 
