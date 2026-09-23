@@ -3507,6 +3507,27 @@ WantedBy=multi-user.target
             "debian_name": "python3-markdown",
             "environments": ["early_prod"],
         },
+        # daemons/gdpr_csv_export/main.py imports zipstream and calls
+        # zipstream.ZipStream(...) -- that name is only ever provided by the
+        # "zipstream-ng" distribution. Debian's OTHER, unrelated "zipstream"
+        # package (python3-zipstream, an old "python-zipstream" by a
+        # different author) installs into the exact same top-level import
+        # path with a completely different, older API (zipstream.ZipFile,
+        # no ZipStream at all) -- real bug found live on hams1, 2026-09-23:
+        # whichever prior provisioning step installed python3-zipstream by
+        # hand (never through this manifest -- neither package was ever
+        # listed here) shadowed the real dependency, so every GDPR zip
+        # export request crashed with AttributeError, 100% of the time,
+        # with zero test coverage catching it (see
+        # daemons/gdpr_csv_export/test_main.py's new
+        # TestConsumeAndExportCallShape for the sibling bug found in the
+        # same request path). python3-zipstream must never be installed
+        # alongside this one.
+        {
+            "name": "python3-zipstream-ng",
+            "debian_name": "python3-zipstream-ng",
+            "environments": ["early_prod"],
+        },
     ],
     "env_defaults": {
         "DB_PORT": "5432",
