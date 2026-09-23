@@ -959,7 +959,11 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool/adif_queue
+# /opt/hams/failed_input added 2026-09-23: main.py's save_failed_payload() writes a
+# diagnostic metadata JSON file there for any job it can't process -- found live,
+# itself failing with "Read-only file system" while handling an unrelated real
+# failure, masking that failure's own error behind a second one.
+ReadWritePaths=/opt/hams/spool/adif_queue /opt/hams/failed_input
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/adif_processor
@@ -970,8 +974,15 @@ EnvironmentFile=-/opt/hams/etc/redis.env
 EnvironmentFile=-/opt/hams/etc/rabbitmq.env
 EnvironmentFile=-/opt/hams/etc/pdns.env
 EnvironmentFile=-/opt/hams/etc/odoo.env
-Environment="ODOO_USER=logbook_api_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/logbook_api_service_internal.key"
+# Found live on hams1, 2026-09-23: this unit was reading logbook_api_service_internal, the
+# read-only public-API proxy account (ham_logbook.user_logbook_api_service) -- the same
+# wrong-account mistake documented in ham_init/hooks.py's own comment on the retired
+# lotw_eqsl_sync daemon. process_job() here writes ham.adif.queue.state and creates
+# ham.qso records, both of which are hardcoded to require
+# ham_logbook.user_logbook_sync_service specifically; every job failed with "You are not
+# allowed to modify 'ADIF Processing Queue' records" and stayed pending forever.
+Environment="ODOO_USER=logbook_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/logbook_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -3527,7 +3538,18 @@ WantedBy=multi-user.target
             "ReadWritePaths": [
                 "/opt/hams/etc/keys",
                 "/var/lib/odoo",
-                "/var/log/odoo"
+                "/var/log/odoo",
+                # Found live on hams1, 2026-09-23: ADIF log uploads (ham_logbook's
+                # web_adif_upload(), a real member-facing feature, not a daemon)
+                # spool directly to /opt/hams/spool/adif_uploads from inside the
+                # main odoo.service process itself, but that path was never added
+                # here -- every one of this project's OTHER systemd units already
+                # grants itself "/opt/hams/spool /opt/hams/downloads", but odoo.service
+                # is the one process that actually needs to write an ADIF upload
+                # there and was the one unit missing it. Confirmed live: every
+                # upload attempt failed with "Read-only file system" until this was
+                # added.
+                "/opt/hams/spool",
             ],
             "PrivateTmp": "true",
             "PrivateDevices": "true",
