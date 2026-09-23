@@ -1327,7 +1327,16 @@ def resolve_repo_layout(base_dir):
     if os.path.isfile(git_file):
         try:
             result = subprocess.run(
-                ["git", "-C", base_dir, "rev-parse", "--git-common-dir"],
+                # Bug fix (night-watch, 2026-09-22, see hams_com's own
+                # night_shift_todo/high/worktree-test-py-cannot-resolve-zero-sudo-addon-b9f496a7.md
+                # for the full trace): a linked worktree's `.git` is a FILE, not a directory, and
+                # git's ownership-safety check treats that differently from a plain repo -- this
+                # call was failing with "detected dubious ownership" for every worktree run as
+                # `odoo` (whose global git config has no safe.directory entries), silently caught
+                # by the except below and falling through to the plain-clone path, which is wrong
+                # for a worktree. `-c safe.directory=<base_dir>` scopes the exception to just this
+                # one subprocess call, with no standing config mutation on the `odoo` account.
+                ["git", "-c", f"safe.directory={base_dir}", "-C", base_dir, "rev-parse", "--git-common-dir"],
                 capture_output=True,
                 text=True,
                 check=True,

@@ -267,6 +267,54 @@ class ResolveRepoLayoutTests(unittest.TestCase):
         self.assertEqual(parent_dir, os.path.abspath(os.path.join(self.tmp, "..")))
         self.assertTrue(any(self.tmp in msg for msg in cm.output))
 
+    def test_the_git_rev_parse_call_scopes_safe_directory_to_the_worktree(self):
+        # Real bug found live, 2026-09-22/23 (night_shift_todo/high/
+        # worktree-test-py-cannot-resolve-zero-sudo-addon-b9f496a7.md): a linked worktree's
+        # .git is a FILE, not a directory, and git's own ownership-safety check rejects it
+        # for an account (odoo, here) with no matching safe.directory entry in its global
+        # git config -- "detected dubious ownership", caught by the except below and
+        # silently falling back to the plain-clone layout, which is wrong for a worktree.
+        # Confirmed live against a real worktree that `-c safe.directory=<base_dir>` on this
+        # one subprocess call fixes it with no standing config mutation. This test doesn't
+        # reproduce the actual cross-account ownership mismatch (this process already owns
+        # its own tmpdir), but does assert the real subprocess call always carries the flag,
+        # so a future edit can't silently drop it and reintroduce the bug for every worktree
+        # run as odoo again.
+        captured_cmd = []
+        real_run = _test_runner.subprocess.run
+
+        def spy_run(cmd, **kwargs):
+            captured_cmd.append(cmd)
+            return real_run(cmd, **kwargs)
+
+        with patch.object(_test_runner.subprocess, "run", side_effect=spy_run):
+            _test_runner.resolve_repo_layout(self.tmp)
+        self.assertEqual(len(captured_cmd), 1)
+        self.assertIn(f"safe.directory={self.tmp}", captured_cmd[0])
+
+    def test_a_real_linked_worktree_resolves_to_the_main_checkout(self):
+        # Companion to the mock-based test above: a genuine `git worktree add`, not a fake
+        # .git file, exercising resolve_repo_layout() end to end against real git behavior
+        # (including the safe.directory-scoped rev-parse call actually succeeding).
+        main_repo = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(main_repo, ignore_errors=True))
+        run = _test_runner.subprocess.run
+        run(["git", "init", "-q", main_repo], check=True)
+        run(["git", "-C", main_repo, "config", "user.email", "test@example.com"], check=True)
+        run(["git", "-C", main_repo, "config", "user.name", "Test"], check=True)
+        with open(os.path.join(main_repo, "README.md"), "w") as f:
+            f.write("placeholder\n")
+        run(["git", "-C", main_repo, "add", "README.md"], check=True)
+        run(["git", "-C", main_repo, "commit", "-q", "-m", "initial"], check=True)
+
+        worktree_dir = os.path.join(self.tmp, "linked_worktree")
+        run(["git", "-C", main_repo, "worktree", "add", "-q", worktree_dir], check=True)
+        self.addCleanup(lambda: run(["git", "-C", main_repo, "worktree", "remove", "-f", worktree_dir], check=False))
+
+        parent_dir, repo_root = _test_runner.resolve_repo_layout(worktree_dir)
+        self.assertEqual(repo_root, main_repo)
+        self.assertEqual(parent_dir, os.path.abspath(os.path.join(main_repo, "..")))
+
 
 class FailureExtractorAttributeGuardTests(unittest.TestCase):
     """hams_shared/tools/ 326-finding discovery, 2026-09-12 (CRITICAL AI LAZINESS:
