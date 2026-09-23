@@ -2654,7 +2654,7 @@ WantedBy=multi-user.target
             "path": "/opt/hams/systemd/ised.canada.sync.service",
             "content": """\
 [Unit]
-Description=Ham Radio ISED Canada Callbook Sync Daemon
+Description=Ham Radio ISED Canada Callbook Sync (One-Shot)
 After=network.target
 
 [Service]
@@ -2667,7 +2667,7 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 ReadWritePaths=/opt/hams/spool /opt/hams/downloads
-Type=simple
+Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/ised_canada_sync
 
@@ -2685,14 +2685,27 @@ Environment="DAEMON_ARGS="
 # Execution via system Python
 ExecStart=/usr/bin/python3 /opt/hams/daemons/ised_canada_sync/main.py $DAEMON_ARGS
 
-Restart=always
-RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=ised.canada.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/ised.canada.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio ISED Canada Callbook Sync Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
