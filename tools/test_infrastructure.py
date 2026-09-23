@@ -1364,6 +1364,48 @@ class SplitModulesByInstallStateTests(unittest.TestCase):
         self.assertEqual(to_update, ["ham_base", "ham_communications_consent"])
 
 
+class DiscoverHamsComDirTests(_TmpDirTestCase):
+    """Regression test for a real production incident, 2026-09-23: fixing
+    provision.py's own repo_root computation (a separate, earlier fix)
+    exposed this function's own ambiguity, since hams_open has its own,
+    unrelated top-level daemons/ directory -- the exact real
+    /opt/hams/src/{hams_com,hams_open} sibling layout is reproduced here
+    directly, not simplified away, since that's precisely what the bug
+    depended on."""
+
+    def _make_hams_open(self, with_daemons=True):
+        hams_open = os.path.join(self.tmp, "hams_open")
+        if with_daemons:
+            os.makedirs(os.path.join(hams_open, "daemons"))
+        else:
+            os.makedirs(hams_open)
+        return hams_open
+
+    def _make_sibling_hams_com(self):
+        hams_com = os.path.join(self.tmp, "hams_com")
+        os.makedirs(os.path.join(hams_com, "ham_base"))
+        with open(os.path.join(hams_com, "ham_base", "__manifest__.py"), "w") as f:
+            f.write("{}")
+        return hams_com
+
+    def test_finds_the_real_sibling_hams_com_even_though_hams_open_has_its_own_daemons_dir(self):
+        hams_open = self._make_hams_open(with_daemons=True)
+        hams_com = self._make_sibling_hams_com()
+        self.assertEqual(infra._discover_hams_com_dir(hams_open), os.path.abspath(hams_com))
+
+    def test_returns_repo_root_itself_when_it_really_is_hams_com(self):
+        # The /app-style single-repo layout: repo_root IS hams_com.
+        repo_root = os.path.join(self.tmp, "app")
+        os.makedirs(os.path.join(repo_root, "ham_base"))
+        with open(os.path.join(repo_root, "ham_base", "__manifest__.py"), "w") as f:
+            f.write("{}")
+        self.assertEqual(infra._discover_hams_com_dir(repo_root), os.path.abspath(repo_root))
+
+    def test_returns_none_when_hams_com_cannot_be_found_anywhere(self):
+        hams_open = self._make_hams_open(with_daemons=True)
+        self.assertIsNone(infra._discover_hams_com_dir(hams_open))
+
+
 class RefuseUnsafeTestDbDropTests(unittest.TestCase):
     def test_refuses_to_drop_the_well_known_prod_db_name(self):
         # Regression test for a real destructive-operation bug:

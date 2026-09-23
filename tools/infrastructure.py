@@ -4844,6 +4844,38 @@ def _refuse_if_unsafe_test_db_drop(db_name):
         )
 
 
+# [@ANCHOR: infrastructure:_discover_hams_com_dir]
+# Verified by [@ANCHOR: test_discover_hams_com_dir_disambiguates_from_hams_open]
+def _discover_hams_com_dir(repo_root):
+    """Finds hams_com's own directory relative to repo_root (hams_open's own
+    root). Bug-hunt fix (2026-09-23, found live on hams1 immediately after
+    fixing provision.py's own repo_root computation): every branch here used
+    to check for a bare "daemons" subdirectory as the signal for "this path
+    IS hams_com" -- but hams_open has its own, completely unrelated
+    top-level daemons/ directory too, so once repo_root correctly pointed at
+    hams_open's own root, the FIRST branch matched hams_open against itself
+    and never fell through to the real, sibling hams_com directory at all --
+    has_hams_com came back False, ham_com (and everything depending on it,
+    including a real module upgrade a real release needed) never loaded, and
+    the addons_path written to /etc/odoo/odoo.conf silently ended up with
+    hams_open listed twice and hams_com missing entirely.
+    ham_base/__manifest__.py is a real, specific signal only hams_com itself
+    has (matching this function's own prior has_hams_com validation step,
+    now folded directly into the discovery instead of only catching the
+    wrong answer after the fact) -- checking it directly in every branch
+    removes the ambiguity "daemons" had."""
+    candidates = [
+        repo_root,
+        os.path.join(repo_root, "..", "hams_com"),
+        os.path.join(repo_root, "..", "..", "hams_com"),
+        "/hams_com",
+    ]
+    for candidate in candidates:
+        if os.path.exists(os.path.join(candidate, "ham_base", "__manifest__.py")):
+            return os.path.abspath(candidate)
+    return None
+
+
 def provision_environment(
     run_cmd_func,
     env_vars,
@@ -4863,21 +4895,9 @@ def provision_environment(
 
     load_and_prompt_env(env_vars, is_test)
 
-    hams_com_dir = None
+    hams_com_dir = _discover_hams_com_dir(repo_root)
     hams_community_dir = None
-
-    if os.path.exists(os.path.join(repo_root, "daemons")):
-        hams_com_dir = repo_root
-    elif os.path.exists(os.path.join(repo_root, "..", "hams_com", "daemons")):
-        hams_com_dir = os.path.abspath(os.path.join(repo_root, "..", "hams_com"))
-    elif os.path.exists(os.path.join(repo_root, "..", "..", "hams_com", "daemons")):
-        hams_com_dir = os.path.abspath(os.path.join(repo_root, "..", "..", "hams_com"))
-    elif os.path.exists("/hams_com/daemons"):
-        hams_com_dir = "/hams_com"
-        
-    has_hams_com = False
-    if hams_com_dir:
-        has_hams_com = os.path.exists(os.path.join(hams_com_dir, "ham_base", "__manifest__.py"))
+    has_hams_com = bool(hams_com_dir)
 
     if os.path.exists(os.path.join(repo_root, "hams_shared")):
         hams_community_dir = repo_root
