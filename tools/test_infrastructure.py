@@ -1267,6 +1267,83 @@ class DatabaseExistsAndOwnerTests(_SafePatchTestCase):
         self.assertEqual(cmd[cmd.index("-v") + 1], f"db_name={malicious_name}")
 
 
+class GetInstalledModuleNamesTests(_SafePatchTestCase):
+    def test_returns_empty_set_when_the_database_does_not_exist(self):
+        self.safe_patch_object(infra, "_database_exists", return_value=False)
+        mock_run = self.safe_patch_object(infra.subprocess, "run")
+        self.assertEqual(infra._get_installed_module_names("hams_test"), set())
+        mock_run.assert_not_called()
+
+    def test_parses_one_module_name_per_line_from_a_real_query_result(self):
+        self.safe_patch_object(infra, "_database_exists", return_value=True)
+        self.safe_patch_object(
+            infra.subprocess, "run",
+            return_value=MagicMock(returncode=0, stdout="ham_base\nham_logbook\n\n", stderr=""),
+        )
+        result = infra._get_installed_module_names("hams_prod")
+        self.assertEqual(result, {"ham_base", "ham_logbook"})
+
+    def test_a_fresh_database_with_no_ir_module_module_table_yet_returns_empty_set(self):
+        # A genuinely fresh database (created but never initialized) has no
+        # ir_module_module table at all -- the query itself fails with
+        # "relation ... does not exist", which must be read as "nothing
+        # installed yet" (matching this function's pre-existing behavior
+        # for a fresh database), not surfaced as a warning/error.
+        self.safe_patch_object(infra, "_database_exists", return_value=True)
+        self.safe_patch_object(
+            infra.subprocess, "run",
+            return_value=MagicMock(
+                returncode=1, stdout="",
+                stderr='ERROR:  relation "ir_module_module" does not exist',
+            ),
+        )
+        mock_warning = self.safe_patch_object(infra._logger, "warning")
+        result = infra._get_installed_module_names("hams_test")
+        self.assertEqual(result, set())
+        mock_warning.assert_not_called()
+
+    def test_an_unexpected_query_failure_is_logged_not_silently_swallowed(self):
+        self.safe_patch_object(infra, "_database_exists", return_value=True)
+        self.safe_patch_object(
+            infra.subprocess, "run",
+            return_value=MagicMock(returncode=1, stdout="", stderr="FATAL: connection refused"),
+        )
+        with self.assertLogs("infrastructure", level="WARNING") as log_ctx:
+            result = infra._get_installed_module_names("hams_prod")
+        self.assertEqual(result, set())
+        self.assertTrue(
+            any("Could not read ir_module_module" in msg for msg in log_ctx.output)
+        )
+
+
+class SplitModulesByInstallStateTests(unittest.TestCase):
+    def test_a_module_not_yet_installed_goes_to_install(self):
+        to_install, to_update = infra._split_modules_by_install_state(
+            {"ham_base"}, installed_modules=set()
+        )
+        self.assertEqual(to_install, ["ham_base"])
+        self.assertEqual(to_update, [])
+
+    def test_an_already_installed_module_goes_to_update_not_install(self):
+        # This is the real bug the split exists to fix: a module already
+        # 'installed' passed to `-i` again is a no-op in Odoo, so it must
+        # route to `-u` instead to actually pick up a later change.
+        to_install, to_update = infra._split_modules_by_install_state(
+            {"ham_communications_consent"},
+            installed_modules={"ham_communications_consent"},
+        )
+        self.assertEqual(to_install, [])
+        self.assertEqual(to_update, ["ham_communications_consent"])
+
+    def test_a_mix_of_new_and_already_installed_modules_splits_correctly(self):
+        to_install, to_update = infra._split_modules_by_install_state(
+            {"ham_base", "ham_communications_consent", "ham_new_module"},
+            installed_modules={"ham_base", "ham_communications_consent"},
+        )
+        self.assertEqual(to_install, ["ham_new_module"])
+        self.assertEqual(to_update, ["ham_base", "ham_communications_consent"])
+
+
 class RefuseUnsafeTestDbDropTests(unittest.TestCase):
     def test_refuses_to_drop_the_well_known_prod_db_name(self):
         # Regression test for a real destructive-operation bug:
@@ -1285,6 +1362,15 @@ class RefuseUnsafeTestDbDropTests(unittest.TestCase):
 
 
 class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
+    def setUp(self):
+        # _get_installed_module_names() queries the real database via a
+        # real subprocess.run() (psql) -- default it to "nothing installed"
+        # (the -i/-u split's original, pre-split behavior: everything goes
+        # to -i) for every test in this class so none of them accidentally
+        # shells out for real. Tests below that specifically exercise the
+        # split override this per-test.
+        self.safe_patch_object(infra, "_get_installed_module_names", return_value=set())
+
     def _run_with_dirs(self, hams_open_dir, hams_com_dir, run_cmd):
         self.safe_patch_object(infra.os, "listdir", return_value=["ham_base"])
         # Force at least one "module" so the function doesn't bail out
@@ -1377,6 +1463,44 @@ class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
         infra.initialize_odoo_database(run_cmd, "/a", "/b")
         install = [c.args[0] for c in run_cmd.call_args_list if "--stop-after-init" in c.args[0]][0]
         self.assertEqual(install[install.index("-d") + 1], "hams_test")
+
+    def test_an_already_installed_custom_module_gets_dash_u_not_a_no_op_dash_i(self):
+        # The real bug this whole split exists to fix, exercised end to end
+        # through initialize_odoo_database itself (not just the pure split
+        # helper above): a module the target database already has installed
+        # -- exactly hams_prod's own situation for ham_communications_consent
+        # after Phase 1 -- must reach the actual `odoo` command via `-u`, or a
+        # later change to that module (new fields, new models) would never
+        # apply to a real, already-provisioned database.
+        run_cmd = MagicMock()
+        self.safe_patch_object(
+            infra, "_get_installed_module_names",
+            return_value={"ham_communications_consent"},
+        )
+        self.safe_patch_object(
+            infra.os, "listdir",
+            return_value=["ham_base", "ham_communications_consent"],
+        )
+        self.safe_patch_object(
+            infra.os.path, "exists",
+            side_effect=lambda p: p.endswith("__manifest__.py") or p in ("/a", "/b"),
+        )
+        self.safe_patch_object(infra.os.path, "isdir", return_value=True)
+        infra.initialize_odoo_database(run_cmd, "/a", "/b", db_name="hams_prod")
+
+        install = [c.args[0] for c in run_cmd.call_args_list if "--stop-after-init" in c.args[0]][0]
+        install_value = install[install.index("-i") + 1]
+        # base and the never-before-installed ham_base go to -i; the
+        # already-installed ham_communications_consent must NOT be in there.
+        self.assertIn("base", install_value.split(","))
+        self.assertIn("ham_base", install_value.split(","))
+        self.assertNotIn("ham_communications_consent", install_value.split(","))
+        # "-u" also appears earlier as part of "sudo -u odoo"; the module-update
+        # flag is the one after "-d", so search from there.
+        after_d = install.index("-d")
+        self.assertIn("-u", install[after_d:])
+        update_idx = after_d + install[after_d:].index("-u")
+        self.assertEqual(install[update_idx + 1], "ham_communications_consent")
 
 
 class RustToolchainPackageTests(unittest.TestCase):

@@ -3912,8 +3912,29 @@ def initialize_odoo_database(
         _logger.info("No custom modules found to initialize.")
         return
 
-    mod_string = "base," + ",".join(modules)
+    # [@ANCHOR: infrastructure:initialize_odoo_database_install_vs_update_split]
+    # Bruce's own instruction, 2026-09-23: this function must be safe to re-run
+    # against an existing, populated database to pick up new module changes, not
+    # just to provision one from scratch. Before this split existed, every
+    # discovered module -- including ones already 'installed' from a prior run --
+    # was passed to `-i` unconditionally. Odoo's `-i` on a module already in
+    # 'installed' state is a no-op (it does not re-run that module's own upgrade
+    # logic), so a real, live database like hams_prod would silently never pick
+    # up a later change to a module it already had -- a new field, a new model, a
+    # new data file -- while a *fresh* database (nothing installed yet) would
+    # still work correctly, since everything there legitimately needs `-i`. Split
+    # the discovered modules by their actual current state in db_name and route
+    # each into the right flag: `-i` for a module not yet installed (unchanged
+    # behavior), `-u` for one that already is (the one that was missing).
+    installed_modules = _get_installed_module_names(db_name)
+    to_install, to_update = _split_modules_by_install_state(modules, installed_modules)
+    mod_string = "base," + ",".join(sorted(modules))
     _logger.info("Initializing modules: %s", mod_string)
+    _logger.info(
+        "[*] Split by current state in %s: %d to install (%s), %d to update (%s)",
+        db_name, len(to_install), ",".join(to_install) or "none",
+        len(to_update), ",".join(to_update) or "none",
+    )
 
     addons_path_str = ",".join(filter(None, [
         "/usr/lib/python3/dist-packages/odoo/addons",
@@ -3954,11 +3975,19 @@ def initialize_odoo_database(
     except Exception as e:  # audit-ignore-catch-all: best-effort stop before init (e.g. service already stopped/not installed yet on a fresh box); logged and initialization proceeds regardless.
         _logger.warning("Failed to stop odoo.service before init: %s", e)
 
+    # base always goes through -i (a no-op once it's already installed, which it
+    # always is on any real database) -- unchanged from this function's prior,
+    # single-flag behavior; only the *custom* modules found above are split.
+    install_string = "base," + (",".join(to_install) if to_install else "")
     cmd = [
         "sudo", "-u", "odoo", "odoo",
         "-c", "/etc/odoo/odoo.conf",
         "-d", db_name,
-        "-i", mod_string,
+        "-i", install_string,
+    ]
+    if to_update:
+        cmd += ["-u", ",".join(to_update)]
+    cmd += [
         "--stop-after-init",
         "--without-demo=all",
         "--workers=0",
@@ -4576,6 +4605,76 @@ def _database_exists(db_name):
 def _create_database_if_missing(run_cmd_func, db_name):
     if not _database_exists(db_name):
         run_cmd_func(["sudo", "-u", "postgres", "createdb", "-O", "odoo", db_name])
+
+
+# [@ANCHOR: infrastructure:_get_installed_module_names]
+def _get_installed_module_names(db_name):
+    """
+    Returns the set of module technical names currently in Odoo's own
+    'installed' state in db_name, read directly from ir_module_module via
+    the same non-shell, stdin-piped psql pattern _database_exists uses
+    (see its own docstring for why -c/-tAc's :'var' substitution is
+    avoided). This is what initialize_odoo_database() below uses to decide
+    which already-installed modules need `-u` (upgrade -- picks up new
+    fields/models/data files on a module that's already there) instead of
+    `-i` (install -- a no-op for a module Odoo already considers
+    'installed', so it would silently never apply a later change to an
+    already-shipped module against a database that already has it).
+
+    On a genuinely fresh database (ir_module_module doesn't exist yet, or
+    the database itself doesn't exist), returns an empty set -- correctly
+    treating every discovered module as needing `-i`, matching this
+    function's only prior behavior before this distinction existed.
+    """
+    if not _database_exists(db_name):
+        return set()
+    res = subprocess.run(
+        [
+            "sudo", "-u", "postgres", "psql",
+            "-d", db_name,
+            "-tA",
+        ],
+        input="SELECT name FROM ir_module_module WHERE state = 'installed';\n",
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        # A fresh database has no ir_module_module table at all yet (the
+        # query itself fails with "relation does not exist") -- that's
+        # exactly the "nothing is installed" case, not an error worth
+        # surfacing; anything else is logged so it isn't silently masked.
+        if "does not exist" not in res.stderr:
+            _logger.warning(
+                "[*] Could not read ir_module_module from %s (%s) -- "
+                "treating as no modules installed.",
+                db_name, res.stderr.strip(),
+            )
+        return set()
+    return {line.strip() for line in res.stdout.splitlines() if line.strip()}
+
+
+# [@ANCHOR: infrastructure:_split_modules_by_install_state]
+# Verified by [@ANCHOR: test_split_modules_by_install_state]
+def _split_modules_by_install_state(modules, installed_modules):
+    """
+    Pure split of `modules` (every custom module directory discovered on
+    disk) into (to_install, to_update) using `installed_modules` (the set
+    already in Odoo's 'installed' state, from _get_installed_module_names)
+    -- a module not yet installed needs `-i`; one that already is needs
+    `-u` to actually pick up anything new about it (see
+    initialize_odoo_database's own comment on this split for the full
+    reasoning). Kept as its own small, pure function, deliberately not
+    inlined into initialize_odoo_database, so it can be unit-tested
+    directly without mocking that function's own much larger,
+    host-dependent scope (odoo.conf rewriting, systemctl, subprocess) --
+    matching this file's own established split between "genuinely
+    destructive/host-dependent, not unit-tested" and "smaller,
+    self-contained, real logic" (see this module's own test file docstring).
+    """
+    return (
+        sorted(m for m in modules if m not in installed_modules),
+        sorted(m for m in modules if m in installed_modules),
+    )
 
 
 # [@ANCHOR: infrastructure:_alter_database_owner_to_odoo]
