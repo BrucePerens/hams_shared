@@ -732,6 +732,32 @@ MANIFEST = {
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
+        {
+            # Moved here from "static_files" (bug found live on hams1,
+            # 2026-09-23, mid-release: this entry has no content/src/url --
+            # it exists purely for its post_provision_hooks, and belongs in
+            # "directories", the list execute_hooks() actually iterates for
+            # exactly that case (see execute_hooks' own for-loop). Sitting in
+            # "static_files" instead meant provision_static_files() tried to
+            # treat its bare path as a file to write content into, crashing
+            # with IsADirectoryError the moment /var/lib/powerdns already
+            # existed as a real directory (which it always does in
+            # practice -- see the comment below on why). Created by the
+            # pdns-server/pdns-backend-sqlite3 packages' postinst, so this
+            # entry doesn't create the directory itself -- only its
+            # post_provision_hooks. Found live on hams1, 2026-09-22: nothing
+            # in this codebase ever created pdns.sqlite3 (the main instance's
+            # gsqlite3 database, distinct from the callbook one below), so
+            # pdns.service could bind port 53 but its REST API returned 404
+            # for every zone -- no database existed for it to have created
+            # any zone in.
+            "path": "/var/lib/powerdns",
+            "owner": "pdns:pdns",
+            "provision_mode": "755",
+            "runtime_mount": "rw",
+            "environments": ["prod"],
+            "post_provision_hooks": [hook_create_pdns_sqlite_schema],
+        },
     ],
     "env_groups": {
         "db.env": [
@@ -2480,22 +2506,6 @@ loglevel=4
             "owner": "pdns:pdns",
             "mode": "640",
             "environments": ["prod"],
-        },
-        {
-            # Created by the pdns-server/pdns-backend-sqlite3 packages'
-            # postinst, so this entry doesn't create the directory itself --
-            # only its post_provision_hooks. Found live on hams1,
-            # 2026-09-22: nothing in this codebase ever created
-            # pdns.sqlite3 (the main instance's gsqlite3 database, distinct
-            # from the callbook one below), so pdns.service could bind
-            # port 53 but its REST API returned 404 for every zone -- no
-            # database existed for it to have created any zone in.
-            "path": "/var/lib/powerdns",
-            "owner": "pdns:pdns",
-            "provision_mode": "755",
-            "runtime_mount": "rw",
-            "environments": ["prod"],
-            "post_provision_hooks": [hook_create_pdns_sqlite_schema],
         },
         {
             "path": "/var/lib/powerdns/callbook",

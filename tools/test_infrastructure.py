@@ -522,11 +522,18 @@ class ExecuteHooksTests(_TmpDirTestCase):
 
         fullchain = os.path.join(ssl_dir, "fullchain.pem")
 
-        def fake_run_cmd(cmd):
-            with open(fullchain, "w") as f:
-                f.write("cert")
-            with open(os.path.join(ssl_dir, "privkey.pem"), "w") as f:
-                f.write("key")
+        # **kwargs: a real run_cmd_func accepts stdin=... too (hook_create_
+        # pdns_sqlite_schema's own real invocation passes it) -- since the
+        # /var/lib/powerdns MANIFEST["directories"] entry (moved there from
+        # "static_files", 2026-09-23 -- see that entry's own comment) now
+        # correctly reaches execute_hooks() too, this fake needs to accept
+        # the same call shape a real one would.
+        def fake_run_cmd(cmd, **kwargs):
+            if cmd[:1] == ["openssl"]:
+                with open(fullchain, "w") as f:
+                    f.write("cert")
+                with open(os.path.join(ssl_dir, "privkey.pem"), "w") as f:
+                    f.write("key")
 
         mock_run = MagicMock(side_effect=fake_run_cmd)
 
@@ -534,12 +541,25 @@ class ExecuteHooksTests(_TmpDirTestCase):
 
         # hook_generate_ssl really ran, against the real, correctly
         # dest_dir-joined MANIFEST directory path.
-        mock_run.assert_called_once()
-        self.assertIn("openssl", mock_run.call_args[0][0])
+        openssl_calls = [c for c in mock_run.call_args_list if c.args[0][:1] == ["openssl"]]
+        self.assertEqual(len(openssl_calls), 1)
         self.assertTrue(os.path.exists(os.path.join(ssl_dir, "lotw_root.pem")))
 
         # hook_clear_pycache really ran too.
         self.assertEqual(os.listdir(pycache_dir), [])
+
+        # hook_create_pdns_sqlite_schema now really runs too, since its own
+        # MANIFEST entry moved from "static_files" (which execute_hooks()
+        # never iterated at all) to "directories" (which it does) -- the
+        # real gap this whole move exists to close (see that entry's own
+        # comment: "nothing in this codebase ever created pdns.sqlite3").
+        sqlite_calls = [c for c in mock_run.call_args_list if c.args[0][:1] == ["sqlite3"]]
+        self.assertEqual(len(sqlite_calls), 1)
+        self.assertIn(
+            os.path.join(self.tmp, "var/lib/powerdns/pdns.sqlite3"),
+            sqlite_calls[0].args[0],
+        )
+        self.assertIn("stdin", sqlite_calls[0].kwargs)
 
     def test_docker_environment_only_touches_deploy_ssl_not_opt_hams_nginx(self):
         deploy_ssl = os.path.join(self.tmp, "deploy/ssl")
