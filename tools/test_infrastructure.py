@@ -1717,6 +1717,36 @@ class AptPackagesManifestTests(unittest.TestCase):
         self.assertIn("early_prod", entries[0]["environments"])
 
 
+class StaticFilesEntriesHaveContentTests(unittest.TestCase):
+    """Regression test for a real production incident, 2026-09-23: three
+    MANIFEST["static_files"] entries (/var/lib/powerdns, /var/lib/powerdns/
+    callbook, /opt/hams/hamcall) had none of content/src/url -- they were
+    directory-only declarations, meant for MANIFEST["directories"], sitting
+    in the wrong list. provision_static_files() iterates every entry in
+    "static_files" and, finding none of those three keys, falls through to
+    its own "write file content" branch and calls os.open() on the path --
+    which crashed with IsADirectoryError the moment any of those three
+    paths already existed as a real directory (which, in production, they
+    always do -- each is created by a package's own postinst or a daemon's
+    own setup before this ever runs). The first of the three was found only
+    by actually running provision.py against hams1 mid-release; the other
+    two were found by this same check, run proactively, before either
+    became the next crash. Every entry in "static_files" must declare one
+    of content/src/url -- a directory-only entry belongs in "directories"
+    instead."""
+
+    def test_every_static_files_entry_declares_content_src_or_url(self):
+        missing = [
+            entry["path"] for entry in infra.MANIFEST["static_files"]
+            if not any(k in entry for k in ("content", "src", "url"))
+        ]
+        self.assertEqual(
+            missing, [],
+            f"static_files entries with none of content/src/url (belong in "
+            f"'directories' instead): {missing}",
+        )
+
+
 class SystemdUnitPathTests(unittest.TestCase):
     """A path in ReadWritePaths= that does not exist stops the service before it starts (systemd
     status 226/NAMESPACE) unless it has a leading "-". The first production release hit this on

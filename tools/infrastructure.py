@@ -758,6 +758,48 @@ MANIFEST = {
             "environments": ["prod"],
             "post_provision_hooks": [hook_create_pdns_sqlite_schema],
         },
+        {
+            # Moved here from "static_files" alongside its own sibling
+            # /var/lib/powerdns entry above -- same real bug, same crash
+            # (found live on hams1, 2026-09-23, immediately after fixing the
+            # first one): no content/src/url, so provision_static_files()
+            # tried to os.open() this already-real directory too. This one
+            # has no post_provision_hooks at all, so it was purely
+            # misplaced -- apply_production_directories() (which DOES
+            # iterate "directories") is now what creates/chowns/chmods it,
+            # a safe os.makedirs(..., exist_ok=True) no-op since
+            # pdns.callbook.service's own setup already created it.
+            "path": "/var/lib/powerdns/callbook",
+            "owner": "pdns:pdns",
+            # setgid (leading 2): callbook_dns_export runs as User=odoo with
+            # SupplementaryGroups=pdns, not User=pdns, so a file it creates
+            # here only lands group=pdns if this directory's own group is
+            # inherited -- setgid is what makes that automatic. Without it,
+            # new files land group=odoo and pdns.callbook.service (running
+            # as User=pdns Group=pdns, no supplementary groups) gets zero
+            # access to its own database. Found live on hams1, 2026-09-22,
+            # after fixing the group ownership by hand and still hitting
+            # "attempt to write a readonly database" on every publish after
+            # the first, once a WAL-mode connection had already been opened.
+            "provision_mode": "2775",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Moved here from "static_files" -- same bug as the two pdns
+            # entries above (found in the same pass, 2026-09-23, checking
+            # for other static_files entries with no content/src/url before
+            # they became the NEXT production crash): no
+            # post_provision_hooks either, purely misplaced.
+            # Licensed HamCall index (ADR-0092): hand-delivered by K6BP, never published,
+            # used only to validate callsigns behind the scenes. Operator steps are in
+            # daemons/hamcall_idx_sync/README.md ("Placing the licensed file").
+            "path": "/opt/hams/hamcall",
+            "owner": "hams_com:hams_com",
+            "provision_mode": "750",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
     ],
     "env_groups": {
         "db.env": [
@@ -2345,16 +2387,6 @@ WantedBy=timers.target
             "environments": ["prod", "test"],
         },
         {
-            # Licensed HamCall index (ADR-0092): hand-delivered by K6BP, never published,
-            # used only to validate callsigns behind the scenes. Operator steps are in
-            # daemons/hamcall_idx_sync/README.md ("Placing the licensed file").
-            "path": "/opt/hams/hamcall",
-            "owner": "hams_com:hams_com",
-            "provision_mode": "750",
-            "runtime_mount": "ro",
-            "environments": ["prod", "test"],
-        },
-        {
             # HamCall licensed-index sync (ADR-0092), a ONE-SHOT service with NO TIMER on
             # purpose. Bruce, 2026-09-20: no automatic updates for now. The daemon runs once
             # when the licensed hamcall.idx is placed at /opt/hams/hamcall/hamcall.idx and
@@ -2506,23 +2538,6 @@ loglevel=4
             "owner": "pdns:pdns",
             "mode": "640",
             "environments": ["prod"],
-        },
-        {
-            "path": "/var/lib/powerdns/callbook",
-            "owner": "pdns:pdns",
-            # setgid (leading 2): callbook_dns_export runs as User=odoo with
-            # SupplementaryGroups=pdns, not User=pdns, so a file it creates
-            # here only lands group=pdns if this directory's own group is
-            # inherited -- setgid is what makes that automatic. Without it,
-            # new files land group=odoo and pdns.callbook.service (running
-            # as User=pdns Group=pdns, no supplementary groups) gets zero
-            # access to its own database. Found live on hams1, 2026-09-22,
-            # after fixing the group ownership by hand and still hitting
-            # "attempt to write a readonly database" on every publish after
-            # the first, once a WAL-mode connection had already been opened.
-            "provision_mode": "2775",
-            "runtime_mount": "rw",
-            "environments": ["prod", "test"],
         },
         {
             "path": "/opt/hams/systemd/pdns.callbook.service",
