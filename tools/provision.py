@@ -13,9 +13,34 @@ import sys
 import subprocess
 import logging
 
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, repo_root)
+# Bug-hunt fix (2026-09-23, found while preparing a real production release):
+# this script lives at hams_shared/tools/provision.py, and infrastructure.py is
+# its own direct sibling in that same tools/ directory -- but `repo_root` used
+# to be computed as ONE level up from here (dirname(__file__) + "/.."), landing
+# on hams_shared itself, not hams_open. That broke two different things that
+# both used to share this one value:
+#   1. `sys.path.insert(0, repo_root)` needs the directory infrastructure.py
+#      actually lives in (this file's own directory, zero levels up) for
+#      `import infrastructure` to succeed at all -- confirmed directly: running
+#      this script standalone (not under pytest, which happens to also put
+#      this same directory on sys.path via its own test collection and so
+#      masked the bug) raised a real ModuleNotFoundError.
+#   2. `env_vars["REPO_ROOT"]`, which infrastructure.provision_environment()
+#      expects to be hams_open's own root (it checks
+#      `os.path.exists(os.path.join(repo_root, "hams_shared"))` as its PRIMARY
+#      test for "this repo_root IS hams_open") -- that needs TWO levels up from
+#      here (tools -> hams_shared -> hams_open), not one. The single wrong
+#      value happened to still often locate hams_com_dir/hams_community_dir
+#      correctly in practice, purely by falling through to this same
+#      function's own `../..`-relative fallback branches for the specific,
+#      real `/opt/hams/src/{hams_com,hams_open}` sibling layout -- coincidence
+#      that masked the deeper problem, not evidence the original value was
+#      right.
+_provision_tools_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _provision_tools_dir)
 import infrastructure  # noqa: E402
+
+repo_root = os.path.abspath(os.path.join(_provision_tools_dir, "..", ".."))
 
 logging.basicConfig(level=logging.INFO)
 _logger = logging.getLogger(__name__)

@@ -24,6 +24,7 @@ argparse.parse_known_args() with no way to inject them otherwise.
 """
 
 import os
+import subprocess
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -272,6 +273,53 @@ class ProvisionHoldOdooTests(ProvisionTestCase):
     def test_hold_odoo_defaults_to_off(self):
         mock_infra, _ = self.run_provision([], os_id="debian")
         self.assertIs(mock_infra.provision_environment.call_args.kwargs["hold_odoo"], False)
+
+
+class RepoRootAndImportInAFreshProcessTests(unittest.TestCase):
+    """Regression test for a real bug found 2026-09-23 while preparing a
+    production release: `import infrastructure` and `repo_root`'s own value
+    both silently depended on hams_shared/tools already being on sys.path --
+    true inside THIS pytest run (pytest puts every collected test file's own
+    directory on sys.path, which happens to also make `infrastructure`
+    importable directly, entirely independent of provision.py's own now-fixed
+    sys.path.insert line), but false for the real, documented deploy
+    invocation (`cd .../hams_open && sudo python3
+    hams_shared/tools/provision.py`), which raised a real ModuleNotFoundError
+    before ever reaching provision()'s own sudo re-exec. Every other test in
+    this file imports `provision` the same masked way pytest always does, so
+    none of them could have caught this -- only a genuinely fresh subprocess,
+    with no pytest-inserted sys.path entries at all, actually exercises the
+    real invocation path."""
+
+    def test_provision_py_help_runs_in_a_fresh_subprocess_with_no_import_error(self):
+        hams_open_root = os.path.abspath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        )
+        result = subprocess.run(
+            [sys.executable, "hams_shared/tools/provision.py", "--help"],
+            cwd=hams_open_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"provision.py --help failed in a fresh subprocess:\n{result.stderr}",
+        )
+        self.assertNotIn("ModuleNotFoundError", result.stderr)
+        self.assertIn("Standalone Environment Provisioning Script", result.stdout)
+
+    def test_repo_root_is_hams_opens_own_root_not_hams_shared(self):
+        # The real assertion behind the bug: infrastructure.provision_environment
+        # treats REPO_ROOT as correct precisely when repo_root/hams_shared exists
+        # (infrastructure.py's own primary, non-fallback check) -- which is only
+        # true when repo_root IS hams_open's own root.
+        self.assertTrue(
+            os.path.isdir(os.path.join(provision.repo_root, "hams_shared")),
+            f"provision.repo_root ({provision.repo_root!r}) is not hams_open's "
+            "own root -- infrastructure.provision_environment's primary "
+            "hams_community_dir check would miss it.",
+        )
 
 
 if __name__ == "__main__":
