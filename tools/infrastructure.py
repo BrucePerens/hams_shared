@@ -576,14 +576,6 @@ MANIFEST = {
             "post_provision_hooks": [hook_generate_ssl],
         },
         {
-            "path": "/deploy/ssl",
-            "owner": "hams_com:hams_com",
-            "provision_mode": "750",
-            "runtime_mount": "ro",
-            "environments": ["docker"],
-            "post_provision_hooks": [hook_generate_ssl],
-        },
-        {
             "path": "/opt/hams/odoo",
             "owner": "hams_com:hams_com",
             "provision_mode": "750",
@@ -5215,7 +5207,7 @@ def provision_environment(
         # directories in
         # MANIFEST["directories"] but never runs their post_provision_hooks,
         # so hook_generate_ssl (self-signed cert generation for
-        # /opt/hams/nginx/ssl and /deploy/ssl) and hook_clear_pycache
+        # /opt/hams/nginx/ssl) and hook_clear_pycache
         # (/opt/hams/pycache) silently never ran during a real provisioning
         # run. Called here, right after the directories it hooks against are
         # actually created, matching provision_static_files()'s own

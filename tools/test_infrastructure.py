@@ -561,25 +561,6 @@ class ExecuteHooksTests(_TmpDirTestCase):
         )
         self.assertIn("stdin", sqlite_calls[0].kwargs)
 
-    def test_docker_environment_only_touches_deploy_ssl_not_opt_hams_nginx(self):
-        deploy_ssl = os.path.join(self.tmp, "deploy/ssl")
-        os.makedirs(deploy_ssl)
-        fullchain = os.path.join(deploy_ssl, "fullchain.pem")
-
-        def fake_run_cmd(cmd):
-            with open(fullchain, "w") as f:
-                f.write("cert")
-            with open(os.path.join(deploy_ssl, "privkey.pem"), "w") as f:
-                f.write("key")
-
-        mock_run = MagicMock(side_effect=fake_run_cmd)
-        infra.execute_hooks("docker", mock_run, {}, dest_dir=self.tmp)
-
-        self.assertTrue(os.path.exists(os.path.join(deploy_ssl, "lotw_root.pem")))
-        # /opt/hams/nginx/ssl's directory entry is prod-only -- "docker"
-        # must not touch it.
-        self.assertFalse(os.path.exists(os.path.join(self.tmp, "opt/hams/nginx/ssl")))
-
     def test_an_environment_with_no_hooked_directories_runs_no_hooks(self):
         mock_run = MagicMock()
         infra.execute_hooks("nonexistent_env", mock_run, {}, dest_dir=self.tmp)
