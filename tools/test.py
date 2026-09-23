@@ -1448,27 +1448,57 @@ def check_linters(
     # 2026-09-14 entries for the full trace. A fresh, real, whole-repo scan with this
     # flag confirmed 0 errors before this line was changed; do not remove this flag to
     # "fix" a future daemons/tools finding without first fixing the finding itself.
-    cmd_burn = (
-        [
-            python_exec,
-            burn_script,
-            os.path.join(base_dir, target_modules[0]),
-            "--ignore-file",
-            ignore_filepath,
-            "--scan-daemons-and-tools",
-        ]
-        if target_modules and len(target_modules) == 1
-        else [
-            python_exec,
-            burn_script,
-            base_dir,
-            "--ignore-file",
-            ignore_filepath,
-            "--scan-daemons-and-tools",
-        ]
+    #
+    # Scan scope, per Bruce's own answer (night_shift_questions/answered/test-py-multi-
+    # target-burn-list-scope-4e892722.md, 2026-09-23): a run naming ONE OR MORE specific
+    # modules scans only those modules' own directories -- a multi-module run behaves
+    # the same way regardless of how many modules are named, and is no longer blocked
+    # by a burn-list issue in a module nobody asked to test, or by another session's
+    # unrelated in-progress work elsewhere in a shared checkout. Only a run naming ZERO
+    # modules (an explicit "test everything" request) scans the whole repository --
+    # that case is unchanged, since testing everything naturally implies linting
+    # everything too. check_burn_list.py's own `directory` argument takes exactly one
+    # path, so a multi-module run scans each named module in its own subprocess call
+    # and aggregates the results, rather than trying to pass several paths at once.
+    burn_targets = (
+        [os.path.join(base_dir, module) for module in target_modules]
+        if target_modules
+        else [base_dir]
     )
 
-    res_burn = subprocess.run(cmd_burn, capture_output=True, text=True)
+    res_burn_returncode = 0
+    res_burn_stdout_parts = []
+    res_burn_stderr_parts = []
+    for burn_target in burn_targets:
+        res_burn_one = subprocess.run(
+            [
+                python_exec,
+                burn_script,
+                burn_target,
+                "--ignore-file",
+                ignore_filepath,
+                "--scan-daemons-and-tools",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        res_burn_stdout_parts.append(res_burn_one.stdout)
+        if res_burn_one.stderr:
+            res_burn_stderr_parts.append(res_burn_one.stderr)
+        if res_burn_one.returncode != 0:
+            res_burn_returncode = res_burn_one.returncode
+
+    class _AggregatedBurnResult:
+        def __init__(self, returncode, stdout, stderr):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    res_burn = _AggregatedBurnResult(
+        res_burn_returncode,
+        "\n".join(res_burn_stdout_parts),
+        "\n".join(res_burn_stderr_parts),
+    )
     if res_burn.returncode != 0:
         print(res_burn.stdout)
         print(res_burn.stderr)

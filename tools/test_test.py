@@ -1039,5 +1039,101 @@ class CiLoadGateOrderingTests(unittest.TestCase):
             "test lock is taken, or a wait blocks every other session on the box",
         )
 
+class CheckLintersBurnListScopeTests(unittest.TestCase):
+    """Regression tests for the burn-list scan-scope decision in check_linters(),
+    per Bruce's own answer (night_shift_questions/answered/test-py-multi-target-burn-
+    list-scope-4e892722.md, 2026-09-23): a run naming one or more specific modules
+    scans only those modules' own directories, not the whole repository -- a
+    multi-module run now behaves the same way as a single-module run, rather than
+    getting the whole-repo treatment only a zero-module ("test everything") run still
+    gets.
+
+    subprocess.run is mocked for the whole function (check_linters() runs several
+    other linters too -- manifest, init-imports, anchor scan, JS -- each via its own
+    subprocess.run call); the mock inspects each call's own command list to tell the
+    burn-list invocations apart from the others and returns a generic success result
+    for everything, so the function runs to completion without exercising any real
+    linter or touching the filesystem beyond what's asserted on directly.
+    """
+
+    def _mock_subprocess_run(self, burn_calls):
+        def side_effect(cmd, *args, **kwargs):
+            if any("check_burn_list.py" in str(part) for part in cmd):
+                burn_calls.append(cmd)
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = ""
+            result.stderr = ""
+            return result
+
+        return side_effect
+
+    def test_a_single_named_module_scans_only_that_module(self):
+        burn_calls = []
+        with patch.object(
+            _test_runner.subprocess, "run", side_effect=self._mock_subprocess_run(burn_calls)
+        ):
+            _test_runner.check_linters(
+                "python3", "/repo", "/repo/.ignore", target_modules=["ham_events"]
+            )
+        self.assertEqual(len(burn_calls), 1, burn_calls)
+        self.assertIn(os.path.join("/repo", "ham_events"), burn_calls[0])
+        self.assertNotIn("/repo", [arg for arg in burn_calls[0] if arg == "/repo"])
+
+    def test_two_named_modules_scan_only_those_two_modules_not_the_whole_repo(self):
+        burn_calls = []
+        with patch.object(
+            _test_runner.subprocess, "run", side_effect=self._mock_subprocess_run(burn_calls)
+        ):
+            _test_runner.check_linters(
+                "python3",
+                "/repo",
+                "/repo/.ignore",
+                target_modules=["ham_events", "ham_repeater_dir"],
+            )
+        self.assertEqual(len(burn_calls), 2, burn_calls)
+        scanned_targets = [call[2] for call in burn_calls]
+        self.assertIn(os.path.join("/repo", "ham_events"), scanned_targets)
+        self.assertIn(os.path.join("/repo", "ham_repeater_dir"), scanned_targets)
+        # The whole-repo path itself must never be scanned for a named multi-module
+        # run -- that's the exact regression this test exists to catch.
+        self.assertNotIn("/repo", scanned_targets)
+
+    def test_zero_named_modules_still_scans_the_whole_repo(self):
+        burn_calls = []
+        with patch.object(
+            _test_runner.subprocess, "run", side_effect=self._mock_subprocess_run(burn_calls)
+        ):
+            _test_runner.check_linters("python3", "/repo", "/repo/.ignore", target_modules=None)
+        self.assertEqual(len(burn_calls), 1, burn_calls)
+        self.assertEqual(burn_calls[0][2], "/repo")
+
+    def test_a_failure_in_either_named_module_halts_the_whole_run(self):
+        # A multi-module run must still catch a real burn-list violation in EITHER
+        # named module, not just the first one checked.
+        def side_effect(cmd, *args, **kwargs):
+            result = MagicMock()
+            if any("check_burn_list.py" in str(part) for part in cmd) and cmd[2].endswith(
+                "ham_repeater_dir"
+            ):
+                result.returncode = 1
+                result.stdout = "some real violation"
+                result.stderr = ""
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with patch.object(_test_runner.subprocess, "run", side_effect=side_effect):
+            with self.assertRaises(SystemExit):
+                _test_runner.check_linters(
+                    "python3",
+                    "/repo",
+                    "/repo/.ignore",
+                    target_modules=["ham_events", "ham_repeater_dir"],
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
