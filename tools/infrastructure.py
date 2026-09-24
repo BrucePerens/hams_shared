@@ -5346,6 +5346,7 @@ def provision_environment(
                 _logger.debug("Original user %s not found: %s", orig_user, e)
 
         _logger.info("[*] Linking custom systemd units...")
+        linked_timers = []
         try:
             systemd_dir = "/opt/hams/systemd"
             if os.path.exists(systemd_dir):
@@ -5357,9 +5358,48 @@ def provision_environment(
                         dst = os.path.join("/etc/systemd/system", item)
                         if not os.path.exists(dst):
                             os.symlink(src, dst)
+                        if item.endswith(".timer"):
+                            linked_timers.append(item)
         except OSError as e:
             _logger.warning("Failed to link systemd units: %s", e)
             record_hook_failure("systemd_unit_linking", e)
+
+        # Bug fix, 2026-09-23 (night-watch): linking a unit into
+        # /etc/systemd/system with a bare symlink leaves it in systemd's own
+        # "linked" state, not "enabled" -- [Install] WantedBy=timers.target
+        # is only acted on by an explicit `systemctl enable`, which this
+        # provisioning step never issued. Confirmed live on hams1: ~18 of
+        # ~20 hams.com-specific timers sat "linked (dead)", zero
+        # timer-driven run history, since the box was first provisioned --
+        # silently never syncing regulator callbook data, AMSAT TLE,
+        # contest calendars, POTA/SOTA, or ingesting inbound support email,
+        # until a night-watch session found and manually enabled them one
+        # at a time days later. Plain `enable` (not `enable --now`)
+        # deliberately: it wires each timer into timers.target.wants/ so it
+        # fires at its own next OnCalendar tick going forward, without
+        # forcing an immediate first run -- safe to re-run this same
+        # provisioning step against an already-running system without an
+        # unwanted stampede of first-ever executions across every daemon.
+        if linked_timers:
+            _logger.info(
+                "[*] Enabling %d linked systemd timer(s)...", len(linked_timers)
+            )
+            try:
+                subprocess.run(["systemctl", "daemon-reload"], check=False)
+                for timer in linked_timers:
+                    result = subprocess.run(
+                        ["systemctl", "enable", timer],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if result.returncode != 0:
+                        _logger.warning(
+                            "Failed to enable %s: %s", timer, result.stderr.strip()
+                        )
+            except OSError as e:
+                _logger.warning("Failed to enable systemd timers: %s", e)
+                record_hook_failure("systemd_timer_enabling", e)
 
         if hold_odoo:
             # Prepare-only run (provision.py --hold-odoo): everything above (packages, accounts,

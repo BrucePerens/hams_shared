@@ -1618,6 +1618,48 @@ class HoldOdooTests(unittest.TestCase):
         self.assertIn('db_name=env_vars.get("DB_NAME", "hams_test")', source)
 
 
+class LinkedSystemdTimersAreActuallyEnabledTests(unittest.TestCase):
+    """provision_environment() is too host-dependent to execute here (see this file's own
+    established pattern for it), so this reads its source, like the neighbouring tests.
+
+    Real bug found live on hams1, 2026-09-23: linking a unit into /etc/systemd/system with a
+    bare os.symlink() leaves it in systemd's own "linked" state, not "enabled" -- [Install]
+    WantedBy=timers.target is only acted on by an explicit `systemctl enable`, which this
+    provisioning step never issued. Confirmed live: ~18 of ~20 hams.com-specific timers sat
+    "linked (dead)" with zero timer-driven run history since the box was first provisioned,
+    silently never syncing regulator callbook data, AMSAT TLE, contest calendars, POTA/SOTA, or
+    ingesting inbound support email -- caught only because a night-watch session happened to
+    check `systemctl list-timers --all` days later."""
+
+    def test_every_linked_timer_is_enabled_after_the_linking_loop(self):
+        source = inspect.getsource(infra.provision_environment)
+        link_idx = source.index('_logger.info("[*] Linking custom systemd units...")')
+        enable_idx = source.index('"systemctl", "enable", timer', link_idx)
+        self.assertGreater(
+            enable_idx,
+            link_idx,
+            "the systemctl enable call must come after the symlinking loop, "
+            "not before it (nothing to enable yet before units are linked)",
+        )
+        self.assertIn('item.endswith(".timer")', source[link_idx:enable_idx])
+
+    def test_enable_is_not_enable_now_to_avoid_an_immediate_first_run_stampede(self):
+        # `enable --now` would force every one of ~20 daemons to run for the very first time
+        # the instant this provisioning step runs -- including sensitive ones like inbound
+        # support-email ingestion, which could process a real backlog and fire real
+        # notification mail. Plain `enable` only wires the timer into
+        # timers.target.wants/ so it fires at its own next OnCalendar tick.
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn('["systemctl", "enable", timer]', source)
+        self.assertNotIn('["systemctl", "enable", "--now"', source)
+
+    def test_daemon_reload_runs_before_any_enable_call(self):
+        source = inspect.getsource(infra.provision_environment)
+        reload_idx = source.index('["systemctl", "daemon-reload"]')
+        enable_idx = source.index('"systemctl", "enable", timer')
+        self.assertLess(reload_idx, enable_idx)
+
+
 class LoadAndPromptEnvRabbitmqUserDefaultTests(unittest.TestCase):
     def test_rmq_user_defaults_to_a_real_non_guest_service_account(self):
         # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: this used
