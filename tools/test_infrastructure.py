@@ -613,6 +613,41 @@ class HookDaemonsPermsTests(_TmpDirTestCase):
         mock_run.assert_not_called()
 
 
+class ServiceStartCommandTests(unittest.TestCase):
+    """_service_start_command() is the one piece of run_post_provision_
+    smoketest()'s own logic worth testing in isolation (see that function's
+    own module-level NON_BLOCKING_START_SERVICES comment for the real
+    2026-09-24 production incident this fixes) -- pure, no subprocess/host
+    interaction, matching this file's own established reasoning for why the
+    smoketest function itself isn't attempted here."""
+
+    def test_callbook_geo_enrich_gets_no_block(self):
+        self.assertEqual(
+            infra._service_start_command("callbook.geo.enrich.service"),
+            ["systemctl", "start", "--no-block", "callbook.geo.enrich.service"],
+        )
+
+    def test_an_ordinary_service_stays_blocking(self):
+        # fcc.uls.sync.service and hamcall.idx.sync.service are the two other
+        # real one-shot sync services in the same smoketest loop -- both fail
+        # or finish in seconds (confirmed from the real 2026-09-24 incident
+        # log), so they must NOT pick up --no-block just because they sit next
+        # to callbook.geo.enrich.service in the same MANIFEST/loop.
+        for svc in ("fcc.uls.sync.service", "hamcall.idx.sync.service", "odoo", "postgresql"):
+            with self.subTest(svc=svc):
+                self.assertEqual(
+                    infra._service_start_command(svc),
+                    ["systemctl", "start", svc],
+                )
+
+    def test_non_blocking_start_services_contains_exactly_callbook_geo_enrich(self):
+        # Guards against someone widening the exception set casually --
+        # today it should be exactly this one service, not a growing list.
+        self.assertEqual(
+            infra.NON_BLOCKING_START_SERVICES, {"callbook.geo.enrich.service"}
+        )
+
+
 class GenerateSecurePasswordTests(unittest.TestCase):
     def test_default_length_is_32_characters(self):
         self.assertEqual(len(infra.generate_secure_password()), 32)

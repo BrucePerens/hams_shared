@@ -4018,6 +4018,47 @@ def initialize_odoo_database(
         _logger.error("Failed to initialize Odoo database: %s", e)
         raise
 
+# Real production incident, 2026-09-24: run_post_provision_smoketest()'s own
+# `systemctl start` is a plain, blocking call -- fine for every OTHER service it
+# starts, which either fails or finishes in seconds (confirmed from the real
+# incident log), but callbook.geo.enrich.service is `Type=oneshot` with no
+# `RemainAfterExit`, so a blocking `systemctl start` waits for its own `ExecStart`
+# process to exit -- and that process can legitimately run for many hours on a
+# large backlog (it geo-enriches ham.callbook records via the free, rate-limited
+# US Census Bureau Geocoder, one HTTP call per record). On a first-ever backlog
+# this smoketest blocked for 16+ hours, stalling every provisioning step after it
+# (including initialize_odoo_database(), which stops/upgrades/restarts
+# odoo.service). The service's own unit file already documents that it's
+# normally driven by its own daily callbook.geo.enrich.timer in the background,
+# not expected to run-to-completion synchronously here -- this smoketest only
+# needs to confirm it can be STARTED, not wait for a multi-hour batch job to
+# finish. `--no-block` returns as soon as systemd has queued the start job,
+# matching that intent; the service still runs to completion on its own, just
+# not on this process's clock. Deliberately a narrow, named exception (not a
+# change to the shared loop's default behavior) so a future long-but-fast-
+# failing service added to this list still gets the fast fail-detection a
+# blocking start provides. Module-level (not a local inside the function it's
+# used in) specifically so _service_start_command() below -- the actual decision
+# this incident's fix hinges on -- stays a small, pure, independently-testable
+# function, matching this file's own established shape for keeping the smaller
+# real logic out of the genuinely destructive/host-dependent orchestration
+# functions this test file's own docstring says it doesn't attempt to test.
+NON_BLOCKING_START_SERVICES = {
+    "callbook.geo.enrich.service",
+}
+
+
+def _service_start_command(svc):
+    """The actual `systemctl start` command line for `svc`: `--no-block` for
+    anything in NON_BLOCKING_START_SERVICES (see that constant's own comment),
+    a plain blocking start otherwise. Pure and side-effect-free on purpose --
+    this is the one piece of run_post_provision_smoketest()'s own logic worth
+    testing in isolation, without mocking subprocess.run wholesale."""
+    if svc in NON_BLOCKING_START_SERVICES:
+        return ["systemctl", "start", "--no-block", svc]
+    return ["systemctl", "start", svc]
+
+
 def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
     _logger.info("[*] Running post-provisioning smoketest on all services...")
 
@@ -4079,9 +4120,17 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
             already_active_services.append(svc)
             continue
 
-        _logger.info("    Starting %s...", svc)
+        if svc in NON_BLOCKING_START_SERVICES:
+            # See NON_BLOCKING_START_SERVICES' own comment above: this specific
+            # service can legitimately run for hours, so --no-block only waits
+            # for systemd to accept/queue the start job, not for the service's
+            # own ExecStart to finish. A returncode of 0 here means "dispatched,"
+            # not "completed" -- distinct from every other service in this loop.
+            _logger.info("    Starting %s (non-blocking -- may still be running when this smoketest finishes)...", svc)
+        else:
+            _logger.info("    Starting %s...", svc)
         res = subprocess.run(
-            ["systemctl", "start", svc], capture_output=True, text=True
+            _service_start_command(svc), capture_output=True, text=True
         )
         started_services.append(svc)
         if res.returncode != 0:
