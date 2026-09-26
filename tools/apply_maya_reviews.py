@@ -240,6 +240,63 @@ GENE_ANALOGIES = {
             'if rain smudges three letters on the paper, the receiver\'s error-correction code still reconstructs the entire message '
             'without needing a retransmission."</p>'
         )
+    },
+    # Ch 3: Class C Amplifiers & Waveform Clipping
+    2: {
+        "trigger": "class c",
+        "insert_after": True,
+        "content": (
+            '<p>"A Class C amplifier is like kicking a child on a playground swing at the bottom of the arc," Sarah realized, '
+            'watching the clipped pulse on the scope. "You don\'t push smoothly through the whole thirty-foot arc like Class A; '
+            'you deliver one violent, brief kick for less than half the cycle—well under 180 degrees. That gives you eighty percent '
+            'efficiency! And the tuned LC tank circuit acts like the swing\'s momentum flywheel, absorbing the jagged kicks and '
+            'smoothing them back into a clean, unclipped sine wave for CW and FM."</p>'
+        )
+    },
+    # Ch 131: Small Magnetic Loop Direction-Finding Nulls
+    130: {
+        "trigger": "null",
+        "insert_after": True,
+        "content": (
+            '<p>"A directional loop antenna works just like looking through the hole of a spinning doughnut," Sarah laughed, '
+            'swiveling the copper loop on its tripod. "You don\'t aim the copper ring broadside like a lens; the sharpest null is '
+            'looking straight through the empty doughnut hole! When you aim that hole right at the neighbor\'s noisy plasma TV, '
+            'the magnetic RF induction field cancels out to zero and the interference vanishes completely."</p>'
+        )
+    },
+    # Ch 33: Vacuum Tube Neutralization & Parasitic Feedback
+    32: {
+        "trigger": "neutralization",
+        "insert_after": True,
+        "content": (
+            '<p>"Neutralization is like fighting a screeching microphone at a karaoke night," Sarah said, adjusting the air '
+            'variable capacitor. "When a singer holds the mic too close to the stage monitor speaker, the sound feeds right '
+            'back into the mic, building into a deafening howl. That\'s exactly what plate-to-grid capacitance does inside a power '
+            'tube. By feeding back a tiny signal sample that is exactly 180 degrees out of phase, you cancel out the feedback loop '
+            'and silence the howl before the tube burns itself out!"</p>'
+        )
+    },
+    # Ch 94: Feedline Dielectric Loss Under High SWR
+    93: {
+        "trigger": "dielectric",
+        "insert_after": True,
+        "content": (
+            '<p>"High SWR on coaxial cable is like putting damp paper towels in a microwave oven," Andre explained, touching '
+            'the warm jacket of the RG-58. "The extreme standing-wave voltage swings violently vibrate the solid plastic dielectric '
+            'molecules back and forth millions of times every second. That friction boils away your transmitter power as wasted '
+            'heat inside the cable jacket. Open-wire window line replaces that plastic with air, which has no molecules to boil!"</p>'
+        )
+    },
+    # Ch 7: Battery Internal Resistance & Voltage Sag
+    6: {
+        "trigger": "internal resistance",
+        "insert_after": True,
+        "content": (
+            '<p>"Battery internal resistance is like sipping a thick milkshake through a pinched paper straw," Sarah observed, '
+            'watching the DC supply meter sag from 12.6 to 11.2 volts. "When you draw a gentle trickle of current on receive, '
+            'the voltage barely flinches. But the moment you key a hundred-watt SSB voice peak, the twenty-amp gulp collapses '
+            'the straw—the terminal voltage plunges below the radio\'s microprocessor reset threshold, and the transceiver shuts down cold."</p>'
+        )
     }
 }
 
