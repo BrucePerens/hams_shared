@@ -20,7 +20,7 @@ GitHub allows a deploy key on only one repository, so each repository has its ow
 `git@github.com:BrucePerens/<repository>.git`; each checkout is told which key to use with its own setting,
 `git config core.sshCommand "ssh -i <key file> -o IdentitiesOnly=yes"`. There are no ssh host aliases and `~/.ssh/config` is not used.
 `devbox_tools/bruce_yoga_git_setup.ps1` (Windows) or `.sh` in `hams_com` installs the keys and sets that up. Commits from this machine are authored
-`Gemini (bruce-yoga)`, so a reader can tell them from the Claude sessions' commits. Push with `git push origin HEAD:main`.
+`Gemini (bruce-yoga)`, so a reader can tell them from the Claude sessions' commits.
 
 Never write a private key, token or password into any repository. `hams_open` and `hams_shared` are public; do not put proprietary,
 patent or business material in them (it belongs in `hams_com`).
@@ -28,18 +28,22 @@ patent or business material in them (it belongs in `hams_com`).
 ## Before you start work
 
 1. In each repository you will touch: `git fetch origin`, then `git status -sb`. If you are behind, `git pull --rebase --autostash` first.
-   Several Claude sessions commit to the same branch all day; the ingestion files under `hams_com/ingest/` are edited from both sides.
+   Several Claude sessions commit all day; the ingestion files under `hams_com/ingest/` are edited from both sides.
 2. Read the newest entries of `hams_shared/agents/skills/project-experience/SKILL.md` and the files in `hams_shared/agents/skills/claude-memory/`
    (the Claude sessions' standing lessons, committed as policy). They record traps that will cost you an hour if you rediscover them.
 
-## Checking in code
+## Checking in code (Mandatory PR Workflow)
 
-* Commit small, stable chunks, and only your own files by explicit path: `git add path1 path2`, then `git commit -m "..." -- path1 path2` is **not**
-  enough if another session may have edited the same file; check `git diff -- path` first. Never `git add -A` or `git commit -a`.
-* Before every push: `git fetch origin && git rebase origin/main` (on your own commits only), rerun the tests that cover what you changed, then
-  `git push origin HEAD:main`. If the push is rejected, fetch and rebase again; never force-push and never rewrite commits that are already pushed.
-* A change to `hams_shared` is two commits: the change inside `hams_open/hams_shared` (push it from inside `hams_open/hams_shared`), then a second commit in
-  `hams_open` that moves its `hams_shared` pointer (push to `hams_open`). Do them in that order.
+**Never push directly to `main` (or any other protected branch) on `hams_com`, `hams_open`, or `hams_shared`.** ALL changes MUST go through a pull request (see `AGENTS.md` and ADR 0102).
+
+* Create a dedicated feature branch for your work: `git checkout -b <descriptive-branch-name>`.
+* Commit small, stable chunks, and only your own files by explicit path: `git add path1 path2`, then `git commit -m "..." -- path1 path2`. Never `git add -A` or `git commit -a`. Check `git diff -- path` first.
+* Push your branch to origin: `git push -u origin <descriptive-branch-name>`.
+* Open a pull request: `gh pr create --title "..." --body "..."`.
+* Verify CI checks (such as `burn-list`) pass using `gh pr checks <PR-number>`.
+* Once CI passes and requirements are met, merge via `gh pr merge <PR-number> --merge`.
+* After merging, switch back to `main`, pull the merge commit (`git checkout main && git pull --rebase`), and delete the feature branch.
+* A change to `hams_shared` is two PRs: the change inside `hams_open/hams_shared` (PR and merge it from inside `hams_open/hams_shared`), then a second PR in `hams_open` that updates the `hams_shared` submodule pointer (PR and merge it in `hams_open`). Do them in that order.
 * Do not delete other people's branches, stashes or files.
 
 ## Checking in skills and lessons
