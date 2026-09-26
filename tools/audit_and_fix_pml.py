@@ -88,6 +88,11 @@ def audit_chapter_pml(chapter_path: str, course_history: set, is_general: bool =
     for acr, (full_name, defn) in COMMON_ACRONYMS.items():
         if acr not in course_history:
             pattern = r'\b' + acr + r'\b'
+            # If full name is already in the lesson, the acronym is already expanded
+            if full_name.lower() in html.lower():
+                course_history.add(acr)
+                continue
+
             # Check if acronym appears in plain text
             m = re.search(pattern, html)
             if m:
