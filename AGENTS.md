@@ -50,6 +50,23 @@ All daemon tests must run in a fully provisioned environment without relying on 
 No use of sudo() is permitted, and any attempt to use sudo() will break the build.
 Any permission or privilege problem must be solved using zero_sudo and the
 micro-privilege architecture.
+
+**Never push directly to `main` (or any other protected branch) on `hams_com`, `hams_open`, or
+`hams_shared`.** ALL changes MUST go through a pull request: create a branch, commit your work,
+push the branch, open a PR, and let it merge through the normal review/CI gate -- even when your
+own git credential technically has permission to push straight to `main` and the platform does not
+visibly refuse it. A direct push (`git push origin main` or equivalent) skips the required review
+AND the required CI status check (e.g. `burn-list`) entirely for that change, with no confirmation
+prompt and no visible signal beyond `git push`'s own text output -- it is not a shortcut, it is a
+bypass of every safety mechanism this repository has. This already happened for real: a direct
+push to `hams_com`'s `main` landed unreviewed `ingest/*.py` content carrying 36 real lint
+violations, which then failed the `burn-list` CI check for every other open and future pull
+request repository-wide, unrelated work included, until someone noticed and fixed it. Branch
+protection on these repositories is being hardened specifically to stop this (see
+`hams_shared/docs/adrs/0102_concurrent_session_isolation_and_merge_gating.md`), but treat this as a
+hard rule regardless of whether the platform currently enforces it for your specific credential --
+if `git push` to a protected branch ever succeeds without a PR having been merged, that is a bug in
+your own process, not a green light.
 </site_rules>
 
 ## 1. CORE OPERATING PRINCIPLES (META-RULES)
