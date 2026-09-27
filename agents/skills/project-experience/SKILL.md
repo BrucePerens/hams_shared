@@ -298,3 +298,27 @@ about the code under test, rebuild the DB again, and relaunch fully detached (`n
 disown`, redirecting stdin/stdout/stderr) so the process survives independently of the tool call
 that started it — then poll the log file for the real `odoo.tests.result` line rather than trusting
 the launching tool call's own exit status.
+
+## 47. The `transaction.default_env` Trap: `with_user()` Elevation Is Discarded for x2many Writes Linking `res.partner`/`res.users`
+**The Trap:** Odoo 19's `Many2many.write_real()` (`odoo/orm/fields_relational.py`) calls
+`_check_sudo_commands()`, and for any comodel with `_allow_sudo_commands = False` (`res.partner`,
+`res.users`, `res.groups`, most `ir.*` models) it re-runs the "read" access check on the linked
+records as `comodel.sudo(False).with_user(env.transaction.default_env.uid)` -- the account that
+made the ORIGINAL RPC/HTTP request (`odoo/service/model.py` and `odoo/http.py` set
+`transaction.default_env` to the caller's env). Every `with_user()`/`sudo()` applied later in
+the call chain is ignored for that one check. Symptom: an `AccessError` on `res.partner` logged
+against the *request* uid from inside code that provably runs as a different, elevated service
+account (production incident 2026-09-27: `message_post(partner_ids=...)` under
+`hams_helpdesk.user_helpdesk_service` failed as the mail-ingest account). Three separate passes
+misdiagnosed it (an OdooBot grant, a "caught mid-flight" theory, a code-drift theory) because
+`odoo shell` and every `TransactionCase` have the SUPERUSER as `transaction.default_env`, so no
+repro ever failed: the identical call chain succeeds in a shell and fails only behind a real RPC.
+**The Solution:** The account that *originates* the request must hold read access on the comodel
+being linked (here `res.partner`), even though the linking happens under an elevated account;
+grant it read-only in that account's own module (`ir.model.access.csv`), never a broader group.
+To reproduce or regression-test faithfully, set `self.env.transaction.default_env =
+self.env(user=<request uid>, su=False)` before the call (and restore it in `addCleanup`) -- that
+is the real dispatcher's behaviour, not a mock -- see `hams_helpdesk/tests/test_mail_ingest.py`
+`test_06`. When a production `AccessError` names a uid the traced code "cannot" be running as,
+check `_allow_sudo_commands` on the comodel and the transaction's default env before anything
+else.
