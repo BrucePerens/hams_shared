@@ -85,7 +85,7 @@ def get_original_bubbles(course: str, batch_id: int, proposals: dict):
                     vd = json.load(f)
                     if vd.get("bubbles"):
                         return vd["bubbles"]
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 _logger.warning(f"Error reading {vis_file}: {e}")
                 
     item = proposals.get((course, batch_id), {})
@@ -102,7 +102,7 @@ def get_target_bubbles(course: str, batch_id: int, proposals: dict):
                 b = cd.get("visuals", {}).get("bubbles")
                 if b:
                     return b
-        except Exception as e:
+        except (OSError, ValueError) as e:
             _logger.warning(f"Error reading {ch_file}: {e}")
             
     item = proposals.get((course, batch_id), {})
@@ -132,7 +132,7 @@ def recomposite_chapter_image(img_path: str, orig_bubbles: list, target_bubbles:
             lines = extract_ocr_lines(tmp_crop_path)
             if os.path.exists(tmp_crop_path):
                 os.remove(tmp_crop_path)
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             _logger.warning(f"Error during top-crop fallback for {img_path}: {e}")
             
     if not lines:
