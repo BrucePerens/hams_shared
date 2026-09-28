@@ -143,6 +143,18 @@ class FormatEnvTests(unittest.TestCase):
         self.assertIn('DB=hams_prod;', text)
         self.assertNotIn("$hams_prod", text)
 
+    def test_the_key_bootstrapper_commits_what_succeeded_then_fails_on_a_partial_result(self):
+        # action_force_provision_all() now returns a "danger" result instead of raising when a daemon fails, so
+        # the unit must commit what succeeded (files are already written) and then fail the unit itself.
+        entry = next(
+            item for item in infra.MANIFEST["static_files"]
+            if item.get("path") == "/opt/hams/systemd/hams.daemon.keys.service"
+        )
+        text = infra.format_env(entry["content"], {"DB_NAME": "hams_prod"})
+        command = next(line for line in text.splitlines() if line.startswith("ExecStart="))
+        self.assertLess(command.index("env.cr.commit()"), command.index("assert r['params']['type'] == 'success'"))
+        self.assertIn("r = env['daemon.key.registry'].action_force_provision_all()", command)
+
     def test_a_missing_variable_now_raises_instead_of_silently_degrading(self):
         # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
         # LAZINESS: Catch-all KeyError): this used to silently return the unformatted
