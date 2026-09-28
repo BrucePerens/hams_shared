@@ -1019,6 +1019,21 @@ RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS = 5
 RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS = 10
 
 
+# Where the Odoo test process (and the headless Chrome profiles it creates) keeps its temporary files. /tmp on the development box is a
+# separate 2.7 GB partition that leftovers from other jobs fill; the `caching` LRU-eviction tour writes hundreds of megabytes into its
+# Chrome profile and fails deterministically ("Cache.put: Unexpected internal error") when /tmp is nearly full. The same run with
+# TMPDIR on the roomy disk passes (night_shift_todo tmp-full-breaks-caching-lru-tour). Bruce approved this change 2026-09-28.
+DEFAULT_TEST_TMPDIR = "/var/lib/odoo/tmp"
+
+
+def apply_default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR):
+    """Point TMPDIR at `directory` unless the caller already chose one or the directory is unusable. Returns the TMPDIR in force
+    (None if none is set)."""
+    if not environ.get("TMPDIR") and os.path.isdir(directory) and os.access(directory, os.W_OK):
+        environ["TMPDIR"] = directory
+    return environ.get("TMPDIR")
+
+
 def run_cmd(cmd, extractor=None, cwd=None, env=None):
     if env is None:
         env = dict(os.environ)
@@ -2151,6 +2166,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     os.environ["HAMS_REAL_LOG_DIRECTORY"] = real_log_dir
     os.environ["HOME"] = "/var/lib/odoo"
     os.environ["XDG_DATA_HOME"] = "/var/lib/odoo/.local/share"
+    apply_default_test_tmpdir(os.environ)
 
     odoo_user = pwd.getpwnam("odoo")
 
