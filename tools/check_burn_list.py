@@ -5618,20 +5618,40 @@ def _is_odoo_module(filepath, target_dir):
     return False
 
 
+def _git_worktree_root(directory):
+    """The nearest ancestor of `directory` (itself included) that holds a `.git` entry, or None outside a repository."""
+    current = os.path.abspath(directory)
+    while True:
+        if os.path.exists(os.path.join(current, ".git")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
 def _git_ignored_paths(target_dir):
     """Paths under `target_dir` (relative to it) that git ignores, with an ignored directory listed once instead of
-    every file in it. Empty outside a git repository or when git cannot be run."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", target_dir, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
+    every file in it. Empty outside a git repository.
+
+    `-c safe.directory=<worktree>` is scoped to this one call: tools/test.py runs this linter as the `odoo` account, which
+    does not own the checkout, and git then refuses with "detected dubious ownership". Falling back to an empty set on that
+    failure lints every ignored file, which fails a multi-module test run on a machine holding synced course content
+    (found 2026-09-28: 538 false errors from ham_training/data/teachers_guide). So a git failure inside a repository is fatal."""
+    root = _git_worktree_root(target_dir)
+    if root is None:
         return set()
+    result = subprocess.run(
+        [
+            "git", "-c", f"safe.directory={root}", "-C", target_dir,
+            "ls-files", "--others", "--ignored", "--exclude-standard", "--directory",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     if result.returncode != 0:
-        return set()
+        sys.exit(f"check_burn_list: cannot ask git which files under {target_dir} are ignored: {result.stderr.strip()}")
     return {os.path.normpath(line.rstrip("/")) for line in result.stdout.splitlines() if line.strip()}
 
 
