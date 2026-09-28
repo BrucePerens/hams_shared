@@ -64,6 +64,11 @@ def _git_tracked_js_files(repo_root):
         basename = os.path.basename(rel)
         if basename.endswith(".test.js") or basename.endswith(".min.js"):
             continue
+        # static/tests/ holds the test-only bundles (tours, Hoot suites). They are loaded only by the test runner and are
+        # never part of a production page, so a TEST_* branch there is the test half of a hook, not a reachable one. The
+        # production half (the Service Worker that receives the message) is under static/src/ and is still checked.
+        if "/static/tests/" in "/" + rel:
+            continue
         files.append(os.path.join(repo_root, rel))
     return files
 
