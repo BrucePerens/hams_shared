@@ -183,111 +183,36 @@ class CheckSmtpTests(unittest.TestCase):
 
 
 class CheckGeminiTests(unittest.TestCase):
-    def _resp(self, status):
-        resp = MagicMock()
-        resp.status = status
-        resp.__enter__ = MagicMock(return_value=resp)
-        resp.__exit__ = MagicMock(return_value=False)
-        return resp
+    """check_gemini() no longer verifies the key over the network (AI features moved to the agy subprocess, 2026-09-22);
+    it only says that a still-set GEMINI_API_KEY is no longer how the deployment reaches Gemini."""
 
-    def test_a_missing_api_key_warns_without_a_network_call(self):
+    def _run(self, environ):
         buf = io.StringIO()
-        with contextlib.redirect_stderr(buf), patch.dict(
-            "os.environ", {}, clear=True
-        ), patch("urllib.request.urlopen") as m:
+        with contextlib.redirect_stderr(buf), patch.dict("os.environ", environ, clear=True), patch(
+            "urllib.request.urlopen"
+        ) as urlopen:
             ev.check_gemini()
-        m.assert_not_called()
-        self.assertIn("GEMINI_API_KEY is not set", buf.getvalue())
+        return buf.getvalue(), urlopen
 
-    def test_a_200_response_produces_no_warning(self):
-        buf = io.StringIO()
-        with contextlib.redirect_stderr(buf), patch.dict(
-            "os.environ", {"GEMINI_API_KEY": "x"}, clear=True
-        ), patch("urllib.request.urlopen", return_value=self._resp(200)):
-            ev.check_gemini()
-        self.assertEqual(buf.getvalue(), "")
+    def test_an_unset_key_is_silent_and_makes_no_network_call(self):
+        output, urlopen = self._run({})
+        self.assertEqual(output, "")
+        urlopen.assert_not_called()
 
-    def test_an_unexpected_non_200_status_is_reported(self):
-        buf = io.StringIO()
-        with contextlib.redirect_stderr(buf), patch.dict(
-            "os.environ", {"GEMINI_API_KEY": "x"}, clear=True
-        ), patch("urllib.request.urlopen", return_value=self._resp(201)):
-            ev.check_gemini()
-        self.assertIn("Unexpected status code 201", buf.getvalue())
+    def test_an_empty_key_counts_as_unset(self):
+        output, urlopen = self._run({"GEMINI_API_KEY": ""})
+        self.assertEqual(output, "")
+        urlopen.assert_not_called()
 
-    def test_a_401_http_error_is_reported_as_an_invalid_or_expired_key(self):
-        def raise_401(*_a, **_k):
-            raise HTTPError("url", 401, "Unauthorized", {}, None)
+    def test_a_set_key_warns_that_it_is_no_longer_used_and_is_never_sent_anywhere(self):
+        output, urlopen = self._run({"GEMINI_API_KEY": "sekrit-value"})
+        self.assertIn("GEMINI", output)
+        self.assertIn("no longer how this deployment reaches Gemini", output)
+        urlopen.assert_not_called()
 
-        buf = io.StringIO()
-        with contextlib.redirect_stderr(buf), patch.dict(
-            "os.environ", {"GEMINI_API_KEY": "x"}, clear=True
-        ), patch("urllib.request.urlopen", side_effect=raise_401):
-            ev.check_gemini()
-        self.assertIn("Invalid or expired GEMINI_API_KEY", buf.getvalue())
-
-    def test_a_500_http_error_is_reported_with_its_own_code_and_reason_not_the_invalid_key_message(self):
-        def raise_500(*_a, **_k):
-            raise HTTPError("url", 500, "Server Error", {}, None)
-
-        buf = io.StringIO()
-        with contextlib.redirect_stderr(buf), patch.dict(
-            "os.environ", {"GEMINI_API_KEY": "x"}, clear=True
-        ), patch("urllib.request.urlopen", side_effect=raise_500):
-            ev.check_gemini()
-        self.assertIn("API Key verification failed with HTTP 500: Server Error", buf.getvalue())
-        self.assertNotIn("Invalid or expired", buf.getvalue())
-
-    def test_the_api_key_is_sent_via_header_never_in_the_request_url(self):
-        # Bug-hunt regression test (2026-09-10, bug class 51:
-        # secret-in-url-or-log): the API key used to be interpolated into
-        # the URL's own query string (?key=<api_key>), a real exposure
-        # vector (proxy/CDN access logs record full request URLs) distinct
-        # from transport encryption. Confirmed via a real HTTPS request
-        # (curl, outside this test) that generativelanguage.googleapis.com
-        # accepts the key identically via the x-goog-api-key header.
-        captured = {}
-
-        def fake_urlopen(req, timeout=None):
-            captured["url"] = req.full_url
-            captured["header"] = req.get_header("X-goog-api-key")
-            return self._resp(200)
-
-        with patch.dict(
-            "os.environ", {"GEMINI_API_KEY": "sekrit-value"}, clear=True
-        ), patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            ev.check_gemini()
-        self.assertNotIn("sekrit-value", captured["url"])
-        self.assertEqual(captured["header"], "sekrit-value")
-
-    def test_a_network_level_url_error_is_reported_distinctly_from_an_http_error(self):
-        def raise_url_error(*_a, **_k):
-            raise URLError("no network")
-
-        buf = io.StringIO()
-        with contextlib.redirect_stderr(buf), patch.dict(
-            "os.environ", {"GEMINI_API_KEY": "x"}, clear=True
-        ), patch("urllib.request.urlopen", side_effect=raise_url_error):
-            ev.check_gemini()
-        self.assertIn("Network error when verifying API key: no network", buf.getvalue())
-
-    def test_a_wholly_unexpected_exception_is_reported_and_also_logged(self):
-        # Regression test for the `# audit-ignore-catch-all` tag added to check_gemini's final
-        # bare `except Exception` handler (the true catch-all fallback below the specific
-        # HTTPError/URLError branches). Same rule as the other tests in this file: a real
-        # logging call is now required, and present, alongside the existing print_warning().
-        def raise_something_unexpected(*_a, **_k):
-            raise ValueError("totally unexpected")
-
-        buf = io.StringIO()
-        with self.assertLogs(level="ERROR") as log_ctx, contextlib.redirect_stderr(buf), patch.dict(
-            "os.environ", {"GEMINI_API_KEY": "x"}, clear=True
-        ), patch("urllib.request.urlopen", side_effect=raise_something_unexpected):
-            ev.check_gemini()
-        self.assertIn("Unexpected error during API key verification", buf.getvalue())
-        self.assertTrue(
-            any("Unexpected error during API key verification" in msg for msg in log_ctx.output)
-        )
+    def test_the_key_value_never_appears_in_the_warning(self):
+        output, _ = self._run({"GEMINI_API_KEY": "sekrit-value"})
+        self.assertNotIn("sekrit-value", output)
 
 
 class LoadEnvFilesTests(unittest.TestCase):
