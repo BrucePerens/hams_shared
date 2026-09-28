@@ -322,3 +322,25 @@ is the real dispatcher's behaviour, not a mock -- see `hams_helpdesk/tests/test_
 `test_06`. When a production `AccessError` names a uid the traced code "cannot" be running as,
 check `_allow_sudo_commands` on the comodel and the transaction's default env before anything
 else.
+
+## 48. Four Production Faults That Only Showed Up By Looking At The Running Server (2026-09-28)
+**The Trap:** Tests, linters and a clean deployment all passed, and four faults had been live for days.
+(a) *A one-shot script under `Restart=always`.* A daemon whose `main.py` runs one pass and exits, run as
+`Type=simple` with `Restart=always RestartSec=60`, is restarted every minute forever (`NRestarts` 7,000 to 8,000 on three
+services; the same bug `fcc.uls.sync` had). It re-scrapes its source once a minute and, in one case, failed the same insert
+each time because the failure path never saved its "already handled" marker. (b) *Raising after partial success when a side
+effect is already outside the transaction.* `daemon_key_manager.action_force_provision_all` wrote each key file and then raised
+at the end if any daemon failed; the raise rolled back the database keys of the daemons that had succeeded, but their files
+stayed, so files and database disagreed and those daemons got "Unauthorized" for days. (c) *Odoo 19 refuses a server action for a
+user without write access to its model* unless the action names one of the user's groups. A cron that runs as a read-and-delete
+service account never runs; the only trace is a `Forbidden server action` warning and a rising `failure_count`, and the
+module's own tests call the model method directly and pass. (d) *A data block switched from `noupdate="1"` to `"0"` changes
+nothing on an existing database*: Odoo reads the flag stored in `ir_model_data`.
+**The Solution:** (a) A periodic job is `Type=oneshot` with its own `.timer`; a test now requires every timer's service to be
+oneshot without `Restart=always`. A daemon that must stay up loops in its own code. (b) Make each unit of work all-or-nothing
+(a savepoint per daemon, file written last), report failure in the result instead of raising, and let the caller commit what
+succeeded; have the systemd unit fail on a non-success result. (c) Name the service's group on the server action (the cron
+record's `group_ids`), and keep a test that asks Odoo's own check (`_can_execute_action_on_records`) as the cron's user; audit a
+running database with a shell script that walks `ir.cron`. (d) Flip `ir_model_data.noupdate` with SQL, then run `-u`. In
+general, after a deployment read the server, not only the tests: `systemctl --failed`, the `NRestarts` of every service,
+`ir_cron.failure_count`, the newest ERROR lines of the Odoo log, and a probe that each daemon's key still authenticates.
