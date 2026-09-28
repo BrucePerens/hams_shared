@@ -1256,7 +1256,9 @@ EnvironmentFile=-/opt/hams/etc/pdns.env
 EnvironmentFile=-/opt/hams/etc/odoo.env
 Environment="ODOO_USER=space_weather_service"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/space_weather_service.key"
-Environment="POLL_INTERVAL=14400"
+# noaa_swpc_sync/main.py polls at this interval (default 1800). NOAA publishes the Kp bins every three hours and the
+# flux a few times a day, so 30 minutes keeps the homepage within a bin of the source without re-downloading.
+Environment="POLL_INTERVAL=1800"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
