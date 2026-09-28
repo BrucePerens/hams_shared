@@ -7,6 +7,11 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # typescript-eslint's peer range is typescript >=4.8.4 <6.1.0 (checked 2026-09-28 against 8.70.1), so TypeScript 7 would break the
+    # JavaScript lint. Lift this once typescript-eslint supports it.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       minor-and-patch:
         update-types:
