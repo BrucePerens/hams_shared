@@ -645,47 +645,104 @@ class ReportDocumentationGapsTests(unittest.TestCase):
 
 
 class ReportDummyBlocksTests(unittest.TestCase):
+    """The stacked-anchors rule flags adjacent `Tests` anchors only (it used to flag any two adjacent anchors of any role)."""
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_two_consecutive_anchor_lines_are_flagged_as_stacked(self):
+    def _links(self, *lines, anchor="mod_a:COMM_x"):
         filepath = os.path.join(self.tmp, "mod_a", "tests", "test_foo.py")
-        all_lines = {filepath: {5, 6}}
-        self.assertTrue(va._report_dummy_blocks(all_lines, [], self.tmp))
+        return {filepath: [(anchor, n) for n in lines]}
 
-    def test_non_consecutive_anchor_lines_are_not_flagged(self):
-        filepath = os.path.join(self.tmp, "mod_a", "tests", "test_foo.py")
-        all_lines = {filepath: {5, 9}}
-        self.assertFalse(va._report_dummy_blocks(all_lines, [], self.tmp))
+    def test_two_consecutive_tests_anchor_lines_are_flagged_as_stacked(self):
+        self.assertTrue(va._report_dummy_blocks(self._links(5, 6), [], self.tmp))
 
-    def test_a_single_anchor_line_is_never_flagged(self):
-        filepath = os.path.join(self.tmp, "mod_a", "tests", "test_foo.py")
-        all_lines = {filepath: {5}}
-        self.assertFalse(va._report_dummy_blocks(all_lines, [], self.tmp))
+    def test_non_consecutive_tests_anchor_lines_are_not_flagged(self):
+        self.assertFalse(va._report_dummy_blocks(self._links(5, 9), [], self.tmp))
 
-    def test_the_check_is_blind_to_anchor_role_a_base_declaration_next_to_a_verified_by_still_trips_it(self):
-        # The real, empirically-discovered behavior that cost a fixture
-        # rewrite in MainIntegrationTests: this check only looks at
-        # adjacent line numbers, not what kind of anchor comment is on
-        # them. A base declaration immediately followed by an unrelated
-        # "# # Verified by" comment for a DIFFERENT anchor trips it exactly
-        # like two stacked test declarations would -- going through the
-        # real find_anchors_in_code() scan, not a hand-built line-number
-        # set, so a future change that makes the two functions disagree
-        # about what counts as "adjacent anchors" would be caught here.
+    def test_a_single_tests_anchor_line_is_never_flagged(self):
+        self.assertFalse(va._report_dummy_blocks(self._links(5), [], self.tmp))
+
+    def test_several_tests_anchors_on_one_line_are_not_adjacent_lines(self):
+        # The same line twice is one line.
+        self.assertFalse(va._report_dummy_blocks(self._links(5, 5), [], self.tmp))
+
+    def test_a_base_declaration_directly_above_a_verified_by_line_is_not_flagged(self):
+        # The house pattern, which the earlier role-blind rule flagged: the scan puts only `Tests` anchors in tests_links, so a
+        # real scan of this source yields no stacked block. Goes through the real find_anchors_in_code(), not a hand-built map.
         _write(
             os.path.join(self.tmp, "mod_a", "models", "foo.py"),
             "# [@ANCHOR: COMM_my_feature]\n"
             "# # Verified by [@ANCHOR: COMM_test_my_feature]\n"
+            "# # Verified by [@ANCHOR: COMM_test_my_feature_edge]\n"
             "class Foo:\n    pass\n",
         )
-        _code_anchors, _locs, _tests, _tests_set, _verified, _audit_ignore, _cross, _dups, code_anchor_lines = (
-            va.find_anchors_in_code(self.tmp, self.tmp)
+        scan = va.find_anchors_in_code(self.tmp, self.tmp)
+        tests_links = scan[2]
+        self.assertFalse(va._report_dummy_blocks(tests_links, [], self.tmp))
+
+    def test_stacked_tests_anchors_in_a_real_file_are_flagged_through_the_real_scan(self):
+        _write(
+            os.path.join(self.tmp, "mod_a", "tests", "test_foo.py"),
+            "def test_x(self):\n"
+            "    # Tests [@ANCHOR: mod_a:COMM_one]\n"
+            "    # Tests [@ANCHOR: mod_a:COMM_two]\n"
+            "    self.assertEqual(1, 1)\n",
         )
-        self.assertTrue(va._report_dummy_blocks(code_anchor_lines, [], self.tmp))
+        scan = va.find_anchors_in_code(self.tmp, self.tmp)
+        self.assertTrue(va._report_dummy_blocks(scan[2], [], self.tmp))
+
+
+class DummyTestBodyTests(unittest.TestCase):
+    """A `test*` function that cannot fail, however its anchors are laid out."""
+
+    def _names(self, source):
+        return [name for name, _line in va.find_dummy_test_functions(source)]
+
+    def test_pass_only_is_a_dummy_test(self):
+        self.assertEqual(self._names("def test_a(self):\n    pass\n"), ["test_a"])
+
+    def test_a_body_of_only_comments_and_a_docstring_is_a_dummy_test(self):
+        source = 'def test_a(self):\n    """Covers it."""\n    # Tests [@ANCHOR: mod:COMM_a] # Tests [@ANCHOR: mod:COMM_b]\n'
+        # A comment-only body is a syntax error on its own, so give it the docstring the real shape always has.
+        self.assertEqual(self._names(source), ["test_a"])
+
+    def test_ellipsis_and_an_assertion_that_cannot_fail_are_dummy_tests(self):
+        self.assertEqual(self._names("def test_a(self):\n    ...\n"), ["test_a"])
+        self.assertEqual(self._names("def test_b(self):\n    self.assertTrue(True)\n"), ["test_b"])
+        self.assertEqual(self._names("def test_c(self):\n    self.assertFalse(False)\n"), ["test_c"])
+        self.assertEqual(self._names("def test_d(self):\n    assert True\n"), ["test_d"])
+
+    def test_a_test_that_exercises_something_is_not_a_dummy_test(self):
+        self.assertEqual(self._names("def test_a(self):\n    self.assertEqual(f(), 1)\n"), [])
+        self.assertEqual(self._names("def test_b(self):\n    x = f()\n"), [])
+        self.assertEqual(self._names("def test_c(self):\n    raise NotImplementedError\n"), [])
+        self.assertEqual(self._names("def test_d(self):\n    self.assertTrue(f())\n"), [])
+
+    def test_one_real_statement_among_no_ops_makes_it_a_real_test(self):
+        self.assertEqual(self._names("def test_a(self):\n    pass\n    self.assertEqual(f(), 1)\n"), [])
+
+    def test_a_helper_that_is_not_named_test_is_never_flagged(self):
+        self.assertEqual(self._names("def helper(self):\n    pass\n"), [])
+
+    def test_async_test_methods_and_nested_classes_are_checked(self):
+        source = "class T:\n    async def test_a(self):\n        pass\n"
+        self.assertEqual(self._names(source), ["test_a"])
+
+    def test_a_file_that_does_not_parse_is_skipped_not_crashed(self):
+        self.assertEqual(self._names("def test_a(:\n"), [])
+
+    def test_the_report_flags_a_dummy_test_in_an_anchored_file_and_ignores_a_real_one(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        path = os.path.join(tmp, "mod_a", "tests", "test_foo.py")
+        _write(path, "def test_dummy(self):\n    # Tests [@ANCHOR: mod_a:COMM_x]\n    pass\n")
+        self.assertTrue(va._report_dummy_test_bodies({path: [("mod_a:COMM_x", 2)]}, [], tmp))
+        _write(path, "def test_real(self):\n    # Tests [@ANCHOR: mod_a:COMM_x]\n    self.assertEqual(f(), 1)\n")
+        self.assertFalse(va._report_dummy_test_bodies({path: [("mod_a:COMM_x", 2)]}, [], tmp))
 
 
 class ReportMissingUxDocsTests(unittest.TestCase):
@@ -825,7 +882,7 @@ class MainIntegrationTests(unittest.TestCase):
         _write(
             os.path.join(self.tmp, "mod_a", "tests", "test_foo.py"),
             "# Tests [@ANCHOR: COMM_my_feature]\n"
-            "class TestFoo:\n    def test_my_feature(self):\n        pass\n",
+            "class TestFoo:\n    def test_my_feature(self):\n        assert 1 + 1 == 2\n",
         )
         _write(
             os.path.join(self.tmp, "mod_a", "docs", "stories", "my_feature.md"),

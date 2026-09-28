@@ -37,6 +37,7 @@ RULES OF TRACEABILITY:
    still has to read both and decide.
 """
 
+import ast
 import json
 import os
 import re
@@ -1029,16 +1030,24 @@ def _report_documentation_gaps(
     return has_errors
 
 
-def _report_dummy_blocks(all_anchor_lines, primary_dirs, repo_root, explicit_non_primary=None):
+def _report_dummy_blocks(tests_links, primary_dirs, repo_root, explicit_non_primary=None):
+    """Adjacent `Tests` anchors: two `# Tests [@ANCHOR: ...]` lines on consecutive lines.
+
+    This used to flag any two consecutive lines that both carried an anchor, whatever their role, which also fired on the
+    ordinary house pattern of a feature's base declaration directly above its `Verified by` line, and on several `Verified by`
+    lines under one feature. Neither is a dummy test. What the rule exists to stop is a test that claims coverage of several
+    features with nothing behind it, and that is a stack of `Tests` anchors. (A separate check, `_report_dummy_test_bodies`,
+    catches the test whose body does nothing at all, however its anchors are laid out.) `tests_links` is the
+    {path: [(anchor, line)]} map of `Tests` anchors the scan already builds."""
     has_errors = False
-    for filepath, lines_set in all_anchor_lines.items():
+    for filepath, links in tests_links.items():
         if not is_primary(filepath, primary_dirs, repo_root, explicit_non_primary):
             continue
-            
-        lines = sorted(list(lines_set))
+
+        lines = sorted({line for _anchor, line in links})
         consecutive_blocks = []
         current_block = []
-        
+
         for line in lines:
             if not current_block:
                 current_block.append(line)
@@ -1050,23 +1059,93 @@ def _report_dummy_blocks(all_anchor_lines, primary_dirs, repo_root, explicit_non
                 current_block = [line]
         if len(current_block) > 1:
             consecutive_blocks.append(current_block)
-            
+
         if consecutive_blocks:
             rel_path = os.path.relpath(filepath, repo_root)
             # Keyed by file, not line span: line numbers shift with any unrelated edit.
             if _is_grandfathered("stacked", rel_path):
                 continue
             if not has_errors:
-                print("\n[!] CI/CD FAILURE: Dummy Test / Stacked Anchors Detected:")
+                print("\n[!] CI/CD FAILURE: Dummy Test / Stacked Tests Anchors Detected:")
                 has_errors = True
-            print(f"    - Stacked anchors found in '{rel_path}'")
+            print(f"    - Stacked `Tests` anchors found in '{rel_path}'")
             for block in consecutive_blocks:
-                print(f"      -> Lines {block[0]} to {block[-1]} have anchors right next to each other.")
-            print("      [!] DIAGNOSTIC FOR AI: You are strictly forbidden from creating 'dummy tests'")
-            print("          with multiple anchors stacked together. Each anchor MUST be placed inside")
-            print("          a real, functional test (one anchor per real test). If this is a document,")
-            print("          space out the definitions and write real content for them.")
+                print(f"      -> Lines {block[0]} to {block[-1]} are `Tests` anchors right next to each other.")
+            print("      [!] DIAGNOSTIC FOR AI: You are strictly forbidden from creating 'dummy tests' that claim")
+            print("          coverage of several features with nothing behind it. Put each `Tests` anchor inside a")
+            print("          real, functional test that exercises that feature. (A feature's own anchor above its")
+            print("          `Verified by` line is fine and is not what this check is about.)")
 
+    return has_errors
+
+
+# Statements that do nothing a test could be judged by: `pass`, a docstring or bare literal (`...` included), and an
+# assertion that cannot fail.
+_ALWAYS_TRUE_ASSERTIONS = {"assertTrue": True, "assertFalse": False}
+
+
+def _is_no_op_statement(stmt):
+    if isinstance(stmt, ast.Pass):
+        return True
+    if isinstance(stmt, ast.Assert):
+        return isinstance(stmt.test, ast.Constant) and bool(stmt.test.value) is True
+    if isinstance(stmt, ast.Expr):
+        value = stmt.value
+        if isinstance(value, ast.Constant):
+            return True
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr in _ALWAYS_TRUE_ASSERTIONS
+            and value.args
+            and isinstance(value.args[0], ast.Constant)
+            and value.args[0].value is _ALWAYS_TRUE_ASSERTIONS[value.func.attr]
+        ):
+            return True
+    return False
+
+
+def find_dummy_test_functions(source, filename="<string>"):
+    """[(name, line)] for each `test*` function whose whole body is no-ops, i.e. a test that can never fail.
+
+    Anchors are comments, so a test whose only content is `# Tests [@ANCHOR: ...]` lines parses as an empty body however the
+    anchors are arranged: one long line of them, or several lines. This looks at the function, not at the layout."""
+    try:
+        tree = ast.parse(source, filename=filename)
+    except SyntaxError:
+        return []
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+            if all(_is_no_op_statement(stmt) for stmt in node.body):
+                found.append((node.name, node.lineno))
+    return found
+
+
+def _report_dummy_test_bodies(tests_links, primary_dirs, repo_root, explicit_non_primary=None):
+    """A `test*` function that cannot fail, in a file that carries `Tests` anchors (see `find_dummy_test_functions`)."""
+    has_errors = False
+    for filepath in sorted(tests_links):
+        if not filepath.endswith(".py"):
+            continue
+        if not is_primary(filepath, primary_dirs, repo_root, explicit_non_primary):
+            continue
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                source = f.read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        rel_path = os.path.relpath(filepath, repo_root)
+        for name, line in find_dummy_test_functions(source, filepath):
+            if _is_grandfathered("dummy_test", f"{rel_path}::{name}"):
+                continue
+            if not has_errors:
+                print("\n[!] CI/CD FAILURE: Dummy Test (a test that cannot fail) Detected:")
+                has_errors = True
+            print(f"    - '{name}' in '{rel_path}' (line {line}) has no statement a test could fail on.")
+            print("      [!] DIAGNOSTIC FOR AI: You are strictly forbidden from creating 'dummy tests'. A test whose body")
+            print("          is `pass`, a docstring, or an assertion that cannot fail does not verify the feature its")
+            print("          anchors name. Exercise the real code and assert on the result.")
     return has_errors
 
 
@@ -1262,16 +1341,13 @@ def main():
     audit_ignore_links = {}
     user_manual_anchors = set()
     duplicates = []
-    all_anchor_lines = {}
 
     for target_dir in final_targets:
-        da, ca, dal = find_anchors_in_docs(target_dir, repo_root)
+        da, ca, _dal = find_anchors_in_docs(target_dir, repo_root)
         for k, v in da.items():
             docs_anchors.setdefault(k, []).extend(v)
         for k, v in ca.items():
             contract_anchors.setdefault(k, []).extend(v)
-        for k, v in dal.items():
-            all_anchor_lines.setdefault(k, set()).update(v)
 
         (
             c_anchors,
@@ -1282,7 +1358,7 @@ def main():
             a_ignore_links,
             c_refs,
             dups,
-            cal,
+            _cal,
         ) = find_anchors_in_code(target_dir, repo_root)
 
         # Real bug found 2026-09-12, confirmed empirically: `find_anchors_in_code`'s own
@@ -1325,8 +1401,6 @@ def main():
             audit_ignore_links.setdefault(k, []).extend(v)
         for k, v in c_refs.items():
             cross_references.setdefault(k, []).extend(v)
-        for k, v in cal.items():
-            all_anchor_lines.setdefault(k, set()).update(v)
         duplicates.extend(dups)
 
         for root, dirs, files in os.walk(target_dir):
@@ -1389,7 +1463,13 @@ def main():
             explicit_non_primary,
         ),
         _report_dummy_blocks(
-            all_anchor_lines,
+            tests_links,
+            primary_dirs,
+            repo_root,
+            explicit_non_primary,
+        ),
+        _report_dummy_test_bodies(
+            tests_links,
             primary_dirs,
             repo_root,
             explicit_non_primary,
