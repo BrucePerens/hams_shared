@@ -2166,7 +2166,6 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     os.environ["HAMS_REAL_LOG_DIRECTORY"] = real_log_dir
     os.environ["HOME"] = "/var/lib/odoo"
     os.environ["XDG_DATA_HOME"] = "/var/lib/odoo/.local/share"
-    apply_default_test_tmpdir(os.environ)
 
     odoo_user = pwd.getpwnam("odoo")
 
@@ -2960,6 +2959,8 @@ def main():
         ),
     )
     args = parser.parse_args()
+    # Before anything is spawned, so every child (Odoo, its headless Chrome profiles) inherits it in every mode, namespaced or flat.
+    apply_default_test_tmpdir(os.environ)
 
     if args.pause_on_fail:
         os.environ["HAMS_PAUSE_ON_FAIL"] = "1"
