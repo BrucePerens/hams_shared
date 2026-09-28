@@ -45,6 +45,30 @@ def _load_test_py_module():
 _test_runner = _load_test_py_module()
 
 
+class DefaultTestTmpdirTests(unittest.TestCase):
+    """The Odoo test process keeps its temporary files (and Chrome profiles) on the roomy disk, not the small /tmp partition."""
+
+    def test_an_unset_tmpdir_is_pointed_at_the_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environ = {}
+            self.assertEqual(_test_runner.apply_default_test_tmpdir(environ, directory), directory)
+            self.assertEqual(environ["TMPDIR"], directory)
+
+    def test_a_tmpdir_the_caller_already_chose_is_never_overridden(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environ = {"TMPDIR": "/somewhere/else"}
+            self.assertEqual(_test_runner.apply_default_test_tmpdir(environ, directory), "/somewhere/else")
+            self.assertEqual(environ["TMPDIR"], "/somewhere/else")
+
+    def test_a_missing_directory_leaves_tmpdir_alone(self):
+        environ = {}
+        self.assertIsNone(_test_runner.apply_default_test_tmpdir(environ, "/no/such/directory/for/tests"))
+        self.assertNotIn("TMPDIR", environ)
+
+    def test_the_default_is_the_odoo_account_temporary_directory(self):
+        self.assertEqual(_test_runner.DEFAULT_TEST_TMPDIR, "/var/lib/odoo/tmp")
+
+
 class RunCmdHangRecoveryTests(unittest.TestCase):
     """run_cmd()'s 60-second no-output branch used to kill headless chrome
     and retry FOREVER on every timeout -- `force_killed` was assigned
