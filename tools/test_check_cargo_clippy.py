@@ -74,6 +74,14 @@ class FindCargoCratesTests(unittest.TestCase):
         _write(os.path.join(worktree_crate, "Cargo.toml"), "[package]\nname = \"real_daemon\"\n")
         self.assertEqual(chk.find_cargo_crates(self.tmp), [real_crate])
 
+    def test_the_riscv_bench_crate_that_needs_a_generated_speech_file_is_excluded(self):
+        # Its main.rs include_bytes!s a gitignored file that prep.sh generates, so it cannot build on a clean checkout.
+        bench = os.path.join(self.tmp, "daemons", "ham_digital_modes", "tools", "codec2_riscv32_bench")
+        _write(os.path.join(bench, "Cargo.toml"), "[package]\nname = \"codec2_riscv32_bench\"\n")
+        real = os.path.join(self.tmp, "daemons", "ham_digital_modes")
+        _write(os.path.join(real, "Cargo.toml"), "[package]\nname = \"ham_digital_modes\"\n")
+        self.assertEqual(chk.find_cargo_crates(self.tmp), [real])
+
     def test_multiple_crates_are_all_found_and_sorted(self):
         crate_a = os.path.join(self.tmp, "daemons", "a_daemon")
         crate_b = os.path.join(self.tmp, "daemons", "b_daemon")

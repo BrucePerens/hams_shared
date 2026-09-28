@@ -46,8 +46,16 @@ IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".
 # against, matching `check_rust_function_test_anchors.py`'s own `reference/` exclusion for the
 # exact same reason -- so it's excluded from the build/lint gate rather than patched to track
 # a toolchain it was never written against.
+#
+# Found 2026-09-28 running this gate on a clean checkout: daemons/ham_digital_modes/tools/codec2_riscv32_bench
+# is a bare-metal harness (riscv32imc, run under QEMU) whose main.rs does
+# `include_bytes!("../speech.raw")`. That file is gitignored -- prep.sh cuts it out of a speech recording -- so
+# on any checkout without a local copy the crate cannot build at all, and the gate reported a "build error"
+# every time. Its code path is already covered by the host build of the same fixed-point codec and by the
+# harness's own checksum comparison (see its prep.sh), so it is excluded here rather than given a fake data file.
 EXCLUDE_CRATE_RELPATHS = {
     "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check",
+    "daemons/ham_digital_modes/tools/codec2_riscv32_bench",
     "reference/ambe/imbe.rs",
 }
 
