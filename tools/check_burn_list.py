@@ -1134,6 +1134,14 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 self.lines[lineno - 1]
             ):
                 return
+            # The OUTBOUND FETCH rule's own escape hatch, naming the trusted host (it was a warning until every existing
+            # site was converted or justified, 2026-09-28; see _check_unguarded_outbound_fetch).
+            if (
+                lineno <= len(self.lines)
+                and "audit-ignore-outbound-fetch" in self.lines[lineno - 1]
+                and "OUTBOUND FETCH" in msg
+            ):
+                return
             self.errors.append((lineno, msg))
 
         def add_warning(self, lineno, msg):
@@ -2897,14 +2905,14 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             every hop, including redirect targets, rather than trusting a
             second independently-timed DNS lookup.
 
-            Deliberately a WARNING rather than an error, and the reason is
-            about blast radius rather than severity: this is a repo-wide
-            scan that halts a run on its first error, so an error-level rule
-            landing on the ~33 existing call sites would break every
+            An ERROR since 2026-09-28. It started as a warning, and the reason
+            was blast radius rather than severity: this is a repo-wide scan
+            that halts a run on its first error, so an error-level rule
+            landing on the ~33 existing call sites would have broken every
             session's pre-flight on this shared box until all of them were
-            triaged. Warn first, triage, then promote. Most existing sites
-            call a fixed vendor host and will pass on the literal-URL test
-            above without anyone touching them.
+            triaged. Every site has now been converted to urlopen_ssrf_safe or
+            justified with an audit-ignore-outbound-fetch tag naming why the
+            host is fixed, and the rule also sees requests.Session receivers.
             """
             # Module code only. A test may legitimately fetch its own local
             # mock server, and daemons/ and tools/ are outside the Odoo
@@ -2951,9 +2959,9 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     # (`urllib.robotparser.RobotFileParser()`), an Attribute
                     # rather than a Name. Matching `.read()` on a tracked
                     # receiver name gets both cases right.
-                    self.add_warning(
+                    self.add_error(
                         node.lineno,
-                        "[%AUDIT] OUTBOUND FETCH: RobotFileParser.read() fetches robots.txt "
+                        "OUTBOUND FETCH: RobotFileParser.read() fetches robots.txt "
                         "itself, with no private-address check and no SSRF-safe variant. "
                         "Fetch it through zero_sudo.daemon.ssrf_safe_fetch.urlopen_ssrf_safe "
                         "and hand the body to .parse() instead -- see "
@@ -2995,9 +3003,9 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             ):
                 return
 
-            self.add_warning(
+            self.add_error(
                 node.lineno,
-                f"[%AUDIT] OUTBOUND FETCH: {matched} on a URL this scan cannot see the host of "
+                f"OUTBOUND FETCH: {matched} on a URL this scan cannot see the host of "
                 "-- an SSRF risk if any part of it comes from a caller, a record field or an "
                 "HTTP parameter, since the server can reach private addresses the caller "
                 "cannot. Use zero_sudo.daemon.ssrf_safe_fetch.urlopen_ssrf_safe, which "
