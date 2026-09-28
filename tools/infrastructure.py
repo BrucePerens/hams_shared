@@ -4732,7 +4732,8 @@ def _get_installed_module_names(db_name):
     On a genuinely fresh database (ir_module_module doesn't exist yet, or
     the database itself doesn't exist), returns an empty set -- correctly
     treating every discovered module as needing `-i`, matching this
-    function's only prior behavior before this distinction existed.
+    function's only prior behavior before this distinction existed. Any
+    other failure to read the list raises RuntimeError.
     """
     if not _database_exists(db_name):
         return set()
@@ -4751,13 +4752,16 @@ def _get_installed_module_names(db_name):
         # query itself fails with "relation does not exist") -- that's
         # exactly the "nothing is installed" case, not an error worth
         # surfacing; anything else is logged so it isn't silently masked.
-        if "does not exist" not in res.stderr:
-            _logger.warning(
-                "[*] Could not read ir_module_module from %s (%s) -- "
-                "treating as no modules installed.",
-                db_name, res.stderr.strip(),
-            )
-        return set()
+        if "does not exist" in res.stderr:
+            return set()
+        # Anything else means the database exists but its installed-module list could not be read (a transient
+        # connection error, a permissions problem). Returning an empty set here would send every module to `-i`,
+        # which Odoo treats as a no-op for an already-installed module, so the run would report success having
+        # applied none of its updates. Stop instead.
+        raise RuntimeError(
+            f"Could not read ir_module_module from {db_name} ({res.stderr.strip()}); refusing to guess which "
+            "modules are installed, because an empty answer would turn every module update into a silent no-op."
+        )
     return {line.strip() for line in res.stdout.splitlines() if line.strip()}
 
 
