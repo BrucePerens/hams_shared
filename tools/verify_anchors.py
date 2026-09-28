@@ -78,7 +78,8 @@ CODE_ISLANDS_UNDER_DOCS = [
 # Ratchet (baseline) for the pre-existing backlog. Every per-finding check has a kind: ADR-0055
 # documentation coverage ("doc_gap"), source-without-test-link ("no_test_link"), duplicate base
 # anchors ("duplicate"), a doc pointing at code that no longer exists ("missing_target"),
-# "orphan_test", "audit_ignore", "ux_doc", "stacked" (keyed by file), "cross_ref" and
+# "orphan_test", "audit_ignore", "ux_doc", "dummy_test" (keyed by file and function; there used to be a "stacked" kind, see
+# `_report_dummy_test_bodies`), "cross_ref" and
 # "broken_test_binding". The first several had large pre-existing backlogs, so the scan failed on every run and callers had to set HAMS_SKIP_ANCHOR_SCAN=1, which
 # also hid NEW gaps. A baseline file (`anchor_baseline_<repo>.json` beside this script, same
 # convention as `js_function_test_anchor_baseline_<repo>.json`) records the findings that existed
@@ -1030,55 +1031,6 @@ def _report_documentation_gaps(
     return has_errors
 
 
-def _report_dummy_blocks(tests_links, primary_dirs, repo_root, explicit_non_primary=None):
-    """Adjacent `Tests` anchors: two `# Tests [@ANCHOR: ...]` lines on consecutive lines.
-
-    This used to flag any two consecutive lines that both carried an anchor, whatever their role, which also fired on the
-    ordinary house pattern of a feature's base declaration directly above its `Verified by` line, and on several `Verified by`
-    lines under one feature. Neither is a dummy test. What the rule exists to stop is a test that claims coverage of several
-    features with nothing behind it, and that is a stack of `Tests` anchors. (A separate check, `_report_dummy_test_bodies`,
-    catches the test whose body does nothing at all, however its anchors are laid out.) `tests_links` is the
-    {path: [(anchor, line)]} map of `Tests` anchors the scan already builds."""
-    has_errors = False
-    for filepath, links in tests_links.items():
-        if not is_primary(filepath, primary_dirs, repo_root, explicit_non_primary):
-            continue
-
-        lines = sorted({line for _anchor, line in links})
-        consecutive_blocks = []
-        current_block = []
-
-        for line in lines:
-            if not current_block:
-                current_block.append(line)
-            elif line == current_block[-1] + 1:
-                current_block.append(line)
-            else:
-                if len(current_block) > 1:
-                    consecutive_blocks.append(current_block)
-                current_block = [line]
-        if len(current_block) > 1:
-            consecutive_blocks.append(current_block)
-
-        if consecutive_blocks:
-            rel_path = os.path.relpath(filepath, repo_root)
-            # Keyed by file, not line span: line numbers shift with any unrelated edit.
-            if _is_grandfathered("stacked", rel_path):
-                continue
-            if not has_errors:
-                print("\n[!] CI/CD FAILURE: Dummy Test / Stacked Tests Anchors Detected:")
-                has_errors = True
-            print(f"    - Stacked `Tests` anchors found in '{rel_path}'")
-            for block in consecutive_blocks:
-                print(f"      -> Lines {block[0]} to {block[-1]} are `Tests` anchors right next to each other.")
-            print("      [!] DIAGNOSTIC FOR AI: You are strictly forbidden from creating 'dummy tests' that claim")
-            print("          coverage of several features with nothing behind it. Put each `Tests` anchor inside a")
-            print("          real, functional test that exercises that feature. (A feature's own anchor above its")
-            print("          `Verified by` line is fine and is not what this check is about.)")
-
-    return has_errors
-
-
 # Statements that do nothing a test could be judged by: `pass`, a docstring or bare literal (`...` included), and an
 # assertion that cannot fail.
 _ALWAYS_TRUE_ASSERTIONS = {"assertTrue": True, "assertFalse": False}
@@ -1458,12 +1410,6 @@ def main():
         _report_missing_ux_docs(
             code_anchors,
             user_manual_anchors,
-            primary_dirs,
-            repo_root,
-            explicit_non_primary,
-        ),
-        _report_dummy_blocks(
-            tests_links,
             primary_dirs,
             repo_root,
             explicit_non_primary,

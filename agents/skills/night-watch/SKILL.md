@@ -1258,13 +1258,13 @@ Odoo run in the background, then work items that never need the lock. On 2026-09
 
 **Before queueing the Odoo run, expect two pre-flight halts that have nothing to do with your
 change** (2026-09-15, workspace-dc). The Semantic Anchor scan fails every run on repo-wide
-violations: about 170 "stacked anchors", plus missing targets under `docs/patent_disclosures/`.
+violations: the ADR-0054 / ADR-0055 coverage ratchets and missing targets under `docs/patent_disclosures/` (until
+2026-09-28 it also failed on about 170 "stacked anchors"; that rule was removed, see below).
 The burn list fails on hams_open's backlog. Either one aborts the run before a single test starts,
 after you've waited out the lock. Pass `HAMS_SKIP_ANCHOR_SCAN=1 HAMS_SKIP_BURN_LIST=1`, and cover
 what they skip yourself: `check_burn_list.py <module dir>` on each touched module, and a grep of the
-aborted log for your own anchor names. The log does list violations per file, so a new stacked
-anchor you added (for example, an `[@ANCHOR:]` line directly followed by `Verified by`) shows up
-there.
+aborted log for your own anchor names. The log does list violations per file, so a new unlinked function you
+added shows up there.
 
 ### A load gate now runs BEFORE the lock, so a busy box delays you instead of failing you
 
@@ -1612,15 +1612,13 @@ session that fixes the first finding and stops has not finished:
   from operational source code," which looks like a completely different problem from the one you
   were fixing. The tool's own diagnostic says so, several hundred lines away from the finding.
 
-The trap is in fixing the first one. The cheapest way to give an unlinked function test linkage is
-to add a second `// Tests [@ANCHOR:]` line above a test that already exercises it — and two anchor
-lines adjacent in a file is exactly what the **stacked anchors** check forbids. So the fix converts
-a "no test linkage" finding into a "stacked anchors" finding, in a different section of the report,
-and a session that re-greps only for its own anchor NAMES will not see it: stacked anchors are
-reported by file and line number, never by name. Grep the report for your FILE, not just your
-anchor names.
+The cheapest way to give an unlinked function test linkage is to add a second `// Tests [@ANCHOR:]` line above a test
+that already exercises it. That is fine as long as the test really does exercise it: the old "stacked anchors" check,
+which refused two adjacent anchor lines, was removed on 2026-09-28 (Bruce approved) because everything it still flagged was a
+real test covering several features. What refuses a dummy test now is the "test that cannot fail" check, which looks at the
+test's body (`pass`, a docstring, an assertion that cannot fail), not at how its anchors are laid out.
 
-The real fix is one anchor per test. If a function has no test of its own, that is usually the
+Better still is one anchor per test. If a function has no test of its own, that is usually the
 report telling you something true — write the test. On 2026-09-15 this produced a genuinely better
 suite: the function in question (a direct UDP DNS query) had only ever been exercised through a
 higher-level decision, and giving it its own test covered the socket path on its own for the first
