@@ -37,6 +37,42 @@ def _resolve_repo_root(given_path):
     return given_path
 
 
+def _resolve_main_checkout_root(repo_root):
+    """Resolves the REAL main checkout of `repo_root`'s own git repository, so the sibling-repo
+    paths computed from it (hams_open from hams_com, or vice versa) are correct even when
+    `repo_root` is itself a git worktree nested under `.claude/worktrees/<name>/`. Naively
+    joining `repo_root` with `".."` lands inside that nested worktree directory instead of back
+    at the real `~/workspace/` level -- confirmed live 2026-09-28: every module that depends on
+    the other repo (zero_sudo, compliance, user_websites, and everything else that lives in
+    hams_open, not hams_com) silently failed pre-flight in a worktree, deterministically, on
+    every run, not as a flake -- because `community_dir` above was computed from `repo_root`
+    directly and always resolved to a directory that doesn't exist. Same technique
+    fix_worktree_symlinks.py (hams_com repo root) already uses for the identical class of
+    problem with checked-in cross-repo symlinks: ask git itself where the shared object database
+    lives (`git rev-parse --git-common-dir`), which resolves correctly regardless of how deeply
+    the current worktree is nested, then take its parent directory as the true main checkout
+    root. Falls back to `repo_root` unchanged if git can't answer (not actually a git repository,
+    or git isn't on PATH) -- preserves the old, pre-fix behavior for that edge case rather than
+    raising, since every call site already has its own reasonable fallback for a missing
+    sibling."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return repo_root
+    git_common_dir = result.stdout.strip()
+    if not git_common_dir:
+        return repo_root
+    if not os.path.isabs(git_common_dir):
+        git_common_dir = os.path.join(repo_root, git_common_dir)
+    return os.path.dirname(os.path.normpath(git_common_dir))
+
+
 def _resolve_module_path(mod, repo_root, community_dir):
     """Resolve a named module to its real manifest directory: `repo_root` first, falling back to
     `community_dir` (the sibling repo) if the module has no `__manifest__.py` there. Returns the
@@ -153,13 +189,18 @@ def main():
         sys.exit(1)
 
     # 3. Resolve Sibling Dependency
+    main_checkout_root = _resolve_main_checkout_root(repo_root)
     community_dir = None
     if not os.path.exists(os.path.join(repo_root, "zero_sudo", "__manifest__.py")):
-        sibling_community = os.path.abspath(os.path.join(repo_root, "..", "hams_open"))
+        sibling_community = os.path.abspath(os.path.join(main_checkout_root, "..", "hams_open"))
         if os.path.isdir(sibling_community):
             community_dir = sibling_community
 
-    addons_paths = ["/usr/lib/python3/dist-packages/odoo/addons", repo_root, os.path.abspath(os.path.join(repo_root, "..", "hams_com"))]
+    addons_paths = [
+        "/usr/lib/python3/dist-packages/odoo/addons",
+        repo_root,
+        os.path.abspath(os.path.join(main_checkout_root, "..", "hams_com")),
+    ]
     if community_dir:
         addons_paths.append(community_dir)
     addons_path_str = ",".join(addons_paths)
@@ -550,7 +591,7 @@ def main():
     # vendored/sibling-repo asset it references may live outside
     # `dir_path` entirely, so this always scans the full repo and also
     # searches the sibling repo root for cross-repo asset references.
-    sibling_dir = community_dir or os.path.abspath(os.path.join(repo_root, "..", "hams_com"))
+    sibling_dir = community_dir or os.path.abspath(os.path.join(main_checkout_root, "..", "hams_com"))
     res = subprocess.run(
         [
             python_exec,
