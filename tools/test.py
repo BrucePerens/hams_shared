@@ -58,6 +58,7 @@ import ctypes
 import fcntl
 import glob
 import logging
+import math
 import os
 import pwd
 import queue
@@ -2547,8 +2548,14 @@ def _ci_load_gate_settings():
     raw_ratio = os.environ.get("HAMS_CI_LOAD_GATE_RATIO")
     if raw_ratio:
         try:
-            ratio = float(raw_ratio)
+            parsed_ratio = float(raw_ratio)
+            if not math.isfinite(parsed_ratio):
+                raise ValueError(raw_ratio)
+            ratio = parsed_ratio
         except ValueError:
+            # float("nan")/float("inf")/float("-infinity") all parse successfully with no
+            # ValueError -- explicitly re-raising into this same branch is what actually rejects
+            # them, same fallback-and-log treatment as any other unparseable override.
             print(
                 "[!] HAMS_CI_LOAD_GATE_RATIO=%r is not a number; using the default %.2f"
                 % (raw_ratio, ratio)
@@ -2557,7 +2564,10 @@ def _ci_load_gate_settings():
     raw_timeout = os.environ.get("HAMS_CI_LOAD_GATE_TIMEOUT")
     if raw_timeout:
         try:
-            timeout = float(raw_timeout)
+            parsed_timeout = float(raw_timeout)
+            if not math.isfinite(parsed_timeout):
+                raise ValueError(raw_timeout)
+            timeout = parsed_timeout
         except ValueError:
             print(
                 "[!] HAMS_CI_LOAD_GATE_TIMEOUT=%r is not a number; using the default %d"

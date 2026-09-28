@@ -862,6 +862,24 @@ class CiLoadGateWaitTests(unittest.TestCase):
         self.assertIn("HAMS_CI_LOAD_GATE_RATIO", buf.getvalue())
         self.assertIn("HAMS_CI_LOAD_GATE_TIMEOUT", buf.getvalue())
 
+    def test_a_non_finite_override_falls_back_to_the_default_and_says_so(self):
+        """float("nan")/float("inf")/float("-infinity") all parse without raising ValueError --
+        a plain `float(raw)` guard alone lets them through silently. Real bug found 2026-09-28 by
+        hams_shared/tools/check_float_isfinite.py; confirmed it would otherwise have set a NaN
+        threshold (every comparison against it is False, so the load gate would never trip) or an
+        infinite timeout (the gate would wait forever)."""
+        for bad_ratio, bad_timeout in (("nan", "inf"), ("inf", "-infinity"), ("-infinity", "nan")):
+            with self.subTest(bad_ratio=bad_ratio, bad_timeout=bad_timeout):
+                os.environ["HAMS_CI_LOAD_GATE_RATIO"] = bad_ratio
+                os.environ["HAMS_CI_LOAD_GATE_TIMEOUT"] = bad_timeout
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    ratio, timeout = _test_runner._ci_load_gate_settings()
+                self.assertEqual(ratio, _test_runner.CI_LOAD_GATE_DEFAULT_LOAD_RATIO)
+                self.assertEqual(timeout, _test_runner.CI_LOAD_GATE_DEFAULT_TIMEOUT_SECONDS)
+                self.assertIn("HAMS_CI_LOAD_GATE_RATIO", buf.getvalue())
+                self.assertIn("HAMS_CI_LOAD_GATE_TIMEOUT", buf.getvalue())
+
 
 class TestBrowserCountTests(unittest.TestCase):
     """`count_test_browser_processes()` replaced a box-wide

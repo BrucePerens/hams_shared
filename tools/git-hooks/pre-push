@@ -11,19 +11,29 @@ set -euo pipefail
 
 remote_name="$1"
 protected_ref="refs/heads/main"
+zero_sha="0000000000000000000000000000000000000000"
 
-while read -r local_ref local_sha remote_ref remote_sha; do
+# stdin (one "local_ref local_sha remote_ref remote_sha" line per ref being pushed) can only be
+# read once -- buffered into an array so both passes below can use it, instead of the original
+# single `while read` loop that only ever served the main fast-forward check.
+updates=()
+while IFS= read -r line; do
+    updates+=("$line")
+done
+
+for line in "${updates[@]}"; do
+    read -r local_ref local_sha remote_ref remote_sha <<< "$line"
     [ "$remote_ref" = "$protected_ref" ] || continue
 
     # Deleting the branch: local_sha is all zeros. Never allowed for main; branch protection
     # (allow_deletions: false) already refuses this server-side, but fail fast locally too.
-    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    if [ "$local_sha" = "$zero_sha" ]; then
         echo "pre-push: refusing to delete $protected_ref" >&2
         exit 1
     fi
 
     # Branch doesn't exist on the remote yet: nothing to fast-forward against.
-    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    if [ "$remote_sha" = "$zero_sha" ]; then
         continue
     fi
 
@@ -41,5 +51,57 @@ EOF
         exit 1
     fi
 done
+
+# ADR-0102 addendum, 2026-09-28: require the same check CI requires (burn-list-lint.yml's
+# `check_burn_list.py`, the one required status check gating a merge into main -- see that
+# workflow file's own comment) to pass locally before pushing anything OTHER than main, i.e. a
+# feature branch on its way to becoming a PR. Bruce's own instruction, found after several real
+# CI failures the same night that a local run would already have caught: "the process [should]
+# clearly require a linter run before a PR is submitted, so we will only get [CI failures]
+# related to conflicts between recent check-ins." Deliberately scoped to check_burn_list.py
+# alone, not the much slower full `run_linters.py` suite (Odoo module loading, the internal
+# pytest self-test suite): those other checks are not yet part of the required CI gate itself
+# (tracked separately -- see night_shift_todo), so failing pre-push on one of them would block a
+# push over something that would not actually have failed CI, the opposite of this check's own
+# purpose. Skips main pushes: those go through a PR's own CI already, and a direct push to main
+# is refused by the fast-forward/branch-protection checks above (and forbidden outright by
+# AGENTS.md) regardless.
+if [ "${HAMS_SKIP_PREPUSH_LINT:-0}" != "1" ]; then
+    pushing_non_main=0
+    for line in "${updates[@]}"; do
+        read -r local_ref local_sha remote_ref remote_sha <<< "$line"
+        [ "$remote_ref" = "$protected_ref" ] && continue
+        [ "$local_sha" = "$zero_sha" ] && continue  # deleting a branch: nothing to lint
+        pushing_non_main=1
+    done
+
+    if [ "$pushing_non_main" = "1" ]; then
+        repo_root=$(git rev-parse --show-toplevel)
+        linter=""
+        for candidate in "$repo_root/hams_shared/tools/check_burn_list.py" "$repo_root/tools/check_burn_list.py"; do
+            if [ -f "$candidate" ]; then
+                linter="$candidate"
+                break
+            fi
+        done
+
+        if [ -n "$linter" ]; then
+            echo "pre-push: running check_burn_list.py (the same check CI requires) before pushing..." >&2
+            if ! python3 "$linter" "$repo_root"; then
+                cat >&2 <<EOF
+
+pre-push: check_burn_list.py failed -- refusing to push. Fix the findings above (this is the
+exact check CI would otherwise fail on). If this push genuinely isn't headed for a PR against
+main, override with: HAMS_SKIP_PREPUSH_LINT=1 git push ...
+EOF
+                exit 1
+            fi
+        else
+            # A worktree whose hams_shared submodule/symlink is not populated: nothing to run,
+            # matching the pre-commit hook's own "don't block on a missing checker" convention.
+            echo "pre-push: check_burn_list.py not found, pre-push lint gate skipped" >&2
+        fi
+    fi
+fi
 
 exit 0

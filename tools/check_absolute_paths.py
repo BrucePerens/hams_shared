@@ -109,6 +109,16 @@ def check_absolute_paths(repo_dir):
             if file.startswith("course_") and file.endswith(".json"):
                 continue
 
+            # night_shift_todo/*/orphaned-worktree-*.md: sweep_orphan_worktrees.py (ADR-0102)
+            # generates these to flag a real, still-on-disk worktree it found idle with unpushed
+            # content, so a person can go look at it before it's lost. The absolute path IS the
+            # finding -- it's the literal filesystem location the file exists to point someone
+            # at, the same "this is real content, not a mistake" reasoning as course_*.json and
+            # the archive/ directory above, just filename-scoped since night_shift_todo/ is a
+            # real doc directory whose other files should still be checked normally.
+            if file.startswith("orphaned-worktree-") and file.endswith(".md"):
+                continue
+
             # This checker's own source and test necessarily embed the literal string
             # "/home/" somewhere -- it's what they search for and exercise -- so scanning
             # them would always flag a false self-match. Real false positive found
