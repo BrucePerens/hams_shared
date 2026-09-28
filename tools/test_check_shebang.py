@@ -74,6 +74,10 @@ class CheckShebangTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "node_modules", "pkg", "cli.py"), "x\n#!bad\n")
         self.assertEqual(chk.check_shebang(self.tmp), [])
 
+    def test_a_vendored_third_party_directory_is_never_walked(self):
+        _write(os.path.join(self.tmp, "daemons", "x", "vendor", "lib", "ttar.sh"), "x\n#!/bin/bash\n")
+        self.assertEqual(chk.check_shebang(self.tmp), [])
+
     def test_a_claude_worktree_directory_is_never_walked(self):
         # Real bug found 2026-09-12: this project's own standing convention runs concurrent
         # bug-hunt dispatches in isolated git worktrees under .claude/worktrees/<session>/

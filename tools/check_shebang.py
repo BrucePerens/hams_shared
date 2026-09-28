@@ -29,6 +29,9 @@ def check_shebang(repo_dir):
         ".claude",
         "target",
         "radae",
+        # Vendored third-party source (cargo vendor, opus, prometheus/procfs's ttar, ...): not ours to edit, and
+        # several of those files legitimately carry a shebang inside a generated here-document.
+        "vendor",
     }
     # Only check script files
     valid_exts = {
