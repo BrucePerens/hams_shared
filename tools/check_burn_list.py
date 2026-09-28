@@ -5664,6 +5664,10 @@ def _git_ignored_paths(target_dir):
     does not own the checkout, and git then refuses with "detected dubious ownership". Falling back to an empty set on that
     failure lints every ignored file, which fails a multi-module test run on a machine holding synced course content
     (found 2026-09-28: 538 false errors from ham_training/data/teachers_guide). So a git failure inside a repository is fatal."""
+    if not os.path.isdir(target_dir):
+        # test.py names a single test class as `module:TestClass`; there is no such directory to ask git about, and the walk
+        # below finds nothing to scan for it either.
+        return set()
     root = _git_worktree_root(target_dir)
     if root is None:
         return set()

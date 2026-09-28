@@ -4276,6 +4276,12 @@ def test_a_git_failure_inside_a_repository_is_fatal_not_an_empty_ignore_list(tmp
     assert "dubious ownership" in str(excinfo.value)
 
 
+def test_a_target_that_is_not_a_directory_is_not_a_git_failure(tmp_path):
+    # test.py passes `module:TestClass` to select one class; asking git about that non-directory made the pre-flight fatal.
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    assert check_burn_list._git_ignored_paths(str(tmp_path / "ham_shack:TestShackTour")) == set()
+
+
 def test_outside_a_git_repository_nothing_is_ignored(tmp_path, monkeypatch):
     monkeypatch.setattr(check_burn_list, "_git_worktree_root", lambda directory: None)
     assert check_burn_list._git_ignored_paths(str(tmp_path)) == set()
