@@ -6010,16 +6010,13 @@ def test_a_test_file_may_assert_what_the_loading_flags_really_are():
 
 
 def _outbound_fetch_warnings(source, filepath="/tmp/some_module/models/importer.py"):
-    # A warning, not an error, so read the warnings channel. See
-    # _check_unguarded_outbound_fetch's own docstring for why this rule is
-    # warning-level: an error halts this repo-wide scan on its first hit,
-    # which would break every session's pre-flight on a shared box until all
-    # ~33 existing call sites were triaged.
+    # An error since 2026-09-28 (a warning until every existing site was converted or justified); reading both channels keeps
+    # these tests about the rule's shape rather than its severity.
     lines = source.splitlines()
-    _errors, warnings = check_ast_vulnerabilities(
+    errors, warnings = check_ast_vulnerabilities(
         filepath, source, lines, is_odoo_module=True
     )
-    return [msg for _lineno, msg in warnings if "OUTBOUND FETCH" in msg]
+    return [msg for _lineno, msg in errors + warnings if "OUTBOUND FETCH" in msg]
 
 
 def test_requests_get_on_a_variable_url_is_flagged():
@@ -6493,3 +6490,12 @@ def test_a_local_import_is_forbidden_even_when_gated_and_tagged_as_optional():
 def test_the_optional_import_tag_is_not_in_the_bypass_allow_list():
     assert "burn-ignore-optional-import" not in {t for t, _ok in _allow_listed_bypass_tags()}
 
+
+
+def test_the_outbound_fetch_finding_is_an_error_and_its_audit_tag_suppresses_it():
+    flagged = "def f(url):\n    return requests.get(url)\n"
+    errors, _warnings = check_ast_vulnerabilities("/tmp/some_module/models/importer.py", flagged, flagged.splitlines(), is_odoo_module=True)
+    assert any("OUTBOUND FETCH" in msg for _n, msg in errors)
+    tagged = "def f(url):\n    return requests.get(url)  # audit-ignore-outbound-fetch\n"
+    errors, warnings = check_ast_vulnerabilities("/tmp/some_module/models/importer.py", tagged, tagged.splitlines(), is_odoo_module=True)
+    assert not [m for _n, m in errors + warnings if "OUTBOUND FETCH" in m]
