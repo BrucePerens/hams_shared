@@ -1061,6 +1061,26 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     if isinstance(target, ast.Name):
                         self._robotfileparser_names.add(target.id)
 
+            # Names bound to a `requests.Session()`, for OUTBOUND FETCH: `session.get(url)` is exactly as unverifiable as
+            # `requests.get(url)`, and the rule used to match only a receiver literally named `requests`, so the two real
+            # Session users in module code (cloudflare_api's module-level `session`, json_rpc_client's `self.session`) went
+            # unreported. Both a plain name and an attribute (`self.session = requests.Session()`) are collected.
+            self._requests_session_names = set()
+            for n in ast.walk(tree):
+                if not isinstance(n, ast.Assign) or not isinstance(n.value, ast.Call):
+                    continue
+                called = n.value.func
+                if not (
+                    (isinstance(called, ast.Attribute) and called.attr == "Session" and getattr(called.value, "id", "") == "requests")
+                    or (isinstance(called, ast.Name) and called.id == "Session")
+                ):
+                    continue
+                for target in n.targets:
+                    if isinstance(target, ast.Name):
+                        self._requests_session_names.add(target.id)
+                    elif isinstance(target, ast.Attribute):
+                        self._requests_session_names.add(target.attr)
+
             self.has_ham_base = False
             if self.filepath:
                 current = os.path.abspath(self.filepath)
@@ -2900,11 +2920,17 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
             if isinstance(node.func, ast.Attribute):
                 receiver = getattr(node.func.value, "id", "")
+                session_name = receiver or getattr(node.func.value, "attr", "")
                 if (
                     receiver == "requests"
                     and node.func.attr in self._OUTBOUND_REQUESTS_VERBS
                 ):
                     matched = f"requests.{node.func.attr}()"
+                elif (
+                    session_name in self._requests_session_names
+                    and node.func.attr in self._OUTBOUND_REQUESTS_VERBS
+                ):
+                    matched = f"{session_name}.{node.func.attr}()"
                 elif node.func.attr == "urlopen":
                     matched = "urlopen()"
                 elif (
@@ -2952,7 +2978,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             # wrong: ham_relay_bridge's Cloudflare client is exactly this
             # shape and could not have been cleared by any amount of care at
             # the call site.
-            url_index = 1 if matched == "requests.request()" else 0
+            url_index = 1 if matched.endswith(".request()") else 0
             if len(node.args) > url_index:
                 url_arg = node.args[url_index]
             else:

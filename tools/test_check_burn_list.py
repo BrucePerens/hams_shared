@@ -6057,6 +6057,45 @@ def test_an_uppercase_attribute_url_is_not_flagged():
     assert not _outbound_fetch_warnings(source)
 
 
+def test_a_module_level_session_get_on_a_variable_url_is_flagged():
+    source = "session = requests.Session()\n\ndef f(url):\n    return session.get(url, timeout=10)\n"
+    assert _outbound_fetch_warnings(source)
+
+
+def test_an_instance_attribute_session_post_on_a_variable_url_is_flagged():
+    source = (
+        "class C:\n"
+        "    def __init__(self):\n"
+        "        self.session = requests.Session()\n"
+        "    def send(self, url):\n"
+        "        return self.session.post(url, json={})\n"
+    )
+    assert _outbound_fetch_warnings(source)
+
+
+def test_a_session_call_on_a_literal_or_constant_url_is_not_flagged():
+    source = (
+        "API = 'https://api.example.com'\n"
+        "session = requests.Session()\n\n"
+        "def f():\n"
+        "    session.get('https://api.example.com/v1')\n"
+        "    return session.post(API)\n"
+    )
+    assert not _outbound_fetch_warnings(source)
+
+
+def test_session_request_reads_the_url_from_its_second_argument():
+    fixed = "session = requests.Session()\n\ndef f(path):\n    return session.request('GET', f'https://api.example.com/{path}')\n"
+    unfixed = "session = requests.Session()\n\ndef f(url):\n    return session.request('GET', url)\n"
+    assert not _outbound_fetch_warnings(fixed)
+    assert _outbound_fetch_warnings(unfixed)
+
+
+def test_a_get_on_something_that_is_not_a_session_is_not_flagged():
+    # dict.get and friends share the verb names; only names bound to requests.Session() count.
+    assert not _outbound_fetch_warnings("def f(cache, key):\n    return cache.get(key)\n")
+
+
 def test_urlopen_on_a_variable_url_is_flagged_both_bare_and_qualified():
     bare = "def f(url):\n    return urlopen(url)\n"
     qualified = "def f(url):\n    return urllib.request.urlopen(url)\n"
