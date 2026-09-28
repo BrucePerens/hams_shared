@@ -2049,6 +2049,13 @@ class TimerDrivenUnitTests(unittest.TestCase):
             self.assertIn("Type=oneshot", units[service], f"{service} is started by a timer, so it must be oneshot")
             self.assertNotIn("Restart=always", units[service], f"{service} must not restart itself under a timer")
 
+    def test_ncvec_sync_writes_its_data_under_the_writable_spool_not_the_read_only_source_tree(self):
+        # ProtectSystem=strict makes /opt/hams/daemons read-only; the daemon's default of ../../ham_training/data failed
+        # every cycle with "Read-only file system".
+        unit = self._units()["ncvec.sync.service"]
+        self.assertIn('Environment="HAMS_NCVEC_DATA_DIR=/opt/hams/spool/ncvec"', unit)
+        self.assertIn("ReadWritePaths=/opt/hams/spool", unit)
+
     def test_ncvec_and_au_pii_are_now_timer_driven(self):
         units = self._units()
         for name in ("ncvec.sync", "au.pii.sync"):

@@ -2798,6 +2798,7 @@ EnvironmentFile=-/opt/hams/etc/rabbitmq.env
 EnvironmentFile=-/opt/hams/etc/pdns.env
 EnvironmentFile=-/opt/hams/etc/odoo.env
 Environment="ODOO_USER=ncvec_sync_service_internal"
+Environment="HAMS_NCVEC_DATA_DIR=/opt/hams/spool/ncvec"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/ncvec_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
