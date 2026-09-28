@@ -207,5 +207,56 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("never imported", out)
 
 
+class ModuleSubpackageTests(unittest.TestCase):
+    """An Odoo module whose controllers (or models, wizard, report) package nothing imports installs cleanly and serves 404s."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _module(self, root_init, subpackage_init="from . import main\n", with_sub_init=True):
+        _write(os.path.join(self.tmp, "mod_a", "__manifest__.py"), "{}\n")
+        _write(os.path.join(self.tmp, "mod_a", "__init__.py"), root_init)
+        if with_sub_init:
+            _write(os.path.join(self.tmp, "mod_a", "controllers", "__init__.py"), subpackage_init)
+        _write(os.path.join(self.tmp, "mod_a", "controllers", "main.py"), "X = 1\n")
+
+    def _run(self):
+        result = subprocess.run([sys.executable, _SCRIPT, self.tmp], capture_output=True, text=True, timeout=30)
+        return result.returncode, result.stdout + result.stderr
+
+    def test_an_imported_controllers_package_passes(self):
+        self._module("from . import controllers\n")
+        code, out = self._run()
+        self.assertEqual(code, 0, out)
+
+    def test_a_controllers_package_the_module_never_imports_is_flagged(self):
+        self._module("\n")
+        code, out = self._run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("never imported by the module's own __init__.py", out)
+
+    def test_a_controllers_directory_with_no_init_is_flagged(self):
+        self._module("from . import controllers\n", with_sub_init=False)
+        code, out = self._run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("has no __init__.py", out)
+
+    def test_an_empty_subpackage_directory_is_not_flagged(self):
+        _write(os.path.join(self.tmp, "mod_a", "__manifest__.py"), "{}\n")
+        _write(os.path.join(self.tmp, "mod_a", "__init__.py"), "\n")
+        os.makedirs(os.path.join(self.tmp, "mod_a", "controllers"))
+        code, out = self._run()
+        self.assertEqual(code, 0, out)
+
+    def test_a_directory_that_is_not_a_module_is_not_held_to_it(self):
+        _write(os.path.join(self.tmp, "plain", "__init__.py"), "\n")
+        _write(os.path.join(self.tmp, "plain", "controllers", "main.py"), "X = 1\n")
+        code, out = self._run()
+        self.assertEqual(code, 0, out)
+
+
 if __name__ == "__main__":
     unittest.main()
