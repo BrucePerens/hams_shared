@@ -75,7 +75,11 @@ class CrashVisibilityTests(unittest.TestCase):
     def test_run_tests_reports_a_discovery_crash_in_its_own_return_value(self):
         fake_module = mock.Mock()
         fake_module.__file__ = "/fake/path/tests/__init__.py"
+        # run_tests() asks find_spec() whether the addon has a tests package before importing it;
+        # there is no odoo package to search here, so report that it does.
         with mock.patch.object(
+            test_mcp_server.importlib.util, "find_spec", return_value=mock.Mock()
+        ), mock.patch.object(
             test_mcp_server.importlib, "import_module", return_value=fake_module
         ), mock.patch.object(
             test_mcp_server.unittest.defaultTestLoader,
