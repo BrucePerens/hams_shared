@@ -347,7 +347,7 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         # The real practical question this widening raises: does a normal
         # multi-line anchor (content between BEGIN and END, the whole
         # point of the syntax) accidentally look like the "stacked/dummy"
-        # shape _report_dummy_blocks flags? It shouldn't -- BEGIN and END
+        # shape the (since removed) stacked-anchor rule flagged? It shouldn't -- BEGIN and END
         # land on lines 1 and 3 here, not adjacent, so code_anchor_lines
         # for this file must not contain two consecutive line numbers.
         _write(
@@ -644,8 +644,10 @@ class ReportDocumentationGapsTests(unittest.TestCase):
         )
 
 
-class ReportDummyBlocksTests(unittest.TestCase):
-    """The stacked-anchors rule flags adjacent `Tests` anchors only (it used to flag any two adjacent anchors of any role)."""
+class StackedAnchorsAreNoLongerARuleTests(unittest.TestCase):
+    """The adjacent-anchor ("stacked") rule was removed 2026-09-28 (Bruce approved). Every file it still flagged after it was narrowed
+    to `Tests` anchors was a real test with a real body that covers several features, so it only produced false positives; the
+    check for a test that cannot fail (`DummyTestBodyTests`) is what guards against dummy tests, independent of anchor layout."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -653,47 +655,36 @@ class ReportDummyBlocksTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _links(self, *lines, anchor="mod_a:COMM_x"):
-        filepath = os.path.join(self.tmp, "mod_a", "tests", "test_foo.py")
-        return {filepath: [(anchor, n) for n in lines]}
+    def _run(self):
+        result = subprocess.run([sys.executable, _SCRIPT, self.tmp], capture_output=True, text=True, timeout=60)
+        return result.returncode, result.stdout + result.stderr
 
-    def test_two_consecutive_tests_anchor_lines_are_flagged_as_stacked(self):
-        self.assertTrue(va._report_dummy_blocks(self._links(5, 6), [], self.tmp))
+    def test_the_rule_and_its_report_no_longer_exist(self):
+        self.assertIsNone(getattr(va, "_report_dummy_blocks", None))
 
-    def test_non_consecutive_tests_anchor_lines_are_not_flagged(self):
-        self.assertFalse(va._report_dummy_blocks(self._links(5, 9), [], self.tmp))
-
-    def test_a_single_tests_anchor_line_is_never_flagged(self):
-        self.assertFalse(va._report_dummy_blocks(self._links(5), [], self.tmp))
-
-    def test_several_tests_anchors_on_one_line_are_not_adjacent_lines(self):
-        # The same line twice is one line.
-        self.assertFalse(va._report_dummy_blocks(self._links(5, 5), [], self.tmp))
-
-    def test_a_base_declaration_directly_above_a_verified_by_line_is_not_flagged(self):
-        # The house pattern, which the earlier role-blind rule flagged: the scan puts only `Tests` anchors in tests_links, so a
-        # real scan of this source yields no stacked block. Goes through the real find_anchors_in_code(), not a hand-built map.
-        _write(
-            os.path.join(self.tmp, "mod_a", "models", "foo.py"),
-            "# [@ANCHOR: COMM_my_feature]\n"
-            "# # Verified by [@ANCHOR: COMM_test_my_feature]\n"
-            "# # Verified by [@ANCHOR: COMM_test_my_feature_edge]\n"
-            "class Foo:\n    pass\n",
-        )
-        scan = va.find_anchors_in_code(self.tmp, self.tmp)
-        tests_links = scan[2]
-        self.assertFalse(va._report_dummy_blocks(tests_links, [], self.tmp))
-
-    def test_stacked_tests_anchors_in_a_real_file_are_flagged_through_the_real_scan(self):
+    def test_several_tests_anchors_above_a_real_body_are_accepted(self):
         _write(
             os.path.join(self.tmp, "mod_a", "tests", "test_foo.py"),
             "def test_x(self):\n"
             "    # Tests [@ANCHOR: mod_a:COMM_one]\n"
             "    # Tests [@ANCHOR: mod_a:COMM_two]\n"
-            "    self.assertEqual(1, 1)\n",
+            "    self.assertEqual(f(), 1)\n",
         )
-        scan = va.find_anchors_in_code(self.tmp, self.tmp)
-        self.assertTrue(va._report_dummy_blocks(scan[2], [], self.tmp))
+        _code, out = self._run()
+        self.assertNotIn("Stacked", out)
+        self.assertNotIn("cannot fail", out)
+
+    def test_the_same_anchors_above_a_body_that_cannot_fail_are_still_refused(self):
+        _write(
+            os.path.join(self.tmp, "mod_a", "tests", "test_foo.py"),
+            "def test_x(self):\n"
+            "    # Tests [@ANCHOR: mod_a:COMM_one]\n"
+            "    # Tests [@ANCHOR: mod_a:COMM_two]\n"
+            "    pass\n",
+        )
+        code, out = self._run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("cannot fail", out)
 
 
 class DummyTestBodyTests(unittest.TestCase):
