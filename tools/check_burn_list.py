@@ -15,6 +15,7 @@ Future AI sessions MUST read this docstring. If this linter fails your code:
 """
 import os
 import re
+import subprocess
 import sys
 import ast
 
@@ -5617,6 +5618,23 @@ def _is_odoo_module(filepath, target_dir):
     return False
 
 
+def _git_ignored_paths(target_dir):
+    """Paths under `target_dir` (relative to it) that git ignores, with an ignored directory listed once instead of
+    every file in it. Empty outside a git repository or when git cannot be run."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", target_dir, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return set()
+    if result.returncode != 0:
+        return set()
+    return {os.path.normpath(line.rstrip("/")) for line in result.stdout.splitlines() if line.strip()}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", nargs="?", default=".")
@@ -5655,11 +5673,18 @@ def main():
                 if stripped and not stripped.startswith("#"):
                     ignore_patterns.append(re.compile(stripped))
 
+    # Files git itself ignores (generated content such as ham_training/data/teachers_guide, delivered to a checkout by
+    # a sync script and never committed) are not part of the repository, so they are not linted. Before this, a checkout
+    # that held that generated HTML failed every test.py run at this pre-flight step with hundreds of "UI tour mandate"
+    # findings about files CI never sees. Outside a git repository nothing is skipped.
+    git_ignored = _git_ignored_paths(target_dir)
+
     def is_ignored(path_str):
         for pat in ignore_patterns:
             if pat.search(path_str):
                 return True
-        return False
+        parts = os.path.normpath(path_str).split(os.sep)
+        return any(os.sep.join(parts[:i]) in git_ignored for i in range(1, len(parts) + 1))
 
     for root, dirs, files in os.walk(target_dir):
         if "radae" in dirs:
