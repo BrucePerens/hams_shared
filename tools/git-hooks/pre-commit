@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Anti-summation-bias check: refuses a commit that shrinks a .md, .py or .json file by more than 5 percent, because that is
+# what an edit that silently dropped rules or nuance looks like. Only the staged changes are judged, so another session's
+# unrelated edit in a shared working tree cannot block this commit.
+#
+# A shrink that is a real refactor or deliberate deletion: commit with `git commit --no-verify` and say in the commit message
+# and in your report why the file got smaller.
+#
+# Installed by ../install_git_hooks.sh into .git/hooks/pre-commit, which every worktree of a repo shares.
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+for candidate in "$root/hams_shared/tools/check_summation_bias.py" "$root/tools/check_summation_bias.py"; do
+    if [ -f "$candidate" ]; then
+        exec python3 "$candidate" --staged
+    fi
+done
+# A worktree whose hams_shared submodule or symlink is not populated: nothing to run, and a hook must not block on that.
+echo "pre-commit: check_summation_bias.py not found, size check skipped" >&2
+exit 0

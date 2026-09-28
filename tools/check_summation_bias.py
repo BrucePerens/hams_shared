@@ -7,6 +7,9 @@ Summation Bias Checker
 ----------------------
 Detects if a file's size has been reduced by more than 5% compared to HEAD.
 This helps prevent AI agents from summarizing and dropping critical nuance during edits.
+
+With `--staged` (what git-hooks/pre-commit runs) only the changes staged for the commit are compared, and the new size is
+the staged content's, so an unrelated edit another session has left in a shared working tree cannot block a commit.
 """
 
 import os
@@ -14,6 +17,7 @@ import subprocess
 import sys
 
 def main():
+    staged = "--staged" in sys.argv[1:]
     try:
         # `git rev-parse --show-toplevel` resolves correctly regardless of the CURRENT working
         # directory, as long as it's anywhere inside the repo -- unlike the naive relative-path
@@ -25,7 +29,8 @@ def main():
         repo_root = repo_root_res.stdout.strip()
 
         # Get list of modified files against HEAD
-        res = subprocess.run(["git", "diff", "--name-only", "HEAD"], capture_output=True, text=True, check=True)
+        diff_command = ["git", "diff", "--name-only"] + (["--cached"] if staged else ["HEAD"])
+        res = subprocess.run(diff_command, capture_output=True, text=True, check=True)
         modified_files = [f for f in res.stdout.strip().split("\n") if f]
     except subprocess.CalledProcessError:
         # Not in a git repo or no HEAD yet
@@ -65,7 +70,18 @@ def main():
             # File might be new (not in HEAD)
             continue
 
-        new_size = os.path.getsize(abs_filepath)
+        if staged:
+            try:
+                new_size = int(
+                    subprocess.run(
+                        ["git", "cat-file", "-s", f":{filepath}"],
+                        capture_output=True, text=True, check=True, cwd=repo_root,
+                    ).stdout.strip()
+                )
+            except subprocess.CalledProcessError:
+                continue  # the path is no longer in the index: a staged deletion
+        else:
+            new_size = os.path.getsize(abs_filepath)
         
         if old_size > 0 and new_size < old_size:
             reduction_ratio = (old_size - new_size) / old_size

@@ -48,9 +48,9 @@ def _commit_file(repo, relpath, content, message="add"):
     _git(repo, "commit", "-q", "-m", message)
 
 
-def _run(repo):
+def _run(repo, *args):
     result = subprocess.run(
-        [sys.executable, _SCRIPT], cwd=repo, capture_output=True, text=True, timeout=30
+        [sys.executable, _SCRIPT, *args], cwd=repo, capture_output=True, text=True, timeout=30
     )
     return result.returncode, result.stdout + result.stderr
 
@@ -62,6 +62,38 @@ class CheckSummationBiasTests(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_staged_mode_flags_a_staged_shrink(self):
+        _commit_file(self.tmp, "a.md", "x" * 1000)
+        _write(os.path.join(self.tmp, "a.md"), "x" * 100)
+        _git(self.tmp, "add", "a.md")
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 1, out)
+        self.assertIn("SUMMATION BIAS DETECTED in a.md", out)
+
+    def test_staged_mode_ignores_a_shrunk_file_that_is_not_staged(self):
+        # Another session's unrelated edit in the shared working tree must not block this commit.
+        _commit_file(self.tmp, "a.md", "x" * 1000)
+        _commit_file(self.tmp, "b.md", "y" * 1000)
+        _write(os.path.join(self.tmp, "a.md"), "x" * 100)
+        _write(os.path.join(self.tmp, "b.md"), "y" * 1001)
+        _git(self.tmp, "add", "b.md")
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 0, out)
+
+    def test_staged_mode_judges_the_staged_content_not_the_working_tree(self):
+        _commit_file(self.tmp, "a.md", "x" * 1000)
+        _write(os.path.join(self.tmp, "a.md"), "x" * 990)
+        _git(self.tmp, "add", "a.md")
+        _write(os.path.join(self.tmp, "a.md"), "x" * 10)  # a later, unstaged gutting
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 0, out)
+
+    def test_staged_mode_ignores_a_staged_deletion(self):
+        _commit_file(self.tmp, "a.md", "x" * 1000)
+        _git(self.tmp, "rm", "-q", "a.md")
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 0, out)
 
     def test_a_python_file_shrunk_more_than_5_percent_is_flagged(self):
         _commit_file(self.tmp, "foo.py", "x = 1\n" * 100)
