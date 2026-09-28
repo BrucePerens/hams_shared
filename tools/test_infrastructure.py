@@ -1957,8 +1957,10 @@ class LocalDatabaseBackupUnitTests(_TmpDirTestCase):
         line = next(l for l in text.splitlines() if l.startswith("ExecStart="))
         argv = shlex.split(line[len("ExecStart="):])
         self.assertEqual(argv[:2], ["/bin/bash", "-c"])
-        # systemd turns %% into %; do the same so the script runs as it would under systemd.
-        return argv[2].replace("%%", "%")
+        # systemd itself expands a bare $NAME (to nothing, when unset), so a literal dollar sign must be written $$.
+        # It also turns %% into %. Do what systemd does so the script runs as it would there.
+        self.assertNotRegex(argv[2].replace("$$", ""), r"\$", "an unescaped $ would be eaten by systemd")
+        return argv[2].replace("$$", "$").replace("%%", "%")
 
     def test_it_is_a_production_only_daily_timer_for_the_service(self):
         self.assertEqual(self._unit("service")["environments"], ["prod"])

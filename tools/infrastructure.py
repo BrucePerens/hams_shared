@@ -1407,7 +1407,8 @@ After=postgresql.service
 # file under /opt/hams/backups, which ProtectSystem=strict would forbid. It holds no network access to speak of and
 # reads only the local database socket.
 Type=oneshot
-ExecStart=/bin/bash -c 'set -euo pipefail; d=/opt/hams/backups/db-daily; install -d -m 700 $d; f=$d/hams_prod-$(date -u +%%Y-%%m-%%d-%%H%%M).dump; runuser -u postgres -- pg_dump -Fc hams_prod > $f.tmp; mv $f.tmp $f; chmod 600 $f; ls -1t $d/hams_prod-*.dump | tail -n +8 | xargs -r rm -f'
+# systemd expands $NAME itself, so every literal dollar sign is doubled ($$); %% likewise stands for a literal %.
+ExecStart=/bin/bash -c 'set -euo pipefail; d=/opt/hams/backups/db-daily; install -d -m 700 $$d; f=$$d/hams_prod-$$(date -u +%%Y-%%m-%%d-%%H%%M).dump; runuser -u postgres -- pg_dump -Fc hams_prod > $$f.tmp; mv $$f.tmp $$f; chmod 600 $$f; ls -1t $$d/hams_prod-*.dump | tail -n +8 | xargs -r rm -f'
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams.db.local.backup
