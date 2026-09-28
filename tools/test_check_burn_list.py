@@ -4215,6 +4215,35 @@ def test_a_module_with_a_non_literal_manifest_value_does_not_abort_the_whole_sca
     assert "RCE" in result.stdout and "eval" in result.stdout
 
 
+def _run_burn_list(directory):
+    return subprocess.run(
+        [sys.executable, str(Path(__file__).parent / "check_burn_list.py"), str(directory)],
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_a_file_git_ignores_is_not_linted(tmp_path):
+    # Generated content that a sync script delivers to a checkout and git ignores (ham_training/data/teachers_guide) is not
+    # part of the repository; linting it failed every multi-module test.py run on a machine that held it.
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text("generated/\n", encoding="utf-8")
+    (tmp_path / "generated").mkdir()
+    (tmp_path / "generated" / "bad.py").write_text("def f():\n    eval('1+1')\n", encoding="utf-8")
+    result = _run_burn_list(tmp_path)
+    assert "Traceback" not in result.stderr
+    assert "RCE" not in result.stdout, result.stdout
+
+
+def test_a_file_that_git_does_not_ignore_is_still_linted_even_when_untracked(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text("generated/\n", encoding="utf-8")
+    (tmp_path / "new_code").mkdir()
+    (tmp_path / "new_code" / "bad.py").write_text("def f():\n    eval('1+1')\n", encoding="utf-8")
+    result = _run_burn_list(tmp_path)
+    assert "RCE" in result.stdout and "eval" in result.stdout, result.stdout
+
+
 def test_access_csv_blank_line_is_forbidden():
     content = (
         "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink\n"
