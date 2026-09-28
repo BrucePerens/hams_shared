@@ -23,6 +23,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -4242,6 +4243,42 @@ def test_a_file_that_git_does_not_ignore_is_still_linted_even_when_untracked(tmp
     (tmp_path / "new_code" / "bad.py").write_text("def f():\n    eval('1+1')\n", encoding="utf-8")
     result = _run_burn_list(tmp_path)
     assert "RCE" in result.stdout and "eval" in result.stdout, result.stdout
+
+
+def test_the_git_ignore_query_scopes_safe_directory_to_the_worktree(tmp_path, monkeypatch):
+    # tools/test.py runs the linter as the odoo account, which does not own the checkout; without the scoped exception git
+    # refuses ("dubious ownership") and every ignored file used to get linted.
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "sub").mkdir()
+    captured = []
+    real_run = subprocess.run
+
+    def spy(cmd, *args, **kwargs):
+        captured.append(cmd)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(check_burn_list.subprocess, "run", spy)
+    check_burn_list._git_ignored_paths(str(tmp_path / "sub"))
+    assert f"safe.directory={tmp_path}" in captured[0]
+
+
+def test_a_git_failure_inside_a_repository_is_fatal_not_an_empty_ignore_list(tmp_path, monkeypatch):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+    class Failed:
+        returncode = 128
+        stdout = ""
+        stderr = "fatal: detected dubious ownership"
+
+    monkeypatch.setattr(check_burn_list.subprocess, "run", lambda *a, **k: Failed())
+    with pytest.raises(SystemExit) as excinfo:
+        check_burn_list._git_ignored_paths(str(tmp_path))
+    assert "dubious ownership" in str(excinfo.value)
+
+
+def test_outside_a_git_repository_nothing_is_ignored(tmp_path, monkeypatch):
+    monkeypatch.setattr(check_burn_list, "_git_worktree_root", lambda directory: None)
+    assert check_burn_list._git_ignored_paths(str(tmp_path)) == set()
 
 
 def test_access_csv_blank_line_is_forbidden():
