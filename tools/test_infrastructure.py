@@ -2011,6 +2011,40 @@ class LocalDatabaseBackupUnitTests(_TmpDirTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([n for n in os.listdir(backup_dir) if n.endswith(".dump")], [])
 
+class TimerDrivenUnitTests(unittest.TestCase):
+    """A sync that has a timer runs once and exits, so its service must be Type=oneshot and must not carry
+    Restart=always. ncvec.sync and au.pii.sync were Type=simple with Restart=always and RestartSec=60 while their main
+    scripts run one pass and exit, so systemd restarted them every minute for days (8,247 and 7,738 restarts on hams1),
+    re-scraping ncvec.org once a minute."""
+
+    def _units(self):
+        # Comment lines removed: several units explain, in a comment, the restart loop they used to have.
+        return {
+            item["path"].rsplit("/", 1)[1]: "\n".join(
+                line for line in item["content"].splitlines() if not line.lstrip().startswith("#")
+            )
+            for item in infra.MANIFEST["static_files"]
+            if item.get("path", "").startswith("/opt/hams/systemd/")
+        }
+
+    def test_every_service_that_has_a_timer_is_a_oneshot_that_is_not_restarted(self):
+        units = self._units()
+        timers = [name for name in units if name.endswith(".timer")]
+        self.assertGreater(len(timers), 10)
+        for timer in timers:
+            service = timer[: -len(".timer")] + ".service"
+            self.assertIn(service, units, f"{timer} has no service to run")
+            self.assertIn("Type=oneshot", units[service], f"{service} is started by a timer, so it must be oneshot")
+            self.assertNotIn("Restart=always", units[service], f"{service} must not restart itself under a timer")
+
+    def test_ncvec_and_au_pii_are_now_timer_driven(self):
+        units = self._units()
+        for name in ("ncvec.sync", "au.pii.sync"):
+            self.assertIn(f"{name}.timer", units)
+            self.assertIn("OnCalendar=daily", units[f"{name}.timer"])
+            self.assertIn("WantedBy=timers.target", units[f"{name}.timer"])
+            self.assertNotIn("WantedBy=multi-user.target", units[f"{name}.service"])
+
 
 if __name__ == "__main__":
     unittest.main()

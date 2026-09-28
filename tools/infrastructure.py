@@ -2787,7 +2787,7 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 ReadWritePaths=/opt/hams/spool /opt/hams/downloads
-Type=simple
+Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/ncvec_sync
 
@@ -2805,14 +2805,28 @@ Environment="DAEMON_ARGS="
 # Execution via system Python
 ExecStart=/usr/bin/python3 /opt/hams/daemons/ncvec_sync/main.py $DAEMON_ARGS
 
-Restart=always
-RestartSec=60
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=ncvec.sync
 
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/ncvec.sync.timer",
+            "content": """\
+[Unit]
+Description=Run the NCVEC Question Pool Sync Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
 [Install]
-WantedBy=multi-user.target
+WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
@@ -3073,7 +3087,7 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 ReadWritePaths=/opt/hams/spool /opt/hams/downloads
-Type=simple
+Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/au_pii_sync
 
@@ -3091,14 +3105,28 @@ Environment="DAEMON_ARGS="
 # Execution via system Python
 ExecStart=/usr/bin/python3 /opt/hams/daemons/au_pii_sync/main.py $DAEMON_ARGS
 
-Restart=always
-RestartSec=60
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=au.pii.sync
 
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/au.pii.sync.timer",
+            "content": """\
+[Unit]
+Description=Run the Australia PII Sync Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
 [Install]
-WantedBy=multi-user.target
+WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
