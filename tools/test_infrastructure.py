@@ -1339,18 +1339,18 @@ class GetInstalledModuleNamesTests(_SafePatchTestCase):
         self.assertEqual(result, set())
         mock_warning.assert_not_called()
 
-    def test_an_unexpected_query_failure_is_logged_not_silently_swallowed(self):
+    def test_an_unexpected_query_failure_stops_instead_of_reporting_nothing_installed(self):
+        # An empty set would send every module to `-i` (a no-op for an installed one), so a provisioning run would
+        # succeed while applying none of its updates.
         self.safe_patch_object(infra, "_database_exists", return_value=True)
         self.safe_patch_object(
             infra.subprocess, "run",
             return_value=MagicMock(returncode=1, stdout="", stderr="FATAL: connection refused"),
         )
-        with self.assertLogs("infrastructure", level="WARNING") as log_ctx:
-            result = infra._get_installed_module_names("hams_prod")
-        self.assertEqual(result, set())
-        self.assertTrue(
-            any("Could not read ir_module_module" in msg for msg in log_ctx.output)
-        )
+        with self.assertRaises(RuntimeError) as ctx:
+            infra._get_installed_module_names("hams_prod")
+        self.assertIn("connection refused", str(ctx.exception))
+        self.assertIn("hams_prod", str(ctx.exception))
 
 
 class SplitModulesByInstallStateTests(unittest.TestCase):
