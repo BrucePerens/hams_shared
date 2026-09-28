@@ -24,6 +24,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -1940,6 +1941,73 @@ class ProvisionEnvironmentHookWiringTests(unittest.TestCase):
         )
         hooks_test_idx = source.index('execute_hooks("test", run_cmd_func, env_vars)')
         self.assertLess(dirs_test_idx, hooks_test_idx)
+
+class LocalDatabaseBackupUnitTests(_TmpDirTestCase):
+    """The nightly local pg_dump unit (interim safety net while no S3/B2 backup is configured): its shell command must
+    parse, write a private dump, and keep only the seven newest."""
+
+    def _unit(self, suffix):
+        return next(
+            item for item in infra.MANIFEST["static_files"]
+            if item.get("path") == f"/opt/hams/systemd/hams.db.local.backup.{suffix}"
+        )
+
+    def _command(self):
+        text = infra.format_env(self._unit("service")["content"], {})
+        line = next(l for l in text.splitlines() if l.startswith("ExecStart="))
+        argv = shlex.split(line[len("ExecStart="):])
+        self.assertEqual(argv[:2], ["/bin/bash", "-c"])
+        # systemd turns %% into %; do the same so the script runs as it would under systemd.
+        return argv[2].replace("%%", "%")
+
+    def test_it_is_a_production_only_daily_timer_for_the_service(self):
+        self.assertEqual(self._unit("service")["environments"], ["prod"])
+        self.assertEqual(self._unit("timer")["environments"], ["prod"])
+        self.assertIn("OnCalendar=*-*-* 02:30:00", self._unit("timer")["content"])
+        self.assertIn("Persistent=true", self._unit("timer")["content"])
+
+    def test_the_command_writes_a_private_dump_and_keeps_only_the_seven_newest(self):
+        bin_dir = os.path.join(self.tmp, "bin")
+        os.makedirs(bin_dir)
+        counter = os.path.join(self.tmp, "counter")
+        with open(os.path.join(bin_dir, "runuser"), "w") as f:
+            f.write("#!/bin/bash\necho dump-of-\"$@\"\n")
+        # A stub clock so ten runs in one second still get ten different file names, and increasing mtimes.
+        with open(os.path.join(bin_dir, "date"), "w") as f:
+            f.write(f"#!/bin/bash\nn=$(cat {counter} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {counter}; printf '2026-01-01-%04d' $n\n")
+        for name in ("runuser", "date"):
+            os.chmod(os.path.join(bin_dir, name), 0o755)
+        backup_dir = os.path.join(self.tmp, "db-daily")
+        command = self._command().replace("/opt/hams/backups/db-daily", backup_dir)
+        self.assertNotIn("/opt/hams", command)
+        env = dict(os.environ, PATH=bin_dir + os.pathsep + os.environ["PATH"])
+        for _ in range(10):
+            subprocess.run(["/bin/bash", "-c", command], env=env, check=True)
+            # Give the files distinct, increasing mtimes without sleeping; retention orders by mtime.
+            for i, name in enumerate(sorted(os.listdir(backup_dir))):
+                os.utime(os.path.join(backup_dir, name), (1000 + i, 1000 + i))
+        kept = sorted(os.listdir(backup_dir))
+        self.assertEqual(len(kept), 7)
+        self.assertEqual(kept[-1], "hams_prod-2026-01-01-0010.dump")
+        self.assertEqual(kept[0], "hams_prod-2026-01-01-0004.dump")
+        self.assertFalse([n for n in kept if n.endswith(".tmp")])
+        self.assertEqual(os.stat(os.path.join(backup_dir, kept[-1])).st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(backup_dir).st_mode & 0o777, 0o700)
+        with open(os.path.join(backup_dir, kept[-1])) as f:
+            self.assertIn("pg_dump -Fc hams_prod", f.read())
+
+    def test_a_failing_dump_leaves_no_partial_file_and_fails_the_unit(self):
+        bin_dir = os.path.join(self.tmp, "bin")
+        os.makedirs(bin_dir)
+        with open(os.path.join(bin_dir, "runuser"), "w") as f:
+            f.write("#!/bin/bash\necho half-a-dump\nexit 3\n")
+        os.chmod(os.path.join(bin_dir, "runuser"), 0o755)
+        backup_dir = os.path.join(self.tmp, "db-daily")
+        command = self._command().replace("/opt/hams/backups/db-daily", backup_dir)
+        env = dict(os.environ, PATH=bin_dir + os.pathsep + os.environ["PATH"])
+        result = subprocess.run(["/bin/bash", "-c", command], env=env, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([n for n in os.listdir(backup_dir) if n.endswith(".dump")], [])
 
 
 if __name__ == "__main__":

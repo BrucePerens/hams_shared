@@ -1396,6 +1396,45 @@ WantedBy=timers.target
             "environments": ["prod", "test"],
         },
         {
+            "path": "/opt/hams/systemd/hams.db.local.backup.service",
+            "content": """\
+[Unit]
+Description=Nightly local pg_dump of the hams_prod database (interim safety net until the S3/B2 backup is configured)
+After=postgresql.service
+
+[Service]
+# Deliberately not sandboxed like the sync daemons: it runs pg_dump as the postgres account and writes a root-only
+# file under /opt/hams/backups, which ProtectSystem=strict would forbid. It holds no network access to speak of and
+# reads only the local database socket.
+Type=oneshot
+ExecStart=/bin/bash -c 'set -euo pipefail; d=/opt/hams/backups/db-daily; install -d -m 700 $d; f=$d/hams_prod-$(date -u +%%Y-%%m-%%d-%%H%%M).dump; runuser -u postgres -- pg_dump -Fc hams_prod > $f.tmp; mv $f.tmp $f; chmod 600 $f; ls -1t $d/hams_prod-*.dump | tail -n +8 | xargs -r rm -f'
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.db.local.backup
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams.db.local.backup.timer",
+            "content": """\
+[Unit]
+Description=Nightly local pg_dump of the hams_prod database
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             "path": "/opt/hams/systemd/ses.inbound.mail.ingest.service",
             "content": """\
 [Unit]
