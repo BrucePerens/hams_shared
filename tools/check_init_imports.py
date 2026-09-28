@@ -57,6 +57,34 @@ def get_imported_names(init_path):
     return imported
 
 
+# The subpackages an Odoo module's own __init__.py must import. A `controllers` package that nothing imports registers no
+# routes, a `models` one defines no models, and Odoo reports none of it: the module installs cleanly and every route just 404s.
+MODULE_SUBPACKAGES = ("models", "controllers", "wizard", "wizards", "report", "reports")
+
+
+def check_module_subpackages(module_root, dirs, files):
+    """Errors for an Odoo module (a directory holding __manifest__.py) whose models/controllers/wizard/report directory holds
+    Python files but has no __init__.py, or has one that the module's own __init__.py never imports. Returns the count and
+    prints each problem."""
+    problems = 0
+    root_init = os.path.join(module_root, "__init__.py")
+    root_imports = get_imported_names(root_init) if "__init__.py" in files else set()
+    for name in MODULE_SUBPACKAGES:
+        if name not in dirs:
+            continue
+        sub = os.path.join(module_root, name)
+        py_files = [f for f in os.listdir(sub) if f.endswith(".py") and f != "__init__.py"]
+        if not py_files:
+            continue
+        if not os.path.isfile(os.path.join(sub, "__init__.py")):
+            print(f"  ❌  ERROR: '{sub}' holds Python files ({', '.join(sorted(py_files)[:3])}...) but has no __init__.py, so Odoo never loads them")
+            problems += 1
+        elif name not in root_imports:
+            print(f"  ❌  ERROR: '{sub}' is never imported by the module's own __init__.py, so none of its {len(py_files)} file(s) load")
+            problems += 1
+    return problems
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: check_init_imports.py <repo_root>")
@@ -93,6 +121,8 @@ def main():
         if rel_parts[:3] == ["hams_shared", "tools", "odoo_type_stubs"]:
             dirs[:] = []
             continue
+        if "__manifest__.py" in files:
+            warnings += check_module_subpackages(root, dirs, files)
         if "__init__.py" in files:
             init_path = os.path.join(root, "__init__.py")
             imported = get_imported_names(init_path)
