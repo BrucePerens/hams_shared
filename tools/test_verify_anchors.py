@@ -455,6 +455,25 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         code_anchors, _locs, _tl, tests_links_set, *_rest = self._scan()
         self.assertIn("mod_a:COMM_x", tests_links_set)
 
+    def test_a_leftover_claude_worktree_directory_is_never_scanned(self):
+        """Real incident, 2026-09-29: an orphaned, untracked, .gitignore'd
+        .claude/worktrees/<session>/ directory (this project's own standing convention for
+        isolated concurrent work, left behind after its git worktree registration was removed
+        without deleting the directory itself) held a byte-identical copy of a real source file.
+        Because .claude was missing from this scan's own exclude_dirs, that leftover copy was
+        walked as if it were real code, and its anchor was reported as a duplicate of the real
+        one -- a hard CI/CD failure caused entirely by stale disk state. This exact shape (a
+        second on-disk copy of the same anchor, buried under .claude/worktrees/) must never be
+        seen at all, not merely tolerated as a non-duplicate."""
+        _write(os.path.join(self.tmp, "mod_a", "models", "foo.py"), "# [@ANCHOR: COMM_x]\n")
+        _write(
+            os.path.join(self.tmp, ".claude", "worktrees", "some-session", "mod_a", "models", "foo.py"),
+            "# [@ANCHOR: COMM_x]\n",
+        )
+        code_anchors, anchor_locations, _tl, _tls, _vbl, _aig, _crefs, duplicates, _lines = self._scan()
+        self.assertEqual(duplicates, [])
+        self.assertEqual(len(anchor_locations["mod_a:COMM_x"]), 1)
+
 
 class ReportDuplicatesTests(unittest.TestCase):
     def setUp(self):
