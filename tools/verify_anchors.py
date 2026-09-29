@@ -75,6 +75,30 @@ CODE_ISLANDS_UNDER_DOCS = [
     "docs/proposals/patent_disclosures/filed_applications/_pipeline",
 ]
 
+# Directories every os.walk below prunes before descending -- never real, first-party source or
+# docs, so never worth scanning for anchors. Centralized as one constant (rather than copied
+# literal sets at each call site) after a real incident: ".claude" was missing from all three of
+# this file's own exclude_dirs sets, so a leftover, untracked, .gitignore'd worktree directory
+# (.claude/worktrees/<session>/, this project's own standing convention for isolated concurrent
+# work -- excluded by name in every OTHER linter that walks the tree, e.g.
+# check_manifest_dependencies.py, check_cargo_clippy.py, run_linters.py itself) got walked as if
+# it were real code. Its files are byte-identical copies of real source under daemons/, so every
+# anchor in them was reported as a "Duplicate Semantic Anchor" against the real definition -- a
+# hard CI/CD failure (found live 2026-09-29, blocking an unrelated devbox_tools change) caused
+# entirely by stale disk state, not a real duplicate. Anything here is pruned in every walk;
+# adding a new exclusion once, here, is how the next such gap is avoided instead of quietly
+# missing one of three copies again.
+ANCHOR_SCAN_EXCLUDE_DIRS = {
+    ".claude",
+    ".git",
+    "__pycache__",
+    # Cargo build output (rustdoc HTML mirrors every .rs source file's own comments verbatim,
+    # including anchor tags) -- generated, gitignored, not source. Found live: scanning it
+    # duplicated a real anchor's "stacked Tests-anchor lines" finding under a second, bogus path
+    # (target/doc/src/.../decode.rs.html) alongside the real one.
+    "target",
+}
+
 # Ratchet (baseline) for the pre-existing backlog. Every per-finding check has a kind: ADR-0055
 # documentation coverage ("doc_gap"), source-without-test-link ("no_test_link"), duplicate base
 # anchors ("duplicate"), a doc pointing at code that no longer exists ("missing_target"),
@@ -277,19 +301,11 @@ def find_anchors_in_docs(root_dir, repo_root):
     contract_anchors = {}
     doc_anchor_lines = {}
     pattern = ANCHOR_PATTERN
-    exclude_dirs = {
+    exclude_dirs = ANCHOR_SCAN_EXCLUDE_DIRS | {
         "tools",
         "scripts",
         "hams_community",
         "hams_com",
-        ".git",
-        "__pycache__",
-        # Cargo build output (rustdoc HTML mirrors every .rs source file's own
-        # comments verbatim, including anchor tags) -- generated, gitignored,
-        # not source. Found live: scanning it duplicated a real anchor's
-        # "stacked Tests-anchor lines" finding under a second, bogus path
-        # (target/doc/src/.../decode.rs.html) alongside the real one.
-        "target",
     }
     code_island_paths = {os.path.join(root_dir, island) for island in CODE_ISLANDS_UNDER_DOCS}
 
@@ -486,21 +502,12 @@ def find_anchors_in_code(root_dir, repo_root):
     code_anchor_lines = {}
     duplicates = []
     pattern = ANCHOR_PATTERN
-    exclude_dirs = {
+    exclude_dirs = ANCHOR_SCAN_EXCLUDE_DIRS | {
         "docs",
-        ".git",
-        "__pycache__",
         "tools",
         "scripts",
         "hams_community",
         "hams_com",
-        # Cargo build output (rustdoc HTML mirrors every .rs source file's own
-        # comments verbatim, including anchor tags) -- generated, gitignored,
-        # not source. Found live: this walk's own file.endswith((..., ".html"))
-        # branch was scanning target/doc/src/.../*.rs.html as if it were real
-        # code, duplicating a real anchor's "stacked Tests-anchor lines"
-        # finding under a second, bogus path.
-        "target",
     }
 
     for root, dirs, files in os.walk(root_dir):
@@ -1360,16 +1367,7 @@ def main():
             dirs[:] = [
                 d
                 for d in dirs
-                if d
-                not in {
-                    "tools",
-                    "scripts",
-                    "hams_community",
-                    "hams_com",
-                    ".git",
-                    "__pycache__",
-                    "target",
-                }
+                if d not in ANCHOR_SCAN_EXCLUDE_DIRS | {"tools", "scripts", "hams_community", "hams_com"}
             ]
             if "documentation.html" in files:
                 full_doc_path = os.path.join(root, "documentation.html")
