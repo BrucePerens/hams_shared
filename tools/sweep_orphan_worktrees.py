@@ -15,6 +15,13 @@ Never force-deletes anything with real content in it. Three outcomes per worktre
   - present, clean, and fully pushed, and idle for at least `_MIN_IDLE_HOURS`: removed.
   - anything else (dirty, unpushed, or too recently touched to be confident it's abandoned):
     left alone, flagged once as a night_shift_todo/low/ entry rather than destroyed.
+
+"Clean" tolerates exactly one known, deliberately-never-committed source of dirt:
+`fix_worktree_symlinks.py`'s own local re-pointing of AGENTS.md/hams_shared (and similar
+checked-in relative symlinks) to an absolute, machine-specific target so they resolve correctly
+inside a worktree -- see hams_com/CLAUDE.md's own "Git Worktrees" section. Almost every real
+worktree ever created carries this exact drift and nothing else, which used to make this sweep
+flag (never remove) nearly all of them even when they were otherwise fully idle and pushed.
 """
 import logging
 import os
@@ -65,10 +72,55 @@ def _idle_hours(path):
     return (time.time() - newest) / 3600.0
 
 
-def _is_clean_and_pushed(path):
+def _real_symlink_target(anchor_dir, link_content):
+    """Resolve a symlink's stored content (absolute or relative), as if the symlink lived in
+    `anchor_dir`, to its fully-resolved real filesystem path -- following any intermediate
+    symlinks the resolved path passes through (e.g. a path built via a `hams_shared` symlink
+    compares equal to the same real location written out in full), and without requiring the
+    final target itself to exist."""
+    candidate = link_content if os.path.isabs(link_content) else os.path.join(anchor_dir, link_content)
+    return os.path.realpath(candidate)
+
+
+def _is_known_symlink_localization_drift(repo_root, worktree_path, modified_paths):
+    """True only if every path in `modified_paths` is a symlink whose sole change is
+    fix_worktree_symlinks.py's own local, machine-specific, deliberately-never-committed
+    absolute-path rewrite (see hams_com/CLAUDE.md's "Git Worktrees" section -- AGENTS.md and
+    hams_shared are checked-in relative symlinks that tool re-points to an absolute, correct
+    target inside a worktree, because their committed *relative* target is written assuming the
+    symlink sits at the main checkout's own top level, and resolves to the wrong place once the
+    same relative string sits several directories deeper inside a worktree).
+
+    Narrow on purpose: each symlink's actual on-disk real target must equal what its committed
+    content would resolve to if the same symlink instead sat at its own path directly under
+    `repo_root` (the main checkout) -- not merely "some path under this repo" -- so a genuine
+    accidental edit to one of these files is never masked as this drift."""
+    if not modified_paths:
+        return False
+    for rel in modified_paths:
+        full = os.path.join(worktree_path, rel)
+        if not os.path.islink(full):
+            return False
+        committed = _run(["git", "show", f"HEAD:{rel}"], cwd=worktree_path)
+        if committed.returncode != 0:
+            return False
+        working_real = os.path.realpath(full)
+        intended_real = _real_symlink_target(os.path.dirname(os.path.join(repo_root, rel)), committed.stdout)
+        if working_real != intended_real:
+            return False
+    return True
+
+
+def _is_clean_and_pushed(repo_root, path):
     status = _run(["git", "status", "--porcelain"], cwd=path)
     if status.stdout.strip():
-        return False
+        lines = status.stdout.splitlines()
+        # " M path" only -- an unstaged modification to a tracked file, nothing staged, added,
+        # deleted or renamed. Anything else (including a bare "M path", i.e. staged) is real
+        # dirt this function must not wave through.
+        modified = [line[3:] for line in lines if line[:2] == " M"]
+        if len(modified) != len(lines) or not _is_known_symlink_localization_drift(repo_root, path, modified):
+            return False
     branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=path).stdout.strip()
     upstream = _run(
         ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=path
@@ -145,9 +197,14 @@ def sweep_repo(repo_root):
             _logger.info("Skipping %s: touched %.1fh ago, too recent to call orphaned", path, idle_hours)
             continue
 
-        if _is_clean_and_pushed(path):
+        if _is_clean_and_pushed(repo_root, path):
             _logger.info("Removing clean, fully-pushed, idle worktree %s", path)
-            _run(["git", "worktree", "remove", path], cwd=repo_root)
+            # --force: `git worktree remove` does its own, independent dirt check and refuses
+            # a worktree carrying only the known symlink-localization drift just as readily as
+            # one with real changes -- but `_is_clean_and_pushed` above has already verified any
+            # dirt present is exactly that harmless, narrowly-matched pattern (or none at all),
+            # so it is safe to override git's own more conservative refusal here specifically.
+            _run(["git", "worktree", "remove", "--force", path], cwd=repo_root)
         elif not _todo_already_flagged(repo_root, path):
             branch = wt.get("branch", "").removeprefix("refs/heads/")
             _flag_worktree(repo_root, path, branch)
