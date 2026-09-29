@@ -233,6 +233,26 @@ class FindPythonFilesTests(unittest.TestCase):
         rels = [os.path.relpath(p, self.tmp) for p in found]
         self.assertEqual(rels, [os.path.join("real_dir", "x.py")])
 
+    def test_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- real bug found live 2026-09-28/29: a stray, untracked
+        daemons/hams_local_relay/test_run/whisper_venv/ left over from an earlier session's own
+        testing produced 15+ findings, every one inside vendored third-party packages (numpy,
+        pip, torch, urllib3, tqdm), none of it this project's own code. "site-packages" matches
+        any virtualenv by its structurally-guaranteed subdirectory, regardless of the venv's own
+        outer name."""
+        os.makedirs(os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy"))
+        os.makedirs(os.path.join(self.tmp, "real_dir"))
+        with open(
+            os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy", "x.py"), "w"
+        ) as f:
+            f.write("x = 1\n")
+        with open(os.path.join(self.tmp, "real_dir", "x.py"), "w") as f:
+            f.write("x = 1\n")
+        found = chk.find_python_files(self.tmp)
+        rels = [os.path.relpath(p, self.tmp) for p in found]
+        self.assertEqual(rels, [os.path.join("real_dir", "x.py")])
+
     def test_finds_nested_py_files_sorted(self):
         os.makedirs(os.path.join(self.tmp, "b"))
         os.makedirs(os.path.join(self.tmp, "a"))

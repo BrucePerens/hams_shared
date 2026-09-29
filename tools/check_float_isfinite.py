@@ -50,6 +50,16 @@ IGNORE_DIR_NAMES = {
     "target",
     ".git",
     "worktrees",
+    # A venv's own outer directory can be named anything (found live 2026-09-28/29: a stray,
+    # untracked daemons/hams_local_relay/test_run/whisper_venv/ left over from an earlier
+    # session's own testing flagged 15+ real-looking findings, every one of them inside vendored
+    # third-party packages -- numpy, pip, torch, urllib3, tqdm -- none of it this project's own
+    # code, and none of it fixable here even if it mattered). "venv"/".venv" above only catches
+    # the conventional name; "site-packages" catches any virtualenv regardless of what its own
+    # outer directory happens to be called, since every one has this exact subdirectory
+    # structurally (lib/pythonX.Y/site-packages/). Same reasoning check_absolute_paths.py's own
+    # "site-packages" exclusion already documents for the identical class of false positive.
+    "site-packages",
 }
 
 _IGNORE_COMMENT = "float-isfinite-ignore:"
