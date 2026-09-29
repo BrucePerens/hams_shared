@@ -62,7 +62,16 @@ module.exports = tseslint.config(
     },
     rules: {
       ...promiseRulesAllErrors,
-      "no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      // Real gap found 2026-09-28/29 running the full lint suite: this codebase already uses a
+      // leading-underscore convention for an intentionally-unused catch binding (e.g. `catch
+      // (_e) { ... }`, theme_hams/static/src/js/hams_theme.js and others) -- but `no-unused-vars`
+      // treats a catch clause's binding as a distinct category from an ordinary function
+      // argument, so `argsIgnorePattern` alone never covered it. Every one of those existing
+      // `catch (_e)` sites was a real, undetected lint violation until this was added.
+      "no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
+      ],
       "no-undef": "error",
     },
   },
@@ -77,6 +86,22 @@ module.exports = tseslint.config(
       globals: {
         __MAX_FILE_SIZE_BYTES__: "readonly",
         __MAX_STORAGE_BYTES__: "readonly",
+        // Same literal-substitution mechanism as the two above -- added when this
+        // file adopted the test-hooks pattern too, but this list was never updated.
+        __TEST_HOOKS_ENABLED__: "readonly",
+      },
+    },
+  },
+  {
+    // ham_shack/static/src/sw/shack_sw.js is served the same way, through
+    // ham_shack/controllers/offline.py's own literal string substitution --
+    // same reasoning as the caching/static/src/sw/sw.js entry immediately
+    // above: this is a build-time placeholder, not a real identifier, and
+    // was simply never added here when shack_sw.js adopted the pattern.
+    files: ["**/ham_shack/static/src/sw/shack_sw.js"],
+    languageOptions: {
+      globals: {
+        __TEST_HOOKS_ENABLED__: "readonly",
       },
     },
   },
@@ -107,6 +132,15 @@ module.exports = tseslint.config(
     // recommendedTypeChecked preset (which assumes a codebase designed
     // for strict typing and would be noisy here for no real benefit).
     files: ["**/*.js"],
+    // tsconfig.json's own `include` only covers `*/static/**/*.js` (real
+    // application source) -- `ham_training/data/**/*.js` is course content
+    // (teaching-material JS embedded for browser display, not app source)
+    // and was never meant to be in that project. Matching `**/*.js` above
+    // without this exclusion sent those files to the type-aware parser
+    // anyway, which then failed outright ("file not found in any of the
+    // provided project(s)") instead of just skipping them -- real files,
+    // real (if narrow) fix, not files that needed fixing themselves.
+    ignores: ["**/ham_training/data/**/*.js"],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
