@@ -3367,6 +3367,58 @@ WantedBy=multi-user.target
             "mode": "644",
             "environments": ["prod", "test"],
         },
+        {
+            # Added 2026-09-30: found via test_daemon_provisioning_coverage.py that this real,
+            # already-built child-safety monitoring daemon (docs/proposals/
+            # CHILD_SAFETY_COMMUNICATIONS_CONSENT.md section G.2, "The Official Observer") had zero
+            # systemd unit and zero running process on production -- a documented safety feature
+            # that was never actually deployed. Mirrors hams.simulated.bots.service's own
+            # environment exactly (same connection settings, same STT backend, same
+            # safety-classification module -- see observer.py's own module docstring for why they
+            # share configuration), differing only in ExecStart/Description/SyslogIdentifier and
+            # depending on hams.simulated.band.service directly (the underlying SFU) rather than on
+            # hams.simulated.bots.service, since the Observer is architecturally independent of the
+            # conversational bot fleet, not a client of it.
+            "path": "/opt/hams/systemd/hams.simulated.observer.service",
+            "content": """\
+[Unit]
+Description=Hams.com Simulated Band Official Observer (silent safety monitor)
+After=network.target hams.simulated.band.service
+Requires=hams.simulated.band.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/cache/whisper
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/daemons/hams_simulated_bots
+
+Environment="HF_HOME=/opt/hams/cache/whisper"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/hams_simulated_bots/observer.py $DAEMON_ARGS
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.simulated.observer
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
     ],
     "apt_packages": [
         {"name": "odoo", "debian_name": "odoo", "environments": ["early_prod"]},
