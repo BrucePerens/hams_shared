@@ -439,6 +439,28 @@ def hook_install_kopia_binary(env_vars, dest_dir, path, run_cmd_func):
     safe_remove(path)
 
 
+def hook_install_wkhtmltopdf(env_vars, dest_dir, path, run_cmd_func):
+    """Installs the real, patched-Qt wkhtmltopdf build Odoo's own PDF reports need
+    (report.render_qweb_pdf, e.g. Event: Registration Confirmation's attached ticket PDF -- a real
+    production failure found live 2026-09-29, "Unable to find Wkhtmltopdf on this system"). Debian
+    dropped the `wkhtmltopdf` package from its own repos entirely (confirmed live: `apt-cache
+    policy wkhtmltopdf` shows no candidate at all on Debian 13/trixie) -- Odoo's own documentation
+    points at this exact project's own GitHub releases instead, never a distro package, since a
+    plain unpatched build can't render some layouts Odoo relies on ("with patched qt" in `wkhtmltopdf
+    --version` confirms the right one installed). No Debian-13/trixie-specific build exists yet
+    (project last released 2023-05-22); the bookworm (Debian 12) amd64 build installs and runs
+    cleanly on trixie -- verified live, including a real report render, not just `--version`.
+    Installed via `apt-get install -y <path>`, not a bare `dpkg -i`, so apt resolves the package's
+    own declared Depends (xfonts-75dpi, xfonts-base, and the ordinary shared libraries already on
+    any Odoo box) automatically instead of leaving them missing."""
+    try:
+        run_cmd_func(["apt-get", "install", "-y", path])
+    except Exception as e:  # audit-ignore-catch-all
+        _logger.warning("wkhtmltopdf install failed: %s", e)
+        record_hook_failure("hook_install_wkhtmltopdf", e)
+    safe_remove(path)
+
+
 # [@ANCHOR: infrastructure:hook_create_pdns_sqlite_schema]
 _PDNS_SQLITE_SCHEMA_PATH = "/usr/share/pdns-backend-sqlite3/schema/schema.sqlite3.sql"
 
@@ -953,6 +975,14 @@ WantedBy=multi-user.target
             "mode": "644",
             "environments": ["prod"],
             "post_provision_hooks": [hook_install_kopia_binary],
+        },
+        {
+            "path": "/tmp/wkhtmltox.deb",
+            "url": "https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.bookworm_amd64.deb",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+            "post_provision_hooks": [hook_install_wkhtmltopdf],
         },
 
         {

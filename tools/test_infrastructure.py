@@ -457,6 +457,40 @@ class HookInstallKopiaBinaryTests(_TmpDirTestCase):
         self.assertFalse(os.path.exists(archive_path))
 
 
+class HookInstallWkhtmltopdfTests(_TmpDirTestCase):
+    # Real production failure, found live 2026-09-29: "Unable to find Wkhtmltopdf on this system"
+    # -- Debian dropped the wkhtmltopdf package from its own repos entirely, so Odoo's own PDF
+    # reports (e.g. Event: Registration Confirmation's attached ticket) failed outright. Odoo's
+    # own docs point at wkhtmltopdf's own GitHub releases instead of a distro package.
+    def test_installs_the_downloaded_deb_via_apt_get_so_its_own_deps_resolve(self):
+        deb_path = os.path.join(self.tmp, "wkhtmltox.deb")
+        with open(deb_path, "w") as f:
+            f.write("fake deb bytes")
+        mock_run = MagicMock()
+        infra.hook_install_wkhtmltopdf({}, self.tmp, deb_path, mock_run)
+        # apt-get install (not a bare dpkg -i) so the package's own declared Depends
+        # (xfonts-75dpi, xfonts-base, and friends) resolve automatically instead of being
+        # left missing, exactly as verified against the real production install.
+        mock_run.assert_called_once_with(["apt-get", "install", "-y", deb_path])
+        self.assertFalse(os.path.exists(deb_path))
+
+    def test_a_run_cmd_failure_is_swallowed_and_the_deb_is_still_cleaned_up(self):
+        deb_path = os.path.join(self.tmp, "wkhtmltox.deb")
+        with open(deb_path, "w") as f:
+            f.write("fake deb bytes")
+        mock_run = MagicMock(side_effect=RuntimeError("simulated apt failure"))
+        infra.hook_install_wkhtmltopdf({}, self.tmp, deb_path, mock_run)  # must not raise
+        self.assertFalse(os.path.exists(deb_path))
+        failures = infra.get_hook_failures()
+        self.assertEqual(len(failures), 1)
+        name, msg = failures[0]
+        self.assertEqual(name, "hook_install_wkhtmltopdf")
+        self.assertIn("simulated apt failure", msg)
+        summary = infra.render_hook_failure_summary()
+        self.assertIn("DEGRADED", summary)
+        self.assertIn("hook_install_wkhtmltopdf", summary)
+
+
 class HookFailureSummaryTests(_TmpDirTestCase):
     """Tests for the end-of-run hook-failure summary mechanism itself
     (night_shift_todo provisioning-silent-hook-failures-summary-328e3e45.md):
