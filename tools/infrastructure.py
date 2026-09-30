@@ -2448,7 +2448,82 @@ WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
+            # night_shift_todo/medium/pi500-1-fcc-uls-sync-not-tracked-in-infrastructure-py-
+            # 6d9a2f83.md: this "prod"/"test" entry describes the OLD deployment shape (system
+            # Python directly on hams1) -- it is stale and no longer what's actually running
+            # anywhere. The real, currently-working deployment moved to pi500-1's own
+            # residential egress path (see fcc-uls-sync-needs-non-datacenter-egress-path-
+            # a8e5f3c1.md for why: hams1's datacenter IP got rate-limited/blocked by Akamai);
+            # see the "pi500-1" entries a few lines below for the real, live unit files. Left
+            # in place rather than deleted -- removing a provisioning manifest entry that
+            # something else might still reference was a real, unverified risk, and this
+            # to-do's own scope is "capture the real content in git," not "clean up the old
+            # one."
             "environments": ["prod", "test"],
+        },
+        {
+            # night_shift_todo/medium/pi500-1-fcc-uls-sync-not-tracked-in-infrastructure-py-
+            # 6d9a2f83.md: the REAL, currently-working unit file, pulled directly from
+            # /etc/systemd/system/fcc.uls.sync.service on pi500-1 (2026-09-30) -- not the stale
+            # "prod"/"test" entry a few lines above. Tagged with its own "pi500-1" environment
+            # (matching the existing "early_prod" precedent) so provision_environment() never
+            # touches hams1's own provisioning unless something explicitly targets
+            # environment="pi500-1" in the future.
+            #
+            # Runs under a real venv (Python 3.11.2, packages: requests, curl_cffi, certifi,
+            # idna, urllib3, cffi, pycparser, charset-normalizer -- curl_cffi specifically
+            # because a plain `requests` TLS fingerprint was part of what got the old
+            # datacenter-IP deployment blocked; see the egress-path proposal doc above) at
+            # /opt/hams/daemons/fcc_uls_sync/.venv, and a real ODOO_KEY_FILE at
+            # /opt/hams/daemons/fcc_uls_sync/.keys/fcc_uls_sync.env -- neither the venv's own
+            # installed packages nor the key file's contents are reproduced here; a rebuild
+            # still needs to recreate the venv (`python3 -m venv .venv && .venv/bin/pip install
+            # requests curl_cffi`) and re-provision a real key file separately, the same as
+            # every other daemon's own secret-provisioning convention in this codebase.
+            "path": "/etc/systemd/system/fcc.uls.sync.service",
+            "content": """\
+[Unit]
+Description=FCC ULS Daily Sync (non-datacenter egress path, see night_shift_todo/high/fcc-uls-sync-needs-non-datacenter-egress-path-a8e5f3c1.md)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=odoo
+UMask=0002
+WorkingDirectory=/opt/hams/daemons/fcc_uls_sync
+Environment="ODOO_URL=https://hams.com"
+Environment="ODOO_DB=hams_prod"
+Environment="ODOO_KEY_FILE=/opt/hams/daemons/fcc_uls_sync/.keys/fcc_uls_sync.env"
+Environment="SYSTEM_USER_AGENT=Hams.com Sync Daemon (bruce@perens.com, run from pi500-1 -- see night_shift_todo/high/fcc-uls-sync-needs-non-datacenter-egress-path-a8e5f3c1.md)"
+Environment="PYTHONPATH=/opt/hams/daemons"
+ExecStart=/opt/hams/daemons/fcc_uls_sync/.venv/bin/python3 /opt/hams/daemons/fcc_uls_sync/main.py
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fcc.uls.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["pi500-1"],
+        },
+        {
+            "path": "/etc/systemd/system/fcc.uls.sync.timer",
+            "content": """\
+[Unit]
+Description=Run the FCC ULS Daily Sync Once a Day (from pi500-1's residential egress path)
+
+[Timer]
+OnCalendar=*-*-* 05:00:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["pi500-1"],
         },
         {
             # HamCall licensed-index sync (ADR-0092), a ONE-SHOT service with NO TIMER on

@@ -1894,6 +1894,64 @@ class StaticFilesEntriesHaveContentTests(unittest.TestCase):
         )
 
 
+class Pi500FccUlsSyncManifestTests(unittest.TestCase):
+    """night_shift_todo/medium/pi500-1-fcc-uls-sync-not-tracked-in-infrastructure-py-6d9a2f83.md:
+    pi500-1's real, currently-working fcc.uls.sync.service/.timer used to exist only as
+    hand-edited files on that one physical machine, with nothing in version control to
+    reconstruct them from if the box were ever reprovisioned. Confirms the real content (pulled
+    directly from /etc/systemd/system/ on pi500-1, 2026-09-30) is captured, and that it is
+    tagged with its own "pi500-1" environment -- never "prod"/"test" -- so provision_environment()
+    (default environment="prod") never touches it unless something explicitly targets pi500-1."""
+
+    def _pi500_entries(self):
+        return [
+            entry for entry in infra.MANIFEST["static_files"]
+            if entry["path"] in (
+                "/etc/systemd/system/fcc.uls.sync.service",
+                "/etc/systemd/system/fcc.uls.sync.timer",
+            )
+        ]
+
+    def test_both_the_real_service_and_timer_are_captured(self):
+        paths = {entry["path"] for entry in self._pi500_entries()}
+        self.assertEqual(
+            paths,
+            {"/etc/systemd/system/fcc.uls.sync.service", "/etc/systemd/system/fcc.uls.sync.timer"},
+            "expected both the real, live fcc.uls.sync.service and .timer as captured in git",
+        )
+
+    def test_both_are_tagged_pi500_1_only_not_prod_or_test(self):
+        for entry in self._pi500_entries():
+            with self.subTest(path=entry["path"]):
+                self.assertEqual(
+                    entry["environments"], ["pi500-1"],
+                    "must be scoped to its own environment, never prod/test -- provisioning a "
+                    "real production or test box must never accidentally lay down pi500-1's "
+                    "own residential-egress-path unit file",
+                )
+
+    def test_service_content_matches_the_real_deployment_shape(self):
+        service = next(
+            e for e in self._pi500_entries() if e["path"].endswith("fcc.uls.sync.service")
+        )
+        content = service["content"]
+        # The real, currently-working deployment's own distinguishing features -- confirmed
+        # live, 2026-09-30, not assumed: the venv-based ExecStart (not system Python), the
+        # UMask=0002 fix (night_shift_history.md's own 2026-09-30 entry), and the residential
+        # ODOO_URL pointing at the real production site rather than a local address.
+        self.assertIn("UMask=0002", content)
+        self.assertIn(
+            "/opt/hams/daemons/fcc_uls_sync/.venv/bin/python3", content,
+            "must use the real venv interpreter, not system /usr/bin/python3 -- that was the "
+            "OLD, stale deployment shape this entry replaces",
+        )
+        self.assertIn('Environment="ODOO_URL=https://hams.com"', content)
+
+    def test_timer_content_matches_the_real_deployment_shape(self):
+        timer = next(e for e in self._pi500_entries() if e["path"].endswith("fcc.uls.sync.timer"))
+        self.assertIn("OnCalendar=*-*-* 05:00:00", timer["content"])
+
+
 class SystemdUnitPathTests(unittest.TestCase):
     """A path in ReadWritePaths= that does not exist stops the service before it starts (systemd
     status 226/NAMESPACE) unless it has a leading "-". The first production release hit this on
