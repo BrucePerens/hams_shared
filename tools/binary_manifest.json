@@ -6,8 +6,8 @@
     "extract_member": "kopia"
   },
   "etcd": {
-    "url": "https://github.com/etcd-io/etcd/releases/download/v3.7.1/etcd-v3.7.1-linux-amd64.tar.gz",
-    "checksum": "e8cd3fa8064c98137c5dbd78b76f969417ace84efb83c481041d7a52ffdd8fb9",
+    "url": "https://github.com/etcd-io/etcd/releases/download/v3.7.2/etcd-v3.7.2-linux-amd64.tar.gz",
+    "checksum": "3a3679bc51a4ee9d30bccea1da7cd4fe62c6fc1d2ca1255068d2c53bf3026135",
     "type": "tar.gz",
     "extract_member": "etcd"
   },
