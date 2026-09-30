@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# This software is distributed under the terms of the Affero General Public License (AGPL-3).
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
 Odoo DevSecOps AST Linter (ADR-0083, ADR-0022)

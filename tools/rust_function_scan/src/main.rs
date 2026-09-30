@@ -1,4 +1,3 @@
-// This software is distributed under the terms of the Affero General Public License (AGPL-3).
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Real `syn`-based AST scan of Rust source files for
 //! `check_rust_function_test_anchors.py` (ADR 0090 decision 2's Rust

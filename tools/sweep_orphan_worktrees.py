@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# This software is distributed under the terms of the Affero General Public License (AGPL-3).
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
 ADR-0102: sweeps orphaned git worktrees left behind by a session that never reached its own

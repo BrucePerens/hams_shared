@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# This software is distributed under the terms of the Affero General Public License (AGPL-3).
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
 Unit tests for mcp_watchdog_client.py -- a dependency-free CLI client written 2026-08-28 so
