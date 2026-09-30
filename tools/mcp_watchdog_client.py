@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # flake8: noqa
-# This software is distributed under the terms of the Affero General Public License (AGPL-3).
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
 Dependency-free CLI client for mcp_watchdog.py's shared SSE instance, for use by anything that
