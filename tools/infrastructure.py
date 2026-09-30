@@ -3341,7 +3341,7 @@ ProtectHome=read-only
 PrivateTmp=true
 PrivateDevices=true
 NoNewPrivileges=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 CapabilityBoundingSet=
 ReadWritePaths=/opt/hams/cache/whisper
 Type=simple
@@ -3351,6 +3351,19 @@ WorkingDirectory=/opt/hams/daemons/hams_simulated_bots
 Environment="HF_HOME=/opt/hams/cache/whisper"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
+# Added 2026-09-30 -- these previously existed ONLY in a hand-maintained,
+# untracked systemd drop-in (/etc/systemd/system/hams.simulated.bots.service.d/
+# band-config.conf) on hams1 itself, invisible to this MANIFEST. None of these
+# four values are secrets (two are file *paths*, matching this codebase's own
+# ODOO_KEY_FILE convention elsewhere in this MANIFEST; one is a loopback URL;
+# one is a plain hostname label) -- the actual secrets live at the paths named
+# here, never in this unit text. See night_shift_history.md (hams_com) for the
+# full story of why this drop-in existed unversioned in the first place.
+Environment="HAMS_SIMULATED_BAND_WS_URL=ws://localhost:3000/ws"
+Environment="HAMS_SIMULATED_BAND_KEY_FILE=/etc/hams-bots/band.key"
+Environment="HAMS_SIMULATED_BOT_HOST_NAME=hams1-local-bots"
+Environment="HAMS_SIMULATED_BOT_COORDINATOR_TOKEN_FILE=/etc/hams-bots/coordinator.key"
+Environment="ODOO_URL=https://hams.com"
 
 ExecStart=/usr/bin/python3 /opt/hams/daemons/hams_simulated_bots/main.py $DAEMON_ARGS
 
@@ -3393,7 +3406,7 @@ ProtectHome=read-only
 PrivateTmp=true
 PrivateDevices=true
 NoNewPrivileges=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 CapabilityBoundingSet=
 ReadWritePaths=/opt/hams/cache/whisper
 Type=simple
@@ -3403,6 +3416,14 @@ WorkingDirectory=/opt/hams/daemons/hams_simulated_bots
 Environment="HF_HOME=/opt/hams/cache/whisper"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
+# Same rationale as hams.simulated.bots.service's own 2026-09-30 comment above --
+# only the subset observer.py itself actually reads (confirmed by reading the
+# file: it imports `main as bots_main` for create_safety_ticket(), which needs
+# ODOO_URL, but never reads HAMS_SIMULATED_BOT_HOST_NAME or
+# HAMS_SIMULATED_BOT_COORDINATOR_TOKEN_FILE -- those are BotClient-specific).
+Environment="HAMS_SIMULATED_BAND_WS_URL=ws://localhost:3000/ws"
+Environment="HAMS_SIMULATED_BAND_KEY_FILE=/etc/hams-bots/band.key"
+Environment="ODOO_URL=https://hams.com"
 
 ExecStart=/usr/bin/python3 /opt/hams/daemons/hams_simulated_bots/observer.py $DAEMON_ARGS
 
