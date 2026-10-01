@@ -1383,6 +1383,33 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 54. check_xml_attribute_position_comment -- a real Odoo-core silent-failure trap, found
+    # live 2026-09-28/29/2026-10-01: an XML comment placed as a direct sibling of <attribute>
+    # elements inside an <xpath ... position="attributes"> block parses fine and loads fine,
+    # but silently makes EVERY <attribute> in that block render as absent -- no error, no
+    # warning, no failed upgrade. This checker found a second, previously-undiscovered real
+    # instance the same day it was written (theme_hams/views/layout_overrides.xml's
+    # hams_dynamic_filter_template_blog_post_card, fixed alongside this check landing). Always
+    # scans the full repo, same reasoning as check_xml_comment_double_hyphen.py immediately
+    # above: a view's own structural shape is not a property of any single lint target module.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_xml_attribute_position_comment.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
