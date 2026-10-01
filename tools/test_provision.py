@@ -291,12 +291,19 @@ class RepoRootAndImportInAFreshProcessTests(unittest.TestCase):
     real invocation path."""
 
     def test_provision_py_help_runs_in_a_fresh_subprocess_with_no_import_error(self):
-        hams_open_root = os.path.abspath(
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-        )
+        # Bug-hunt fix (2026-10-01): this test file is deployed as an identical copy at two
+        # different nesting depths, same as provision.py itself (see provision._find_repo_root's
+        # own comment) -- re-deriving "hams_open's own root" here with a second, independent
+        # fixed-depth "..", ".." walk broke for one of the two copies by the same construction
+        # (it landed on the PARENT of hams_com, not hams_open, when this file runs as
+        # hams_com/tools/test_provision.py). Reusing provision.repo_root directly ties this test
+        # to the SAME value the module itself considers correct, instead of a second, divergent
+        # computation of the same thing -- and `repo_root/hams_shared/tools/provision.py` is a
+        # real, reachable file from either copy's own repo_root (a real directory from the
+        # hams_open copy, a symlink into hams_open from the hams_com copy).
         result = subprocess.run(
             [sys.executable, "hams_shared/tools/provision.py", "--help"],
-            cwd=hams_open_root,
+            cwd=provision.repo_root,
             capture_output=True,
             text=True,
             timeout=30,
