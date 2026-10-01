@@ -39,7 +39,35 @@ _provision_tools_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _provision_tools_dir)
 import infrastructure  # noqa: E402
 
-repo_root = os.path.abspath(os.path.join(_provision_tools_dir, "..", ".."))
+
+# Bug-hunt fix (2026-10-01, found via a full tools/run_linters.py sweep): this script is
+# deployed as an identical copy at two genuinely different nesting depths --
+# `hams_com/tools/provision.py` (one level above hams_com's own root, which holds `hams_shared`
+# as a symlink into hams_open) and `hams_open/hams_shared/tools/provision.py` (two levels above
+# hams_open's own root, which holds `hams_shared` as a real directory). The previous fixed
+# `"..", ".."` walk was only ever correct for the second copy -- the first copy landed on the
+# PARENT of hams_com (e.g. `~/workspace`), where `hams_shared` does not exist at all, breaking
+# every caller of `repo_root` for that copy. A fixed-depth walk cannot serve both real layouts by
+# construction, so this walks upward from this file's own location until it finds the first
+# ancestor directory whose own `hams_shared` subdirectory exists (real directory or symlink,
+# `os.path.exists` follows both) -- the one property both deployed copies actually share.
+def _find_repo_root(start_dir):
+    current = start_dir
+    for _ in range(5):  # five levels is already far more than either real layout ever needs
+        if os.path.exists(os.path.join(current, "hams_shared")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    raise RuntimeError(
+        f"Could not find a repo root containing 'hams_shared' above {start_dir!r} -- "
+        "this script must live under either <hams_com>/tools/ or "
+        "<hams_open>/hams_shared/tools/."
+    )
+
+
+repo_root = _find_repo_root(_provision_tools_dir)
 
 logging.basicConfig(level=logging.INFO)
 _logger = logging.getLogger(__name__)
