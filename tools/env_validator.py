@@ -101,21 +101,24 @@ def check_gemini():
     # longer reflects how the deployment is meant to work -- it was
     # failing on every startup (env_validator's own "GEMINI WARNING"
     # noise) purely because the key this check verified is being retired,
-    # not because it rotted. Two runtime modules still read GEMINI_API_KEY
-    # directly for their own AI calls as of this change --
-    # ham_repeater_dir/models/ham_repeater_import.py is mid-migration to
-    # agy as of this same date; ham_onboarding/models/
-    # res_users_verification.py has not started yet. Migrating either is a
-    # separate, larger change this commit does not make; this function
-    # only stops validating a startup precondition that no longer applies.
+    # not because it rotted.
+    #
+    # Updated 2026-10-01: ham_repeater_dir/models/ham_repeater_import.py has now fully migrated
+    # off Gemini (it went straight from the old agy/Antigravity-CLI call to the real Claude Code
+    # CLI the same night, skipping any lingering GEMINI_API_KEY read entirely -- confirmed by
+    # grep, zero references remain in that file). ham_onboarding/models/
+    # res_users_verification.py is the only runtime module left that still reads GEMINI_API_KEY
+    # directly for its own AI calls; migrating it is a separate, larger change this commit does
+    # not make -- this function only stops validating a startup precondition that no longer
+    # applies to the module it used to warn about together with this one.
     if os.environ.get("GEMINI_API_KEY"):
         print_warning(
             "GEMINI",
             "GEMINI_API_KEY is set but is no longer how this deployment reaches "
-            "Gemini (AI features are moving to the Antigravity CLI, agy, run as a "
-            "subprocess). Startup no longer verifies this key; if it's still "
-            "referenced by res_users_verification.py or ham_repeater_import.py, "
-            "migrating those call sites to agy is tracked separately.",
+            "Gemini (ham_repeater_import.py has fully migrated off it; "
+            "res_users_verification.py is the one remaining real call site). Startup "
+            "no longer verifies this key; migrating res_users_verification.py off it "
+            "is tracked separately.",
         )
 
 
