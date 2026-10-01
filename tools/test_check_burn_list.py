@@ -459,6 +459,17 @@ def test_patch_ban_exempts_github_self_hosted_runner():
     assert errors == []
 
 
+def test_patch_ban_exempts_devbox_tools():
+    # devbox_tools/ (2026-10-01) is a sixth instance of the same case: standalone, non-Odoo
+    # test_*.py files with no Odoo TestCase base class to redirect to. Found live:
+    # devbox_tools/test_deploy_to_production.py was already using native unittest.mock.patch
+    # directly before this exclusion existed. `(?:^|/)tools/` does not already cover this --
+    # it anchors to an exact "tools" path segment, and "devbox_tools" is one segment, not
+    # "devbox" + "tools".
+    errors = _patch_ban_errors("devbox_tools/test_import_gemini_club_dataset.py")
+    assert errors == []
+
+
 def _qweb_numeric_separator_errors(source):
     # GENERAL_ERROR_RULES is only exercised via scan_file()'s own line-by-line regex pass, not
     # check_ast_vulnerabilities()/_dict_findings() -- matching _patch_ban_errors's own pattern

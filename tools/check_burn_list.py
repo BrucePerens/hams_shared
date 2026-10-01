@@ -390,7 +390,15 @@ GENERAL_ERROR_RULES = [
         # `unittest.TestCase`, no Odoo dependency at all (a GitHub Actions runner hook and a
         # one-time sudo registration script), so `self.safe_patch()` is not available here
         # either, the identical reasoning as daemons?/ingest/tools/scripts/ above.
-        r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/)(?!.*(?:^|/)tools/)(?!.*(?:^|/)scripts/)(?!.*(?:^|/)\.github/self-hosted-runner/).*test_.*\.py$",
+        #
+        # Also excludes devbox_tools/ (2026-10-01): a sixth instance of the same case, found via
+        # test_import_gemini_club_dataset.py -- confirmed devbox_tools/test_deploy_to_production.py
+        # was ALREADY silently violating this rule too (plain unittest.TestCase classes, already
+        # using unittest.mock.patch directly), the same "found already live, not hypothetical"
+        # pattern as every prior addition to this list. `(?:^|/)tools/` does not already cover
+        # this: it anchors to an exact "tools" path SEGMENT, and "devbox_tools" is one segment,
+        # not "devbox" + "tools", so it never matched.
+        r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/)(?!.*(?:^|/)tools/)(?!.*(?:^|/)scripts/)(?!.*(?:^|/)\.github/self-hosted-runner/)(?!.*(?:^|/)devbox_tools/).*test_.*\.py$",
         re.compile(r"(?:@(?:mock\.)?patch\b|\b(?:mock\.)?patch(?:\.object)?\s*\()"),
         "CRITICAL ARCHITECTURE: Native patch decorators and context managers are forbidden. Use self.safe_patch() or self.safe_patch_object().",
     ),
