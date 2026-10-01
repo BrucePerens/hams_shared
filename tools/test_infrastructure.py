@@ -1680,14 +1680,14 @@ class LinkedSystemdTimersAreActuallyEnabledTests(unittest.TestCase):
     def test_every_linked_timer_is_enabled_after_the_linking_loop(self):
         source = inspect.getsource(infra.provision_environment)
         link_idx = source.index('_logger.info("[*] Linking custom systemd units...")')
-        enable_idx = source.index('"systemctl", "enable", timer', link_idx)
+        enable_idx = source.index('"systemctl", "enable", unit', link_idx)
         self.assertGreater(
             enable_idx,
             link_idx,
             "the systemctl enable call must come after the symlinking loop, "
             "not before it (nothing to enable yet before units are linked)",
         )
-        self.assertIn('item.endswith(".timer")', source[link_idx:enable_idx])
+        self.assertIn('item.endswith((".timer", ".path"))', source[link_idx:enable_idx])
 
     def test_enable_is_not_enable_now_to_avoid_an_immediate_first_run_stampede(self):
         # `enable --now` would force every one of ~20 daemons to run for the very first time
@@ -1696,14 +1696,29 @@ class LinkedSystemdTimersAreActuallyEnabledTests(unittest.TestCase):
         # notification mail. Plain `enable` only wires the timer into
         # timers.target.wants/ so it fires at its own next OnCalendar tick.
         source = inspect.getsource(infra.provision_environment)
-        self.assertIn('["systemctl", "enable", timer]', source)
+        self.assertIn('["systemctl", "enable", unit]', source)
         self.assertNotIn('["systemctl", "enable", "--now"', source)
 
     def test_daemon_reload_runs_before_any_enable_call(self):
         source = inspect.getsource(infra.provision_environment)
         reload_idx = source.index('["systemctl", "daemon-reload"]')
-        enable_idx = source.index('"systemctl", "enable", timer')
+        enable_idx = source.index('"systemctl", "enable", unit')
         self.assertLess(reload_idx, enable_idx)
+
+    def test_path_units_are_linked_and_enabled_the_same_way_as_timers(self):
+        # Added 2026-10-01 alongside this codebase's first .path unit
+        # (hams-pgbackrest-backup.path, ADR 0103): a .path unit is an
+        # [Install] WantedBy= activation unit exactly like a .timer, with
+        # the identical "linked but not enabled" footgun this whole test
+        # class exists to guard against -- it must get the same explicit
+        # `systemctl enable` treatment, not just the symlink.
+        source = inspect.getsource(infra.provision_environment)
+        link_idx = source.index('_logger.info("[*] Linking custom systemd units...")')
+        self.assertIn('item.endswith((".service", ".timer", ".path"))', source[link_idx:])
+        self.assertIn(
+            'linked_activation_units.append(item)',
+            source[link_idx:],
+        )
 
 
 class LoadAndPromptEnvRabbitmqUserDefaultTests(unittest.TestCase):
