@@ -3928,6 +3928,25 @@ WantedBy=multi-user.target
             "NoNewPrivileges": "true",
             "KillSignal": "SIGINT",
             "TimeoutStopSec": "15",
+            # Real incident, 2026-10-01: odoo.service had no Restart= at all
+            # (systemd's own default, "no"), so a transient PostgreSQL
+            # restart -- even a brief, intentional one -- fatally crashed
+            # odoo.service outright rather than self-healing. Root cause:
+            # odoo/service/server.py's process_spawn() -> check_registries()
+            # opens a fresh cursor as part of its own pre-fork health check
+            # and does not retry on a connection failure; if that check
+            # happens to run during the exact window PostgreSQL is mid-
+            # restart, the resulting psycopg2.OperationalError propagates
+            # all the way up and the whole server process exits (status
+            # 255), which systemd then just leaves "failed" rather than
+            # restarting. Confirmed live: this happened twice in one
+            # session restarting postgresql@18-main.service to pick up a
+            # new EnvironmentFile, each one a real site outage until
+            # manually `systemctl start odoo`'d back. `on-failure` makes
+            # this self-heal; 5s gives PostgreSQL a moment to finish coming
+            # back up before the retry.
+            "Restart": "on-failure",
+            "RestartSec": "5",
         },
     },
     # Bug found live on hams1, 2026-09-22: pdns.service ships as a plain OS
