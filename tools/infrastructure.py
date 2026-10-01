@@ -3587,6 +3587,133 @@ WantedBy=multi-user.target
             "mode": "644",
             "environments": ["prod", "test"],
         },
+        {
+            # Bringing an already-live, hand-provisioned file under tracked management --
+            # night_shift_todo/low/claude-cli-wrapper-scripts-untracked-on-hams1-b71e4a92.md.
+            # Content copied verbatim from the real, already-working file on hams1 (read directly,
+            # confirmed clean, no secrets embedded) -- not rewritten. `hams_ai_agent` has no login
+            # shell (nologin, by design), so `sudo -i` can't be used to get one, and plain
+            # `sudo -u` does not change the working directory either -- Claude Code's own
+            # workspace/CLAUDE.md discovery and MCP config resolution are CWD/HOME-relative, so
+            # without this fix it would inherit whatever directory and HOME the calling shell
+            # happened to have. Only exists on hams1 -- the dedicated `hams_ai_agent` account is
+            # itself prod-only, not provisioned in this MANIFEST yet (a separate, larger gap, see
+            # night_shift_todo/medium/service-account-creation-and-sudoers-sandboxes-are-
+            # untracked-infra-c3a9f714.md), so this file is `environments: ["prod"]` only.
+            "path": "/usr/local/sbin/run-hams-ai-agent-claude.sh",
+            "content": """\
+#!/bin/bash
+# Runs the real Claude Code CLI as hams_ai_agent with its CWD and HOME set to its own home
+# directory. Same reasoning as run-hams-event-agent-claude.sh: plain sudo -u does not change the
+# working directory, and this account has no login shell (nologin, by design), so sudo -i cannot
+# be used either. Claude Code's own workspace/CLAUDE.md discovery and MCP config resolution are
+# CWD/HOME-relative, so without this fix it would inherit whatever directory and HOME the calling
+# shell happened to have.
+cd /home/hams_ai_agent || exit 1
+export HOME=/home/hams_ai_agent
+exec /home/hams_ai_agent/.local/bin/claude "$@"
+""",
+            "owner": "root:root",
+            "mode": "755",
+            "environments": ["prod"],
+        },
+        {
+            # Same gap, same fix, sibling account -- see the run-hams-ai-agent-claude.sh entry
+            # above for the full reasoning. Content likewise copied verbatim from hams1.
+            "path": "/usr/local/sbin/run-hams-event-agent-claude.sh",
+            "content": """\
+#!/bin/bash
+# Runs the real Claude Code CLI as hams_event_agent with its CWD and HOME set to its own home
+# directory. Same reasoning as run-hams-event-agent.sh (the agy wrapper): plain sudo -u does not
+# change the working directory, and this account has no login shell (nologin, by design), so
+# sudo -i cannot be used either -- a nologin shell makes -i refuse with "This account is
+# currently not available." Claude Code's own workspace/CLAUDE.md discovery and MCP config
+# resolution are CWD/HOME-relative, so without this fix it would inherit whatever directory and
+# HOME the calling shell happened to have.
+cd /home/hams_event_agent || exit 1
+export HOME=/home/hams_event_agent
+exec /home/hams_event_agent/.local/bin/claude "$@"
+""",
+            "owner": "root:root",
+            "mode": "755",
+            "environments": ["prod"],
+        },
+        {
+            # night_shift_questions/answered/credential-touch-timer-unattended-schedule-f3c8a291.md
+            # (Bruce, 2026-10-01: "Build the touch timer") / night_shift_todo/high/
+            # claude-service-account-oauth-refresh-unreliable-c4f8e912.md. See
+            # daemons/credential_touch/main.py's own module docstring for the full reasoning.
+            #
+            # Deliberately NOT the ADR-0070 standard hardening set: NoNewPrivileges is omitted
+            # (not set true) and CapabilityBoundingSet is narrowed to exactly
+            # CAP_SETUID/CAP_SETGID rather than emptied, because this unit's whole job is to run
+            # `sudo -u hams_ai_agent`/`sudo -u hams_event_agent` -- NoNewPrivileges=true disables
+            # the effect of setuid binaries (including sudo) for the whole process tree regardless
+            # of capabilities, and an emptied CapabilityBoundingSet would stop a setuid-root
+            # binary from ever regaining root's capabilities even with NoNewPrivileges off. Both
+            # `sudo -u` calls are restricted to one exact, already-live, narrowly-scoped command
+            # each via real sudoers.d grants (confirmed directly on hams1, not assumed):
+            #   odoo ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/run-hams-ai-agent-claude.sh
+            #   odoo ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-agent-claude.sh
+            # ReadWritePaths carves out exactly the two accounts' home directories (where the
+            # Claude Code CLI's own refreshed .credentials.json actually gets written), rather
+            # than weakening ProtectHome=read-only more broadly than that one real need.
+            #
+            # No Odoo/DB/Redis/RabbitMQ EnvironmentFile lines: this daemon never touches the
+            # database, Redis, or RabbitMQ at all, so it carries none of the credentials that
+            # would grant it.
+            "path": "/opt/hams/systemd/credential.touch.timer.service",
+            "content": """\
+[Unit]
+Description=Periodic Touch of Claude Code CLI Service-Account OAuth Sessions (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction, with ONE deliberate, documented exception -- see this
+# entry's own comment above for the full reasoning.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+ReadWritePaths=/home/hams_ai_agent /home/hams_event_agent
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/credential_touch
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/credential_touch/main.py
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=credential.touch.timer
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/credential.touch.timer.timer",
+            "content": """\
+[Unit]
+Description=Periodic Touch of Claude Code CLI Service-Account OAuth Sessions Twice Daily
+
+[Timer]
+# Matches the already-established hams-aws-session-touch-interval cadence precedent for exactly
+# this class of problem (an OAuth-style session that needs periodic real use to stay refreshed),
+# and sits well inside the ~34-hour real failure window
+# claude-service-account-oauth-refresh-unreliable-c4f8e912.md found live.
+OnCalendar=*-*-* 00,12:00:00
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
     ],
     "apt_packages": [
         {"name": "odoo", "debian_name": "odoo", "environments": ["early_prod"]},
