@@ -34,6 +34,15 @@ class FindCargoCratesTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- matches check_float_isfinite.py's own real-bug regression test."""
+        vendored = os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "pkg")
+        _write(os.path.join(vendored, "Cargo.toml"), "[package]\nname = \"pkg\"\n")
+        crate = os.path.join(self.tmp, "daemons", "some_daemon")
+        _write(os.path.join(crate, "Cargo.toml"), "[package]\nname = \"some_daemon\"\n")
+        self.assertEqual(chk.find_cargo_crates(self.tmp), [crate])
+
     def test_a_package_crate_is_found(self):
         crate = os.path.join(self.tmp, "daemons", "some_daemon")
         _write(os.path.join(crate, "Cargo.toml"), "[package]\nname = \"some_daemon\"\n")

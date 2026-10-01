@@ -51,6 +51,16 @@ class CheckAbsolutePathsTests(unittest.TestCase):
         self.assertIn("script.py:1", violations[0])
         self.assertIn("script.py:3", violations[1])
 
+    def test_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- matches check_float_isfinite.py's own real-bug regression test."""
+        _write(
+            os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy", "x.py"),
+            f"path = '{_HOME}/thing'\n",
+        )
+        _write(os.path.join(self.tmp, "real_dir", "x.py"), "path = '/tmp/thing'\n")
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+
     def test_a_disallowed_extension_is_never_scanned(self):
         _write(os.path.join(self.tmp, "image.png"), f"{_HOME}/binary-looking-content")
         self.assertEqual(chk.check_absolute_paths(self.tmp), [])

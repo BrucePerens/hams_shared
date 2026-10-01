@@ -37,6 +37,21 @@ class FindRequirementsFilesTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- matches check_float_isfinite.py's own real-bug regression test. A real
+        site-packages tree can genuinely carry a vendored package's own requirements.txt."""
+        _write(
+            os.path.join(
+                self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy", "requirements.txt"
+            )
+        )
+        _write(os.path.join(self.tmp, "requirements.txt"))
+        self.assertEqual(
+            chk.find_requirements_files(self.tmp),
+            [os.path.join(self.tmp, "requirements.txt")],
+        )
+
     def test_a_root_level_requirements_txt_is_found(self):
         _write(os.path.join(self.tmp, "requirements.txt"))
         self.assertEqual(

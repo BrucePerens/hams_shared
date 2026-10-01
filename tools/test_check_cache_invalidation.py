@@ -35,6 +35,16 @@ class CheckFileTests(unittest.TestCase):
         _write(p, content)
         return p
 
+    def test_ignore_dir_names_excludes_site_packages(self):
+        """main()'s own os.walk() pruning (`dirs[:] = [d for d in dirs if d not in
+        IGNORE_DIR_NAMES]`) is inline, not a separately-callable file-finder the way
+        check_float_isfinite.py's find_python_files() is -- asserting set membership directly is
+        the proportionate test here rather than refactoring main() out of its own real shape just
+        to exercise it end to end. A venv's own outer directory can be named anything
+        ("whisper_venv", not just "venv"/".venv") -- see check_float_isfinite.py's own comment
+        and test for the real, live bug this exclusion exists to prevent."""
+        self.assertIn("site-packages", chk.IGNORE_DIR_NAMES)
+
     def test_a_mutating_raw_sql_with_no_invalidation_call_is_flagged(self):
         p = self._path(
             "def foo(self):\n"

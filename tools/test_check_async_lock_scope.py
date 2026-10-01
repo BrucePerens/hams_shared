@@ -32,6 +32,21 @@ class CheckFileTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_find_rust_files_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- matches check_float_isfinite.py's own real-bug regression test. Vendored
+        Python packages don't normally carry .rs files, but the exclusion is directory-name-based
+        regardless of file type, so this still exercises the real code path."""
+        os.makedirs(os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy"))
+        with open(
+            os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy", "x.rs"), "w"
+        ) as f:
+            f.write("fn x() {}\n")
+        _write_rs(self.tmp, "fn real() {}\n")
+        found = chk.find_rust_files(self.tmp)
+        rels = [os.path.relpath(p, self.tmp) for p in found]
+        self.assertEqual(rels, [os.path.join("src", "lib.rs")])
+
     def test_a_read_guard_held_across_a_later_await_is_flagged(self):
         # The real telemetry_loop shape this checker was born from: a guard bound at the top
         # of a block, with no drop, sitting alive across a later, unrelated .await.

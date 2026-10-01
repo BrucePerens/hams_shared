@@ -38,6 +38,21 @@ class CheckFileTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_find_python_files_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- matches check_float_isfinite.py's own real-bug regression test."""
+        vendored_dir = os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy")
+        os.makedirs(vendored_dir)
+        with open(os.path.join(vendored_dir, "x.py"), "w", encoding="utf-8") as f:
+            f.write("x = 1\n")
+        real_dir = os.path.join(self.tmp, "real_dir")
+        os.makedirs(real_dir)
+        with open(os.path.join(real_dir, "x.py"), "w", encoding="utf-8") as f:
+            f.write("x = 1\n")
+        found = chk.find_python_files(self.tmp)
+        rels = [os.path.relpath(p, self.tmp) for p in found]
+        self.assertEqual(rels, [os.path.join("real_dir", "x.py")])
+
     def test_int_float_with_only_except_valueerror_is_flagged(self):
         # The real bug this gate was born from (sota_sync._int()'s own shape).
         path = _write_py(

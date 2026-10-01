@@ -76,6 +76,10 @@ def check_absolute_paths(repo_dir):
         ".claude",
         "ics_training",
         "ham_auxcomm_training",
+        # Matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/site-packages/
+        # subdirectory regardless of the venv's own outer directory name -- "venv"/".venv" alone
+        # missed a real stray "whisper_venv/" (see check_float_isfinite.py's own comment/test).
+        "site-packages",
     }
     # Only check text-based files
     valid_exts = {

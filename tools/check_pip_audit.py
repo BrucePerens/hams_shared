@@ -21,7 +21,11 @@ import os
 import subprocess
 import sys
 
-IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", ".claude"}
+# "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
+# site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
+# alone missed a real stray "whisper_venv/" -- see check_float_isfinite.py's own comment and test
+# for the full story).
+IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", ".claude", "site-packages"}
 
 # Real bug found 2026-09-12, confirmed empirically with a real `git worktree add`: this
 # project's own standing convention runs concurrent bug-hunt dispatches in isolated git

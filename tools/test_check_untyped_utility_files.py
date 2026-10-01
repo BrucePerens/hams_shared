@@ -117,6 +117,22 @@ class CollectCandidatesTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_ignores_site_packages_under_a_directory_scan_root_regardless_of_the_venvs_own_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- matches check_float_isfinite.py's own real-bug regression test, and the
+        original real incident (an untracked daemons/hams_local_relay/test_run/whisper_venv/ this
+        whole exclusion-sweep campaign started from) was genuinely nested under "daemons", a real
+        SCAN_ROOTS directory this checker walks recursively."""
+        _write(
+            os.path.join(
+                self.tmp, "daemons", "whisper_venv", "lib", "python3.13", "site-packages", "numpy", "x.py"
+            ),
+            "def f():\n    pass\n",
+        )
+        _write(os.path.join(self.tmp, "daemons", "real", "x.py"), "def f():\n    pass\n")
+        candidates = chk.collect_candidates(self.tmp)
+        self.assertEqual(candidates, [os.path.join(self.tmp, "daemons", "real", "x.py")])
+
     def test_a_single_file_scan_root_is_collected_when_present(self):
         _write(
             os.path.join(self.tmp, "distributed_redis_cache", "redis_cache.py"),

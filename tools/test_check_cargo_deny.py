@@ -35,6 +35,17 @@ class FindDenyCratesTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- matches check_float_isfinite.py's own real-bug regression test."""
+        vendored = os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "pkg")
+        _write(os.path.join(vendored, "Cargo.toml"))
+        _write(os.path.join(vendored, "deny.toml"))
+        crate = os.path.join(self.tmp, "daemons", "some_daemon")
+        _write(os.path.join(crate, "Cargo.toml"))
+        _write(os.path.join(crate, "deny.toml"))
+        self.assertEqual(chk.find_deny_crates(self.tmp), [crate])
+
     def test_a_crate_with_both_cargo_toml_and_deny_toml_is_found(self):
         crate = os.path.join(self.tmp, "daemons", "some_daemon")
         _write(os.path.join(crate, "Cargo.toml"))
