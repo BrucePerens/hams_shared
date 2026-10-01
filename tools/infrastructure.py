@@ -573,6 +573,24 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # backup_management/daemon/main.py's _run_pgbackrest_via_sidecar():
+            # backup.worker.service (NoNewPrivileges=true, ProtectSystem=strict)
+            # cannot perform a real pgbackrest backup itself -- PostgreSQL's own
+            # data directory is 0700 postgres:postgres. This spool directory is
+            # how it hands that one operation off to hams-pgbackrest-backup's
+            # privileged, unsandboxed sidecar instead of granting itself
+            # standing root/postgres filesystem access. odoo:odoo 700, same
+            # shape as relay_cert_renew above: the sidecar runs as root before
+            # its own internal `runuser -u postgres`, so it can read this
+            # directory regardless of its mode: root is not bound by
+            # permission bits.
+            "path": "/opt/hams/backup_requests",
+            "owner": "odoo:odoo",
+            "provision_mode": "700",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/etc/localhost_cert_renewal",
             "owner": "localhost_cert:localhost_cert",
             "provision_mode": "750",
@@ -1118,7 +1136,7 @@ CapabilityBoundingSet=
 # A leading "-" means "skip if the directory does not exist": a fresh server has none of the optional
 # destinations yet (no external backup disk is mounted), and without it systemd refuses to start
 # the service at all (status 226/NAMESPACE, found on the first production release, 2026-09-21).
-ReadWritePaths=/var/lib/odoo/backups -/var/lib/odoo/backup_repo -/var/backups/global -/opt/hams/backup /opt/hams/etc/keys -/mnt/backup /var/lib/pgbackrest /var/log/pgbackrest
+ReadWritePaths=/var/lib/odoo/backups -/var/lib/odoo/backup_repo -/var/backups/global -/opt/hams/backup /opt/hams/etc/keys -/mnt/backup /var/lib/pgbackrest /var/log/pgbackrest /opt/hams/backup_requests
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/backup_worker
@@ -1146,6 +1164,61 @@ SyslogIdentifier=backup.worker
 
 [Install]
 WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # backup_management/daemon/pgbackrest_sidecar.py's own privileged half of
+            # _run_pgbackrest_via_sidecar() (main.py). Deliberately NOT sandboxed like
+            # backup.worker.service -- it needs to read PostgreSQL's own 0700
+            # postgres:postgres data directory via `runuser -u postgres`, which
+            # ProtectSystem=strict would forbid, the exact same reasoning
+            # hams.db.local.backup.service's own comment already gives for pg_dump.
+            # No EnvironmentFile=/Environment= on purpose: the only secrets it ever
+            # handles (PGBACKREST_REPO1_S3_KEY/_SECRET) arrive per-request in the
+            # spool file backup_worker writes, validated again by the sidecar script
+            # itself before use -- this unit carries no standing credential of its
+            # own. Started by hams-pgbackrest-backup.path below, not WantedBy=
+            # multi-user.target -- a oneshot with nothing to keep running.
+            "path": "/opt/hams/systemd/hams-pgbackrest-backup.service",
+            "content": """\
+[Unit]
+Description=Privileged pgbackrest sidecar (runs real backups as postgres)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+Environment="PYTHONPATH=/opt/hams/daemons"
+ExecStart=/usr/bin/python3 /opt/hams/daemons/backup_worker/pgbackrest_sidecar.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.pgbackrest.sidecar
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Watches backup_worker's own odoo-owned spool directory (see the
+            # /opt/hams/backup_requests directory entry above) and starts the
+            # privileged sidecar service the moment a request file appears --
+            # this codebase's first .path unit; the symlink/enable provisioning
+            # step below treats a .path exactly like a .timer (both are
+            # [Install] WantedBy= activation units that need an explicit
+            # `systemctl enable`, not just the symlink, to actually fire).
+            "path": "/opt/hams/systemd/hams-pgbackrest-backup.path",
+            "content": """\
+[Unit]
+Description=Trigger the privileged pgbackrest sidecar on a new backup request
+
+[Path]
+PathExistsGlob=/opt/hams/backup_requests/request-*.json
+Unit=hams-pgbackrest-backup.service
+
+[Install]
+WantedBy=paths.target
 """,
             "owner": "root:root",
             "mode": "644",
@@ -5598,20 +5671,24 @@ def provision_environment(
                 _logger.debug("Original user %s not found: %s", orig_user, e)
 
         _logger.info("[*] Linking custom systemd units...")
-        linked_timers = []
+        # .path units (first used 2026-10-01, hams-pgbackrest-backup.path) are an
+        # [Install] WantedBy= activation unit exactly like a .timer -- they need the
+        # same explicit `systemctl enable` below, not just the symlink, to actually
+        # fire. Named linked_activation_units (was linked_timers) to reflect that.
+        linked_activation_units = []
         try:
             systemd_dir = "/opt/hams/systemd"
             if os.path.exists(systemd_dir):
                 for item in os.listdir(systemd_dir):
-                    if item.endswith(".service") or item.endswith(".timer"):
+                    if item.endswith((".service", ".timer", ".path")):
                         if not has_hams_com and item != "hams-pycache.service":
                             continue
                         src = os.path.join(systemd_dir, item)
                         dst = os.path.join("/etc/systemd/system", item)
                         if not os.path.exists(dst):
                             os.symlink(src, dst)
-                        if item.endswith(".timer"):
-                            linked_timers.append(item)
+                        if item.endswith((".timer", ".path")):
+                            linked_activation_units.append(item)
         except OSError as e:
             _logger.warning("Failed to link systemd units: %s", e)
             record_hook_failure("systemd_unit_linking", e)
@@ -5632,22 +5709,23 @@ def provision_environment(
         # forcing an immediate first run -- safe to re-run this same
         # provisioning step against an already-running system without an
         # unwanted stampede of first-ever executions across every daemon.
-        if linked_timers:
+        if linked_activation_units:
             _logger.info(
-                "[*] Enabling %d linked systemd timer(s)...", len(linked_timers)
+                "[*] Enabling %d linked systemd timer/path unit(s)...",
+                len(linked_activation_units),
             )
             try:
                 subprocess.run(["systemctl", "daemon-reload"], check=False)
-                for timer in linked_timers:
+                for unit in linked_activation_units:
                     result = subprocess.run(
-                        ["systemctl", "enable", timer],
+                        ["systemctl", "enable", unit],
                         capture_output=True,
                         text=True,
                         check=False,
                     )
                     if result.returncode != 0:
                         _logger.warning(
-                            "Failed to enable %s: %s", timer, result.stderr.strip()
+                            "Failed to enable %s: %s", unit, result.stderr.strip()
                         )
             except OSError as e:
                 _logger.warning("Failed to enable systemd timers: %s", e)
