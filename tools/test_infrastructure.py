@@ -910,6 +910,21 @@ class ProvisionSystemdOverrideTests(_TmpDirTestCase):
             )
         )
 
+    def test_odoo_override_restarts_on_failure(self):
+        # Real incident, 2026-10-01: odoo.service had no Restart= at all, so a
+        # transient PostgreSQL restart (check_registries()'s own pre-fork
+        # health check opening a cursor mid-restart, with no retry) crashed
+        # the whole server process -- and systemd just left it "failed"
+        # rather than bringing it back, a real site outage twice in one
+        # night until someone noticed and ran `systemctl start odoo` by
+        # hand. See this file's own comment at the manifest entry.
+        infra.provision_systemd_override(MagicMock(), {}, environment="prod", dest_dir=self.tmp)
+        override_file = os.path.join(self.override_dir, "override.conf")
+        with open(override_file) as f:
+            lines = f.read().splitlines()
+        self.assertIn("Restart=on-failure", lines)
+        self.assertIn("RestartSec=5", lines)
+
 
 class ProvisionModeEnvFileTests(_TmpDirTestCase):
     """load_and_prompt_env() must not carry saved *.env values across test-mode and production
