@@ -31,6 +31,10 @@ def check_rabbitmq(repo_dir):
         # inside the repo root -- a real git worktree checkout, not an empty directory --
         # which this set never excluded.
         ".claude",
+        # Matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/site-packages/
+        # subdirectory regardless of the venv's own outer directory name -- "venv"/".venv" alone
+        # missed a real stray "whisper_venv/" (see check_float_isfinite.py's own comment/test).
+        "site-packages",
     }
     
     # Pattern to look for direct pika connection instantiation

@@ -30,6 +30,16 @@ class CheckShebangTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- matches check_float_isfinite.py's own real-bug regression test."""
+        _write(
+            os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy", "x.py"),
+            "print('hi')\n#!oops\n",
+        )
+        _write(os.path.join(self.tmp, "real_dir", "x.py"), "print('hi')\n")
+        self.assertEqual(chk.check_shebang(self.tmp), [])
+
     def test_a_shebang_on_line_one_is_never_a_violation(self):
         _write(os.path.join(self.tmp, "script.py"), "#!/usr/bin/env python3\nprint('hi')\n")
         self.assertEqual(chk.check_shebang(self.tmp), [])

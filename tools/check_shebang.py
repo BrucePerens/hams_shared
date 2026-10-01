@@ -31,6 +31,10 @@ def check_shebang(repo_dir):
         # Vendored third-party source (cargo vendor, opus, prometheus/procfs's ttar, ...): not ours to edit, and
         # several of those files legitimately carry a shebang inside a generated here-document.
         "vendor",
+        # Matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/site-packages/
+        # subdirectory regardless of the venv's own outer directory name -- "venv"/".venv" alone
+        # missed a real stray "whisper_venv/" (see check_float_isfinite.py's own comment/test).
+        "site-packages",
     }
     # Only check script files
     valid_exts = {

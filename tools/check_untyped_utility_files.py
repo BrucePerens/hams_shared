@@ -174,7 +174,11 @@ EXCLUDED_DIR_PREFIXES = [
 # repopulated reflexively just because a new file trips this check.
 EXCLUDED_FILES: set = set()
 
-IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git"}
+# "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
+# site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
+# alone missed a real stray "whisper_venv/" -- see check_float_isfinite.py's own comment and test
+# for the full story).
+IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", "site-packages"}
 
 
 def defines_odoo_model_class(path):

@@ -49,6 +49,10 @@ _IGNORE_DIRS = {
     # clean. Same reasoning as check_absolute_paths.py's own archive/
     # exclusion and check_hoot_runner_coverage.py's own ignore_dirs.
     ".claude",
+    # Matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/site-packages/
+    # subdirectory regardless of the venv's own outer directory name -- "venv"/".venv" alone
+    # missed a real stray "whisper_venv/" (see check_float_isfinite.py's own comment/test).
+    "site-packages",
 }
 
 

@@ -26,6 +26,18 @@ class CheckWindowFetchReassignmentTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- matches check_float_isfinite.py's own real-bug regression test. The exclusion
+        is directory-name-based regardless of file type, so this still exercises the real code
+        path even though a vendored Python package wouldn't normally carry a .test.js file."""
+        _write(
+            os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy", "foo.test.js"),
+            "QUnit.test('x', async () => {\n    window.fetch = () => Promise.resolve({});\n});\n",
+        )
+        _write(os.path.join(self.tmp, "real_dir", "foo.test.js"), "QUnit.test('x', async () => {});\n")
+        self.assertEqual(chk.check_window_fetch_reassignment(self.tmp), [])
+
     def test_direct_dot_assignment_is_flagged(self):
         _write(
             os.path.join(self.tmp, "foo.test.js"),

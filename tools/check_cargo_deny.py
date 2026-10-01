@@ -23,7 +23,11 @@ import os
 import subprocess
 import sys
 
-IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", ".claude"}
+# "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
+# site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
+# alone missed a real stray "whisper_venv/" -- see check_float_isfinite.py's own comment and test
+# for the full story).
+IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", ".claude", "site-packages"}
 
 # Real bug found 2026-09-12, same class and same real-worktree confirmation as
 # check_pip_audit.py's own fix (see its own comment): `.claude/worktrees/<session>/` is a real

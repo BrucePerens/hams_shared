@@ -43,6 +43,19 @@ class CheckFileTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_find_candidate_files_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- matches check_float_isfinite.py's own real-bug regression test."""
+        os.makedirs(os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy"))
+        _write(
+            os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy", "x.rs"),
+            "fn x() {}\n",
+        )
+        _write(os.path.join(self.tmp, "src", "lib.rs"), "fn real() {}\n")
+        found = chk.find_candidate_files(self.tmp)
+        rels = [os.path.relpath(p, self.tmp) for p in found]
+        self.assertEqual(rels, [os.path.join("src", "lib.rs")])
+
     def test_a_fake_websocket_struct_with_no_real_bind_anywhere_is_flagged(self):
         path = _write(
             os.path.join(self.tmp, "src", "lib.rs"),

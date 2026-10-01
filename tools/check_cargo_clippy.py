@@ -21,7 +21,11 @@ import os
 import subprocess
 import sys
 
-IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git"}
+# "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
+# site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
+# alone missed a real stray "whisper_venv/" -- see check_float_isfinite.py's own comment and test
+# for the full story).
+IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", "site-packages"}
 
 # Real gap found 2026-09-06 running this gate end to end via run_linters.py:
 # this standalone `#![no_std]` codegen-inspection crate (see its own README)

@@ -30,6 +30,16 @@ class CheckRabbitmqTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
+        """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
+        ".venv") -- matches check_float_isfinite.py's own real-bug regression test."""
+        _write(
+            os.path.join(self.tmp, "whisper_venv", "lib", "python3.13", "site-packages", "numpy", "x.py"),
+            "conn = pika.BlockingConnection(params)\n",
+        )
+        _write(os.path.join(self.tmp, "real_dir", "x.py"), "x = 1\n")
+        self.assertEqual(chk.check_rabbitmq(self.tmp), [])
+
     def test_a_blocking_connection_is_flagged(self):
         _write(os.path.join(self.tmp, "foo.py"), "conn = pika.BlockingConnection(params)\n")
         violations = chk.check_rabbitmq(self.tmp)
