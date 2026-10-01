@@ -574,7 +574,7 @@ MANIFEST = {
         },
         {
             # backup_management/daemon/main.py's _run_pgbackrest_via_sidecar():
-            # backup.worker.service (NoNewPrivileges=true, ProtectSystem=strict)
+            # the backup worker daemon's own unit (NoNewPrivileges=true, ProtectSystem=strict)
             # cannot perform a real pgbackrest backup itself -- PostgreSQL's own
             # data directory is 0700 postgres:postgres. This spool directory is
             # how it hands that one operation off to hams-pgbackrest-backup's
