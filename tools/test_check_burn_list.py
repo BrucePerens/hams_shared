@@ -4345,6 +4345,35 @@ def test_outside_a_git_repository_nothing_is_ignored(tmp_path, monkeypatch):
     assert check_burn_list._git_ignored_paths(str(tmp_path)) == set()
 
 
+def test_a_shebang_inside_a_string_literal_is_not_flagged(tmp_path):
+    # Bug found live, 2026-10-02 (night_shift_todo/medium/service-account-creation-and-sudoers-
+    # sandboxes-are-untracked-infra-c3a9f714.md's own PR): infrastructure.py's own MANIFEST
+    # embeds whole separate files' content -- shebang line included -- as Python string literals
+    # (its "static_files" entries' own `content` values), to be written out verbatim during
+    # provisioning. The old plain-text line scan could not tell that apart from a real, second,
+    # executable shebang sitting in actual code, and flagged every one of them.
+    (tmp_path / "manifest_like.py").write_text(
+        "CONTENT = \"\"\"\\\n"
+        "#!/bin/bash\n"
+        "echo hi\n"
+        "\"\"\"\n",
+        encoding="utf-8",
+    )
+    result = _run_burn_list(tmp_path)
+    assert "Shebang" not in result.stdout, result.stdout
+
+
+def test_a_real_shebang_outside_a_string_literal_is_still_flagged(tmp_path):
+    # The fix above must not blind the rule to its actual, original purpose: a genuine stray
+    # shebang sitting in real code past line 1 (not inside a string) is still a real violation.
+    (tmp_path / "bad_shebang.py").write_text(
+        "x = 1\n#!/bin/bash\ny = 2\n",
+        encoding="utf-8",
+    )
+    result = _run_burn_list(tmp_path)
+    assert "Shebang" in result.stdout, result.stdout
+
+
 def test_access_csv_blank_line_is_forbidden():
     content = (
         "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink\n"

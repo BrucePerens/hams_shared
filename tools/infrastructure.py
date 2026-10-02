@@ -542,6 +542,43 @@ MANIFEST = {
             "add_to_users": ["odoo"],
             "environments": ["prod", "test"],
         },
+        {
+            # night_shift_todo/medium/service-account-creation-and-sudoers-sandboxes-are-
+            # untracked-infra-c3a9f714.md: hand-provisioned on hams1 with no tracked source
+            # anywhere -- confirmed directly, 2026-10-02 (`id hams_ai_agent`): uid 995, gid 986,
+            # own dedicated group, no supplementary group membership, `nologin` shell (it is
+            # never interactively logged into; `odoo` reaches it only through the narrow
+            # sudoers.d grants below). Runs the ticket-triage `agy` import tool and its own
+            # Claude Code CLI session -- see the `hams_ai_agent-mcp-servers`,
+            # `odoo-agy-sandbox`, and `odoo-ai-agent-claude-sandbox` static_files entries below
+            # for the matching sudoers.d grants, and the already-tracked
+            # `run-hams-ai-agent-claude.sh`/`credential.touch.timer` entries elsewhere in this
+            # MANIFEST for what runs under it. Prod-only: this account has no reason to exist on
+            # the dev box's own local `hams_dev` environment.
+            "user": "hams_ai_agent",
+            "group": "hams_ai_agent",
+            "home": "/home/hams_ai_agent",
+            "shell": "/usr/sbin/nologin",
+            "environments": ["prod"],
+        },
+        {
+            # Sibling account, same gap, same reasoning as hams_ai_agent immediately above --
+            # confirmed directly on hams1, 2026-10-02: uid 994, gid 985, own dedicated group, no
+            # supplementary group membership, `nologin` shell. Deliberately a separate account
+            # from hams_ai_agent (see agents/skills/local-resources/SKILL.md and
+            # night_shift_todo/high/agy-shared-mcp-blanket-permission-crosses-repeater-import-
+            # and-ticket-triage-b6e91f2a.md) so a compromised event-enrichment session, which
+            # fetches untrusted third-party club-website content, can never pivot into
+            # ticket-triage's own tools or data. See the `hams_event_agent-mcp-servers`,
+            # `odoo-event-agent-sandbox`, and `odoo-event-agent-claude-sandbox` static_files
+            # entries below for its matching sudoers.d grants. Prod-only, same reasoning as
+            # hams_ai_agent above.
+            "user": "hams_event_agent",
+            "group": "hams_event_agent",
+            "home": "/home/hams_event_agent",
+            "shell": "/usr/sbin/nologin",
+            "environments": ["prod"],
+        },
     ],
     "directories": [
         {
@@ -830,6 +867,32 @@ MANIFEST = {
             "provision_mode": "750",
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
+        },
+        {
+            # hams_ai_agent's home directory -- see this MANIFEST's own "system_accounts" entry
+            # for the account itself. `provision_system_accounts()`'s `useradd` call deliberately
+            # never passes `-m` (matches the existing convention for every other account here,
+            # e.g. hams_com/localhost_cert above, which also get their home directories from a
+            # "directories" entry rather than from useradd itself), so without this entry
+            # re-running provisioning against a fresh host would create the account but never its
+            # home directory. Mode and ownership confirmed directly on hams1, 2026-10-02
+            # (`find /home/hams_ai_agent -maxdepth 0`): 0700, owned by the account itself -- rw
+            # because the account's own Claude Code CLI session writes its refreshed
+            # `.credentials.json` here (see credential.touch.timer's own ReadWritePaths).
+            "path": "/home/hams_ai_agent",
+            "owner": "hams_ai_agent:hams_ai_agent",
+            "provision_mode": "700",
+            "runtime_mount": "rw",
+            "environments": ["prod"],
+        },
+        {
+            # Sibling entry, same reasoning as hams_ai_agent's home directory immediately above.
+            # Mode and ownership likewise confirmed directly on hams1, 2026-10-02.
+            "path": "/home/hams_event_agent",
+            "owner": "hams_event_agent:hams_event_agent",
+            "provision_mode": "700",
+            "runtime_mount": "rw",
+            "environments": ["prod"],
         },
     ],
     "env_groups": {
@@ -3712,6 +3775,223 @@ WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # night_shift_todo/medium/service-account-creation-and-sudoers-sandboxes-are-
+            # untracked-infra-c3a9f714.md: every real file under hams1's /etc/sudoers.d/ was
+            # hand-provisioned, with no tracked source anywhere. Confirmed directly on hams1,
+            # 2026-10-02 -- `ls -la /etc/sudoers.d/` lists exactly 8 custom grants (plus the
+            # stock Debian `README` the `sudo` package itself installs, not tracked here since it
+            # carries no project-specific content). Seven of the eight are tracked below; the
+            # eighth, `odoo-agyimport-sandbox`, is deliberately NOT tracked -- see its own
+            # omission comment further down, where its sibling `odoo-agy-sandbox` entry sits.
+            # Content copied verbatim from each live file (read directly via `sudo cat`,
+            # confirmed clean, no secrets). Real mode on hams1 is 0440 (`-r--r-----`, root:root)
+            # for every one of them -- visudo's own convention for sudoers.d drop-ins, enforced
+            # here the same way.
+            #
+            # This one grants `ai` (the account used to administer hams1 itself) full,
+            # unrestricted NOPASSWD sudo -- not command-restricted like the six other tracked
+            # grants below. The `ai` system account itself remains a separate, pre-existing gap
+            # (it predates this MANIFEST's own tooling -- it is the account `infrastructure.py`'s
+            # provisioning commands are themselves run as/through -- and is not provisioned here).
+            "path": "/etc/sudoers.d/ai-nopasswd",
+            "content": "ai ALL=(ALL) NOPASSWD:ALL\n",
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        {
+            # Lets `hams_ai_agent` (see this MANIFEST's "system_accounts" entry) run the
+            # ticket-triage MCP server as `odoo`, restricted to this one exact wrapper script --
+            # see the matching `run-ticket-triage-mcp.sh` static_files entry below for what it
+            # actually runs.
+            "path": "/etc/sudoers.d/hams_ai_agent-mcp-servers",
+            "content": (
+                "hams_ai_agent ALL=(odoo) NOPASSWD: "
+                "/usr/local/sbin/run-ticket-triage-mcp.sh\n"
+            ),
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        {
+            # Sibling grant for `hams_event_agent`'s own event-enrichment MCP server -- see the
+            # matching `run-event-enrichment-mcp.sh` static_files entry below. Deliberately a
+            # separate sudoers.d file and a separate wrapper script from the ticket-triage grant
+            # above (see the hams_event_agent "system_accounts" entry's own comment for why these
+            # two accounts/tools must never share a grant).
+            "path": "/etc/sudoers.d/hams_event_agent-mcp-servers",
+            "content": (
+                "hams_event_agent ALL=(odoo) NOPASSWD: "
+                "/usr/local/sbin/run-event-enrichment-mcp.sh\n"
+            ),
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        # Deliberately NOT tracking /etc/sudoers.d/odoo-agyimport-sandbox (confirmed live on
+        # hams1, 2026-10-02: "odoo ALL=(agyimport) NOPASSWD: /usr/local/lib/agy-import/agy
+        # --sandbox --output-format json") or the `agyimport` system account it grants to, even
+        # though both still exist today -- night_shift_todo/low/agyimport-account-is-dead-
+        # infrastructure-on-hams1-a7e4c891.md (filed 2026-10-01, before this pass) already
+        # identified this exact account/sudoers-file/binary trio as dead infrastructure from a
+        # superseded isolation plan (ham_repeater_import.py moved to Claude Code CLI/
+        # hams_ai_agent instead; agyimport's own one-time interactive sign-in was never
+        # completed), slated for removal on hams1, not for permanent tracking. Adding a
+        # static_files entry here would make a fresh-host rebuild recreate dead infrastructure
+        # forever and would need its own follow-up removal the moment a7e4c891 is actioned --
+        # whoever closes that item needs to touch only hams1, not this MANIFEST too.
+        {
+            # Lets `odoo` run the repeater-import `agy` tool as `hams_ai_agent` itself (a second,
+            # older route alongside the dedicated `agyimport` sandbox above) -- restricted to the
+            # not-yet-tracked `run-hams-ai-agent.sh` wrapper, see its own static_files entry
+            # below.
+            "path": "/etc/sudoers.d/odoo-agy-sandbox",
+            "content": (
+                "odoo ALL=(hams_ai_agent) NOPASSWD: "
+                "/usr/local/sbin/run-hams-ai-agent.sh\n"
+            ),
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        {
+            # Lets `odoo` run the real Claude Code CLI as `hams_ai_agent` -- restricted to the
+            # already-tracked `run-hams-ai-agent-claude.sh` wrapper (see its own static_files
+            # entry elsewhere in this MANIFEST).
+            "path": "/etc/sudoers.d/odoo-ai-agent-claude-sandbox",
+            "content": (
+                "odoo ALL=(hams_ai_agent) NOPASSWD: "
+                "/usr/local/sbin/run-hams-ai-agent-claude.sh\n"
+            ),
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        {
+            # Sibling grant letting `odoo` run the real Claude Code CLI as `hams_event_agent` --
+            # restricted to the already-tracked `run-hams-event-agent-claude.sh` wrapper (see its
+            # own static_files entry elsewhere in this MANIFEST).
+            "path": "/etc/sudoers.d/odoo-event-agent-claude-sandbox",
+            "content": (
+                "odoo ALL=(hams_event_agent) NOPASSWD: "
+                "/usr/local/sbin/run-hams-event-agent-claude.sh\n"
+            ),
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        {
+            # Lets `odoo` run the event-enrichment tooling as `hams_event_agent` itself --
+            # restricted to the `run-hams-event-agent.sh` wrapper, see its own static_files entry
+            # below (a fourth remaining untracked wrapper script this todo's own "Done when" list
+            # did not name, found by checking the sudoers grant's actual target directly on
+            # hams1 rather than trusting that list's count -- the same three-vs-seven-vs-eight
+            # undercount pattern as this MANIFEST's sudoers.d entries above).
+            "path": "/etc/sudoers.d/odoo-event-agent-sandbox",
+            "content": (
+                "odoo ALL=(hams_event_agent) NOPASSWD: "
+                "/usr/local/sbin/run-hams-event-agent.sh\n"
+            ),
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        {
+            # Bringing the four remaining untracked wrapper scripts the sudoers.d grants above
+            # reference under tracked management -- the two Claude CLI wrappers
+            # (`run-hams-ai-agent-claude.sh`, `run-hams-event-agent-claude.sh`) were already
+            # tracked by a separate pass (see their own static_files entries elsewhere in this
+            # MANIFEST); these four were not (this todo's own "Done when" section named three of
+            # them; the fourth, `run-hams-event-agent.sh`, was found by checking the
+            # `odoo-event-agent-sandbox` sudoers grant's actual target directly on hams1 -- see
+            # that entry's own comment above). Content copied verbatim from the real,
+            # already-working files on hams1 (read directly via `sudo cat`, confirmed clean -- no
+            # secrets embedded, only a key *file path*, not a key value, in the two MCP wrapper
+            # scripts below).
+            "path": "/usr/local/sbin/run-hams-ai-agent.sh",
+            "content": """\
+#!/bin/bash
+# Same fix, same reasoning, for hams_ai_agent (ticket-triage) -- see run-hams-event-agent.sh.
+cd /home/hams_ai_agent || exit 1
+exec /home/hams_ai_agent/.local/bin/agy "$@"
+""",
+            "owner": "root:root",
+            "mode": "755",
+            "environments": ["prod"],
+        },
+        {
+            # Sibling wrapper for the ticket-triage MCP server, run as `odoo` via the
+            # `hams_ai_agent-mcp-servers` sudoers.d grant above. A wrapper script, not the raw
+            # command line in sudoers, because sudoers' own parser chokes on the URL colon in
+            # ODOO_URL (same reasoning as run-event-enrichment-mcp.sh below).
+            "path": "/usr/local/sbin/run-ticket-triage-mcp.sh",
+            "content": """\
+#!/bin/bash
+# Exact env + exec for hams_ticket_triage_mcp, run as odoo via a narrow sudoers grant for
+# hams_ai_agent. A wrapper script, not the raw command line in sudoers, because sudoers own
+# parser chokes on the URL colon in ODOO_URL.
+export PYTHONPATH=/opt/hams/daemons
+export ODOO_URL=http://127.0.0.1:8069
+export ODOO_DB=hams_prod
+export ODOO_KEY_FILE=/opt/hams/etc/keys/ai_triage_service_internal.key
+exec /usr/bin/python3 /opt/hams/daemons/hams_ticket_triage_mcp/main.py
+""",
+            "owner": "root:root",
+            "mode": "755",
+            "environments": ["prod"],
+        },
+        {
+            # Sibling wrapper for the event-enrichment MCP server, run as `odoo` via the
+            # `hams_event_agent-mcp-servers` sudoers.d grant above. Deliberately its own separate
+            # MCP registration from ticket-triage (see the hams_event_agent "system_accounts"
+            # entry's own comment) -- this one fetches untrusted third-party club-website content
+            # via read_url and must never share write tools with unrelated data.
+            "path": "/usr/local/sbin/run-event-enrichment-mcp.sh",
+            "content": """\
+#!/bin/bash
+# Exact env + exec for hams_event_enrichment_mcp, run as odoo via a narrow sudoers grant for
+# hams_event_agent (its own dedicated account, separate from hams_ai_agent/ticket-triage --
+# see agents/skills/local-resources/SKILL.md and night_shift_todo/high/
+# agy-shared-mcp-blanket-permission-crosses-repeater-import-and-ticket-triage-b6e91f2a.md for why
+# event-enrichment, which fetches untrusted third-party club-website content via read_url, must
+# never share an MCP registration with a feature that has real write tools on unrelated data).
+export PYTHONPATH=/opt/hams/daemons
+export ODOO_URL=http://127.0.0.1:8069
+export ODOO_DB=hams_prod
+export ODOO_KEY_FILE=/opt/hams/etc/keys/event_ai_correction_service_internal.key
+exec /usr/bin/python3 /opt/hams/daemons/hams_event_enrichment_mcp/main.py
+""",
+            "owner": "root:root",
+            "mode": "755",
+            "environments": ["prod"],
+        },
+        {
+            # Fourth remaining wrapper script -- see the "Bringing the four remaining untracked
+            # wrapper scripts" comment above. Run as `hams_event_agent` via the
+            # `odoo-event-agent-sandbox` sudoers.d grant above; sibling of
+            # `run-hams-ai-agent.sh` (same fix, same reasoning, for the event-enrichment side's
+            # own agy invocation).
+            "path": "/usr/local/sbin/run-hams-event-agent.sh",
+            "content": """\
+#!/bin/bash
+# Runs agy as hams_event_agent with its CWD set to its own home directory. Necessary because
+# plain sudo -u does not change the working directory, and this account has no login shell
+# (nologin, by design), so sudo -i cannot be used either -- a nologin shell makes -i refuse with
+# "This account is currently not available." Found live 2026-09-29: without this, agy inherited
+# whatever CWD the calling shell happened to have (often /home/ai, the sysadmin account it was
+# invoked from during manual testing), computed that as its own workspace directory, and burned
+# huge time/token cost on hundreds of failed permission-denied attempts to read
+# /home/ai/AGENTS.md, /home/ai/GEMINI.md, and similar project-discovery files it could never
+# actually reach -- the real root cause of every non-converging multi-hop test run tonight, not a
+# prompt-wording or page-size issue as first suspected.
+cd /home/hams_event_agent || exit 1
+exec /home/hams_event_agent/.local/bin/agy "$@"
+""",
+            "owner": "root:root",
+            "mode": "755",
             "environments": ["prod"],
         },
         {
