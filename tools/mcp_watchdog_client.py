@@ -32,7 +32,7 @@ import threading
 import httpx
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 
 _logger = logging.getLogger("mcp_watchdog_client")
 
@@ -228,12 +228,12 @@ def main():
         _logger.warning("Timed out on %s at %s: %s", args.cmd, sse_url, e)
         print(f"CLIENT ERROR: {e}", file=sys.stderr)
         sys.exit(1)
-    except McpError as e:  # A request deadline expired (see _call_tool).
+    except MCPError as e:  # A request deadline expired (see _call_tool).
         # Split out from the catch-all below only to say something true: on a
         # timeout the server WAS reachable and did answer the handshake, it
         # just never answered this request. "could not reach" would send a
         # reader looking for a network fault that isn't there. Any other
-        # McpError still exits 1 with the generic message -- this branch
+        # MCPError still exits 1 with the generic message -- this branch
         # never re-raises, because a raw traceback escaping to the caller's
         # shell is exactly what this boundary exists to prevent.
         if e.error.code == httpx.codes.REQUEST_TIMEOUT:

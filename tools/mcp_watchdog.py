@@ -20,7 +20,15 @@ if sys.platform == "linux":
 else:
     pyinotify = None
 import logging
-from mcp.server.fastmcp import FastMCP
+# Requires mcp>=2 (standardized system-wide, 2026-10-02, after both this dev box's own system-wide
+# install and hams1's were found to have drifted independently -- see
+# night_shift_history.md's 2026-09-01 entry for the original broken-install finding, and
+# night_shift_todo's mcp-version-standardization entry for the resolution). `mcp<2`'s server class
+# was `mcp.server.fastmcp.FastMCP`; v2 renamed it to `mcp.server.mcpserver.MCPServer` and moved
+# `mcp.shared.exceptions.McpError` to `MCPError` (see mcp_watchdog_client.py's own import). A plain,
+# unconditional import here is deliberate -- if this environment ever has the wrong mcp version
+# again, this must fail loudly and immediately, not silently branch around it.
+from mcp.server.mcpserver import MCPServer
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 
@@ -37,7 +45,7 @@ SESSION_REGISTRY = {}
 # time, whether a receiver is currently blocked) for queue_status to tell
 # apart a dead/never-started receiver from a dead/never-started sender.
 #
-# Deliberately stdlib threading.Queue, not asyncio.Queue: FastMCP's
+# Deliberately stdlib threading.Queue, not asyncio.Queue: MCPServer's
 # streamable-http transport hardcodes its own Starlette lifespan
 # (`lambda app: self.session_manager.run()`) and does not invoke the
 # `lifespan=` constructor argument the way its docstring suggests -- there is
@@ -128,7 +136,7 @@ def start_legacy_bridge():
 
 from starlette.responses import Response, JSONResponse
 
-mcp = FastMCP("Watchdog")
+mcp = MCPServer("Watchdog")
 
 @mcp.custom_route("/sse", methods=["POST"])
 async def _handle_sse_post_probe(request):
