@@ -1169,9 +1169,22 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         self.assertNotIn("-c", cmd, f"SQL must not be passed via -c: {cmd!r}")
         self.assertIn("input", call.kwargs, "SQL must be piped over stdin instead")
 
-    def test_skips_creation_entirely_when_the_role_already_exists(self):
+    def test_existing_role_is_not_recreated_but_is_granted_superuser(self):
+        # hams_shared PR #66 (d31aad3, found live provisioning jetson-1): the
+        # odoo apt package's postinst pre-creates a NON-superuser `odoo` role,
+        # so the already-exists path must still ALTER it to SUPERUSER (needed
+        # for `CREATE EXTENSION vector`). Exactly one command runs: that
+        # ALTER ROLE -- no CREATE ROLE, and db_pass never reaches the argv.
         mock_run_cmd_func = self._run("normalPass123", role_already_exists=True)
-        mock_run_cmd_func.assert_not_called()
+        mock_run_cmd_func.assert_called_once_with(
+            ["sudo", "-u", "postgres", "psql", "-c", "ALTER ROLE odoo WITH SUPERUSER;"]
+        )
+        call = mock_run_cmd_func.call_args
+        self.assertNotIn("input", call.kwargs, "the existing-role path must not pipe CREATE ROLE SQL")
+        self.assertFalse(
+            any("normalPass123" in arg for arg in call.args[0]),
+            "db_pass must not be passed when the role already exists",
+        )
 
 
 class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
