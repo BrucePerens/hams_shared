@@ -3714,6 +3714,67 @@ WantedBy=timers.target
             "mode": "644",
             "environments": ["prod"],
         },
+        {
+            # night_shift_todo/low/detect-stray-long-running-interactive-odoo-processes-
+            # b3f8a672.md: a forgotten `odoo shell` process once ran on hams1 for 4+ days
+            # undetected (night_shift_todo/medium/stray-odoo-shell-process-ran-4-days-on-
+            # production-e81f4a92.md, closed), holding stale in-memory code and running its own
+            # independent ir.cron scheduler the whole time. See daemons/
+            # stray_odoo_shell_detector/main.py's own module docstring for the full reasoning.
+            #
+            # The FULL ADR-0070 standard hardening set applies unexceptionally here (unlike
+            # credential_touch's own deliberate exception just above) -- this daemon only ever
+            # runs `ps` to read /proc, never sudo's into another account, so it needs no setuid
+            # capability and no ReadWritePaths carve-out.
+            "path": "/opt/hams/systemd/stray.odoo.shell.detector.service",
+            "content": """\
+[Unit]
+Description=Detect a Stray, Long-Running Interactive Odoo Shell Process (One-Shot)
+After=network.target
+
+[Service]
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/stray_odoo_shell_detector
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/stray_odoo_shell_detector/main.py
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=stray.odoo.shell.detector
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/stray.odoo.shell.detector.timer",
+            "content": """\
+[Unit]
+Description=Hourly Check For A Stray Interactive Odoo Shell Process
+
+[Timer]
+# Hourly matches this check's own STALE_THRESHOLD_SECONDS (one hour) -- no point checking much
+# more often than the threshold itself, and hourly still catches a stray process reasonably
+# promptly against the real incident this closes (one ran undetected for 4+ days).
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
     ],
     "apt_packages": [
         {"name": "odoo", "debian_name": "odoo", "environments": ["early_prod"]},
