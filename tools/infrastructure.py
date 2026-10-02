@@ -5879,8 +5879,53 @@ def provision_environment(
                 pg_major = pg_res.stdout.strip()
                 all_packages.append(f"postgresql-{pg_major}-pgvector")
 
+            # Real gap found live on jetson-1 (Ubuntu 24.04 "noble"), 2026-10-02:
+            # apt-get install aborts the ENTIRE command -- installing nothing at all,
+            # not just skipping the bad entry -- the moment any one package name has
+            # no candidate in the configured repos. Ubuntu dropped the `awscli` apt
+            # package starting with 24.04 (it now only ships via snap or pip). This
+            # single package, needed only for daemons/ses_inbound_mail_ingest/main.py's
+            # `aws` CLI shell-out (prod-only, no-op on a test box), was silently taking
+            # down provisioning for every OTHER package in the same apt-get invocation.
+            # Falls back to pip for exactly this one known case rather than building
+            # generic any-package-might-be-missing handling for a problem only ever
+            # seen here once.
+            PIP_FALLBACK_APT_PACKAGES = {"awscli": "awscli"}
+            missing_apt_packages = []
+            for pkg in all_packages:
+                probe = subprocess.run(
+                    ["apt-cache", "show", pkg],
+                    capture_output=True,
+                    text=True,
+                )
+                if probe.returncode != 0 or not probe.stdout.strip():
+                    missing_apt_packages.append(pkg)
+            if missing_apt_packages:
+                _logger.warning(
+                    "[*] No apt candidate for: %s -- excluding from the apt-get install "
+                    "so the rest of the package list still installs.",
+                    ", ".join(missing_apt_packages),
+                )
+                all_packages = [p for p in all_packages if p not in missing_apt_packages]
+
             all_packages = sorted(list(set(all_packages)))
             run_cmd_func(["apt-get", "install", "-y"] + apt_opts + all_packages)
+
+            for pkg in missing_apt_packages:
+                pip_name = PIP_FALLBACK_APT_PACKAGES.get(pkg)
+                if pip_name:
+                    _logger.info(
+                        "[*] Installing %s via pip (no apt candidate on this OS release)",
+                        pip_name,
+                    )
+                    run_cmd_func(["pip3", "install", "--break-system-packages", pip_name])
+                else:
+                    _logger.error(
+                        "[!] %s has no apt candidate and no known pip fallback -- "
+                        "left uninstalled. Anything that depends on it will fail "
+                        "at runtime, not at provisioning time.",
+                        pkg,
+                    )
 
             _logger.info("[*] Installing pip packages...")
             run_cmd_func(
