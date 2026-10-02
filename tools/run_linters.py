@@ -999,7 +999,7 @@ def main():
             os.path.join(
                 dir_path,
                 "tools",
-                f"function_test_anchor_baseline_{os.path.basename(repo_root)}.json",
+                f"function_test_anchor_baseline_{os.path.basename(main_checkout_root)}.json",
             ),
         ],
         capture_output=True,
@@ -1027,7 +1027,7 @@ def main():
             os.path.join(
                 dir_path,
                 "tools",
-                f"js_function_test_anchor_baseline_{os.path.basename(repo_root)}.json",
+                f"js_function_test_anchor_baseline_{os.path.basename(main_checkout_root)}.json",
             ),
         ],
         capture_output=True,
@@ -1056,7 +1056,7 @@ def main():
             os.path.join(
                 dir_path,
                 "tools",
-                f"rust_function_test_anchor_baseline_{os.path.basename(repo_root)}.json",
+                f"rust_function_test_anchor_baseline_{os.path.basename(main_checkout_root)}.json",
             ),
         ],
         capture_output=True,
