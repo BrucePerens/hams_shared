@@ -5752,21 +5752,51 @@ def provision_environment(
     hams_community_dir = None
     has_hams_com = bool(hams_com_dir)
 
-    if os.path.exists(os.path.join(repo_root, "hams_shared")):
+    # Bug-hunt fix (2026-10-02, found live on jetson-1's first-ever fresh
+    # `provision.py --test` run against a checkout using the established
+    # `hams_com/hams_shared -> ../hams_open/hams_shared` symlink convention):
+    # a bare `hams_shared` existence check is ambiguous the same way the
+    # bare "daemons" check already documented above for
+    # `_discover_hams_com_dir` was -- hams_com ITSELF satisfies
+    # `os.path.exists(os.path.join(repo_root, "hams_shared"))` via that
+    # symlink even when repo_root is hams_com's own directory, not
+    # hams_open's. That silently set `hams_community_dir = repo_root`
+    # (hams_com again), so hams_open was never added to the addons_path at
+    # all and any module depending on hams_open-only code (e.g. zero_sudo)
+    # failed to install with "module ... depends on ... zero_sudo. But the
+    # latter module is not available in your system." Each check now also
+    # requires a real, hams_open-exclusive signal (zero_sudo's own
+    # manifest) directly under the same candidate, removing the ambiguity.
+    def _is_real_hams_open(path):
+        return os.path.exists(os.path.join(path, "zero_sudo", "__manifest__.py"))
+
+    if os.path.exists(os.path.join(repo_root, "hams_shared")) and _is_real_hams_open(
+        repo_root
+    ):
         hams_community_dir = repo_root
-    elif os.path.exists(os.path.join(repo_root, "..", "hams_shared")):
+    elif os.path.exists(
+        os.path.join(repo_root, "..", "hams_shared")
+    ) and _is_real_hams_open(os.path.join(repo_root, "..")):
         hams_community_dir = os.path.abspath(os.path.join(repo_root, ".."))
-    elif os.path.exists(os.path.join(repo_root, "..", "hams_community", "hams_shared")):
+    elif os.path.exists(
+        os.path.join(repo_root, "..", "hams_community", "hams_shared")
+    ) and _is_real_hams_open(os.path.join(repo_root, "..", "hams_community")):
         hams_community_dir = os.path.abspath(
             os.path.join(repo_root, "..", "hams_community")
         )
-    elif os.path.exists(os.path.join(repo_root, "..", "..", "hams_community", "hams_shared")):
+    elif os.path.exists(
+        os.path.join(repo_root, "..", "..", "hams_community", "hams_shared")
+    ) and _is_real_hams_open(os.path.join(repo_root, "..", "..", "hams_community")):
         hams_community_dir = os.path.abspath(
             os.path.join(repo_root, "..", "..", "hams_community")
         )
-    elif os.path.exists(os.path.expanduser("~/workspace/hams_open/hams_shared")):
+    elif os.path.exists(
+        os.path.expanduser("~/workspace/hams_open/hams_shared")
+    ) and _is_real_hams_open(os.path.expanduser("~/workspace/hams_open")):
         hams_community_dir = os.path.expanduser("~/workspace/hams_open")
-    elif os.path.exists("/hams_community/hams_shared"):
+    elif os.path.exists("/hams_community/hams_shared") and _is_real_hams_open(
+        "/hams_community"
+    ):
         hams_community_dir = "/hams_community"
 
     if not hams_com_dir:
