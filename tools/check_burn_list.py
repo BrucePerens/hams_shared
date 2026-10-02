@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import ast
+import tokenize
 
 # Odoo's command-line loading flags. Odoo 19 sets these in `odoo/tools/config.py` and never
 # clears them: nothing in `odoo/modules/loading.py`, `odoo/orm/registry.py`,
@@ -5889,7 +5890,41 @@ def main():
                                         errors.append(
                                             "Line 1 (__manifest__.py format): __manifest__.py must not contain a shebang. It should ideally start with the dictionary '{' or standard -*- coding -*- comment."
                                         )
+                                # Bug found live, 2026-10-02 (night_shift_todo/medium/
+                                # service-account-creation-and-sudoers-sandboxes-are-untracked-
+                                # infra-c3a9f714.md's own PR): this used to be a plain text scan
+                                # (`line.startswith("#!")` over every physical line), which
+                                # cannot tell a real, executable second shebang apart from a
+                                # "#!/bin/bash" first line sitting inside a triple-quoted string
+                                # literal -- an established, intentional pattern in
+                                # infrastructure.py's own MANIFEST (embedding a separate file's
+                                # full content, shebang included, as a Python string to be
+                                # written out verbatim during provisioning). That false positive
+                                # was already live on `main` for the two wrapper-script entries
+                                # PR #57 added, silently failing this required burn-list CI gate
+                                # for every PR to this repo since (reproduced here: checked out
+                                # `main` unmodified and re-ran this exact scan before touching
+                                # anything). Fixed by tokenizing the file and skipping any line
+                                # that falls inside a STRING token's span -- a real stray shebang
+                                # sitting in actual code (not inside a string literal) is still
+                                # caught exactly as before.
+                                string_line_numbers = set()
+                                try:
+                                    for tok in tokenize.generate_tokens(
+                                        iter(lines).__next__
+                                    ):
+                                        if tok.type == tokenize.STRING:
+                                            string_line_numbers.update(
+                                                range(tok.start[0], tok.end[0] + 1)
+                                            )
+                                except (tokenize.TokenError, SyntaxError):
+                                    # Can't be tokenized cleanly -- fall back to the old,
+                                    # unfiltered behavior below rather than silently skipping
+                                    # the check altogether.
+                                    pass
                                 for idx, line in enumerate(lines[1:], start=2):
+                                    if idx in string_line_numbers:
+                                        continue
                                     if line.startswith("#!"):
                                         errors.append(f"Line {idx} (Shebang): Shebangs are only allowed on the first line of the file.")
                     except (SyntaxError, OSError):
