@@ -127,6 +127,18 @@ entry instead of destroyed. `ExitWorktree`'s own keep/remove prompt already cove
 exit and already refuses to remove a dirty worktree -- this sweep only covers the case that prompt can't
 reach: crashes, force-quits, and worktrees created by hand with `git worktree add`.
 
+**6. A pure `hams_shared` submodule-pointer bump in `hams_open` is pushed directly to `main`, no PR**
+(Bruce's decision, 2026-10-02). Its content was already reviewed and gated as `hams_shared`'s own PR, so a
+second PR around a one-line gitlink change reviews nothing new and only delays production pickup (a
+`hams_shared` change reaches `hams1` only once `hams_open` records it). Server side, `hams_open`'s ruleset
+`main-pr-required-no-direct-push` (id 24045234) had its admin-role bypass changed from `pull_request` to
+`always` the same day so the push is accepted. That bypass cannot be scoped to submodule changes on a
+personal (non-organization) repository, so it lets **any** direct admin push through, and every session on
+this box authenticates as the admin account: the narrowness of this exception is enforced by the written rule
+in `AGENTS.md`'s `site_rules` (on `main`, nothing ahead of `origin/main`, only the `hams_shared` path staged,
+target commit reachable from `hams_shared`'s `origin/main`), not by GitHub. Everything else on `hams_open`
+still goes through a PR exactly as before; `hams_com` and `hams_shared` are unchanged.
+
 ## Consequences
 
 Local working-tree damage from one session's mistake is now contained to that session's own worktree --
