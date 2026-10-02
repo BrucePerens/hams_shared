@@ -490,6 +490,7 @@
   "no_test_link|ham_digital_modes:r0_normalize_fixed",
   "no_test_link|ham_digital_modes:required_window_samples",
   "no_test_link|ham_digital_modes:samples_per_symbol",
+  "no_test_link|hams_helpdesk:COMM_ncmec_attempt_legal_hold_call",
   "no_test_link|hams_helpdesk:res_partner_compute_callsign",
   "no_test_link|knowledge:manual_compile_markdown",
   "no_test_link|pager_duty:get_log_files",
