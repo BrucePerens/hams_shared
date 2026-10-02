@@ -1875,6 +1875,48 @@ class AptPackagesManifestTests(unittest.TestCase):
         )
         self.assertIn("early_prod", entries[0]["environments"])
 
+    def test_python3_aiohttp_is_installed_for_adif_ingress_and_gdpr_csv_exports_real_runtime_dependency(self):
+        # The same miscategorization as the feedparser test above, found while root-causing
+        # night_shift_todo's adif-ingress-intermittent-aiohttp-modulenotfound-crash-loop report
+        # (2026-10-02): daemons/adif_ingress/main.py and daemons/gdpr_csv_export/main.py both do
+        # a real, unconditional module-level `import aiohttp` / `from aiohttp import web`, but
+        # this package had only ever been installed under `if is_test:` further down in
+        # provision_environment() (grouped there with other daemons' genuinely test-only
+        # dependencies). With no `early_prod` entry, a fresh/re-provisioning run never
+        # guaranteed this package was present before adif.ingress.service (Restart=always,
+        # WantedBy=multi-user.target) first tried to start -- explaining the observed
+        # intermittent ModuleNotFoundError crash loop on boot.
+        entries = [
+            pkg for pkg in infra.MANIFEST["apt_packages"]
+            if pkg.get("debian_name") == "python3-aiohttp"
+        ]
+        self.assertTrue(
+            entries,
+            "expected an apt_packages MANIFEST entry installing python3-aiohttp "
+            "for adif_ingress/main.py's and gdpr_csv_export/main.py's real aiohttp dependency",
+        )
+        self.assertIn("early_prod", entries[0]["environments"])
+
+    def test_adif_ingress_waits_for_its_own_aiohttp_dependency_before_execstart(self):
+        # Defense in depth alongside the MANIFEST fix above: adif.ingress.service's own
+        # ExecStart crashes with ModuleNotFoundError before main() runs anything if aiohttp
+        # is ever transiently unavailable for any reason (a regression in the fix above, a
+        # future unattended-upgrades operation mid-flight, etc). Unlike this unit's siblings
+        # (adif.processor.service, gdpr.csv.export.service), it previously had no
+        # ExecStartPre resource check at all. This pins that it now retries the one real
+        # dependency that actually crashed in production, bounded, before ExecStart ever runs.
+        entry = next(
+            item for item in infra.MANIFEST["static_files"]
+            if item.get("path") == "/opt/hams/systemd/adif.ingress.service"
+        )
+        text = infra.format_env(entry["content"], {})
+        pre_line = next(
+            line for line in text.splitlines() if line.startswith("ExecStartPre=")
+        )
+        self.assertIn("import aiohttp", pre_line)
+        exec_start_index = text.index("\nExecStart=")
+        self.assertLess(text.index(pre_line), exec_start_index)
+
     def test_awscli_is_installed_for_ses_inbound_mail_ingests_real_runtime_dependency(self):
         # Real gap found live on hams1, 2026-09-22: daemons/ses_inbound_mail_ingest/main.py
         # shells out to the `aws` CLI, but nothing in this MANIFEST ever installed it --

@@ -3405,6 +3405,22 @@ Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/logbook_api_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
+# Defense in depth for the intermittent boot-time ModuleNotFoundError crash loop
+# root-caused 2026-10-02 (night_shift_todo's
+# adif-ingress-intermittent-aiohttp-modulenotfound-crash-loop report): the real fix is
+# the MANIFEST apt_packages entry now guaranteeing python3-aiohttp is actually
+# installed before this unit is ever started (see infrastructure.py), but this daemon's
+# own ExecStart does a real, unconditional `import aiohttp` at module load, before
+# main() runs anything -- unlike this unit's sibling daemons (adif.processor.service,
+# gdpr.csv.export.service), it had no ExecStartPre resource check at all. Retries a
+# plain import of the one dependency that actually crashed in production for up to
+# ten seconds (matching this unit's own RestartSec cadence) before letting ExecStart
+# run, so this unit waits out any future transient unavailability of its own real
+# runtime dependency internally instead of climbing NRestarts via the full
+# Restart=always crash-loop path; a genuinely still-missing package still fails loudly
+# (re-raises the same ModuleNotFoundError) rather than retrying forever.
+ExecStartPre=/bin/bash -c 'n=0; while ! /usr/bin/python3 -c "import aiohttp" >/dev/null 2>&1; do n=$$((n + 1)); [ "$$n" -ge 10 ] && exec /usr/bin/python3 -c "import aiohttp"; sleep 1; done'
+
 # Execution via system Python
 ExecStart=/usr/bin/python3 /opt/hams/daemons/adif_ingress/main.py $DAEMON_ARGS
 
@@ -4233,6 +4249,30 @@ WantedBy=timers.target
         {
             "name": "python3-feedparser",
             "debian_name": "python3-feedparser",
+            "environments": ["early_prod"],
+        },
+        # The same miscategorization this file's own comment above already flags for
+        # feedparser, left unfixed here until now: daemons/adif_ingress/main.py and
+        # daemons/gdpr_csv_export/main.py both do a real, unconditional module-level
+        # `import aiohttp` / `from aiohttp import web` -- a genuine prod runtime
+        # dependency for two real daemons, not a test-only one -- yet this package was
+        # ONLY ever installed under the `if is_test:` branch further down in this same
+        # file. Root-caused 2026-10-02 against night_shift_todo's
+        # adif-ingress-intermittent-aiohttp-modulenotfound-crash-loop report: with no
+        # `early_prod` entry, a (re)provisioning run never guarantees this package is
+        # actually present on a prod box before `adif.ingress.service`
+        # (WantedBy=multi-user.target, Restart=always) first tries to start -- whether
+        # it happens to be there at that moment depends entirely on uncontrolled
+        # outside state (a stale manual install, dpkg's current state, an
+        # unattended-upgrades operation mid-flight), explaining the observed
+        # intermittent `ModuleNotFoundError: No module named 'aiohttp'` crash-loop on
+        # boot that then "resolves itself" once something else outside this project's
+        # own provisioning happens to leave the package in place. Installed here
+        # instead so prod actually gets it guaranteed, same fix shape as feedparser
+        # above; the is_test-gated install becomes a harmless duplicate for test boxes.
+        {
+            "name": "python3-aiohttp",
+            "debian_name": "python3-aiohttp",
             "environments": ["early_prod"],
         },
         {
