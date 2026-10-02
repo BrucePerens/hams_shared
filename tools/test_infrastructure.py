@@ -1641,6 +1641,46 @@ class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
         update_idx = after_d + install[after_d:].index("-u")
         self.assertEqual(install[update_idx + 1], "ham_communications_consent")
 
+    def test_gevent_memory_limits_are_written_to_odoo_conf(self):
+        # Tests [@ANCHOR: infrastructure:odoo_conf_gevent_memory_limits]
+        # Regression for the 2026-09-30 gevent restart loop: an unset
+        # limit_memory_soft_gevent fell back to a 2 GiB ceiling the worker's
+        # own VSZ crossed under ordinary websocket load. Provisioning must
+        # write a soft limit with headroom AND a gevent hard limit above it
+        # (Odoo's limit_memory_hard default, 2.5 GiB, is below 3 GiB).
+        run_cmd = MagicMock()
+        self._run_with_dirs("/tmp/hams_open", "/tmp/hams_com", run_cmd)
+        cmds = [c.args[0] for c in run_cmd.call_args_list]
+        limits = dict(infra.ODOO_CONF_GEVENT_MEMORY_LIMITS)
+        self.assertEqual(limits["limit_memory_soft_gevent"], 3 * 1024 ** 3)
+        self.assertEqual(limits["limit_memory_hard_gevent"], 4 * 1024 ** 3)
+        self.assertLess(limits["limit_memory_soft_gevent"], limits["limit_memory_hard_gevent"])
+        for key, value in limits.items():
+            delete = ["sudo", "sed", "-i", f"/^{key}[[:space:]]*=/d", "/etc/odoo/odoo.conf"]
+            append = [
+                c for c in cmds
+                if c[:2] == ["sudo", "bash"] and shlex.split(c[3])[:2] == ["echo", f"{key} = {value}"]
+            ]
+            self.assertIn(delete, cmds)
+            self.assertEqual(len(append), 1, f"expected exactly one append of {key}")
+            # Delete before append, or a re-provision would remove the fresh line.
+            self.assertLess(cmds.index(delete), cmds.index(append[0]))
+        # The actual sed address used must match the key's own line but not
+        # a longer key sharing its prefix, and no sed in this function may
+        # delete the operator-managed limit_memory_soft/limit_memory_hard.
+        conf_lines = [
+            "limit_memory_soft = 1", "limit_memory_hard = 4294967296",
+            "limit_memory_soft_gevent = 1", "limit_memory_hard_gevent = 1",
+            "limit_memory_soft_gevent_x = 1",
+        ]
+        for c in cmds:
+            if c[:3] != ["sudo", "sed", "-i"] or "limit_memory" not in c[3]:
+                continue
+            address = c[3][1:-2].replace("[[:space:]]", r"\s")  # strip "/" ... "/d"
+            matched = [line for line in conf_lines if re.match(address, line)]
+            self.assertEqual(len(matched), 1, f"{c[3]} must delete exactly one key, got {matched}")
+            self.assertIn(matched[0].split(" = ")[0], limits)
+
 
 class RustToolchainPackageTests(unittest.TestCase):
     def test_cargo_is_installed_by_provisioning_because_the_rust_daemon_hook_needs_it(self):
