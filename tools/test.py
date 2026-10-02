@@ -2406,6 +2406,75 @@ def _test_runner_lock_path():
     return os.environ.get("HAMS_TEST_LOCK_PATH") or "/tmp/hams_odoo_test_runner.lock"
 
 
+def check_offline_isolation_invocation_shape(offline_isolation, isolated_ns_env, lock_held_env):
+    """Decide whether THIS invocation can actually reach offline_browser_ns.setup().
+
+    Pure (takes the three relevant values rather than reading os.environ/argparse
+    itself) so the decision can be tested at its boundary without a real
+    invocation. Returns `(ok, message)`; message is the human-readable failure
+    reason and is empty when ok is True.
+
+    `offline_browser_ns.setup()` must run from a ROOT process already inside
+    test.py's own unshared network namespace (see that module's own docstring):
+    it unshares a further NESTED network namespace and moves a veth end into
+    it, both of which need real CAP_NET_ADMIN, not just a plain process running
+    as the `odoo` user. The only place in this file that is ever true is inside
+    `setup_namespace_and_run_tests()` (Process B of the real
+    unshare/systemd-run escalation pipeline, which itself calls
+    `offline_browser_ns.setup()` -- when `--offline-isolation` was requested --
+    BEFORE spawning Process C, the final unprivileged odoo-uid test subprocess).
+
+    This project's own `HAMS_ISOLATED_NS=1` invocation convention (see the
+    `hams-odoo-test-runner-sudo-and-polkit` memory) exists for ORDINARY runs,
+    where a single flat process running directly as the unprivileged `odoo`
+    user -- no escalation, no namespace creation, nothing root -- is exactly
+    what's wanted. But that convention skips `setup_namespace_and_run_tests()`
+    entirely, so a DIRECT `HAMS_ISOLATED_NS=1` invocation of
+    `--offline-isolation` can never reach the setup it needs: nothing in that
+    invocation shape is ever root, so there is no code position to move the
+    nested-namespace setup into that would make it reachable without granting
+    `odoo` privileges it deliberately does not have (a real security decision,
+    not something to route around here).
+
+    Process C is the one legitimate exception: by the time it runs,
+    `setup_namespace_and_run_tests()` (Process B) has already either set up the
+    nested namespace successfully or raised trying to -- either way, Process C
+    inherits `HAMS_ISOLATED_NS=1` from Process B's own environment (set right
+    before Process C is spawned) purely so it takes the same "already isolated,
+    don't escalate again" branch through main() a second time, not because it
+    is itself unprivileged by design the way a direct shortcut invocation is.
+    It is told apart from a direct shortcut invocation by `HAMS_TEST_LOCK_HELD`
+    (also set, once, immediately before Process C is spawned, for the
+    unrelated reason of exempting it from its own redundant lock acquisition)
+    -- so this check only fires for the case that can truly never work, and
+    lets Process C itself proceed.
+
+    Found 2026-09-19 the slow way: a direct `HAMS_ISOLATED_NS=1
+    --offline-isolation` run got all the way through module install and DB
+    setup before the tour's own self-check finally caught it and failed with
+    "This test only runs under tools/test.py --offline-isolation...". This
+    check moves that same, correct diagnosis to before any of that work
+    starts.
+    """
+    if offline_isolation and isolated_ns_env == "1" and lock_held_env != "1":
+        return False, (
+            "--offline-isolation needs the real unshare/systemd-run escalation "
+            "path (setup_namespace_and_run_tests()) to create its nested "
+            "browser namespace -- that whole path is skipped whenever "
+            "HAMS_ISOLATED_NS=1 is already set, which this box's own standing "
+            "convention for ORDINARY test runs always does (see the "
+            "hams-odoo-test-runner-sudo-and-polkit memory). Invoke test.py "
+            "for an --offline-isolation run WITHOUT HAMS_ISOLATED_NS=1 set "
+            "instead -- e.g. as the plain sudo-capable user (not `sudo -u "
+            "odoo env HAMS_ISOLATED_NS=1 ...`) -- so the real escalation path "
+            "runs and reaches offline_browser_ns.setup(). This now works: the "
+            "apt package that used to block that path (nginx) has been "
+            "installed on this box since 2026-10-01. See "
+            "hams_shared/docs/OFFLINE_BROWSER_NAMESPACE_TESTING.md."
+        )
+    return True, ""
+
+
 # --------------------------------------------------------------------------
 # Continuous-integration load gate
 # --------------------------------------------------------------------------
@@ -2968,6 +3037,21 @@ def main():
         ),
     )
     args = parser.parse_args()
+
+    # Fail fast, before any module install/DB rebuild, rather than letting a
+    # direct `HAMS_ISOLATED_NS=1 --offline-isolation` invocation burn real
+    # wall-clock time only for the tour's own self-check to catch this exact
+    # same gap much later. See check_offline_isolation_invocation_shape()'s
+    # own docstring for why this specific combination can never work.
+    offline_isolation_ok, offline_isolation_reason = check_offline_isolation_invocation_shape(
+        args.offline_isolation,
+        os.environ.get("HAMS_ISOLATED_NS"),
+        os.environ.get("HAMS_TEST_LOCK_HELD"),
+    )
+    if not offline_isolation_ok:
+        print(f"❌ ERROR: {offline_isolation_reason}")
+        sys.exit(1)
+
     # Before anything is spawned, so every child (Odoo, its headless Chrome profiles) inherits it in every mode, namespaced or flat.
     apply_default_test_tmpdir(os.environ)
 

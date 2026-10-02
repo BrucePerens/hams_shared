@@ -107,6 +107,36 @@ mercy of this mechanism for no gain.
 Tours cannot run in parallel on this box; `--offline-isolation` uses the same systemwide `test.py`
 lock as every other run, and makes no attempt to work around it.
 
+### Invocation shape matters: do NOT use the `HAMS_ISOLATED_NS=1` shortcut
+
+`offline_browser_ns.setup()` (the function above) must run from a **root** process that is already
+inside `test.py`'s own unshared network namespace -- it unshares a further *nested* network
+namespace and moves a veth end into it, both of which genuinely need `CAP_NET_ADMIN`, not just a
+process running as the unprivileged `odoo` user. The only place in `test.py` that is ever true is
+inside `setup_namespace_and_run_tests()`, which the project's own `HAMS_ISOLATED_NS=1` shortcut
+convention (`hams-odoo-test-runner-sudo-and-polkit` memory; used for *ordinary* runs to skip polkit
+prompts and sudo friction) skips entirely. So:
+
+```bash
+# WRONG for --offline-isolation -- HAMS_ISOLATED_NS=1 never reaches
+# setup_namespace_and_run_tests(), so the nested namespace is never created.
+# test.py now fails fast with a clear message rather than burning a DB
+# rebuild and module install first (check_offline_isolation_invocation_shape()
+# in test.py).
+sudo -u odoo env HAMS_ISOLATED_NS=1 python3 hams_shared/tools/test.py --offline-isolation -u ham_shack
+
+# RIGHT -- invoke as the plain sudo-capable user (e.g. bruce), with NO
+# HAMS_ISOLATED_NS set, so test.py takes its real unshare/systemd-run
+# escalation path and setup_namespace_and_run_tests() actually runs.
+python3 hams_shared/tools/test.py --offline-isolation -u ham_shack
+```
+
+This used to fail a different way even invoked correctly: `check_host_apt_packages()` required
+`nginx`, which this dev box did not have before 2026-10-01 (it was installed then for an unrelated
+reason -- a reverse proxy in front of Odoo's bus/websocket worker, see `CLAUDE.md`). `nginx` is
+installed now, so the real escalation path's own host-prerequisite check passes and
+`--offline-isolation` reaches `offline_browser_ns.setup()` as designed.
+
 ## Writing an offline tour for another module
 
 ### 1. Tag the test class so ordinary runs never collect it
