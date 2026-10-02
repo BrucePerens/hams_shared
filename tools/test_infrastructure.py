@@ -2023,6 +2023,66 @@ class Pi500FccUlsSyncManifestTests(unittest.TestCase):
         self.assertIn("OnCalendar=*-*-* 05:00:00", timer["content"])
 
 
+class ClaudeWrapperCiOauthTokenTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:claude_wrapper_ci_oauth_token]
+
+    The two Claude CLI wrapper scripts were fixed live on hams1 (2026-10-02) to prefer a
+    provisioned `~/.claude/ci_oauth_token` as CLAUDE_CODE_OAUTH_TOKEN; the MANIFEST copy had
+    drifted and a re-provisioning run would have reverted it. These run the real rendered
+    MANIFEST content (what provision_static_files() writes to disk) under bash, with only the
+    account's home path redirected to a temp dir so it can run off-box, and a stand-in `claude`
+    that reports what it was given."""
+
+    ACCOUNTS = ("hams_ai_agent", "hams_event_agent")
+
+    def _rendered(self, account):
+        path = f"/usr/local/sbin/run-hams-{account.removeprefix('hams_').replace('_', '-')}-claude.sh"
+        entry = next(e for e in infra.MANIFEST["static_files"] if e["path"] == path)
+        self.assertEqual((entry["owner"], entry["mode"], entry["environments"]), ("root:root", "755", ["prod"]))
+        return infra.format_env(entry["content"], {})
+
+    def _run(self, account, token_text):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, account)
+            os.makedirs(os.path.join(home, ".claude"))
+            os.makedirs(os.path.join(home, ".local", "bin"))
+            fake = os.path.join(home, ".local", "bin", "claude")
+            with open(fake, "w") as f:
+                f.write('#!/bin/bash\necho "cwd=$PWD"\necho "home=$HOME"\n'
+                        'echo "token=${CLAUDE_CODE_OAUTH_TOKEN-UNSET}"\necho "args=$*"\n')
+            os.chmod(fake, 0o755)
+            if token_text is not None:
+                with open(os.path.join(home, ".claude", "ci_oauth_token"), "w") as f:
+                    f.write(token_text)
+            script = self._rendered(account).replace(f"/home/{account}", home)
+            env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+            out = subprocess.run(
+                ["bash", "-c", script, "wrapper", "-p", "hi"],
+                capture_output=True, text=True, check=True, env=env, cwd=tmp,
+            ).stdout
+            return dict(line.split("=", 1) for line in out.splitlines()), home
+
+    def test_content_survives_format_env_unchanged(self):
+        for account in self.ACCOUNTS:
+            with self.subTest(account=account):
+                self.assertIn("ci_oauth_token", self._rendered(account))
+
+    def test_a_provisioned_token_file_is_exported(self):
+        for account in self.ACCOUNTS:
+            with self.subTest(account=account):
+                seen, home = self._run(account, "tok-from-file\n")
+                self.assertEqual(seen["token"], "tok-from-file")
+                self.assertEqual((seen["cwd"], seen["home"], seen["args"]), (home, home, "-p hi"))
+
+    def test_no_token_file_or_an_empty_one_keeps_the_old_behavior(self):
+        for account in self.ACCOUNTS:
+            for token_text in (None, ""):
+                with self.subTest(account=account, token_text=token_text):
+                    seen, home = self._run(account, token_text)
+                    self.assertEqual(seen["token"], "UNSET")
+                    self.assertEqual((seen["cwd"], seen["home"]), (home, home))
+
+
 class SystemdUnitPathTests(unittest.TestCase):
     """A path in ReadWritePaths= that does not exist stops the service before it starts (systemd
     status 226/NAMESPACE) unless it has a leading "-". The first production release hit this on
