@@ -67,6 +67,16 @@ protection on these repositories is being hardened specifically to stop this (se
 hard rule regardless of whether the platform currently enforces it for your specific credential --
 if `git push` to a protected branch ever succeeds without a PR having been merged, that is a bug in
 your own process, not a green light.
+
+**The one exception: a pure submodule-pointer bump in `hams_open`** (Bruce's decision, 2026-10-02:
+"We don't need a PR to bump a submodule pointer"). When the only change is moving `hams_open`'s
+`hams_shared` gitlink forward to a commit that is already merged on `hams_shared`'s own `main`, commit
+it directly on `hams_open`'s `main` and push -- the content it points at was already reviewed and
+gated in `hams_shared`, so a second PR reviews nothing new. Before pushing, confirm: the checkout is on
+`main`, `git log --oneline origin/main..main` is empty, `git status -s` shows nothing but `hams_shared`,
+and the target commit is reachable from `hams_shared`'s `origin/main`. Commit only that path
+(`git commit -- hams_shared`). Anything else in the same commit -- even a one-line doc change --
+voids the exception and needs a PR. See ADR 0102 decision 6.
 </site_rules>
 
 ## 1. CORE OPERATING PRINCIPLES (META-RULES)
