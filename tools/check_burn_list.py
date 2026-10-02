@@ -5889,8 +5889,30 @@ def main():
                                         errors.append(
                                             "Line 1 (__manifest__.py format): __manifest__.py must not contain a shebang. It should ideally start with the dictionary '{' or standard -*- coding -*- comment."
                                         )
+                                # A '#!' line inside a multi-line string literal (e.g. a daemon's
+                                # systemd-unit or wrapper-script template embedded as generated
+                                # file content, as in infrastructure.py's own MANIFEST) is real
+                                # shebang content for the FILE THAT GETS WRITTEN TO DISK, not a
+                                # second shebang in this .py source file -- exclude those lines so
+                                # this check only flags an actual misplaced source-level shebang.
+                                string_literal_lines = set()
+                                try:
+                                    for node in ast.walk(
+                                        ast.parse("".join(lines), filename=filepath)
+                                    ):
+                                        if isinstance(node, ast.Constant) and isinstance(
+                                            node.value, str
+                                        ):
+                                            string_literal_lines.update(
+                                                range(
+                                                    node.lineno,
+                                                    getattr(node, "end_lineno", node.lineno) + 1,
+                                                )
+                                            )
+                                except SyntaxError:
+                                    pass
                                 for idx, line in enumerate(lines[1:], start=2):
-                                    if line.startswith("#!"):
+                                    if line.startswith("#!") and idx not in string_literal_lines:
                                         errors.append(f"Line {idx} (Shebang): Shebangs are only allowed on the first line of the file.")
                     except (SyntaxError, OSError):
                         pass

@@ -4246,6 +4246,54 @@ def test_a_file_git_ignores_is_not_linted(tmp_path):
     assert "RCE" not in result.stdout, result.stdout
 
 
+def test_a_shebang_embedded_in_a_string_literal_is_not_flagged(tmp_path):
+    # Real false positive found live 2026-10-02: infrastructure.py's own MANIFEST generates
+    # wrapper-script/systemd-unit file content as triple-quoted string literals, each starting
+    # with a real '#!/bin/bash' line for the FILE THAT GETS WRITTEN TO DISK -- the old line-based
+    # check flagged these as a second shebang in infrastructure.py itself, blocking every PR
+    # against hams_shared once CI started actually running again after a 21+ hour self-hosted
+    # runner outage. tools/ is pruned from the default scan, so this needs --scan-daemons-and-tools
+    # to reproduce the real failure mode.
+    (tmp_path / "infra_like.py").write_text(
+        '"""docstring"""\n'
+        "MANIFEST = {\n"
+        '    "content": """\\\n'
+        "#!/bin/bash\n"
+        'echo hello\n"""\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parent / "check_burn_list.py"),
+            "--scan-daemons-and-tools",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert "Shebang" not in result.stdout, result.stdout
+
+
+def test_a_real_misplaced_shebang_outside_any_string_is_still_flagged(tmp_path):
+    (tmp_path / "bad_shebang.py").write_text(
+        "#!/usr/bin/env python3\nimport os\n#!/bin/bash\nprint(os.getcwd())\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parent / "check_burn_list.py"),
+            "--scan-daemons-and-tools",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert "Shebang" in result.stdout, result.stdout
+
+
 def test_a_file_that_git_does_not_ignore_is_still_linted_even_when_untracked(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     (tmp_path / ".gitignore").write_text("generated/\n", encoding="utf-8")

@@ -236,7 +236,8 @@ class SweepRepoEndToEndTests(unittest.TestCase):
         sow.sweep_repo(self.repo)
         self.assertTrue(os.path.isdir(path))
         todo_dir = os.path.join(self.repo, "night_shift_todo", "low")
-        self.assertFalse(os.path.isdir(todo_dir) and os.listdir(todo_dir))
+        if os.path.isdir(todo_dir):
+            self.assertEqual(os.listdir(todo_dir), [])
 
 
 if __name__ == "__main__":
