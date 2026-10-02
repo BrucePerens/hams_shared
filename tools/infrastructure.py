@@ -4809,6 +4809,32 @@ def provision_systemd_override(
             _logger.warning("Failed to reload systemd daemons: %s", e)
 
 
+# Memory limits for Odoo's single gevent (websocket/bus) worker, written into
+# /etc/odoo/odoo.conf by initialize_odoo_database() below.
+#
+# Real production incident, 2026-09-30: with neither key set, the gevent
+# worker fell back to Odoo's limit_memory_soft default (2 GiB) and, during a
+# burst of websocket traffic, hit it 17 times in 14 minutes, SIGTERMing itself
+# every 20-40 s and dropping every open browser's real-time connection
+# ("real-time connection lost"). Odoo's check measures psutil's
+# memory_info().vms -- VIRTUAL size, not RSS: the freshly forked worker
+# already sits at ~1.1-1.3 GiB VSZ from loaded C extensions alone, and the
+# burst peaked at 2.15-2.24 GiB. Not a leak; the ceiling was too low.
+# 3 GiB was set by hand on hams1 2026-10-01 and held through the following
+# daytime traffic with zero recurrences.
+#
+# The hard limit must be managed too: the gevent worker's RLIMIT_AS comes from
+# limit_memory_hard_gevent, else limit_memory_hard, whose Odoo default is only
+# 2.5 GiB -- below a 3 GiB soft limit, so on a fresh box the clean soft-limit
+# restart could never fire and the worker would die of MemoryError instead.
+# limit_memory_hard_gevent (4 GiB, the value hams1's limit_memory_hard already
+# has) keeps soft < hard without changing the ordinary HTTP worker pool.
+ODOO_CONF_GEVENT_MEMORY_LIMITS = (
+    ("limit_memory_soft_gevent", 3 * 1024 * 1024 * 1024),
+    ("limit_memory_hard_gevent", 4 * 1024 * 1024 * 1024),
+)
+
+
 # [@ANCHOR: infrastructure:initialize_odoo_database]
 def initialize_odoo_database(
     run_cmd_func, hams_open_dir, hams_com_dir, db_name="hams_test"
@@ -4885,6 +4911,14 @@ def initialize_odoo_database(
         # neutralizes that regardless of what characters the path contains.
         run_cmd_func(["sudo", "bash", "-c", f"echo {shlex.quote(f'addons_path = {addons_path_str}')} >> /etc/odoo/odoo.conf"])
         run_cmd_func(["sudo", "bash", "-c", f"echo {shlex.quote(f'workers = {workers}')} >> /etc/odoo/odoo.conf"])
+        # [@ANCHOR: infrastructure:odoo_conf_gevent_memory_limits]
+        # Each delete regex is anchored on the key's own "=" so that
+        # removing one key never also deletes a longer key sharing its
+        # prefix (e.g. a bare /^limit_memory_soft/d would take out
+        # limit_memory_soft_gevent too).
+        for key, value in ODOO_CONF_GEVENT_MEMORY_LIMITS:
+            run_cmd_func(["sudo", "sed", "-i", f"/^{key}[[:space:]]*=/d", "/etc/odoo/odoo.conf"])
+            run_cmd_func(["sudo", "bash", "-c", f"echo {shlex.quote(f'{key} = {value}')} >> /etc/odoo/odoo.conf"])
     except Exception as e: # audit-ignore-catch-all
         _logger.warning("Failed to update odoo.conf: %s", e)
 
