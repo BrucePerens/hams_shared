@@ -236,11 +236,6 @@ class SweepRepoEndToEndTests(unittest.TestCase):
         sow.sweep_repo(self.repo)
         self.assertTrue(os.path.isdir(path))
         todo_dir = os.path.join(self.repo, "night_shift_todo", "low")
-        # Bug found live, 2026-10-02 (the same pass that fixed check_burn_list.py's shebang
-        # false positive): `assertFalse(A and B)` is the exact "multiple conditions" anti-pattern
-        # the burn-list linter's own AST check flags -- a failure here would have reported only
-        # the combined truthiness, not which half (the directory's existence, or its contents)
-        # was unexpected. Split into two precise assertions, same intent: nothing was flagged.
         if os.path.isdir(todo_dir):
             self.assertEqual(os.listdir(todo_dir), [])
 
