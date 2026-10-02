@@ -3781,18 +3781,21 @@ WantedBy=timers.target
             # night_shift_todo/medium/service-account-creation-and-sudoers-sandboxes-are-
             # untracked-infra-c3a9f714.md: every real file under hams1's /etc/sudoers.d/ was
             # hand-provisioned, with no tracked source anywhere. Confirmed directly on hams1,
-            # 2026-10-02 -- `ls -la /etc/sudoers.d/` lists exactly these 8 custom grants (plus
-            # the stock Debian `README` the `sudo` package itself installs, not tracked here
-            # since it carries no project-specific content). Content below is copied verbatim
-            # from each live file (read directly via `sudo cat`, confirmed clean, no secrets).
-            # Real mode on hams1 is 0440 (`-r--r-----`, root:root) for every one of them --
-            # visudo's own convention for sudoers.d drop-ins, enforced here the same way.
+            # 2026-10-02 -- `ls -la /etc/sudoers.d/` lists exactly 8 custom grants (plus the
+            # stock Debian `README` the `sudo` package itself installs, not tracked here since it
+            # carries no project-specific content). Seven of the eight are tracked below; the
+            # eighth, `odoo-agyimport-sandbox`, is deliberately NOT tracked -- see its own
+            # omission comment further down, where its sibling `odoo-agy-sandbox` entry sits.
+            # Content copied verbatim from each live file (read directly via `sudo cat`,
+            # confirmed clean, no secrets). Real mode on hams1 is 0440 (`-r--r-----`, root:root)
+            # for every one of them -- visudo's own convention for sudoers.d drop-ins, enforced
+            # here the same way.
             #
             # This one grants `ai` (the account used to administer hams1 itself) full,
-            # unrestricted NOPASSWD sudo -- not command-restricted like the other seven below.
-            # The `ai` system account itself remains a separate, pre-existing gap (it predates
-            # this MANIFEST's own tooling -- it is the account `infrastructure.py`'s provisioning
-            # commands are themselves run as/through -- and is not provisioned here).
+            # unrestricted NOPASSWD sudo -- not command-restricted like the six other tracked
+            # grants below. The `ai` system account itself remains a separate, pre-existing gap
+            # (it predates this MANIFEST's own tooling -- it is the account `infrastructure.py`'s
+            # provisioning commands are themselves run as/through -- and is not provisioned here).
             "path": "/etc/sudoers.d/ai-nopasswd",
             "content": "ai ALL=(ALL) NOPASSWD:ALL\n",
             "owner": "root:root",
@@ -3828,23 +3831,18 @@ WantedBy=timers.target
             "mode": "440",
             "environments": ["prod"],
         },
-        {
-            # Lets `odoo` run the repeater-import `agy` tool as the separate, dedicated
-            # `agyimport` sandbox account (confirmed directly on hams1, 2026-10-02: uid 996, gid
-            # 987, its own group, `nologin` shell, comment "agy for repeater import (no MCP)") --
-            # restricted to this one exact command and flag set. `agyimport` itself remains a
-            # separate, not-yet-provisioned-here account, same class of gap as `ai` above; out of
-            # scope for this pass, which is specifically about the hams_ai_agent/hams_event_agent
-            # pair this todo named.
-            "path": "/etc/sudoers.d/odoo-agyimport-sandbox",
-            "content": (
-                "odoo ALL=(agyimport) NOPASSWD: "
-                "/usr/local/lib/agy-import/agy --sandbox --output-format json\n"
-            ),
-            "owner": "root:root",
-            "mode": "440",
-            "environments": ["prod"],
-        },
+        # Deliberately NOT tracking /etc/sudoers.d/odoo-agyimport-sandbox (confirmed live on
+        # hams1, 2026-10-02: "odoo ALL=(agyimport) NOPASSWD: /usr/local/lib/agy-import/agy
+        # --sandbox --output-format json") or the `agyimport` system account it grants to, even
+        # though both still exist today -- night_shift_todo/low/agyimport-account-is-dead-
+        # infrastructure-on-hams1-a7e4c891.md (filed 2026-10-01, before this pass) already
+        # identified this exact account/sudoers-file/binary trio as dead infrastructure from a
+        # superseded isolation plan (ham_repeater_import.py moved to Claude Code CLI/
+        # hams_ai_agent instead; agyimport's own one-time interactive sign-in was never
+        # completed), slated for removal on hams1, not for permanent tracking. Adding a
+        # static_files entry here would make a fresh-host rebuild recreate dead infrastructure
+        # forever and would need its own follow-up removal the moment a7e4c891 is actioned --
+        # whoever closes that item needs to touch only hams1, not this MANIFEST too.
         {
             # Lets `odoo` run the repeater-import `agy` tool as `hams_ai_agent` itself (a second,
             # older route alongside the dedicated `agyimport` sandbox above) -- restricted to the
