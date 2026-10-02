@@ -507,7 +507,15 @@ def hook_daemons_perms(env_vars, dest_dir, path, run_cmd_func):
 # before its systemd unit's ExecStart can run. Runs before
 # hook_daemons_perms in the same directory entry's hook list so the
 # perms fixup below also covers the freshly built binaries.
-RUST_DAEMON_CRATES = ["hams_data_relay", "hams_relay_bridge", "hams_simulated_band"]
+RUST_DAEMON_CRATES = [
+    "hams_data_relay",
+    "hams_relay_bridge",
+    "hams_simulated_band",
+    # hams_com daemons/hams_auth_gateway: the auth.hams.com certificate login gateway (LoTW
+    # client certificates over TLS 1.2, TCP 443). See its README and hams_com
+    # docs/deploy/LOTW_CA_CHAIN.md section 7.
+    "hams_auth_gateway",
+]
 
 
 def hook_build_rust_daemons(env_vars, dest_dir, path, run_cmd_func):
@@ -576,6 +584,19 @@ MANIFEST = {
             "user": "hams_event_agent",
             "group": "hams_event_agent",
             "home": "/home/hams_event_agent",
+            "shell": "/usr/sbin/nologin",
+            "environments": ["prod"],
+        },
+        {
+            # hams_com daemons/hams_auth_gateway (the auth.hams.com certificate login gateway):
+            # its own unprivileged account, the only user that can read the TLS key and the
+            # token secret under /etc/hams/auth (both 0640, group hams-auth). Binds TCP 443
+            # through CAP_NET_BIND_SERVICE in its own unit (hams-auth-gateway.service below),
+            # never as root. Not a member of any other group, and no other account joins its
+            # group. Prod-only: auth.hams.com exists only on the production server.
+            "user": "hams-auth",
+            "group": "hams-auth",
+            "home": "/etc/hams/auth",
             "shell": "/usr/sbin/nologin",
             "environments": ["prod"],
         },
@@ -749,6 +770,27 @@ MANIFEST = {
             "provision_mode": "750",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
+        },
+        # hams_com daemons/hams_auth_gateway: its configuration directory. Holds gateway.toml,
+        # auth.crt/auth.key (installed by the certbot deploy hook) and gateway_token_secret,
+        # none of which is in this public repository -- installing them stays a release step
+        # (hams_com docs/proposals/PROVISION_PRODUCTION_NOTES.md, "the gateway replaces nginx on
+        # auth.hams.com"). Readable only by root and the hams-auth group. Deliberately no
+        # "runtime_mount" key: these files belong to the gateway alone and must never be
+        # mounted into any other runtime.
+        {
+            "path": "/etc/hams/auth",
+            "owner": "root:hams-auth",
+            "provision_mode": "750",
+            "environments": ["prod"],
+        },
+        {
+            # The pinned ARRL LoTW trust anchors (gateway.toml's [[anchor.certificate]] files,
+            # copied from hams_com nginx/prod/lotw_ca/ at release time).
+            "path": "/etc/hams/auth/anchors/arrl_lotw",
+            "owner": "root:hams-auth",
+            "provision_mode": "750",
+            "environments": ["prod"],
         },
 
         {
@@ -3515,6 +3557,75 @@ WantedBy=multi-user.target
             "owner": "root:root",
             "mode": "644",
             "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/hams_auth_gateway: the auth.hams.com certificate login gateway.
+            # Text identical to hams_com daemons/hams_auth_gateway/packaging/
+            # hams-auth-gateway.service (hams_com's daemons/test_daemon_provisioning_coverage.py
+            # fails if the two drift). Like every .service here it is only linked into
+            # /etc/systemd/system, never enabled: it cannot start until the release steps that
+            # this public repository cannot perform are done (the auth.hams.com DNS record, its
+            # TLS certificate, /etc/hams/auth/gateway.toml, the ARRL anchors, the token secret,
+            # and `ufw allow 443/tcp` -- hams_com docs/proposals/PROVISION_PRODUCTION_NOTES.md,
+            # "the gateway replaces nginx on auth.hams.com"). Then: systemctl enable --now.
+            "path": "/opt/hams/systemd/hams-auth-gateway.service",
+            "content": """\
+# systemd unit for hams_auth_gateway (auth.hams.com). Provisioned by hams_shared/tools/infrastructure.py's
+# MANIFEST as /opt/hams/systemd/hams-auth-gateway.service; daemons/hams_auth_gateway/packaging/
+# hams-auth-gateway.service in hams_com must stay identical (daemons/test_daemon_provisioning_coverage.py).
+[Unit]
+Description=hams.com certificate login gateway (auth.hams.com)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/hams/daemons/hams_auth_gateway/target/release/hams_auth_gateway /etc/hams/auth/gateway.toml
+Restart=always
+RestartSec=5
+
+# Unprivileged. Port 443 is bound with CAP_NET_BIND_SERVICE only.
+User=hams-auth
+Group=hams-auth
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Hardening: no new privileges, read-only system, private /tmp and devices, nothing writable at all.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadOnlyPaths=/etc/hams/auth
+UMask=0077
+
+# Limits (the daemon has its own per-source and total connection limits too).
+LimitNOFILE=4096
+TasksMax=256
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
         },
         {
             "path": "/opt/hams/systemd/hams.simulated.band.service",
