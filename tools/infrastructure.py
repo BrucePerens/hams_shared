@@ -5362,6 +5362,29 @@ def _create_odoo_role_if_missing(run_cmd_func, db_pass):
     actually makes the substitution happen at all.
     """
     if _role_exists("odoo"):
+        # Bug-hunt fix (2026-10-02, found live provisioning jetson-1, a
+        # genuinely fresh Ubuntu box): the Debian/Ubuntu `odoo` apt package's
+        # own postinst already creates a basic, non-superuser `odoo`
+        # PostgreSQL role (`Create DB` only) as a side effect of package
+        # installation, running BEFORE this function ever does -- so
+        # `_role_exists("odoo")` was already true by the time provisioning
+        # reached here, and the early `return` above meant the CREATE ROLE
+        # ... WITH SUPERUSER below (needed for `CREATE EXTENSION vector`,
+        # among other superuser-only DDL Odoo's own install step issues)
+        # never ran. Confirmed live: `psql -c '\du odoo'` showed only
+        # `Create DB`, and module installation failed with
+        # "psycopg2.errors.InsufficientPrivilege: permission denied to
+        # create extension \"vector\" ... Must be superuser." Never caught
+        # on the dev box/hams1 because their own `odoo` role already had
+        # superuser from earlier history predating the apt-package-creates-
+        # a-role behavior (the same class of "never provisioned from truly
+        # fresh" gap already found for the role/database bootstrap
+        # functions' own `:'var'`-substitution bug, see this function's own
+        # docstring above). Idempotent either way: ALTER ROLE ... SUPERUSER
+        # on an already-superuser role is a harmless no-op.
+        run_cmd_func(
+            ["sudo", "-u", "postgres", "psql", "-c", "ALTER ROLE odoo WITH SUPERUSER;"]
+        )
         return
     run_cmd_func(
         [
