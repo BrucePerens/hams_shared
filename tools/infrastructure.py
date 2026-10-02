@@ -3537,6 +3537,18 @@ Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/hams_simulated_band
 
+# Added 2026-10-02 -- like hams.simulated.bots.service's own 2026-09-30 fold-in
+# below, this previously existed ONLY in a hand-maintained, untracked drop-in
+# on hams1 (/etc/systemd/system/hams.simulated.band.service.d/bot-keys.conf,
+# dated 2026-09-24). It is a file *path*, not a secret: the per-host bot key
+# lines (minted with daemons/hams_simulated_band/tools/new_bot_key.sh) stay
+# hand-placed at this path, mode 0600/0640, never in this unit text. Without
+# the variable the SFU starts but refuses every QAI (bot) client; with it set
+# and the file missing, the SFU fails fast at startup by design (bot_auth.rs).
+# Provisioning only links this unit, it never enables it, so a host without
+# the key file is unaffected until someone deliberately turns the band on.
+Environment="HAMS_BAND_BOT_KEYS_FILE=/etc/hams-band/band_bot_keys"
+
 ExecStart=/opt/hams/daemons/hams_simulated_band/target/release/hams_simulated_band
 
 Restart=always
