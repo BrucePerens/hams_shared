@@ -1900,6 +1900,7 @@ class RabbitmqGuestDefaultRemovedTests(unittest.TestCase):
 
 class DeleteRabbitmqGuestUserTests(_SafePatchTestCase):
     def test_deletes_guest_when_present(self):
+        # Tests [@ANCHOR: infrastructure:_delete_rabbitmq_guest_user_if_present]
         self.safe_patch_object(infra, "_rabbitmq_user_exists", side_effect=lambda user: user == "guest")
         run_cmd = MagicMock()
         infra._delete_rabbitmq_guest_user_if_present(run_cmd)
@@ -1922,6 +1923,7 @@ class DeleteRabbitmqGuestUserTests(_SafePatchTestCase):
 
 class EnsureLineInFileTests(_SafePatchTestCase):
     def test_appends_once_and_is_idempotent(self):
+        # Tests [@ANCHOR: infrastructure:_ensure_line_in_file]
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "rabbitmq-env.conf")
             with open(path, "w") as f:
@@ -1947,6 +1949,7 @@ class EnsureLineInFileTests(_SafePatchTestCase):
 
 class RedisAclTests(_SafePatchTestCase):
     def test_production_env_gets_redis_credentials_and_a_matching_url(self):
+        # Tests [@ANCHOR: infrastructure:redis_url]
         env_vars = {"DOMAIN": "hams.com", "CLOUDFLARE_ZONE_ID": "none"}
         infra.load_and_prompt_env(env_vars, is_test=False)
         self.assertEqual(env_vars["REDIS_USERNAME"], "hams_redis")
@@ -1978,6 +1981,7 @@ class RedisAclTests(_SafePatchTestCase):
         )
 
     def test_acl_fragment_turns_default_off_and_stores_only_a_hash(self):
+        # Tests [@ANCHOR: infrastructure:_redis_acl_include_content]
         content = infra._redis_acl_include_content("hams_redis", "secretvalue")
         digest = hashlib.sha256(b"secretvalue").hexdigest()
         lines = [line for line in content.splitlines() if not line.startswith("#")]
@@ -1991,6 +1995,7 @@ class RedisAclTests(_SafePatchTestCase):
         self.assertNotIn("secretvalue", content)
 
     def test_write_include_creates_fragment_and_include_line_idempotently(self):
+        # Tests [@ANCHOR: infrastructure:_write_redis_acl_include]
         self.safe_patch_object(infra, "apply_permissions")
         with tempfile.TemporaryDirectory() as directory:
             conf = os.path.join(directory, "redis.conf")

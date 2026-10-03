@@ -1707,7 +1707,8 @@ def refuse_to_run_on_production_host(marker_files=None, database_names=()):
         + "".join(f"   - {reason}\n" for reason in reasons)
         + "   test.py flushes Redis and publishes to RabbitMQ on whatever host it runs on; on the\n"
         "   production host that is production's own data and production's own consumers.\n"
-        "   Bruce's decision (2026-10-02/03): never run test.py on hams1. Run it on the dev box."
+        "   Bruce's decision (2026-10-02/03): never run test.py on hams1. Run it on the dev box.\n"
+        "   On a dev box, a hams_prod database means a restored production dump: drop or rename it."
     )
     sys.exit(2)
 
