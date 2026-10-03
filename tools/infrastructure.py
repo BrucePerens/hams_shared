@@ -523,7 +523,12 @@ def hook_build_rust_daemons(env_vars, dest_dir, path, run_cmd_func):
         manifest_path = os.path.join(path, crate, "Cargo.toml")
         if os.path.exists(manifest_path):
             try:
-                run_cmd_func(["cargo", "build", "--release", "--manifest-path", manifest_path])
+                # `--target-dir` pins the binary to <crate>/target/release/, where the systemd
+                # units' ExecStart expects it; an inherited CARGO_TARGET_DIR (e.g. via `sudo -E`
+                # from a Claude session, whose hams_com settings.json sets a shared build cache)
+                # would otherwise strand it elsewhere.
+                target_dir = os.path.join(path, crate, "target")
+                run_cmd_func(["cargo", "build", "--release", "--manifest-path", manifest_path, "--target-dir", target_dir])
             except Exception as e:  # audit-ignore-catch-all
                 _logger.warning("Rust daemon build failed for %s: %s", crate, e)
                 record_hook_failure(f"hook_build_rust_daemons:{crate}", e)
