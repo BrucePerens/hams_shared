@@ -105,7 +105,13 @@ def provision():
     _logger.info(f"[*] Discovered OS: {os_id}")
 
     parser = argparse.ArgumentParser(description="Standalone Environment Provisioning Script")
-    parser.add_argument("--test", action="store_true", help="Smoke-test all daemons and stop them after")
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Provision a test host: smoke-test the local daemons and stop them after, even on "
+        "failure. Units that fetch from third-party servers (MANIFEST external_fetch) are "
+        "linked but never enabled or started",
+    )
     parser.add_argument("--force-reset", action="store_true", help="Completely destroy the existing database, filestore, and cache before provisioning")
     parser.add_argument(
         "--hold-odoo",

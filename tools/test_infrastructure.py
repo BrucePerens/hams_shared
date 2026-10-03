@@ -2570,5 +2570,250 @@ class SignerDaemonManifestTests(unittest.TestCase):
             self.assertIn("WantedBy=multi-user.target\n", unit)
 
 
+
+class ExternalFetchUnitClassificationTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:external_fetch_unit_names]
+
+    Standing rule (2026-10-03): a test or development machine never runs a unit that fetches
+    from third-party servers. On 2026-10-02 `provision.py --test` enabled every timer and its
+    smoketest started every service on fresh test hosts; one of them pulled the whole national
+    licence database. The MANIFEST now marks each such unit "external_fetch". This class forces
+    every systemd unit in the MANIFEST into exactly one of two audited buckets, so a new unit
+    cannot be added without someone deciding which it is (by reading its daemon's code)."""
+
+    # Read each daemon's code, 2026-10-02: none of these talks to a third-party server on its own.
+    AUDITED_LOCAL_ONLY_UNITS = {
+        "adif.ingress.service": "HTTP upload endpoint; only calls the local Odoo and RabbitMQ",
+        "adif.processor.service": "RabbitMQ consumer; local Odoo only",
+        "backup.worker.service": "runs only backup jobs an operator configured; idle otherwise",
+        "callbook.dns.export.service": "reads Odoo, writes the local PowerDNS zone",
+        "callbook.dns.export.timer": "activates callbook.dns.export.service (local)",
+        "callbook.dns.rrl.service": "local DNS rate-limiting proxy",
+        "dx.firehose.service": "local websocket server over the local database",
+        "gdpr.csv.export.service": "local HTTP export server",
+        "hamcall.idx.sync.service": "reads a licensed file already on disk; no timer",
+        "hams-auth-gateway.service": "local server",
+        "hams-device-command-signer.service": "local signing socket",
+        "hams-pgbackrest-backup.path": "fires only on a spool file a configured backup job writes",
+        "hams-pgbackrest-backup.service": "runs only for a configured backup job",
+        "hams-pycache.service": "compiles local Python files",
+        "hams-relay-signer.service": "local signing socket",
+        "hams-subcarrier-signer.service": "local signing socket",
+        "hams.daemon.keys.service": "provisions daemon keys in the local database",
+        "hams.data.relay.service": "serves map data from local Redis; no ingestion task",
+        "hams.db.local.backup.service": "local pg_dump",
+        "hams.db.local.backup.timer": "activates hams.db.local.backup.service (local)",
+        "hams.relay.bridge.service": "local websocket bridge to the local Odoo",
+        "hams.simulated.band.service": "local server; STUN only while negotiating with a peer",
+        "hams.simulated.bots.service": "local band client; speech model fetched once into a cache",
+        "hams.simulated.observer.service": "local band client, same as the bots",
+        "pdns.callbook.service": "local PowerDNS server",
+        "pdns.sync.service": "RabbitMQ consumer writing to the local PowerDNS API",
+        "stray.odoo.shell.detector.service": "inspects local processes",
+        "stray.odoo.shell.detector.timer": "activates stray.odoo.shell.detector.service (local)",
+    }
+
+    # Units seen running on test hosts in the 2026-10-02 incident; each must stay classified.
+    INCIDENT_UNITS = (
+        "fcc.uls.sync.service",
+        "fcc.uls.sync.timer",
+        "uk.ofcom.sync.timer",
+        "au.acma.sync.timer",
+        "de.bnetza.sync.timer",
+        "br.anatel.sync.timer",
+        "pota.sync.timer",
+        "sota.sync.timer",
+        "wa7bnm.contest.sync.timer",
+        "arrl.hamfests.sync.timer",
+        "qrz.scraper.service",
+    )
+
+    def _unit_specs(self):
+        return [
+            spec for spec in infra.MANIFEST["static_files"]
+            if "/systemd/" in spec["path"]
+            and spec["path"].endswith((".service", ".timer", ".path"))
+        ]
+
+    def test_every_systemd_unit_is_classified_exactly_once(self):
+        flagged = infra.external_fetch_unit_names()
+        for spec in self._unit_specs():
+            name = os.path.basename(spec["path"])
+            in_local = name in self.AUDITED_LOCAL_ONLY_UNITS
+            self.assertNotEqual(
+                name in flagged,
+                in_local,
+                f"{name} must be either MANIFEST external_fetch or listed in "
+                "AUDITED_LOCAL_ONLY_UNITS, not both and not neither -- read its daemon's code",
+            )
+
+    def test_audited_local_set_has_no_stale_names(self):
+        names = {os.path.basename(spec["path"]) for spec in self._unit_specs()}
+        stale = set(self.AUDITED_LOCAL_ONLY_UNITS) - names
+        self.assertEqual(stale, set())
+
+    def test_every_flag_is_a_non_empty_reason(self):
+        for spec in infra.MANIFEST["static_files"]:
+            if "external_fetch" in spec:
+                self.assertIsInstance(spec["external_fetch"], str, spec["path"])
+                self.assertTrue(spec["external_fetch"].strip(), spec["path"])
+
+    def test_a_timer_and_its_service_are_classified_together(self):
+        flagged = infra.external_fetch_unit_names()
+        names = {os.path.basename(spec["path"]) for spec in self._unit_specs()}
+        for name in names:
+            if not name.endswith(".timer"):
+                continue
+            service = name[: -len(".timer")] + ".service"
+            self.assertIn(service, names, name)
+            self.assertEqual(name in flagged, service in flagged, f"{name} vs {service}")
+
+    def test_every_copy_of_a_unit_carries_the_same_flag(self):
+        # fcc.uls.sync has a second pair of entries for its dedicated egress host.
+        seen = {}
+        for spec in self._unit_specs():
+            name = os.path.basename(spec["path"])
+            seen.setdefault(name, set()).add(bool(spec.get("external_fetch")))
+        for name, flags in seen.items():
+            self.assertEqual(len(flags), 1, f"{name} is flagged in one entry but not another")
+
+    def test_incident_units_are_classified_external(self):
+        flagged = infra.external_fetch_unit_names()
+        for name in self.INCIDENT_UNITS:
+            self.assertIn(name, flagged)
+
+    def test_system_startup_is_classified_because_it_starts_an_external_sync(self):
+        # Its ExecStart is `systemctl start amsat.tle.sync.service`, and the smoketest used to
+        # start it in test mode only (the daemons_to_skip check skips it in production).
+        unit = next(
+            spec for spec in infra.MANIFEST["static_files"]
+            if spec["path"].endswith("/system-startup.service")
+        )
+        self.assertIn("amsat.tle.sync.service", unit["content"])
+        self.assertIn("amsat.tle.sync.service", infra.external_fetch_unit_names())
+        self.assertIn("system-startup.service", infra.external_fetch_unit_names())
+
+
+class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:activation_units_to_enable]
+    Tests [@ANCHOR: infrastructure:smoketest_candidate_services]
+
+    Fails if any external-fetch unit would be enabled or started in a test environment, and
+    also if the flag silently dropped one from production."""
+
+    def _linked_activation_units(self):
+        # Same selection provision_environment()'s linking loop makes from /opt/hams/systemd.
+        return sorted(
+            {
+                os.path.basename(spec["path"])
+                for spec in infra.MANIFEST["static_files"]
+                if spec["path"].startswith("/opt/hams/systemd/")
+                and spec["path"].endswith((".timer", ".path"))
+            }
+        )
+
+    def test_no_external_fetch_unit_is_enabled_in_a_test_environment(self):
+        linked = self._linked_activation_units()
+        enabled = infra._activation_units_to_enable(linked, is_test_env=True)
+        flagged = infra.external_fetch_unit_names()
+        self.assertEqual(set(enabled) & flagged, set())
+        self.assertTrue(set(linked) & flagged, "expected some flagged timers to be linked")
+        # Local timers are still enabled in test.
+        self.assertIn("stray.odoo.shell.detector.timer", enabled)
+
+    def test_production_still_enables_every_linked_unit(self):
+        linked = self._linked_activation_units()
+        self.assertEqual(infra._activation_units_to_enable(linked, is_test_env=False), linked)
+
+    def test_provision_environment_enables_only_the_filtered_list(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn("_activation_units_to_enable(", source)
+        self.assertIn("linked_activation_units, is_test_env", source)
+        self.assertIn("for unit in units_to_enable:", source)
+        self.assertNotIn("for unit in linked_activation_units:", source)
+
+    def test_smoketest_never_lists_an_external_fetch_service_in_a_test_environment(self):
+        flagged = infra.external_fetch_unit_names()
+        for has_hams_com in (True, False):
+            candidates = infra._smoketest_candidate_services(has_hams_com, is_test_env=True)
+            self.assertEqual(set(candidates) & flagged, set())
+        candidates = infra._smoketest_candidate_services(True, is_test_env=True)
+        self.assertIn("adif.processor.service", candidates)
+
+    def test_smoketest_still_starts_external_fetch_services_in_production(self):
+        candidates = infra._smoketest_candidate_services(True, is_test_env=False)
+        self.assertIn("qrz.scraper.service", candidates)
+        self.assertIn("fcc.uls.sync.service", candidates)
+        self.assertNotIn("system-startup.service", candidates)
+
+
+class SmoketestTestModeTests(_SafePatchTestCase):
+    """Tests [@ANCHOR: infrastructure:smoketest_test_mode_always_stops]
+
+    Runs the real run_post_provision_smoketest() with systemctl replaced by a recorder."""
+
+    FAILING_SERVICE = "gdpr.csv.export.service"
+
+    def _fake_systemctl(self, calls, fail_service=None):
+        def fake_run(cmd, *args, **kwargs):
+            calls.append(list(cmd))
+            stdout = ""
+            returncode = 0
+            if cmd[:2] == ["systemctl", "is-active"]:
+                stdout = "inactive\n"
+            elif cmd[:2] == ["systemctl", "is-failed"]:
+                stdout = "active\n"
+            elif cmd[:2] == ["systemctl", "start"] and cmd[-1] == fail_service:
+                returncode = 1
+            return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr="")
+
+        return fake_run
+
+    def _run(self, is_test_env, fail_service=None):
+        calls = []
+        self.safe_patch_object(
+            infra.subprocess, "run", side_effect=self._fake_systemctl(calls, fail_service)
+        )
+        self.safe_patch_object(infra.time, "sleep")
+        exited = False
+        try:
+            infra.run_post_provision_smoketest(has_hams_com=True, is_test_env=is_test_env)
+        except SystemExit:
+            exited = True
+        return calls, exited
+
+    @staticmethod
+    def _started(calls):
+        return [cmd[-1] for cmd in calls if cmd[:2] == ["systemctl", "start"]]
+
+    @staticmethod
+    def _stopped(calls):
+        return [cmd[-1] for cmd in calls if cmd[:2] == ["systemctl", "stop"]]
+
+    def test_test_mode_never_starts_an_external_fetch_service(self):
+        calls, exited = self._run(is_test_env=True)
+        self.assertFalse(exited)
+        started = self._started(calls)
+        self.assertTrue(started)
+        self.assertEqual(set(started) & infra.external_fetch_unit_names(), set())
+
+    def test_test_mode_stops_what_it_started_on_success(self):
+        calls, _ = self._run(is_test_env=True)
+        self.assertEqual(sorted(self._stopped(calls)), sorted(self._started(calls)))
+
+    def test_test_mode_stops_what_it_started_even_when_a_start_fails(self):
+        calls, exited = self._run(is_test_env=True, fail_service=self.FAILING_SERVICE)
+        self.assertTrue(exited, "a failed start must still fail the smoketest")
+        started = self._started(calls)
+        self.assertIn(self.FAILING_SERVICE, started)
+        self.assertEqual(sorted(self._stopped(calls)), sorted(started))
+
+    def test_production_starts_external_fetch_services_and_leaves_them_running(self):
+        calls, exited = self._run(is_test_env=False)
+        self.assertFalse(exited)
+        self.assertIn("qrz.scraper.service", self._started(calls))
+        self.assertEqual(self._stopped(calls), [])
+
+
 if __name__ == "__main__":
     unittest.main()
