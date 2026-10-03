@@ -345,7 +345,7 @@ running database with a shell script that walks `ir.cron`. (d) Flip `ir_model_da
 general, after a deployment read the server, not only the tests: `systemctl --failed`, the `NRestarts` of every service,
 `ir_cron.failure_count`, the newest ERROR lines of the Odoo log, and a probe that each daemon's key still authenticates.
 
-### `/web/login` redirects to itself forever: the registry failed to load (2026-10-02)
+## 49. The `/web/login` Self-Redirect Loop Trap: the Registry Failed to Load (2026-10-02)
 **The Trap:** On a database whose schema is behind the code (a missing column), `/web/login`, `/web`, `/odoo` and `/odoo/*`
 302 to themselves forever, even for a cookie-less `curl`. It looks like an auth or routing bug in our overrides. It is Odoo 19
 core: `Registry(db)` raises `ProgrammingError`, `Application.__call__` catches the `RegistryError`, logs the session out and
