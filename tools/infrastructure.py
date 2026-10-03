@@ -2513,6 +2513,71 @@ WantedBy=timers.target
             "environments": ["prod", "test"],
         },
         {
+            # electronicsfleamarket.com's monthly swap meet ("2nd Saturday
+            # of each month") -- same shape as arrl.hamfests.sync above.
+            # The site's own schedule changes a handful of times a year,
+            # so the sibling daemons' weekly cadence is ample.
+            "path": "/opt/hams/systemd/electronicsfleamarket.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Electronics Flea Market Swap Meet Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/event_sync
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
+EnvironmentFile=-/opt/hams/etc/pdns.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=event_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/electronicsfleamarket_sync.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=electronicsfleamarket.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/electronicsfleamarket.sync.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio Electronics Flea Market Swap Meet Sync Weekly
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/systemd/fcc.uls.sync.service",
             "content": """\
 [Unit]
