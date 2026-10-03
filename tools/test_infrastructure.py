@@ -18,6 +18,7 @@ file covers the smaller units that logic actually lives in.
 """
 
 import builtins
+import hashlib
 import inspect
 import os
 import re
@@ -1869,6 +1870,154 @@ class CreateRabbitmqUserIfMissingTests(_SafePatchTestCase):
             ["rabbitmqctl", "set_permissions", "-p", "/", "hams_rabbitmq", ".*", ".*", ".*"],
             calls,
         )
+
+
+class RabbitmqGuestDefaultRemovedTests(unittest.TestCase):
+    """provision_environment() applies MANIFEST["env_defaults"] with setdefault() BEFORE
+    load_and_prompt_env(); a guest/guest entry there pre-empted the real production defaults."""
+
+    def test_env_defaults_carry_no_rabbitmq_credentials(self):
+        self.assertNotIn("RMQ_USER", infra.MANIFEST["env_defaults"])
+        self.assertNotIn("RMQ_PASS", infra.MANIFEST["env_defaults"])
+
+    def test_production_env_after_env_defaults_gets_the_real_account_and_a_generated_password(self):
+        # The exact order provision_environment() uses.
+        env_vars = {"DOMAIN": "hams.com", "CLOUDFLARE_ZONE_ID": "none"}
+        for k, v in infra.MANIFEST["env_defaults"].items():
+            env_vars.setdefault(k, v)
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(env_vars["RMQ_USER"], "hams_rabbitmq")
+        self.assertNotEqual(env_vars["RMQ_PASS"], "guest")
+        self.assertGreaterEqual(len(env_vars["RMQ_PASS"]), 32)
+
+    def test_test_env_keeps_the_private_brokers_factory_account(self):
+        env_vars = {}
+        for k, v in infra.MANIFEST["env_defaults"].items():
+            env_vars.setdefault(k, v)
+        infra.load_and_prompt_env(env_vars, is_test=True)
+        self.assertEqual((env_vars["RMQ_USER"], env_vars["RMQ_PASS"]), ("guest", "guest"))
+
+
+class DeleteRabbitmqGuestUserTests(_SafePatchTestCase):
+    def test_deletes_guest_when_present(self):
+        self.safe_patch_object(infra, "_rabbitmq_user_exists", side_effect=lambda user: user == "guest")
+        run_cmd = MagicMock()
+        infra._delete_rabbitmq_guest_user_if_present(run_cmd)
+        run_cmd.assert_called_once_with(["rabbitmqctl", "delete_user", "guest"])
+
+    def test_does_nothing_when_guest_is_already_gone(self):
+        self.safe_patch_object(infra, "_rabbitmq_user_exists", return_value=False)
+        run_cmd = MagicMock()
+        infra._delete_rabbitmq_guest_user_if_present(run_cmd)
+        run_cmd.assert_not_called()
+
+    def test_provisioning_deletes_guest_only_for_production_and_only_after_the_real_account(self):
+        source = inspect.getsource(infra.provision_environment)
+        create_idx = source.index("_create_rabbitmq_user_if_missing(run_cmd_func, rmq_user, rmq_pass)")
+        guard_idx = source.index("if not is_test:", create_idx)
+        delete_idx = source.index("_delete_rabbitmq_guest_user_if_present(run_cmd_func)")
+        self.assertLess(create_idx, guard_idx)
+        self.assertLess(guard_idx, delete_idx)
+
+
+class EnsureLineInFileTests(_SafePatchTestCase):
+    def test_appends_once_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "rabbitmq-env.conf")
+            with open(path, "w") as f:
+                f.write("# comment\n#NODE_IP_ADDRESS=127.0.0.1")  # no trailing newline
+            self.assertTrue(infra._ensure_line_in_file(path, "NODE_IP_ADDRESS=127.0.0.1"))
+            self.assertFalse(infra._ensure_line_in_file(path, "NODE_IP_ADDRESS=127.0.0.1"))
+            with open(path) as f:
+                lines = f.read().splitlines()
+            self.assertEqual(lines, ["# comment", "#NODE_IP_ADDRESS=127.0.0.1", "NODE_IP_ADDRESS=127.0.0.1"])
+
+    def test_creates_a_missing_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "new.conf")
+            self.assertTrue(infra._ensure_line_in_file(path, "include /etc/redis/hams-acl.conf"))
+            with open(path) as f:
+                self.assertEqual(f.read(), "include /etc/redis/hams-acl.conf\n")
+
+    def test_rabbitmq_env_conf_is_no_longer_appended_blindly(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn('_ensure_line_in_file("/etc/rabbitmq/rabbitmq-env.conf", "NODE_IP_ADDRESS=127.0.0.1")', source)
+        self.assertNotIn('open("/etc/rabbitmq/rabbitmq-env.conf", "a")', source)
+
+
+class RedisAclTests(_SafePatchTestCase):
+    def test_production_env_gets_redis_credentials_and_a_matching_url(self):
+        env_vars = {"DOMAIN": "hams.com", "CLOUDFLARE_ZONE_ID": "none"}
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(env_vars["REDIS_USERNAME"], "hams_redis")
+        self.assertGreaterEqual(len(env_vars["REDIS_PASSWORD"]), 32)
+        self.assertEqual(
+            env_vars["REDIS_URL"],
+            f"redis://hams_redis:{env_vars['REDIS_PASSWORD']}@redis:6379/0",
+        )
+
+    def test_an_existing_password_is_kept_and_the_url_follows_it(self):
+        env_vars = {
+            "DOMAIN": "hams.com", "CLOUDFLARE_ZONE_ID": "none",
+            "REDIS_PASSWORD": "p@ss/word", "REDIS_URL": "redis://stale@redis:6379/0",
+        }
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(env_vars["REDIS_PASSWORD"], "p@ss/word")
+        self.assertEqual(env_vars["REDIS_URL"], "redis://hams_redis:p%40ss%2Fword@redis:6379/0")
+
+    def test_test_env_gets_no_redis_credentials(self):
+        env_vars = {}
+        infra.load_and_prompt_env(env_vars, is_test=True)
+        self.assertNotIn("REDIS_PASSWORD", env_vars)
+        self.assertNotIn("REDIS_USERNAME", env_vars)
+
+    def test_redis_env_file_carries_the_credentials(self):
+        self.assertEqual(
+            infra.MANIFEST["env_groups"]["redis.env"],
+            ["REDIS_HOST", "REDIS_PORT", "REDIS_USERNAME", "REDIS_PASSWORD", "REDIS_URL"],
+        )
+
+    def test_acl_fragment_turns_default_off_and_stores_only_a_hash(self):
+        content = infra._redis_acl_include_content("hams_redis", "secretvalue")
+        digest = hashlib.sha256(b"secretvalue").hexdigest()
+        lines = [line for line in content.splitlines() if not line.startswith("#")]
+        self.assertEqual(
+            lines,
+            [
+                "user default off resetpass resetkeys resetchannels -@all",
+                f"user hams_redis on #{digest} ~* &* +@all",
+            ],
+        )
+        self.assertNotIn("secretvalue", content)
+
+    def test_write_include_creates_fragment_and_include_line_idempotently(self):
+        self.safe_patch_object(infra, "apply_permissions")
+        with tempfile.TemporaryDirectory() as directory:
+            conf = os.path.join(directory, "redis.conf")
+            include = os.path.join(directory, "hams-acl.conf")
+            with open(conf, "w") as f:
+                f.write("bind 127.0.0.1 -::1\n")
+            env_vars = {"REDIS_USERNAME": "hams_redis", "REDIS_PASSWORD": "pw"}
+            infra._write_redis_acl_include(env_vars, conf, include)
+            infra._write_redis_acl_include(env_vars, conf, include)
+            with open(conf) as f:
+                self.assertEqual(f.read().splitlines(), ["bind 127.0.0.1 -::1", f"include {include}"])
+            with open(include) as f:
+                self.assertEqual(f.read(), infra._redis_acl_include_content("hams_redis", "pw"))
+            self.assertEqual(os.stat(include).st_mode & 0o777, 0o640)
+        infra.apply_permissions.assert_called_with(include, "redis:redis", 0o640)
+
+    def test_write_include_refuses_missing_or_default_credentials(self):
+        for env_vars in ({}, {"REDIS_USERNAME": "hams_redis"}, {"REDIS_USERNAME": "default", "REDIS_PASSWORD": "pw"}):
+            with self.subTest(env_vars=env_vars), self.assertRaises(RuntimeError):
+                infra._write_redis_acl_include(env_vars, "/nonexistent/redis.conf", "/nonexistent/acl.conf")
+
+    def test_provisioning_applies_the_acl_for_production_only(self):
+        source = inspect.getsource(infra.provision_environment)
+        call_idx = source.index("_write_redis_acl_include(env_vars)")
+        guard = source.rfind("if not is_test:", 0, call_idx)
+        self.assertNotEqual(guard, -1)
+        self.assertNotIn("is_test", source[guard + len("if not is_test:"):call_idx])
 
 
 class AptPackagesManifestTests(unittest.TestCase):
