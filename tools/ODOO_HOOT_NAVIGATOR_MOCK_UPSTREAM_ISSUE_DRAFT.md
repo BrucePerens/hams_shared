@@ -1,3 +1,9 @@
+> **DO NOT FILE (2026-10-03).** The "Illegal invocation" this draft blames on Odoo's hoot was caused by
+> our own test harness: zero_sudo's browser_js defined `onLine`/`virtualKeyboard` on the `navigator`
+> instance, so hoot's `createMock(navigator)` forwarded only those keys. Fixed in hams_open
+> (zero_sudo `_NAVIGATOR_OVERRIDES_JS` on `Navigator.prototype`, branch night-shift/hoot-navigator-race).
+> Kept for the record only. Whether to remove `patch_odoo_hoot_navigator_mock.py` and its apt hook is Bruce's call.
+
 # Draft: GitHub issue for odoo/odoo
 
 Not filed. Per project convention (Bruce handles all outward-facing/public actions himself, e.g.
