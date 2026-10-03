@@ -87,6 +87,17 @@ this reason). Odoo module tests are run by the working session on the dev box an
 hosts. Advisory security jobs that are not test duplicates (pip-audit, scheduled cargo-audit /
 cargo-deny, dependency-watch) may stay.
 
+**Rust is tested on the dev box, not in GitHub CI** (Bruce's decision, 2026-10-03). The Rust CI
+workflows (hams_com `build-relay`, `build-server-daemons`, `test-jetson`, `test-pi500-runner-smoke`)
+are disabled, so GitHub CI now runs no tests at all. **Process: after a session of work on Rust code,
+build and test it on the dev box before merging** -- `cargo fmt --check`, `cargo clippy --all-targets
+-- -D warnings` and `cargo test` in each crate you touched, run under `nice` with the shared
+`CARGO_TARGET_DIR=/home/bruce/.cache/hams-cargo-target` (never a per-worktree `target/`; those
+filled /home on 2026-10-03), and record the commands and results in the commit or PR. Do not wait
+for, re-enable, or restructure merges around CI ("don't munge things for a CI problem"). The
+disabled `build-relay` workflow also produced relay release binaries; publishing a release is a
+separate, deliberate step for Bruce.
+
 **Test and development machines never run external-sync daemons** (standing rule, 2026-10-03).
 Any daemon, timer, or one-shot unit that fetches from third-party servers -- a licensing
 regulator's register download, an event or contest calendar scrape, a callbook scrape, a public
