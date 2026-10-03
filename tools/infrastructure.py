@@ -18,6 +18,7 @@ import os
 import pwd
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -126,6 +127,18 @@ def micro_privilege(username):
         os.setresuid(orig_ruid, orig_euid, orig_suid)
         os.setresgid(orig_rgid, orig_egid, orig_sgid)
         os.setgroups(orig_groups)
+
+
+def _ensure_local_hostname(text, env_vars):
+    """Fill `{LOCAL_HOSTNAME}` for a manifest entry that uses it (the /etc/hosts template).
+
+    The /etc/hosts template used to list only localhost and the service aliases, so a host
+    provisioned from it could no longer resolve its own name: every `sudo` then printed
+    "unable to resolve host <name>" (found on hams1, 2026-10-03). Debian's convention is
+    `127.0.1.1 <hostname>`.
+    """
+    if "{LOCAL_HOSTNAME}" in text and "LOCAL_HOSTNAME" not in env_vars:
+        env_vars["LOCAL_HOSTNAME"] = socket.gethostname()
 
 
 def format_env(text, env_vars):
@@ -1412,6 +1425,7 @@ loglevel=6
             "path": "/etc/hosts",
             "content": """\
 127.0.0.1 localhost
+127.0.1.1 {LOCAL_HOSTNAME}
 ::1 localhost ip6-localhost ip6-loopback
 127.0.0.1 postgres redis rabbitmq odoo powerdns daemon_dx_firehose
 """,
@@ -5689,6 +5703,7 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
             else:
                 if "{DEB_CODENAME}" in file_spec.get("content", "") and "DEB_CODENAME" not in env_vars:
                     env_vars["DEB_CODENAME"] = get_os_codename()
+                _ensure_local_hostname(file_spec.get("content", ""), env_vars)
                 content = format_env(file_spec.get("content", ""), env_vars)
                 state = _file_state(path, content)
                 if state != "unchanged":
@@ -5740,6 +5755,7 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
                 and "DEB_CODENAME" not in env_vars
             ):
                 env_vars["DEB_CODENAME"] = get_os_codename()
+            _ensure_local_hostname(file_spec.get("content", ""), env_vars)
             content = format_env(file_spec.get("content", ""), env_vars)
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
             fd = os.open(path, flags, mode)

@@ -3520,3 +3520,27 @@ class ProvisionPlanModeTests(_TmpDirTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EtcHostsTemplateTests(_SafePatchTestCase):
+    """The /etc/hosts template must keep the machine's own name resolvable (2026-10-03)."""
+
+    def _hosts_entry(self):
+        entries = [e for e in infra.MANIFEST["static_files"] if e.get("path") == "/etc/hosts"]
+        self.assertEqual(len(entries), 1)
+        return entries[0]
+
+    def test_template_has_a_hostname_line(self):
+        self.assertIn("127.0.1.1 {LOCAL_HOSTNAME}", self._hosts_entry()["content"])
+
+    def test_local_hostname_is_filled_from_the_machine(self):
+        self.safe_patch("infrastructure.socket.gethostname", return_value="testbox")
+        env_vars = {}
+        infra._ensure_local_hostname(self._hosts_entry()["content"], env_vars)
+        rendered = infra.format_env(self._hosts_entry()["content"], env_vars)
+        self.assertIn("127.0.1.1 testbox\n", rendered)
+
+    def test_entries_without_the_placeholder_are_untouched(self):
+        env_vars = {}
+        infra._ensure_local_hostname("no placeholder here", env_vars)
+        self.assertEqual(env_vars, {})
