@@ -2725,6 +2725,69 @@ class SignerDaemonManifestTests(unittest.TestCase):
 
 
 
+class RelayCaSignerManifestTests(unittest.TestCase):
+    """The MANIFEST pieces hams_com's daemons/relay_ca (the Relay Issuing CA signer) needs.
+    Kept apart from SignerDaemonManifestTests: this signer's key lives on a PKCS#11 token, so
+    there is no key file to migrate and no generated public key to write. The defaults are
+    copied from daemons/relay_ca/main.py (BASE_DIR/PUBLIC_DIR/SOCKET_PATH)."""
+
+    UNIT = "/opt/hams/systemd/hams-relay-ca.service"
+
+    def _unit(self):
+        for entry in infra.MANIFEST["static_files"]:
+            if entry["path"] == self.UNIT:
+                return entry["content"]
+        self.fail(f"no {self.UNIT} in static_files")
+
+    def test_account_and_odoo_joins_its_group(self):
+        accounts = {a["user"]: a for a in infra.MANIFEST["system_accounts"]}
+        account = accounts["hams_relay_ca"]
+        self.assertEqual(account["group"], "hams_relay_ca")
+        self.assertEqual(account["home"], "/opt/hams/etc/relay_ca")
+        self.assertEqual(account["shell"], "/usr/sbin/nologin")
+        self.assertEqual(account["add_to_users"], ["odoo"])
+        self.assertEqual(account["environments"], ["prod", "test"])
+
+    def test_private_dir_is_0700_and_public_dir_is_0755(self):
+        dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
+        owner = "hams_relay_ca:hams_relay_ca"
+        private = dirs["/opt/hams/etc/relay_ca"]
+        public = dirs["/opt/hams/etc/relay_ca_public"]
+        self.assertEqual((private["owner"], private["provision_mode"]), (owner, "700"))
+        self.assertEqual((public["owner"], public["provision_mode"]), (owner, "755"))
+        self.assertNotIn("post_provision_hooks", private)
+
+    def test_unit_runs_isolated_and_waits_for_a_ceremony(self):
+        unit = self._unit()
+        self.assertTrue(unit.startswith("[Unit]\n"))
+        # Skipped, not restart-looping, on a host where no ceremony has run yet.
+        self.assertIn(
+            "ConditionPathExists=/opt/hams/etc/relay_ca_public/relay_issuing.pem\n", unit
+        )
+        self.assertIn("User=hams_relay_ca\n", unit)
+        self.assertIn("SupplementaryGroups=hams_com\n", unit)
+        self.assertIn("RestrictAddressFamilies=AF_UNIX\n", unit)
+        # Only its private directory (issuance log, SoftHSM2 tokens) is writable.
+        self.assertIn("ReadWritePaths=/opt/hams/etc/relay_ca\n", unit)
+        self.assertIn("RuntimeDirectory=hams_relay_ca\n", unit)
+        self.assertIn("RuntimeDirectoryMode=0750\n", unit)
+        for key, value in (
+            ("BASE_DIR", "/opt/hams/etc/relay_ca"),
+            ("PUBLIC_DIR", "/opt/hams/etc/relay_ca_public"),
+            ("SOCKET_PATH", "/run/hams_relay_ca/signer.sock"),
+            ("LEAF_DAYS", "800"),
+        ):
+            self.assertIn(f'Environment="RELAY_CA_{key}={value}"\n', unit)
+        self.assertIn("EnvironmentFile=-/opt/hams/etc/relay_ca/relay_ca.env\n", unit)
+        main_py = "/opt/hams/daemons/relay_ca/main.py"
+        self.assertIn(f"ExecStartPre=/usr/bin/python3 {main_py} --start-test\n", unit)
+        self.assertIn(f"ExecStart=/usr/bin/python3 {main_py}\n", unit)
+        self.assertIn("WantedBy=multi-user.target\n", unit)
+
+    def test_not_an_external_fetch_unit(self):
+        self.assertNotIn("hams-relay-ca.service", infra.external_fetch_unit_names())
+
+
 class ExternalFetchUnitClassificationTests(unittest.TestCase):
     """Tests [@ANCHOR: infrastructure:external_fetch_unit_names]
 
@@ -2752,6 +2815,7 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams-pgbackrest-backup.service": "runs only for a configured backup job",
         "hams-pycache.service": "compiles local Python files",
         "hams-relay-signer.service": "local signing socket",
+        "hams-relay-ca.service": "local signing socket; signs with a local PKCS#11 token",
         "hams-subcarrier-signer.service": "local signing socket",
         "hams.daemon.keys.service": "provisions daemon keys in the local database",
         "hams.data.relay.service": "serves map data from local Redis; no ingestion task",
