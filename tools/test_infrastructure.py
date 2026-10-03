@@ -3096,7 +3096,14 @@ class HostClassTests(unittest.TestCase):
             infra.provision_host_class("nonsense", lambda cmd, **kw: None)
 
     def test_class_gated_units_are_listed(self):
-        self.assertEqual(infra.host_class_unit_names(), {"hams-relay-ca-signer.service"})
+        tenant_units = {
+            "hams-tenant@.service", "hams-tenant-firewall.service", "hams-tenant-backup.service",
+            "hams-tenant-backup.timer", "hams-tenant-restore-test.service",
+            "hams-tenant-restore-test.timer",
+        }
+        self.assertEqual(
+            infra.host_class_unit_names(), {"hams-relay-ca-signer.service"} | tenant_units
+        )
 
 
 class ExternalFetchUnitClassificationTests(unittest.TestCase):
@@ -3128,6 +3135,12 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams-relay-signer.service": "local signing socket",
         "hams-relay-ca-signer.service": "listens only on a WireGuard address for hams1's signed requests; fetches nothing",
         "hams-subcarrier-signer.service": "local signing socket",
+        "hams-tenant@.service": "an Odoo tenant: loopback listener, local PostgreSQL socket; fetches nothing",
+        "hams-tenant-firewall.service": "loads a local nftables table",
+        "hams-tenant-backup.service": "local pg_dump and tar of tenant data",
+        "hams-tenant-backup.timer": "activates hams-tenant-backup.service (local)",
+        "hams-tenant-restore-test.service": "restores a local backup into a scratch database",
+        "hams-tenant-restore-test.timer": "activates hams-tenant-restore-test.service (local)",
         "hams.daemon.keys.service": "provisions daemon keys in the local database",
         "hams.data.relay.service": "serves map data from local Redis; no ingestion task",
         "hams.db.local.backup.service": "local pg_dump",

@@ -1,0 +1,10 @@
+{
+  "name": "perens_com",
+  "description": "perens.com: Bruce Perens' personal site (Odoo website, blog)",
+  "domains": ["perens.com", "www.perens.com"],
+  "http_port": 18101,
+  "workers": 0,
+  "memory_max": "768M",
+  "memory_high": "640M",
+  "modules": ["website", "website_blog"]
+}
