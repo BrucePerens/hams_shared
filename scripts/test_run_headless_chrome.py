@@ -12,15 +12,11 @@ kind of thing that silently accumulates and eats memory/disk across a long
 session (matching this environment's own history of resource exhaustion
 from unbounded test-run byproducts).
 
-CAUTION for whoever runs this file: reap_headless_chromes() is
-deliberately broad by design (matches ANY chrome/chromium-named process
-with --headless in its cmdline, owned by the current UID -- not scoped to
-processes this script itself spawned). That's the tool's own real,
-intended behavior (its own module docstring: "Sequential execution only
-is required"), not a test artifact -- but it means these tests must not
-run concurrently with anything else on this box that's using headless
-Chrome (e.g. an Odoo test.py tour run), or it will kill that too. Run
-this file in isolation.
+reap_headless_chromes(user_data_dir) is scoped: it kills only the Chrome
+processes of the current UID whose --user-data-dir is the given profile, so
+this file is safe to run while other sessions on this box use headless
+Chrome (an Odoo test.py tour run, another screenshot). Each test also stops
+the Chromes it started itself, by their own profile.
 """
 
 import os
@@ -86,41 +82,118 @@ def _spawn_real_headless_chrome(tmp_dir):
 
 
 class ReapHeadlessChromesTests(unittest.TestCase):
+    # Tests [@ANCHOR: run_headless_chrome_scoped_reap]
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        # Cleanups run after tearDown, i.e. after the chrome process is reaped.
+        # Cleanups run LIFO after tearDown: chromes are stopped before rmtree.
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
-    def tearDown(self):
-        # Best-effort: if a test somehow left a real chrome process
-        # running, don't let it survive past this test file.
-        rhc.reap_headless_chromes()
+    def _profile(self, name):
+        path = os.path.join(self.tmp, name)
+        os.mkdir(path)
+        return path
 
-    def test_a_real_running_headless_chrome_process_is_killed(self):
-        proc = _spawn_real_headless_chrome(self.tmp)
+    def _spawn(self, profile):
+        proc = _spawn_real_headless_chrome(profile)
+        self.addCleanup(self._stop, proc, profile)
         self.assertIsNone(
             proc.poll(),
             "test setup assumption: the spawned chrome process must actually be alive",
         )
+        return proc
 
-        rhc.reap_headless_chromes()
+    @staticmethod
+    def _stop(proc, profile):
+        # Scoped to this test's own profile, so other sessions' Chromes survive.
+        rhc.reap_headless_chromes(profile)
+        try:
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5.0)
 
+    def _assert_exits(self, proc):
         try:
             exit_code = proc.wait(timeout=5.0)
         except subprocess.TimeoutExpired:
             exit_code = None
-
         self.assertIsNotNone(
             exit_code,
-            "reap_headless_chromes() must actually terminate a real headless "
-            "chrome process owned by the current user",
+            "reap_headless_chromes() must terminate a real headless chrome "
+            "process that uses the given profile directory",
         )
+
+    def test_a_chrome_using_the_given_profile_is_killed(self):
+        profile = self._profile("own")
+        proc = self._spawn(profile)
+
+        rhc.reap_headless_chromes(profile)
+
+        self._assert_exits(proc)
+
+    def test_a_chrome_using_another_profile_is_spared(self):
+        # The to-do this fixes: one wrapper run must not kill a headless
+        # Chrome it did not start (another session's, or a test.py tour's).
+        other = self._spawn(self._profile("other_session"))
+        mine = self._profile("own")
+
+        rhc.reap_headless_chromes(mine)
+        time.sleep(1.0)  # audit-ignore-sleep
+
+        self.assertIsNone(
+            other.poll(),
+            "reap_headless_chromes() killed a headless chrome using a "
+            "different --user-data-dir",
+        )
+        self.assertEqual(
+            psutil.Process(other.pid).name(),
+            "chrome",
+            "the spared process must still be the real chrome binary",
+        )
+
+    def test_profile_paths_are_compared_after_normalisation(self):
+        # A trailing slash or a symlinked path names the same profile.
+        profile = self._profile("own")
+        proc = self._spawn(profile)
+        link = os.path.join(self.tmp, "link_to_own")
+        os.symlink(profile, link)
+
+        rhc.reap_headless_chromes(link + "/")
+
+        self._assert_exits(proc)
 
     def test_no_running_chromes_does_not_raise(self):
         # The common case (nothing to reap) must be a silent no-op, not an
         # exception -- reap_headless_chromes() is called unconditionally at
-        # both startup and on every termination signal.
-        rhc.reap_headless_chromes()
+        # startup, on every termination signal and on exit.
+        rhc.reap_headless_chromes(self._profile("empty"))
+
+
+class BuildChromeCommandTests(unittest.TestCase):
+    # Tests [@ANCHOR: run_headless_chrome_own_profile_dir]
+    def test_user_data_dir_from_args(self):
+        self.assertIsNone(rhc.user_data_dir_from_args(["--headless=new", "about:blank"]))
+        self.assertEqual(
+            rhc.user_data_dir_from_args(["--user-data-dir=/a", "--user-data-dir=/b"]),
+            "/b",
+            "Chrome uses the last --user-data-dir switch",
+        )
+
+    def test_caller_profile_is_used_and_not_owned(self):
+        args = ["--headless=new", "--user-data-dir=/some/profile", "about:blank"]
+        cmd, profile, owned = rhc.build_chrome_command(args)
+        self.assertEqual(cmd, ["google-chrome"] + args)
+        self.assertEqual(profile, "/some/profile")
+        self.assertFalse(owned)
+
+    def test_wrapper_creates_its_own_profile_when_none_given(self):
+        args = ["--headless=new", "about:blank"]
+        cmd, profile, owned = rhc.build_chrome_command(args)
+        self.addCleanup(shutil.rmtree, profile, ignore_errors=True)
+        self.assertTrue(owned)
+        self.assertTrue(os.path.isdir(profile))
+        self.assertTrue(os.path.basename(profile).startswith(rhc.PROFILE_DIR_PREFIX))
+        self.assertEqual(cmd, ["google-chrome"] + args + ["--user-data-dir=" + profile])
 
 
 if __name__ == "__main__":
