@@ -225,6 +225,97 @@ class MainModeDispatchTests(unittest.TestCase):
         mock_run_cmd.assert_called_once()
 
 
+class ProductionHostRefusalTests(unittest.TestCase):
+    """Bruce's decision, 2026-10-02/03: test.py never runs on the production host (hams1). A
+    HAMS_ISOLATED_NS=1 run there flushed production Redis db 0 and fed broker tests to production's
+    RabbitMQ consumers. Either signal (deploy_to_production.py's marker files, or a hams_prod
+    database on the target PostgreSQL) must stop the run before anything is touched."""
+
+    def test_a_dev_box_with_no_marker_and_no_production_database_is_allowed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            markers = (os.path.join(directory, "DEPLOY_LOG"),)
+            self.assertEqual(
+                _test_runner.production_host_refusal_reasons(markers, ["postgres", "hams_dev", "hams_test"]), []
+            )
+            _test_runner.refuse_to_run_on_production_host(markers, ["hams_test"])  # does not exit
+
+    def test_a_deploy_marker_file_alone_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = os.path.join(directory, "DEPLOY_LOG")
+            open(marker, "w").close()
+            reasons = _test_runner.production_host_refusal_reasons((marker,), [])
+            self.assertEqual(len(reasons), 1)
+            self.assertIn(marker, reasons[0])
+
+    def test_a_production_database_alone_refuses(self):
+        reasons = _test_runner.production_host_refusal_reasons((), ["postgres", "hams_prod", "hams_test"])
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("hams_prod", reasons[0])
+
+    def test_refusal_exits_with_status_2_and_says_why(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as ctx:
+            _test_runner.refuse_to_run_on_production_host((), ["hams_prod"])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("PRODUCTION host", out.getvalue())
+        self.assertIn("hams_prod", out.getvalue())
+
+    def test_the_real_marker_paths_are_the_ones_deploy_to_production_writes(self):
+        self.assertEqual(
+            _test_runner.PRODUCTION_HOST_MARKER_FILES,
+            ("/opt/hams/src/DEPLOY_LOG", "/opt/hams/src/DEPLOYED_COMMITS"),
+        )
+
+    def test_list_database_names_parses_psql_output(self):
+        fake = MagicMock(returncode=0, stdout="postgres\nhams_prod\n\nhams_test\n", stderr="")
+        with patch.object(_test_runner.subprocess, "run", return_value=fake) as run:
+            self.assertEqual(
+                _test_runner.list_database_names("psql", {}), ["postgres", "hams_prod", "hams_test"]
+            )
+        self.assertEqual(run.call_args.args[0][:2], ["psql", "postgres"])
+
+    def test_list_database_names_fails_fast_when_postgres_is_unreachable(self):
+        fake = MagicMock(returncode=2, stdout="", stderr="connection refused")
+        with patch.object(_test_runner.subprocess, "run", return_value=fake), \
+             contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            _test_runner.list_database_names("psql", {})
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_rebuild_db_refuses_before_the_redis_flush(self):
+        """The flush is what wiped production Redis; the refusal has to come first."""
+        calls = []
+
+        def fake_run(cmd, *args, **kwargs):
+            calls.append(list(cmd))
+            if "-At" in cmd:
+                return MagicMock(returncode=0, stdout="postgres\nhams_prod\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch.dict(os.environ, {"HAMS_ISOLATED_NS": "1"}), \
+             patch.object(_test_runner.subprocess, "run", side_effect=fake_run), \
+             patch.object(_test_runner.infrastructure, "get_pg_bin", return_value="psql"), \
+             patch.object(_test_runner, "PRODUCTION_HOST_MARKER_FILES", ()), \
+             contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            _test_runner.rebuild_db("hams_test")
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertFalse([c for c in calls if c and c[0] == "redis-cli"], calls)
+        self.assertFalse([c for c in calls if "DROP" in " ".join(c)], calls)
+
+    def test_main_refuses_first_when_a_marker_file_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = os.path.join(directory, "DEPLOYED_COMMITS")
+            open(marker, "w").close()
+            with patch.object(_test_runner, "PRODUCTION_HOST_MARKER_FILES", (marker,)), \
+                 patch.object(_test_runner, "rebuild_db") as mock_rebuild_db, \
+                 patch.object(_test_runner, "run_cmd") as mock_run_cmd, \
+                 patch.object(sys, "argv", ["test.py", "-u", "dummy_mod"]), \
+                 contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+                _test_runner.main()
+        self.assertEqual(ctx.exception.code, 2)
+        mock_rebuild_db.assert_not_called()
+        mock_run_cmd.assert_not_called()
+
+
 class ResourceMonitorHelperTests(unittest.TestCase):
     # Real bug found 2026-09-12: both of these helpers wrapped their real
     # work in `except Exception: pass`, silently returning None/0 (a

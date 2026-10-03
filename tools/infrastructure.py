@@ -25,6 +25,8 @@ import urllib.request
 import secrets
 import string
 import base64
+import hashlib
+import urllib.parse
 from datetime import datetime
 
 _logger = logging.getLogger(__name__)
@@ -1235,7 +1237,9 @@ MANIFEST = {
             "CLOUDFLARE_ZONE_ID",
         ],
         "rabbitmq.env": ["RMQ_PASS", "RABBITMQ_HOST", "RMQ_PORT", "RMQ_USER"],
-        "redis.env": ["REDIS_HOST", "REDIS_PORT"],
+        # REDIS_USERNAME/REDIS_PASSWORD: the production Redis ACL user (see _redis_acl_include_content).
+        # REDIS_URL carries the same credentials for hams_data_relay (Rust), which reads only a URL.
+        "redis.env": ["REDIS_HOST", "REDIS_PORT", "REDIS_USERNAME", "REDIS_PASSWORD", "REDIS_URL"],
         "bridge.env": ["BRIDGE_API_KEY"],
         "smtp.env": ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"],
         "core.env": [
@@ -5155,8 +5159,13 @@ WantedBy=timers.target
         "RMQ_PORT": "5672",
         "REDIS_PORT": "6379",
         "DX_FIREHOSE_WS_PORT": "8765",
-        "RMQ_USER": "guest",
-        "RMQ_PASS": "guest",
+        # No RMQ_USER/RMQ_PASS here. provision_environment() applies these defaults with setdefault()
+        # BEFORE load_and_prompt_env(), so a "guest"/"guest" entry here (present until 2026-10-03)
+        # pre-empted load_and_prompt_env's own production defaults: RMQ_USER never became
+        # "hams_rabbitmq" and RMQ_PASS was never generated, and _create_rabbitmq_user_if_missing then
+        # refused "guest" (recorded only as a "rabbitmq_bindings" hook failure). The guest default now
+        # lives only where a broker that knows no other account is in use: load_and_prompt_env's test
+        # branch and scaffold_test_environment().
         "PLAYWRIGHT_BROWSERS_PATH": "/opt/hams/cache/ms-playwright",
     },
     "systemd_odoo_override": {
@@ -5245,6 +5254,10 @@ WantedBy=timers.target
 def scaffold_test_environment(args_db, provision_dirs=True):
     for k, v in MANIFEST["env_defaults"].items():
         os.environ.setdefault(k, v)
+    # The test pipeline starts its own private rabbitmq-server, whose only account is the factory
+    # "guest" one (test.py's run_cmd sets the same default for the Odoo process).
+    os.environ.setdefault("RMQ_USER", "guest")
+    os.environ.setdefault("RMQ_PASS", "guest")
 
     os.environ.setdefault("DB_NAME", args_db)
     os.environ.setdefault("ODOO_DB", args_db)
@@ -6014,6 +6027,9 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault("SMTP_HOST", "localhost")
         env_vars.setdefault("SMTP_PORT", "1025")
         env_vars.setdefault("HAMS_CRYPTO_KEY", "0000000000000000000000000000000000000000000=")
+        # A test box's broker only has the factory account (see MANIFEST["env_defaults"]).
+        env_vars.setdefault("RMQ_USER", "guest")
+        env_vars.setdefault("RMQ_PASS", "guest")
     else:
         # Set automatic sensible defaults
         env_vars.setdefault("DB_NAME", "hams_prod")
@@ -6065,6 +6081,13 @@ def load_and_prompt_env(env_vars, is_test):
             env_vars["HAMS_CRYPTO_KEY"] = base64.b64encode(secrets.token_bytes(32)).decode('utf-8')
         if "RMQ_PASS" not in env_vars:
             env_vars["RMQ_PASS"] = generate_secure_password()
+        # Production Redis has no unauthenticated access (2026-10-03, after the hams1 test runner
+        # flushed production Redis db 0 through it). Every client authenticates as this ACL user;
+        # see _redis_acl_include_content.
+        env_vars.setdefault("REDIS_USERNAME", "hams_redis")
+        if "REDIS_PASSWORD" not in env_vars:
+            env_vars["REDIS_PASSWORD"] = generate_secure_password()
+        env_vars["REDIS_URL"] = redis_url(env_vars)
 
         # DOMAIN identifies which site this box is being provisioned for and
         # has no safe default -- silently assuming "hams.com" would mean a
@@ -6576,6 +6599,102 @@ def _create_rabbitmq_user_if_missing(run_cmd_func, rmq_user, rmq_pass):
     run_cmd_func(["rabbitmqctl", "set_permissions", "-p", "/", rmq_user, ".*", ".*", ".*"])
 
 
+# [@ANCHOR: infrastructure:_delete_rabbitmq_guest_user_if_present]
+def _delete_rabbitmq_guest_user_if_present(run_cmd_func):
+    """
+    Deletes RabbitMQ's factory-default `guest` account on a production broker.
+
+    RabbitMQ creates `guest` (administrator, full rights on `/`) on first boot, and nothing in this
+    file ever removed it -- _create_rabbitmq_user_if_missing only ADDS the real service account.
+    Found live on hams1, 2026-10-03: `guest` still existed, Odoo's hams_rabbitmq pool was silently
+    using it (no rabbitmq.* parameters in hams_prod, so it fell back to guest/guest), and a test
+    run on that host used it to feed test jobs to production's backup.worker. Only called for a
+    production (not test) provisioning, after the real account has been provisioned, because a
+    test box's private broker has no other account.
+    """
+    if _rabbitmq_user_exists("guest"):
+        run_cmd_func(["rabbitmqctl", "delete_user", "guest"])
+
+
+# [@ANCHOR: infrastructure:_ensure_line_in_file]
+def _ensure_line_in_file(path, line):
+    """Appends `line` to `path` (creating it) unless an identical line is already there. Returns True
+    when it appended. Replaces a bare append that added another NODE_IP_ADDRESS line to
+    /etc/rabbitmq/rabbitmq-env.conf on every provisioning run (eleven of them on hams1 by 2026-10-03)."""
+    text = ""
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    if line in text.splitlines():
+        return False
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(("\n" if text and not text.endswith("\n") else "") + line + "\n")
+    return True
+
+
+# [@ANCHOR: infrastructure:redis_url]
+def redis_url(env_vars):
+    """The redis:// URL for hams_data_relay (Rust), which reads REDIS_URL and nothing else. Built
+    from the same REDIS_* values every other client reads, so the two can never disagree."""
+    username = urllib.parse.quote(env_vars["REDIS_USERNAME"], safe="")
+    password = urllib.parse.quote(env_vars["REDIS_PASSWORD"], safe="")
+    host = env_vars.get("REDIS_HOST", "redis")
+    port = env_vars.get("REDIS_PORT", "6379")
+    return f"redis://{username}:{password}@{host}:{port}/0"
+
+
+REDIS_CONF_PATH = "/etc/redis/redis.conf"
+REDIS_ACL_INCLUDE_PATH = "/etc/redis/hams-acl.conf"
+
+
+# [@ANCHOR: infrastructure:_redis_acl_include_content]
+def _redis_acl_include_content(username, password):
+    """
+    The Redis configuration fragment that closes production Redis to unauthenticated clients.
+
+    Until 2026-10-03 production Redis (127.0.0.1:6379) had no password: any local process could
+    read or flush it, and the hams1 test runner did flush db 0. Every real client runs as the
+    `odoo` Unix user -- and so did that test runner -- so a Unix-socket-plus-group scheme would not
+    have stopped it; a password delivered only through the root-only (0400) /opt/hams/etc/redis.env
+    that systemd injects does. (A process running as `odoo` could still read another `odoo`
+    process's /proc/<pid>/environ: this stops accidents, it is not a boundary against a hostile
+    `odoo` process.)
+
+    A named ACL user rather than `requirepass` because it allows a rollout without downtime: a
+    redis-py client that sends AUTH while the server's `default` user is still `nopass` gets an
+    error, so with `requirepass` clients and server would have to switch at the same instant. With
+    a named user, the user is created first (no effect on anyone), clients move to it one by one,
+    and only then is `default` turned off.
+
+    The password is stored as its SHA-256 (`#<hex>`), so the plaintext lives only in redis.env.
+    `user` directives in a config file cannot be combined with `aclfile`; nothing here uses one.
+    """
+    digest = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return (
+        "# Managed by hams_shared/tools/infrastructure.py (_redis_acl_include_content). Do not edit.\n"
+        "user default off resetpass resetkeys resetchannels -@all\n"
+        f"user {username} on #{digest} ~* &* +@all\n"
+    )
+
+
+# [@ANCHOR: infrastructure:_write_redis_acl_include]
+def _write_redis_acl_include(env_vars, conf_path=REDIS_CONF_PATH, include_path=REDIS_ACL_INCLUDE_PATH):
+    """Writes the ACL fragment (redis:redis, 0640) and makes redis.conf include it. Production only:
+    test.py's private Redis starts from the host's own redis.conf, so a test box must not get it."""
+    username = env_vars.get("REDIS_USERNAME", "")
+    password = env_vars.get("REDIS_PASSWORD", "")
+    if not username or not password:
+        raise RuntimeError("REDIS_USERNAME and REDIS_PASSWORD must both be set to lock down production Redis.")
+    if username == "default":
+        raise RuntimeError("REDIS_USERNAME must not be 'default': that is the user this lock-down turns off.")
+    fd = os.open(include_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+    os.fchmod(fd, 0o640)
+    with open(fd, "w", encoding="utf-8") as f:
+        f.write(_redis_acl_include_content(username, password))
+    apply_permissions(include_path, "redis:redis", 0o640)
+    _ensure_line_in_file(conf_path, f"include {include_path}")
+
+
 # [@ANCHOR: infrastructure:_refuse_if_unsafe_test_db_drop]
 def _refuse_if_unsafe_test_db_drop(db_name):
     """
@@ -7077,8 +7196,7 @@ def provision_environment(
         try:
             _logger.info("[*] Locking down RabbitMQ to local loopback...")
             os.makedirs("/etc/rabbitmq", exist_ok=True)
-            with open("/etc/rabbitmq/rabbitmq-env.conf", "a") as f:
-                f.write("NODE_IP_ADDRESS=127.0.0.1\n")
+            _ensure_line_in_file("/etc/rabbitmq/rabbitmq-env.conf", "NODE_IP_ADDRESS=127.0.0.1")
             if not is_isolated_ns:
                 run_cmd_func(["systemctl", "restart", "rabbitmq-server"])
                 # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: nothing
@@ -7092,6 +7210,10 @@ def provision_environment(
                 rmq_pass = env_vars.get("RMQ_PASS", "")
                 if rmq_user and rmq_pass:
                     _create_rabbitmq_user_if_missing(run_cmd_func, rmq_user, rmq_pass)
+                    # Production only, and only once the real account exists (a test box's
+                    # private broker has no account but guest). See the function's docstring.
+                    if not is_test:
+                        _delete_rabbitmq_guest_user_if_present(run_cmd_func)
                 else:
                     _logger.warning(
                         "[*] Skipping RabbitMQ user provisioning -- RMQ_USER/RMQ_PASS "
@@ -7100,6 +7222,16 @@ def provision_environment(
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to configure RabbitMQ bindings: %s", e)
             record_hook_failure("rabbitmq_bindings", e)
+
+        if not is_test:
+            try:
+                _logger.info("[*] Closing production Redis to unauthenticated clients (ACL user)...")
+                _write_redis_acl_include(env_vars)
+                if not is_isolated_ns:
+                    run_cmd_func(["systemctl", "restart", "redis-server"])
+            except Exception as e:  # audit-ignore-catch-all
+                _logger.warning("[*] Failed to lock down Redis: %s", e)
+                record_hook_failure("redis_acl", e)
 
         try:
             _logger.info("[*] Locking down PostgreSQL to local loopback...")
