@@ -86,6 +86,22 @@ burn-list pre-push gate and the burn-list CI workflow/required check were remove
 this reason). Odoo module tests are run by the working session on the dev box and the other test
 hosts. Advisory security jobs that are not test duplicates (pip-audit, scheduled cargo-audit /
 cargo-deny, dependency-watch) may stay.
+
+**Test and development machines never run external-sync daemons** (standing rule, 2026-10-03).
+Any daemon, timer, or one-shot unit that fetches from third-party servers -- a licensing
+regulator's register download, an event or contest calendar scrape, a callbook scrape, a public
+geocoder, a DX-cluster or APRS feed, a paid third-party API, an ACME certificate renewal, an
+external mail landing zone -- runs only in production. On a test or development host it loads
+someone else's server for data nobody uses, and repeated bulk downloads from one address get that
+address blocked. Every such unit is marked `"external_fetch": "<reason>"` in
+`hams_shared/tools/infrastructure.py`'s MANIFEST (the service and its timer both), decided by
+reading the daemon's code, not by its name. Provisioning in a test environment (`provision.py
+--test`, or `test.py`'s own isolated provisioning) may write and link those unit files but must
+never enable, start, or timer-activate them, and the `--test` smoketest stops every service it
+started, on failure as well as on success. A new systemd unit must be classified either way
+(`ExternalFetchUnitClassificationTests` in `tools/test_infrastructure.py` fails until it is). Do
+not start one of these units by hand on a test machine to "see if it works" -- test the parser
+against a saved sample instead.
 </site_rules>
 
 ## 1. CORE OPERATING PRINCIPLES (META-RULES)

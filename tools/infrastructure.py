@@ -523,7 +523,12 @@ def hook_build_rust_daemons(env_vars, dest_dir, path, run_cmd_func):
         manifest_path = os.path.join(path, crate, "Cargo.toml")
         if os.path.exists(manifest_path):
             try:
-                run_cmd_func(["cargo", "build", "--release", "--manifest-path", manifest_path])
+                # `--target-dir` pins the binary to <crate>/target/release/, where the systemd
+                # units' ExecStart expects it; an inherited CARGO_TARGET_DIR (e.g. via `sudo -E`
+                # from a Claude session, whose hams_com settings.json sets a shared build cache)
+                # would otherwise strand it elsewhere.
+                target_dir = os.path.join(path, crate, "target")
+                run_cmd_func(["cargo", "build", "--release", "--manifest-path", manifest_path, "--target-dir", target_dir])
             except Exception as e:  # audit-ignore-catch-all
                 _logger.warning("Rust daemon build failed for %s: %s", crate, e)
                 record_hook_failure(f"hook_build_rust_daemons:{crate}", e)
@@ -1327,6 +1332,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/opt/hams/systemd/system-startup.service",
+            "external_fetch": "its ExecStart starts amsat.tle.sync.service, an external fetch",
             "content": """\
 [Unit]
 Description=Run all timed daemons at startup
@@ -1574,6 +1580,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/opt/hams/systemd/ham.dx.daemon.service",
+            "external_fetch": "holds a persistent telnet connection to a third-party DX cluster",
             "content": """\
 [Unit]
 Description=Ham Radio DX Cluster Telnet Daemon
@@ -1625,6 +1632,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/opt/hams/systemd/noaa-swpc-sync.service",
+            "external_fetch": "polls a government space-weather data service in a loop",
             "content": """\
 [Unit]
 Description=Ham Radio NOAA Space Weather Sync Daemon
@@ -1732,6 +1740,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/opt/hams/systemd/amsat.tle.sync.service",
+            "external_fetch": "downloads satellite orbital elements from a third-party site",
             "content": """\
 [Unit]
 Description=Ham Radio AMSAT TLE Sync Service
@@ -1778,6 +1787,7 @@ SyslogIdentifier=amsat.tle.sync
         },
         {
             "path": "/opt/hams/systemd/amsat.tle.sync.timer",
+            "external_fetch": "activates amsat.tle.sync.service",
             "content": """\
 [Unit]
 Description=Run AMSAT TLE Sync Daily
@@ -1836,6 +1846,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/ses.inbound.mail.ingest.service",
+            "external_fetch": "polls an external cloud mail landing zone and moves objects out of it",
             "content": """\
 [Unit]
 Description=Ham Radio SES Inbound Mail Ingest Service
@@ -1889,6 +1900,7 @@ SyslogIdentifier=ses.inbound.mail.ingest
         },
         {
             "path": "/opt/hams/systemd/ses.inbound.mail.ingest.timer",
+            "external_fetch": "activates ses.inbound.mail.ingest.service",
             "content": """\
 [Unit]
 Description=Poll SES Inbound Mail Every 2 Minutes
@@ -1907,6 +1919,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/relay.cert.renew.service",
+            "external_fetch": "renews a certificate with a public ACME CA and a DNS provider API",
             "content": """\
 [Unit]
 Description=Relay Wildcard TLS Cert Renewal Service
@@ -1953,6 +1966,7 @@ SyslogIdentifier=relay.cert.renew
         },
         {
             "path": "/opt/hams/systemd/relay.cert.renew.timer",
+            "external_fetch": "activates relay.cert.renew.service",
             "content": """\
 [Unit]
 Description=Check Relay Wildcard Cert For Renewal Twice Daily
@@ -1971,6 +1985,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/localhost.cert.renewal.service",
+            "external_fetch": "renews a certificate with a public ACME CA and a DNS provider API",
             "content": """\
 [Unit]
 Description=Shared localhost.hams.com TLS Certificate Renewal (ADR 0100)
@@ -2014,6 +2029,7 @@ SyslogIdentifier=localhost.cert.renewal
         },
         {
             "path": "/opt/hams/systemd/localhost.cert.renewal.timer",
+            "external_fetch": "activates localhost.cert.renewal.service",
             "content": """\
 [Unit]
 Description=Check The Shared localhost.hams.com Certificate For Renewal Daily
@@ -2243,6 +2259,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/opt/hams/systemd/qrz.scraper.service",
+            "external_fetch": "scrapes a third-party callbook website",
             "content": """\
 [Unit]
 Description=Ham Radio QRZ Scraper Daemon
@@ -2295,6 +2312,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/opt/hams/systemd/au.acma.sync.service",
+            "external_fetch": "downloads a national licensing regulator's amateur register",
             "content": """\
 [Unit]
 Description=Ham Radio Australia ACMA Callsign Sync (One-Shot)
@@ -2342,6 +2360,7 @@ SyslogIdentifier=au.acma.sync
         },
         {
             "path": "/opt/hams/systemd/au.acma.sync.timer",
+            "external_fetch": "activates au.acma.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio Australia ACMA Callsign Sync Daily
@@ -2360,6 +2379,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/au.callsign.sync.service",
+            "external_fetch": "walks a national regulator's online register page by page",
             "content": """\
 [Unit]
 Description=Ham Radio Australia ACMA SPA Scraper (One-Shot)
@@ -2403,6 +2423,7 @@ SyslogIdentifier=au.callsign.sync
         },
         {
             "path": "/opt/hams/systemd/au.callsign.sync.timer",
+            "external_fetch": "activates au.callsign.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio Australia ACMA SPA Scraper Daily
@@ -2421,6 +2442,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/br.anatel.sync.service",
+            "external_fetch": "downloads a national licensing regulator's amateur register",
             "content": """\
 [Unit]
 Description=Ham Radio Brazil ANATEL Callsign Sync (One-Shot)
@@ -2464,6 +2486,7 @@ SyslogIdentifier=br.anatel.sync
         },
         {
             "path": "/opt/hams/systemd/br.anatel.sync.timer",
+            "external_fetch": "activates br.anatel.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio Brazil ANATEL Callsign Sync Daily
@@ -2482,6 +2505,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/de.bnetza.sync.service",
+            "external_fetch": "downloads the national callsign list from a third-party site",
             "content": """\
 [Unit]
 Description=Ham Radio Germany BNetzA Callsign Sync (One-Shot)
@@ -2525,6 +2549,7 @@ SyslogIdentifier=de.bnetza.sync
         },
         {
             "path": "/opt/hams/systemd/de.bnetza.sync.timer",
+            "external_fetch": "activates de.bnetza.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio Germany BNetzA Callsign Sync Daily
@@ -2543,6 +2568,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/nz.rsm.sync.service",
+            "external_fetch": "pages through a national regulator's register API",
             "content": """\
 [Unit]
 Description=Ham Radio New Zealand RSM Callsign Sync (One-Shot)
@@ -2586,6 +2612,7 @@ SyslogIdentifier=nz.rsm.sync
         },
         {
             "path": "/opt/hams/systemd/nz.rsm.sync.timer",
+            "external_fetch": "activates nz.rsm.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio New Zealand RSM Callsign Sync Daily
@@ -2604,6 +2631,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/uk.ofcom.sync.service",
+            "external_fetch": "downloads a national licensing regulator's amateur register",
             "content": """\
 [Unit]
 Description=Ham Radio UK Ofcom Callsign Sync (One-Shot)
@@ -2647,6 +2675,7 @@ SyslogIdentifier=uk.ofcom.sync
         },
         {
             "path": "/opt/hams/systemd/uk.ofcom.sync.timer",
+            "external_fetch": "activates uk.ofcom.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio UK Ofcom Callsign Sync Daily
@@ -2665,6 +2694,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/wa7bnm.contest.sync.service",
+            "external_fetch": "fetches a third-party contest calendar feed",
             "content": """\
 [Unit]
 Description=Ham Radio WA7BNM Contest Calendar Sync (One-Shot)
@@ -2708,6 +2738,7 @@ SyslogIdentifier=wa7bnm.contest.sync
         },
         {
             "path": "/opt/hams/systemd/wa7bnm.contest.sync.timer",
+            "external_fetch": "activates wa7bnm.contest.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio WA7BNM Contest Calendar Sync Weekly
@@ -2726,6 +2757,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/arrl.hamfests.sync.service",
+            "external_fetch": "scrapes a third-party hamfest calendar",
             "content": """\
 [Unit]
 Description=Ham Radio ARRL Hamfests Sync (One-Shot)
@@ -2769,6 +2801,7 @@ SyslogIdentifier=arrl.hamfests.sync
         },
         {
             "path": "/opt/hams/systemd/arrl.hamfests.sync.timer",
+            "external_fetch": "activates arrl.hamfests.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio ARRL Hamfests Sync Weekly
@@ -2787,6 +2820,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/rac.events.sync.service",
+            "external_fetch": "scrapes a third-party event calendar",
             "content": """\
 [Unit]
 Description=Ham Radio RAC Events Sync (One-Shot)
@@ -2830,6 +2864,7 @@ SyslogIdentifier=rac.events.sync
         },
         {
             "path": "/opt/hams/systemd/rac.events.sync.timer",
+            "external_fetch": "activates rac.events.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio RAC Events Sync Weekly
@@ -2848,6 +2883,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/sm3cer.contest.sync.service",
+            "external_fetch": "scrapes a third-party contest calendar",
             "content": """\
 [Unit]
 Description=Ham Radio SM3CER Contest Calendar Sync (One-Shot)
@@ -2891,6 +2927,7 @@ SyslogIdentifier=sm3cer.contest.sync
         },
         {
             "path": "/opt/hams/systemd/sm3cer.contest.sync.timer",
+            "external_fetch": "activates sm3cer.contest.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio SM3CER Contest Calendar Sync Weekly
@@ -2913,6 +2950,7 @@ WantedBy=timers.target
             # The site's own schedule changes a handful of times a year,
             # so the sibling daemons' weekly cadence is ample.
             "path": "/opt/hams/systemd/electronicsfleamarket.sync.service",
+            "external_fetch": "scrapes a third-party event website",
             "content": """\
 [Unit]
 Description=Ham Radio Electronics Flea Market Swap Meet Sync (One-Shot)
@@ -2956,6 +2994,7 @@ SyslogIdentifier=electronicsfleamarket.sync
         },
         {
             "path": "/opt/hams/systemd/electronicsfleamarket.sync.timer",
+            "external_fetch": "activates electronicsfleamarket.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio Electronics Flea Market Swap Meet Sync Weekly
@@ -2974,6 +3013,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/fcc.uls.sync.service",
+            "external_fetch": "downloads the national licence database (about 1.3M rows)",
             "content": """\
 [Unit]
 Description=Ham Radio FCC ULS Daily Sync Daemon
@@ -3029,6 +3069,7 @@ SyslogIdentifier=fcc.uls.sync
         },
         {
             "path": "/opt/hams/systemd/fcc.uls.sync.timer",
+            "external_fetch": "activates fcc.uls.sync.service",
             "content": """\
 [Unit]
 Description=Run the FCC ULS Daily Sync Once a Day
@@ -3082,6 +3123,7 @@ WantedBy=timers.target
             # value is the daemon.key.registry name, whose Remote Self-Rotation box must be set.
             # Without it, hams1's 59-day cron revokes this key and the daemon is locked out.
             "path": "/etc/systemd/system/fcc.uls.sync.service",
+            "external_fetch": "downloads the national licence database (about 1.3M rows)",
             "content": """\
 [Unit]
 Description=FCC ULS Daily Sync (non-datacenter egress path, see night_shift_todo/high/fcc-uls-sync-needs-non-datacenter-egress-path-a8e5f3c1.md)
@@ -3111,6 +3153,7 @@ SyslogIdentifier=fcc.uls.sync
         },
         {
             "path": "/etc/systemd/system/fcc.uls.sync.timer",
+            "external_fetch": "activates fcc.uls.sync.service",
             "content": """\
 [Unit]
 Description=Run the FCC ULS Daily Sync Once a Day (from pi500-1's residential egress path)
@@ -3197,6 +3240,7 @@ SyslogIdentifier=hamcall.idx.sync
             # benefit. A daily oneshot+timer (the au.callsign.sync/br.anatel
             # pattern) comfortably keeps up with same-day FCC ingestion.
             "path": "/opt/hams/systemd/callbook.geo.enrich.service",
+            "external_fetch": "calls a public geocoding service once per callbook record",
             "content": """\
 [Unit]
 Description=Ham Radio Callbook Congressional District / County Geo-Enrichment (One-Shot)
@@ -3240,6 +3284,7 @@ SyslogIdentifier=callbook.geo.enrich
         },
         {
             "path": "/opt/hams/systemd/callbook.geo.enrich.timer",
+            "external_fetch": "activates callbook.geo.enrich.service",
             "content": """\
 [Unit]
 Description=Ham Radio Callbook Geo-Enrichment Daily (Incremental)
@@ -3424,6 +3469,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/opt/hams/systemd/ised.canada.sync.service",
+            "external_fetch": "downloads a national licensing regulator's amateur register",
             "content": """\
 [Unit]
 Description=Ham Radio ISED Canada Callbook Sync (One-Shot)
@@ -3471,6 +3517,7 @@ SyslogIdentifier=ised.canada.sync
         },
         {
             "path": "/opt/hams/systemd/ised.canada.sync.timer",
+            "external_fetch": "activates ised.canada.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio ISED Canada Callbook Sync Daily
@@ -3489,6 +3536,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/ncvec.sync.service",
+            "external_fetch": "downloads question pools from a third-party site",
             "content": """\
 [Unit]
 Description=Ham Radio NCVEC Question Pool Sync Daemon
@@ -3534,6 +3582,7 @@ SyslogIdentifier=ncvec.sync
         },
         {
             "path": "/opt/hams/systemd/ncvec.sync.timer",
+            "external_fetch": "activates ncvec.sync.service",
             "content": """\
 [Unit]
 Description=Run the NCVEC Question Pool Sync Daily
@@ -3552,6 +3601,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/pota.sync.service",
+            "external_fetch": "downloads park data from a third-party program API",
             "content": """\
 [Unit]
 Description=Ham Radio POTA Park Reference Data Sync (One-Shot)
@@ -3595,6 +3645,7 @@ SyslogIdentifier=pota.sync
         },
         {
             "path": "/opt/hams/systemd/pota.sync.timer",
+            "external_fetch": "activates pota.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio POTA Park Reference Data Sync Weekly
@@ -3613,6 +3664,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/sota.sync.service",
+            "external_fetch": "downloads summit data from a third-party program site",
             "content": """\
 [Unit]
 Description=Ham Radio SOTA Summit Reference Data Sync (One-Shot)
@@ -3656,6 +3708,7 @@ SyslogIdentifier=sota.sync
         },
         {
             "path": "/opt/hams/systemd/sota.sync.timer",
+            "external_fetch": "activates sota.sync.service",
             "content": """\
 [Unit]
 Description=Ham Radio SOTA Summit Reference Data Sync Weekly
@@ -3674,6 +3727,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/code.review.sweep.service",
+            "external_fetch": "sends source batches to a paid third-party LLM API",
             "content": """\
 [Unit]
 Description=Hams.com Code Review Sweep -- Gemini leg (One-Shot)
@@ -3724,6 +3778,7 @@ SyslogIdentifier=code.review.sweep
         },
         {
             "path": "/opt/hams/systemd/code.review.sweep.timer",
+            "external_fetch": "activates code.review.sweep.service",
             "content": """\
 [Unit]
 Description=Hams.com Code Review Sweep Quarterly (incremental mode)
@@ -3742,6 +3797,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/aprs.is.sync.service",
+            "external_fetch": "holds a persistent feed connection to a third-party network",
             "content": """\
 [Unit]
 Description=Ham Radio APRS-IS Sync Daemon
@@ -3790,6 +3846,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/opt/hams/systemd/au.pii.sync.service",
+            "external_fetch": "designed to fetch operator data from an external source (stubbed today)",
             "content": """\
 [Unit]
 Description=Ham Radio Australia PII Sync Daemon
@@ -3834,6 +3891,7 @@ SyslogIdentifier=au.pii.sync
         },
         {
             "path": "/opt/hams/systemd/au.pii.sync.timer",
+            "external_fetch": "activates au.pii.sync.service",
             "content": """\
 [Unit]
 Description=Run the Australia PII Sync Daily
@@ -4354,6 +4412,7 @@ exec /home/hams_event_agent/.local/bin/claude "$@"
             # database, Redis, or RabbitMQ at all, so it carries none of the credentials that
             # would grant it.
             "path": "/opt/hams/systemd/credential.touch.timer.service",
+            "external_fetch": "refreshes a third-party OAuth session, rotating its token",
             "content": """\
 [Unit]
 Description=Periodic Touch of Claude Code CLI Service-Account OAuth Sessions (One-Shot)
@@ -4385,6 +4444,7 @@ SyslogIdentifier=credential.touch.timer
         },
         {
             "path": "/opt/hams/systemd/credential.touch.timer.timer",
+            "external_fetch": "activates credential.touch.timer.service",
             "content": """\
 [Unit]
 Description=Periodic Touch of Claude Code CLI Service-Account OAuth Sessions Twice Daily
@@ -5553,14 +5613,49 @@ def _service_start_command(svc):
     return ["systemctl", "start", svc]
 
 
-def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
-    _logger.info("[*] Running post-provisioning smoketest on all services...")
+# Standing rule (2026-10-03): a test or development machine never runs a unit
+# that fetches from third-party servers -- a regulator's licence register, an
+# event calendar, a public geocoder, a DX cluster, a paid API, an ACME CA.
+# On a test host such a unit only loads someone else's server for data
+# nobody uses, and repeated bulk pulls from one address get that address
+# blocked. Incident, 2026-10-02: `provision.py --test` enabled every timer
+# and the smoketest started every service on fresh test hosts, and one of
+# them pulled the whole national licence database. Each such MANIFEST entry
+# carries "external_fetch": "<why>" (the .service and its .timer both); the
+# classification comes from reading each daemon's code, not its name.
+# test_infrastructure.py's ExternalFetchUnitClassificationTests requires
+# every systemd unit in the MANIFEST to be either flagged or listed there as
+# audited local-only, so a new unit cannot skip the decision.
+# [@ANCHOR: infrastructure:external_fetch_unit_names]
+def external_fetch_unit_names():
+    """Basenames of every systemd unit the MANIFEST flags external_fetch."""
+    names = set()
+    for spec in MANIFEST.get("static_files", []):
+        if spec.get("external_fetch"):
+            names.add(os.path.basename(spec["path"]))
+    return names
 
-    try:
-        subprocess.run(["systemctl", "daemon-reload"], check=False)
-    except OSError as e:
-        _logger.debug("Ignored OSError during daemon-reload: %s", e)
 
+# [@ANCHOR: infrastructure:activation_units_to_enable]
+def _activation_units_to_enable(linked_units, is_test_env):
+    """The linked .timer/.path units provisioning should `systemctl enable`.
+
+    In a test environment (provision.py --test, or test.py's isolated
+    provisioning) external-fetch units are left linked but never enabled,
+    so no timer ever fires them. Production enables every linked unit."""
+    if not is_test_env:
+        return list(linked_units)
+    external = external_fetch_unit_names()
+    return [unit for unit in linked_units if unit not in external]
+
+
+# [@ANCHOR: infrastructure:smoketest_candidate_services]
+def _smoketest_candidate_services(has_hams_com=True, is_test_env=False):
+    """Services run_post_provision_smoketest() may start, in start order.
+
+    In a test environment external-fetch services are left out, so the
+    smoketest never starts one (a blocking start of a oneshot sync runs
+    the whole download)."""
     potential_services = [
         "postgresql",
         "redis-server",
@@ -5573,6 +5668,7 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
         "system-startup.service",
         "hams-pycache.service"
     }
+    external = external_fetch_unit_names() if is_test_env else set()
 
     for sf in MANIFEST.get("static_files", []):
         path = sf.get("path", "")
@@ -5582,8 +5678,24 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
                 continue
             if not is_test_env and svc_name in daemons_to_skip:
                 continue
+            if svc_name in external:
+                continue
             if svc_name not in potential_services and "@" not in svc_name:
                 potential_services.append(svc_name)
+    return potential_services
+
+
+def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
+    _logger.info("[*] Running post-provisioning smoketest on all services...")
+
+    try:
+        subprocess.run(["systemctl", "daemon-reload"], check=False)
+    except OSError as e:
+        _logger.debug("Ignored OSError during daemon-reload: %s", e)
+
+    potential_services = _smoketest_candidate_services(
+        has_hams_com, is_test_env
+    )
 
     _logger.info("DEBUG potential_services: %s", potential_services)
     _logger.info("DEBUG has_hams_com: %s, is_test_env: %s", has_hams_com, is_test_env)
@@ -5602,98 +5714,103 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
     started_services = []
     already_active_services = []
     start_failures = []
-
-    for svc in services_to_test:
-        res_active = subprocess.run(
-            ["systemctl", "is-active", svc], capture_output=True, text=True
-        )
-        if res_active.stdout.strip() == "active":
-            if svc == "odoo":
-                subprocess.run(["systemctl", "restart", "odoo"])
-            _logger.info("    %s is already active, skipping start.", svc)
-            already_active_services.append(svc)
-            continue
-
-        if svc in NON_BLOCKING_START_SERVICES:
-            # See NON_BLOCKING_START_SERVICES' own comment above: this specific
-            # service can legitimately run for hours, so --no-block only waits
-            # for systemd to accept/queue the start job, not for the service's
-            # own ExecStart to finish. A returncode of 0 here means "dispatched,"
-            # not "completed" -- distinct from every other service in this loop.
-            _logger.info("    Starting %s (non-blocking -- may still be running when this smoketest finishes)...", svc)
-        else:
-            _logger.info("    Starting %s...", svc)
-        res = subprocess.run(
-            _service_start_command(svc), capture_output=True, text=True
-        )
-        started_services.append(svc)
-        if res.returncode != 0:
-            logs = subprocess.run(
-                ["journalctl", "-u", svc, "-n", "100", "--no-pager"],
-                capture_output=True,
-                text=True,
+    # A --test run must never leave a service it started running, however
+    # the smoketest ends: both failure paths below sys.exit(1), and before
+    # 2026-10-02 they exited before the stop loop, so a test host kept
+    # every started daemon running. The finally runs on SystemExit too.
+    # [@ANCHOR: infrastructure:smoketest_test_mode_always_stops]
+    try:
+        for svc in services_to_test:
+            res_active = subprocess.run(
+                ["systemctl", "is-active", svc], capture_output=True, text=True
             )
-            if "Address already in use" in logs.stdout or "Address already in use" in logs.stderr:
-                _logger.warning(
-                    "    [~] %s failed to start due to port conflict ('Address already in use'). Assuming it is running externally or port is handled.", svc
-                )
-                started_services.remove(svc)
+            if res_active.stdout.strip() == "active":
+                if svc == "odoo":
+                    subprocess.run(["systemctl", "restart", "odoo"])
+                _logger.info("    %s is already active, skipping start.", svc)
+                already_active_services.append(svc)
+                continue
+
+            if svc in NON_BLOCKING_START_SERVICES:
+                # See NON_BLOCKING_START_SERVICES' own comment above: this specific
+                # service can legitimately run for hours, so --no-block only waits
+                # for systemd to accept/queue the start job, not for the service's
+                # own ExecStart to finish. A returncode of 0 here means "dispatched,"
+                # not "completed" -- distinct from every other service in this loop.
+                _logger.info("    Starting %s (non-blocking -- may still be running when this smoketest finishes)...", svc)
             else:
-                _logger.error(
-                    "    [!] systemctl start %s returned non-zero exit code: %s",
-                    svc,
-                    res.returncode,
+                _logger.info("    Starting %s...", svc)
+            res = subprocess.run(
+                _service_start_command(svc), capture_output=True, text=True
+            )
+            started_services.append(svc)
+            if res.returncode != 0:
+                logs = subprocess.run(
+                    ["journalctl", "-u", svc, "-n", "100", "--no-pager"],
+                    capture_output=True,
+                    text=True,
                 )
-                _logger.error("stdout: %s", res.stdout)
-                _logger.error("stderr: %s", res.stderr)
+                if "Address already in use" in logs.stdout or "Address already in use" in logs.stderr:
+                    _logger.warning(
+                        "    [~] %s failed to start due to port conflict ('Address already in use'). Assuming it is running externally or port is handled.", svc
+                    )
+                    started_services.remove(svc)
+                else:
+                    _logger.error(
+                        "    [!] systemctl start %s returned non-zero exit code: %s",
+                        svc,
+                        res.returncode,
+                    )
+                    _logger.error("stdout: %s", res.stdout)
+                    _logger.error("stderr: %s", res.stderr)
+                    _logger.error(
+                        "--- LOGS FOR %s ---\n%s\n-------------------", svc, logs.stdout
+                    )
+                    # Keep going and start the rest, so one run reports every service that will not
+                    # start. Stopping at the first cost a full provisioning run per problem on the
+                    # first production release (2026-09-21).
+                    start_failures.append(svc)
+
+        if start_failures:
+            _logger.error(
+                "[!] %d service(s) failed to start: %s", len(start_failures), ", ".join(start_failures)
+            )
+            sys.exit(1)
+
+        _logger.info("[*] Waiting for services to stabilize (5 seconds)...")
+        time.sleep(5)
+
+        failed = False
+        for svc in started_services + already_active_services:
+            res = subprocess.run(
+                ["systemctl", "is-failed", svc], capture_output=True, text=True
+            )
+            state = res.stdout.strip()
+            if state == "failed":
+                _logger.error("[!] Service %s failed to start or crashed.", svc)
+                logs = subprocess.run(
+                    ["journalctl", "-u", svc, "-n", "100", "--no-pager"],
+                    capture_output=True,
+                    text=True,
+                )
                 _logger.error(
                     "--- LOGS FOR %s ---\n%s\n-------------------", svc, logs.stdout
                 )
-                # Keep going and start the rest, so one run reports every service that will not
-                # start. Stopping at the first cost a full provisioning run per problem on the
-                # first production release (2026-09-21).
-                start_failures.append(svc)
+                failed = True
 
-    if start_failures:
-        _logger.error(
-            "[!] %d service(s) failed to start: %s", len(start_failures), ", ".join(start_failures)
-        )
-        sys.exit(1)
-
-    _logger.info("[*] Waiting for services to stabilize (5 seconds)...")
-    time.sleep(5)
-
-    failed = False
-    for svc in started_services + already_active_services:
-        res = subprocess.run(
-            ["systemctl", "is-failed", svc], capture_output=True, text=True
-        )
-        state = res.stdout.strip()
-        if state == "failed":
-            _logger.error("[!] Service %s failed to start or crashed.", svc)
-            logs = subprocess.run(
-                ["journalctl", "-u", svc, "-n", "100", "--no-pager"],
-                capture_output=True,
-                text=True,
-            )
+        if failed:
             _logger.error(
-                "--- LOGS FOR %s ---\n%s\n-------------------", svc, logs.stdout
+                "[!] One or more services failed the smoketest. Aborting snapshot."
             )
-            failed = True
+            sys.exit(1)
 
-    if failed:
-        _logger.error(
-            "[!] One or more services failed the smoketest. Aborting snapshot."
-        )
-        sys.exit(1)
-
-    if is_test_env:
-        _logger.info("[*] All services started successfully. Shutting them down (--test mode)...")
-        for svc in reversed(started_services):
-            _logger.info("    Stopping %s...", svc)
-            subprocess.run(["systemctl", "stop", svc], capture_output=True)
-    else:
-        _logger.info("[*] All services started successfully and are running.")
+        _logger.info("[*] All services started successfully.")
+    finally:
+        if is_test_env:
+            _logger.info("[*] Shutting down the services this smoketest started (--test mode)...")
+            for svc in reversed(started_services):
+                _logger.info("    Stopping %s...", svc)
+                subprocess.run(["systemctl", "stop", svc], capture_output=True)
 
     _logger.info("[*] Smoketest complete: %s", datetime.now())
 
@@ -6980,14 +7097,29 @@ def provision_environment(
         # forcing an immediate first run -- safe to re-run this same
         # provisioning step against an already-running system without an
         # unwanted stampede of first-ever executions across every daemon.
-        if linked_activation_units:
+        #
+        # A test environment (is_test_env: provision.py --test, or test.py's
+        # own isolated provisioning) enables only the units that never fetch
+        # from third-party servers -- see external_fetch_unit_names(). The
+        # rest stay linked but disabled, so no timer ever fires them there.
+        units_to_enable = _activation_units_to_enable(
+            linked_activation_units, is_test_env
+        )
+        held_back = sorted(set(linked_activation_units) - set(units_to_enable))
+        if held_back:
+            _logger.info(
+                "[*] Test environment: NOT enabling %d external-fetch unit(s): %s",
+                len(held_back),
+                ", ".join(held_back),
+            )
+        if units_to_enable:
             _logger.info(
                 "[*] Enabling %d linked systemd timer/path unit(s)...",
-                len(linked_activation_units),
+                len(units_to_enable),
             )
             try:
                 subprocess.run(["systemctl", "daemon-reload"], check=False)
-                for unit in linked_activation_units:
+                for unit in units_to_enable:
                     result = subprocess.run(
                         ["systemctl", "enable", unit],
                         capture_output=True,

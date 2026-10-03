@@ -109,8 +109,12 @@ def _ensure_scan_binary_built():
     success (binary present after this call), False otherwise."""
     if os.path.exists(_SCAN_BINARY):
         return True
+    # `--target-dir` pins the output to _SCAN_BINARY's location. Without it an inherited
+    # CARGO_TARGET_DIR (hams_com's .claude/settings.json sets one for Claude sessions, to share
+    # a build cache) would put the binary elsewhere, the existence check below would fail, and
+    # _run_rust_scan would return {} -- the anchor check passing vacuously.
     proc = subprocess.run(
-        ["cargo", "build", "--release", "--quiet"],
+        ["cargo", "build", "--release", "--quiet", "--target-dir", os.path.join(_SCAN_CRATE_DIR, "target")],
         cwd=_SCAN_CRATE_DIR,
         capture_output=True,
         text=True,
