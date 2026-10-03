@@ -50,6 +50,7 @@ SECRET_FIELD_RE = re.compile(r"(password|passwd|secret|token|api_?key|private_?k
 
 # The only methods ever sent to the source. Anything else raises before a request is made.
 # [@ANCHOR: odoo_site_migrate:read_only_source]
+# Verified by [@ANCHOR: test_odoo_site_migrate:read_only_source]
 READ_ONLY_METHODS = frozenset({"search", "search_read", "read", "fields_get", "search_count"})
 
 # Runtime and tracking data that is not site content.
@@ -90,6 +91,7 @@ class Credentials:
 
 
 # [@ANCHOR: odoo_site_migrate:load_credentials]
+# Verified by [@ANCHOR: test_odoo_site_migrate:load_credentials]
 def load_credentials(path):
     """Reads the env-style credentials file. Refuses a file readable by group or others, and a
     non-HTTPS URL for anything but localhost, so the secret never travels in clear text."""
@@ -229,6 +231,7 @@ def slugify(text):
 
 
 # [@ANCHOR: odoo_site_migrate:rewrite_html]
+# Verified by [@ANCHOR: test_odoo_site_migrate:rewrite_html]
 def rewrite_html(html, domains, attachment_map=None, blog_map=None, post_map=None, report=None):
     """Rewrites internal references inside an HTML or QWeb string:
 
@@ -530,6 +533,7 @@ class Exporter:
 
 
 # [@ANCHOR: odoo_site_migrate:verify_export]
+# Verified by [@ANCHOR: test_odoo_site_migrate:verify_export]
 def verify_export(out_dir):
     """Re-hashes every file listed in CHECKSUMS.sha256. Returns the list of problems."""
     problems = []

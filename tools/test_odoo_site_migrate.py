@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for odoo_site_migrate.py against an in-memory fake Odoo (no network, no real site).
-
-Tests [@ANCHOR: odoo_site_migrate:read_only_source] [@ANCHOR: odoo_site_migrate:load_credentials]
-[@ANCHOR: odoo_site_migrate:rewrite_html] [@ANCHOR: odoo_site_migrate:verify_export]
 """
+
+# [@ANCHOR: test_odoo_site_migrate:read_only_source]
+# Tests [@ANCHOR: odoo_site_migrate:read_only_source]
+# [@ANCHOR: test_odoo_site_migrate:load_credentials]
+# Tests [@ANCHOR: odoo_site_migrate:load_credentials]
+# [@ANCHOR: test_odoo_site_migrate:rewrite_html]
+# Tests [@ANCHOR: odoo_site_migrate:rewrite_html]
+# [@ANCHOR: test_odoo_site_migrate:verify_export]
+# Tests [@ANCHOR: odoo_site_migrate:verify_export]
 
 import base64
 import hashlib

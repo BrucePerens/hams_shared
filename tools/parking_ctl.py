@@ -73,6 +73,7 @@ def default_values():
 
 
 # [@ANCHOR: parking_ctl:parse_domain_file]
+# Verified by [@ANCHOR: test_parking_ctl:parse_domain_file]
 def parse_domain_file(text, defaults=None, reserved=()):
     """Returns (entries, problems). entries: {normalized domain: values dict}. Problems are
     human-readable strings; a file with any problem is never applied."""
@@ -204,6 +205,7 @@ def normalized_existing(client):
 
 
 # [@ANCHOR: parking_ctl:diff]
+# Verified by [@ANCHOR: test_parking_ctl:diff]
 def diff(entries, existing):
     create, update, same = [], [], []
     for domain, values in sorted(entries.items()):

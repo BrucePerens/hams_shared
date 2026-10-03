@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests [@ANCHOR: parking_ctl:parse_domain_file] [@ANCHOR: parking_ctl:diff] for parking_ctl.py."""
+"""Tests for parking_ctl.py (a fake Odoo client; no network)."""
+
+# [@ANCHOR: test_parking_ctl:parse_domain_file]
+# Tests [@ANCHOR: parking_ctl:parse_domain_file]
+# [@ANCHOR: test_parking_ctl:diff]
+# Tests [@ANCHOR: parking_ctl:diff]
 
 import json
 import os

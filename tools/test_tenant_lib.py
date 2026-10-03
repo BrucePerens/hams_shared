@@ -5,13 +5,35 @@
 The provisioning code is run for real against a FakeSystem: file operations happen in a temporary
 directory (so permissions, content and idempotence are real), and only the commands that need root
 or a PostgreSQL server (useradd, psql, systemctl, nft, pg_dump) are answered by a small in-memory
-model. Tests [@ANCHOR: tenant_lib:validate_spec] [@ANCHOR: tenant_lib:build_create_steps]
-[@ANCHOR: tenant_lib:render_odoo_conf] [@ANCHOR: tenant_lib:render_unit_dropin]
-[@ANCHOR: tenant_lib:render_pg_hba] [@ANCHOR: tenant_lib:render_nft]
-[@ANCHOR: tenant_lib:backup_tenant] [@ANCHOR: tenant_lib:restore_test] [@ANCHOR: tenant_lib:status]
-[@ANCHOR: tenant_lib:upgrade_tenant]
-[@ANCHOR: tenant_lib:delete_tenant] [@ANCHOR: tenant_cloudflare:build_ingress]
+model.
 """
+
+# [@ANCHOR: test_tenant_lib:validate_spec]
+# Tests [@ANCHOR: tenant_lib:validate_spec]
+# [@ANCHOR: test_tenant_lib:render_odoo_conf]
+# Tests [@ANCHOR: tenant_lib:render_odoo_conf]
+# [@ANCHOR: test_tenant_lib:render_unit_dropin]
+# Tests [@ANCHOR: tenant_lib:render_unit_dropin]
+# [@ANCHOR: test_tenant_lib:render_pg_hba]
+# Tests [@ANCHOR: tenant_lib:render_pg_hba]
+# [@ANCHOR: test_tenant_lib:render_nft]
+# Tests [@ANCHOR: tenant_lib:render_nft]
+# [@ANCHOR: test_tenant_lib:render_pg_sql]
+# Tests [@ANCHOR: tenant_lib:render_pg_sql]
+# [@ANCHOR: test_tenant_lib:build_create_steps]
+# Tests [@ANCHOR: tenant_lib:build_create_steps]
+# [@ANCHOR: test_tenant_lib:backup_tenant]
+# Tests [@ANCHOR: tenant_lib:backup_tenant]
+# [@ANCHOR: test_tenant_lib:restore_test]
+# Tests [@ANCHOR: tenant_lib:restore_test]
+# [@ANCHOR: test_tenant_lib:status]
+# Tests [@ANCHOR: tenant_lib:status]
+# [@ANCHOR: test_tenant_lib:upgrade_tenant]
+# Tests [@ANCHOR: tenant_lib:upgrade_tenant]
+# [@ANCHOR: test_tenant_lib:delete_tenant]
+# Tests [@ANCHOR: tenant_lib:delete_tenant]
+# [@ANCHOR: test_tenant_cloudflare:build_ingress]
+# Tests [@ANCHOR: tenant_cloudflare:build_ingress]
 
 import copy
 import datetime

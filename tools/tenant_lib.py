@@ -31,7 +31,6 @@ import shutil
 import subprocess
 import tarfile
 
-# [@ANCHOR: tenant_lib:naming]
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,23}$")
 MODULE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 LABEL_RE = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
@@ -176,6 +175,7 @@ def _check_int(field, value, low, high):
 
 
 # [@ANCHOR: tenant_lib:validate_spec]
+# Verified by [@ANCHOR: test_tenant_lib:validate_spec]
 def validate_spec(raw):
     """Returns a complete, validated copy of a tenant spec (defaults filled in)."""
     if not isinstance(raw, dict):
@@ -297,6 +297,7 @@ def pg_role(name):
 
 
 # [@ANCHOR: tenant_lib:render_odoo_conf]
+# Verified by [@ANCHOR: test_tenant_lib:render_odoo_conf]
 def render_odoo_conf(spec, paths, admin_passwd_hash):
     name = spec["name"]
     extra = [paths.addons_dir(name)] if spec["extra_modules"] else []
@@ -338,6 +339,7 @@ def render_odoo_conf(spec, paths, admin_passwd_hash):
 
 
 # [@ANCHOR: tenant_lib:render_unit_dropin]
+# Verified by [@ANCHOR: test_tenant_lib:render_unit_dropin]
 def render_unit_dropin(spec):
     """Per-tenant resource limits on top of the shared sandboxed template unit."""
     return (
@@ -354,6 +356,7 @@ def render_unit_dropin(spec):
 
 
 # [@ANCHOR: tenant_lib:render_pg_hba]
+# Verified by [@ANCHOR: test_tenant_lib:render_pg_hba]
 def render_pg_hba(spec):
     name = spec["name"]
     return (
@@ -380,6 +383,7 @@ def pg_hba_include_line(include_dir):
 
 
 # [@ANCHOR: tenant_lib:render_nft]
+# Verified by [@ANCHOR: test_tenant_lib:render_nft]
 def render_nft(specs):
     """One nftables table that stops tenant processes opening NEW connections to anything local.
 
@@ -409,7 +413,8 @@ def render_nft(specs):
     )
 
 
-# [@ANCHOR: tenant_lib:render_install_script]
+# [@ANCHOR: tenant_lib:render_pg_sql]
+# Verified by [@ANCHOR: test_tenant_lib:render_pg_sql]
 def render_pg_sql(spec, phase):
     """SQL for one phase, all identifiers validated by NAME_RE so interpolation is safe."""
     name = spec["name"]
@@ -623,6 +628,7 @@ def pg_hba_errors(system):
 
 
 # [@ANCHOR: tenant_lib:build_create_steps]
+# Verified by [@ANCHOR: test_tenant_lib:build_create_steps]
 def build_create_steps(spec, paths, system, apply_firewall=True, start=True, all_specs=None):
     """The ordered, idempotent list of steps that creates (or repairs) one tenant."""
     name = spec["name"]
@@ -952,6 +958,7 @@ def sha256_file(path):
 
 
 # [@ANCHOR: tenant_lib:backup_tenant]
+# Verified by [@ANCHOR: test_tenant_lib:backup_tenant]
 def backup_tenant(spec, paths, system, keep=7):
     """pg_dump -Fc of the tenant database plus a tar.gz of its filestore, with checksums.
 
@@ -1008,6 +1015,7 @@ def latest_backup(paths, system, name):
 
 
 # [@ANCHOR: tenant_lib:restore_test]
+# Verified by [@ANCHOR: test_tenant_lib:restore_test]
 def restore_test(spec, paths, system):
     """Restores the newest backup into a scratch database, counts users and installed modules,
     drops the scratch database. Returns a dict; raises if the backup does not restore."""
@@ -1040,6 +1048,7 @@ def restore_test(spec, paths, system):
 
 
 # [@ANCHOR: tenant_lib:status]
+# Verified by [@ANCHOR: test_tenant_lib:status]
 def tenant_status(spec, paths, system, http_get=None):
     """One dict per tenant: unit state, database size, filestore size, backup age, HTTP probes."""
     name = spec["name"]
@@ -1082,6 +1091,7 @@ def tenant_status(spec, paths, system, http_get=None):
 
 
 # [@ANCHOR: tenant_lib:upgrade_tenant]
+# Verified by [@ANCHOR: test_tenant_lib:upgrade_tenant]
 def build_upgrade_steps(spec, paths, system):
     """One tenant's module upgrade after an Odoo package upgrade: backup, stop, `odoo -u` as the
     tenant (no HTTP, no cron), start. Run for one tenant at a time; the next only when the
@@ -1106,6 +1116,7 @@ def build_upgrade_steps(spec, paths, system):
 
 
 # [@ANCHOR: tenant_lib:delete_tenant]
+# Verified by [@ANCHOR: test_tenant_lib:delete_tenant]
 def build_delete_steps(spec, paths, system, all_specs=None):
     """Steps that remove a tenant. A final backup comes first and cannot be skipped by this builder;
     the backup directory itself is never removed."""

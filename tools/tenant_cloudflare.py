@@ -52,6 +52,7 @@ def _is_catch_all(rule):
 
 
 # [@ANCHOR: tenant_cloudflare:build_ingress]
+# Verified by [@ANCHOR: test_tenant_cloudflare:build_ingress]
 def build_ingress(specs, current):
     """Returns the new ingress list derived from `current` (a list of rules, last one the catch-all).
 
