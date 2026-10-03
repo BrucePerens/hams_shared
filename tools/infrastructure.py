@@ -1636,7 +1636,7 @@ MANIFEST = {
         # REDIS_USERNAME/REDIS_PASSWORD: the production Redis ACL user (see _redis_acl_include_content).
         # REDIS_URL carries the same credentials for hams_data_relay (Rust), which reads only a URL.
         "redis.env": ["REDIS_HOST", "REDIS_PORT", "REDIS_USERNAME", "REDIS_PASSWORD", "REDIS_URL"],
-        "bridge.env": ["BRIDGE_API_KEY"],
+        "bridge.env": ["BRIDGE_API_KEY", "BRIDGE_STUN_BIND"],
         "smtp.env": ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"],
         "core.env": [
             "DOMAIN",
@@ -6074,6 +6074,20 @@ WantedBy=timers.target
         # branch and scaffold_test_environment().
         "PLAYWRIGHT_BROWSERS_PATH": "/opt/hams/cache/ms-playwright",
     },
+    # Host firewall (ufw) rules provisioned on production. Only ports a hams.com service must
+    # answer from the internet belong here; everything else stays denied (ufw's default).
+    # `args` is passed to `ufw` as is. Applied by provision_firewall_rules(), only when ufw is
+    # installed and active, only when the rule is not already present, never on a test host.
+    "firewall_rules": [
+        {
+            # stun.hams.com: the relay bridge's STUN responder (hams_relay_bridge stun_responder.rs,
+            # BRIDGE_STUN_BIND in bridge.env). UDP only; the responder answers nothing but a
+            # well-formed Binding request, rate limited, with a reply of at most 44 bytes.
+            "args": ["allow", "3478/udp"],
+            "comment": "stun.hams.com (hams_relay_bridge STUN responder)",
+            "environments": ["prod"],
+        },
+    ],
     "systemd_odoo_override": {
         "Unit": {"Requires": "hams-pycache.service", "After": "hams-pycache.service"},
         "Service": {
@@ -6490,6 +6504,65 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
 
 
 # [@ANCHOR: infrastructure:provision_systemd_override]
+# [@ANCHOR: infrastructure:provision_firewall_rules]
+def _ufw_active():
+    """True when ufw is installed and reports `Status: active`; False otherwise (including any
+    failure to ask: a firewall that cannot be read is left alone)."""
+    if not shutil.which("ufw"):
+        return False
+    try:
+        res = subprocess.run(
+            ["ufw", "status"], capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return res.returncode == 0 and "Status: active" in res.stdout
+
+
+def _ufw_rule_present(args):
+    """True when `ufw status` already lists the allow rule `args` (the `port/proto` form)."""
+    try:
+        res = subprocess.run(
+            ["ufw", "status"], capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    target = args[-1]
+    for line in res.stdout.splitlines():
+        fields = line.split()
+        if fields and fields[0] == target and "ALLOW" in line and "(v6)" not in line:
+            return True
+    return False
+
+
+def provision_firewall_rules(run_cmd_func, environment="prod", dest_dir=""):
+    """Adds the ufw rules in MANIFEST["firewall_rules"] for `environment`, idempotently.
+
+    Production only (every entry lists its environments; a test host's run finds none and does
+    nothing, so provisioning a test machine never opens a public port). Skipped, with a log line,
+    when ufw is absent or inactive: this function does not enable a firewall, it only opens what a
+    service needs on one that is already running (hams1's ufw is active with WireGuard and SSH
+    allowed). In plan mode it reports what it would add. Never removes a rule."""
+    if dest_dir:
+        return
+    rules = [r for r in MANIFEST.get("firewall_rules", []) if environment in r["environments"]]
+    if not rules:
+        return
+    if not _ufw_active():
+        _logger.info("[*] ufw is not installed or not active; not adding %d firewall rule(s)", len(rules))
+        return
+    for rule in rules:
+        if _ufw_rule_present(rule["args"]):
+            continue
+        if _plan("firewall", f"ufw {' '.join(rule['args'])} comment {rule['comment']!r}"):
+            continue
+        try:
+            run_cmd_func(["ufw", *rule["args"], "comment", rule["comment"]])
+        except Exception as e:  # audit-ignore-catch-all
+            _logger.warning("[*] Failed to add ufw rule %s: %s", rule["args"], e)
+            record_hook_failure("firewall_rules", e)
+
+
 def provision_systemd_override(
     run_cmd_func,
     env_vars,
@@ -7181,6 +7254,14 @@ def load_and_prompt_env(env_vars, is_test):
     # same value into the database.
     if not env_vars.get("BRIDGE_API_KEY", "").strip():
         env_vars["BRIDGE_API_KEY"] = secrets.token_urlsafe(48)
+
+    # stun.hams.com (hams_com docs/proposals/ICE_DIRECT_ROUTING.md section 11.2): the bridge's STUN
+    # responder binds this address when BRIDGE_STUN_BIND is set, and not at all when it is not.
+    # Production gets it by default (dual stack, UDP 3478; MANIFEST["firewall_rules"] opens the
+    # port); a test host does not, so provisioning a test machine opens no public UDP port. An
+    # operator who set it (or set it empty, to switch the responder off) keeps their value.
+    if not is_test:
+        env_vars.setdefault("BRIDGE_STUN_BIND", "[::]:3478")
 
     if is_test:
         env_vars.setdefault("ODOO_URL", "http://odoo:8069")
@@ -8638,6 +8719,7 @@ def provision_environment(
 
         provision_systemd_override(run_cmd_func, env_vars, environment="prod")
         provision_systemd_override(run_cmd_func, env_vars, environment="test")
+        provision_firewall_rules(run_cmd_func, environment="test" if is_test else "prod")
         provision_systemd_override(
             run_cmd_func, env_vars, environment="prod",
             manifest_key="systemd_pdns_override", unit_name="pdns",

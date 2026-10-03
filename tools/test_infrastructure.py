@@ -3903,3 +3903,91 @@ class EtcHostsTemplateTests(_SafePatchTestCase):
         env_vars = {}
         infra._ensure_local_hostname("no placeholder here", env_vars)
         self.assertEqual(env_vars, {})
+
+
+class FirewallRulesProvisioningTests(_TmpDirTestCase):
+    """MANIFEST["firewall_rules"]: stun.hams.com's UDP 3478 on production only, added only to an
+    active ufw, only when missing, never on a test host. subprocess.run (`ufw status`) is mocked."""
+
+    ACTIVE = "Status: active\n\nTo   Action   From\n--   ------   ----\n51820/udp   ALLOW   Anywhere\n"
+    WITH_STUN = ACTIVE + "3478/udp   ALLOW   Anywhere\n3478/udp (v6)   ALLOW   Anywhere (v6)\n"
+
+    def _ufw(self, status_text, installed=True):
+        self.safe_patch("infrastructure.shutil.which", return_value="/usr/sbin/ufw" if installed else None)
+        return self.safe_patch(
+            "infrastructure.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, stdout=status_text, stderr=""),
+        )
+
+    def test_the_manifest_opens_only_stun_udp_and_only_on_production(self):
+        # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
+        rules = infra.MANIFEST["firewall_rules"]
+        self.assertEqual([r["args"] for r in rules], [["allow", "3478/udp"]])
+        self.assertEqual(rules[0]["environments"], ["prod"])
+
+    def test_adds_the_rule_to_an_active_ufw_that_lacks_it(self):
+        # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
+        self._ufw(self.ACTIVE)
+        run = MagicMock()
+        infra.provision_firewall_rules(run, environment="prod")
+        run.assert_called_once_with(
+            ["ufw", "allow", "3478/udp", "comment", "stun.hams.com (hams_relay_bridge STUN responder)"]
+        )
+
+    def test_a_rule_already_present_is_left_alone(self):
+        # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
+        self._ufw(self.WITH_STUN)
+        run = MagicMock()
+        infra.provision_firewall_rules(run, environment="prod")
+        run.assert_not_called()
+
+    def test_a_test_host_never_gets_a_public_port(self):
+        # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
+        probe = self._ufw(self.ACTIVE)
+        run = MagicMock()
+        infra.provision_firewall_rules(run, environment="test")
+        run.assert_not_called()
+        probe.assert_not_called()
+
+    def test_no_ufw_or_an_inactive_one_is_not_touched(self):
+        # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
+        run = MagicMock()
+        self._ufw("", installed=False)
+        infra.provision_firewall_rules(run, environment="prod")
+        self._ufw("Status: inactive\n")
+        infra.provision_firewall_rules(run, environment="prod")
+        run.assert_not_called()
+
+    def test_plan_mode_reports_the_rule_and_runs_nothing(self):
+        # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
+        self._ufw(self.ACTIVE)
+        run = MagicMock()
+        with infra.planning() as plan:
+            infra.provision_firewall_rules(run, environment="prod")
+        run.assert_not_called()
+        self.assertEqual([k for k, _ in plan.actions], ["firewall"])
+        self.assertIn("3478/udp", plan.actions[0][1])
+
+    def test_a_failing_ufw_is_a_hook_failure_not_a_crash(self):
+        # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
+        self._ufw(self.ACTIVE)
+        run = MagicMock(side_effect=subprocess.CalledProcessError(1, ["ufw"]))
+        infra.provision_firewall_rules(run, environment="prod")
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["firewall_rules"])
+
+    def test_production_gets_a_stun_bind_default_and_a_test_host_does_not(self):
+        # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
+        prod = {"DOMAIN": "hams.com"}
+        infra.load_and_prompt_env(prod, is_test=False)
+        self.assertEqual(prod["BRIDGE_STUN_BIND"], "[::]:3478")
+        test = {}
+        infra.load_and_prompt_env(test, is_test=True)
+        self.assertNotIn("BRIDGE_STUN_BIND", test)
+        # An operator's value, including an empty one that switches the responder off, is kept.
+        for value in ("0.0.0.0:3478", ""):
+            custom = {"DOMAIN": "hams.com", "BRIDGE_STUN_BIND": value}
+            infra.load_and_prompt_env(custom, is_test=False)
+            self.assertEqual(custom["BRIDGE_STUN_BIND"], value)
+
+    def test_the_bind_default_is_written_to_bridge_env(self):
+        self.assertIn("BRIDGE_STUN_BIND", infra.MANIFEST["env_groups"]["bridge.env"])
