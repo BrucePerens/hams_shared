@@ -327,12 +327,12 @@ def planning():
 # [@ANCHOR: infrastructure:redact_command]
 def redact_command(cmd):
     """A printable copy of a provisioning command line with password values masked: psql
-    `-v <name>=<value>` variables whose name mentions "pass", and the password argument of
+    `-v <name>=<value>` variables whose name mentions "pass", "key" or "secret", and the password argument of
     `rabbitmqctl add_user|change_password <user> <password>`. Used for plan output and run logs."""
     out = [str(arg) for arg in cmd]
     for i, arg in enumerate(out):
         name, sep, _value = arg.partition("=")
-        if sep and i > 0 and out[i - 1] == "-v" and "pass" in name.lower():
+        if sep and i > 0 and out[i - 1] == "-v" and any(w in name.lower() for w in ("pass", "key", "secret")):
             out[i] = f"{name}=<redacted>"
     if len(out) >= 4 and os.path.basename(out[0]) == "rabbitmqctl" and out[1] in ("add_user", "change_password"):
         out[3] = "<redacted>"
@@ -6335,6 +6335,14 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault(key, val)
     env_vars["HAMS_PROVISION_MODE"] = "test" if is_test else "prod"
 
+    # The key hams_relay_bridge presents to Odoo (ham_relay_bridge.api_key). Generated in both
+    # modes: the bridge refuses to start without one outside HAMS_PROVISION_MODE=test, and a
+    # random key costs a test host nothing. Truthiness, not presence: hams1 ran 2026-09-23..10-03
+    # with a 0-byte bridge.env, so no relay could uplink. _sync_bridge_api_key_to_odoo() writes the
+    # same value into the database.
+    if not env_vars.get("BRIDGE_API_KEY", "").strip():
+        env_vars["BRIDGE_API_KEY"] = secrets.token_urlsafe(48)
+
     if is_test:
         env_vars.setdefault("ODOO_URL", "http://odoo:8069")
         env_vars.setdefault("REDIS_HOST", "redis")
@@ -6813,6 +6821,93 @@ def _provision_cache_manager_role(
     # flow), so the file exists as root:root immediately after os.open()
     # above until this chown/chmod actually runs.
     apply_permissions(env_file, "odoo:odoo", 0o600)
+
+
+# [@ANCHOR: infrastructure:_bridge_api_key_matches_odoo]
+def _bridge_api_key_matches_odoo(db_name, api_key):
+    """True when db_name's ir_config_parameter ham_relay_bridge.api_key equals api_key, False when it
+    is missing or different. A read-only probe (it also runs under --plan); the comparison happens
+    in SQL, so the stored value never leaves PostgreSQL, and api_key travels as a psql variable over
+    the argument list, never in the SQL text. Raises RuntimeError when the query itself fails."""
+    res = subprocess.run(
+        [
+            "sudo", "-u", "postgres", "psql",
+            "-d", db_name,
+            # terse: an error report carries no "LINE n:" excerpt of the interpolated query.
+            "-v", "VERBOSITY=terse",
+            "-v", f"bridge_api_key={api_key}",
+            "-tA",
+        ],
+        input=(
+            "SELECT count(*) FROM ir_config_parameter "
+            "WHERE key = 'ham_relay_bridge.api_key' AND value = :'bridge_api_key';\n"
+        ),
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        first_line = (res.stderr.strip().splitlines() or ["no error output"])[0]
+        raise RuntimeError(f"could not read ir_config_parameter from {db_name}: {first_line}")
+    return res.stdout.strip() == "1"
+
+
+# [@ANCHOR: infrastructure:_sync_bridge_api_key_to_odoo]
+def _sync_bridge_api_key_to_odoo(run_cmd_func, db_name, api_key):
+    """
+    Makes Odoo's ham_relay_bridge.api_key equal BRIDGE_API_KEY (bridge.env), the key
+    hams_relay_bridge sends with every call to Odoo. Before 2026-10-03 nothing in provisioning
+    wrote either side, and on hams1 both were empty: Odoo rejected every relay uplink
+    (night_shift_todo/high/production-relay-bridge-api-key-never-provisioned-relays-cannot-uplink-5c1e9a27.md).
+
+    bridge.env is the source of truth (load_and_prompt_env generates it when absent or empty, and
+    write_env_files persists it at 0400 root:root); the database follows it. Odoo has no code path
+    that reads secrets from its environment, and ham_relay_bridge reads this key with get_param()
+    in a dozen places, so the provisioning run writes the parameter, the same way the coordinator
+    fixed hams1 by hand. It runs after initialize_odoo_database() and before the smoketest starts
+    Odoo again: get_param() is cached per process, so a direct write is only safe while Odoo is
+    stopped. The write happens only when the stored value is missing or differs; it goes over psql
+    stdin with the key as a `-v` variable, which redact_command() masks in logs and plan output.
+
+    A failure to read back the expected value is recorded as a hook failure, which makes a
+    production run exit 2 (print_hook_failure_summary).
+    """
+    if not api_key:
+        record_hook_failure("bridge_api_key", RuntimeError("BRIDGE_API_KEY is empty; bridge.env was not provisioned"))
+        return
+    if not _database_exists(db_name):
+        if not _plan("odoo", f"set ham_relay_bridge.api_key in {db_name} (database does not exist yet)"):
+            record_hook_failure("bridge_api_key", RuntimeError(f"database {db_name} does not exist"))
+        return
+    try:
+        if _bridge_api_key_matches_odoo(db_name, api_key):
+            return
+        if _plan("odoo", f"set ham_relay_bridge.api_key in {db_name} (missing or different from bridge.env)"):
+            return
+        run_cmd_func(
+            [
+                "sudo", "-u", "postgres", "psql",
+                "-d", db_name,
+                "-v", "ON_ERROR_STOP=1",
+                "-v", "VERBOSITY=terse",
+                "-v", f"bridge_api_key={api_key}",
+            ],
+            input=(
+                "INSERT INTO ir_config_parameter (key, value, create_date, write_date) "
+                "VALUES ('ham_relay_bridge.api_key', :'bridge_api_key', now() at time zone 'UTC', "
+                "now() at time zone 'UTC') "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_date = EXCLUDED.write_date;\n"
+            ),
+            text=True,
+        )
+        if not _bridge_api_key_matches_odoo(db_name, api_key):
+            raise RuntimeError(f"ham_relay_bridge.api_key in {db_name} still differs from bridge.env after writing it")
+    except subprocess.CalledProcessError as e:
+        # str(e) would quote the command line, key included.
+        record_hook_failure(
+            "bridge_api_key", RuntimeError(f"psql exited {e.returncode} writing ham_relay_bridge.api_key")
+        )
+    except (RuntimeError, OSError) as e:
+        record_hook_failure("bridge_api_key", e)
 
 
 # [@ANCHOR: infrastructure:_database_exists]
@@ -7968,11 +8063,19 @@ def provision_environment(
                 "daemons. Re-run provision.py without --hold-odoo to finish."
             )
         elif not is_isolated_ns and _planning():
+            if has_hams_com:
+                # Read-only under --plan: probes the database and records what it would set.
+                _sync_bridge_api_key_to_odoo(
+                    run_cmd_func,
+                    env_vars.get("DB_NAME", "hams_test"),
+                    env_vars.get("BRIDGE_API_KEY", ""),
+                )
             _plan(
                 "odoo",
                 f"initialize_odoo_database on {env_vars.get('DB_NAME', 'hams_test')} (stops odoo, "
-                "installs/upgrades modules, rewrites odoo.conf) and run_post_provision_smoketest "
-                "(starts every service)",
+                "installs/upgrades modules, rewrites odoo.conf), sets ham_relay_bridge.api_key to "
+                "match bridge.env when it differs, and run_post_provision_smoketest (starts every "
+                "service)",
             )
         elif not is_isolated_ns:
             initialize_odoo_database(
@@ -7981,6 +8084,13 @@ def provision_environment(
                 hams_com_dir,
                 db_name=env_vars.get("DB_NAME", "hams_test"),
             )
+            if has_hams_com:
+                # ham_relay_bridge and hams_relay_bridge are hams_com code.
+                _sync_bridge_api_key_to_odoo(
+                    run_cmd_func,
+                    env_vars.get("DB_NAME", "hams_test"),
+                    env_vars.get("BRIDGE_API_KEY", ""),
+                )
             run_post_provision_smoketest(
                 has_hams_com, is_test_env=is_test_env, opt_in_units=opt_in_units
             )
