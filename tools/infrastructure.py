@@ -642,8 +642,8 @@ def hook_migrate_relay_signing_key(env_vars, dest_dir, path, run_cmd_func):
 # 0600 key file under /opt/hams/etc/keys/, but every one of those files is owned by `odoo`, so any
 # daemon running as `odoo` can read every other daemon's credential: the per-daemon keys give no
 # isolation between these units. The units that already run under their own account
-# (localhost_cert, hams_subcarrier_signer, hams_device_command_signer, hams_relay_signer, pdns,
-# hams-auth) are the pattern a fix would extend.
+# (localhost_cert, hams_subcarrier_signer, hams_device_command_signer, hams_relay_signer,
+# hams_relay_ca, pdns, hams-auth) are the pattern a fix would extend.
 #
 # Which fix (static per-daemon accounts, DynamicUser=, a high-value subset first, or an accepted
 # risk) is Bruce's open decision: hams_com night_shift_questions/open/
@@ -766,6 +766,19 @@ MANIFEST = {
             "user": "hams_relay_signer",
             "group": "hams_relay_signer",
             "home": "/opt/hams/etc/relay_signer",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/relay_ca: the Relay Issuing CA signer (hams_com
+            # docs/proposals/RELAY_TRUST_AND_PAIRING_PLAN.md §4). Same shape as the
+            # signers above, but its key stays on a PKCS#11 token; this account holds
+            # the token PIN and the issuance log in its 0700 directory. odoo joins the
+            # group only to reach the socket in /run/hams_relay_ca.
+            "user": "hams_relay_ca",
+            "group": "hams_relay_ca",
+            "home": "/opt/hams/etc/relay_ca",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
             "environments": ["prod", "test"],
@@ -929,6 +942,23 @@ MANIFEST = {
         {
             "path": "/opt/hams/etc/relay_signer_public",
             "owner": "hams_relay_signer:hams_relay_signer",
+            "provision_mode": "755",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/relay_ca: PIN file (pkcs11_pin), issuance log, optional
+            # relay_ca.env, and on a SoftHSM2-backed test host the token directory.
+            "path": "/opt/hams/etc/relay_ca",
+            "owner": "hams_relay_ca:hams_relay_ca",
+            "provision_mode": "700",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
+        {
+            # The CA certificates (relay_root.pem, relay_issuing.pem): public.
+            "path": "/opt/hams/etc/relay_ca_public",
+            "owner": "hams_relay_ca:hams_relay_ca",
             "provision_mode": "755",
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
@@ -2286,6 +2316,63 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams.relay.signer
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/relay_ca: the Relay Issuing CA signer. Skipped (not
+            # failed, not restart-looping) until a key ceremony has put the issuing CA
+            # certificate in place. Host-specific settings (PKCS#11 module, token
+            # label, SOFTHSM2_CONF on a SoftHSM2 test host) go in the optional
+            # /opt/hams/etc/relay_ca/relay_ca.env. Talks only to its PKCS#11 token
+            # (pcscd's Unix socket for a smart card) and its own Unix socket.
+            "path": "/opt/hams/systemd/hams-relay-ca.service",
+            "content": """\
+[Unit]
+Description=Relay Issuing CA signer (relay server certificates, key on a PKCS#11 token)
+After=network.target pcscd.socket
+ConditionPathExists=/opt/hams/etc/relay_ca_public/relay_issuing.pem
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+# A smart card is reached through pcscd's Unix socket, never a device node.
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/etc/relay_ca
+RuntimeDirectory=hams_relay_ca
+RuntimeDirectoryMode=0750
+Type=simple
+User=hams_relay_ca
+Group=hams_relay_ca
+SupplementaryGroups=hams_com
+WorkingDirectory=/opt/hams/daemons/relay_ca
+UMask=0027
+
+Environment="RELAY_CA_BASE_DIR=/opt/hams/etc/relay_ca"
+Environment="RELAY_CA_PUBLIC_DIR=/opt/hams/etc/relay_ca_public"
+Environment="RELAY_CA_SOCKET_PATH=/run/hams_relay_ca/signer.sock"
+Environment="RELAY_CA_LEAF_DAYS=800"
+EnvironmentFile=-/opt/hams/etc/relay_ca/relay_ca.env
+
+# Smoketest Resource Verification
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_ca/main.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/relay_ca/main.py
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.relay.ca
 
 [Install]
 WantedBy=multi-user.target
