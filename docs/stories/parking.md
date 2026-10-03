@@ -30,8 +30,7 @@ the target's own path; the scheme and host always come from the target, so a cra
 
 ## Scenario: A domain is for sale
 
-The page carries a contact form. The form posts to one fixed path
-[@ANCHOR: parking:inquiry_path] and is protected by a stateless token bound to the host and to the time
+The page carries a contact form. The form posts to one fixed path and is protected by a stateless token bound to the host and to the time
 the page was rendered (at least three seconds old, at most a day, so the page may sit in Cloudflare's
 cache) [@ANCHOR: parking:COMM_form_token]. A filled honeypot, a bad token or a token for another host is
 answered like a success and stores nothing; one address may send five inquiries an hour
