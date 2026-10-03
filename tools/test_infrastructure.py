@@ -2071,6 +2071,18 @@ class Pi500FccUlsSyncManifestTests(unittest.TestCase):
         )
         self.assertIn('Environment="ODOO_URL=https://hams.com"', content)
 
+    def test_service_names_its_registry_for_remote_self_rotation(self):
+        # hams1's Odoo cannot write pi500-1's key file. Without this variable the daemon
+        # never rotates its own key, and hams1's 59-day cron would revoke it instead
+        # (night_shift_todo/low/fcc-uls-sync-pi500-key-does-not-auto-rotate-3f8c1d92.md).
+        service = next(
+            e for e in self._pi500_entries() if e["path"].endswith("fcc.uls.sync.service")
+        )
+        self.assertIn(
+            'Environment="ODOO_KEY_SELF_ROTATE_DAEMON=FCC ULS Sync (pi500-1)"',
+            service["content"],
+        )
+
     def test_timer_content_matches_the_real_deployment_shape(self):
         timer = next(e for e in self._pi500_entries() if e["path"].endswith("fcc.uls.sync.timer"))
         self.assertIn("OnCalendar=*-*-* 05:00:00", timer["content"])
@@ -2339,6 +2351,223 @@ class TimerDrivenUnitTests(unittest.TestCase):
             self.assertIn("OnCalendar=daily", units[f"{name}.timer"])
             self.assertIn("WantedBy=timers.target", units[f"{name}.timer"])
             self.assertNotIn("WantedBy=multi-user.target", units[f"{name}.service"])
+
+    def test_callbook_dns_export_follows_each_country_sync(self):
+        # docs/proposals/CALLBOOK_DNS_SERVICE.md (hams_com), "Serving": the zone is rebuilt after
+        # each sync of a country it publishes. CA and AU sync on this host and chain with OnSuccess=;
+        # fcc.uls.sync runs on pi500-1 (05:00 America/New_York + up to 1h), so the export timer has
+        # its own run two hours after that window, in the same time zone.
+        units = self._units()
+        export = "OnSuccess=callbook.dns.export.service"
+        for name in ("ised.canada.sync.service", "au.acma.sync.service"):
+            self.assertIn(export, units[name], f"{name} must trigger the callbook DNS export")
+        self.assertIn("callbook.dns.export.service", units)
+        timer = units["callbook.dns.export.timer"]
+        self.assertIn("OnCalendar=daily", timer)
+        self.assertIn("OnCalendar=*-*-* 08:00:00 America/New_York", timer)
+        fcc_timer = next(
+            item["content"] for item in infra.MANIFEST["static_files"]
+            if item.get("path") == "/etc/systemd/system/fcc.uls.sync.timer" and "pi500-1" in item["environments"]
+        )
+        self.assertIn("OnCalendar=*-*-* 05:00:00", fcc_timer)
+        self.assertIn("RandomizedDelaySec=1h", fcc_timer)
+
+
+class SigningKeyMigrationHookTests(_TmpDirTestCase):
+    """Tests [@ANCHOR: infrastructure:migrate_signing_key]
+
+    hams_com's relay_signer/subcarrier_signer/device_command_signer daemons
+    take over keys that older Odoo code kept in /var/lib/odoo. The hooks run as root
+    in production; here the account lookups resolve to the test runner's
+    own uid/gid, so the real fchown/rename/remove path runs unpatched."""
+
+    KEY_NAME = "hams_subcarrier_signing_ed25519.key"
+    OLD_MTIME = 1_700_000_000
+
+    def setUp(self):
+        super().setUp()
+        self.old_dir = os.path.join(self.tmp, "var/lib/odoo")
+        self.new_dir = os.path.join(self.tmp, "opt/hams/etc/subcarrier_signer")
+        os.makedirs(self.old_dir)
+        os.makedirs(self.new_dir)
+        self.old_path = os.path.join(self.old_dir, self.KEY_NAME)
+        self.new_path = os.path.join(self.new_dir, self.KEY_NAME)
+        self.uid = os.getuid()
+        self.gid = os.getgid()
+        self.safe_patch(
+            "infrastructure.pwd.getpwnam",
+            return_value=MagicMock(pw_uid=self.uid),
+        )
+        self.safe_patch(
+            "infrastructure.grp.getgrnam",
+            return_value=MagicMock(gr_gid=self.gid),
+        )
+
+    def _write_old_key(self, raw=b"k" * 32):
+        with open(self.old_path, "wb") as f:
+            f.write(raw)
+        os.chmod(self.old_path, 0o600)
+        os.utime(self.old_path, (self.OLD_MTIME, self.OLD_MTIME))
+        return raw
+
+    def _run_hook(self):
+        infra.hook_migrate_subcarrier_signing_key({}, self.tmp, self.new_dir, None)
+
+    def test_moves_the_key_preserving_bytes_mode_and_mtime(self):
+        raw = self._write_old_key()
+        self._run_hook()
+        self.assertFalse(os.path.exists(self.old_path))
+        with open(self.new_path, "rb") as f:
+            self.assertEqual(f.read(), raw)
+        st = os.stat(self.new_path)
+        self.assertEqual(st.st_mode & 0o777, 0o600)
+        self.assertEqual(int(st.st_mtime), self.OLD_MTIME)
+        self.assertEqual((st.st_uid, st.st_gid), (self.uid, self.gid))
+        self.assertEqual(os.listdir(self.new_dir), [self.KEY_NAME])
+        self.assertEqual(infra.get_hook_failures(), [])
+
+    def test_no_old_key_is_a_no_op(self):
+        self._run_hook()
+        self.assertEqual(os.listdir(self.new_dir), [])
+        self.assertEqual(infra.get_hook_failures(), [])
+
+    def test_identical_leftover_old_key_is_removed(self):
+        raw = self._write_old_key()
+        with open(self.new_path, "wb") as f:
+            f.write(raw)
+        self._run_hook()
+        self.assertFalse(os.path.exists(self.old_path))
+        self.assertEqual(infra.get_hook_failures(), [])
+
+    def test_different_old_key_is_kept_and_reported(self):
+        self._write_old_key(b"o" * 32)
+        with open(self.new_path, "wb") as f:
+            f.write(b"n" * 32)
+        self._run_hook()
+        self.assertTrue(os.path.exists(self.old_path))
+        with open(self.new_path, "rb") as f:
+            self.assertEqual(f.read(), b"n" * 32)
+        failures = infra.get_hook_failures()
+        self.assertEqual(
+            [name for name, _ in failures], ["hook_migrate_subcarrier_signing_key"]
+        )
+
+    def test_missing_account_keeps_the_old_key(self):
+        self._write_old_key()
+        self.safe_patch("infrastructure.pwd.getpwnam", side_effect=KeyError("nope"))
+        self._run_hook()
+        self.assertTrue(os.path.exists(self.old_path))
+        self.assertEqual(os.listdir(self.new_dir), [])
+        self.assertEqual(len(infra.get_hook_failures()), 1)
+
+    @unittest.skipIf(os.geteuid() == 0, "root can chown to any uid")
+    def test_failed_chown_keeps_the_old_key_and_leaves_no_partial_copy(self):
+        self._write_old_key()
+        self.safe_patch(
+            "infrastructure.pwd.getpwnam", return_value=MagicMock(pw_uid=0)
+        )
+        self._run_hook()
+        self.assertTrue(os.path.exists(self.old_path))
+        self.assertEqual(os.listdir(self.new_dir), [])
+        self.assertEqual(len(infra.get_hook_failures()), 1)
+
+    def test_device_command_hook_uses_its_own_key_and_account(self):
+        key_name = "hams_device_command_signing_ed25519.key"
+        old_path = os.path.join(self.old_dir, key_name)
+        with open(old_path, "wb") as f:
+            f.write(b"d" * 32)
+        getpwnam = infra.pwd.getpwnam
+        infra.hook_migrate_device_command_signing_key({}, self.tmp, self.new_dir, None)
+        self.assertFalse(os.path.exists(old_path))
+        self.assertTrue(os.path.exists(os.path.join(self.new_dir, key_name)))
+        getpwnam.assert_called_with("hams_device_command_signer")
+
+    def test_relay_hook_moves_the_noise_key_to_its_own_account(self):
+        # The relay key's file name is the historical
+        # hams_noise_signing_ed25519.key (daemons/relay_signer/main.py's
+        # SIGNING_KEY_PATH), not hams_relay_signing_ed25519.key.
+        key_name = "hams_noise_signing_ed25519.key"
+        old_path = os.path.join(self.old_dir, key_name)
+        with open(old_path, "wb") as f:
+            f.write(b"r" * 32)
+        os.utime(old_path, (self.OLD_MTIME, self.OLD_MTIME))
+        getpwnam = infra.pwd.getpwnam
+        infra.hook_migrate_relay_signing_key({}, self.tmp, self.new_dir, None)
+        self.assertFalse(os.path.exists(old_path))
+        new_path = os.path.join(self.new_dir, key_name)
+        with open(new_path, "rb") as f:
+            self.assertEqual(f.read(), b"r" * 32)
+        self.assertEqual(int(os.stat(new_path).st_mtime), self.OLD_MTIME)
+        getpwnam.assert_called_with("hams_relay_signer")
+        self.assertEqual(infra.get_hook_failures(), [])
+
+
+class SignerDaemonManifestTests(unittest.TestCase):
+    """The MANIFEST pieces hams_com's three signer daemons need to start at
+    all. The defaults below are copied from each daemon's own main.py
+    (BASE_DIR/PUBLIC_DIR/SOCKET_PATH) and its Odoo-side client."""
+
+    SIGNERS = {
+        "subcarrier_signer": ("subcarrier-signer", "SUBCARRIER_SIGNER"),
+        "device_command_signer": ("device-command-signer", "DEVICE_COMMAND_SIGNER"),
+        "relay_signer": ("relay-signer", "RELAY_SIGNER"),
+    }
+
+    def _unit(self, unit_name):
+        for entry in infra.MANIFEST["static_files"]:
+            if entry["path"] == f"/opt/hams/systemd/hams-{unit_name}.service":
+                return entry["content"]
+        self.fail(f"no hams-{unit_name}.service in static_files")
+
+    def test_accounts_exist_and_odoo_joins_each_group(self):
+        accounts = {a["user"]: a for a in infra.MANIFEST["system_accounts"]}
+        for name in self.SIGNERS:
+            account = accounts[f"hams_{name}"]
+            self.assertEqual(account["group"], f"hams_{name}")
+            self.assertEqual(account["shell"], "/usr/sbin/nologin")
+            self.assertEqual(account["add_to_users"], ["odoo"])
+            self.assertEqual(account["environments"], ["prod", "test"])
+
+    def test_private_dir_is_0700_and_public_dir_is_0755(self):
+        dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
+        hooks = {
+            "subcarrier_signer": infra.hook_migrate_subcarrier_signing_key,
+            "device_command_signer": infra.hook_migrate_device_command_signing_key,
+            "relay_signer": infra.hook_migrate_relay_signing_key,
+        }
+        for name in self.SIGNERS:
+            owner = f"hams_{name}:hams_{name}"
+            private = dirs[f"/opt/hams/etc/{name}"]
+            public = dirs[f"/opt/hams/etc/{name}_public"]
+            self.assertEqual((private["owner"], private["provision_mode"]), (owner, "700"))
+            self.assertEqual((public["owner"], public["provision_mode"]), (owner, "755"))
+            self.assertEqual(private["post_provision_hooks"], [hooks[name]])
+
+    def test_unit_can_start_and_odoo_can_reach_its_socket(self):
+        for name, (unit_name, env_prefix) in self.SIGNERS.items():
+            unit = self._unit(unit_name)
+            self.assertTrue(unit.startswith("[Unit]\n"))
+            self.assertIn(f"User=hams_{name}\n", unit)
+            # /opt/hams and /opt/hams/etc are 0750 hams_com.
+            self.assertIn("SupplementaryGroups=hams_com\n", unit)
+            # --start-test writes the public key, so both dirs are writable.
+            self.assertIn(
+                f"ReadWritePaths=/opt/hams/etc/{name} /opt/hams/etc/{name}_public\n",
+                unit,
+            )
+            self.assertIn(f"RuntimeDirectory=hams_{name}\n", unit)
+            self.assertIn("RuntimeDirectoryMode=0750\n", unit)
+            expected_env = {
+                "BASE_DIR": f"/opt/hams/etc/{name}",
+                "PUBLIC_DIR": f"/opt/hams/etc/{name}_public",
+                "SOCKET_PATH": f"/run/hams_{name}/signer.sock",
+            }
+            for key, value in expected_env.items():
+                self.assertIn(f'Environment="{env_prefix}_{key}={value}"\n', unit)
+            main_py = f"/opt/hams/daemons/{name}/main.py"
+            self.assertIn(f"ExecStartPre=/usr/bin/python3 {main_py} --start-test\n", unit)
+            self.assertIn(f"ExecStart=/usr/bin/python3 {main_py}\n", unit)
+            self.assertIn("WantedBy=multi-user.target\n", unit)
 
 
 if __name__ == "__main__":

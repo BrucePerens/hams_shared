@@ -507,7 +507,15 @@ def hook_daemons_perms(env_vars, dest_dir, path, run_cmd_func):
 # before its systemd unit's ExecStart can run. Runs before
 # hook_daemons_perms in the same directory entry's hook list so the
 # perms fixup below also covers the freshly built binaries.
-RUST_DAEMON_CRATES = ["hams_data_relay", "hams_relay_bridge", "hams_simulated_band"]
+RUST_DAEMON_CRATES = [
+    "hams_data_relay",
+    "hams_relay_bridge",
+    "hams_simulated_band",
+    # hams_com daemons/hams_auth_gateway: the auth.hams.com certificate login gateway (LoTW
+    # client certificates over TLS 1.2, TCP 443). See its README and hams_com
+    # docs/deploy/LOTW_CA_CHAIN.md section 7.
+    "hams_auth_gateway",
+]
 
 
 def hook_build_rust_daemons(env_vars, dest_dir, path, run_cmd_func):
@@ -519,6 +527,106 @@ def hook_build_rust_daemons(env_vars, dest_dir, path, run_cmd_func):
             except Exception as e:  # audit-ignore-catch-all
                 _logger.warning("Rust daemon build failed for %s: %s", crate, e)
                 record_hook_failure(f"hook_build_rust_daemons:{crate}", e)
+
+
+# [@ANCHOR: infrastructure:migrate_signing_key]
+# hams_com's privilege-isolated signer daemons (daemons/relay_signer,
+# daemons/subcarrier_signer, daemons/device_command_signer) each own one
+# Ed25519 key that used to live
+# in /var/lib/odoo, 0600 odoo:odoo -- readable by any code running as the
+# odoo OS user. Once the daemon's dedicated account and 0700 directory
+# exist, the key moves there. Strict on purpose: the old key is deleted
+# only after the new copy is written, owned by the daemon's account and
+# stamped with the old file's mtime (each daemon derives the key's public
+# "created at" from that mtime). If any of that fails the old key stays
+# where it was and the failure is raised to the hook, so nothing is lost.
+def _migrate_signing_key(old_path, new_path, owner_str):
+    """Move one signing key from old_path to new_path, owned by owner_str
+    (user:group) at mode 0600. Returns True if a key was moved. A no-op
+    when there is no old key (a fresh server: the daemon generates its own
+    on first start). When the new key already exists, an identical old
+    copy left by an interrupted earlier run is removed; a different one is
+    left alone and reported, because removing it could lose a key."""
+    if not os.path.exists(old_path):
+        return False
+    with open(old_path, "rb") as f:  # audit-ignore-path
+        raw = f.read()
+    if os.path.exists(new_path):
+        with open(new_path, "rb") as f:  # audit-ignore-path
+            current = f.read()
+        if current != raw:
+            msg = f"{new_path} exists and differs from {old_path}"
+            raise FileExistsError(msg)
+        os.remove(old_path)
+        return False
+    user, group = owner_str.split(":")
+    uid = pwd.getpwnam(user).pw_uid
+    gid = grp.getgrnam(group).gr_gid
+    old_stat = os.stat(old_path)
+    tmp_path = new_path + ".migrating"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    fd = os.open(tmp_path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        os.fchown(fd, uid, gid)
+        os.write(fd, raw)
+        os.fsync(fd)
+    except BaseException:  # audit-ignore-catch-all
+        # Remove the partial copy and re-raise unconditionally.
+        os.close(fd)
+        os.remove(tmp_path)
+        raise
+    os.close(fd)
+    times = (old_stat.st_atime, old_stat.st_mtime)
+    os.utime(tmp_path, times)
+    os.rename(tmp_path, new_path)
+    os.remove(old_path)
+    return True
+
+
+def _run_signing_key_migration(hook_name, key_filename, owner_str, dest_dir, path):
+    old_path = os.path.join("/var/lib/odoo", key_filename)
+    if dest_dir:
+        old_path = os.path.join(dest_dir, old_path.lstrip("/"))
+    new_path = os.path.join(path, key_filename)
+    try:
+        if _migrate_signing_key(old_path, new_path, owner_str):
+            _logger.info("Migrated signing key %s to %s.", old_path, new_path)
+    except (OSError, KeyError) as e:
+        _logger.warning("%s: signing key not migrated: %s", hook_name, e)
+        record_hook_failure(hook_name, e)
+
+
+def hook_migrate_subcarrier_signing_key(env_vars, dest_dir, path, run_cmd_func):
+    _run_signing_key_migration(
+        "hook_migrate_subcarrier_signing_key",
+        "hams_subcarrier_signing_ed25519.key",
+        "hams_subcarrier_signer:hams_subcarrier_signer",
+        dest_dir,
+        path,
+    )
+
+
+def hook_migrate_device_command_signing_key(env_vars, dest_dir, path, run_cmd_func):
+    _run_signing_key_migration(
+        "hook_migrate_device_command_signing_key",
+        "hams_device_command_signing_ed25519.key",
+        "hams_device_command_signer:hams_device_command_signer",
+        dest_dir,
+        path,
+    )
+
+
+def hook_migrate_relay_signing_key(env_vars, dest_dir, path, run_cmd_func):
+    # The relay key keeps its historical "noise" file name (daemons/
+    # relay_signer/main.py's SIGNING_KEY_PATH), unlike the other two.
+    _run_signing_key_migration(
+        "hook_migrate_relay_signing_key",
+        "hams_noise_signing_ed25519.key",
+        "hams_relay_signer:hams_relay_signer",
+        dest_dir,
+        path,
+    )
 
 
 MANIFEST = {
@@ -538,6 +646,40 @@ MANIFEST = {
             "user": "localhost_cert",
             "group": "localhost_cert",
             "home": "/opt/hams/etc/localhost_cert_renewal",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/subcarrier_signer: the one account that can read the
+            # subcarrier-attestation signing key (its 0700 directory below). odoo joins this
+            # group only to reach the daemon's socket in /run/hams_subcarrier_signer (0750);
+            # group membership gives it nothing on the 0700 key directory.
+            "user": "hams_subcarrier_signer",
+            "group": "hams_subcarrier_signer",
+            "home": "/opt/hams/etc/subcarrier_signer",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/device_command_signer: same shape, for the
+            # device_command_authority key (it signs device check-in responses, including
+            # "wipe_now", so it is the most damaging of the signing keys to leak).
+            "user": "hams_device_command_signer",
+            "group": "hams_device_command_signer",
+            "home": "/opt/hams/etc/device_command_signer",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/relay_signer: same shape, for the relay-bridge Noise
+            # attestation / transmit-grant key (a forged DENIAL could take a licensed
+            # operator off the air).
+            "user": "hams_relay_signer",
+            "group": "hams_relay_signer",
+            "home": "/opt/hams/etc/relay_signer",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
             "environments": ["prod", "test"],
@@ -576,6 +718,19 @@ MANIFEST = {
             "user": "hams_event_agent",
             "group": "hams_event_agent",
             "home": "/home/hams_event_agent",
+            "shell": "/usr/sbin/nologin",
+            "environments": ["prod"],
+        },
+        {
+            # hams_com daemons/hams_auth_gateway (the auth.hams.com certificate login gateway):
+            # its own unprivileged account, the only user that can read the TLS key and the
+            # token secret under /etc/hams/auth (both 0640, group hams-auth). Binds TCP 443
+            # through CAP_NET_BIND_SERVICE in its own unit (hams-auth-gateway.service below),
+            # never as root. Not a member of any other group, and no other account joins its
+            # group. Prod-only: auth.hams.com exists only on the production server.
+            "user": "hams-auth",
+            "group": "hams-auth",
+            "home": "/etc/hams/auth",
             "shell": "/usr/sbin/nologin",
             "environments": ["prod"],
         },
@@ -633,6 +788,62 @@ MANIFEST = {
             "provision_mode": "750",
             # The renewal daemon runs on the host as localhost_cert; the Odoo tier only reads the
             # served copy (ham_relay_bridge's shared_tls_cert_bundle route), so it never needs rw.
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/subcarrier_signer: the private Ed25519 key, 0700, owned by the
+            # dedicated account alone. The odoo OS user must have no path into this directory;
+            # that is the point of the daemon. The hook moves a key generated by the older
+            # in-Odoo code out of /var/lib/odoo.
+            "path": "/opt/hams/etc/subcarrier_signer",
+            "owner": "hams_subcarrier_signer:hams_subcarrier_signer",
+            "provision_mode": "700",
+            # Odoo never writes here (or reads; mode 0700 forbids it).
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+            "post_provision_hooks": [hook_migrate_subcarrier_signing_key],
+        },
+        {
+            # The public key, its creation time and the operator-created "revoked" marker are
+            # not secret: a separate, world-readable sibling (never a child of the 0700
+            # directory) that the daemon writes and Odoo reads directly.
+            "path": "/opt/hams/etc/subcarrier_signer_public",
+            "owner": "hams_subcarrier_signer:hams_subcarrier_signer",
+            "provision_mode": "755",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/device_command_signer: same shape as subcarrier_signer above.
+            "path": "/opt/hams/etc/device_command_signer",
+            "owner": "hams_device_command_signer:hams_device_command_signer",
+            "provision_mode": "700",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+            "post_provision_hooks": [hook_migrate_device_command_signing_key],
+        },
+        {
+            "path": "/opt/hams/etc/device_command_signer_public",
+            "owner": "hams_device_command_signer:hams_device_command_signer",
+            "provision_mode": "755",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/relay_signer: same shape as subcarrier_signer above. The
+            # hook moves /var/lib/odoo/hams_noise_signing_ed25519.key, if present.
+            "path": "/opt/hams/etc/relay_signer",
+            "owner": "hams_relay_signer:hams_relay_signer",
+            "provision_mode": "700",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+            "post_provision_hooks": [hook_migrate_relay_signing_key],
+        },
+        {
+            "path": "/opt/hams/etc/relay_signer_public",
+            "owner": "hams_relay_signer:hams_relay_signer",
+            "provision_mode": "755",
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
         },
@@ -749,6 +960,27 @@ MANIFEST = {
             "provision_mode": "750",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
+        },
+        # hams_com daemons/hams_auth_gateway: its configuration directory. Holds gateway.toml,
+        # auth.crt/auth.key (installed by the certbot deploy hook) and gateway_token_secret,
+        # none of which is in this public repository -- installing them stays a release step
+        # (hams_com docs/proposals/PROVISION_PRODUCTION_NOTES.md, "the gateway replaces nginx on
+        # auth.hams.com"). Readable only by root and the hams-auth group. Deliberately no
+        # "runtime_mount" key: these files belong to the gateway alone and must never be
+        # mounted into any other runtime.
+        {
+            "path": "/etc/hams/auth",
+            "owner": "root:hams-auth",
+            "provision_mode": "750",
+            "environments": ["prod"],
+        },
+        {
+            # The pinned ARRL LoTW trust anchors (gateway.toml's [[anchor.certificate]] files,
+            # copied from hams_com nginx/prod/lotw_ca/ at release time).
+            "path": "/etc/hams/auth/anchors/arrl_lotw",
+            "owner": "root:hams-auth",
+            "provision_mode": "750",
+            "environments": ["prod"],
         },
 
         {
@@ -1799,6 +2031,165 @@ WantedBy=timers.target
             "environments": ["prod", "test"],
         },
         {
+            # hams_com daemons/subcarrier_signer: a long-running signing helper, one
+            # per key. odoo reaches it over the Unix socket in
+            # /run/hams_subcarrier_signer (RuntimeDirectory, 0750; odoo is in that
+            # group). It writes both its 0700 key directory and the public sibling, so
+            # both are ReadWritePaths. SupplementaryGroups=hams_com lets it traverse
+            # /opt/hams (0750 hams_com) to reach its code and directories.
+            "path": "/opt/hams/systemd/hams-subcarrier-signer.service",
+            "content": """\
+[Unit]
+Description=Privilege-isolated subcarrier-attestation signing helper
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/etc/subcarrier_signer /opt/hams/etc/subcarrier_signer_public
+RuntimeDirectory=hams_subcarrier_signer
+RuntimeDirectoryMode=0750
+Type=simple
+User=hams_subcarrier_signer
+Group=hams_subcarrier_signer
+SupplementaryGroups=hams_com
+WorkingDirectory=/opt/hams/daemons/subcarrier_signer
+UMask=0027
+
+Environment="SUBCARRIER_SIGNER_BASE_DIR=/opt/hams/etc/subcarrier_signer"
+Environment="SUBCARRIER_SIGNER_PUBLIC_DIR=/opt/hams/etc/subcarrier_signer_public"
+Environment="SUBCARRIER_SIGNER_SOCKET_PATH=/run/hams_subcarrier_signer/signer.sock"
+
+# Smoketest Resource Verification
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/subcarrier_signer/main.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/subcarrier_signer/main.py
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.subcarrier.signer
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/device_command_signer: a long-running signing helper, one
+            # per key. odoo reaches it over the Unix socket in
+            # /run/hams_device_command_signer (RuntimeDirectory, 0750; odoo is in that
+            # group). It writes both its 0700 key directory and the public sibling, so
+            # both are ReadWritePaths. SupplementaryGroups=hams_com lets it traverse
+            # /opt/hams (0750 hams_com) to reach its code and directories.
+            "path": "/opt/hams/systemd/hams-device-command-signer.service",
+            "content": """\
+[Unit]
+Description=Privilege-isolated device-command-authority signing helper
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/etc/device_command_signer /opt/hams/etc/device_command_signer_public
+RuntimeDirectory=hams_device_command_signer
+RuntimeDirectoryMode=0750
+Type=simple
+User=hams_device_command_signer
+Group=hams_device_command_signer
+SupplementaryGroups=hams_com
+WorkingDirectory=/opt/hams/daemons/device_command_signer
+UMask=0027
+
+Environment="DEVICE_COMMAND_SIGNER_BASE_DIR=/opt/hams/etc/device_command_signer"
+Environment="DEVICE_COMMAND_SIGNER_PUBLIC_DIR=/opt/hams/etc/device_command_signer_public"
+Environment="DEVICE_COMMAND_SIGNER_SOCKET_PATH=/run/hams_device_command_signer/signer.sock"
+
+# Smoketest Resource Verification
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/device_command_signer/main.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/device_command_signer/main.py
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.device.command.signer
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/relay_signer: a long-running signing helper, one
+            # per key. odoo reaches it over the Unix socket in
+            # /run/hams_relay_signer (RuntimeDirectory, 0750; odoo is in that
+            # group). It writes both its 0700 key directory and the public sibling, so
+            # both are ReadWritePaths. SupplementaryGroups=hams_com lets it traverse
+            # /opt/hams (0750 hams_com) to reach its code and directories.
+            "path": "/opt/hams/systemd/hams-relay-signer.service",
+            "content": """\
+[Unit]
+Description=Privilege-isolated relay-bridge attestation and transmit-grant signing helper
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/etc/relay_signer /opt/hams/etc/relay_signer_public
+RuntimeDirectory=hams_relay_signer
+RuntimeDirectoryMode=0750
+Type=simple
+User=hams_relay_signer
+Group=hams_relay_signer
+SupplementaryGroups=hams_com
+WorkingDirectory=/opt/hams/daemons/relay_signer
+UMask=0027
+
+Environment="RELAY_SIGNER_BASE_DIR=/opt/hams/etc/relay_signer"
+Environment="RELAY_SIGNER_PUBLIC_DIR=/opt/hams/etc/relay_signer_public"
+Environment="RELAY_SIGNER_SOCKET_PATH=/run/hams_relay_signer/signer.sock"
+
+# Smoketest Resource Verification
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_signer/main.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/relay_signer/main.py
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.relay.signer
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/systemd/gdpr.csv.export.service",
             "content": """\
 [Unit]
@@ -1908,6 +2299,10 @@ WantedBy=multi-user.target
 [Unit]
 Description=Ham Radio Australia ACMA Callsign Sync (One-Shot)
 After=network.target
+# Republish the callbook DNS zone once fresh register data has landed
+# (docs/proposals/CALLBOOK_DNS_SERVICE.md, "Serving": export after each
+# country sync). AU publishes its licence class in that zone.
+OnSuccess=callbook.dns.export.service
 
 [Service]
 # ADR-0070 OS-Level Daemon Restriction
@@ -2680,6 +3075,12 @@ WantedBy=timers.target
             # still needs to recreate the venv (`python3 -m venv .venv && .venv/bin/pip install
             # requests curl_cffi`) and re-provision a real key file separately, the same as
             # every other daemon's own secret-provisioning convention in this codebase.
+            #
+            # ODOO_KEY_SELF_ROTATE_DAEMON: hams1's Odoo cannot write this machine's key file,
+            # so the daemon rotates its own key over JSON-2 (daemon_key_manager's
+            # rotate_own_key(), hams_com daemons/hams_config.py's rotate_own_key_if_due()). The
+            # value is the daemon.key.registry name, whose Remote Self-Rotation box must be set.
+            # Without it, hams1's 59-day cron revokes this key and the daemon is locked out.
             "path": "/etc/systemd/system/fcc.uls.sync.service",
             "content": """\
 [Unit]
@@ -2695,6 +3096,7 @@ WorkingDirectory=/opt/hams/daemons/fcc_uls_sync
 Environment="ODOO_URL=https://hams.com"
 Environment="ODOO_DB=hams_prod"
 Environment="ODOO_KEY_FILE=/opt/hams/daemons/fcc_uls_sync/.keys/fcc_uls_sync.env"
+Environment="ODOO_KEY_SELF_ROTATE_DAEMON=FCC ULS Sync (pi500-1)"
 Environment="SYSTEM_USER_AGENT=Hams.com Sync Daemon (bruce@perens.com, run from pi500-1 -- see night_shift_todo/high/fcc-uls-sync-needs-non-datacenter-egress-path-a8e5f3c1.md)"
 Environment="PYTHONPATH=/opt/hams/daemons"
 ExecStart=/opt/hams/daemons/fcc_uls_sync/.venv/bin/python3 /opt/hams/daemons/fcc_uls_sync/main.py
@@ -2959,10 +3361,16 @@ SyslogIdentifier=callbook.dns.export
             "path": "/opt/hams/systemd/callbook.dns.export.timer",
             "content": """\
 [Unit]
-Description=Ham Radio Callbook DNS Zone Export, Nightly
+Description=Ham Radio Callbook DNS Zone Export, Nightly and After the FCC Sync
 
 [Timer]
 OnCalendar=daily
+# fcc.uls.sync runs on pi500-1, not on this host, so OnSuccess= cannot
+# chain to it. Its timer fires at 05:00 America/New_York plus up to 1h
+# of RandomizedDelaySec; this run, two hours after the latest start,
+# publishes the day's FCC changes instead of waiting for midnight UTC.
+# The CA and AU syncs that run here chain to the export with OnSuccess=.
+OnCalendar=*-*-* 08:00:00 America/New_York
 Persistent=true
 RandomizedDelaySec=30m
 
@@ -3020,6 +3428,10 @@ WantedBy=multi-user.target
 [Unit]
 Description=Ham Radio ISED Canada Callbook Sync (One-Shot)
 After=network.target
+# Republish the callbook DNS zone once fresh register data has landed
+# (docs/proposals/CALLBOOK_DNS_SERVICE.md, "Serving": export after each
+# country sync).
+OnSuccess=callbook.dns.export.service
 
 [Service]
 # ADR-0070 OS-Level Daemon Restriction
@@ -3582,6 +3994,75 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
+            # hams_com daemons/hams_auth_gateway: the auth.hams.com certificate login gateway.
+            # Text identical to hams_com daemons/hams_auth_gateway/packaging/
+            # hams-auth-gateway.service (hams_com's daemons/test_daemon_provisioning_coverage.py
+            # fails if the two drift). Like every .service here it is only linked into
+            # /etc/systemd/system, never enabled: it cannot start until the release steps that
+            # this public repository cannot perform are done (the auth.hams.com DNS record, its
+            # TLS certificate, /etc/hams/auth/gateway.toml, the ARRL anchors, the token secret,
+            # and `ufw allow 443/tcp` -- hams_com docs/proposals/PROVISION_PRODUCTION_NOTES.md,
+            # "the gateway replaces nginx on auth.hams.com"). Then: systemctl enable --now.
+            "path": "/opt/hams/systemd/hams-auth-gateway.service",
+            "content": """\
+# systemd unit for hams_auth_gateway (auth.hams.com). Provisioned by hams_shared/tools/infrastructure.py's
+# MANIFEST as /opt/hams/systemd/hams-auth-gateway.service; daemons/hams_auth_gateway/packaging/
+# hams-auth-gateway.service in hams_com must stay identical (daemons/test_daemon_provisioning_coverage.py).
+[Unit]
+Description=hams.com certificate login gateway (auth.hams.com)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/hams/daemons/hams_auth_gateway/target/release/hams_auth_gateway /etc/hams/auth/gateway.toml
+Restart=always
+RestartSec=5
+
+# Unprivileged. Port 443 is bound with CAP_NET_BIND_SERVICE only.
+User=hams-auth
+Group=hams-auth
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Hardening: no new privileges, read-only system, private /tmp and devices, nothing writable at all.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadOnlyPaths=/etc/hams/auth
+UMask=0077
+
+# Limits (the daemon has its own per-source and total connection limits too).
+LimitNOFILE=4096
+TasksMax=256
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             "path": "/opt/hams/systemd/hams.simulated.band.service",
             "content": """\
 [Unit]
@@ -3601,6 +4082,18 @@ ReadWritePaths=
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/hams_simulated_band
+
+# Added 2026-10-02 -- like hams.simulated.bots.service's own 2026-09-30 fold-in
+# below, this previously existed ONLY in a hand-maintained, untracked drop-in
+# on hams1 (/etc/systemd/system/hams.simulated.band.service.d/bot-keys.conf,
+# dated 2026-09-24). It is a file *path*, not a secret: the per-host bot key
+# lines (minted with daemons/hams_simulated_band/tools/new_bot_key.sh) stay
+# hand-placed at this path, mode 0600/0640, never in this unit text. Without
+# the variable the SFU starts but refuses every QAI (bot) client; with it set
+# and the file missing, the SFU fails fast at startup by design (bot_auth.rs).
+# Provisioning only links this unit, it never enables it, so a host without
+# the key file is unaffected until someone deliberately turns the band on.
+Environment="HAMS_BAND_BOT_KEYS_FILE=/etc/hams-band/band_bot_keys"
 
 ExecStart=/opt/hams/daemons/hams_simulated_band/target/release/hams_simulated_band
 
