@@ -1089,6 +1089,33 @@ class LoadAndPromptEnvTests(_SafePatchTestCase):
         infra.load_and_prompt_env(env_vars, is_test=True)
         self.assertEqual(env_vars["DOMAIN"], "localhost")
 
+    def test_pdns_zone_defaults_derive_from_domain(self):
+        # [@ANCHOR: infrastructure:test_pdns_zone_defaults]
+        # Tests [@ANCHOR: infrastructure:set_pdns_zone_defaults]
+        # pdns_sync names these in every zone it creates; Cloudflare
+        # delegates u.<DOMAIN> to ns1/ns2.<DOMAIN> (hams_com, 2026-10-03).
+        env_vars = {"DOMAIN": "hams.com"}
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(
+            env_vars["PDNS_ZONE_NAMESERVERS"], "ns1.hams.com,ns2.hams.com"
+        )
+        self.assertEqual(env_vars["PDNS_PERSONAL_PARENT_ZONE"], "u.hams.com")
+        self.assertIn(
+            "PDNS_ZONE_NAMESERVERS", infra.MANIFEST["env_groups"]["pdns.env"]
+        )
+        self.assertIn(
+            "PDNS_PERSONAL_PARENT_ZONE",
+            infra.MANIFEST["env_groups"]["pdns.env"],
+        )
+
+        test_vars = {}
+        infra.load_and_prompt_env(test_vars, is_test=True)
+        self.assertEqual(test_vars["PDNS_PERSONAL_PARENT_ZONE"], "u.localhost")
+
+        kept = {"DOMAIN": "hams.com", "PDNS_ZONE_NAMESERVERS": "a.example."}
+        infra.load_and_prompt_env(kept, is_test=False)
+        self.assertEqual(kept["PDNS_ZONE_NAMESERVERS"], "a.example.")
+
     def test_generates_odoo_admin_password_when_missing(self):
         env_vars = {"DOMAIN": "hams.com"}
         infra.load_and_prompt_env(env_vars, is_test=False)

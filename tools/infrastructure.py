@@ -1619,7 +1619,12 @@ MANIFEST = {
             "DB_PORT",
             "DB_USER",
         ],
-        "pdns.env": ["PDNS_API_KEY", "PDNS_API_URL"],
+        "pdns.env": [
+            "PDNS_API_KEY",
+            "PDNS_API_URL",
+            "PDNS_ZONE_NAMESERVERS",
+            "PDNS_PERSONAL_PARENT_ZONE",
+        ],
         "odoo.env": [
             "ODOO_ADMIN_PASSWORD",
             "ODOO_SERVICE_PASSWORD",
@@ -1664,12 +1669,26 @@ MANIFEST = {
             # have, which meant pdns_server could never find this file at
             # all regardless of the (also missing, until now)
             # systemd_pdns_override pointing --config-dir at its directory.
+            #
+            # Public authoritative DNS (Bruce's decision 2026-10-03, hams_com
+            # night_shift_questions/answered/personal-dns-zone-nameservers-and-
+            # delegation-74b5b2fa.md): Cloudflare delegates u.{DOMAIN} (every
+            # personal '<alias>.u.{DOMAIN}' zone) to ns1/ns2.{DOMAIN}, which are
+            # this server, so port 53 here answers the internet. This file does
+            # not open the firewall -- nothing in infrastructure.py manages ufw --
+            # so on a host with ufw the operator runs `ufw allow 53/udp` and
+            # `ufw allow 53/tcp` by hand. default-soa-content gives every zone
+            # pdns_sync creates a real SOA instead of PowerDNS's built-in
+            # 'a.misconfigured.dns.server.invalid'; existing zones keep theirs.
+            # IPv4 only for now: listening on '::' too would fail pdns.service on
+            # a host with IPv6 disabled (local-address-nonexist-fail).
             "path": "/opt/hams/etc/pdns-gsqlite3.conf",
             "content": """\
 launch=gsqlite3
 gsqlite3-database=/var/lib/powerdns/pdns.sqlite3
 gsqlite3-dnssec=no
 local-address=0.0.0.0
+default-soa-content=ns1.{DOMAIN} hostmaster.{DOMAIN} 0 10800 3600 604800 3600
 api=yes
 api-key={PDNS_API_KEY}
 webserver=yes
@@ -7096,6 +7115,19 @@ def _refuse_env_files_from_other_provision_mode(file_vars, is_test, env_dir):
     return {}
 
 
+# [@ANCHOR: infrastructure:set_pdns_zone_defaults]
+# Verified by [@ANCHOR: infrastructure:test_pdns_zone_defaults]
+def _set_pdns_zone_defaults(env_vars):
+    """pdns_sync's public-DNS settings (hams_com daemons/pdns_sync/main.py):
+    the nameservers every zone it creates names in its apex NS, and the one
+    parent zone Cloudflare delegates to them, 'u.<DOMAIN>' (personal zones are
+    '<alias>.u.<DOMAIN>'; ham_dns's PERSONAL_ZONE_LABEL must match). Derived
+    from DOMAIN, which the caller has already required."""
+    domain = env_vars["DOMAIN"].strip().strip(".")
+    env_vars.setdefault("PDNS_ZONE_NAMESERVERS", f"ns1.{domain},ns2.{domain}")
+    env_vars.setdefault("PDNS_PERSONAL_PARENT_ZONE", f"u.{domain}")
+
+
 def load_and_prompt_env(env_vars, is_test):
     """
     Populate env_vars for provisioning, non-interactively.
@@ -7161,6 +7193,7 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault("PDNS_API_URL", "http://powerdns:8081/api/v1/servers/localhost/zones")
         env_vars.setdefault("PDNS_API_KEY", "secret")
         env_vars.setdefault("DOMAIN", "localhost")
+        _set_pdns_zone_defaults(env_vars)
         env_vars.setdefault("ODOO_ADMIN_PASSWORD", "admin")
         env_vars.setdefault("ODOO_SERVICE_PASSWORD", "service")
         env_vars.setdefault("SMTP_HOST", "localhost")
@@ -7242,6 +7275,7 @@ def load_and_prompt_env(env_vars, is_test):
                 "box is for -- e.g. DOMAIN=hams.com."
             )
         domain = env_vars["DOMAIN"]
+        _set_pdns_zone_defaults(env_vars)
 
         env_vars.setdefault("ODOO_URL", "http://odoo:8069")
         env_vars.setdefault("SYSADMIN_EMAILS", f"admin@{domain}")
