@@ -103,7 +103,7 @@ hosts need no change.
 **6. Test.** `hams_com/daemons/test_no_browser_user_agent.py` walks every Python source under `daemons/`
 and fails if a browser-like UA string, an `impersonate=` argument, or a forged `Sec-Fetch-*` header
 appears without a well-formed `honest-ua-exception` tag in range, and also fails if the tag's fields are
-missing, its date is not `YYYY-MM-DD`, or the scan finds none of the known sync daemons (a broken scan
+missing, its date is not `YYYY-MM-DD`, or any `SYSTEM_USER_AGENT` fallback literal lacks hams.com with a `+https://` URL or contains an `@`, or the scan finds none of the known sync daemons (a broken scan
 must not pass). Each fetching daemon's own tests check what is actually sent on the wire where the daemon
 already has a local HTTP stand-in (`uk_ofcom_sync`, `fcc_uls_sync`). In hams_open, the same browser-UA
 pattern is rejected in `pager_duty` by its synthetic-spooler test. These tests never contact a third-party
