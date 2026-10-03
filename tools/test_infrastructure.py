@@ -2815,5 +2815,38 @@ class SmoketestTestModeTests(_SafePatchTestCase):
         self.assertEqual(self._stopped(calls), [])
 
 
+class SharedOdooAccountRatchetTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:shared_odoo_account_ratchet]"""
+
+    def test_every_unit_running_as_odoo_is_on_the_reviewed_list(self):
+        running_as_odoo = infra.systemd_units_running_as(infra.MANIFEST, "odoo")
+        unlisted = sorted(running_as_odoo - infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertEqual(
+            unlisted, [],
+            "These units run as User=odoo and so can read every other daemon's key file. Give "
+            "each its own account, or add it to SHARED_ODOO_ACCOUNT_UNITS in a reviewed change.",
+        )
+
+    def test_no_listed_unit_has_already_moved_off_the_odoo_account(self):
+        running_as_odoo = infra.systemd_units_running_as(infra.MANIFEST, "odoo")
+        stale = sorted(infra.SHARED_ODOO_ACCOUNT_UNITS - running_as_odoo)
+        self.assertEqual(
+            stale, [],
+            "These units no longer run as User=odoo; remove them from SHARED_ODOO_ACCOUNT_UNITS.",
+        )
+
+    def test_the_units_with_their_own_account_are_found_under_that_account(self):
+        # The same parser must see the existing dedicated-account units, or the two checks
+        # above could pass on a parser that finds nothing.
+        self.assertIn(
+            "localhost.cert.renewal.service",
+            infra.systemd_units_running_as(infra.MANIFEST, "localhost_cert"),
+        )
+        self.assertNotIn(
+            "localhost.cert.renewal.service",
+            infra.systemd_units_running_as(infra.MANIFEST, "odoo"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
