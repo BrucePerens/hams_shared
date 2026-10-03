@@ -1672,6 +1672,60 @@ _SAFE_DB_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _HOST_CORE_DAEMONS = ("postgresql", "redis-server", "rabbitmq-server", "pdns")
 
+# Bruce's decision, 2026-10-02/03: this script must never run on the production host (hams1).
+# Found the hard way: a `HAMS_ISOLATED_NS=1` run there used production's own Redis and RabbitMQ
+# (rebuild_db's `redis-cli flushdb` wiped production Redis db 0, and production's backup.worker
+# consumed test jobs). Two independent signals, either one is enough:
+#   * deploy_to_production.py writes these files under /opt/hams/src on the production host only;
+#   * the production database name exists on the Postgres this run would use.
+# There is deliberately no override.
+PRODUCTION_HOST_MARKER_FILES = ("/opt/hams/src/DEPLOY_LOG", "/opt/hams/src/DEPLOYED_COMMITS")
+PRODUCTION_DATABASE_NAME = "hams_prod"
+
+
+def production_host_refusal_reasons(marker_files=None, database_names=()):
+    """Returns why this host looks like production (an empty list means it does not)."""
+    if marker_files is None:
+        marker_files = PRODUCTION_HOST_MARKER_FILES
+    reasons = [
+        f"{path} exists (deploy_to_production.py writes it on the production host only)"
+        for path in marker_files
+        if os.path.exists(path)
+    ]
+    if PRODUCTION_DATABASE_NAME in database_names:
+        reasons.append(f"a database named {PRODUCTION_DATABASE_NAME!r} exists on the target PostgreSQL")
+    return reasons
+
+
+def refuse_to_run_on_production_host(marker_files=None, database_names=()):
+    """Exits with status 2 before anything is touched if this is the production host."""
+    reasons = production_host_refusal_reasons(marker_files, database_names)
+    if not reasons:
+        return
+    print(
+        "❌ REFUSING TO RUN: this looks like the PRODUCTION host.\n"
+        + "".join(f"   - {reason}\n" for reason in reasons)
+        + "   test.py flushes Redis and publishes to RabbitMQ on whatever host it runs on; on the\n"
+        "   production host that is production's own data and production's own consumers.\n"
+        "   Bruce's decision (2026-10-02/03): never run test.py on hams1. Run it on the dev box."
+    )
+    sys.exit(2)
+
+
+def list_database_names(psql_cmd, env):
+    """Names of every database on the PostgreSQL that `psql_cmd` reaches with `env`. Exits on failure:
+    rebuild_db() needs that same server a moment later, and the production check must not be skipped."""
+    res = subprocess.run(
+        [psql_cmd, "postgres", "-At", "-c", "SELECT datname FROM pg_database"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if res.returncode != 0:
+        print(f"❌ ERROR: could not list databases to check for a production host: {res.stderr.strip()}")
+        sys.exit(1)
+    return [line.strip() for line in res.stdout.splitlines() if line.strip()]
+
 
 def core_daemons_to_start(isolated):
     """Host services rebuild_db() starts with systemctl before testing.
@@ -1724,6 +1778,15 @@ def rebuild_db(db_name):
         for svc in daemons:
             subprocess.run(["systemctl", "start", svc], check=False)
 
+    try:
+        psql_cmd = infrastructure.get_pg_bin("psql")
+    except FileNotFoundError as e:
+        print(f"❌ ERROR: {e}")
+        sys.exit(1)
+
+    # Must stay before the Redis flush below: that flush is what wiped production Redis on hams1.
+    refuse_to_run_on_production_host(database_names=list_database_names(psql_cmd, env))
+
     print("[*] Flushing persistent daemons (Redis / RabbitMQ)...")
     redis_db = os.environ.get("REDIS_DB", "0")
     subprocess.run(["redis-cli", "-n", redis_db, "flushdb"], check=False, env=env)
@@ -1731,12 +1794,6 @@ def rebuild_db(db_name):
     # Get the working directory where data is saved
     subprocess.run(["redis-cli", "CONFIG", "GET", "dir"], check=False, env=env)
     subprocess.run(["redis-cli", "CONFIG", "GET", "dbfilename"], check=False, env=env)
-
-    try:
-        psql_cmd = infrastructure.get_pg_bin("psql")
-    except FileNotFoundError as e:
-        print(f"❌ ERROR: {e}")
-        sys.exit(1)
 
     sql_input = f"""
 SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :'dbname';
@@ -2742,6 +2799,9 @@ def wait_for_ci_load_to_subside(sleep_func=None, now_func=None):
 
 def main():
     global _single_instance_lock
+    # First thing, before any lock, namespace, daemon or database work. rebuild_db() repeats the check
+    # with the database list once PostgreSQL is reachable.
+    refuse_to_run_on_production_host()
     audio_sink_before = (
         get_default_audio_sink_name()
         if os.environ.get("HAMS_ISOLATED_NS") != "1"
