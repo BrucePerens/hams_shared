@@ -1121,6 +1121,108 @@ class LoadAndPromptEnvTests(_SafePatchTestCase):
         self.assertFalse(hasattr(infra, "getpass"))  # burn-ignore-introspection
 
 
+class BridgeApiKeyProvisioningTests(_TmpDirTestCase):
+    """BRIDGE_API_KEY (bridge.env) and Odoo's ham_relay_bridge.api_key must exist and agree after
+    provisioning. hams1 ran 2026-09-23..10-03 with both empty, and every relay uplink was refused.
+    subprocess.run is mocked: these never reach a real database, and no assertion prints a key."""
+
+    KEY = "k" * 64
+
+    def setUp(self):
+        super().setUp()
+        self.safe_patch("infrastructure.os.path.exists", return_value=False)
+
+    def _psql(self, matches_sequence, db_exists=True):
+        """Mocks the read-only probes: _database_exists, then each _bridge_api_key_matches_odoo."""
+        self.safe_patch("infrastructure._database_exists", return_value=db_exists)
+        results = [
+            subprocess.CompletedProcess([], 0, stdout="1\n" if m else "0\n", stderr="")
+            for m in matches_sequence
+        ]
+        return self.safe_patch("infrastructure.subprocess.run", side_effect=results)
+
+    def test_generates_a_key_in_both_modes_when_absent_or_empty(self):
+        for is_test, start in ((False, {"DOMAIN": "hams.com"}), (True, {}),
+                               (False, {"DOMAIN": "hams.com", "BRIDGE_API_KEY": ""})):
+            env_vars = dict(start)
+            infra.load_and_prompt_env(env_vars, is_test=is_test)
+            self.assertGreaterEqual(len(env_vars["BRIDGE_API_KEY"]), 64)
+
+    def test_keeps_an_existing_key(self):
+        env_vars = {"DOMAIN": "hams.com", "BRIDGE_API_KEY": "already-set"}
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(env_vars["BRIDGE_API_KEY"], "already-set")
+
+    def test_write_env_files_persists_it_to_bridge_env_at_0400(self):
+        run = MagicMock()
+        self.safe_patch("infrastructure.apply_permissions")
+        infra.write_env_files(self.tmp, {"BRIDGE_API_KEY": self.KEY}, run)
+        path = os.path.join(self.tmp, "bridge.env")
+        self.assertEqual(infra._read_env_value(path, "BRIDGE_API_KEY"), self.KEY)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o400)
+
+    def test_matching_parameter_is_left_alone(self):
+        self._psql([True])
+        run = MagicMock()
+        infra._sync_bridge_api_key_to_odoo(run, "hams_prod", self.KEY)
+        run.assert_not_called()
+        self.assertEqual(infra.get_hook_failures(), [])
+
+    def test_missing_or_different_parameter_is_written_then_verified(self):
+        # Tests [@ANCHOR: infrastructure:_sync_bridge_api_key_to_odoo]
+        # Tests [@ANCHOR: infrastructure:_bridge_api_key_matches_odoo]
+        probe = self._psql([False, True])
+        run = MagicMock()
+        infra._sync_bridge_api_key_to_odoo(run, "hams_prod", self.KEY)
+        run.assert_called_once()
+        cmd = run.call_args.args[0]
+        sql = run.call_args.kwargs["input"]
+        self.assertIn(f"bridge_api_key={self.KEY}", cmd)
+        self.assertIn("ham_relay_bridge.api_key", sql)
+        self.assertIn("ON CONFLICT (key) DO UPDATE", sql)
+        # The key travels only as a psql variable, never inside the SQL text.
+        self.assertNotIn(self.KEY, sql)
+        for call in probe.call_args_list:
+            self.assertNotIn(self.KEY, call.kwargs["input"])
+        self.assertEqual(infra.get_hook_failures(), [])
+
+    def test_a_value_that_does_not_read_back_is_a_hook_failure(self):
+        self._psql([False, False])
+        infra._sync_bridge_api_key_to_odoo(MagicMock(), "hams_prod", self.KEY)
+        [(name, msg)] = infra.get_hook_failures()
+        self.assertEqual(name, "bridge_api_key")
+        self.assertNotIn(self.KEY, msg)
+
+    def test_a_failed_write_records_no_key(self):
+        self._psql([False])
+        run = MagicMock(side_effect=subprocess.CalledProcessError(1, ["psql", f"bridge_api_key={self.KEY}"]))
+        infra._sync_bridge_api_key_to_odoo(run, "hams_prod", self.KEY)
+        [(name, msg)] = infra.get_hook_failures()
+        self.assertEqual(name, "bridge_api_key")
+        self.assertNotIn(self.KEY, msg)
+
+    def test_an_empty_key_is_a_hook_failure(self):
+        run = MagicMock()
+        infra._sync_bridge_api_key_to_odoo(run, "hams_prod", "")
+        run.assert_not_called()
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["bridge_api_key"])
+
+    def test_plan_mode_probes_but_never_writes(self):
+        self._psql([False])
+        run = MagicMock()
+        with infra.planning() as plan:
+            infra._sync_bridge_api_key_to_odoo(run, "hams_prod", self.KEY)
+        run.assert_not_called()
+        self.assertEqual(len(plan.actions), 1)
+        self.assertIn("ham_relay_bridge.api_key", plan.actions[0][1])
+        self.assertNotIn(self.KEY, plan.actions[0][1])
+
+    def test_redact_command_masks_the_key_variable(self):
+        printed = " ".join(infra.redact_command(["psql", "-v", f"bridge_api_key={self.KEY}"]))
+        self.assertNotIn(self.KEY, printed)
+        self.assertIn("bridge_api_key=<redacted>", printed)
+
+
 class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
     def _run(self, db_pass, role_already_exists):
         mock_role_exists = self.safe_patch_object(
