@@ -1035,15 +1035,17 @@ MANIFEST = {
         },
         {
             # hams_com daemons/relay_ca: the Relay Issuing CA signer (hams_com
-            # docs/proposals/RELAY_TRUST_AND_PAIRING_PLAN.md §4). Same shape as the
-            # signers above, but its key stays on a PKCS#11 token; this account holds
-            # the token PIN and the issuance log in its 0700 directory. odoo joins the
-            # group only to reach the socket in /run/hams_relay_ca.
+            # docs/proposals/RELAY_CA_REMOTE_SIGNER.md). It runs only on the "ca_signer" host
+            # class (at Bruce's site, pi500-1 for now), never on hams1: a Vultr virtual server
+            # cannot have the SmartCard-HSM attached, so hams1 holds no CA key. This account
+            # holds the issuing key file (or the token PIN), the issuance and audit logs and
+            # the authorised client keys in its 0700 directory. No other account joins its
+            # group: hams1's Odoo reaches the signer over WireGuard, not a local socket.
             "user": "hams_relay_ca",
             "group": "hams_relay_ca",
             "home": "/opt/hams/etc/relay_ca",
             "shell": "/usr/sbin/nologin",
-            "add_to_users": ["odoo"],
+            "host_class": "ca_signer",
             "environments": ["prod", "test"],
         },
         {
@@ -1210,19 +1212,33 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
-            # hams_com daemons/relay_ca: PIN file (pkcs11_pin), issuance log, optional
-            # relay_ca.env, and on a SoftHSM2-backed test host the token directory.
+            # hams_com daemons/relay_ca, ca_signer host class only: the issuing key file (software
+            # phase) or PIN file (card phase), issued.jsonl, revoked.jsonl, the CRL, audit.jsonl,
+            # authorized_clients.json and relay_ca.env. Never created on hams1.
             "path": "/opt/hams/etc/relay_ca",
             "owner": "hams_relay_ca:hams_relay_ca",
             "provision_mode": "700",
             "runtime_mount": "ro",
+            "host_class": "ca_signer",
             "environments": ["prod", "test"],
         },
         {
-            # The CA certificates (relay_root.pem, relay_issuing.pem): public.
+            # The CA certificates (relay_root.pem, relay_issuing.pem): public. ca_signer only.
             "path": "/opt/hams/etc/relay_ca_public",
             "owner": "hams_relay_ca:hams_relay_ca",
             "provision_mode": "755",
+            "runtime_mount": "ro",
+            "host_class": "ca_signer",
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com ham_relay_bridge's client of the remote signer (models/relay_ca_client.py),
+            # on every host that runs Odoo: client.json (the signer's WireGuard URL), the
+            # request-only client_ed25519.key (0600 odoo; it can ask for signatures and nothing
+            # more) and the pinned PUBLIC relay_issuing.pem. Holds no CA key, ever.
+            "path": "/opt/hams/etc/relay_ca_client",
+            "owner": "odoo:odoo",
+            "provision_mode": "700",
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
         },
@@ -2596,18 +2612,24 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
-            # hams_com daemons/relay_ca: the Relay Issuing CA signer. Skipped (not
-            # failed, not restart-looping) until a key ceremony has put the issuing CA
-            # certificate in place. Host-specific settings (PKCS#11 module, token
-            # label, SOFTHSM2_CONF on a SoftHSM2 test host) go in the optional
-            # /opt/hams/etc/relay_ca/relay_ca.env. Talks only to its PKCS#11 token
-            # (pcscd's Unix socket for a smart card) and its own Unix socket.
-            "path": "/opt/hams/systemd/hams-relay-ca.service",
+            # hams_com daemons/relay_ca: the Relay Issuing CA signer, REMOTE from hams1
+            # (docs/proposals/RELAY_CA_REMOTE_SIGNER.md). Written, linked and started only on a
+            # host of the "ca_signer" class (provision.py --host-class ca_signer; at Bruce's site,
+            # pi500-1 for now), never on hams1. It listens on exactly one address, this host's
+            # WireGuard address (RELAY_CA_BIND, set in /opt/hams/etc/relay_ca/relay_ca.env
+            # together with RELAY_CA_ALLOWED_SOURCES and RELAY_CA_KEY_FILE), for signed requests
+            # from hams1's Odoo. systemd's own IP filter allows only hams1's WireGuard address, a
+            # second layer under the host firewall and the daemon's source allowlist. Fetches
+            # nothing from any third party. Skipped (not failed, not restart-looping) until a key
+            # ceremony has put the issuing certificate there and a client has been authorised.
+            "path": "/opt/hams/systemd/hams-relay-ca-signer.service",
             "content": """\
 [Unit]
-Description=Relay Issuing CA signer (relay server certificates, key on a PKCS#11 token)
-After=network.target pcscd.socket
+Description=Relay Issuing CA signer (remote: WireGuard address only, signed requests from hams1)
+Wants=network-online.target
+After=network-online.target pcscd.socket
 ConditionPathExists=/opt/hams/etc/relay_ca_public/relay_issuing.pem
+ConditionPathExists=/opt/hams/etc/relay_ca/authorized_clients.json
 
 [Service]
 # ADR-0070 OS-Level Daemon Restriction
@@ -2617,21 +2639,21 @@ PrivateTmp=true
 # A smart card is reached through pcscd's Unix socket, never a device node.
 PrivateDevices=true
 NoNewPrivileges=true
-RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
+# Only hams1's WireGuard address may talk to this process, in either direction.
+IPAddressDeny=any
+IPAddressAllow=10.99.0.1
 ReadWritePaths=/opt/hams/etc/relay_ca
-RuntimeDirectory=hams_relay_ca
-RuntimeDirectoryMode=0750
 Type=simple
 User=hams_relay_ca
 Group=hams_relay_ca
 SupplementaryGroups=hams_com
 WorkingDirectory=/opt/hams/daemons/relay_ca
-UMask=0027
+UMask=0077
 
 Environment="RELAY_CA_BASE_DIR=/opt/hams/etc/relay_ca"
 Environment="RELAY_CA_PUBLIC_DIR=/opt/hams/etc/relay_ca_public"
-Environment="RELAY_CA_SOCKET_PATH=/run/hams_relay_ca/signer.sock"
 Environment="RELAY_CA_LEAF_DAYS=800"
 EnvironmentFile=-/opt/hams/etc/relay_ca/relay_ca.env
 
@@ -2643,13 +2665,14 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=hams.relay.ca
+SyslogIdentifier=hams.relay.ca.signer
 
 [Install]
 WantedBy=multi-user.target
 """,
             "owner": "root:root",
             "mode": "644",
+            "host_class": "ca_signer",
             "environments": ["prod", "test"],
         },
         {
@@ -5658,12 +5681,15 @@ def get_mount_paths(environment, mount_type):
         d["path"]
         for d in MANIFEST["directories"]
         if environment in d["environments"] and d.get("runtime_mount") == mount_type
+        and _in_host_class(d)
     ]
 
 
-def provision_system_accounts(run_cmd_func, environment="prod", dest_dir=""):
+def provision_system_accounts(run_cmd_func, environment="prod", dest_dir="", only_host_class=None):
     for acc in MANIFEST.get("system_accounts", []):
         if environment not in acc.get("environments", ["prod", "test"]):
+            continue
+        if not _spec_selected(acc, only_host_class):
             continue
 
         user = acc["user"]
@@ -5697,7 +5723,7 @@ def execute_hooks(environment, run_cmd_func, env_vars=None, dest_dir=""):
         dest_dir = dest_dir[:-1]
 
     for d in MANIFEST["directories"]:
-        if environment in d["environments"] and "post_provision_hooks" in d:
+        if environment in d["environments"] and "post_provision_hooks" in d and _in_host_class(d):
             for hook in d["post_provision_hooks"]:
                 physical_path = (
                     os.path.join(dest_dir, d["path"].lstrip("/"))
@@ -5710,12 +5736,12 @@ def execute_hooks(environment, run_cmd_func, env_vars=None, dest_dir=""):
 
 
 # [@ANCHOR: infrastructure:apply_production_directories]
-def apply_production_directories(run_cmd_func=None, environment="prod", dest_dir=""):
+def apply_production_directories(run_cmd_func=None, environment="prod", dest_dir="", only_host_class=None):
     """Creates every MANIFEST directory for environment and sets its owner and mode. An entry
     marked "preserve_existing" is only created when missing: an existing one keeps its owner and
     mode (e.g. /var/log/redis, which redis-server's package owns)."""
     for d in MANIFEST["directories"]:
-        if environment in d["environments"]:
+        if environment in d["environments"] and _spec_selected(d, only_host_class):
             path = (
                 os.path.join(dest_dir, d["path"].lstrip("/")) if dest_dir else d["path"]
             )
@@ -5841,9 +5867,11 @@ def _skip_deployed_copy(file_spec, path):
 
 
 # [@ANCHOR: infrastructure:provision_static_files]
-def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=""):
+def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir="", only_host_class=None):
     for file_spec in MANIFEST.get("static_files", []):
         if environment not in file_spec["environments"]:
+            continue
+        if not _spec_selected(file_spec, only_host_class):
             continue
 
         condition_env = file_spec.get("condition_env")
@@ -6224,6 +6252,114 @@ def external_fetch_unit_names():
     return names
 
 
+# [@ANCHOR: infrastructure:host_classes]
+# Host classes: a MANIFEST account, directory or file carrying "host_class": "<name>" exists only
+# on a host that has been designated that class. The first class is "ca_signer": the machine at
+# Bruce's site that runs daemons/relay_ca (docs/proposals/RELAY_CA_REMOTE_SIGNER.md). hams1 is a
+# Vultr virtual server with no USB device service, so the SmartCard-HSM can never be attached to
+# it, and it must never hold the CA key: it is not a ca_signer, so provisioning never creates the
+# signer's account, directories or unit there. A host is designated by `provision.py --host-class
+# ca_signer`, which records it in HOST_CLASSES_FILE (so a later plain re-run keeps it), or by the
+# HAMS_HOST_CLASSES environment variable (comma separated).
+KNOWN_HOST_CLASSES = frozenset({"ca_signer"})
+HOST_CLASSES_FILE = "/opt/hams/etc/host_classes"
+
+
+def host_classes(environ=None, path=None):
+    """The set of host classes this machine was designated, from HAMS_HOST_CLASSES and the
+    host_classes file (one name per line, # comments). Unknown names are an error: a typo must not
+    silently leave a host without its class."""
+    environ = os.environ if environ is None else environ
+    names = {n.strip() for n in environ.get("HAMS_HOST_CLASSES", "").split(",") if n.strip()}
+    try:
+        with open(path or HOST_CLASSES_FILE, "r", encoding="utf-8") as f:  # audit-ignore-path
+            for line in f.read().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    names.add(line)
+    except (FileNotFoundError, PermissionError):
+        # Provisioning runs as root and can always read it; a non-root caller (a test, a plan
+        # by an unprivileged user) is not on a designated host and sees no classes.
+        pass
+    unknown = names - KNOWN_HOST_CLASSES
+    if unknown:
+        raise ValueError(f"unknown host class(es): {', '.join(sorted(unknown))}")
+    return names
+
+
+def _in_host_class(spec, classes=None):
+    """True when `spec` (a MANIFEST entry) is for every host or for a class this host has."""
+    wanted = spec.get("host_class")
+    if not wanted:
+        return True
+    return wanted in (host_classes() if classes is None else classes)
+
+
+def _spec_selected(spec, only_host_class=None):
+    """With `only_host_class` (provision_host_class), exactly that class's entries; otherwise
+    every entry that is for all hosts or for a class this host has."""
+    if only_host_class:
+        return spec.get("host_class") == only_host_class
+    return _in_host_class(spec)
+
+
+def host_class_unit_names():
+    """Basenames of every systemd unit the MANIFEST restricts to a host class."""
+    return {
+        os.path.basename(spec["path"])
+        for spec in MANIFEST.get("static_files", [])
+        if spec.get("host_class")
+    }
+
+
+def record_host_class(name, path=None):
+    """Adds `name` to HOST_CLASSES_FILE (idempotent). Used by provision.py --host-class."""
+    if name not in KNOWN_HOST_CLASSES:
+        raise ValueError(f"unknown host class: {name}")
+    path = path or HOST_CLASSES_FILE
+    try:
+        with open(path, "r", encoding="utf-8") as f:  # audit-ignore-path
+            existing = f.read().splitlines()
+    except FileNotFoundError:
+        existing = []
+    if name in existing:
+        return False
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:  # audit-ignore-path
+        f.write(name + "\n")
+    return True
+
+
+# [@ANCHOR: infrastructure:provision_host_class]
+def provision_host_class(host_class, run_cmd_func, env_vars=None, environment="prod"):
+    """Provisions ONLY the MANIFEST entries of one host class: its accounts, directories and
+    files (the unit), links the unit into /etc/systemd/system and reloads systemd. It enables and
+    starts nothing: the signer needs key material and an authorised client first, and its unit
+    skips itself (ConditionPathExists) until they are in place. For a host that is not a full
+    hams.com server (pi500-1 runs only the FCC sync daemon): `provision.py --only-host-class
+    ca_signer` runs this instead of the whole provisioning. Honours plan mode."""
+    if host_class not in KNOWN_HOST_CLASSES:
+        raise ValueError(f"unknown host class: {host_class}")
+    env_vars = dict(os.environ) if env_vars is None else env_vars
+    provision_system_accounts(run_cmd_func, environment, only_host_class=host_class)
+    apply_production_directories(run_cmd_func, environment, only_host_class=host_class)
+    provision_static_files(run_cmd_func, env_vars, environment, only_host_class=host_class)
+    systemd_dir = "/opt/hams/systemd"
+    for spec in MANIFEST.get("static_files", []):
+        unit_path = spec["path"]
+        item = os.path.basename(unit_path)
+        if spec.get("host_class") != host_class or os.path.dirname(unit_path) != systemd_dir:
+            continue
+        if not item.endswith((".service", ".timer", ".path")):
+            continue
+        dst = os.path.join("/etc/systemd/system", item)
+        if not os.path.exists(dst) and not _plan("link", f"{dst} -> {unit_path}"):
+            os.symlink(unit_path, dst)
+    if not _plan("run", "systemctl daemon-reload"):
+        run_cmd_func(["systemctl", "daemon-reload"])
+    _logger.info("[*] Host class %s provisioned. Nothing was enabled or started.", host_class)
+
+
 # [@ANCHOR: infrastructure:opt_in_unit_names]
 def opt_in_unit_names():
     """Basenames of every systemd unit the MANIFEST marks "opt_in": units that cost money or must
@@ -6285,6 +6421,8 @@ def _smoketest_candidate_services(has_hams_com=True, is_test_env=False, opt_in_u
             if not is_test_env and svc_name in daemons_to_skip:
                 continue
             if svc_name in external:
+                continue
+            if not _in_host_class(sf):
                 continue
             if svc_name not in potential_services and "@" not in svc_name:
                 potential_services.append(svc_name)
@@ -8159,6 +8297,7 @@ def provision_environment(
                         and not os.path.exists(unit_path)
                         and (has_hams_com or item == "hams-pycache.service")
                         and set(spec.get("environments", [])) & {"prod", "test"}
+                        and _in_host_class(spec)
                         and not os.path.exists(os.path.join("/etc/systemd/system", item))
                     ):
                         _plan("link", f"/etc/systemd/system/{item} -> {unit_path}")

@@ -73,6 +73,31 @@ logging.basicConfig(level=logging.INFO)
 _logger = logging.getLogger(__name__)
 
 
+def _provision_only_host_class(host_class, plan, env_vars):
+    """`--only-host-class`: the entries of one host class and nothing else (see
+    infrastructure.provision_host_class)."""
+    if host_class not in infrastructure.KNOWN_HOST_CLASSES:
+        _logger.error(f"[!] Unknown host class: {host_class}")
+        sys.exit(1)
+
+    def run_only(cmd, **kw):
+        printable = " ".join(infrastructure.redact_command(cmd))
+        if plan:
+            print(f"PLAN run: {printable}", flush=True)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        _logger.info(f"[*] Running: {printable}")
+        return subprocess.run(cmd, check=True, **kw)
+
+    if plan:
+        os.environ["HAMS_HOST_CLASSES"] = host_class
+        with infrastructure.planning():
+            infrastructure.provision_host_class(host_class, run_only, env_vars)
+        return
+    if infrastructure.record_host_class(host_class):
+        _logger.info(f"[*] Recorded host class {host_class} in {infrastructure.HOST_CLASSES_FILE}")
+    infrastructure.provision_host_class(host_class, run_only, env_vars)
+
+
 def provision():
     os.chdir(repo_root)
 
@@ -134,6 +159,23 @@ def provision():
         help="Also enable (and smoke-test) this MANIFEST opt_in unit, e.g. code.review.sweep.timer, "
         "which calls the paid Gemini API. Repeatable. Without it opt-in units are linked only",
     )
+    parser.add_argument(
+        "--only-host-class",
+        metavar="CLASS",
+        help="Provision ONLY the entries of this host class (accounts, directories, unit files; "
+        "nothing is enabled or started) instead of the whole hams.com stack. For a machine that is "
+        "not a full server, such as the Relay CA signer host: `--only-host-class ca_signer`. "
+        "Records the class in /opt/hams/etc/host_classes. Honours --plan",
+    )
+    parser.add_argument(
+        "--host-class",
+        action="append",
+        default=[],
+        metavar="CLASS",
+        help="Designate this host as a MANIFEST host class (currently: ca_signer, the machine at "
+        "Bruce's site that runs the Relay CA signer; never hams1). Recorded in "
+        "/opt/hams/etc/host_classes so later runs keep it. Repeatable",
+    )
     args, _ = parser.parse_known_args()
 
     if os_id not in ("ubuntu", "debian"):
@@ -141,6 +183,24 @@ def provision():
             f"[!] Unsupported OS: {os_id}. Only Debian and Ubuntu are currently supported."
         )
         sys.exit(1)
+
+    for host_class in args.host_class:
+        if host_class not in infrastructure.KNOWN_HOST_CLASSES:
+            _logger.error(f"[!] Unknown host class: {host_class}")
+            sys.exit(1)
+        if args.plan:
+            print(f"PLAN record host class {host_class} in {infrastructure.HOST_CLASSES_FILE}", flush=True)
+        elif infrastructure.record_host_class(host_class):
+            _logger.info(f"[*] Recorded host class {host_class} in {infrastructure.HOST_CLASSES_FILE}")
+    if args.plan and args.host_class:
+        # --plan writes nothing, so make the classes visible to this process's own plan.
+        os.environ["HAMS_HOST_CLASSES"] = ",".join(
+            sorted(set(filter(None, os.environ.get("HAMS_HOST_CLASSES", "").split(","))) | set(args.host_class))
+        )
+
+    if args.only_host_class:
+        _provision_only_host_class(args.only_host_class, args.plan, env_vars)
+        return
 
     infrastructure.load_and_prompt_env(env_vars, args.test)
 
