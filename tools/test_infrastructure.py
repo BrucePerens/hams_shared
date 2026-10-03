@@ -267,6 +267,37 @@ class DownloadFileTests(_TmpDirTestCase):
         self.assertEqual(captured["ua"], "MyAgent/1.0")
 
 
+class HonestUserAgentDefaultTests(_SafePatchTestCase):
+    """ADR 0104: the provisioned and fallback User-Agent is URL-only, with no personal contact."""
+
+    HONEST = "HamsComSyncDaemon/1.0 (+https://crawler.hams.com)"
+
+    def test_download_file_default_user_agent_is_the_honest_string(self):
+        captured = {}
+
+        def fake_urlopen(req, timeout=5):
+            captured["ua"] = req.headers.get("User-agent")
+            m = MagicMock()
+            m.read.return_value = b""
+            m.__enter__.return_value = m
+            m.__exit__.return_value = False
+            return m
+
+        self.safe_patch_object(infra.urllib.request, "urlopen", side_effect=fake_urlopen)
+        with tempfile.TemporaryDirectory() as tmp:
+            infra.download_file("https://example.invalid/file", os.path.join(tmp, "f"), 0o644, {})
+        self.assertEqual(captured["ua"], self.HONEST)
+
+    def test_every_system_user_agent_literal_in_this_module_is_the_honest_string(self):
+        source = inspect.getsource(infra)
+        literals = re.findall(r"SYSTEM_USER_AGENT=([^\"\n]+)", source)
+        literals += re.findall(r"(?:get|setdefault)\(\s*\"SYSTEM_USER_AGENT\",\s*\"([^\"]+)\"", source)
+        self.assertGreaterEqual(len(literals), 3)
+        for literal in literals:
+            self.assertEqual(literal, self.HONEST)
+            self.assertNotRegex(literal, r"@|(?i:bruce|perens)|\d{3}[ .-]\d{3}[ .-]\d{4}")
+
+
 class HookGenerateSslTests(_TmpDirTestCase):
     def test_generates_certs_via_run_cmd_func_when_none_exist_yet(self):
         fullchain = os.path.join(self.tmp, "fullchain.pem")
