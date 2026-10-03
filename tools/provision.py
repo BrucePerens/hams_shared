@@ -119,6 +119,21 @@ def provision():
         help="Prepare the box (packages, accounts, env files, code, empty database, units) but do NOT "
         "install the Odoo modules into the database and do NOT start Odoo or any daemon",
     )
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="Print every action provisioning would take (accounts, directories, files and config "
+        "writes, apt installs, units linked/enabled/restarted, database steps) and change nothing. "
+        "Read-only probes still run. Secret values are never printed",
+    )
+    parser.add_argument(
+        "--enable-opt-in",
+        action="append",
+        default=[],
+        metavar="UNIT",
+        help="Also enable (and smoke-test) this MANIFEST opt_in unit, e.g. code.review.sweep.timer, "
+        "which calls the paid Gemini API. Repeatable. Without it opt-in units are linked only",
+    )
     args, _ = parser.parse_known_args()
 
     if os_id not in ("ubuntu", "debian"):
@@ -129,7 +144,11 @@ def provision():
 
     infrastructure.load_and_prompt_env(env_vars, args.test)
 
-    if args.force_reset:
+    if args.force_reset and args.plan:
+        _logger.warning(
+            "[*] PLAN: --force-reset would stop odoo, drop the database, wipe its filestore and flush redis"
+        )
+    elif args.force_reset:
         db_name = env_vars.get("DB_NAME", "hams_test")
         # Bug-hunt fix (2026-09-10): db_name is interpolated below into a
         # filesystem path that a subsequent `rm -rf` deletes outright
@@ -165,15 +184,24 @@ def provision():
         subprocess.run(["redis-cli", "flushall"], check=False)
 
     def run_sys(cmd, **kw):
-        _logger.info(f"[*] Running: {' '.join(cmd)}")
+        printable = " ".join(infrastructure.redact_command(cmd))
+        if args.plan:
+            # --plan: never execute; record the command (passwords masked) and report success.
+            print(f"PLAN run: {printable}", flush=True)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        _logger.info(f"[*] Running: {printable}")
         if "env" not in kw:
             kw["env"] = env_vars
         return subprocess.run(cmd, check=True, **kw)
 
-    if os_id == "debian":
+    if os_id == "debian" and "python3-pypdf2" in infrastructure._installed_apt_packages():
+        # Already there (every re-run on a provisioned box): rebuilding and re-installing it would
+        # only churn dpkg on a live host.
+        _logger.info("[*] Dummy python3-pypdf2 package already installed; skipping its build")
+    elif os_id == "debian":
         _logger.info("[*] Generating dummy python3-pypdf2 package for Debian compatibility")
         run_sys(["apt-get", "update", "-y"])
-        run_sys(["apt-get", "install", "-y", "equivs"])
+        run_sys(["apt-get", "install", "-y", "--no-upgrade", "equivs"])
         # Real, previously-masked ordering bug found 2026-09-13 hardware-qualifying pi500-1
         # (Raspberry Pi 500, a genuinely fresh Debian 12 bookworm box): the equivs package
         # built just below declares `Depends: python3-pypdf`, but that real package is only
@@ -187,7 +215,7 @@ def provision():
         # explicitly, before building/installing the dummy compatibility package that needs
         # it -- not duplicated later, since infrastructure.py's own MANIFEST-driven install of
         # python3-pypdf is naturally a no-op once apt already has it satisfied.
-        run_sys(["apt-get", "install", "-y", "python3-pypdf"])
+        run_sys(["apt-get", "install", "-y", "--no-upgrade", "python3-pypdf"])
         equivs_config = (
             "Section: python\n"
             "Priority: optional\n"
@@ -197,14 +225,18 @@ def provision():
             "Depends: python3-pypdf\n"
             "Description: Dummy python3-pypdf2 package for Ubuntu compatibility\n"
         )
-        with open("/tmp/python3-pypdf2.control", "w") as f:
-            f.write(equivs_config)
+        if not args.plan:
+            with open("/tmp/python3-pypdf2.control", "w") as f:
+                f.write(equivs_config)
         run_sys(["equivs-build", "python3-pypdf2.control"], cwd="/tmp")
         run_sys(["dpkg", "-i", "/tmp/python3-pypdf2_1.0_all.deb"])
 
     infrastructure.provision_environment(
-        run_sys, env_vars, orig_user, os_id, is_test=args.test, hold_odoo=args.hold_odoo
+        run_sys, env_vars, orig_user, os_id, is_test=args.test, hold_odoo=args.hold_odoo,
+        plan=args.plan, opt_in_units=tuple(args.enable_opt_in),
     )
+    if args.plan:
+        return
 
     domain = env_vars.get("DOMAIN", "hams.com")
     _logger.info(f"""

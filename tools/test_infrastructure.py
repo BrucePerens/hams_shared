@@ -651,8 +651,29 @@ class HookDaemonsPermsTests(_TmpDirTestCase):
         mock_run = MagicMock()
         infra.hook_daemons_perms({}, "", target, mock_run)
         self.assertEqual(mock_run.call_count, 2)
-        self.assertEqual(mock_run.call_args_list[0][0][0], ["chown", "-R", "hams_com:hams_com", target])
+        # Tests [@ANCHOR: infrastructure:hook_daemons_perms]
+        # Only root-owned entries change owner, so odoo-owned daemon paths keep their owner.
+        self.assertEqual(
+            mock_run.call_args_list[0][0][0],
+            ["find", "-P", target, "-user", "root", "-exec", "chown", "-h", "hams_com:hams_com", "{}", "+"],
+        )
         self.assertEqual(mock_run.call_args_list[1][0][0], ["chmod", "-R", "a+rX", target])
+
+    def test_the_find_selector_leaves_non_root_entries_alone(self):
+        # Run the real find (with `-print` in place of the chown) over a tree holding a file owned
+        # by this non-root test user: it must not be selected.
+        target = os.path.join(self.tmp, "daemons")
+        os.makedirs(target)
+        mine = os.path.join(target, "owned_by_someone_else.py")
+        open(mine, "w").close()
+        commands = []
+        infra.hook_daemons_perms({}, "", target, commands.append)
+        find_cmd = commands[0]
+        selector = find_cmd[: find_cmd.index("-exec")] + ["-print"]
+        out = subprocess.run(selector, capture_output=True, text=True, check=True).stdout.split()
+        if os.geteuid() != 0:
+            self.assertNotIn(mine, out)
+        self.assertNotIn("-R", find_cmd)
 
     def test_does_nothing_when_the_target_does_not_exist(self):
         mock_run = MagicMock()
@@ -1210,6 +1231,8 @@ class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
         self.assertIn("CREATE ROLE", create_sql)
         self.assertNotIn("ALTER ROLE", create_sql)
 
+        # The role exists but no env file records its password: rotate it.
+        os.remove(self._env_path())
         run_cmd.reset_mock()
         self.safe_patch_object(infra, "_role_exists", return_value=True)
         infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=self._env_path())
@@ -1276,7 +1299,8 @@ class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
         mode = os.stat(env_path).st_mode & 0o777
         self.assertEqual(mode, 0o600)
 
-    def test_rotated_password_differs_from_whatever_a_prior_call_wrote(self):
+    def test_a_rerun_keeps_the_recorded_password_and_alters_nothing(self):
+        # Round-2 production runbook, 2026-10-03: the password used to rotate on every run.
         run_cmd = MagicMock()
         self.safe_patch_object(infra, "_role_exists", return_value=False)
         self.safe_patch_object(infra, "apply_permissions")
@@ -1284,14 +1308,33 @@ class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
 
         infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=env_path)
         with open(env_path) as f:
-            first_pass = [l for l in f if l.startswith("DB_PASS=")][0]
+            first = f.read()
+        mtime = os.stat(env_path).st_mtime_ns
 
+        run_cmd.reset_mock()
         self.safe_patch_object(infra, "_role_exists", return_value=True)
         infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=env_path)
         with open(env_path) as f:
-            second_pass = [l for l in f if l.startswith("DB_PASS=")][0]
+            self.assertEqual(f.read(), first)
+        self.assertEqual(os.stat(env_path).st_mtime_ns, mtime)
+        sql = [c.kwargs["input"] for c in run_cmd.call_args_list]
+        self.assertFalse(any("ROLE" in q and "PASSWORD" in q for q in sql), sql)
+        self.assertTrue(any("GRANT CONNECT" in q for q in sql))
 
-        self.assertNotEqual(first_pass, second_pass)
+    def test_a_missing_role_is_created_with_the_recorded_password(self):
+        # Tests [@ANCHOR: infrastructure:_read_env_value]
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra, "apply_permissions")
+        env_path = self._env_path()
+        os.makedirs(os.path.dirname(env_path))
+        with open(env_path, "w") as f:
+            f.write("DB_PASS=kept-secret-value\n")
+        self.safe_patch_object(infra, "_role_exists", return_value=False)
+        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=env_path)
+        first = run_cmd.call_args_list[0]
+        self.assertIn("CREATE ROLE", first.kwargs["input"])
+        self.assertIn("db_pass=kept-secret-value", first.args[0])
+        self.assertEqual(infra._read_env_value(env_path, "DB_PASS"), "kept-secret-value")
 
 
 class RoleExistsTests(_SafePatchTestCase):
@@ -1719,9 +1762,9 @@ class HoldOdooTests(unittest.TestCase):
     def test_hold_branch_comes_before_and_excludes_the_init_and_smoketest_calls(self):
         source = inspect.getsource(infra.provision_environment)
         hold_idx = source.index("if hold_odoo:")
-        elif_idx = source.index("elif not is_isolated_ns:", hold_idx)
+        elif_idx = source.index("elif not is_isolated_ns", hold_idx)
         init_idx = source.index("initialize_odoo_database(\n", hold_idx)
-        smoke_idx = source.index("run_post_provision_smoketest(has_hams_com", hold_idx)
+        smoke_idx = source.index("run_post_provision_smoketest(\n", hold_idx)
         # The init and smoketest calls sit inside the elif of the hold check, never
         # unconditionally after it.
         self.assertLess(hold_idx, elif_idx)
@@ -1943,7 +1986,8 @@ class EnsureLineInFileTests(_SafePatchTestCase):
 
     def test_rabbitmq_env_conf_is_no_longer_appended_blindly(self):
         source = inspect.getsource(infra.provision_environment)
-        self.assertIn('_ensure_line_in_file("/etc/rabbitmq/rabbitmq-env.conf", "NODE_IP_ADDRESS=127.0.0.1")', source)
+        self.assertIn('"/etc/rabbitmq/rabbitmq-env.conf", "NODE_IP_ADDRESS=127.0.0.1"', source)
+        self.assertIn("rabbitmq_conf_changed = _ensure_line_in_file(", source)
         self.assertNotIn('open("/etc/rabbitmq/rabbitmq-env.conf", "a")', source)
 
 
@@ -2339,24 +2383,81 @@ class PostgresqlLockdownTests(unittest.TestCase):
         # over pg_hba.conf, letting any local OS account connect as any
         # PostgreSQL role, the superuser included. See
         # _postgresql_lockdown_commands()'s docstring.
-        commands = infra._postgresql_lockdown_commands()
-        self.assertTrue(commands)
-        for cmd in commands:
-            text = " ".join(cmd)
-            self.assertNotIn("pg_hba", text)
-            self.assertNotIn("trust", text)
+        source = inspect.getsource(infra._apply_postgresql_lockdown).split('"""')[-1]
+        self.assertNotIn("pg_hba", source)
+        self.assertNotIn("trust", source)
+        for key, value in infra.POSTGRESQL_LOCKDOWN_SETTINGS:
+            self.assertNotIn("pg_hba", key + value)
 
     def test_still_binds_postgresql_to_loopback(self):
-        text = "\n".join(" ".join(cmd) for cmd in infra._postgresql_lockdown_commands())
-        self.assertIn("listen_addresses = '127.0.0.1, ::1'", text)
-        self.assertIn("shared_preload_libraries = 'pg_stat_statements'", text)
+        # Tests [@ANCHOR: infrastructure:postgresql_lockdown]
+        settings = dict(infra.POSTGRESQL_LOCKDOWN_SETTINGS)
+        self.assertEqual(settings["listen_addresses"], "'127.0.0.1, ::1'")
+        self.assertEqual(settings["shared_preload_libraries"], "'pg_stat_statements'")
+
+    def _conf(self, text):
+        path = os.path.join(self._tmpdir.name, "postgresql.conf")
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+
+    def test_collapses_duplicate_pairs_without_asking_for_a_restart(self):
+        # Tests [@ANCHOR: infrastructure:_apply_postgresql_lockdown]
+        # hams1 had eleven duplicate pairs, all with the wanted values.
+        pair = "listen_addresses = '127.0.0.1, ::1'\nshared_preload_libraries = 'pg_stat_statements'\n"
+        path = self._conf("#listen_addresses = 'localhost'\nport = 5432\n" + pair * 11)
+        self.assertFalse(infra._apply_postgresql_lockdown([path]))
+        with open(path) as f:
+            text = f.read()
+        self.assertEqual(text, "#listen_addresses = 'localhost'\nport = 5432\n" + pair)
+        # And a second run changes nothing at all.
+        self.assertFalse(infra._apply_postgresql_lockdown([path]))
+        with open(path) as f:
+            self.assertEqual(f.read(), text)
+
+    def test_a_real_value_change_asks_for_a_restart(self):
+        path = self._conf("listen_addresses = '*'\nport = 5432")
+        self.assertTrue(infra._apply_postgresql_lockdown([path]))
+        with open(path) as f:
+            lines = f.read().splitlines()
+        self.assertEqual(lines[0], "listen_addresses = '127.0.0.1, ::1'")
+        self.assertIn("shared_preload_libraries = 'pg_stat_statements'", lines)
+        self.assertEqual(sum(1 for line in lines if line.startswith("listen_addresses")), 1)
+
+    def test_set_conf_key_uses_the_last_active_line_as_the_effective_value(self):
+        # Tests [@ANCHOR: infrastructure:_set_conf_key]
+        text = "listen_addresses = '127.0.0.1, ::1'  # ok\nlisten_addresses = '*'\n"
+        new_text, changed = infra._set_conf_key(text, "listen_addresses", "'127.0.0.1, ::1'")
+        self.assertTrue(changed)
+        self.assertEqual(new_text, "listen_addresses = '127.0.0.1, ::1'\n")
+        _, changed = infra._set_conf_key(new_text, "listen_addresses", "'127.0.0.1, ::1'")
+        self.assertFalse(changed)
+        # Commented-out lines are neither counted nor removed.
+        new_text, changed = infra._set_conf_key("#listen_addresses = 'x'\n", "listen_addresses", "'y'")
+        self.assertTrue(changed)
+        self.assertEqual(new_text, "#listen_addresses = 'x'\nlisten_addresses = 'y'\n")
+
+    def test_plan_mode_writes_nothing(self):
+        path = self._conf("listen_addresses = '*'\n")
+        with infra.planning() as plan:
+            self.assertTrue(infra._apply_postgresql_lockdown([path]))
+        with open(path) as f:
+            self.assertEqual(f.read(), "listen_addresses = '*'\n")
+        self.assertEqual(plan.actions[0][0], "write")
 
     def test_provision_environment_uses_the_lockdown_commands_and_no_pg_hba_edit(self):
         # provision_environment() itself is too host-dependent to execute
         # here (see this file's docstring), so check its source: the
         # blanket substitution must not come back inline.
         source = inspect.getsource(infra.provision_environment)
-        self.assertIn("_postgresql_lockdown_commands()", source)
+        self.assertIn("_apply_postgresql_lockdown()", source)
+        # The restart is conditional on a real change (a PostgreSQL restart can crash odoo).
+        restart_idx = source.index('["systemctl", "restart", "postgresql"]')
+        self.assertIn("if postgresql_restart_needed:", source[restart_idx - 200:restart_idx])
         self.assertNotIn("pg_hba", source)
         self.assertNotIn("s/peer/trust", source)
 
@@ -2939,9 +3040,39 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
         # Local timers are still enabled in test.
         self.assertIn("stray.odoo.shell.detector.timer", enabled)
 
-    def test_production_still_enables_every_linked_unit(self):
+    def test_production_enables_every_linked_unit_except_opt_in_ones(self):
+        # Tests [@ANCHOR: infrastructure:opt_in_unit_names]
         linked = self._linked_activation_units()
-        self.assertEqual(infra._activation_units_to_enable(linked, is_test_env=False), linked)
+        opt_in = infra.opt_in_unit_names()
+        self.assertIn("code.review.sweep.timer", opt_in)
+        self.assertIn("code.review.sweep.timer", linked)
+        self.assertEqual(
+            infra._activation_units_to_enable(linked, is_test_env=False),
+            [unit for unit in linked if unit not in opt_in],
+        )
+
+    def test_an_opt_in_unit_is_enabled_only_when_named(self):
+        linked = self._linked_activation_units()
+        enabled = infra._activation_units_to_enable(
+            linked, is_test_env=False, opt_in_units=("code.review.sweep.timer",)
+        )
+        self.assertIn("code.review.sweep.timer", enabled)
+        # A test environment still never enables an external-fetch unit, opted in or not.
+        enabled_test = infra._activation_units_to_enable(
+            linked, is_test_env=True, opt_in_units=("code.review.sweep.timer",)
+        )
+        self.assertNotIn("code.review.sweep.timer", enabled_test)
+
+    def test_smoketest_never_starts_an_opt_in_service_unless_named(self):
+        self.assertNotIn(
+            "code.review.sweep.service", infra._smoketest_candidate_services(True, is_test_env=False)
+        )
+        self.assertIn(
+            "code.review.sweep.service",
+            infra._smoketest_candidate_services(
+                True, is_test_env=False, opt_in_units=("code.review.sweep.service",)
+            ),
+        )
 
     def test_provision_environment_enables_only_the_filtered_list(self):
         source = inspect.getsource(infra.provision_environment)
@@ -3064,6 +3195,327 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
             "localhost.cert.renewal.service",
             infra.systemd_units_running_as(infra.MANIFEST, "odoo"),
         )
+
+
+class RedactCommandTests(unittest.TestCase):
+    def test_masks_psql_password_variables_and_rabbitmq_passwords(self):
+        # Tests [@ANCHOR: infrastructure:redact_command]
+        self.assertEqual(
+            infra.redact_command(["sudo", "-u", "postgres", "psql", "-v", "role_name=x", "-v", "db_pass=s3cret"]),
+            ["sudo", "-u", "postgres", "psql", "-v", "role_name=x", "-v", "db_pass=<redacted>"],
+        )
+        self.assertEqual(
+            infra.redact_command(["rabbitmqctl", "change_password", "hams", "s3cret"]),
+            ["rabbitmqctl", "change_password", "hams", "<redacted>"],
+        )
+        self.assertEqual(infra.redact_command(["systemctl", "restart", "x"]), ["systemctl", "restart", "x"])
+
+
+class AptInstallSafetyTests(_TmpDirTestCase):
+    """Round-2 production runbook, 2026-10-03: a re-run's `apt-get install -y <MANIFEST list>` aborted
+    on hams1's `apt-mark hold odoo`, and without the hold would have upgraded odoo, pgbackrest and
+    pgvector and replaced the installed Rust toolchain."""
+
+    def test_filter_skips_installed_held_and_toolchain_packages(self):
+        # Tests [@ANCHOR: infrastructure:_filter_apt_install]
+        to_install, skipped = infra._filter_apt_install(
+            ["odoo", "pgbackrest", "cargo-web", "redis-server", "python3-new", "python3-new"],
+            installed={"pgbackrest", "redis-server"},
+            held={"odoo"},
+            have_cargo=True,
+        )
+        self.assertEqual(to_install, ["python3-new"])
+        self.assertEqual(skipped["odoo"], "held (apt-mark hold)")
+        self.assertEqual(skipped["pgbackrest"], "already installed")
+        self.assertIn("cargo", skipped["cargo-web"])
+        to_install, _ = infra._filter_apt_install(["cargo-web"], set(), set(), have_cargo=False)
+        self.assertEqual(to_install, ["cargo-web"])
+
+    def test_parse_apt_simulation(self):
+        # Tests [@ANCHOR: infrastructure:_parse_apt_simulation]
+        out = (
+            "Inst libfoo1 (1.2 Debian:13 [amd64])\n"
+            "Inst odoo [19.0.20260923] (19.0.20261002 Odoo [all])\n"
+            "Remv rustc-web [1.96]\n"
+            "Conf libfoo1 (1.2 Debian:13 [amd64])\n"
+        )
+        self.assertEqual(infra._parse_apt_simulation(out), (["libfoo1"], ["odoo"], ["rustc-web"]))
+
+    def _fake_probes(self, installed="", held="", simulation="", sim_rc=0):
+        def fake_run(cmd, **kwargs):
+            if cmd[0] == "dpkg-query":
+                return subprocess.CompletedProcess(cmd, 0, stdout=installed, stderr="")
+            if cmd[:2] == ["apt-mark", "showhold"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=held, stderr="")
+            if cmd[:2] == ["apt-get", "-s"]:
+                return subprocess.CompletedProcess(cmd, sim_rc, stdout=simulation, stderr="E: held")
+            raise AssertionError(f"unexpected command {cmd}")
+        self.safe_patch_object(infra.subprocess, "run", side_effect=fake_run)
+        self.safe_patch_object(infra.shutil, "which", return_value="/usr/bin/cargo")
+
+    def test_installs_only_missing_packages_with_no_upgrade(self):
+        # Tests [@ANCHOR: infrastructure:_apt_install_missing]
+        # Tests [@ANCHOR: infrastructure:_installed_apt_packages]
+        # Tests [@ANCHOR: infrastructure:_held_apt_packages]
+        self._fake_probes(installed="ii  odoo\nii  pgbackrest\nrc  oldpkg\n", held="odoo\n",
+                          simulation="Inst python3-new (1 Debian [all])\n")
+        run_cmd = MagicMock()
+        installed = infra._apt_install_missing(
+            run_cmd, ["odoo", "pgbackrest", "python3-new", "cargo-web"], ["-o", "x"], "t"
+        )
+        self.assertEqual(installed, ["python3-new"])
+        run_cmd.assert_called_once_with(["apt-get", "install", "-y", "--no-upgrade", "-o", "x", "python3-new"])
+
+    def test_refuses_an_install_that_would_remove_or_upgrade_a_protected_package(self):
+        for simulation in ("Remv rustc-web [1.96]\nInst rustc (1.85 Debian [amd64])\n",
+                           "Inst postgresql-18-pgvector [0.8.0] (0.8.1 PGDG [amd64])\nInst python3-new (1)\n"):
+            with self.subTest(simulation=simulation):
+                infra.reset_hook_failures()
+                self._fake_probes(simulation=simulation)
+                run_cmd = MagicMock()
+                self.assertEqual(infra._apt_install_missing(run_cmd, ["python3-new"], [], "t"), [])
+                run_cmd.assert_not_called()
+                self.assertEqual(infra.get_hook_failures()[0][0], "apt_install:t")
+
+    def test_refuses_when_apt_itself_refuses_over_a_hold(self):
+        self._fake_probes(sim_rc=100)
+        run_cmd = MagicMock()
+        self.assertEqual(infra._apt_install_missing(run_cmd, ["python3-new"], [], "t"), [])
+        run_cmd.assert_not_called()
+
+    def test_provision_environment_has_no_bare_apt_install_left(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertNotIn('["apt-get", "install", "-y"]', source)
+        self.assertEqual(source.count("_apt_install_missing("), 3)
+
+
+class DeployedDaemonsCopyTests(_TmpDirTestCase):
+    """Tests [@ANCHOR: infrastructure:_skip_deployed_copy]
+
+    Round-2 production runbook, 2026-10-03: provisioning copied hams_com's src daemons/ over
+    /opt/hams/daemons and so reverted 79 newer files deployed by `deploy_to_production.py
+    --sync-daemons`, then crashed on a dangling symlink."""
+
+    def _manifest(self, src, dest, flagged=True):
+        spec = {
+            "src": src, "path": dest, "owner": None, "mode": "755",
+            "environments": ["prod"], "post_provision_hooks": [MagicMock(__name__="hook")],
+        }
+        if flagged:
+            spec["deployed_by_sync_daemons"] = True
+        self.safe_patch_dict(infra.MANIFEST, {"static_files": [spec]})
+        return spec
+
+    def safe_patch_dict(self, target, values):
+        patcher = patch.dict(target, values)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _tree(self):
+        src = os.path.join(self.tmp, "src")
+        os.makedirs(src)
+        with open(os.path.join(src, "main.py"), "w") as f:
+            f.write("new = 1\n")
+        dest = os.path.join(self.tmp, "daemons")
+        return src, dest
+
+    def test_a_deployed_host_keeps_its_daemons_and_runs_no_hooks(self):
+        src, dest = self._tree()
+        os.makedirs(dest)
+        with open(os.path.join(dest, "main.py"), "w") as f:
+            f.write("deployed = 2\n")
+        deploy_log = os.path.join(self.tmp, "DEPLOY_LOG")
+        open(deploy_log, "w").close()
+        self.safe_patch_object(infra, "DEPLOY_LOG_PATH", deploy_log)
+        spec = self._manifest(src, dest)
+        infra.provision_static_files(MagicMock(), {}, environment="prod")
+        with open(os.path.join(dest, "main.py")) as f:
+            self.assertEqual(f.read(), "deployed = 2\n")
+        spec["post_provision_hooks"][0].assert_not_called()
+
+    def test_a_fresh_install_still_copies_and_skips_a_dangling_symlink(self):
+        src, dest = self._tree()
+        os.symlink("/nonexistent/hams_open/ham_digital_modes", os.path.join(src, "ham_digital_modes"))
+        self.safe_patch_object(infra, "DEPLOY_LOG_PATH", os.path.join(self.tmp, "no_DEPLOY_LOG"))
+        self.safe_patch_object(infra, "apply_permissions")
+        spec = self._manifest(src, dest)
+        infra.provision_static_files(MagicMock(), {}, environment="prod")
+        with open(os.path.join(dest, "main.py")) as f:
+            self.assertEqual(f.read(), "new = 1\n")
+        spec["post_provision_hooks"][0].assert_called_once()
+        self.assertEqual(infra.get_hook_failures(), [])
+
+    def test_both_daemon_trees_are_flagged_in_the_manifest(self):
+        flagged = {s["path"] for s in infra.MANIFEST["static_files"] if s.get("deployed_by_sync_daemons")}
+        self.assertEqual(flagged, {"/opt/hams/daemons", "/opt/hams/daemons/backup_worker"})
+
+
+class PreserveExistingDirectoryTests(_TmpDirTestCase):
+    def test_an_existing_preserve_existing_directory_keeps_its_mode(self):
+        # Tests [@ANCHOR: infrastructure:apply_production_directories]
+        existing = os.path.join(self.tmp, "var/log/redis")
+        os.makedirs(existing)
+        os.chmod(existing, 0o2750)
+        missing = os.path.join(self.tmp, "new")
+        self.safe_patch_dict(infra.MANIFEST, {"directories": [
+            {"path": existing, "owner": None, "provision_mode": "755", "environments": ["prod"],
+             "preserve_existing": True},
+            {"path": missing, "owner": None, "provision_mode": "750", "environments": ["prod"],
+             "preserve_existing": True},
+        ]})
+        infra.apply_production_directories(environment="prod")
+        self.assertEqual(os.stat(existing).st_mode & 0o7777, 0o2750)
+        self.assertEqual(os.stat(missing).st_mode & 0o777, 0o750)
+
+    def safe_patch_dict(self, target, values):
+        patcher = patch.dict(target, values)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_var_log_redis_is_preserved(self):
+        entry = [d for d in infra.MANIFEST["directories"] if d["path"] == "/var/log/redis"][0]
+        self.assertTrue(entry.get("preserve_existing"))
+
+
+class ConditionalRestartTests(_SafePatchTestCase):
+    def test_redis_acl_write_reports_whether_anything_changed(self):
+        self.safe_patch_object(infra, "apply_permissions")
+        with tempfile.TemporaryDirectory() as directory:
+            conf = os.path.join(directory, "redis.conf")
+            include = os.path.join(directory, "hams-acl.conf")
+            open(conf, "w").close()
+            env_vars = {"REDIS_USERNAME": "hams_redis", "REDIS_PASSWORD": "pw"}
+            self.assertTrue(infra._write_redis_acl_include(env_vars, conf, include))
+            self.assertFalse(infra._write_redis_acl_include(env_vars, conf, include))
+            env_vars["REDIS_PASSWORD"] = "pw2"
+            self.assertTrue(infra._write_redis_acl_include(env_vars, conf, include))
+
+    def test_each_restart_is_conditional_on_its_config_change(self):
+        source = inspect.getsource(infra.provision_environment)
+        for service, guard in (
+            ("rabbitmq-server", "if rabbitmq_conf_changed:"),
+            ("redis-server", "redis_conf_changed"),
+            ("postgresql", "if postgresql_restart_needed:"),
+        ):
+            idx = source.index(f'["systemctl", "restart", "{service}"]')
+            self.assertIn(guard, source[idx - 300:idx], service)
+
+
+class ProvisionPlanModeTests(_TmpDirTestCase):
+    """Tests [@ANCHOR: infrastructure:provision_plan]
+
+    provision_environment(plan=True) runs end to end here with every mutating primitive patched to
+    fail the test: nothing may be written, created, linked, chowned, copied or run."""
+
+    READ_ONLY_PREFIXES = (
+        "dpkg-query", "apt-mark showhold", "apt-get -s", "apt-cache", "bash -c apt-cache",
+        "systemctl is-enabled", "rabbitmqctl list_users", "sudo -u postgres psql", "dpkg-architecture",
+    )
+
+    def _forbid(self, name):
+        def fail(*args, **kwargs):
+            raise AssertionError(f"plan mode called {name}{args}")
+        return fail
+
+    def test_plan_changes_nothing_and_prints_no_secret(self):
+        repo = os.path.join(self.tmp, "hams_open")
+        for rel in ("hams_shared/tools", "zero_sudo", "backup_management/daemon"):
+            os.makedirs(os.path.join(repo, rel))
+        open(os.path.join(repo, "zero_sudo", "__manifest__.py"), "w").close()
+        hams_com = os.path.join(self.tmp, "hams_com")
+        os.makedirs(os.path.join(hams_com, "ham_base"))
+        os.makedirs(os.path.join(hams_com, "daemons"))
+        open(os.path.join(hams_com, "ham_base", "__manifest__.py"), "w").close()
+        pg_conf = os.path.join(self.tmp, "postgresql.conf")
+        with open(pg_conf, "w") as f:
+            f.write("listen_addresses = '*'\n")
+
+        printed = []
+
+        def fake_subprocess_run(cmd, *args, **kwargs):
+            text = " ".join(cmd)
+            if text.startswith("sudo -u postgres psql") and "SELECT" not in (kwargs.get("input") or ""):
+                raise AssertionError(f"plan mode ran a mutating psql: {cmd}")
+            if not text.startswith(self.READ_ONLY_PREFIXES):
+                raise AssertionError(f"plan mode ran {cmd}")
+            stdout = ""
+            if text.startswith("systemctl is-enabled"):
+                stdout = "disabled\n"
+            elif text.startswith("apt-cache show"):
+                stdout = f"Package: {cmd[-1]}\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        real_open = builtins.open
+
+        def guarded_open(file, mode="r", *args, **kwargs):
+            if any(flag in mode for flag in "wax+"):
+                raise AssertionError(f"plan mode opened {file!r} for writing")
+            return real_open(file, mode, *args, **kwargs)
+
+        real_os_open = os.open
+
+        def guarded_os_open(path, flags, *args, **kwargs):
+            if flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND):
+                raise AssertionError(f"plan mode os.open'ed {path!r} for writing")
+            return real_os_open(path, flags, *args, **kwargs)
+
+        self.safe_patch_object(infra.subprocess, "run", side_effect=fake_subprocess_run)
+        self.safe_patch_object(builtins, "open", side_effect=guarded_open)
+        self.safe_patch_object(infra.os, "open", side_effect=guarded_os_open)
+        for name in ("symlink", "makedirs", "chown", "chmod", "replace", "remove", "rename", "fchmod"):
+            self.safe_patch_object(infra.os, name, side_effect=self._forbid(f"os.{name}"))
+        for name in ("copytree", "copy2", "rmtree"):
+            self.safe_patch_object(infra.shutil, name, side_effect=self._forbid(f"shutil.{name}"))
+
+        def fill_env(env, is_test):
+            # Stands in for load_and_prompt_env (which reads the host's real /opt/hams/etc):
+            # every placeholder the MANIFEST renders gets a harmless value.
+            for spec in infra.MANIFEST["static_files"]:
+                for field in ("content", "path", "src"):
+                    for name in re.findall(r"\{([A-Z][A-Z0-9_]*)\}", spec.get(field, "") or ""):
+                        env.setdefault(name, "placeholder")
+            for keys in infra.MANIFEST["env_groups"].values():
+                for key in keys:
+                    env.setdefault(key, "placeholder")
+
+        self.safe_patch_object(infra, "load_and_prompt_env", side_effect=fill_env)
+        self.safe_patch_object(infra, "download_file", side_effect=self._forbid("download_file"))
+        self.safe_patch_object(infra, "initialize_odoo_database", side_effect=self._forbid("initialize_odoo_database"))
+        self.safe_patch_object(infra, "run_post_provision_smoketest", side_effect=self._forbid("smoketest"))
+        original_lockdown = infra._apply_postgresql_lockdown
+        self.safe_patch_object(infra, "_apply_postgresql_lockdown", side_effect=lambda: original_lockdown([pg_conf]))
+        self.safe_patch_dict(os.environ, {"HAMS_ISOLATED_NS": ""})
+        del os.environ["HAMS_ISOLATED_NS"]
+
+        def plan_run(cmd, **kwargs):
+            printed.append(" ".join(infra.redact_command(cmd)))
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        env_vars = {
+            "REPO_ROOT": repo, "DB_NAME": "hams_prod", "DB_PASS": "SEKRET-db",
+            "REDIS_USERNAME": "hams_redis", "REDIS_PASSWORD": "SEKRET-redis",
+            "RMQ_USER": "hams_rabbitmq", "RMQ_PASS": "SEKRET-rmq",
+        }
+        with patch("sys.stdout") as stdout:
+            recorded = infra.provision_environment(
+                plan_run, env_vars, None, os_id="debian", hold_odoo=True, plan=True
+            )
+        stdout_text = "".join(str(c.args[0]) for c in stdout.write.call_args_list if c.args)
+        self.assertFalse(infra._planning(), "plan mode must be switched off afterwards")
+        kinds = {kind for kind, _ in recorded.actions}
+        self.assertTrue({"write", "hook"} <= kinds, kinds)
+        self.assertTrue(any("restart postgresql" in cmd for cmd in printed), printed)
+        self.assertTrue(any(cmd.startswith("apt-get install -y --no-upgrade") for cmd in printed), printed)
+        everything = stdout_text + "\n".join(printed) + repr(recorded.actions)
+        for secret in ("SEKRET-db", "SEKRET-redis", "SEKRET-rmq"):
+            self.assertNotIn(secret, everything)
+        with real_open(pg_conf) as f:
+            self.assertEqual(f.read(), "listen_addresses = '*'\n")
+
+    def safe_patch_dict(self, target, values):
+        patcher = patch.dict(target, values)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
 
 if __name__ == "__main__":
