@@ -208,6 +208,20 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         self.assertIn("patent_pipeline:x", code_anchors)
         self.assertNotIn("should_never_appear:y", code_anchors)
 
+    def test_a_rust_test_file_included_by_path_is_scanned_for_tests_links(self):
+        # A crate that keeps its unit tests in `foo.rs.test`, pulled in with
+        # `#[cfg(test)] #[path = "foo.rs.test"] mod tests;` (daemons/hams_simulated_band does),
+        # cites its features from that file. Found 2026-10-02: `.rs.test` was not scanned, so
+        # every such citation was invisible and each feature it covers read as untested.
+        _write(os.path.join(self.tmp, "daemons", "some_daemon", "src", "auth.rs"), "// [@ANCHOR: check_secret]\nfn check_secret() {}\n")
+        _write(
+            os.path.join(self.tmp, "daemons", "some_daemon", "src", "auth.rs.test"),
+            "#[test]\n// Tests [@ANCHOR: check_secret]\nfn it_checks() { check_secret(); }\n",
+        )
+        code_anchors, _locs, _links, tests_links_set, *_rest = self._scan()
+        self.assertIn("some_daemon:check_secret", code_anchors)
+        self.assertIn("some_daemon:check_secret", tests_links_set)
+
     def test_a_begin_marker_base_declaration_is_captured_the_same_as_plain(self):
         # 2026-09-04 (ADR 0089, Bruce's own request): [@ANCHOR-BEGIN: name] /
         # [@ANCHOR-END: name] must resolve identically to a plain
