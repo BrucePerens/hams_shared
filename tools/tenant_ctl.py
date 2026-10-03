@@ -9,6 +9,7 @@
     tenant_ctl.py health --all                   exit 1 if any tenant is down or answers 5xx
     tenant_ctl.py backup NAME|--all [--apply]    pg_dump + filestore archive with checksums
     tenant_ctl.py restore-test NAME|--all        restore the newest backup into a scratch database
+    tenant_ctl.py upgrade NAME [--apply]         backup, stop, odoo -u, start (one tenant at a time)
     tenant_ctl.py delete NAME --confirm-delete NAME [--apply]
     tenant_ctl.py cloudflare-plan [--current FILE]   ingress rules and DNS records (prints only)
 
@@ -183,6 +184,20 @@ def cmd_restore_test(args, paths, system):
     return 1 if failures else 0
 
 
+def cmd_upgrade(args, paths, system):
+    spec = _specs_for(args, paths)[0]
+    if args.apply:
+        _require_apply_allowed(system)
+    steps = lib.build_upgrade_steps(spec, paths, system)
+    _out(f"{'APPLY' if args.apply else 'PLAN (nothing is changed; add --apply)'}: upgrade {spec['name']}")
+    lib.execute(steps, args.apply, _out)
+    if args.apply:
+        row = lib.tenant_status(spec, paths, system, http_probe)
+        _out(f"after the upgrade: unit={row['unit']} http={row['http']} healthy={row['healthy']}")
+        return 0 if row["healthy"] else 1
+    return 0
+
+
 def cmd_delete(args, paths, system):
     spec = _specs_for(args, paths)[0]
     if args.confirm_delete != spec["name"]:
@@ -238,6 +253,11 @@ def build_parser():
         if name == "backup":
             p.add_argument("--apply", action="store_true")
         p.set_defaults(func=func)
+
+    p = sub.add_parser("upgrade")
+    p.add_argument("name")
+    p.add_argument("--apply", action="store_true")
+    p.set_defaults(func=cmd_upgrade)
 
     p = sub.add_parser("delete")
     p.add_argument("name")

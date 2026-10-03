@@ -9,6 +9,7 @@ model. Tests [@ANCHOR: tenant_lib:validate_spec] [@ANCHOR: tenant_lib:build_crea
 [@ANCHOR: tenant_lib:render_odoo_conf] [@ANCHOR: tenant_lib:render_unit_dropin]
 [@ANCHOR: tenant_lib:render_pg_hba] [@ANCHOR: tenant_lib:render_nft]
 [@ANCHOR: tenant_lib:backup_tenant] [@ANCHOR: tenant_lib:restore_test] [@ANCHOR: tenant_lib:status]
+[@ANCHOR: tenant_lib:upgrade_tenant]
 [@ANCHOR: tenant_lib:delete_tenant] [@ANCHOR: tenant_cloudflare:build_ingress]
 """
 
@@ -121,8 +122,10 @@ class FakeSystem(lib.System):
             return lib.Result(0)
         if argv[0] == "runuser" and "--config" in argv:
             name = argv[argv.index("-d") + 1]
-            wanted = argv[argv.index("-i") + 1].split(",")
-            self.databases[name]["modules"].update(wanted)
+            flag = "-i" if "-i" in argv else "-u"
+            wanted = argv[argv.index(flag) + 1].split(",")
+            if flag == "-i":
+                self.databases[name]["modules"].update(wanted)
             return lib.Result(0)
         raise AssertionError(f"unexpected command {argv}")
 
@@ -538,6 +541,35 @@ class DeleteTests(_Base):
             tenant_ctl.main(["delete", "perens_com"], self.system, self.paths)
 
 
+class UpgradeTests(_Base):
+    def setUp(self):
+        super().setUp()
+        self.run_steps(self.spec)
+
+    def test_upgrade_backs_up_stops_upgrades_and_starts_in_that_order(self):
+        steps = lib.build_upgrade_steps(self.spec, self.paths, self.system)
+        self.assertEqual([s.key for s in steps], ["backup", "stop", "upgrade", "start"])
+        self.system.commands.clear()
+        lib.execute(steps, True, lambda line: None)
+        flat = [" ".join(c) for c in self.system.commands if c[0] != "chown"]
+        stop = next(i for i, c in enumerate(flat) if "systemctl stop" in c)
+        upgrade = next(i for i, c in enumerate(flat) if "-u base,website" in c)
+        start = next(i for i, c in enumerate(flat) if "systemctl start" in c)
+        dump = next(i for i, c in enumerate(flat) if "pg_dump" in c)
+        self.assertLess(dump, stop)
+        self.assertLess(stop, upgrade)
+        self.assertLess(upgrade, start)
+        self.assertTrue(any("--stop-after-init" in c and "--no-http" in c for c in flat))
+
+    def test_cli_upgrade_is_a_plan_by_default(self):
+        stdout = io.StringIO()
+        self.system.commands.clear()
+        with mock.patch("sys.stdout", stdout):
+            tenant_ctl.main(["upgrade", "perens_com"], self.system, self.paths)
+        self.assertIn("PLAN (nothing is changed", stdout.getvalue())
+        self.assertFalse([c for c in self.system.commands if "--stop-after-init" in c and "-u" in c])
+
+
 class CtlTests(_Base):
     def spec_file(self, spec):
         path = os.path.join(self.tmp, f"{spec['name']}.json")
@@ -654,6 +686,16 @@ class CloudflarePlanTests(unittest.TestCase):
             [(r["name"], r["content"], r["proxied"]) for r in records],
             [("perens.com", "abc-123.cfargotunnel.com", True), ("www.perens.com", "abc-123.cfargotunnel.com", True)],
         )
+
+    def test_odoo_rows_view_of_the_plan_names_the_catch_all_the_module_cannot_set(self):
+        new = cf.build_ingress(self.specs, copy.deepcopy(LIVE))
+        rows, catch_all = cf.odoo_route_rows(new)
+        self.assertEqual(catch_all, "http://localhost:18110")
+        self.assertEqual(rows[0], {"sequence": 10, "hostname": "perens.com", "path": "", "service_url": "http://localhost:18101"})
+        self.assertEqual(len(rows), len(new) - 1)
+        text = cf.render_plan_text(self.specs, {"config": {"ingress": copy.deepcopy(LIVE)}}, "t", odoo_rows=True)
+        self.assertIn("http://localhost:8069", text)
+        self.assertIn("service_url=http://localhost:18101", text)
 
     def test_zone_candidates(self):
         self.assertEqual(cf.zone_candidates("www.example.co.uk"), ["www.example.co.uk", "example.co.uk", "co.uk"])

@@ -127,7 +127,18 @@ def zone_candidates(domain):
     return [".".join(labels[i:]) for i in range(len(labels) - 1)]
 
 
-def render_plan_text(specs, current, tunnel_id=None):
+def odoo_route_rows(ingress):
+    """The same list as rows of hams_prod's cloudflare.tunnel.route (sequence, hostname, path,
+    service_url), for the day Bruce chooses to keep the whole list in Odoo. The module always
+    appends its own catch-all (hams_prod's Odoo), so the final catch-all is returned separately."""
+    rows = []
+    for index, rule in enumerate(ingress[:-1], 1):
+        rows.append({"sequence": index * 10, "hostname": rule.get("hostname", ""), "path": rule.get("path", ""),
+                     "service_url": rule["service"]})
+    return rows, ingress[-1]["service"]
+
+
+def render_plan_text(specs, current, tunnel_id=None, odoo_rows=False):
     lines = ["# Cloudflare plan (printed only; nothing was changed)"]
     if current is None:
         lines.append("# No current configuration given: showing tenant rules and DNS only.")
@@ -142,6 +153,13 @@ def render_plan_text(specs, current, tunnel_id=None):
         for index, rule in enumerate(new, 1):
             host = rule.get("hostname", "*any*")
             lines.append(f"{index:2d}. host={host:<24} path={rule.get('path', '-'):<22} -> {rule['service']}")
+        if odoo_rows:
+            rows, catch_all = odoo_route_rows(new)
+            lines.append("# As cloudflare.tunnel.route rows (the module appends its own catch-all, which is "
+                         f"always http://localhost:8069; the list above needs {catch_all} there):")
+            for row in rows:
+                lines.append(f"  seq={row['sequence']:<4} hostname={row['hostname'] or '-':<24} "
+                             f"path={row['path'] or '-':<22} service_url={row['service_url']}")
     lines.append("# DNS (same Cloudflare account only; proxied CNAME to the tunnel):")
     for record in render_dns(specs, tunnel_id):
         lines.append(f"  {record['type']} {record['name']} -> {record['content']} proxied={record['proxied']}")
@@ -262,6 +280,7 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("plan")
     p.add_argument("--current")
+    p.add_argument("--odoo-rows", action="store_true", help="also print the list as route rows")
     p = sub.add_parser("fetch-current")
     p.add_argument("--out", required=True)
     p = sub.add_parser("apply-ingress")
@@ -280,7 +299,7 @@ def main(argv=None):
         if args.current:
             with open(args.current, "r", encoding="utf-8") as handle:  # audit-ignore-path
                 current = json.load(handle)
-        print(render_plan_text(specs, current, args.tunnel_id))
+        print(render_plan_text(specs, current, args.tunnel_id, args.odoo_rows))
         return 0
     if not args.tunnel_id:
         raise SystemExit("--tunnel-id is required for API commands")

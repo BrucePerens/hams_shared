@@ -1081,6 +1081,30 @@ def tenant_status(spec, paths, system, http_get=None):
     }
 
 
+# [@ANCHOR: tenant_lib:upgrade_tenant]
+def build_upgrade_steps(spec, paths, system):
+    """One tenant's module upgrade after an Odoo package upgrade: backup, stop, `odoo -u` as the
+    tenant (no HTTP, no cron), start. Run for one tenant at a time; the next only when the
+    previous one answers."""
+    name = spec["name"]
+    unit = f"hams-tenant@{name}.service"
+    modules = ",".join(["base"] + [m for m in spec["modules"] + spec["extra_modules"] if m != "base"])
+    return [
+        Step("backup", f"back up {name} before the upgrade", lambda: backup_tenant(spec, paths, system)),
+        Step("stop", f"systemctl stop {unit}", lambda: system.run(["systemctl", "stop", unit])),
+        Step(
+            "upgrade",
+            f"odoo -u {modules} --stop-after-init as {os_user(name)}",
+            lambda: system.run(
+                ["runuser", "-u", os_user(name), "--", paths.odoo_bin, "--config", paths.conf_file(name),
+                 "-d", name, "-u", modules, "--stop-after-init", "--no-http", "--max-cron-threads=0",
+                 "--log-level=warn"]
+            ),
+        ),
+        Step("start", f"systemctl start {unit}", lambda: system.run(["systemctl", "start", unit])),
+    ]
+
+
 # [@ANCHOR: tenant_lib:delete_tenant]
 def build_delete_steps(spec, paths, system, all_specs=None):
     """Steps that remove a tenant. A final backup comes first and cannot be skipped by this builder;

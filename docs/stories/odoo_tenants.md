@@ -32,6 +32,13 @@ weekly restore test restores the newest backup into a scratch database and drops
 [@ANCHOR: tenant_lib:status]. Removal needs the tenant's exact name, takes a final backup first and
 never touches the backups [@ANCHOR: tenant_lib:delete_tenant].
 
+## Scenario: Upgrading after an Odoo package upgrade
+
+The Debian package is shared, so every instance runs the new code after its next restart.
+`tenant_ctl upgrade NAME` backs the tenant up, stops it, runs `odoo -u` for its modules as its own
+account and starts it, and reports whether it answers; tenants are done one at a time
+[@ANCHOR: tenant_lib:upgrade_tenant].
+
 ## Scenario: Sending the tenants through the tunnel
 
 The tunnel's existing path-only rules match every hostname, so they are first scoped to hams.com, then
