@@ -77,6 +77,15 @@ gated in `hams_shared`, so a second PR reviews nothing new. Before pushing, conf
 and the target commit is reachable from `hams_shared`'s `origin/main`. Commit only that path
 (`git commit -- hams_shared`). Anything else in the same commit -- even a one-line doc change --
 voids the exception and needs a PR. See ADR 0102 decision 6.
+
+**GitHub CI never runs `test.py`** (Bruce's decision, 2026-10-02, all three repositories: hams_com,
+hams_open, hams_shared). Do not add any GitHub Actions workflow step that invokes
+`hams_shared/tools/test.py` or the Odoo-loading parts of `run_linters.py`, and do not reintroduce
+CI jobs or git hooks that only duplicate the testing sessions already run themselves (the
+burn-list pre-push gate and the burn-list CI workflow/required check were removed the same day for
+this reason). Odoo module tests are run by the working session on the dev box and the other test
+hosts. Advisory security jobs that are not test duplicates (pip-audit, scheduled cargo-audit /
+cargo-deny, dependency-watch) may stay.
 </site_rules>
 
 ## 1. CORE OPERATING PRINCIPLES (META-RULES)
