@@ -16,6 +16,10 @@ import logging
 import multiprocessing
 import os
 import pwd
+import tempfile
+import struct
+import re
+import platform
 import shlex
 import shutil
 import socket
@@ -628,6 +632,171 @@ def hook_build_rust_daemons(env_vars, dest_dir, path, run_cmd_func):
             except Exception as e:  # audit-ignore-catch-all
                 _logger.warning("Rust daemon build failed for %s: %s", crate, e)
                 record_hook_failure(f"hook_build_rust_daemons:{crate}", e)
+
+
+# [@ANCHOR: infrastructure:build_cloudflared_ffi]
+# Builds hams_open/daemons/cloudflared-ffi/libcloudflared.so for this host's CPU.
+#
+# Why. The `cloudflare` module's tests (TestCloudflareTunnelDaemon: edge traffic parsing,
+# unauthorized bypass, websocket traffic) start the Go local HTTPS simulator through
+# cloudflare/utils/cloudflare_daemon.py, which ctypes.CDLL-loads
+# daemons/cloudflared-ffi/libcloudflared.so (the path is relative to that module, so the library
+# must sit inside the tree under test). The library is a compiled, per-architecture artifact. It
+# used to be committed to git as an x86-64 binary, so an arm64 test host (mac1's Lima VM, the
+# Jetsons, the Pi) either had no library or received the dev box's x86-64 file and failed with
+# "wrong ELF class". It is now built on the host that needs it, from the in-repo source.
+#
+# Network. The module is stdlib-only Go (empty go.sum, no `require`), so the build needs the OS
+# package golang-1.24-go (Debian 13 and Ubuntu 24.04 ship it; an apt_packages entry) and a C
+# compiler, and nothing else. The build environment is pinned so no step can reach a network:
+# GOTOOLCHAIN=local, GOFLAGS=-mod=readonly, GOPROXY=off; -trimpath and -buildvcs=false keep build
+# paths and VCS state out of the output. tools/build_cloudflared_ffi.py is the command-line entry.
+CFFI_LIB_NAME = "libcloudflared.so"
+# Debian and Ubuntu install golang-1.24-go here; it is not on PATH when golang-go is a different
+# version (Ubuntu 24.04's golang-go is 1.22).
+CFFI_GO_CANDIDATES = ("/usr/lib/go-1.24/bin/go", "/usr/local/go/bin/go")
+CFFI_APT_PACKAGE = "golang-1.24-go"
+
+# ELF e_machine values for the CPUs hams.com hosts run on.
+CFFI_ELF_MACHINES = {62: "x86_64", 183: "aarch64", 40: "armv7l", 243: "riscv64"}
+CFFI_PLATFORM_ALIASES = {"amd64": "x86_64", "arm64": "aarch64", "armv8l": "armv7l"}
+
+
+def cloudflared_ffi_default_dir():
+    """hams_open/daemons/cloudflared-ffi, found from this file's real location
+    (hams_open/hams_shared/tools/)."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    return os.path.normpath(os.path.join(here, "..", "..", "daemons", "cloudflared-ffi"))
+
+
+def cffi_host_machine():
+    machine = platform.machine().lower()
+    return CFFI_PLATFORM_ALIASES.get(machine, machine)
+
+
+def cffi_elf_machine(path):
+    """The CPU an ELF shared object was built for ("x86_64", "aarch64", ...), or None when the
+    file is not a little-endian 64-bit-or-32-bit ELF object."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(20)
+    except OSError:
+        return None
+    if len(head) < 20 or head[:4] != b"\x7fELF" or head[5] != 1:
+        return None
+    return CFFI_ELF_MACHINES.get(struct.unpack("<H", head[18:20])[0], "unknown")
+
+
+def cffi_library_status(ffi_dir):
+    """(ok, reason). ok means the library exists, was built for this CPU and is not older than
+    its Go source; reason says what is wrong otherwise."""
+    lib = os.path.join(ffi_dir, CFFI_LIB_NAME)
+    if not os.path.exists(lib):
+        return False, f"{lib} does not exist"
+    built_for = cffi_elf_machine(lib)
+    if built_for is None:
+        return False, f"{lib} is not a readable ELF shared object"
+    if built_for != cffi_host_machine():
+        return False, f"{lib} was built for {built_for}, this host is {cffi_host_machine()}"
+    lib_mtime = os.path.getmtime(lib)
+    for src in ("main.go", "go.mod"):
+        src_path = os.path.join(ffi_dir, src)
+        if os.path.exists(src_path) and os.path.getmtime(src_path) > lib_mtime:
+            return False, f"{lib} is older than {src}"
+    return True, ""
+
+
+def cffi_go_version(go):
+    out = subprocess.run([go, "version"], capture_output=True, text=True, check=False).stdout
+    match = re.search(r"go(\d+)\.(\d+)", out)
+    return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+
+
+def cffi_required_go(ffi_dir):
+    """The `go` directive of the module's go.mod, as (major, minor)."""
+    with open(os.path.join(ffi_dir, "go.mod"), encoding="utf-8") as f:
+        match = re.search(r"^go (\d+)\.(\d+)", f.read(), re.MULTILINE)
+    return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+
+
+def cffi_find_go(ffi_dir):
+    """The first installed Go that satisfies go.mod, or None."""
+    need = cffi_required_go(ffi_dir)
+    for go in [shutil.which("go")] + [c for c in CFFI_GO_CANDIDATES if os.path.exists(c)]:
+        if go and cffi_go_version(go) >= need:
+            return go
+    return None
+
+
+def cffi_build_env(base_env, cache_dir):
+    env = dict(base_env)
+    env.update({
+        "GOTOOLCHAIN": "local",
+        "GOFLAGS": "-mod=readonly",
+        "GOPROXY": "off",
+        "CGO_ENABLED": "1",
+        "GOCACHE": cache_dir,
+        "GOPATH": os.path.join(cache_dir, "gopath"),
+    })
+    return env
+
+
+def cffi_build(ffi_dir, run=subprocess.run):
+    """Builds the library into ffi_dir (and the header beside it). Raises RuntimeError with the
+    fix when a prerequisite is missing; the library is replaced only after a successful build."""
+    if not os.path.exists(os.path.join(ffi_dir, "main.go")):
+        raise RuntimeError(f"{ffi_dir}/main.go not found")
+    go = cffi_find_go(ffi_dir)
+    if go is None:
+        need = ".".join(str(n) for n in cffi_required_go(ffi_dir))
+        raise RuntimeError(
+            f"no Go >= {need} installed; run: sudo apt-get install -y {CFFI_APT_PACKAGE} build-essential"
+        )
+    if shutil.which("gcc") is None:
+        raise RuntimeError("no C compiler (cgo needs one); run: sudo apt-get install -y build-essential")
+    with tempfile.TemporaryDirectory(prefix="cloudflared-ffi-build-") as work:
+        out = os.path.join(work, CFFI_LIB_NAME)
+        cmd = [go, "build", "-trimpath", "-buildvcs=false", "-buildmode=c-shared", "-o", out, "."]
+        res = run(cmd, cwd=ffi_dir, env=cffi_build_env(os.environ, os.path.join(work, "cache")),
+                  capture_output=True, text=True, check=False)
+        if res.returncode != 0:
+            raise RuntimeError(f"{' '.join(cmd)} failed:\n{res.stdout}{res.stderr}")
+        if cffi_elf_machine(out) != cffi_host_machine():
+            raise RuntimeError(f"built {out} is for {cffi_elf_machine(out)}, expected {cffi_host_machine()}")
+        # Same directory first, then an atomic rename, so a reader never sees a partial file.
+        for name in (CFFI_LIB_NAME, "libcloudflared.h"):
+            tmp = os.path.join(ffi_dir, "." + name + ".new")
+            shutil.copyfile(os.path.join(work, name), tmp)
+            os.chmod(tmp, 0o755 if name == CFFI_LIB_NAME else 0o644)
+            os.replace(tmp, os.path.join(ffi_dir, name))
+    return os.path.join(ffi_dir, CFFI_LIB_NAME)
+
+
+
+
+# [@ANCHOR: infrastructure:hook_build_cloudflared_ffi]
+def hook_build_cloudflared_ffi(env_vars, dest_dir, path, run_cmd_func):
+    """Builds hams_open/daemons/cloudflared-ffi/libcloudflared.so for this host's CPU.
+
+    The `cloudflare` module's tunnel-daemon tests load that library from inside the tree under
+    test (cloudflare/utils/cloudflare_daemon.py), and it used to be a committed x86-64 binary that
+    arm64 test hosts could not load. The build is local and offline: stdlib-only Go source, the
+    Debian/Ubuntu `golang-1.24-go` package (an apt_packages entry), no module or toolchain
+    download. See tools/build_cloudflared_ffi.py. Never starts or contacts a tunnel."""
+    community_dir = (env_vars or {}).get("HAMS_COMMUNITY_DIR")
+    if not community_dir:
+        return
+    ffi_dir = os.path.join(community_dir, "daemons", "cloudflared-ffi")
+    if not os.path.isdir(ffi_dir):
+        return
+    ok, _reason = cffi_library_status(ffi_dir)
+    if ok:
+        return
+    try:
+        _logger.info("[*] Built %s", cffi_build(ffi_dir))
+    except (RuntimeError, OSError) as e:
+        _logger.warning("libcloudflared.so build failed: %s", e)
+        record_hook_failure("hook_build_cloudflared_ffi", e)
 
 
 # [@ANCHOR: infrastructure:migrate_signing_key]
@@ -1528,7 +1697,7 @@ WantedBy=multi-user.target
             "owner": "hams_com:hams_com",
             "mode": "755",
             "environments": ["prod", "test"],
-            "post_provision_hooks": [hook_build_rust_daemons, hook_daemons_perms],
+            "post_provision_hooks": [hook_build_rust_daemons, hook_build_cloudflared_ffi, hook_daemons_perms],
         },
         {
             "src": "{HAMS_COMMUNITY_DIR}/hams_shared",
@@ -5060,6 +5229,12 @@ WantedBy=timers.target
         # 1.86); Debian's security-maintained cargo-web/rustc-web (1.96) replace it and provide
         # /usr/bin/cargo, so the hook's plain `cargo` command works.
         {"name": "cargo", "debian_name": "cargo-web", "environments": ["early_prod"]},
+        # hook_build_cloudflared_ffi() compiles daemons/cloudflared-ffi (stdlib-only Go, cgo) into
+        # libcloudflared.so, which the cloudflare module's tunnel-daemon tests load. Debian 13 and
+        # Ubuntu 24.04 both ship golang-1.24-go (Ubuntu's plain golang-go is 1.22, too old for the
+        # module's go.mod), so no tarball or toolchain download is needed; gcc comes from
+        # build-essential below.
+        {"name": "golang-1.24-go", "debian_name": "golang-1.24-go", "environments": ["early_prod"]},
         {
             "name": "redis-server",
             "debian_name": "redis-server",
