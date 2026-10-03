@@ -10,7 +10,7 @@ import sys
 def get_public_ip():
     try:
         req = urllib.request.Request(
-            "https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"}
+            "https://api.ipify.org?format=json", headers={"User-Agent": "HamsComSyncDaemon/1.0 (+https://crawler.hams.com)"}
         )
         response = urllib.request.urlopen(req, timeout=5).read()
         return json.loads(response)["ip"]

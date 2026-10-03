@@ -353,7 +353,7 @@ def _file_state(path, new_content):
 def download_file(url, path, mode, env_vars):
     ua = env_vars.get(
         "SYSTEM_USER_AGENT",
-        "Hams.com Bruce Perens K6BP <bruce@perens.com> +1 510-394-5627",
+        "HamsComSyncDaemon/1.0 (+https://crawler.hams.com)",
     )
     req = urllib.request.Request(url, headers={"User-Agent": ua})
     try:
@@ -2952,14 +2952,18 @@ SyslogIdentifier=uk.ofcom.sync
             "environments": ["prod", "test"],
         },
         {
+            # Weekly, not daily (2026-10-02): Ofcom's amateur callsign CSV changes rarely, and a
+            # daily poll of someone else's server for a file that is almost always unchanged is
+            # load for nothing. Each run is also cheap when nothing changed: smart_download sends a
+            # HEAD and skips the body when the ETag/Last-Modified match the values stored in Odoo.
             "path": "/opt/hams/systemd/uk.ofcom.sync.timer",
             "external_fetch": "activates uk.ofcom.sync.service",
             "content": """\
 [Unit]
-Description=Ham Radio UK Ofcom Callsign Sync Daily
+Description=Ham Radio UK Ofcom Callsign Sync Weekly
 
 [Timer]
-OnCalendar=daily
+OnCalendar=weekly
 Persistent=true
 RandomizedDelaySec=15m
 
@@ -3417,7 +3421,7 @@ Environment="ODOO_URL=https://hams.com"
 Environment="ODOO_DB=hams_prod"
 Environment="ODOO_KEY_FILE=/opt/hams/daemons/fcc_uls_sync/.keys/fcc_uls_sync.env"
 Environment="ODOO_KEY_SELF_ROTATE_DAEMON=FCC ULS Sync (pi500-1)"
-Environment="SYSTEM_USER_AGENT=Hams.com Sync Daemon (bruce@perens.com, run from pi500-1 -- see night_shift_todo/high/fcc-uls-sync-needs-non-datacenter-egress-path-a8e5f3c1.md)"
+Environment="SYSTEM_USER_AGENT=HamsComSyncDaemon/1.0 (+https://crawler.hams.com)"
 Environment="PYTHONPATH=/opt/hams/daemons"
 ExecStart=/opt/hams/daemons/fcc_uls_sync/.venv/bin/python3 /opt/hams/daemons/fcc_uls_sync/main.py
 
@@ -6400,7 +6404,7 @@ def load_and_prompt_env(env_vars, is_test):
         # included this at all, despite Bruce believing it already did.
         env_vars.setdefault(
             "SYSTEM_USER_AGENT",
-            "HamsComSyncDaemon/1.0 (+https://hams.com; bruce@perens.com; +1-510-473-7367)",
+            "HamsComSyncDaemon/1.0 (+https://crawler.hams.com)",
         )
 
         if "DB_PASS" not in env_vars:

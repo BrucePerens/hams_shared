@@ -196,8 +196,9 @@ session.
 
 ## Web Application Firewalls (WAF) & Government CDNs
 * **The Bug:** Endpoints like `data.fcc.gov`, UK Ofcom, and AU ACMA actively block default Python `requests` User-Agents, resulting in `Read timed out` or `403 Forbidden` errors.
-* **The Fix:** Hardcode a modern Chrome User-Agent string in `hams_config.py` / daemon scripts to masquerade as a legitimate browser:
-    `"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"`
+* **The Policy (ADR 0104, Bruce 2026-10-03):** Honest unless a firewall forces otherwise. Every external fetch sends `SYSTEM_USER_AGENT`, falling back to `HamsComSyncDaemon/1.0 (+https://crawler.hams.com)` (in hams_com daemons: `honest_user_agent()` in `daemons/hams_config.py`). Reverse DNS under `crawler.hams.com` identifies our crawler hosts regardless. A browser-like UA is allowed only for one named source whose bot protection was verified (honest UA refused, browser UA accepted, same egress, one deliberate pair of requests on the production host, never from a test box) and only with a `# honest-ua-exception: <host> | <YYYY-MM-DD> | <evidence>` tag next to the code; `daemons/test_no_browser_user_agent.py` fails without it. Never forge TLS fingerprints (`impersonate=`) or `Sec-Fetch-*` headers, and never solve challenges. The old advice here (hard-code a Chrome string for FCC, Ofcom, ACMA) was untested and is withdrawn.
+* **FCC is not a UA case:** `data.fcc.gov` blocks hams1's datacenter IP/ASN for every UA and impersonation profile; a residential IP gets 200. The fix is the egress path (`FCC_ULS_PROXY_URL`, pi500-1), not a disguise.
+* **When a provider answers 403 to an honest request:** report it. Options: ask the provider for access or a bulk-data channel, use a sanctioned egress path, or follow ADR 0104 decision 2 to verify and document a UA exception.
 * **Fail-Fast:** Updated `smart_download` to catch header request failures (timeouts, SSL errors) and immediately abort (`return False`) rather than hanging or attempting to download a 404/403 page as a payload.
 
 ## FCC Data Ingestion Specifics

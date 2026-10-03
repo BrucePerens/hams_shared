@@ -2709,6 +2709,14 @@ class TimerDrivenUnitTests(unittest.TestCase):
             self.assertIn("WantedBy=timers.target", units[f"{name}.timer"])
             self.assertNotIn("WantedBy=multi-user.target", units[f"{name}.service"])
 
+    def test_uk_ofcom_sync_polls_weekly_not_daily(self):
+        # Ofcom's amateur callsign CSV changes rarely; a daily poll of someone else's server for an
+        # almost-always-unchanged file is load for nothing (2026-10-02).
+        timer = self._units()["uk.ofcom.sync.timer"]
+        self.assertIn("OnCalendar=weekly", timer)
+        self.assertNotIn("OnCalendar=daily", timer)
+        self.assertIn("Persistent=true", timer)
+
     def test_callbook_dns_export_follows_each_country_sync(self):
         # docs/proposals/CALLBOOK_DNS_SERVICE.md (hams_com), "Serving": the zone is rebuilt after
         # each sync of a country it publishes. CA and AU sync on this host and chain with OnSuccess=;
