@@ -774,6 +774,62 @@ class PublicSiteOnlyTests(unittest.TestCase):
             self.assertFalse(regex.search(path), f"{path} must stay public")
 
 
+class StaticSiteSpecTests(unittest.TestCase):
+    """The tenant's read-only static file server (static_site_ctl.py): its port and path are in the tenant spec."""
+
+    def spec(self, **extra):
+        return lib.validate_spec(dict(PERENS, static_site={"port": 18201, "path": "/static/"}, **extra))
+
+    def test_a_good_static_site_validates_and_defaults_to_none(self):
+        self.assertIsNone(lib.validate_spec(PERENS)["static_site"])
+        self.assertEqual(self.spec()["static_site"], {"port": 18201, "path": "/static/"})
+
+    def test_bad_static_sites_are_refused(self):
+        for bad in ({"port": 18101, "path": "/static/"}, {"port": 8069, "path": "/static/"}, {"port": 99, "path": "/static/"},
+                    {"port": 18201, "path": "static"}, {"port": 18201, "path": "/static"}, {"port": 18201, "path": "/a b/"},
+                    {"port": 18201, "path": "/../"}, {"path": "/static/"}, {"port": 18201, "extra": 1}, "x"):
+            with self.assertRaises(lib.SpecError, msg=str(bad)):
+                lib.validate_spec(dict(PERENS, static_site=bad))
+        with self.assertRaises(lib.SpecError):
+            lib.validate_spec(dict(PARKING, static_site={"port": 18201, "path": "/static/"}))
+
+    def test_the_static_port_is_claimed_in_the_fleet(self):
+        other = lib.validate_spec({"name": "other_site", "domains": ["other.example"], "http_port": 18201})
+        with self.assertRaises(lib.SpecError):
+            lib.validate_fleet([self.spec(), other])
+
+    def test_ingress_puts_the_deny_rule_then_static_then_odoo_per_hostname_and_is_idempotent(self):
+        specs = [self.spec(public_site_only=True), lib.validate_spec(PARKING)]
+        new = cf.build_ingress(specs, copy.deepcopy(LIVE))
+        perens = [r for r in new if r.get("hostname") == "perens.com"]
+        self.assertEqual(perens, [
+            {"hostname": "perens.com", "path": cf.PRIVATE_PATH_REGEX, "service": "http_status:404"},
+            {"hostname": "perens.com", "path": "^/static/", "service": "http://localhost:18201"},
+            {"hostname": "perens.com", "service": "http://localhost:18101"},
+        ])
+        self.assertEqual([r["hostname"] for r in new[:6]], ["perens.com"] * 3 + ["www.perens.com"] * 3)
+        self.assertEqual(cf.build_ingress(specs, copy.deepcopy(new)), new)
+        self.assertEqual(new[-1], {"service": "http://localhost:18110"})
+
+    def test_the_static_path_is_not_caught_by_the_private_path_deny_rule(self):
+        import re
+
+        regex = re.compile(cf.PRIVATE_PATH_REGEX)
+        for public in ("/static/OPERATING.html", "/static/ARRL/TransparencyOctober2018.html", "/static/talk.webm"):
+            self.assertFalse(regex.search(public), public)
+
+    def test_the_shipped_perens_spec_has_the_static_site_and_the_public_site_flag(self):
+        spec = lib.load_spec(os.path.join(HERE, "tenants", "perens_com.json"))
+        self.assertEqual(spec["static_site"], {"port": 18201, "path": "/static/"})
+        self.assertTrue(spec["public_site_only"])
+        lib.load_specs(os.path.join(HERE, "tenants"))  # the whole fleet is still consistent
+
+    def test_the_dry_plan_text_shows_the_rules_before_a_live_list_is_known(self):
+        text = cf.render_plan_text([self.spec(public_site_only=True)], None)
+        self.assertIn("^/static/ -> http://localhost:18201", text)
+        self.assertIn("http_status:404", text)
+
+
 class FakeApiOpener:
     def __init__(self, live):
         self.live = live

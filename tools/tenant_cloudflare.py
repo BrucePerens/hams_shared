@@ -113,11 +113,22 @@ def build_ingress(specs, current):
     for spec in sorted(specs, key=lambda s: s["name"]):
         if spec["catch_all"]:
             continue  # parked hostnames arrive through the catch-all, not by name
-        for domain in spec["domains"]:
-            if spec.get("public_site_only"):
-                tenants.append({"hostname": domain, "path": PRIVATE_PATH_REGEX, "service": "http_status:404"})
-            tenants.append({"hostname": domain, "service": service_for(spec)})
+        tenants.extend(tenant_rules(spec))
     return tenants + unique + [catch_all]
+
+
+def tenant_rules(spec):
+    """The rules one tenant gets, per hostname, most specific first: a public-site tenant's private back end paths
+    answer 404, the static file server takes its path, Odoo takes the rest of the hostname."""
+    rules = []
+    for domain in spec["domains"]:
+        if spec.get("public_site_only"):
+            rules.append({"hostname": domain, "path": PRIVATE_PATH_REGEX, "service": "http_status:404"})
+        if spec.get("static_site"):
+            rules.append({"hostname": domain, "path": "^" + spec["static_site"]["path"],
+                          "service": f"http://localhost:{spec['static_site']['port']}"})
+        rules.append({"hostname": domain, "service": service_for(spec)})
+    return rules
 
 
 def ingress_digest(ingress):
@@ -158,8 +169,8 @@ def render_plan_text(specs, current, tunnel_id=None, odoo_rows=False):
         lines.append("# No current configuration given: showing tenant rules and DNS only.")
         lines.append("# Export the live list (tenant_cloudflare.py fetch-current) to see the full replacement.")
         for spec in specs:
-            for domain in spec["domains"]:
-                lines.append(f"ingress (to be placed FIRST): {domain} -> {service_for(spec)}")
+            for rule in tenant_rules(spec):
+                lines.append(f"ingress (to be placed FIRST): {rule['hostname']} {rule.get('path', '')} -> {rule['service']}")
     else:
         rules = current.get("config", current).get("ingress", current) if isinstance(current, dict) else current
         new = build_ingress(specs, rules)

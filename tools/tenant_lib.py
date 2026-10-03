@@ -86,6 +86,9 @@ DEFAULTS = {
     # mail. The tunnel answers 404 for the Odoo backend, login and API paths on its public names, so the
     # admin reaches them only through an SSH tunnel to the loopback port.
     "public_site_only": False,
+    # A read-only static file server beside the Odoo tenant (static_site_ctl.py): {"port": 18201, "path": "/static/"}.
+    # The tunnel sends that path of the tenant's hostnames to the port; everything else goes to Odoo.
+    "static_site": None,
 }
 
 
@@ -178,6 +181,28 @@ def _check_int(field, value, low, high):
         raise SpecError(f"{field} must be an integer in {low}..{high}: {value!r}")
 
 
+STATIC_PATH_RE = re.compile(r"^/[A-Za-z0-9_.~-]+(?:/[A-Za-z0-9_.~-]+)*/$")
+
+
+def _validate_static_site(value, spec):
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - {"port", "path"}:
+        raise SpecError('static_site must be {"port": N, "path": "/static/"}')
+    path = value.get("path", "/static/")
+    if not isinstance(path, str) or not STATIC_PATH_RE.match(path) or {".", ".."} & set(path.split("/")):
+        raise SpecError(f"static_site.path must look like /static/: {path!r}")
+    port = value.get("port")
+    _check_int("static_site.port", port, PORT_LOW, PORT_HIGH)
+    if port in RESERVED_PORTS:
+        raise SpecError(f"static_site.port {port} is a hams_prod port")
+    if port in (spec.get("http_port"), spec.get("gevent_port")):
+        raise SpecError("static_site.port equals the tenant's own port")
+    if spec["catch_all"]:
+        raise SpecError("a catch_all tenant has no hostnames, so it cannot have a static_site")
+    return {"port": port, "path": path}
+
+
 # [@ANCHOR: tenant_lib:validate_spec]
 # Verified by [@ANCHOR: test_tenant_lib:validate_spec]
 def validate_spec(raw):
@@ -246,6 +271,7 @@ def validate_spec(raw):
             )
     if not re.match(r"^[A-Za-z0-9_.@-]{1,64}$", spec["admin_login"]):
         raise SpecError("admin_login has unsupported characters")
+    spec["static_site"] = _validate_static_site(spec["static_site"], spec)
     if not re.match(r"^[a-z]{2,3}_[A-Z]{2}$", spec["language"]):
         raise SpecError(f"language must look like en_US: {spec['language']!r}")
     return spec
@@ -264,6 +290,8 @@ def validate_fleet(specs):
         for key in ("http_port", "gevent_port"):
             if spec.get(key) is not None:
                 _claim(seen["port"], spec[key], spec["name"], "port")
+        if spec.get("static_site"):
+            _claim(seen["port"], spec["static_site"]["port"], spec["name"], "port")
 
 
 def _claim(table, key, owner, kind):
