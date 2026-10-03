@@ -2615,6 +2615,12 @@ WantedBy=timers.target
             # still needs to recreate the venv (`python3 -m venv .venv && .venv/bin/pip install
             # requests curl_cffi`) and re-provision a real key file separately, the same as
             # every other daemon's own secret-provisioning convention in this codebase.
+            #
+            # ODOO_KEY_SELF_ROTATE_DAEMON: hams1's Odoo cannot write this machine's key file,
+            # so the daemon rotates its own key over JSON-2 (daemon_key_manager's
+            # rotate_own_key(), hams_com daemons/hams_config.py's rotate_own_key_if_due()). The
+            # value is the daemon.key.registry name, whose Remote Self-Rotation box must be set.
+            # Without it, hams1's 59-day cron revokes this key and the daemon is locked out.
             "path": "/etc/systemd/system/fcc.uls.sync.service",
             "content": """\
 [Unit]
@@ -2630,6 +2636,7 @@ WorkingDirectory=/opt/hams/daemons/fcc_uls_sync
 Environment="ODOO_URL=https://hams.com"
 Environment="ODOO_DB=hams_prod"
 Environment="ODOO_KEY_FILE=/opt/hams/daemons/fcc_uls_sync/.keys/fcc_uls_sync.env"
+Environment="ODOO_KEY_SELF_ROTATE_DAEMON=FCC ULS Sync (pi500-1)"
 Environment="SYSTEM_USER_AGENT=Hams.com Sync Daemon (bruce@perens.com, run from pi500-1 -- see night_shift_todo/high/fcc-uls-sync-needs-non-datacenter-egress-path-a8e5f3c1.md)"
 Environment="PYTHONPATH=/opt/hams/daemons"
 ExecStart=/opt/hams/daemons/fcc_uls_sync/.venv/bin/python3 /opt/hams/daemons/fcc_uls_sync/main.py

@@ -2071,6 +2071,18 @@ class Pi500FccUlsSyncManifestTests(unittest.TestCase):
         )
         self.assertIn('Environment="ODOO_URL=https://hams.com"', content)
 
+    def test_service_names_its_registry_for_remote_self_rotation(self):
+        # hams1's Odoo cannot write pi500-1's key file. Without this variable the daemon
+        # never rotates its own key, and hams1's 59-day cron would revoke it instead
+        # (night_shift_todo/low/fcc-uls-sync-pi500-key-does-not-auto-rotate-3f8c1d92.md).
+        service = next(
+            e for e in self._pi500_entries() if e["path"].endswith("fcc.uls.sync.service")
+        )
+        self.assertIn(
+            'Environment="ODOO_KEY_SELF_ROTATE_DAEMON=FCC ULS Sync (pi500-1)"',
+            service["content"],
+        )
+
     def test_timer_content_matches_the_real_deployment_shape(self):
         timer = next(e for e in self._pi500_entries() if e["path"].endswith("fcc.uls.sync.timer"))
         self.assertIn("OnCalendar=*-*-* 05:00:00", timer["content"])
