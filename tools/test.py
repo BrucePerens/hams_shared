@@ -1670,6 +1670,29 @@ def wait_for_socket(sock_path, name, timeout=60.0):
 
 _SAFE_DB_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+_HOST_CORE_DAEMONS = ("postgresql", "redis-server", "rabbitmq-server", "pdns")
+
+
+def core_daemons_to_start(isolated):
+    """Host services rebuild_db() starts with systemctl before testing.
+
+    Not isolated: all four host daemons, including PowerDNS.
+
+    Isolated (HAMS_ISOLATED_NS=1): none. Postgres arrives as the host socket
+    bind-mounted into the namespace, and setup_namespace_and_run_tests()
+    spawns its own Redis and RabbitMQ there. PowerDNS is deliberately NOT
+    provided: nothing starts it in the namespace, and the private network
+    namespace (loopback only) cannot reach a host pdns either. A test that
+    needs a live PowerDNS must start its own throwaway pdns_server on
+    127.0.0.1, as daemons/pdns_sync/test_pdns_sync.py's
+    TestPdnsSyncAgainstRealPowerDns does (hams_com #556); loopback is up
+    inside the namespace, so that works under isolation too.
+    (night_shift_todo 6d19d5cb)
+    """
+    if isolated:
+        return []
+    return list(_HOST_CORE_DAEMONS)
+
 
 def rebuild_db(db_name):
     # Bug-hunt fix (2026-09-10, bug class 47 candidate: raw SQL built by
@@ -1695,9 +1718,10 @@ def rebuild_db(db_name):
     print(f"[*] Dropping and Rebuilding Database Schema ({db_name})...")
     env = dict(os.environ)
 
-    if os.environ.get("HAMS_ISOLATED_NS") != "1":
+    daemons = core_daemons_to_start(os.environ.get("HAMS_ISOLATED_NS") == "1")
+    if daemons:
         print("[*] Starting core daemons before testing...")
-        for svc in ["postgresql", "redis-server", "rabbitmq-server", "pdns"]:
+        for svc in daemons:
             subprocess.run(["systemctl", "start", svc], check=False)
 
     print("[*] Flushing persistent daemons (Redis / RabbitMQ)...")
