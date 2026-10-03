@@ -326,9 +326,196 @@ def scan_claims(repo_root):
     return problems, retired
 
 
+# Source suffixes `--unclaimed` scans for implementation anchors. A claim documents one anchored
+# *function* (ADR 0091), so only languages with functions are listed -- the same three
+# `check_function_test_anchors.py` and its JS/Rust siblings cover. XML/HTML anchors mark views,
+# records and templates, which nobody writes a function claim for.
+UNCLAIMED_SCAN_SUFFIXES = (".py", ".js", ".rs")
+
+# Path components that make a file a test file. A base anchor declared in one is a test anchor
+# (the target of a `# Verified by [@ANCHOR: ...]` link), not an implementation anchor.
+_TEST_DIR_NAMES = {"tests", "test", "tour", "tours"}
+
+
+def _is_test_file(rel_path):
+    parts = rel_path.split(os.sep)
+    if any(part in _TEST_DIR_NAMES for part in parts[:-1]):
+        return True
+    base = parts[-1]
+    return (
+        base.startswith("test_")
+        or base.endswith(("_test.py", "_tests.py", ".test.js", ".rs.test"))
+        or base in ("tests.rs", "conftest.py")
+    )
+
+
+def _anchor_scan_excluded(rel_path):
+    """Mirrors `verify_anchors.find_anchors_in_code`'s own directory exclusions (build output,
+    `docs/`, `tools/`, `scripts/`, the nested-checkout names), including its exception for real
+    code islands that happen to live under `docs/`."""
+    for island in va.CODE_ISLANDS_UNDER_DOCS:
+        if rel_path.startswith(island.rstrip(os.sep) + os.sep):
+            return False
+    excluded = va.ANCHOR_SCAN_EXCLUDE_DIRS | {
+        "docs", "tools", "scripts", "hams_community", "hams_com", "radae",
+    }
+    return any(part in excluded for part in rel_path.split(os.sep)[:-1])
+
+
+def implementation_anchors_in_file(full_path, content, repo_root):
+    """Returns `[(module, name, line_num)]` for every base anchor declaration in `content`.
+
+    Classification is delegated to `verify_anchors._process_file_for_anchors` itself (with
+    throwaway accumulators) rather than reimplemented, so `Tests`/`Verified by`/`Triggers` links,
+    `doc_`/`story_`/`journey_` documentation anchors, conversational "see [@ANCHOR: ...]"
+    mentions and wrapped-comment references are all excluded by exactly the rules the anchor
+    linter itself uses. `module` is the anchor's explicit `module:` prefix when it has one, else
+    the file's own module (`verify_anchors.get_module`)."""
+    anchor_locations = {}
+    duplicates = []
+    va._process_file_for_anchors(
+        full_path, content, va.ANCHOR_PATTERN, {}, anchor_locations, {}, {}, {}, {}, {},
+        duplicates, {}, repo_root,
+    )
+    found = []
+    seen = set()
+    entries = [(anchor, loc) for anchor, locs in anchor_locations.items() for loc in locs]
+    entries += [(anchor, loc) for anchor, loc, _prior in duplicates]
+    for anchor, loc in entries:
+        module, name = anchor.split(":", 1)
+        if (module, name) in seen:
+            continue
+        seen.add((module, name))
+        found.append((module, name, int(loc.rsplit(":", 1)[1])))
+    return found
+
+
+def _claim_keys(claim_path, fields, module):
+    """Returns the set of `(module, cleaned_base_name)` keys one claim file satisfies.
+
+    A claim is matched both by its file name (`<module>/claims/<anchor_name>.md`, the ADR 0091
+    layout) and by its frontmatter `anchor:` value, because the two do not always agree in the
+    real repos (e.g. `add_incident_note.md` documents `pager_duty:mcp_add_incident_note_tool`).
+    An `anchor:` value can carry its own `module:` prefix, and a few claims document several
+    anchors joined with `+` or `,`. `module=None` means "any module" (the centralized store)."""
+    keys = {(module, va._clean(os.path.splitext(os.path.basename(claim_path))[0]))}
+    for raw in re.split(r"[+,\s]+", (fields or {}).get("anchor", "")):
+        if not raw:
+            continue
+        if ":" in raw:
+            prefix, base = raw.split(":", 1)
+            keys.add((module, va._clean(base)))
+            if module is not None:
+                keys.add((prefix, va._clean(base)))
+        else:
+            keys.add((module, va._clean(raw)))
+    return keys
+
+
+def _read_claim_fields(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return parse_claim_frontmatter(f.read())
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def build_claim_index(repo_root, store_roots=()):
+    """Returns the set of `(module, base_name)` keys covered by a claim file.
+
+    Every git-tracked `claims/*.md` in `repo_root` counts for the module `verify_anchors.get_module`
+    assigns its own path (so `ham_shack/claims/x.md` covers `ham_shack` anchors, and
+    `daemons/hams_local_relay/claims/x.md` covers `hams_local_relay` ones). Each of `store_roots`
+    is a centralized claims store (hams_com's `docs/bug_hunt_claims/<repo>/`, which holds the
+    claims for hams_open and hams_shared code): its claims are matched by base name in any module,
+    since the store's directory layout mirrors source paths rather than module names. Retired
+    claims still count -- a retirement is a deliberate decision about that anchor."""
+    keys = set()
+    for claim_path in _git_tracked_files(repo_root, ".md"):
+        if f"{os.sep}claims{os.sep}" not in claim_path or os.path.basename(claim_path) == "README.md":
+            continue
+        rel = os.path.relpath(claim_path, repo_root)
+        if rel.split(os.sep)[:2] == ["docs", "bug_hunt_claims"]:
+            continue
+        keys |= _claim_keys(claim_path, _read_claim_fields(claim_path), va.get_module(claim_path))
+    for store in store_roots:
+        for dirpath, _dirs, files in os.walk(store):
+            if os.path.basename(dirpath) != "claims":
+                continue
+            for name in files:
+                if not name.endswith(".md") or name == "README.md":
+                    continue
+                claim_path = os.path.join(dirpath, name)
+                keys |= _claim_keys(claim_path, _read_claim_fields(claim_path), None)
+    return keys
+
+
+# [@ANCHOR: check_claims_freshness:COMM_unclaimed_anchors]
+def find_unclaimed_anchors(repo_root, store_roots=()):
+    """Returns `[(module, anchor_name, "rel/path:line")]`, sorted, for every implementation anchor
+    under `repo_root` that no claim file covers (see `build_claim_index`).
+
+    The freshness check above only ever looks at claims that exist: an anchored function nobody
+    wrote a claim for is invisible to it. Two real night-shift to-dos (three CSP anchors, four
+    ham_init helpers) were exactly that gap, found by hand. This is the inventory side: it never
+    fails a build, it lists.
+
+    Known over-report: a "cluster" claim that documents several functions in its prose but names
+    only one in `anchor:` (e.g. hams_local_relay's `cw_rate_estimator_accessors_cluster.md`)
+    covers just that one anchor here -- there is no machine-readable field for the others.
+    Directories `verify_anchors.py` itself skips (`tools/`, `scripts/`, `docs/`) are skipped too."""
+    claimed = build_claim_index(repo_root, store_roots)
+    unclaimed = []
+    for full_path in _git_tracked_files(repo_root, ""):
+        if not full_path.endswith(UNCLAIMED_SCAN_SUFFIXES) or os.path.islink(full_path):
+            continue
+        rel = os.path.relpath(full_path, repo_root)
+        if _is_test_file(rel) or _anchor_scan_excluded(rel):
+            continue
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for module, name, line_num in implementation_anchors_in_file(full_path, content, repo_root):
+            base = va._clean(name)
+            if (module, base) in claimed or (None, base) in claimed:
+                continue
+            unclaimed.append((module, name, f"{rel}:{line_num}"))
+    return sorted(unclaimed)
+
+
+def _print_unclaimed(unclaimed):
+    by_module = {}
+    for module, name, loc in unclaimed:
+        by_module.setdefault(module, []).append((name, loc))
+    for module in sorted(by_module):
+        print(f"[*] {module}: {len(by_module[module])} unclaimed anchor(s)")
+        for name, loc in by_module[module]:
+            print(f"    - {module}:{name}  ({loc})")
+    print(
+        f"[*] TOTAL: {len(unclaimed)} implementation anchor(s) in {len(by_module)} module(s) have "
+        "no claim file (informational, not a failure)."
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", nargs="?", default=".")
+    parser.add_argument(
+        "--unclaimed",
+        action="store_true",
+        help="instead of checking existing claims, list every implementation anchor that has no "
+        "claim file under its module's claims/ directory (read-only, always exits 0)",
+    )
+    parser.add_argument(
+        "--claims-store",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="with --unclaimed: a centralized claims store whose claims also count, matched by "
+        "anchor name (e.g. hams_com/docs/bug_hunt_claims/hams_open for hams_open code); repeatable",
+    )
     args = parser.parse_args()
 
     repo_root = os.path.abspath(args.directory)
@@ -338,6 +525,13 @@ def main():
     if not os.path.isdir(repo_root):
         print(f"[!] ERROR: {args.directory!r} is not a directory (resolved to {repo_root}).")
         return 2
+    if args.unclaimed:
+        for store in args.claims_store:
+            if not os.path.isdir(store):
+                print(f"[!] ERROR: --claims-store {store!r} is not a directory.")
+                return 2
+        _print_unclaimed(find_unclaimed_anchors(repo_root, [os.path.abspath(d) for d in args.claims_store]))
+        return 0
     problems, retired = scan_claims(repo_root)
 
     if retired:
