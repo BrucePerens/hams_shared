@@ -85,41 +85,46 @@ status check -- with one necessary exception, `enforce_admins`, discussed below:
      **Superseded 2026-10-02 -- see the addendum at the end: there is no burn-list check any more, and
      `test.py` is never to run in CI.**
 
-**4. A dedicated local script was meant to give trusted autonomous work (night-watch) a fast merge
-path, without running any agent through GitHub Actions** (standing policy: AI agents do not run in
-GitHub Actions). **Currently non-functional, confirmed live 2026-09-22, tracked in
-`night_shift_todo/medium/night-watch-fast-merge-path-cannot-self-approve-same-account-pat-b91af4d3.md`:**
-a fine-grained PAT is tied to a GitHub *account*, not a separate bot identity, and every PAT on this
-box authenticates as `BrucePerens` -- the same account that opens the PR in the first place. GitHub's
-self-approval block applies regardless of which token submits the review, so the design below (a
-second PAT with different scope) does not achieve what it set out to. Left in place as-designed
-documentation of the intended mechanism and why it needs a real second GitHub identity, not deleted,
-so a future fix doesn't have to rediscover this. Until such an identity exists, `night-shift/*` PRs
-merge the same way everything else does: `--admin`, by Bruce, per decision 3's correction above.
+**4. Withdrawn 2026-10-02: there is no night-watch fast-merge path. `night-shift/*` PRs go through
+ordinary human review like every other PR.** The 2026-09-22 design was a dedicated local script
+(`hams_shared/tools/night_watch_review_and_merge.py`, run once per night-watch hourly cycle, never in
+GitHub Actions -- standing policy: AI agents do not run in GitHub Actions) that found open PRs whose head
+branch matched `night-shift/*` and submitted an approving review plus a merge using a **second, dedicated
+PAT** (`~/.secrets/hams_com_ci/NIGHT_WATCH_REVIEWER_GITHUB_PAT`, `Pull requests` and `Contents` read/write,
+repo-scoped to `hams_com` and `hams_shared`, no `Administration`). It never worked, confirmed live
+2026-09-22 against `BrucePerens/hams_shared#4`: `GraphQL: Review Can not approve your own pull request`.
+A fine-grained PAT authenticates as the GitHub *account* that issued it, not as a separate bot identity,
+and every credential on this box is `BrucePerens` -- the same account that opens every PR -- so GitHub's
+self-approval block applies whichever token submits the review.
 
-`hams_shared/tools/night_watch_review_and_merge.py`, invoked once per night-watch hourly cycle (see that
-skill's own `SKILL.md`), finds open PRs whose head branch matches `night-shift/*`, confirms required status
-checks have passed, and submits an approving review plus merge using a **second, dedicated PAT**
-(`~/.secrets/hams_com_ci/NIGHT_WATCH_REVIEWER_GITHUB_PAT`), distinct from whatever identity opened the PR.
+The earlier text here said the design was "left in place ... not deleted, so a future fix doesn't have to
+rediscover this." That is superseded: the script was deleted on 2026-10-02 (it is in git history), and
+this paragraph is now the record a revival needs. The script was dormant code holding merge capability
+under the admin account; it only failed safe because its `--approve` call raised before the merge call
+ran. Do not assume a variant that skipped the approval would be refused: the `hams_com` and `hams_shared`
+rulesets give the admin role a `pull_request` bypass (checked 2026-10-02), so the admin account can merge a
+PR past the required review. A revival needs all of the following:
+   - **A genuinely separate GitHub identity** with write access (a bot/service account or a GitHub App
+     installation), not another PAT on `BrucePerens`. The same identity would also let decision 3's
+     `enforce_admins` go back on.
+   - **A re-specified merge gate.** The design gated on required status checks, but since the 2026-10-02
+     addendum there is no required check on any repository, so that gate is vacuous; something like "the
+     Rust workflows that ran on this head passed" would have to be named explicitly. (The deleted script
+     did not check statuses itself either; it relied on GitHub refusing the merge.)
+   - **Disjoint credentials.** GitHub has no permission that allows merging a PR without also allowing a
+     content write (verified against GitHub's REST documentation on 2026-09-22), so the reviewer
+     credential's scope is functionally identical to the ticket-triage PAT's. The separation between
+     "night-watch can fast-merge its own work" and "ticket-triage can never self-merge" would rest
+     entirely on two different secrets with disjoint access: the
+     ticket-triage MCP server must never be able to read the reviewer credential, and the reviewer must
+     never be able to read the ticket-triage PAT. Both belong under `~/.secrets/`, each in its own file
+     (this dev box's secret convention, not AWS Secrets Manager).
 
-This second PAT is required for a structural reason, not just caution: GitHub refuses to let a PR's own
-author approve it, so the approving identity must differ from the authoring identity regardless of where
-the approval logic runs. Its scope (`Pull requests: Read and write`, `Contents: Read and write`, repo-scoped
-to `hams_com` and `hams_shared`, no `Administration`) is -- verified directly against GitHub's own REST
-documentation, not assumed -- functionally identical to the ticket-triage PAT's scope, because GitHub has no
-finer-grained permission that allows merging a PR without also allowing a content write. Identical scope
-means the separation between "night-watch can fast-merge its own work" and "ticket-triage can never
-self-merge" depends entirely on these being two different secrets with disjoint access, not on anything
-GitHub's permission model enforces on its own:
-   - The ticket-triage MCP server must never be able to read `NIGHT_WATCH_REVIEWER_GITHUB_PAT`.
-   - The night-watch reviewer script must never be able to read the ticket-triage PAT.
-   - Both live under `~/.secrets/`, this dev box's real secret convention (not AWS Secrets Manager, which
-     this project barely uses) -- each in its own file, matching every other credential here.
-
-Even with this fast path, `ai-triage/*` PRs are excluded by construction three separate ways: a different
-branch prefix the reviewer script never matches, a different script that never runs against them, and a
-different credential that can't act on them even if it were pointed at them by mistake. They fall through
-to decision 3's unconditional required-review rule and always wait for Bruce.
+`ai-triage/*` PRs (`hams_helpdesk` ticket triage) are covered by decision 3's unconditional required
+review: no script or scheduled job on this box approves or merges any PR, and the admin bypass
+(`gh pr merge --admin`) is used only for a merge Bruce has reviewed or directed. The `night-shift/<slug>`
+branch naming is still used by night-watch and other night-shift sessions as a plain naming convention;
+nothing acts on it automatically.
 
 **5. Orphaned worktrees are swept, never force-deleted, on the same hourly cadence.**
 `hams_shared/tools/sweep_orphan_worktrees.py`: `git worktree prune` for any worktree whose directory is
@@ -147,10 +152,11 @@ Local working-tree damage from one session's mistake is now contained to that se
 the failure mode that actually happened on 2026-09-22 cannot recur in the same form. Server-side branch
 protection, not a client-side procedure, is what actually stops a bad push from landing on `main`, and it
 applies identically to every session including an admin-authenticated one. The cost is real: worktrees use
-more disk per session, and merging now goes through a PR rather than a direct push for anything that isn't
-night-watch's own fast path -- both `pre-push` hook the client-side layer, and none of this can enforce
-itself if a session goes looking for ways around it, which is exactly why decision 3 does not depend on
-anything running on the session's own machine.
+more disk per session, and merging now goes through a PR rather than a direct push (every PR, including
+night-watch's own `night-shift/*` ones, lands via `--admin` by Bruce -- see decision 4's withdrawal) --
+both `pre-push` hook the client-side layer, and none of this can enforce itself if a session goes looking
+for ways around it, which is exactly why decision 3 does not depend on anything running on the session's
+own machine.
 
 ## Addendum, 2026-10-02: GitHub CI runs only the Rust tests; the burn-list gates are gone
 
@@ -182,9 +188,10 @@ this addendum wins.
 - **The hams-devbox self-hosted runner is stopped and disabled** (hams_com #443, 2026-10-01). Its jobs
   run on GitHub-hosted runners. The self-hosted runners still in use are the just-in-time `pi500-1` and
   `jetson-1` boards, which hold no publish secrets.
-- Decision 4's fast-merge script gated on "required status checks have passed". With no required check,
-  that gate is vacuous. The path stays non-functional for the self-approval reason given there, and
-  reviving it would need its gate re-specified.
+- Decision 4's fast-merge path is **withdrawn**: it could never self-approve (every credential is the
+  same GitHub account), and its status-check gate became vacuous once no check was required.
+  `hams_shared/tools/night_watch_review_and_merge.py` is deleted and the night-watch skill no longer
+  runs it. Decision 4 now records what a revival would need.
 
 ## Related
 

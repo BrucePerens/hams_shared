@@ -25,6 +25,8 @@ import urllib.request
 import secrets
 import string
 import base64
+import hashlib
+import urllib.parse
 from datetime import datetime
 
 _logger = logging.getLogger(__name__)
@@ -263,6 +265,78 @@ def print_hook_failure_summary():
     return True
 
 
+# [@ANCHOR: infrastructure:provision_plan]
+# provision.py --plan (2026-10-03, after the round-2 production runbook found that a full
+# `provision.py --hold-odoo` on hams1 would upgrade held packages, restart PostgreSQL, rotate a
+# password and revert deployed daemons, with no way to see that beforehand). While a plan is active,
+# every step that would change the host records what it would do here instead of doing it:
+# provision.py's run_sys prints commands rather than running them, and each helper below that writes
+# a file, creates a directory, links a unit or runs a hook checks _plan() first. Read-only probes
+# (dpkg-query, apt-cache, psql SELECTs, pwd/grp lookups) still run, so the plan reflects the host.
+# Plan lines never carry secret values: env files list their keys, credential files only their path.
+_PLAN = None
+
+
+class ProvisionPlan:
+    def __init__(self):
+        self.actions = []
+
+    def record(self, kind, detail):
+        self.actions.append((kind, detail))
+        print(f"PLAN {kind}: {detail}", flush=True)
+
+
+def _planning():
+    return _PLAN is not None
+
+
+def _plan(kind, detail):
+    """Records `kind: detail` and returns True while a plan is active (the caller then skips the
+    real action); returns False, recording nothing, during a real run."""
+    if _PLAN is None:
+        return False
+    _PLAN.record(kind, detail)
+    return True
+
+
+@contextlib.contextmanager
+def planning():
+    """Activates plan mode for the duration of the block and yields the ProvisionPlan."""
+    global _PLAN
+    previous = _PLAN
+    _PLAN = ProvisionPlan()
+    try:
+        yield _PLAN
+    finally:
+        _PLAN = previous
+
+
+# [@ANCHOR: infrastructure:redact_command]
+def redact_command(cmd):
+    """A printable copy of a provisioning command line with password values masked: psql
+    `-v <name>=<value>` variables whose name mentions "pass", and the password argument of
+    `rabbitmqctl add_user|change_password <user> <password>`. Used for plan output and run logs."""
+    out = [str(arg) for arg in cmd]
+    for i, arg in enumerate(out):
+        name, sep, _value = arg.partition("=")
+        if sep and i > 0 and out[i - 1] == "-v" and "pass" in name.lower():
+            out[i] = f"{name}=<redacted>"
+    if len(out) >= 4 and os.path.basename(out[0]) == "rabbitmqctl" and out[1] in ("add_user", "change_password"):
+        out[3] = "<redacted>"
+    return out
+
+
+def _file_state(path, new_content):
+    """'new', 'changed' or 'unchanged' for writing new_content (str) to path."""
+    if not os.path.exists(path):
+        return "new"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return "unchanged" if f.read() == new_content else "changed"
+    except (OSError, UnicodeDecodeError):
+        return "changed"
+
+
 def download_file(url, path, mode, env_vars):
     ua = env_vars.get(
         "SYSTEM_USER_AGENT",
@@ -495,10 +569,19 @@ def hook_create_pdns_sqlite_schema(env_vars, dest_dir, path, run_cmd_func):
         record_hook_failure("hook_create_pdns_sqlite_schema", e)
 
 
+# [@ANCHOR: infrastructure:hook_daemons_perms]
 def hook_daemons_perms(env_vars, dest_dir, path, run_cmd_func):
+    """Hands the freshly copied daemon tree to hams_com and makes it world-readable.
+
+    Only entries still owned by root (what the copy just wrote, as root) change owner. A plain
+    `chown -R` used to take /opt/hams/daemons/event_ai_enrichment/, ticket_triage_agent/ and
+    backup_worker/pgbackrest_sidecar.py away from odoo, which owns them on purpose on hams1 (found
+    by the round-2 production runbook, 2026-10-03). -h changes a symlink itself, never its target."""
     target = path
     if os.path.exists(target):
-        run_cmd_func(["chown", "-R", "hams_com:hams_com", target])
+        run_cmd_func(
+            ["find", "-P", target, "-user", "root", "-exec", "chown", "-h", "hams_com:hams_com", "{}", "+"]
+        )
         run_cmd_func(["chmod", "-R", "a+rX", target])
 
 
@@ -634,6 +717,85 @@ def hook_migrate_relay_signing_key(env_vars, dest_dir, path, run_cmd_func):
     )
 
 
+# [@ANCHOR: infrastructure:shared_odoo_account_ratchet]
+# Every systemd unit below whose [Service] section says `User=odoo` shares one OS account with the
+# Odoo server and with every other unit on this list. daemon_key_manager gives each daemon its own
+# 0600 key file under /opt/hams/etc/keys/, but every one of those files is owned by `odoo`, so any
+# daemon running as `odoo` can read every other daemon's credential: the per-daemon keys give no
+# isolation between these units. The units that already run under their own account
+# (localhost_cert, hams_subcarrier_signer, hams_device_command_signer, hams_relay_signer,
+# hams_relay_ca, pdns, hams-auth) are the pattern a fix would extend.
+#
+# Which fix (static per-daemon accounts, DynamicUser=, a high-value subset first, or an accepted
+# risk) is Bruce's open decision: hams_com night_shift_questions/open/
+# daemon-os-isolation-fleet-wide-scope-and-approach-59a738aa.md. Until it is made, this list is the
+# recorded, reviewed state of the gap and a ratchet on it: test_infrastructure.py fails when a unit
+# runs as `odoo` without being listed here (a new daemon must get its own account or be added here
+# in a reviewed change), and when a listed unit no longer runs as `odoo` (remove it, so the list
+# only shrinks as units move to their own accounts).
+SHARED_ODOO_ACCOUNT_UNITS = frozenset({
+    "adif.ingress.service",
+    "adif.processor.service",
+    "amsat.tle.sync.service",
+    "aprs.is.sync.service",
+    "arrl.hamfests.sync.service",
+    "au.acma.sync.service",
+    "au.callsign.sync.service",
+    "au.pii.sync.service",
+    "backup.worker.service",
+    "br.anatel.sync.service",
+    "callbook.dns.export.service",
+    "callbook.dns.rrl.service",
+    "callbook.geo.enrich.service",
+    "code.review.sweep.service",
+    "credential.touch.timer.service",
+    "de.bnetza.sync.service",
+    "dx.firehose.service",
+    "electronicsfleamarket.sync.service",
+    "fcc.uls.sync.service",
+    "gdpr.csv.export.service",
+    "ham.dx.daemon.service",
+    "hamcall.idx.sync.service",
+    # The key bootstrapper writes every daemon's key file, so it runs as the account that owns
+    # them; it stays here under any of the options above.
+    "hams.daemon.keys.service",
+    "hams.data.relay.service",
+    "hams.relay.bridge.service",
+    "hams.simulated.band.service",
+    "hams.simulated.bots.service",
+    "hams.simulated.observer.service",
+    "ised.canada.sync.service",
+    "ncvec.sync.service",
+    "noaa-swpc-sync.service",
+    "nz.rsm.sync.service",
+    "pdns.sync.service",
+    "pota.sync.service",
+    "qrz.scraper.service",
+    "rac.events.sync.service",
+    "relay.cert.renew.service",
+    "ses.inbound.mail.ingest.service",
+    "sm3cer.contest.sync.service",
+    "sota.sync.service",
+    "stray.odoo.shell.detector.service",
+    "uk.ofcom.sync.service",
+    "wa7bnm.contest.sync.service",
+})
+
+
+def systemd_units_running_as(manifest, user):
+    """Return the base names of the manifest's systemd .service files whose User= is `user`."""
+    names = set()
+    for entry in manifest["static_files"]:
+        path = entry["path"]
+        if not path.endswith(".service"):
+            continue
+        for line in (entry.get("content") or "").splitlines():
+            if line.strip() == f"User={user}":
+                names.add(os.path.basename(path))
+                break
+    return names
+
+
 MANIFEST = {
     "system_accounts": [
         {
@@ -685,6 +847,19 @@ MANIFEST = {
             "user": "hams_relay_signer",
             "group": "hams_relay_signer",
             "home": "/opt/hams/etc/relay_signer",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/relay_ca: the Relay Issuing CA signer (hams_com
+            # docs/proposals/RELAY_TRUST_AND_PAIRING_PLAN.md §4). Same shape as the
+            # signers above, but its key stays on a PKCS#11 token; this account holds
+            # the token PIN and the issuance log in its 0700 directory. odoo joins the
+            # group only to reach the socket in /run/hams_relay_ca.
+            "user": "hams_relay_ca",
+            "group": "hams_relay_ca",
+            "home": "/opt/hams/etc/relay_ca",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
             "environments": ["prod", "test"],
@@ -852,6 +1027,23 @@ MANIFEST = {
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
         },
+        {
+            # hams_com daemons/relay_ca: PIN file (pkcs11_pin), issuance log, optional
+            # relay_ca.env, and on a SoftHSM2-backed test host the token directory.
+            "path": "/opt/hams/etc/relay_ca",
+            "owner": "hams_relay_ca:hams_relay_ca",
+            "provision_mode": "700",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
+        {
+            # The CA certificates (relay_root.pem, relay_issuing.pem): public.
+            "path": "/opt/hams/etc/relay_ca_public",
+            "owner": "hams_relay_ca:hams_relay_ca",
+            "provision_mode": "755",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
         # /opt/hams/nginx and its self-signed ssl/ pair: nginx is NOT the
         # production front end. On hams1 nginx is installed but disabled
         # and was never in the request path; ingress is the Cloudflare
@@ -1010,6 +1202,10 @@ MANIFEST = {
         },
         {
             "path": "/var/log/redis",
+            # redis-server's package creates this redis:adm 2750; provisioning used to reset it
+            # to a world-readable redis:redis 755 (round-2 production runbook, 2026-10-03). It
+            # is now created only if missing and an existing one is left as packaged.
+            "preserve_existing": True,
             "owner": "redis:redis",
             "provision_mode": "755",
             "runtime_mount": "rw",
@@ -1161,7 +1357,9 @@ MANIFEST = {
             "CLOUDFLARE_ZONE_ID",
         ],
         "rabbitmq.env": ["RMQ_PASS", "RABBITMQ_HOST", "RMQ_PORT", "RMQ_USER"],
-        "redis.env": ["REDIS_HOST", "REDIS_PORT"],
+        # REDIS_USERNAME/REDIS_PASSWORD: the production Redis ACL user (see _redis_acl_include_content).
+        # REDIS_URL carries the same credentials for hams_data_relay (Rust), which reads only a URL.
+        "redis.env": ["REDIS_HOST", "REDIS_PORT", "REDIS_USERNAME", "REDIS_PASSWORD", "REDIS_URL"],
         "bridge.env": ["BRIDGE_API_KEY"],
         "smtp.env": ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"],
         "core.env": [
@@ -1330,6 +1528,8 @@ WantedBy=multi-user.target
         {
             "src": "{HAMS_COM_DIR}/daemons",
             "path": "/opt/hams/daemons",
+            # See _skip_deployed_copy(): on a deployed host --sync-daemons owns this tree.
+            "deployed_by_sync_daemons": True,
             "owner": "hams_com:hams_com",
             "mode": "755",
             "environments": ["prod", "test"],
@@ -1350,6 +1550,7 @@ WantedBy=multi-user.target
             # own daemons.
             "src": "{HAMS_COMMUNITY_DIR}/backup_management/daemon",
             "path": "/opt/hams/daemons/backup_worker",
+            "deployed_by_sync_daemons": True,
             "owner": "hams_com:hams_com",
             "mode": "755",
             "environments": ["prod", "test"],
@@ -2222,6 +2423,63 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams.relay.signer
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/relay_ca: the Relay Issuing CA signer. Skipped (not
+            # failed, not restart-looping) until a key ceremony has put the issuing CA
+            # certificate in place. Host-specific settings (PKCS#11 module, token
+            # label, SOFTHSM2_CONF on a SoftHSM2 test host) go in the optional
+            # /opt/hams/etc/relay_ca/relay_ca.env. Talks only to its PKCS#11 token
+            # (pcscd's Unix socket for a smart card) and its own Unix socket.
+            "path": "/opt/hams/systemd/hams-relay-ca.service",
+            "content": """\
+[Unit]
+Description=Relay Issuing CA signer (relay server certificates, key on a PKCS#11 token)
+After=network.target pcscd.socket
+ConditionPathExists=/opt/hams/etc/relay_ca_public/relay_issuing.pem
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+# A smart card is reached through pcscd's Unix socket, never a device node.
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/etc/relay_ca
+RuntimeDirectory=hams_relay_ca
+RuntimeDirectoryMode=0750
+Type=simple
+User=hams_relay_ca
+Group=hams_relay_ca
+SupplementaryGroups=hams_com
+WorkingDirectory=/opt/hams/daemons/relay_ca
+UMask=0027
+
+Environment="RELAY_CA_BASE_DIR=/opt/hams/etc/relay_ca"
+Environment="RELAY_CA_PUBLIC_DIR=/opt/hams/etc/relay_ca_public"
+Environment="RELAY_CA_SOCKET_PATH=/run/hams_relay_ca/signer.sock"
+Environment="RELAY_CA_LEAF_DAYS=800"
+EnvironmentFile=-/opt/hams/etc/relay_ca/relay_ca.env
+
+# Smoketest Resource Verification
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_ca/main.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/relay_ca/main.py
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.relay.ca
 
 [Install]
 WantedBy=multi-user.target
@@ -3753,6 +4011,9 @@ WantedBy=timers.target
         {
             "path": "/opt/hams/systemd/code.review.sweep.service",
             "external_fetch": "sends source batches to a paid third-party LLM API",
+            # Paid per call (Gemini API): never enabled or started by provisioning unless named
+            # with provision.py --enable-opt-in. See opt_in_unit_names().
+            "opt_in": "calls the paid Gemini API",
             "content": """\
 [Unit]
 Description=Hams.com Code Review Sweep -- Gemini leg (One-Shot)
@@ -3804,6 +4065,9 @@ SyslogIdentifier=code.review.sweep
         {
             "path": "/opt/hams/systemd/code.review.sweep.timer",
             "external_fetch": "activates code.review.sweep.service",
+            # Paid per call (Gemini API): never enabled or started by provisioning unless named
+            # with provision.py --enable-opt-in. See opt_in_unit_names().
+            "opt_in": "calls the paid Gemini API",
             "content": """\
 [Unit]
 Description=Hams.com Code Review Sweep Quarterly (incremental mode)
@@ -5095,8 +5359,13 @@ WantedBy=timers.target
         "RMQ_PORT": "5672",
         "REDIS_PORT": "6379",
         "DX_FIREHOSE_WS_PORT": "8765",
-        "RMQ_USER": "guest",
-        "RMQ_PASS": "guest",
+        # No RMQ_USER/RMQ_PASS here. provision_environment() applies these defaults with setdefault()
+        # BEFORE load_and_prompt_env(), so a "guest"/"guest" entry here (present until 2026-10-03)
+        # pre-empted load_and_prompt_env's own production defaults: RMQ_USER never became
+        # "hams_rabbitmq" and RMQ_PASS was never generated, and _create_rabbitmq_user_if_missing then
+        # refused "guest" (recorded only as a "rabbitmq_bindings" hook failure). The guest default now
+        # lives only where a broker that knows no other account is in use: load_and_prompt_env's test
+        # branch and scaffold_test_environment().
         "PLAYWRIGHT_BROWSERS_PATH": "/opt/hams/cache/ms-playwright",
     },
     "systemd_odoo_override": {
@@ -5185,6 +5454,10 @@ WantedBy=timers.target
 def scaffold_test_environment(args_db, provision_dirs=True):
     for k, v in MANIFEST["env_defaults"].items():
         os.environ.setdefault(k, v)
+    # The test pipeline starts its own private rabbitmq-server, whose only account is the factory
+    # "guest" one (test.py's run_cmd sets the same default for the Odoo process).
+    os.environ.setdefault("RMQ_USER", "guest")
+    os.environ.setdefault("RMQ_PASS", "guest")
 
     os.environ.setdefault("DB_NAME", args_db)
     os.environ.setdefault("ODOO_DB", args_db)
@@ -5257,29 +5530,71 @@ def execute_hooks(environment, run_cmd_func, env_vars=None, dest_dir=""):
                     if dest_dir
                     else d["path"]
                 )
+                if _plan("hook", f"{hook.__name__} on {physical_path}"):
+                    continue
                 hook(env_vars or {}, dest_dir, physical_path, run_cmd_func)
 
 
+# [@ANCHOR: infrastructure:apply_production_directories]
 def apply_production_directories(run_cmd_func=None, environment="prod", dest_dir=""):
+    """Creates every MANIFEST directory for environment and sets its owner and mode. An entry
+    marked "preserve_existing" is only created when missing: an existing one keeps its owner and
+    mode (e.g. /var/log/redis, which redis-server's package owns)."""
     for d in MANIFEST["directories"]:
         if environment in d["environments"]:
             path = (
                 os.path.join(dest_dir, d["path"].lstrip("/")) if dest_dir else d["path"]
             )
             mode = int(d["provision_mode"], 8)
+            exists = os.path.isdir(path)
+            if exists and d.get("preserve_existing"):
+                continue
+            if _planning():
+                if not exists:
+                    _plan("mkdir", f"{path} ({d.get('owner')}, {d['provision_mode']})")
+                else:
+                    _plan_ownership(path, d.get("owner"), mode)
+                continue
             os.makedirs(path, mode=mode, exist_ok=True)
             apply_permissions(path, d.get("owner"), mode)
+
+
+def _plan_ownership(path, owner_str, mode_int):
+    """Records a chown/chmod of an existing path only when it would actually change something."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return
+    changes = []
+    if owner_str:
+        try:
+            user, group = owner_str.split(":")
+            if (st.st_uid, st.st_gid) != (pwd.getpwnam(user).pw_uid, grp.getgrnam(group).gr_gid):
+                changes.append(f"owner -> {owner_str}")
+        except (KeyError, ValueError):  # burn-ignore-os-account-probe
+            changes.append(f"owner -> {owner_str} (account not created yet)")
+    if mode_int is not None and (st.st_mode & 0o7777) != mode_int:
+        changes.append(f"mode {st.st_mode & 0o7777:o} -> {mode_int:o}")
+    if changes:
+        _plan("chmod", f"{path}: {', '.join(changes)}")
 
 
 # [@ANCHOR: infrastructure:write_env_files]
 def write_env_files(base_etc_dir, env_vars, run_cmd_func, dest_dir=""):
     if dest_dir:
         base_etc_dir = os.path.join(dest_dir, base_etc_dir.lstrip("/"))
-    os.makedirs(base_etc_dir, exist_ok=True)
+    if not _planning():
+        os.makedirs(base_etc_dir, exist_ok=True)
 
     for filename, keys in MANIFEST["env_groups"].items():
         filepath = os.path.join(base_etc_dir, filename)
         content = "".join(f"{k}={env_vars[k]}\n" for k in keys if k in env_vars)
+        if _planning():
+            state = _file_state(filepath, content)
+            if state != "unchanged":
+                present = [k for k in keys if k in env_vars]
+                _plan("write", f"{filepath} ({state}; keys: {' '.join(present) or 'none'})")
+            continue
 
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
         fd = os.open(filepath, flags, 0o400)
@@ -5331,6 +5646,26 @@ def provision_custom_addons(run_cmd_func, env_vars, environment="prod", dest_dir
     apply_permissions(custom_addons_dir, "odoo:odoo", None)
 
 
+# Written by hams_com's devbox_tools/deploy_to_production.py on every applied deployment. Its
+# presence marks a production host whose /opt/hams/daemons is kept current by
+# `deploy_to_production.py --sync-daemons`, not by provisioning.
+DEPLOY_LOG_PATH = "/opt/hams/src/DEPLOY_LOG"
+
+
+# [@ANCHOR: infrastructure:_skip_deployed_copy]
+def _skip_deployed_copy(file_spec, path):
+    """True when a `deployed_by_sync_daemons` src copy must not run: the target already exists and
+    the host is updated by deploy_to_production.py (DEPLOY_LOG_PATH exists). On hams1 the src trees
+    under /opt/hams/src are not what --sync-daemons updates, so copying them over /opt/hams/daemons
+    reverted 79 newer daemon files (round-2 production runbook, 2026-10-03). A fresh install, with
+    no DEPLOY_LOG yet, still copies."""
+    return bool(
+        file_spec.get("deployed_by_sync_daemons")
+        and os.path.exists(DEPLOY_LOG_PATH)
+        and os.path.exists(path)
+    )
+
+
 # [@ANCHOR: infrastructure:provision_static_files]
 def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=""):
     for file_spec in MANIFEST.get("static_files", []):
@@ -5345,22 +5680,65 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
         if dest_dir:
             path = os.path.join(dest_dir, path.lstrip("/"))
 
-        os.makedirs(os.path.dirname(path), exist_ok=True)
         mode = int(file_spec.get("mode", "644"), 8)
 
         src = file_spec.get("src")
         url = file_spec.get("url")
+        hooks = file_spec.get("post_provision_hooks", [])
+
+        if src and _skip_deployed_copy(file_spec, path):
+            _logger.warning(
+                "[*] NOT copying %s over %s: this host is deployed by deploy_to_production.py (%s "
+                "exists). Update it with `python3 devbox_tools/deploy_to_production.py --sync-daemons "
+                "--apply` from the dev box instead.",
+                format_env(src, env_vars), path, DEPLOY_LOG_PATH,
+            )
+            _plan("skip", f"copy {format_env(src, env_vars)} -> {path} (deployed host: use --sync-daemons)")
+            continue
+
+        if _planning():
+            if src:
+                src = format_env(src, env_vars)
+                if os.path.exists(src):
+                    _plan("copy", f"{src} -> {path} (owner {file_spec.get('owner')}, mode {mode:o})")
+                else:
+                    _plan("skip", f"copy {src} -> {path} (source missing)")
+            elif url:
+                _plan("download", f"{url} -> {path}")
+            else:
+                if "{DEB_CODENAME}" in file_spec.get("content", "") and "DEB_CODENAME" not in env_vars:
+                    env_vars["DEB_CODENAME"] = get_os_codename()
+                content = format_env(file_spec.get("content", ""), env_vars)
+                state = _file_state(path, content)
+                if state != "unchanged":
+                    _plan("write", f"{path} ({state}, owner {file_spec.get('owner')}, mode {mode:o})")
+            for hook in hooks:
+                _plan("hook", f"{hook.__name__} on {path}")
+            continue
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
 
         if src:
             src = format_env(src, env_vars)
             if os.path.exists(src):
                 if os.path.isdir(src):
-                    shutil.copytree(
-                        src,
-                        path,
-                        dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns("target", ".git", "__pycache__"),
-                    )
+                    # A dangling symlink in the source (hams_com's
+                    # daemons/hams_local_relay/ham_digital_modes is an absolute link to a dev-box
+                    # path) made copytree raise shutil.Error after copying everything else, and
+                    # provision_environment() only catches CalledProcessError, so the whole run
+                    # ended in a traceback. Dangling links are now skipped, and any other copy
+                    # error is recorded as a degraded step instead of aborting provisioning.
+                    try:
+                        shutil.copytree(
+                            src,
+                            path,
+                            dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("target", ".git", "__pycache__"),
+                            ignore_dangling_symlinks=True,
+                        )
+                    except shutil.Error as e:
+                        _logger.warning("Copy of %s to %s was incomplete: %s", src, path, e)
+                        record_hook_failure(f"copy:{path}", e)
                 else:
                     shutil.copy2(src, path)
         elif url:
@@ -5394,9 +5772,8 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
 
         apply_permissions(path, file_spec.get("owner"), mode)
 
-        if "post_provision_hooks" in file_spec:
-            for hook in file_spec["post_provision_hooks"]:
-                hook(env_vars or {}, dest_dir, path, run_cmd_func)
+        for hook in hooks:
+            hook(env_vars or {}, dest_dir, path, run_cmd_func)
 
 
 # [@ANCHOR: infrastructure:provision_systemd_override]
@@ -5425,7 +5802,6 @@ def provision_systemd_override(
         if dest_dir
         else f"/etc/systemd/system/{unit_name}.service.d"
     )
-    os.makedirs(override_dir, exist_ok=True)
     override_file = os.path.join(override_dir, "override.conf")
 
     lines = []
@@ -5439,6 +5815,12 @@ def provision_systemd_override(
                 lines.append(f"{k}={v}")
         lines.append("")
 
+    state = _file_state(override_file, "\n".join(lines))
+    if _planning():
+        if state != "unchanged":
+            _plan("write", f"{override_file} ({state})")
+        return
+    os.makedirs(override_dir, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(override_file, flags, 0o644)
     # See write_env_files' own comment: os.open()'s mode argument is ignored
@@ -5666,21 +6048,36 @@ def external_fetch_unit_names():
     return names
 
 
+# [@ANCHOR: infrastructure:opt_in_unit_names]
+def opt_in_unit_names():
+    """Basenames of every systemd unit the MANIFEST marks "opt_in": units that cost money or must
+    be a deliberate decision (code.review.sweep calls the paid Gemini API). Provisioning links them
+    but never enables or starts them, in any environment, unless the operator names them with
+    provision.py --enable-opt-in. Found by the round-2 production runbook, 2026-10-03: a re-run
+    would have enabled code.review.sweep.timer on hams1, where it is deliberately only linked."""
+    return {
+        os.path.basename(spec["path"])
+        for spec in MANIFEST.get("static_files", [])
+        if spec.get("opt_in")
+    }
+
+
 # [@ANCHOR: infrastructure:activation_units_to_enable]
-def _activation_units_to_enable(linked_units, is_test_env):
+def _activation_units_to_enable(linked_units, is_test_env, opt_in_units=()):
     """The linked .timer/.path units provisioning should `systemctl enable`.
 
-    In a test environment (provision.py --test, or test.py's isolated
-    provisioning) external-fetch units are left linked but never enabled,
-    so no timer ever fires them. Production enables every linked unit."""
-    if not is_test_env:
-        return list(linked_units)
-    external = external_fetch_unit_names()
-    return [unit for unit in linked_units if unit not in external]
+    Opt-in units (opt_in_unit_names()) are enabled only when named in opt_in_units. In a test
+    environment (provision.py --test, or test.py's isolated provisioning) external-fetch units
+    are also left linked but never enabled, so no timer ever fires them; there, naming an
+    external-fetch unit in opt_in_units does not override that rule."""
+    held = opt_in_unit_names() - set(opt_in_units)
+    if is_test_env:
+        held |= external_fetch_unit_names()
+    return [unit for unit in linked_units if unit not in held]
 
 
 # [@ANCHOR: infrastructure:smoketest_candidate_services]
-def _smoketest_candidate_services(has_hams_com=True, is_test_env=False):
+def _smoketest_candidate_services(has_hams_com=True, is_test_env=False, opt_in_units=()):
     """Services run_post_provision_smoketest() may start, in start order.
 
     In a test environment external-fetch services are left out, so the
@@ -5699,6 +6096,9 @@ def _smoketest_candidate_services(has_hams_com=True, is_test_env=False):
         "hams-pycache.service"
     }
     external = external_fetch_unit_names() if is_test_env else set()
+    # Never started by the smoketest unless the operator opted in (a start of
+    # code.review.sweep.service runs a whole paid review).
+    external |= opt_in_unit_names() - set(opt_in_units)
 
     for sf in MANIFEST.get("static_files", []):
         path = sf.get("path", "")
@@ -5715,7 +6115,7 @@ def _smoketest_candidate_services(has_hams_com=True, is_test_env=False):
     return potential_services
 
 
-def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
+def run_post_provision_smoketest(has_hams_com=True, is_test_env=False, opt_in_units=()):
     _logger.info("[*] Running post-provisioning smoketest on all services...")
 
     try:
@@ -5724,7 +6124,7 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False):
         _logger.debug("Ignored OSError during daemon-reload: %s", e)
 
     potential_services = _smoketest_candidate_services(
-        has_hams_com, is_test_env
+        has_hams_com, is_test_env, opt_in_units
     )
 
     _logger.info("DEBUG potential_services: %s", potential_services)
@@ -5968,6 +6368,9 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault("SMTP_HOST", "localhost")
         env_vars.setdefault("SMTP_PORT", "1025")
         env_vars.setdefault("HAMS_CRYPTO_KEY", "0000000000000000000000000000000000000000000=")
+        # A test box's broker only has the factory account (see MANIFEST["env_defaults"]).
+        env_vars.setdefault("RMQ_USER", "guest")
+        env_vars.setdefault("RMQ_PASS", "guest")
     else:
         # Set automatic sensible defaults
         env_vars.setdefault("DB_NAME", "hams_prod")
@@ -6019,6 +6422,13 @@ def load_and_prompt_env(env_vars, is_test):
             env_vars["HAMS_CRYPTO_KEY"] = base64.b64encode(secrets.token_bytes(32)).decode('utf-8')
         if "RMQ_PASS" not in env_vars:
             env_vars["RMQ_PASS"] = generate_secure_password()
+        # Production Redis has no unauthenticated access (2026-10-03, after the hams1 test runner
+        # flushed production Redis db 0 through it). Every client authenticates as this ACL user;
+        # see _redis_acl_include_content.
+        env_vars.setdefault("REDIS_USERNAME", "hams_redis")
+        if "REDIS_PASSWORD" not in env_vars:
+            env_vars["REDIS_PASSWORD"] = generate_secure_password()
+        env_vars["REDIS_URL"] = redis_url(env_vars)
 
         # DOMAIN identifies which site this box is being provisioned for and
         # has no safe default -- silently assuming "hams.com" would mean a
@@ -6118,10 +6528,70 @@ def _role_exists(role_name):
     return res.returncode == 0 and res.stdout.strip() == "1"
 
 
-def _postgresql_lockdown_commands():
+# [@ANCHOR: infrastructure:postgresql_lockdown]
+POSTGRESQL_LOCKDOWN_SETTINGS = (
+    ("listen_addresses", "'127.0.0.1, ::1'"),
+    ("shared_preload_libraries", "'pg_stat_statements'"),
+)
+
+
+def _conf_value(line, key):
+    """The value of an active `key = value` line of a postgresql.conf-style file, else None."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    name, sep, rest = stripped.partition("=")
+    if not sep or name.strip() != key:
+        return None
+    value = rest.strip()
+    if value.startswith("'"):
+        close = value.find("'", 1)
+        if close != -1:
+            value = value[: close + 1]
+    elif "#" in value:
+        value = value.split("#", 1)[0].strip()
+    return value
+
+
+# [@ANCHOR: infrastructure:_set_conf_key]
+def _set_conf_key(text, key, value):
+    """Sets `key = value` in postgresql.conf-style text, replacing every active line for key with one.
+
+    Returns (new_text, effective_changed). effective_changed is whether the value the server would
+    use changes: PostgreSQL takes the LAST active line for a key, so collapsing duplicates that all
+    hold the wanted value is a text change but not an effective one, and needs no restart. Until
+    2026-10-03 provisioning appended both lockdown lines on every run; hams1 had eleven duplicate
+    pairs."""
+    effective = None
+    first_index = None
+    kept = []
+    for line in text.splitlines(keepends=True):
+        current = _conf_value(line, key)
+        if current is None:
+            kept.append(line)
+            continue
+        effective = current
+        if first_index is None:
+            first_index = len(kept)
+    wanted = f"{key} = {value}\n"
+    if first_index is None:
+        if kept and not kept[-1].endswith("\n"):
+            kept[-1] += "\n"
+        kept.append(wanted)
+    else:
+        kept.insert(first_index, wanted)
+    return "".join(kept), effective != value
+
+
+# [@ANCHOR: infrastructure:_apply_postgresql_lockdown]
+def _apply_postgresql_lockdown(conf_paths=None):
     """
-    The shell commands provision_environment() runs to restrict PostgreSQL to
-    loopback. pg_hba.conf is deliberately left as Debian ships it.
+    Restricts PostgreSQL to loopback in every cluster's postgresql.conf, idempotently, and returns
+    True when a setting's effective value changed, i.e. when the server needs a restart. A file
+    whose text changes only by losing duplicate lines is rewritten without asking for one: a
+    PostgreSQL restart can crash odoo.service (hams_com CLAUDE.md, 2026-10-01).
+
+    pg_hba.conf is deliberately left as Debian ships it.
 
     This step used to run `sed -i 's/peer/trust/g'` over pg_hba.conf, which
     turned `local all postgres peer` and `local all all peer` into `trust`:
@@ -6135,18 +6605,30 @@ def _postgresql_lockdown_commands():
     -- log in with the `odoo` role's password under the stock
     `host ... 127.0.0.1/32 scram-sha-256` lines.
     """
-    return [
-        [
-            "bash",
-            "-c",
-            "echo \"listen_addresses = '127.0.0.1, ::1'\" >> /etc/postgresql/*/main/postgresql.conf",
-        ],
-        [
-            "bash",
-            "-c",
-            "echo \"shared_preload_libraries = 'pg_stat_statements'\" >> /etc/postgresql/*/main/postgresql.conf",
-        ],
-    ]
+    if conf_paths is None:
+        conf_paths = sorted(glob.glob("/etc/postgresql/*/main/postgresql.conf"))
+    restart_needed = False
+    for path in conf_paths:
+        with open(path, "r", encoding="utf-8") as f:
+            original = f.read()
+        text = original
+        effective_changed = False
+        for key, value in POSTGRESQL_LOCKDOWN_SETTINGS:
+            text, changed = _set_conf_key(text, key, value)
+            effective_changed = effective_changed or changed
+        restart_needed = restart_needed or effective_changed
+        if text == original:
+            continue
+        if _plan("write", f"{path} (lockdown settings; restart needed: {effective_changed})"):
+            continue
+        st = os.stat(path)
+        tmp_path = path + ".hams-provision.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chown(tmp_path, st.st_uid, st.st_gid)
+        os.chmod(tmp_path, st.st_mode & 0o7777)
+        os.replace(tmp_path, path)
+    return restart_needed
 
 
 # [@ANCHOR: infrastructure:_create_odoo_role_if_missing]
@@ -6244,6 +6726,20 @@ def _create_odoo_role_if_missing(run_cmd_func, db_pass):
     )
 
 
+# [@ANCHOR: infrastructure:_read_env_value]
+def _read_env_value(path, key):
+    """The value of `key=` in a KEY=VALUE file, or "" when the file or the key is absent."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                name, sep, value = line.strip().partition("=")
+                if sep and name.strip() == key:
+                    return value.strip()
+    except OSError:
+        return ""
+    return ""
+
+
 # [@ANCHOR: infrastructure:_provision_cache_manager_role]
 def _provision_cache_manager_role(
     run_cmd_func,
@@ -6269,27 +6765,34 @@ def _provision_cache_manager_role(
     stdin, never `-c`, and _alter_database_owner_to_odoo's for the `:"var"` identifier form. No
     admin password of its own is needed.
 
-    Always writes a fresh password and env_file, even when role_name already exists in PostgreSQL:
-    the role can outlive a lost or never-written env_file (a re-provisioned box, or a provisioning
-    run predating this function), and a role whose real password nothing on disk records is as
-    useless to the daemon as no role at all. Rotates via ALTER ROLE in that case, mirroring
-    provision_cache_manager_db_role.py's own provision()'s "already exists -- rotating its
-    password" branch -- night_shift_todo/low/cache-manager-odoo-password-fallback-0ea55461.md.
+    Generates a password only when it has to (2026-10-03: it used to rotate on every provisioning
+    run). When env_file already records a DB_PASS and the role exists, that password is kept and
+    no ALTER ROLE runs. When the role exists but nothing on disk records its password (a lost or
+    never-written env_file: a re-provisioned box, or a run predating this function), the role is
+    useless to the daemon, so it is rotated via ALTER ROLE, mirroring
+    provision_cache_manager_db_role.py's own "already exists -- rotating its password" branch --
+    night_shift_todo/low/cache-manager-odoo-password-fallback-0ea55461.md. A missing role is
+    created with the recorded password if there is one, else a fresh one. env_file is rewritten
+    only when its content would change. This does not detect a role whose password was changed by
+    hand to something env_file does not record; delete env_file to force a rotation.
     """
-    password = generate_secure_password()
-    verb = "ALTER" if _role_exists(role_name) else "CREATE"
-    run_cmd_func(
-        [
-            "sudo", "-u", "postgres", "psql",
-            "-v", f"role_name={role_name}",
-            "-v", f"db_pass={password}",
-        ],
-        input=(
-            f'{verb} ROLE :"role_name" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
-            "NOREPLICATION PASSWORD :'db_pass';\n"
-        ),
-        text=True,
-    )
+    existing_password = _read_env_value(env_file, "DB_PASS")
+    role_exists = _role_exists(role_name)
+    password = existing_password or generate_secure_password()
+    if not (role_exists and existing_password):
+        verb = "ALTER" if role_exists else "CREATE"
+        run_cmd_func(
+            [
+                "sudo", "-u", "postgres", "psql",
+                "-v", f"role_name={role_name}",
+                "-v", f"db_pass={password}",
+            ],
+            input=(
+                f'{verb} ROLE :"role_name" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
+                "NOREPLICATION PASSWORD :'db_pass';\n"
+            ),
+            text=True,
+        )
     run_cmd_func(
         [
             "sudo", "-u", "postgres", "psql",
@@ -6299,16 +6802,25 @@ def _provision_cache_manager_role(
         input='GRANT CONNECT ON DATABASE :"db_name" TO :"role_name";\n',
         text=True,
     )
-    directory = os.path.dirname(env_file)
-    os.makedirs(directory, mode=0o700, exist_ok=True)
-    fd = os.open(env_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write("# Auto-generated by infrastructure.py's own provisioning flow.\n")
-        f.write("# Restricted Postgres role for cache_manager.py: CONNECT-only, no table access.\n")
-        f.write("DB_HOST=localhost\n")
-        f.write(f"DB_NAME={db_name}\n")
-        f.write(f"DB_USER={role_name}\n")
-        f.write(f"DB_PASS={password}\n")
+    content = (
+        "# Auto-generated by infrastructure.py's own provisioning flow.\n"
+        "# Restricted Postgres role for cache_manager.py: CONNECT-only, no table access.\n"
+        "DB_HOST=localhost\n"
+        f"DB_NAME={db_name}\n"
+        f"DB_USER={role_name}\n"
+        f"DB_PASS={password}\n"
+    )
+    state = _file_state(env_file, content)
+    if state != "unchanged":
+        if _plan("write", f"{env_file} ({state}; keys DB_HOST DB_NAME DB_USER DB_PASS)"):
+            return
+        directory = os.path.dirname(env_file)
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        fd = os.open(env_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+    elif _planning():
+        return
     # Unlike cache_manager.env (loaded via the systemd unit's own
     # EnvironmentFile=, read by systemd as root before it drops privileges
     # to User=odoo), this file is read directly by cache_manager.py's own
@@ -6531,6 +7043,113 @@ def _create_rabbitmq_user_if_missing(run_cmd_func, rmq_user, rmq_pass):
     run_cmd_func(["rabbitmqctl", "set_permissions", "-p", "/", rmq_user, ".*", ".*", ".*"])
 
 
+# [@ANCHOR: infrastructure:_delete_rabbitmq_guest_user_if_present]
+def _delete_rabbitmq_guest_user_if_present(run_cmd_func):
+    """
+    Deletes RabbitMQ's factory-default `guest` account on a production broker.
+
+    RabbitMQ creates `guest` (administrator, full rights on `/`) on first boot, and nothing in this
+    file ever removed it -- _create_rabbitmq_user_if_missing only ADDS the real service account.
+    Found live on hams1, 2026-10-03: `guest` still existed, Odoo's hams_rabbitmq pool was silently
+    using it (no rabbitmq.* parameters in hams_prod, so it fell back to guest/guest), and a test
+    run on that host used it to feed test jobs to production's backup.worker. Only called for a
+    production (not test) provisioning, after the real account has been provisioned, because a
+    test box's private broker has no other account.
+    """
+    if _rabbitmq_user_exists("guest"):
+        run_cmd_func(["rabbitmqctl", "delete_user", "guest"])
+
+
+# [@ANCHOR: infrastructure:_ensure_line_in_file]
+def _ensure_line_in_file(path, line):
+    """Appends `line` to `path` (creating it) unless an identical line is already there. Returns True
+    when it appended. Replaces a bare append that added another NODE_IP_ADDRESS line to
+    /etc/rabbitmq/rabbitmq-env.conf on every provisioning run (eleven of them on hams1 by 2026-10-03)."""
+    text = ""
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    if line in text.splitlines():
+        return False
+    if _plan("append", f"{path}: {line}"):
+        return True
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(("\n" if text and not text.endswith("\n") else "") + line + "\n")
+    return True
+
+
+# [@ANCHOR: infrastructure:redis_url]
+def redis_url(env_vars):
+    """The redis:// URL for hams_data_relay (Rust), which reads REDIS_URL and nothing else. Built
+    from the same REDIS_* values every other client reads, so the two can never disagree."""
+    username = urllib.parse.quote(env_vars["REDIS_USERNAME"], safe="")
+    password = urllib.parse.quote(env_vars["REDIS_PASSWORD"], safe="")
+    host = env_vars.get("REDIS_HOST", "redis")
+    port = env_vars.get("REDIS_PORT", "6379")
+    return f"redis://{username}:{password}@{host}:{port}/0"
+
+
+REDIS_CONF_PATH = "/etc/redis/redis.conf"
+REDIS_ACL_INCLUDE_PATH = "/etc/redis/hams-acl.conf"
+
+
+# [@ANCHOR: infrastructure:_redis_acl_include_content]
+def _redis_acl_include_content(username, password):
+    """
+    The Redis configuration fragment that closes production Redis to unauthenticated clients.
+
+    Until 2026-10-03 production Redis (127.0.0.1:6379) had no password: any local process could
+    read or flush it, and the hams1 test runner did flush db 0. Every real client runs as the
+    `odoo` Unix user -- and so did that test runner -- so a Unix-socket-plus-group scheme would not
+    have stopped it; a password delivered only through the root-only (0400) /opt/hams/etc/redis.env
+    that systemd injects does. (A process running as `odoo` could still read another `odoo`
+    process's /proc/<pid>/environ: this stops accidents, it is not a boundary against a hostile
+    `odoo` process.)
+
+    A named ACL user rather than `requirepass` because it allows a rollout without downtime: a
+    redis-py client that sends AUTH while the server's `default` user is still `nopass` gets an
+    error, so with `requirepass` clients and server would have to switch at the same instant. With
+    a named user, the user is created first (no effect on anyone), clients move to it one by one,
+    and only then is `default` turned off.
+
+    The password is stored as its SHA-256 (`#<hex>`), so the plaintext lives only in redis.env.
+    `user` directives in a config file cannot be combined with `aclfile`; nothing here uses one.
+    """
+    digest = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return (
+        "# Managed by hams_shared/tools/infrastructure.py (_redis_acl_include_content). Do not edit.\n"
+        "user default off resetpass resetkeys resetchannels -@all\n"
+        f"user {username} on #{digest} ~* &* +@all\n"
+    )
+
+
+# [@ANCHOR: infrastructure:_write_redis_acl_include]
+def _write_redis_acl_include(env_vars, conf_path=REDIS_CONF_PATH, include_path=REDIS_ACL_INCLUDE_PATH):
+    """Writes the ACL fragment (redis:redis, 0640) and makes redis.conf include it. Production only:
+    test.py's private Redis starts from the host's own redis.conf, so a test box must not get it.
+
+    Returns True when the fragment's content or the include line changed, i.e. when redis-server
+    needs a restart to apply it. Production Redis runs with `appendonly no`, so an unneeded restart
+    drops the whole cache (round-2 production runbook, 2026-10-03)."""
+    username = env_vars.get("REDIS_USERNAME", "")
+    password = env_vars.get("REDIS_PASSWORD", "")
+    if not username or not password:
+        raise RuntimeError("REDIS_USERNAME and REDIS_PASSWORD must both be set to lock down production Redis.")
+    if username == "default":
+        raise RuntimeError("REDIS_USERNAME must not be 'default': that is the user this lock-down turns off.")
+    content = _redis_acl_include_content(username, password)
+    state = _file_state(include_path, content)
+    if state != "unchanged" and not _plan("write", f"{include_path} ({state}; Redis ACL users)"):
+        fd = os.open(include_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+        os.fchmod(fd, 0o640)
+        with open(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+    if not _planning():
+        apply_permissions(include_path, "redis:redis", 0o640)
+    appended = _ensure_line_in_file(conf_path, f"include {include_path}")
+    return state != "unchanged" or appended
+
+
 # [@ANCHOR: infrastructure:_refuse_if_unsafe_test_db_drop]
 def _refuse_if_unsafe_test_db_drop(db_name):
     """
@@ -6600,6 +7219,116 @@ def _discover_hams_com_dir(repo_root):
     return None
 
 
+# Packages an incidental dependency change must never upgrade or remove. On hams1 (2026-10-03) a
+# plain `apt-get install -y <MANIFEST list>` would have upgraded odoo, pgbackrest and pgvector and
+# replaced the cargo-web/rustc-web 1.96 toolchain with Debian's older cargo/rustc.
+APT_PROTECTED_PREFIXES = (
+    "odoo", "postgresql", "pgbackrest", "redis", "rabbitmq", "cargo", "rustc", "rust-", "libstd-rust",
+)
+# MANIFEST apt names that only provide the Rust toolchain: skipped when a `cargo` is already on PATH,
+# whatever package (or rustup) provides it.
+APT_RUST_TOOLCHAIN_NAMES = {"cargo", "cargo-web", "rustc", "rustc-web"}
+
+
+# [@ANCHOR: infrastructure:_installed_apt_packages]
+def _installed_apt_packages():
+    """Names of the packages dpkg reports fully installed (read-only probe)."""
+    res = subprocess.run(
+        ["dpkg-query", "-W", "-f", "${db:Status-Abbrev} ${Package}\n"],
+        capture_output=True, text=True,
+    )
+    names = set()
+    for line in res.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].startswith("ii"):
+            names.add(parts[1].split(":")[0])
+    return names
+
+
+# [@ANCHOR: infrastructure:_held_apt_packages]
+def _held_apt_packages():
+    """Names `apt-mark showhold` lists (read-only probe)."""
+    res = subprocess.run(["apt-mark", "showhold"], capture_output=True, text=True)
+    return {line.strip().split(":")[0] for line in res.stdout.splitlines() if line.strip()}
+
+
+# [@ANCHOR: infrastructure:_filter_apt_install]
+def _filter_apt_install(packages, installed, held, have_cargo):
+    """Splits packages into (to_install, skipped): skipped maps a name to why it is left out.
+
+    Provisioning installs only what is missing. An installed package is never re-requested (that
+    is how a re-run upgraded odoo and friends), a held package is never named (apt-get -y aborts
+    the whole command on a held package), and the Rust toolchain packages are skipped when cargo is
+    already on PATH, so the installed rustc/cargo is never replaced."""
+    to_install, skipped = [], {}
+    for pkg in sorted(set(packages)):
+        if pkg in held:
+            skipped[pkg] = "held (apt-mark hold)"
+        elif pkg in installed:
+            skipped[pkg] = "already installed"
+        elif pkg in APT_RUST_TOOLCHAIN_NAMES and have_cargo:
+            skipped[pkg] = "a cargo toolchain is already installed"
+        else:
+            to_install.append(pkg)
+    return to_install, skipped
+
+
+# [@ANCHOR: infrastructure:_parse_apt_simulation]
+def _parse_apt_simulation(output):
+    """(installs, upgrades, removals) package names from `apt-get -s install` output."""
+    installs, upgrades, removals = [], [], []
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        if parts[0] == "Inst":
+            (upgrades if len(parts) > 2 and parts[2].startswith("[") else installs).append(parts[1])
+        elif parts[0] == "Remv":
+            removals.append(parts[1])
+    return installs, upgrades, removals
+
+
+def _is_apt_protected(pkg):
+    return pkg.startswith(APT_PROTECTED_PREFIXES)
+
+
+# [@ANCHOR: infrastructure:_apt_install_missing]
+def _apt_install_missing(run_cmd_func, packages, apt_opts, label):
+    """Installs the packages from `packages` that are missing, never upgrading or removing anything
+    that matters. Simulates first (`apt-get -s`, read-only) and refuses, recording a degraded step,
+    when the install would remove any package or upgrade a protected one (APT_PROTECTED_PREFIXES),
+    or when apt refuses because of a hold. The real install uses --no-upgrade. Returns the list
+    installed (or, in plan mode, the list that would be)."""
+    to_install, skipped = _filter_apt_install(
+        packages, _installed_apt_packages(), _held_apt_packages(), shutil.which("cargo") is not None
+    )
+    for pkg, why in sorted(skipped.items()):
+        if why != "already installed":
+            _logger.info("[*] apt (%s): not installing %s: %s", label, pkg, why)
+    if not to_install:
+        _logger.info("[*] apt (%s): nothing to install.", label)
+        return []
+    sim = subprocess.run(
+        ["apt-get", "-s", "install", "-y", "--no-upgrade"] + apt_opts + to_install,
+        capture_output=True, text=True,
+    )
+    installs, upgrades, removals = _parse_apt_simulation(sim.stdout)
+    protected = sorted(p for p in upgrades if _is_apt_protected(p))
+    if sim.returncode != 0 or removals or protected:
+        reason = (
+            f"apt refused the simulation: {sim.stderr.strip()[-300:]}" if sim.returncode != 0
+            else f"would remove {removals} / upgrade protected {protected}"
+        )
+        _logger.error("[!] apt (%s): NOT installing %s -- %s", label, " ".join(to_install), reason)
+        if not _plan("refuse", f"apt install ({label}) {' '.join(to_install)}: {reason}"):
+            record_hook_failure(f"apt_install:{label}", RuntimeError(reason))
+        return []
+    if upgrades:
+        _logger.info("[*] apt (%s): dependencies to upgrade: %s", label, " ".join(upgrades))
+    run_cmd_func(["apt-get", "install", "-y", "--no-upgrade"] + apt_opts + to_install)
+    return to_install
+
+
 def provision_environment(
     run_cmd_func,
     env_vars,
@@ -6608,7 +7337,21 @@ def provision_environment(
     skip_apt=False,
     is_test=False,
     hold_odoo=False,
+    plan=False,
+    opt_in_units=(),
 ):
+    """Provisions this host. plan=True (provision.py --plan) changes nothing: every action is
+    recorded and printed instead (see ProvisionPlan); run_cmd_func must then only print, as
+    provision.py's plan-mode run_sys does. opt_in_units names MANIFEST "opt_in" units the operator
+    wants enabled (provision.py --enable-opt-in)."""
+    if plan and not _planning():
+        with planning() as recorded:
+            provision_environment(
+                run_cmd_func, env_vars, orig_user, os_id=os_id, skip_apt=skip_apt,
+                is_test=is_test, hold_odoo=hold_odoo, plan=True, opt_in_units=opt_in_units,
+            )
+        print(f"PLAN ONLY: {len(recorded.actions)} action(s) listed above; nothing was changed.", flush=True)
+        return recorded
     _logger.info("[*] Provision version 1")
     reset_hook_failures()
     os_id = os_id or get_os_identifier()
@@ -6722,7 +7465,9 @@ def provision_environment(
     try:
         with open("/etc/hosts", "r") as f:
             hosts_content = f.read()
-        if "redis" not in hosts_content:
+        if "redis" not in hosts_content and not _plan(
+            "append", "/etc/hosts: 127.0.0.1 redis rabbitmq postgres pdns memcached"
+        ):
             _logger.info(
                 "[*] Ensuring docker-compose hostnames resolve locally in /etc/hosts..."
             )
@@ -6751,7 +7496,7 @@ def provision_environment(
             ]
 
             run_cmd_func(["apt-get", "update"] + apt_opts)
-            run_cmd_func(["apt-get", "install", "-y"] + apt_opts + ["gnupg"])
+            _apt_install_missing(run_cmd_func, ["gnupg"], apt_opts, "gnupg")
             run_cmd_func(
                 ["apt-get", "update"] + apt_opts + ["--allow-insecure-repositories"]
             )
@@ -6810,7 +7555,7 @@ def provision_environment(
                 all_packages = [p for p in all_packages if p not in missing_apt_packages]
 
             all_packages = sorted(list(set(all_packages)))
-            run_cmd_func(["apt-get", "install", "-y"] + apt_opts + all_packages)
+            _apt_install_missing(run_cmd_func, all_packages, apt_opts, "manifest")
 
             for pkg in missing_apt_packages:
                 pip_name = PIP_FALLBACK_APT_PACKAGES.get(pkg)
@@ -6928,15 +7673,16 @@ def provision_environment(
                     "[*] Installing test-only apt packages for daemons/ test suites "
                     "(flask, flask-cors, aiohttp, feedparser)..."
                 )
-                run_cmd_func(
-                    ["apt-get", "install", "-y"]
-                    + apt_opts
-                    + [
+                _apt_install_missing(
+                    run_cmd_func,
+                    [
                         "python3-flask",
                         "python3-flask-cors",
                         "python3-aiohttp",
                         "python3-feedparser",
-                    ]
+                    ],
+                    apt_opts,
+                    "test-only",
                 )
         else:
             _logger.info("[*] Bypassing APT phase (skip_apt=True)...")
@@ -7031,11 +7777,16 @@ def provision_environment(
 
         try:
             _logger.info("[*] Locking down RabbitMQ to local loopback...")
-            os.makedirs("/etc/rabbitmq", exist_ok=True)
-            with open("/etc/rabbitmq/rabbitmq-env.conf", "a") as f:
-                f.write("NODE_IP_ADDRESS=127.0.0.1\n")
+            if not _planning():
+                os.makedirs("/etc/rabbitmq", exist_ok=True)
+            rabbitmq_conf_changed = _ensure_line_in_file(
+                "/etc/rabbitmq/rabbitmq-env.conf", "NODE_IP_ADDRESS=127.0.0.1"
+            )
             if not is_isolated_ns:
-                run_cmd_func(["systemctl", "restart", "rabbitmq-server"])
+                # Restart only when the bind address was just added: a restart drops every
+                # consumer's connection (round-2 production runbook, 2026-10-03).
+                if rabbitmq_conf_changed:
+                    run_cmd_func(["systemctl", "restart", "rabbitmq-server"])
                 # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: nothing
                 # here ever actually provisioned a real RabbitMQ user account matching
                 # whatever RMQ_USER/RMQ_PASS ended up in env_vars/the written env files --
@@ -7047,6 +7798,10 @@ def provision_environment(
                 rmq_pass = env_vars.get("RMQ_PASS", "")
                 if rmq_user and rmq_pass:
                     _create_rabbitmq_user_if_missing(run_cmd_func, rmq_user, rmq_pass)
+                    # Production only, and only once the real account exists (a test box's
+                    # private broker has no account but guest). See the function's docstring.
+                    if not is_test:
+                        _delete_rabbitmq_guest_user_if_present(run_cmd_func)
                 else:
                     _logger.warning(
                         "[*] Skipping RabbitMQ user provisioning -- RMQ_USER/RMQ_PASS "
@@ -7056,13 +7811,25 @@ def provision_environment(
             _logger.warning("[*] Failed to configure RabbitMQ bindings: %s", e)
             record_hook_failure("rabbitmq_bindings", e)
 
+        if not is_test:
+            try:
+                _logger.info("[*] Closing production Redis to unauthenticated clients (ACL user)...")
+                redis_conf_changed = _write_redis_acl_include(env_vars)
+                if not is_isolated_ns and redis_conf_changed:
+                    run_cmd_func(["systemctl", "restart", "redis-server"])
+            except Exception as e:  # audit-ignore-catch-all
+                _logger.warning("[*] Failed to lock down Redis: %s", e)
+                record_hook_failure("redis_acl", e)
+
         try:
             _logger.info("[*] Locking down PostgreSQL to local loopback...")
-            for cmd in _postgresql_lockdown_commands():
-                run_cmd_func(cmd)
+            postgresql_restart_needed = _apply_postgresql_lockdown()
 
             if not is_isolated_ns:
-                run_cmd_func(["systemctl", "restart", "postgresql"])
+                # Only when a lockdown setting's effective value changed: restarting PostgreSQL
+                # can crash odoo.service (hams_com CLAUDE.md, 2026-10-01).
+                if postgresql_restart_needed:
+                    run_cmd_func(["systemctl", "restart", "postgresql"])
 
                 db_name = env_vars.get("DB_NAME", "hams_test")
                 _logger.info(
@@ -7097,8 +7864,11 @@ def provision_environment(
             try:
                 u_info = pwd.getpwnam(orig_user)
                 user_tmp = os.path.join(u_info.pw_dir, "tmp")
-                os.makedirs(user_tmp, exist_ok=True)
-                apply_permissions(user_tmp, f"{orig_user}:{orig_user}", None)
+                if not os.path.isdir(user_tmp) and _plan("mkdir", user_tmp):
+                    pass
+                elif not _planning():
+                    os.makedirs(user_tmp, exist_ok=True)
+                    apply_permissions(user_tmp, f"{orig_user}:{orig_user}", None)
 
             except KeyError as e:  # burn-ignore-os-account-probe
                 _logger.debug("Original user %s not found: %s", orig_user, e)
@@ -7118,9 +7888,25 @@ def provision_environment(
                             continue
                         src = os.path.join(systemd_dir, item)
                         dst = os.path.join("/etc/systemd/system", item)
-                        if not os.path.exists(dst):
+                        if not os.path.exists(dst) and not _plan("link", f"{dst} -> {src}"):
                             os.symlink(src, dst)
                         if item.endswith((".timer", ".path")):
+                            linked_activation_units.append(item)
+            if _planning():
+                # Units provision_static_files() would write but which are not on disk yet.
+                for spec in MANIFEST.get("static_files", []):
+                    unit_path = spec["path"]
+                    item = os.path.basename(unit_path)
+                    if (
+                        os.path.dirname(unit_path) == systemd_dir
+                        and item.endswith((".service", ".timer", ".path"))
+                        and not os.path.exists(unit_path)
+                        and (has_hams_com or item == "hams-pycache.service")
+                        and set(spec.get("environments", [])) & {"prod", "test"}
+                        and not os.path.exists(os.path.join("/etc/systemd/system", item))
+                    ):
+                        _plan("link", f"/etc/systemd/system/{item} -> {unit_path}")
+                        if item.endswith((".timer", ".path")) and item not in linked_activation_units:
                             linked_activation_units.append(item)
         except OSError as e:
             _logger.warning("Failed to link systemd units: %s", e)
@@ -7148,12 +7934,12 @@ def provision_environment(
         # from third-party servers -- see external_fetch_unit_names(). The
         # rest stay linked but disabled, so no timer ever fires them there.
         units_to_enable = _activation_units_to_enable(
-            linked_activation_units, is_test_env
+            linked_activation_units, is_test_env, opt_in_units
         )
         held_back = sorted(set(linked_activation_units) - set(units_to_enable))
         if held_back:
             _logger.info(
-                "[*] Test environment: NOT enabling %d external-fetch unit(s): %s",
+                "[*] NOT enabling %d opt-in or (test environment) external-fetch unit(s): %s",
                 len(held_back),
                 ", ".join(held_back),
             )
@@ -7163,8 +7949,16 @@ def provision_environment(
                 len(units_to_enable),
             )
             try:
-                subprocess.run(["systemctl", "daemon-reload"], check=False)
+                if not _plan("run", "systemctl daemon-reload"):
+                    subprocess.run(["systemctl", "daemon-reload"], check=False)
                 for unit in units_to_enable:
+                    if _planning():
+                        state = subprocess.run(
+                            ["systemctl", "is-enabled", unit], capture_output=True, text=True, check=False
+                        ).stdout.strip()
+                        if state != "enabled":
+                            _plan("enable", f"{unit} (now: {state or 'not loaded'})")
+                        continue
                     result = subprocess.run(
                         ["systemctl", "enable", unit],
                         capture_output=True,
@@ -7191,6 +7985,13 @@ def provision_environment(
                 "[*] --hold-odoo: NOT initialising the Odoo database or starting Odoo and the "
                 "daemons. Re-run provision.py without --hold-odoo to finish."
             )
+        elif not is_isolated_ns and _planning():
+            _plan(
+                "odoo",
+                f"initialize_odoo_database on {env_vars.get('DB_NAME', 'hams_test')} (stops odoo, "
+                "installs/upgrades modules, rewrites odoo.conf) and run_post_provision_smoketest "
+                "(starts every service)",
+            )
         elif not is_isolated_ns:
             initialize_odoo_database(
                 run_cmd_func,
@@ -7198,7 +7999,9 @@ def provision_environment(
                 hams_com_dir,
                 db_name=env_vars.get("DB_NAME", "hams_test"),
             )
-            run_post_provision_smoketest(has_hams_com, is_test_env=is_test_env)
+            run_post_provision_smoketest(
+                has_hams_com, is_test_env=is_test_env, opt_in_units=opt_in_units
+            )
         else:
             _logger.info(
                 "[*] Skipping systemd smoketest inside isolated unshare namespace."
@@ -7213,7 +8016,7 @@ def provision_environment(
         # must keep exiting 0 on a clean run even if some host-dependent step
         # legitimately can't succeed in a sandbox, or provisioning-based
         # tests would start failing for reasons unrelated to what they test.
-        if print_hook_failure_summary() and not is_test_env:
+        if print_hook_failure_summary() and not is_test_env and not _planning():
             sys.exit(2)
 
     except subprocess.CalledProcessError as e:

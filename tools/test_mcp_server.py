@@ -15,7 +15,7 @@ import time
 import traceback
 from contextlib import redirect_stdout, redirect_stderr
 
-from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.mcpserver import MCPServer, Context
 import odoo
 from odoo.tools import config
 from odoo.cli import server
@@ -25,7 +25,7 @@ from odoo.modules.registry import Registry
 
 _logger = logging.getLogger(__name__)
 
-mcp = FastMCP("OdooTestServer")
+mcp = MCPServer("OdooTestServer")
 
 class NotifyStream:
     """Wraps an io stream to intercept and forward critical logs to the MCP context."""

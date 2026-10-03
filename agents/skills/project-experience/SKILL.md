@@ -344,3 +344,13 @@ record's `group_ids`), and keep a test that asks Odoo's own check (`_can_execute
 running database with a shell script that walks `ir.cron`. (d) Flip `ir_model_data.noupdate` with SQL, then run `-u`. In
 general, after a deployment read the server, not only the tests: `systemctl --failed`, the `NRestarts` of every service,
 `ir_cron.failure_count`, the newest ERROR lines of the Odoo log, and a probe that each daemon's key still authenticates.
+
+## 49. The `/web/login` Self-Redirect Loop Trap: the Registry Failed to Load (2026-10-02)
+**The Trap:** On a database whose schema is behind the code (a missing column), `/web/login`, `/web`, `/odoo` and `/odoo/*`
+302 to themselves forever, even for a cookie-less `curl`. It looks like an auth or routing bug in our overrides. It is Odoo 19
+core: `Registry(db)` raises `ProgrammingError`, `Application.__call__` catches the `RegistryError`, logs the session out and
+reroutes those paths to the no-database router, where core `ensure_db()` picks the single filtered database again and redirects
+back to the same URL. Our `web_login` overrides (`zero_sudo`, `ham_onboarding`) never run in that router.
+**The Solution:** grep the Odoo log for WARNING `Database or registry unusable, trying without`; it carries the real traceback.
+`/web/session/authenticate` (JSON-RPC) also shows the real error, because it is not rerouted. Then fix the schema
+(`-u <modules> --stop-after-init`, after a `pg_dump`). Do not hunt in the hams login controllers.

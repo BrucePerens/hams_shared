@@ -151,7 +151,7 @@ class ProvisionDebianDummyPackageTests(ProvisionTestCase):
         _, mock_subprocess = self.run_provision([], os_id="debian")
         commands_run = [c.args[0] for c in mock_subprocess.run.call_args_list]
         self.assertIn(["apt-get", "update", "-y"], commands_run)
-        self.assertIn(["apt-get", "install", "-y", "equivs"], commands_run)
+        self.assertIn(["apt-get", "install", "-y", "--no-upgrade", "equivs"], commands_run)
         self.assertTrue(
             any(cmd[:1] == ["equivs-build"] for cmd in commands_run),
             f"expected an equivs-build invocation, got: {commands_run}",
@@ -176,11 +176,11 @@ class ProvisionDebianDummyPackageTests(ProvisionTestCase):
         _, mock_subprocess = self.run_provision([], os_id="debian")
         commands_run = [c.args[0] for c in mock_subprocess.run.call_args_list]
         self.assertIn(
-            ["apt-get", "install", "-y", "python3-pypdf"],
+            ["apt-get", "install", "-y", "--no-upgrade", "python3-pypdf"],
             commands_run,
             f"expected an explicit python3-pypdf install, got: {commands_run}",
         )
-        pypdf_index = commands_run.index(["apt-get", "install", "-y", "python3-pypdf"])
+        pypdf_index = commands_run.index(["apt-get", "install", "-y", "--no-upgrade", "python3-pypdf"])
         dpkg_indices = [i for i, cmd in enumerate(commands_run) if cmd[:2] == ["dpkg", "-i"]]
         self.assertTrue(dpkg_indices, f"expected a dpkg -i invocation, got: {commands_run}")
         self.assertLess(
@@ -193,7 +193,7 @@ class ProvisionDebianDummyPackageTests(ProvisionTestCase):
     def test_skips_the_dummy_pypdf2_package_on_ubuntu(self):
         _, mock_subprocess = self.run_provision([], os_id="ubuntu", patch_open=False)
         commands_run = [c.args[0] for c in mock_subprocess.run.call_args_list]
-        self.assertNotIn(["apt-get", "install", "-y", "equivs"], commands_run)
+        self.assertNotIn(["apt-get", "install", "-y", "--no-upgrade", "equivs"], commands_run)
 
 
 class ProvisionForceResetTests(ProvisionTestCase):
@@ -272,6 +272,37 @@ class ProvisionHoldOdooTests(ProvisionTestCase):
     def test_hold_odoo_defaults_to_off(self):
         mock_infra, _ = self.run_provision([], os_id="debian")
         self.assertIs(mock_infra.provision_environment.call_args.kwargs["hold_odoo"], False)
+
+
+class ProvisionPlanModeTests(ProvisionTestCase):
+    """Tests [@ANCHOR: infrastructure:provision_plan] (provision.py's half)."""
+
+    def test_plan_is_forwarded_and_run_sys_executes_nothing(self):
+        mock_infra, mock_subprocess = self.run_provision(["--plan"], os_id="debian")
+        mock_infra.redact_command.side_effect = lambda cmd: list(cmd)
+        kwargs = mock_infra.provision_environment.call_args.kwargs
+        self.assertIs(kwargs["plan"], True)
+        run_sys = mock_infra.provision_environment.call_args[0][0]
+        mock_subprocess.run.reset_mock()
+        result = run_sys(["systemctl", "restart", "postgresql"])
+        mock_subprocess.run.assert_not_called()
+        self.assertIs(result, mock_subprocess.CompletedProcess.return_value)
+
+    def test_plan_runs_none_of_the_debian_dummy_package_commands(self):
+        _, mock_subprocess = self.run_provision(["--plan"], os_id="debian")
+        mock_subprocess.run.assert_not_called()
+
+    def test_plan_with_force_reset_destroys_nothing(self):
+        _, mock_subprocess = self.run_provision(["--plan", "--force-reset"], os_id="ubuntu", patch_open=False)
+        mock_subprocess.run.assert_not_called()
+
+    def test_plan_defaults_to_off_and_opt_in_units_are_forwarded(self):
+        mock_infra, _ = self.run_provision(
+            ["--enable-opt-in", "code.review.sweep.timer"], os_id="ubuntu", patch_open=False
+        )
+        kwargs = mock_infra.provision_environment.call_args.kwargs
+        self.assertIs(kwargs["plan"], False)
+        self.assertEqual(kwargs["opt_in_units"], ("code.review.sweep.timer",))
 
 
 class RepoRootAndImportInAFreshProcessTests(unittest.TestCase):

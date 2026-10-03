@@ -31,9 +31,9 @@ make. A `status: blocked` to-do points into it.
 
 1. **Orient.** Read `/home/bruce/workspace/hams_com/CLAUDE.md` and
    `hams_shared/docs/adrs/0102_concurrent_session_isolation_and_merge_gating.md` (per-session git
-   worktrees, branch protection, and this run's own fast-merge path -- replaces ADR-0099, which no
-   longer exists). Run `ListAgents`: interactive sessions Bruce runs himself work the same backlog,
-   and so can another run of this agent.
+   worktrees and branch protection; every PR, this run's own included, waits for Bruce's review --
+   replaces ADR-0099, which no longer exists). Run `ListAgents`: interactive sessions Bruce runs
+   himself work the same backlog, and so can another run of this agent.
 2. **Watch** (Part 1): Dependabot alerts, CI runs, and
    `python3 hams_shared/tools/check_dependency_releases.py` from hams_open. Fix what is safely
    fixable, including the whole implication chain; push it.
@@ -67,18 +67,12 @@ make. A `status: blocked` to-do points into it.
 5. **Record** (see "Recording" below). A run that found nothing and worked nothing leaves no trace.
 6. **Improve this file** with anything a future run would genuinely benefit from knowing (see
    "Self-improvement").
-7. **Fast-merge and worktree sweep** (ADR-0102). Cheap, run every cycle regardless of what else
-   happened above:
-   - **Currently non-functional, confirmed live 2026-09-22 -- do not run this step, it will just log
-     failures.** `python3 hams_shared/tools/night_watch_review_and_merge.py` was meant to approve and
-     merge any open PR whose head branch starts with `night-shift/`, using a credential dedicated to
-     this one job. It can't: a fine-grained PAT authenticates as the GitHub *account* that created it,
-     not a separate bot identity, and every credential on this box is the same account
-     (`BrucePerens`) that opens the PR in the first place -- GitHub's self-approval block applies
-     regardless of which token attempts the review. See ADR-0102 decision 4 and
-     `night_shift_todo/medium/night-watch-fast-merge-path-cannot-self-approve-same-account-pat-b91af4d3.md`.
-     Until a real second GitHub identity exists, open the PR as usual (from a `night-shift/<slug>`
-     branch is still fine, that convention is harmless) and it waits for Bruce like everything else.
+7. **Worktree sweep** (ADR-0102). Cheap, run every cycle regardless of what else happened above.
+   There is no fast-merge step: the planned `night_watch_review_and_merge.py` was withdrawn and
+   deleted on 2026-10-02 (ADR-0102 decision 4) because every credential on this box is the same
+   GitHub account (`BrucePerens`) that opens the PR, and GitHub will not let an account approve its
+   own PR. Open PRs from a `night-shift/<slug>` branch as usual; the prefix is only a naming
+   convention, and each PR waits for Bruce's review like every other PR.
    - `python3 hams_shared/tools/sweep_orphan_worktrees.py <hams_com repo root> <hams_shared repo
      root>` -- prunes worktrees whose directory is already gone, removes ones that are clean and
      fully pushed and idle for hours, and flags (never force-deletes) anything else as a
@@ -985,11 +979,11 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   never the working tree itself. Read
   `hams_shared/docs/adrs/0102_concurrent_session_isolation_and_merge_gating.md` before your first
   commit of a run. Use `EnterWorktree` at the start of a run (`ExitWorktree` with `keep` if you stop
-  mid-task, `remove` when genuinely done); merging back is then an ordinary `git push`, or, for
-  anything you want fast-merged without waiting for Bruce, a PR from a branch named
-  `night-shift/<slug>` -- ADR-0102's own review/merge script picks those up every cycle (step 7,
-  above). It is deliberately not restated here -- two copies of a procedure are how the two copies
-  drift apart. If you find a new shared-state failure mode, add it to the ADR, not here.
+  mid-task, `remove` when genuinely done); merging back is a PR from a branch named
+  `night-shift/<slug>`, which waits for Bruce's review and his `--admin` merge -- no script merges
+  it (ADR-0102 decision 4; step 7, above). It is deliberately not restated here -- two copies of a
+  procedure are how the two copies drift apart. If you find a new shared-state failure mode, add
+  it to the ADR, not here.
   What is specific to THIS skill, and worth knowing before you read a CI failure:
   **a shared-index accident can push an uncompilable tree, and it looks like a code regression.**
   On 2026-09-16 a peer's staged `git rm` of `daemons/hams_local_relay/src/offline_records.rs` rode
