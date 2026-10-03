@@ -74,6 +74,8 @@ class FakeOdoo:
                 return not (actual == value or (value is False and not actual))
             if op == "in":
                 return actual in value
+            if op == "not in":
+                return actual not in value
             if op == "=like":
                 return like(actual, value)
             if op == ">":

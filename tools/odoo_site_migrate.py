@@ -60,6 +60,9 @@ SKIP_FIELDS = frozenset(
     {"id", "create_uid", "write_uid", "create_date", "write_date", "display_name", "__last_update",
      "website_url", "website_slug", "website_published_url", "write_date", "access_token"}
 )
+# Binary fields copied as files (site identity); every other binary field is skipped and reported.
+BINARY_COPY = {"website": ["logo", "favicon", "social_default_image"]}
+NOISY_BINARIES = {("res.lang", "flag_image"), ("blog.post", "author_avatar")}
 ATTACHMENT_RES_MODELS = ["ir.ui.view", "blog.post", "blog.blog", "website", "website.page", "website.menu"]
 
 
@@ -334,19 +337,26 @@ class Exporter:
         return bool(self.source.call("ir.model", "search_count", [[("model", "=", model)]]))
 
     # -- discovery
+    def discover_website_models(self):
+        """Concrete (stored) website* models. Abstract mixins have no table and are refused by the
+        server; `abstract` exists on ir.model from Odoo 16, older servers are filtered by name."""
+        has_abstract = bool(self.source.call("ir.model.fields", "search_count",
+                                             [[("model", "=", "ir.model"), ("name", "=", "abstract")]]))
+        domain = [("model", "=like", "website%"), ("transient", "=", False)]
+        if has_abstract:
+            domain.append(("abstract", "=", False))
+        rows = self.source.call("ir.model", "search_read", [domain], {"fields": ["model"], "order": "model"})
+        return [r["model"] for r in rows if not r["model"].endswith((".mixin", ".metadata"))]
+
     def probe(self):
         info = self.source.version()
         installed = self.source.call(
             "ir.module.module", "search_read", [[("state", "=", "installed")]], {"fields": ["name"], "order": "name"}
         )
         names = [row["name"] for row in installed]
-        website_models = self.source.call(
-            "ir.model", "search_read", [[("model", "=like", "website%"), ("transient", "=", False)]],
-            {"fields": ["model"], "order": "model"},
-        )
+        website_models = self.discover_website_models()
         counts = {}
-        for row in website_models + [{"model": m} for m, _d, _e in CORE_MODELS if m.startswith(("blog", "ir.ui", "ir.att"))]:
-            model = row["model"]
+        for model in website_models + [m for m, _d, _e in CORE_MODELS if m.startswith(("blog", "ir.ui", "ir.att"))]:
             if model in counts or model in EXCLUDED_MODELS:
                 continue
             try:
@@ -369,14 +379,9 @@ class Exporter:
                     models.append((model, domain, extra))
         if discovered_extra:
             known = {m for m, _d, _e in models}
-            rows = self.source.call(
-                "ir.model", "search_read", [[("model", "=like", "website%"), ("transient", "=", False)]],
-                {"fields": ["model"], "order": "model"},
-            )
-            for row in rows:
-                model = row["model"]
+            for model in self.discover_website_models():
                 if model not in known and model not in EXCLUDED_MODELS:
-                    models.append((model, [], []))
+                    models.append((model, "discovered", []))
         return models
 
     # -- export
@@ -407,7 +412,24 @@ class Exporter:
             "|", ("website_id", "!=", False), ("res_model", "in", ATTACHMENT_RES_MODELS),
         ]
 
+    def shipped_ids(self, model):
+        """Ids of records the installed modules created themselves (they have an external id from a
+        module): default data, not the site owner's content."""
+        rows = self.source.call(
+            "ir.model.data", "search_read", [[("model", "=", model), ("module", "!=", "__export__")]],
+            {"fields": ["res_id"]},
+        )
+        return sorted({row["res_id"] for row in rows})
+
     def export_model(self, model, domain, extra, previous):
+        if domain == "discovered":
+            try:
+                domain = [("id", "not in", self.shipped_ids(model))]
+                self.fields_of(model)
+            except xmlrpc.client.Fault as exc:
+                self.manifest["skipped"][model] = {"unreadable": str(exc)[:120]}
+                self.log(f"skip {model}: not readable ({str(exc)[:60]})")
+                return {"done": True, "count": 0, "last_id": 0, "sha256": "", "fields": []}
         fields = self.fields_of(model)
         wanted = [
             name for name, meta in fields.items()
@@ -416,11 +438,16 @@ class Exporter:
         skipped_secret = secret_fields(wanted)
         wanted = [n for n in wanted if n not in skipped_secret]
         wanted += [name for name in extra if name in fields and name not in wanted]
-        binaries = sorted(n for n, m in fields.items() if m["type"] == "binary" and model != "ir.attachment")
+        copy_fields = [f for f in BINARY_COPY.get(model, []) if f in fields]
+        binaries = sorted(
+            n for n, m in fields.items()
+            if m["type"] == "binary" and model != "ir.attachment" and n not in copy_fields
+            and (model, n) not in NOISY_BINARIES
+        )
         if skipped_secret or binaries:
             self.manifest["skipped"][model] = {"secret_fields": skipped_secret, "binary_fields": binaries}
         if model == "ir.attachment":
-            domain = self.attachment_domain()
+            domain = self.attachment_domain() + [("id", "not in", self.shipped_ids(model))]
         path = os.path.join(self.out, "data", f"{model}.jsonl")
         last_id, count = self._resume_point(path)
         if not previous:
@@ -439,6 +466,8 @@ class Exporter:
             if model == "ir.attachment":
                 for row in rows:
                     self.export_attachment_file(row)
+            for field in copy_fields:
+                self.export_binary_field(model, [r["id"] for r in rows], field)
             last_id, count = rows[-1]["id"], count + len(rows)
             self.log(f"{model}: {count} records")
         digest = sha256_file(path)
@@ -461,6 +490,17 @@ class Exporter:
         with open(path, "w", encoding="utf-8") as handle:  # audit-ignore-path
             handle.writelines(good)
         return last_id, count
+
+    def export_binary_field(self, model, ids, field):
+        for record in self.source.call(model, "read", [ids], {"fields": [field]}):
+            encoded = record.get(field)
+            if not encoded:
+                continue
+            raw = base64.b64decode(encoded)
+            name = f"files/{model}__{record['id']}__{field}"
+            with open(os.path.join(self.out, name), "wb") as handle:  # audit-ignore-path
+                handle.write(raw)
+            self.manifest["files"][name] = sha256_bytes(raw)
 
     def export_attachment_file(self, row):
         if row.get("type") != "binary":
@@ -627,11 +667,13 @@ class Importer:
 
     # -- link rewriting
     def rewrite(self, html):
+        # A dry run has only placeholder (negative) ids for what it would create; counting the
+        # rewrites with them still shows how many links will change.
+        def usable(model):
+            return {int(k): v for k, v in self.idmap.get(model, {}).items() if v > 0 or not self.apply}
+
         return rewrite_html(
-            html, self.domains,
-            {int(k): v for k, v in self.idmap.get("ir.attachment", {}).items() if v > 0},
-            {int(k): v for k, v in self.idmap.get("blog.blog", {}).items() if v > 0},
-            {int(k): v for k, v in self.idmap.get("blog.post", {}).items() if v > 0},
+            html, self.domains, usable("ir.attachment"), usable("blog.blog"), usable("blog.post"),
             self.report["html"],
         )
 
@@ -684,6 +726,11 @@ class Importer:
             self._remember("website", site["id"], target_id)
             values = self.clean("website", site, extra_skip=("domain", "name", "company_id", "default_lang_id", "language_ids"))
             values = {k: v for k, v in values.items() if v not in (False, None)}
+            for field in BINARY_COPY["website"]:
+                path = os.path.join(self.dir, "files", f"website__{site['id']}__{field}")
+                if os.path.exists(path) and field in self.fields("website"):
+                    with open(path, "rb") as handle:  # audit-ignore-path
+                        values[field] = base64.b64encode(handle.read()).decode()
             self._count("updated" if self.apply else "matched", "website")
             if self.apply and values:
                 self.target.call("website", "write", [[target_id], values])
@@ -871,7 +918,7 @@ class Importer:
             for row in self.data.get(model) or read_jsonl(os.path.join(self.dir, "data", f"{model}.jsonl")):
                 value = row.get(field)
                 new_id = self.mapped(model, row["id"])
-                if not value or not new_id or new_id < 0 or field not in self.fields(model):
+                if not value or not new_id or (new_id < 0 and self.apply) or field not in self.fields(model):
                     continue
                 rewritten = self.rewrite(value)
                 if rewritten != value and self.apply:

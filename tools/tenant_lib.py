@@ -1063,7 +1063,8 @@ def tenant_status(spec, paths, system, http_get=None):
         age_hours = round((system.now() - stamp).total_seconds() / 3600, 1)
     probes = {}
     if http_get is not None and active == "active":
-        for domain in spec["domains"]:
+        # A catch-all tenant has no domain of its own: probe with the loopback host an operator uses.
+        for domain in spec["domains"] or ["localhost"]:
             probes[domain] = http_get(spec["http_port"], domain)
     healthy = active == "active" and (not probes or all(code and code < 500 for code in probes.values()))
     return {
