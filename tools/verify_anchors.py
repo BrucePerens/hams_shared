@@ -531,7 +531,9 @@ def find_anchors_in_code(root_dir, repo_root):
             # scan classified by preceding-text markers ("Tests"/"Verified by"), not a
             # language-aware parser -- nothing in it assumes Python/XML/JS syntax specifically, so
             # it applies to `//`-commented Rust anchors unchanged.
-            if file.endswith((".py", ".js", ".xml", ".html", ".rs")):
+            # `.rs.test`: a crate's unit tests kept beside the source and included with
+            # `#[path = "foo.rs.test"] mod tests;` -- their `Tests` citations count too.
+            if file.endswith((".py", ".js", ".xml", ".html", ".rs", ".rs.test")):
                 full_path = os.path.join(root, file)
                 try:
                     with open(full_path, "r", encoding="utf-8") as f:
