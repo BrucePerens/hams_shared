@@ -2763,14 +2763,18 @@ SyslogIdentifier=uk.ofcom.sync
             "environments": ["prod", "test"],
         },
         {
+            # Weekly, not daily (2026-10-02): Ofcom's amateur callsign CSV changes rarely, and a
+            # daily poll of someone else's server for a file that is almost always unchanged is
+            # load for nothing. Each run is also cheap when nothing changed: smart_download sends a
+            # HEAD and skips the body when the ETag/Last-Modified match the values stored in Odoo.
             "path": "/opt/hams/systemd/uk.ofcom.sync.timer",
             "external_fetch": "activates uk.ofcom.sync.service",
             "content": """\
 [Unit]
-Description=Ham Radio UK Ofcom Callsign Sync Daily
+Description=Ham Radio UK Ofcom Callsign Sync Weekly
 
 [Timer]
-OnCalendar=daily
+OnCalendar=weekly
 Persistent=true
 RandomizedDelaySec=15m
 

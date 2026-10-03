@@ -196,8 +196,8 @@ session.
 
 ## Web Application Firewalls (WAF) & Government CDNs
 * **The Bug:** Endpoints like `data.fcc.gov`, UK Ofcom, and AU ACMA actively block default Python `requests` User-Agents, resulting in `Read timed out` or `403 Forbidden` errors.
-* **The Fix:** Hardcode a modern Chrome User-Agent string in `hams_config.py` / daemon scripts to masquerade as a legitimate browser:
-    `"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"`
+* **The Policy (Bruce, 2026-10-02):** Never impersonate a browser to get past a provider's bot protection -- no browser User-Agent string, no fake `Sec-Fetch-*` navigation headers, no TLS-fingerprint impersonation (`curl_cffi` `impersonate=`), no challenge solving. Every external fetch identifies itself honestly: `SYSTEM_USER_AGENT`, falling back to the same "Hams.com Bruce Perens K6BP <contact>" string the club-directory daemons send. A browser string used to be hard-coded here as "the fix"; it was removed from every daemon on 2026-10-02 and a regression test fails if one comes back. Disguised traffic is also what gets the egress IP banned.
+* **When a provider answers 403 to an honest request:** stop and report it. The legitimate routes are asking the provider for access, an official API or bulk-data channel, or a sanctioned egress path -- never a disguise.
 * **Fail-Fast:** Updated `smart_download` to catch header request failures (timeouts, SSL errors) and immediately abort (`return False`) rather than hanging or attempting to download a 404/403 page as a payload.
 
 ## FCC Data Ingestion Specifics
