@@ -1,0 +1,10 @@
+{
+  "name": "postopen_org",
+  "description": "postopen.org: the Post Open site (Odoo website, blog)",
+  "domains": ["postopen.org", "www.postopen.org"],
+  "http_port": 18102,
+  "workers": 0,
+  "memory_max": "768M",
+  "memory_high": "640M",
+  "modules": ["website", "website_blog"]
+}

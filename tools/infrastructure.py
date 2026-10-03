@@ -1223,6 +1223,64 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # ADR 0105 tenants (hams_shared/tools/tenant_lib.py), odoo_tenants host class only: the
+            # per-tenant odoo.conf directories (each root:t_<name> 0750 once a tenant exists).
+            "path": "/etc/hams-tenants",
+            "owner": "root:root",
+            "provision_mode": "755",
+            "runtime_mount": "ro",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Per-tenant admin and master passwords (root-only, never printed) and a copy of each
+            # validated spec's secrets directory. /opt/hams is 0750 hams_com, so no tenant can reach it.
+            "path": "/opt/hams/etc/tenants",
+            "owner": "root:root",
+            "provision_mode": "700",
+            "runtime_mount": "ro",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            # The validated spec of every tenant that exists (no secrets); tenant_ctl list reads it.
+            "path": "/opt/hams/etc/tenants.d",
+            "owner": "root:root",
+            "provision_mode": "755",
+            "runtime_mount": "ro",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            # One directory per tenant, owned by that tenant's own account (data_dir and filestore).
+            "path": "/var/lib/hams-tenants",
+            "owner": "root:root",
+            "provision_mode": "755",
+            "runtime_mount": "rw",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            # pg_dump and filestore archives of each tenant, root-only. Cover this directory in the
+            # kopia snapshot set (docs/proposals/MULTI_TENANT_ODOO.md, "Backups").
+            "path": "/opt/hams/backups/tenants",
+            "owner": "root:root",
+            "provision_mode": "700",
+            "runtime_mount": "ro",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Root-owned copies of the few hams_open modules a tenant may load (parking). Read-only
+            # for the tenant, outside /opt/hams (which a tenant account cannot traverse).
+            "path": "/usr/local/lib/hams-tenant-addons",
+            "owner": "root:root",
+            "provision_mode": "755",
+            "runtime_mount": "ro",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
             # The CA certificates (relay_root.pem, relay_issuing.pem): public. ca_signer only.
             "path": "/opt/hams/etc/relay_ca_public",
             "owner": "hams_relay_ca:hams_relay_ca",
@@ -2673,6 +2731,223 @@ WantedBy=multi-user.target
             "owner": "root:root",
             "mode": "644",
             "host_class": "ca_signer",
+            "environments": ["prod", "test"],
+        },
+        {
+            # ADR 0105: one instance of this template per tenant (hams-tenant@perens_com.service).
+            # The account, database and limits come from the tenant spec (tenant_lib.py writes the
+            # per-tenant drop-in with MemoryMax, CPUQuota, TasksMax and the allowed listening ports).
+            # Fetches nothing from third parties on its own (a tenant's own outgoing mail is the
+            # tenant operator's choice). Never named odoo@ : that collides with the Debian unit.
+            "path": "/opt/hams/systemd/hams-tenant@.service",
+            "content": """\
+[Unit]
+Description=Odoo tenant instance %i (own user, database, filestore and ports; ADR 0105)
+After=network.target postgresql.service hams-tenant-firewall.service
+Wants=postgresql.service hams-tenant-firewall.service
+ConditionPathExists=/etc/hams-tenants/%i/odoo.conf
+
+[Service]
+Type=simple
+User=t_%i
+Group=t_%i
+UMask=0027
+WorkingDirectory=/var/lib/hams-tenants/%i
+Environment=HOME=/var/lib/hams-tenants/%i
+Environment=PYTHONPYCACHEPREFIX=/var/lib/hams-tenants/%i/pycache
+ExecStart=/usr/bin/odoo --config /etc/hams-tenants/%i/odoo.conf
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+# ADR-0070 OS-level restriction, plus: a tenant sees only its own data directory and cannot see
+# hams_prod's processes, configuration, filestore or the hams daemons' files.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hams-tenants/%i
+ProtectHome=true
+InaccessiblePaths=/opt/hams /var/lib/odoo /etc/odoo /var/log/odoo /var/lib/postgresql /var/lib/redis /var/lib/rabbitmq /root
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+# No ProcSubset=pid: Odoo's psutil reads /proc/stat and /proc/meminfo at startup and exits without them
+# (found on the dev box, 2026-10-03). ProtectProc=invisible still hides other users' processes.
+ProtectProc=invisible
+SystemCallArchitectures=native
+SocketBindDeny=any
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.tenant.%i
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Loads the nftables table that stops tenant accounts opening new connections to local
+            # services (Redis, RabbitMQ, hams daemons, PostgreSQL over TCP), the WireGuard network and
+            # the cloud metadata address. tenant_lib.render_nft writes the file.
+            "path": "/opt/hams/systemd/hams-tenant-firewall.service",
+            "content": """\
+[Unit]
+Description=Firewall table for Odoo tenant accounts (ADR 0105)
+Before=network-online.target
+ConditionPathExists=/etc/hams-tenants/firewall.nft
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/hams-tenants/firewall.nft
+ExecStop=-/usr/sbin/nft delete table inet hams_tenants
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.tenant.firewall
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Every 10 minutes: each tenant's unit, its HTTP answer on loopback and the age of its
+            # newest backup (tenant_ctl health --all). Exits non-zero when anything is wrong, which
+            # leaves this unit failed, which the "Systemd Failed Services Tracker" pager check already
+            # reports. Needs root (the backup directory is 0700 root). Reads local state only.
+            "path": "/opt/hams/systemd/hams-tenant-health.service",
+            "content": """\
+[Unit]
+Description=Check every Odoo tenant (unit, HTTP answer, backup age)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/tenant_ctl.py health --all
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.tenant.health
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-tenant-health.timer",
+            "content": """\
+[Unit]
+Description=Check every Odoo tenant every ten minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=false
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Nightly pg_dump plus filestore archive of every tenant, with checksums, root-only.
+            # Deliberately not sandboxed for the same reason as hams.db.local.backup.service (runuser to
+            # postgres, writes a root-only directory). Reads and writes local files only.
+            "path": "/opt/hams/systemd/hams-tenant-backup.service",
+            "content": """\
+[Unit]
+Description=Back up every Odoo tenant (database dump and filestore, with checksums)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/tenant_ctl.py backup --all --apply
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.tenant.backup
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-tenant-backup.timer",
+            "content": """\
+[Unit]
+Description=Nightly Odoo tenant backup
+
+[Timer]
+OnCalendar=*-*-* 03:10:00
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Weekly proof that the newest backup of each tenant actually restores (into a scratch
+            # database that is dropped again). Local only.
+            "path": "/opt/hams/systemd/hams-tenant-restore-test.service",
+            "content": """\
+[Unit]
+Description=Restore-test the newest backup of every Odoo tenant into a scratch database
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/tenant_ctl.py restore-test --all
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.tenant.restore.test
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-tenant-restore-test.timer",
+            "content": """\
+[Unit]
+Description=Weekly Odoo tenant restore test
+
+[Timer]
+OnCalendar=Sun *-*-* 04:20:00
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "odoo_tenants",
             "environments": ["prod", "test"],
         },
         {
@@ -6261,7 +6536,7 @@ def external_fetch_unit_names():
 # signer's account, directories or unit there. A host is designated by `provision.py --host-class
 # ca_signer`, which records it in HOST_CLASSES_FILE (so a later plain re-run keeps it), or by the
 # HAMS_HOST_CLASSES environment variable (comma separated).
-KNOWN_HOST_CLASSES = frozenset({"ca_signer"})
+KNOWN_HOST_CLASSES = frozenset({"ca_signer", "odoo_tenants"})
 HOST_CLASSES_FILE = "/opt/hams/etc/host_classes"
 
 

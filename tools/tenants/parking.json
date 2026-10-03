@@ -1,0 +1,14 @@
+{
+  "name": "parking",
+  "description": "Parking: one lightweight instance for many parked domains (hams_open parking module)",
+  "domains": [],
+  "http_port": 18110,
+  "workers": 0,
+  "memory_max": "512M",
+  "memory_high": "448M",
+  "modules": [],
+  "extra_modules": [
+    "parking"
+  ],
+  "catch_all": true
+}
