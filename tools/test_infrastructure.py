@@ -2231,8 +2231,8 @@ class TimerDrivenUnitTests(unittest.TestCase):
 class SigningKeyMigrationHookTests(_TmpDirTestCase):
     """Tests [@ANCHOR: infrastructure:migrate_signing_key]
 
-    hams_com's subcarrier_signer/device_command_signer daemons take over
-    keys that older Odoo code kept in /var/lib/odoo. The hooks run as root
+    hams_com's relay_signer/subcarrier_signer/device_command_signer daemons
+    take over keys that older Odoo code kept in /var/lib/odoo. The hooks run as root
     in production; here the account lookups resolve to the test runner's
     own uid/gid, so the real fchown/rename/remove path runs unpatched."""
 
@@ -2337,15 +2337,35 @@ class SigningKeyMigrationHookTests(_TmpDirTestCase):
         self.assertTrue(os.path.exists(os.path.join(self.new_dir, key_name)))
         getpwnam.assert_called_with("hams_device_command_signer")
 
+    def test_relay_hook_moves_the_noise_key_to_its_own_account(self):
+        # The relay key's file name is the historical
+        # hams_noise_signing_ed25519.key (daemons/relay_signer/main.py's
+        # SIGNING_KEY_PATH), not hams_relay_signing_ed25519.key.
+        key_name = "hams_noise_signing_ed25519.key"
+        old_path = os.path.join(self.old_dir, key_name)
+        with open(old_path, "wb") as f:
+            f.write(b"r" * 32)
+        os.utime(old_path, (self.OLD_MTIME, self.OLD_MTIME))
+        getpwnam = infra.pwd.getpwnam
+        infra.hook_migrate_relay_signing_key({}, self.tmp, self.new_dir, None)
+        self.assertFalse(os.path.exists(old_path))
+        new_path = os.path.join(self.new_dir, key_name)
+        with open(new_path, "rb") as f:
+            self.assertEqual(f.read(), b"r" * 32)
+        self.assertEqual(int(os.stat(new_path).st_mtime), self.OLD_MTIME)
+        getpwnam.assert_called_with("hams_relay_signer")
+        self.assertEqual(infra.get_hook_failures(), [])
+
 
 class SignerDaemonManifestTests(unittest.TestCase):
-    """The MANIFEST pieces hams_com's two signer daemons need to start at
+    """The MANIFEST pieces hams_com's three signer daemons need to start at
     all. The defaults below are copied from each daemon's own main.py
     (BASE_DIR/PUBLIC_DIR/SOCKET_PATH) and its Odoo-side client."""
 
     SIGNERS = {
         "subcarrier_signer": ("subcarrier-signer", "SUBCARRIER_SIGNER"),
         "device_command_signer": ("device-command-signer", "DEVICE_COMMAND_SIGNER"),
+        "relay_signer": ("relay-signer", "RELAY_SIGNER"),
     }
 
     def _unit(self, unit_name):
@@ -2368,6 +2388,7 @@ class SignerDaemonManifestTests(unittest.TestCase):
         hooks = {
             "subcarrier_signer": infra.hook_migrate_subcarrier_signing_key,
             "device_command_signer": infra.hook_migrate_device_command_signing_key,
+            "relay_signer": infra.hook_migrate_relay_signing_key,
         }
         for name in self.SIGNERS:
             owner = f"hams_{name}:hams_{name}"

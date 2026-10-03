@@ -522,8 +522,9 @@ def hook_build_rust_daemons(env_vars, dest_dir, path, run_cmd_func):
 
 
 # [@ANCHOR: infrastructure:migrate_signing_key]
-# hams_com's privilege-isolated signer daemons (daemons/subcarrier_signer,
-# daemons/device_command_signer) each own one Ed25519 key that used to live
+# hams_com's privilege-isolated signer daemons (daemons/relay_signer,
+# daemons/subcarrier_signer, daemons/device_command_signer) each own one
+# Ed25519 key that used to live
 # in /var/lib/odoo, 0600 odoo:odoo -- readable by any code running as the
 # odoo OS user. Once the daemon's dedicated account and 0700 directory
 # exist, the key moves there. Strict on purpose: the old key is deleted
@@ -608,6 +609,18 @@ def hook_migrate_device_command_signing_key(env_vars, dest_dir, path, run_cmd_fu
     )
 
 
+def hook_migrate_relay_signing_key(env_vars, dest_dir, path, run_cmd_func):
+    # The relay key keeps its historical "noise" file name (daemons/
+    # relay_signer/main.py's SIGNING_KEY_PATH), unlike the other two.
+    _run_signing_key_migration(
+        "hook_migrate_relay_signing_key",
+        "hams_noise_signing_ed25519.key",
+        "hams_relay_signer:hams_relay_signer",
+        dest_dir,
+        path,
+    )
+
+
 MANIFEST = {
     "system_accounts": [
         {
@@ -648,6 +661,17 @@ MANIFEST = {
             "user": "hams_device_command_signer",
             "group": "hams_device_command_signer",
             "home": "/opt/hams/etc/device_command_signer",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/relay_signer: same shape, for the relay-bridge Noise
+            # attestation / transmit-grant key (a forged DENIAL could take a licensed
+            # operator off the air).
+            "user": "hams_relay_signer",
+            "group": "hams_relay_signer",
+            "home": "/opt/hams/etc/relay_signer",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
             "environments": ["prod", "test"],
@@ -781,6 +805,23 @@ MANIFEST = {
         {
             "path": "/opt/hams/etc/device_command_signer_public",
             "owner": "hams_device_command_signer:hams_device_command_signer",
+            "provision_mode": "755",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/relay_signer: same shape as subcarrier_signer above. The
+            # hook moves /var/lib/odoo/hams_noise_signing_ed25519.key, if present.
+            "path": "/opt/hams/etc/relay_signer",
+            "owner": "hams_relay_signer:hams_relay_signer",
+            "provision_mode": "700",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+            "post_provision_hooks": [hook_migrate_relay_signing_key],
+        },
+        {
+            "path": "/opt/hams/etc/relay_signer_public",
+            "owner": "hams_relay_signer:hams_relay_signer",
             "provision_mode": "755",
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
@@ -2045,6 +2086,59 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams.device.command.signer
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams_com daemons/relay_signer: a long-running signing helper, one
+            # per key. odoo reaches it over the Unix socket in
+            # /run/hams_relay_signer (RuntimeDirectory, 0750; odoo is in that
+            # group). It writes both its 0700 key directory and the public sibling, so
+            # both are ReadWritePaths. SupplementaryGroups=hams_com lets it traverse
+            # /opt/hams (0750 hams_com) to reach its code and directories.
+            "path": "/opt/hams/systemd/hams-relay-signer.service",
+            "content": """\
+[Unit]
+Description=Privilege-isolated relay-bridge attestation and transmit-grant signing helper
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/etc/relay_signer /opt/hams/etc/relay_signer_public
+RuntimeDirectory=hams_relay_signer
+RuntimeDirectoryMode=0750
+Type=simple
+User=hams_relay_signer
+Group=hams_relay_signer
+SupplementaryGroups=hams_com
+WorkingDirectory=/opt/hams/daemons/relay_signer
+UMask=0027
+
+Environment="RELAY_SIGNER_BASE_DIR=/opt/hams/etc/relay_signer"
+Environment="RELAY_SIGNER_PUBLIC_DIR=/opt/hams/etc/relay_signer_public"
+Environment="RELAY_SIGNER_SOCKET_PATH=/run/hams_relay_signer/signer.sock"
+
+# Smoketest Resource Verification
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_signer/main.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/relay_signer/main.py
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.relay.signer
 
 [Install]
 WantedBy=multi-user.target
