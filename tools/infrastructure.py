@@ -1147,6 +1147,26 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # b2_backup host class (hams1): the non-secret configuration plus the root-only repository password
+            # and B2 key file the operator places here. root:root 700 on purpose: the credentials must not sit in
+            # an odoo-owned directory such as /opt/hams/etc/keys, where odoo could replace the file.
+            "path": "/opt/hams/etc/b2_backup",
+            "owner": "root:root",
+            "provision_mode": "700",
+            "runtime_mount": "ro",
+            "host_class": "b2_backup",
+            "environments": ["prod"],
+        },
+        {
+            # b2_backup state: kopia cache and config, staging of database dumps, status files, restore scratch.
+            "path": "/var/lib/hams-b2-backup",
+            "owner": "root:root",
+            "provision_mode": "700",
+            "runtime_mount": "rw",
+            "host_class": "b2_backup",
+            "environments": ["prod"],
+        },
+        {
             "path": "/opt/hams/etc/localhost_cert_renewal",
             "owner": "localhost_cert:localhost_cert",
             "provision_mode": "750",
@@ -2306,6 +2326,201 @@ WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # Off-site backup to Backblaze B2 (hams_shared/tools/b2_backup.py; hams_com docs/runbooks/b2_backup.md).
+            # Host class b2_backup (hams1 only) AND opt_in: provisioning links these units but enables nothing,
+            # so a host without the B2 key never runs them. They upload to our own bucket and fetch nothing
+            # from any third party. Not the ConditionPathExists-skips-silently trap: b2_backup.py check
+            # (hams-b2-backup-check.timer) fails when no good backup was recorded recently.
+            "path": "/opt/hams/etc/b2_backup/config.json",
+            "content": """\
+{{
+  "backend": {{
+    "type": "s3",
+    "bucket": "hams-com-prod-files",
+    "endpoint": "s3.us-east-005.backblazeb2.com",
+    "region": "us-east-1",
+    "prefix": "hams1/"
+  }},
+  "env_file": "/opt/hams/etc/b2_backup/b2_backup.env",
+  "state_dir": "/var/lib/hams-b2-backup",
+  "max_upload_bytes_per_sec": 5000000,
+  "max_download_bytes_per_sec": 10000000,
+  "retention": {{"daily": 14, "weekly": 8, "monthly": 12}},
+  "paths": [
+    {{"name": "filestore_hams_prod", "path": "/var/lib/odoo/.local/share/Odoo/filestore/hams_prod",
+     "content_addressed": true}},
+    {{"name": "etc", "path": "/opt/hams/etc", "exclude": ["b2_backup/b2_backup.env"]}}
+  ],
+  "tenant_spec_dir": "/opt/hams/etc/tenants.d",
+  "tenant_data_root": "/var/lib/hams-tenants",
+  "databases": ["hams_prod"],
+  "pg_prefix": ["runuser", "-u", "postgres", "--"],
+  "restore_test": {{"sample_files": 20, "verify_percent": 1, "database": true}}
+}}
+""",
+            "owner": "root:root",
+            "mode": "600",
+            "host_class": "b2_backup",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-b2-backup.service",
+            "content": """\
+[Unit]
+Description=Encrypted off-site backup of hams1 files and database dumps to Backblaze B2 (kopia)
+After=network-online.target postgresql.service hams-tenant-backup.service
+Wants=network-online.target
+ConditionPathExists=/opt/hams/etc/b2_backup/b2_backup.env
+ConditionPathExists=/opt/hams/etc/b2_backup/config.json
+
+[Service]
+Type=oneshot
+# Runs as root: it reads the odoo and tenant filestores and /opt/hams/etc, and runuser's to postgres for pg_dump.
+# A nonzero exit (any source failed, password fingerprint changed, repository unreachable) fails this unit,
+# which the pager_duty "Systemd Failed Services Tracker" check turns into an operator alert.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hams-b2-backup
+ProtectHome=true
+PrivateTmp=true
+Nice=19
+IOSchedulingClass=idle
+IOSchedulingPriority=7
+CPUQuota=100%
+MemoryHigh=1G
+MemoryMax=2G
+TimeoutStartSec=4h
+ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/b2_backup.py backup
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.b2.backup
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "b2_backup",
+            "opt_in": "needs the B2 key and repository password placed on this host; see docs/runbooks/b2_backup.md",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-b2-backup.timer",
+            "content": """\
+[Unit]
+Description=Nightly off-site backup to Backblaze B2
+
+[Timer]
+# After hams.db.local.backup (02:30) and the tenant backup (03:10); well clear of the 00:00-00:20 UTC Odoo jobs.
+OnCalendar=*-*-* 03:45:00 UTC
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "b2_backup",
+            "opt_in": "needs the B2 key and repository password placed on this host; see docs/runbooks/b2_backup.md",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-b2-restore-test.service",
+            "content": """\
+[Unit]
+Description=Weekly restore test of the Backblaze B2 backups (sampled files and one database)
+After=network-online.target postgresql.service
+Wants=network-online.target
+ConditionPathExists=/opt/hams/etc/b2_backup/b2_backup.env
+ConditionPathExists=/opt/hams/etc/b2_backup/config.json
+
+[Service]
+Type=oneshot
+# Restores a sample of files and one database into a scratch location under /var/lib/hams-b2-backup and a
+# scratch database, compares, and removes both. Fails (and so alerts) on any mismatch.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hams-b2-backup
+ProtectHome=true
+PrivateTmp=true
+Nice=19
+IOSchedulingClass=idle
+IOSchedulingPriority=7
+CPUQuota=100%
+MemoryHigh=1G
+MemoryMax=2G
+TimeoutStartSec=3h
+ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/b2_backup.py restore-test
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.b2.restore.test
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "b2_backup",
+            "opt_in": "needs the B2 key and repository password placed on this host; see docs/runbooks/b2_backup.md",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-b2-restore-test.timer",
+            "content": """\
+[Unit]
+Description=Weekly restore test of the Backblaze B2 backups
+
+[Timer]
+OnCalendar=Sun *-*-* 06:30:00 UTC
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "b2_backup",
+            "opt_in": "needs the B2 key and repository password placed on this host; see docs/runbooks/b2_backup.md",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-b2-backup-check.service",
+            "content": """\
+[Unit]
+Description=Fail when the last good B2 backup or restore test is too old
+
+[Service]
+Type=oneshot
+# Catches a timer that never fired or a unit skipped for a missing credential file, which a failed-unit
+# alert cannot see. Reads only its own status files.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/b2_backup.py check
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.b2.backup.check
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "b2_backup",
+            "opt_in": "needs the B2 key and repository password placed on this host; see docs/runbooks/b2_backup.md",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-b2-backup-check.timer",
+            "content": """\
+[Unit]
+Description=Daily freshness check of the B2 backups
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "b2_backup",
+            "opt_in": "needs the B2 key and repository password placed on this host; see docs/runbooks/b2_backup.md",
             "environments": ["prod"],
         },
         {
@@ -6536,7 +6751,7 @@ def external_fetch_unit_names():
 # signer's account, directories or unit there. A host is designated by `provision.py --host-class
 # ca_signer`, which records it in HOST_CLASSES_FILE (so a later plain re-run keeps it), or by the
 # HAMS_HOST_CLASSES environment variable (comma separated).
-KNOWN_HOST_CLASSES = frozenset({"ca_signer", "odoo_tenants"})
+KNOWN_HOST_CLASSES = frozenset({"b2_backup", "ca_signer", "odoo_tenants"})
 HOST_CLASSES_FILE = "/opt/hams/etc/host_classes"
 
 
@@ -6583,7 +6798,7 @@ def host_class_unit_names():
     return {
         os.path.basename(spec["path"])
         for spec in MANIFEST.get("static_files", [])
-        if spec.get("host_class")
+        if spec.get("host_class") and spec["path"].endswith((".service", ".timer", ".path"))
     }
 
 

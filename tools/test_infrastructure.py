@@ -30,6 +30,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
+import b2_backup
 import infrastructure as infra
 
 _REAL_OPEN = builtins.open
@@ -3132,9 +3133,78 @@ class HostClassTests(unittest.TestCase):
             "hams-tenant-backup.timer", "hams-tenant-restore-test.service",
             "hams-tenant-restore-test.timer", "hams-tenant-health.service", "hams-tenant-health.timer",
         }
+        b2_units = {
+            "hams-b2-backup.service", "hams-b2-backup.timer", "hams-b2-restore-test.service",
+            "hams-b2-restore-test.timer", "hams-b2-backup-check.service", "hams-b2-backup-check.timer",
+        }
         self.assertEqual(
-            infra.host_class_unit_names(), {"hams-relay-ca-signer.service"} | tenant_units
+            infra.host_class_unit_names(), {"hams-relay-ca-signer.service"} | tenant_units | b2_units
         )
+
+
+class B2BackupManifestTests(unittest.TestCase):
+    """Tests [@ANCHOR: b2_backup:tool]: the off-site backup is for hams1 only, never a test host,
+    never started by provisioning, and quiet during the nightly Odoo window."""
+
+    def _specs(self):
+        return [s for s in infra.MANIFEST["static_files"] if "b2_backup" in s["path"] or "hams-b2-" in s["path"]]
+
+    def test_every_b2_file_unit_and_directory_is_prod_only_and_class_gated(self):
+        specs = self._specs()
+        self.assertEqual(len(specs), 7, [s["path"] for s in specs])
+        for spec in specs:
+            self.assertEqual(spec["host_class"], "b2_backup", spec["path"])
+            self.assertEqual(spec["environments"], ["prod"], spec["path"])
+        for path in ("/opt/hams/etc/b2_backup", "/var/lib/hams-b2-backup"):
+            d = [x for x in infra.MANIFEST["directories"] if x["path"] == path][0]
+            self.assertEqual((d["owner"], d["provision_mode"], d["host_class"], d["environments"]),
+                             ("root:root", "700", "b2_backup", ["prod"]))
+        self.assertIn("b2_backup", infra.KNOWN_HOST_CLASSES)
+
+    def test_units_are_opt_in_so_provisioning_never_enables_or_starts_them(self):
+        names = {os.path.basename(s["path"]) for s in self._specs() if s["path"].endswith((".service", ".timer"))}
+        self.assertEqual(len(names), 6)
+        self.assertTrue(names <= infra.opt_in_unit_names())
+        self.assertFalse(names & infra.external_fetch_unit_names())
+        self.assertFalse(infra._activation_units_to_enable(sorted(names), is_test_env=False))
+        with patch.object(infra, "host_classes", return_value={"b2_backup"}):
+            self.assertFalse(names & set(infra._smoketest_candidate_services()))
+        with patch.object(infra, "host_classes", return_value=set()):
+            self.assertFalse(names & set(infra._smoketest_candidate_services()))
+
+    def test_backup_timer_avoids_the_nightly_odoo_window_and_the_service_is_throttled(self):
+        by_name = {os.path.basename(s["path"]): s["content"] for s in self._specs()}
+        timer = by_name["hams-b2-backup.timer"]
+        match = re.search(r"OnCalendar=\*-\*-\* (\d\d):(\d\d):\d\d UTC", timer)
+        self.assertTrue(match, timer)
+        start = int(match.group(1)) * 60 + int(match.group(2))
+        delay = int(re.search(r"RandomizedDelaySec=(\d+)m", timer).group(1))
+        self.assertGreater(start, 20, "must start after 00:20 UTC")
+        self.assertLess(start + delay, 24 * 60)
+        for unit in ("hams-b2-backup.service", "hams-b2-restore-test.service"):
+            text = by_name[unit]
+            for line in ("Nice=19", "IOSchedulingClass=idle", "CPUQuota=100%", "ProtectSystem=strict",
+                         "ConditionPathExists=/opt/hams/etc/b2_backup/b2_backup.env"):
+                self.assertIn(line, text, unit)
+        self.assertIn("b2_backup.py backup", by_name["hams-b2-backup.service"])
+        self.assertIn("b2_backup.py restore-test", by_name["hams-b2-restore-test.service"])
+        self.assertIn("b2_backup.py check", by_name["hams-b2-backup-check.service"])
+
+    def test_shipped_config_is_valid_and_excludes_its_own_credentials(self):
+        spec = [s for s in self._specs() if s["path"].endswith("b2_backup/config.json")][0]
+        raw = json.loads(infra.format_env(spec["content"], {}))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, "w") as f:
+                json.dump(raw, f)
+            cfg = b2_backup.load_config(path)
+        self.assertEqual(cfg.backend["endpoint"], "s3.us-east-005.backblazeb2.com")
+        self.assertEqual(cfg.retention, {"daily": 14, "weekly": 8, "monthly": 12})
+        etc = [p for p in cfg.paths if p["path"] == "/opt/hams/etc"][0]
+        self.assertEqual(etc["exclude"], ["b2_backup/b2_backup.env"])
+        self.assertEqual(cfg.env_file, "/opt/hams/etc/b2_backup/b2_backup.env")
+        filestore = [p for p in cfg.paths if p["name"] == "filestore_hams_prod"][0]
+        self.assertEqual(filestore["path"], "/var/lib/odoo/.local/share/Odoo/filestore/hams_prod")
 
 
 class ExternalFetchUnitClassificationTests(unittest.TestCase):
@@ -3173,6 +3243,12 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams-tenant-health.service": "checks local units, loopback HTTP and backup age",
         "hams-tenant-health.timer": "activates hams-tenant-health.service (local)",
         "hams-tenant-restore-test.service": "restores a local backup into a scratch database",
+        "hams-b2-backup.service": "uploads encrypted backups to our own B2 bucket; fetches nothing from a third party",
+        "hams-b2-backup.timer": "activates hams-b2-backup.service (own bucket)",
+        "hams-b2-restore-test.service": "reads back our own B2 bucket into a scratch location and database",
+        "hams-b2-restore-test.timer": "activates hams-b2-restore-test.service (own bucket)",
+        "hams-b2-backup-check.service": "reads two local status files",
+        "hams-b2-backup-check.timer": "activates hams-b2-backup-check.service (local)",
         "hams-tenant-restore-test.timer": "activates hams-tenant-restore-test.service (local)",
         "hams.daemon.keys.service": "provisions daemon keys in the local database",
         "hams.data.relay.service": "serves map data from local Redis; no ingestion task",
