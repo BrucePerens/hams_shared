@@ -1,5 +1,4 @@
 [
-  "daemons/ham_digital_modes/build.rs::main",
   "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::cheb_poly_eval_fixed_i32",
   "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::cheb_poly_eval_fixed_i64",
   "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::div_round_i128_fn",
