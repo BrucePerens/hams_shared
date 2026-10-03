@@ -852,6 +852,12 @@ MANIFEST = {
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
         },
+        # /opt/hams/nginx and its self-signed ssl/ pair: nginx is NOT the
+        # production front end. On hams1 nginx is installed but disabled
+        # and was never in the request path; ingress is the Cloudflare
+        # Tunnel plus hams_auth_gateway on auth.hams.com (hams_com
+        # docs/proposals/PROVISION_PRODUCTION_NOTES.md, "Update
+        # 2026-10-03"). Nothing on hams1 reads these files.
         {
             "path": "/opt/hams/nginx",
             "owner": "hams_com:hams_com",
@@ -4761,6 +4767,10 @@ WantedBy=timers.target
             "debian_name": "postgresql-client",
             "environments": ["early_prod"],
         },
+        # Installed, but not production's front end: hams1 keeps
+        # nginx.service disabled (ingress is the Cloudflare Tunnel; see the
+        # /opt/hams/nginx entry above). The dev box uses it for its local
+        # 127.0.0.1:8080 bus proxy (hams_com CLAUDE.md).
         {"name": "nginx", "debian_name": "nginx", "environments": ["early_prod"]},
         # hook_build_rust_daemons() runs `cargo build`; without this a fresh box (no rustup)
         # reports PROVISIONING DEGRADED and the three Rust daemons are never built.
@@ -4825,6 +4835,7 @@ WantedBy=timers.target
             "environments": ["early_prod"],
         },
         {"name": "certbot", "debian_name": "certbot", "environments": ["early_prod"]},
+        # Unused in production (nginx disabled; no port 80 open on hams1).
         {
             "name": "python3-certbot-nginx",
             "debian_name": "python3-certbot-nginx",
