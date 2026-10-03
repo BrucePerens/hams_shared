@@ -614,6 +614,30 @@ class RemoveStaleFilestoreTests(unittest.TestCase):
             )
 
 
+class CoreDaemonsToStartTests(unittest.TestCase):
+    """rebuild_db() starts host daemons only outside the isolated namespace, and PowerDNS is
+    never assumed to exist inside it (night_shift_todo 6d19d5cb)."""
+
+    def test_outside_isolation_all_four_host_daemons_are_started(self):
+        self.assertEqual(
+            _test_runner.core_daemons_to_start(False),
+            ["postgresql", "redis-server", "rabbitmq-server", "pdns"],
+        )
+
+    def test_inside_isolation_nothing_is_started_on_the_host(self):
+        self.assertEqual(_test_runner.core_daemons_to_start(True), [])
+
+    def test_the_docstring_says_pdns_is_not_provided_under_isolation(self):
+        doc = _test_runner.core_daemons_to_start.__doc__
+        self.assertIn("PowerDNS is deliberately NOT", doc)
+        self.assertIn("pdns_server", doc)
+
+    def test_rebuild_db_uses_the_helper_rather_than_its_own_list(self):
+        source = inspect.getsource(_test_runner.rebuild_db)
+        self.assertIn("core_daemons_to_start(", source)
+        self.assertNotIn('"pdns"', source)
+
+
 class CiLoadGateDecisionTests(unittest.TestCase):
     """`evaluate_ci_load_gate()` is deliberately pure -- it takes the two
     measurements rather than making them -- so every boundary below is
