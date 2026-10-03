@@ -43,6 +43,17 @@ API = "https://api.cloudflare.com/client/v4"
 USER_AGENT = "HamsComTenantTool/1.0 (+https://crawler.hams.com)"
 
 
+# The Odoo backend, login and API routes. A public-site tenant (spec `public_site_only`) answers 404 for
+# them on its public names; the admin reaches them through an SSH tunnel to the loopback port. Public
+# routes stay: pages, /blog, /web/image, /web/content, /web/assets, /web/static, /website/*, /sitemap.xml.
+# RE2 syntax (Cloudflare uses Go's regexp), anchored at both ends like the rules already in the tunnel.
+PRIVATE_PATH_REGEX = (
+    r"^/(odoo(/.*)?|jsonrpc|xmlrpc(/.*)?|json(/.*)?|websocket|longpolling(/.*)?|my(/.*)?|mail(/.*)?"
+    r"|website/info|website/form(/.*)?|web|web/(login(_successful)?|signup|reset_password|database(/.*)?|session(/.*)?"
+    r"|webclient(/.*)?|dataset(/.*)?|action(/.*)?|become|tests(/.*)?))$"
+)
+
+
 def service_for(spec):
     return f"http://localhost:{spec['http_port']}"
 
@@ -103,6 +114,8 @@ def build_ingress(specs, current):
         if spec["catch_all"]:
             continue  # parked hostnames arrive through the catch-all, not by name
         for domain in spec["domains"]:
+            if spec.get("public_site_only"):
+                tenants.append({"hostname": domain, "path": PRIVATE_PATH_REGEX, "service": "http_status:404"})
             tenants.append({"hostname": domain, "service": service_for(spec)})
     return tenants + unique + [catch_all]
 

@@ -530,7 +530,7 @@ class ImportTests(_Base):
         page = target.rows["website.page"][0]
         self.assertEqual((page["url"], page["view_id"]), ("/about", about["id"]))
         menus = {m["name"]: m for m in target.rows["website.menu"]}
-        self.assertEqual(menus["About"]["parent_id"], menus["Top Menu"]["id"])
+        self.assertEqual(menus["About"]["parent_id"], menus["Default Top"]["id"])  # the target's own root menu
         self.assertEqual(menus["About"]["page_id"], page["id"])
         self.assertEqual(menus["Blog"]["url"], "/blog")
         # blog

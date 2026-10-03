@@ -44,6 +44,14 @@ it was read.
 
 `parking_ctl` reads a text file of domains, validates every line and refuses a file with any problem, compares it with the records and changes only what differs.
 
+## Scenario: Exporting a site from an offline snapshot
+
+When a source server must not be contacted again, `odoo_site_migrate export --snapshot-db` reads a restored database dump and its filestore through the same five read methods, produces the same export files a live export would, leaves out the untouched module and theme view copies Odoo made for the website, and records in the export's inventory what the database holds that is not site content.
+
+## Scenario: A public-site tenant has no signup, no login and no mail
+
+`lockdown` sets invitation-only signup and no password reset, deactivates every outgoing mail server, mail template and mail scheduled action, and deletes nothing; the import replaces website forms by a static notice; the tunnel answers 404 for the backend, login and form paths of a tenant whose spec says `public_site_only`.
+
 ## Scenario: Moving a site's content in
 
 `odoo_site_migrate` reads the source through a wrapper that can only call read methods, keeps its credentials out of every output, rewrites links, attachment ids and blog ids inside content and proves the export is intact before importing it.
