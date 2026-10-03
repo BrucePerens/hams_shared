@@ -222,10 +222,15 @@ def apply_ingress(api, account_id, tunnel_id, specs, live_file, approved_sha, ap
 
 
 def plan_or_apply_dns(api, specs, tunnel_id, apply, out=print):
-    """Creates the proxied CNAMEs for tenant hostnames whose zone is in this account. Never modifies
-    a record that exists with different content: it reports it and stops for a human."""
+    return apply_dns_records(api, render_dns(specs, tunnel_id), apply, out)
+
+
+def apply_dns_records(api, records, apply, out=print):
+    """Creates proxied CNAMEs for hostnames whose zone is in this account. Never modifies a record
+    that exists with different content: it reports it and stops for a human. Returns 0, or 2 when
+    something needs a human (a conflict, or a name whose zone is not in this account)."""
     exit_code = 0
-    for record in render_dns(specs, tunnel_id):
+    for record in records:
         zone = None
         for candidate in zone_candidates(record["name"]):
             found = api.call("GET", f"/zones?name={candidate}")
