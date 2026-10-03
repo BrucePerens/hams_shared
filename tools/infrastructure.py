@@ -353,7 +353,7 @@ def _file_state(path, new_content):
 def download_file(url, path, mode, env_vars):
     ua = env_vars.get(
         "SYSTEM_USER_AGENT",
-        "Hams.com Bruce Perens K6BP <bruce@perens.com> +1 510-394-5627",
+        "HamsComSyncDaemon/1.0 (+https://crawler.hams.com; bruce@perens.com)",
     )
     req = urllib.request.Request(url, headers={"User-Agent": ua})
     try:
@@ -6404,7 +6404,7 @@ def load_and_prompt_env(env_vars, is_test):
         # included this at all, despite Bruce believing it already did.
         env_vars.setdefault(
             "SYSTEM_USER_AGENT",
-            "HamsComSyncDaemon/1.0 (+https://hams.com; bruce@perens.com; +1-510-473-7367)",
+            "HamsComSyncDaemon/1.0 (+https://crawler.hams.com; bruce@perens.com)",
         )
 
         if "DB_PASS" not in env_vars:
