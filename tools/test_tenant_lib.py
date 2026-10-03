@@ -89,6 +89,10 @@ class FakeSystem(lib.System):
         with os.fdopen(fd, "wb") as handle:
             handle.write(b"PGDMP-fake-dump")
 
+    def run_from_file(self, argv, path):
+        assert os.path.exists(path), path
+        self.run(argv)
+
     def run(self, argv, input_text=None, check=True):
         self.commands.append(list(argv))
         if input_text is not None:
@@ -322,7 +326,7 @@ class RenderTests(_Base):
             self.assertIn(needle, text)
 
     def test_pg_hba_allows_exactly_one_role_on_one_database_by_peer(self):
-        self.assertIn("local   perens_com   t_perens_com   peer", lib.render_pg_hba(self.spec))
+        self.assertIn("local   postgres,perens_com   t_perens_com   peer", lib.render_pg_hba(self.spec))
         self.assertIn("local   all   +hams_tenant   reject", lib.PG_HBA_REJECT)
         self.assertIn("host    all   +hams_tenant   0.0.0.0/0   reject", lib.PG_HBA_REJECT)
 
@@ -333,7 +337,8 @@ class RenderTests(_Base):
         self.assertIn("ct state established,related accept", text)
         self.assertIn("169.254.0.0/16", text)
         self.assertIn("10.99.0.0/24", text)
-        self.assertEqual(lib.render_nft([]), "# no tenants\n")
+        self.assertIn("delete table inet hams_tenants", lib.render_nft([]))
+        self.assertNotIn("skuid", lib.render_nft([]))
 
     def test_the_nft_text_is_accepted_by_nft_when_it_is_installed(self):
         nft = shutil.which("nft")
@@ -426,7 +431,7 @@ class CreateStepsTests(_Base):
         self.run_steps(self.spec)
         install = next(c for c in self.system.commands if "--config" in c)
         self.assertEqual(install[:4], ["runuser", "-u", "t_perens_com", "--"])
-        for flag in ("--stop-after-init", "--no-http", "--max-cron-threads=0", "--without-demo=all"):
+        for flag in ("--stop-after-init", "--no-http", "--max-cron-threads=0", "--without-demo=True"):
             self.assertIn(flag, install)
         self.assertEqual(install[install.index("-i") + 1], "base,website")
 
