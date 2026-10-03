@@ -2386,6 +2386,39 @@ def check_host_apt_packages():
         sys.exit(1)
 
 
+# [@ANCHOR: test:check_cloudflared_ffi_library]
+def check_cloudflared_ffi_library(addons_path, install_modules):
+    """Reports a missing or wrong-architecture libcloudflared.so up front, with the fix.
+
+    The `cloudflare` module's TestCloudflareTunnelDaemon loads daemons/cloudflared-ffi/
+    libcloudflared.so through ctypes. Without this check a host that lacks the library
+    (compiled per CPU, not committed to git) produces three late test ERRORs instead of one
+    clear message. Runs in both the namespaced and the HAMS_ISOLATED_NS=1 paths. Returns the
+    error text, or None when nothing is wrong (or the cloudflare module is not under test)."""
+    if "cloudflare" not in install_modules:
+        return None
+    for entry in addons_path.split(","):
+        if os.path.isfile(os.path.join(entry, "cloudflare", "__manifest__.py")):
+            ffi_dir = os.path.realpath(os.path.join(entry, "daemons", "cloudflared-ffi"))
+            break
+    else:
+        return None
+    if not os.path.isdir(ffi_dir):
+        return None
+    ok, reason = infrastructure.cffi_library_status(ffi_dir)
+    if ok:
+        return None
+    return (
+        f"Missing libcloudflared.so for this host: {reason}.\n"
+        "The cloudflare module's TestCloudflareTunnelDaemon tests load it. Build it (offline, "
+        "from the in-repo source) with:\n"
+        f"  sudo apt-get install -y {infrastructure.CFFI_APT_PACKAGE} build-essential\n"
+        f"  python3 {os.path.join(os.path.dirname(os.path.realpath(__file__)), 'build_cloudflared_ffi.py')}"
+        f" --ffi-dir {ffi_dir}\n"
+        "or run `provision.py --test`, whose hook_build_cloudflared_ffi step does the same."
+    )
+
+
 def get_default_audio_sink_name(timeout=5.0):
     """Returns the name of the developer's current default PipeWire audio sink
     (e.g. "Raptor Lake-P/U/H cAVS Speaker"), or None if `wpctl` isn't available
@@ -3158,6 +3191,11 @@ def main():
     )
     if not target_modules:
         target_modules = list(install_modules)
+
+    ffi_problem = check_cloudflared_ffi_library(addons_path, install_modules)
+    if ffi_problem:
+        print(f"❌ ERROR: {ffi_problem}")
+        sys.exit(1)
 
     if not args.module and "caching" in target_modules:
         target_modules.remove("caching")
