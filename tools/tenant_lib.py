@@ -82,6 +82,10 @@ DEFAULTS = {
     "language": "en_US",
     "notes": "",
     "catch_all": False,
+    # A public-site tenant (perens.com, postopen.org: NIGHT_PLAN decision 38): no signup, no invitations, no
+    # mail. The tunnel answers 404 for the Odoo backend, login and API paths on its public names, so the
+    # admin reaches them only through an SSH tunnel to the loopback port.
+    "public_site_only": False,
 }
 
 
@@ -192,6 +196,10 @@ def validate_spec(raw):
         raise SpecError(f"name {name!r} is reserved")
     if not isinstance(spec["catch_all"], bool):
         raise SpecError("catch_all must be true or false")
+    if not isinstance(spec["public_site_only"], bool):
+        raise SpecError("public_site_only must be true or false")
+    if spec["public_site_only"] and spec["catch_all"]:
+        raise SpecError("a catch_all tenant has no public hostnames to restrict (parking has its own guard)")
     domains = spec.get("domains", [] if spec["catch_all"] else None)
     if not isinstance(domains, list) or (not domains and not spec["catch_all"]):
         raise SpecError("domains must be a non-empty list (only a catch_all tenant may have none)")

@@ -6,5 +6,6 @@
   "workers": 0,
   "memory_max": "768M",
   "memory_high": "640M",
-  "modules": ["website", "website_blog"]
+  "modules": ["website", "website_blog"],
+  "public_site_only": true
 }

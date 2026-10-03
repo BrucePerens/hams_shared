@@ -729,6 +729,51 @@ class CloudflarePlanTests(unittest.TestCase):
         self.assertNotIn("Bearer", text)
 
 
+class PublicSiteOnlyTests(unittest.TestCase):
+    """A public-site tenant answers 404 for the Odoo backend, login and API paths on its public names."""
+
+    def setUp(self):
+        self.site = lib.validate_spec(dict(PERENS, public_site_only=True))
+
+    def test_the_flag_is_validated(self):
+        with self.assertRaises(lib.SpecError):
+            lib.validate_spec(dict(PERENS, public_site_only="yes"))
+        with self.assertRaises(lib.SpecError):
+            lib.validate_spec(dict(PARKING, public_site_only=True))
+        self.assertFalse(lib.validate_spec(PERENS)["public_site_only"])
+
+    def test_deny_rules_precede_the_service_rule_of_every_hostname(self):
+        new = cf.build_ingress([self.site, lib.validate_spec(PARKING)], copy.deepcopy(LIVE))
+        deny = {"hostname": "perens.com", "path": cf.PRIVATE_PATH_REGEX, "service": "http_status:404"}
+        self.assertEqual(new[0], deny)
+        self.assertEqual(new[1], {"hostname": "perens.com", "service": "http://localhost:18101"})
+        self.assertEqual(new[2]["hostname"], "www.perens.com")
+        self.assertEqual(new[2]["path"], cf.PRIVATE_PATH_REGEX)
+        self.assertEqual(new[3], {"hostname": "www.perens.com", "service": "http://localhost:18101"})
+
+    def test_idempotent_and_off_by_default(self):
+        specs = [self.site, lib.validate_spec(PARKING)]
+        once = cf.build_ingress(specs, copy.deepcopy(LIVE))
+        self.assertEqual(once, cf.build_ingress(specs, copy.deepcopy(once)))
+        plain = cf.build_ingress([lib.validate_spec(PERENS), lib.validate_spec(PARKING)], copy.deepcopy(LIVE))
+        self.assertFalse(any(r.get("service") == "http_status:404" and r.get("hostname") for r in plain))
+
+    def test_the_regex_denies_the_backend_and_keeps_the_public_site(self):
+        import re
+
+        regex = re.compile(cf.PRIVATE_PATH_REGEX)
+        for path in ("/odoo", "/odoo/action-123", "/web", "/web/login", "/web/login_successful", "/web/signup",
+                     "/web/reset_password", "/web/database/manager", "/web/session/authenticate", "/web/webclient/load_menus",
+                     "/web/dataset/call_kw/res.partner/search", "/jsonrpc", "/xmlrpc/2/object", "/json/2/res.partner/search",
+                     "/websocket", "/my", "/my/home", "/mail/thread/messages", "/website/info", "/website/form/mail.mail", "/website/form/"):
+            self.assertTrue(regex.search(path), f"{path} must be denied")
+        for path in ("/", "/about-post-open", "/documents/license", "/blog", "/blog/news-2/testing-1", "/web/image/website/1/favicon",
+                     "/web/content/12", "/web/assets/1/abc/web.assets_frontend.min.css", "/web/static/lib/jquery/jquery.js",
+                     "/website/static/src/js/x.js", "/website/search", "/sitemap.xml", "/robots.txt", "/favicon.ico",
+                     "/mycontact", "/jsonfeed", "/webinar", "/odoo-notes", "/mailbox"):
+            self.assertFalse(regex.search(path), f"{path} must stay public")
+
+
 class FakeApiOpener:
     def __init__(self, live):
         self.live = live
