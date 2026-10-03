@@ -2340,6 +2340,26 @@ class TimerDrivenUnitTests(unittest.TestCase):
             self.assertIn("WantedBy=timers.target", units[f"{name}.timer"])
             self.assertNotIn("WantedBy=multi-user.target", units[f"{name}.service"])
 
+    def test_callbook_dns_export_follows_each_country_sync(self):
+        # docs/proposals/CALLBOOK_DNS_SERVICE.md (hams_com), "Serving": the zone is rebuilt after
+        # each sync of a country it publishes. CA and AU sync on this host and chain with OnSuccess=;
+        # fcc.uls.sync runs on pi500-1 (05:00 America/New_York + up to 1h), so the export timer has
+        # its own run two hours after that window, in the same time zone.
+        units = self._units()
+        export = "OnSuccess=callbook.dns.export.service"
+        for name in ("ised.canada.sync.service", "au.acma.sync.service"):
+            self.assertIn(export, units[name], f"{name} must trigger the callbook DNS export")
+        self.assertIn("callbook.dns.export.service", units)
+        timer = units["callbook.dns.export.timer"]
+        self.assertIn("OnCalendar=daily", timer)
+        self.assertIn("OnCalendar=*-*-* 08:00:00 America/New_York", timer)
+        fcc_timer = next(
+            item["content"] for item in infra.MANIFEST["static_files"]
+            if item.get("path") == "/etc/systemd/system/fcc.uls.sync.timer" and "pi500-1" in item["environments"]
+        )
+        self.assertIn("OnCalendar=*-*-* 05:00:00", fcc_timer)
+        self.assertIn("RandomizedDelaySec=1h", fcc_timer)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1908,6 +1908,10 @@ WantedBy=multi-user.target
 [Unit]
 Description=Ham Radio Australia ACMA Callsign Sync (One-Shot)
 After=network.target
+# Republish the callbook DNS zone once fresh register data has landed
+# (docs/proposals/CALLBOOK_DNS_SERVICE.md, "Serving": export after each
+# country sync). AU publishes its licence class in that zone.
+OnSuccess=callbook.dns.export.service
 
 [Service]
 # ADR-0070 OS-Level Daemon Restriction
@@ -2959,10 +2963,16 @@ SyslogIdentifier=callbook.dns.export
             "path": "/opt/hams/systemd/callbook.dns.export.timer",
             "content": """\
 [Unit]
-Description=Ham Radio Callbook DNS Zone Export, Nightly
+Description=Ham Radio Callbook DNS Zone Export, Nightly and After the FCC Sync
 
 [Timer]
 OnCalendar=daily
+# fcc.uls.sync runs on pi500-1, not on this host, so OnSuccess= cannot
+# chain to it. Its timer fires at 05:00 America/New_York plus up to 1h
+# of RandomizedDelaySec; this run, two hours after the latest start,
+# publishes the day's FCC changes instead of waiting for midnight UTC.
+# The CA and AU syncs that run here chain to the export with OnSuccess=.
+OnCalendar=*-*-* 08:00:00 America/New_York
 Persistent=true
 RandomizedDelaySec=30m
 
@@ -3020,6 +3030,10 @@ WantedBy=multi-user.target
 [Unit]
 Description=Ham Radio ISED Canada Callbook Sync (One-Shot)
 After=network.target
+# Republish the callbook DNS zone once fresh register data has landed
+# (docs/proposals/CALLBOOK_DNS_SERVICE.md, "Serving": export after each
+# country sync).
+OnSuccess=callbook.dns.export.service
 
 [Service]
 # ADR-0070 OS-Level Daemon Restriction
