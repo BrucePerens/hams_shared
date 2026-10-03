@@ -2828,6 +2828,48 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
+            # Every 10 minutes: each tenant's unit, its HTTP answer on loopback and the age of its
+            # newest backup (tenant_ctl health --all). Exits non-zero when anything is wrong, which
+            # leaves this unit failed, which the "Systemd Failed Services Tracker" pager check already
+            # reports. Needs root (the backup directory is 0700 root). Reads local state only.
+            "path": "/opt/hams/systemd/hams-tenant-health.service",
+            "content": """\
+[Unit]
+Description=Check every Odoo tenant (unit, HTTP answer, backup age)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/tenant_ctl.py health --all
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.tenant.health
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-tenant-health.timer",
+            "content": """\
+[Unit]
+Description=Check every Odoo tenant every ten minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=false
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
             # Nightly pg_dump plus filestore archive of every tenant, with checksums, root-only.
             # Deliberately not sandboxed for the same reason as hams.db.local.backup.service (runuser to
             # postgres, writes a root-only directory). Reads and writes local files only.

@@ -834,11 +834,17 @@ class ManifestTests(unittest.TestCase):
     def test_tenant_units_are_all_host_class_gated(self):
         names = [os.path.basename(s["path"]) for s in infra.MANIFEST["static_files"]
                  if os.path.basename(s["path"]).startswith("hams-tenant")]
-        self.assertEqual(len(names), 6)
+        self.assertEqual(len(names), 8)
         for spec in infra.MANIFEST["static_files"]:
             if os.path.basename(spec["path"]).startswith("hams-tenant"):
                 self.assertEqual(spec["host_class"], "odoo_tenants")
                 self.assertNotIn("external_fetch", spec)
+
+    def test_the_health_unit_is_a_root_oneshot_that_fails_when_a_tenant_is_unhealthy(self):
+        unit = next(s for s in infra.MANIFEST["static_files"] if s["path"].endswith("hams-tenant-health.service"))
+        self.assertIn("tenant_ctl.py health --all", unit["content"])
+        self.assertIn("Type=oneshot", unit["content"])
+        self.assertNotIn("User=", unit["content"])  # root: the backup directory is 0700 root
 
     def test_tenant_directories_are_host_class_gated_and_root_owned(self):
         wanted = {"/etc/hams-tenants", "/opt/hams/etc/tenants", "/opt/hams/etc/tenants.d",

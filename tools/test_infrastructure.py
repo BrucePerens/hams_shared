@@ -3099,7 +3099,7 @@ class HostClassTests(unittest.TestCase):
         tenant_units = {
             "hams-tenant@.service", "hams-tenant-firewall.service", "hams-tenant-backup.service",
             "hams-tenant-backup.timer", "hams-tenant-restore-test.service",
-            "hams-tenant-restore-test.timer",
+            "hams-tenant-restore-test.timer", "hams-tenant-health.service", "hams-tenant-health.timer",
         }
         self.assertEqual(
             infra.host_class_unit_names(), {"hams-relay-ca-signer.service"} | tenant_units
@@ -3139,6 +3139,8 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams-tenant-firewall.service": "loads a local nftables table",
         "hams-tenant-backup.service": "local pg_dump and tar of tenant data",
         "hams-tenant-backup.timer": "activates hams-tenant-backup.service (local)",
+        "hams-tenant-health.service": "checks local units, loopback HTTP and backup age",
+        "hams-tenant-health.timer": "activates hams-tenant-health.service (local)",
         "hams-tenant-restore-test.service": "restores a local backup into a scratch database",
         "hams-tenant-restore-test.timer": "activates hams-tenant-restore-test.service (local)",
         "hams.daemon.keys.service": "provisions daemon keys in the local database",

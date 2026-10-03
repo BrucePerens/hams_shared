@@ -48,10 +48,11 @@ MULTI_TENANT_ODOO.md` (hams_com).
   instance. This is a reviewed whole-list replacement derived from the live list
   (`tenant_cloudflare.py`), never a push of hams_prod's `cloudflare.tunnel.route` rows.
 * Parking: the `parking` module (hams_open) answers every public request of the parking instance from
-  its own table through `ir.http._match` and `_serve_fallback`; no website, no cookie, no backend route
-  reachable from the internet. It depends only on `web` (a tenant has no Redis, so `zero_sudo` cannot
-  be installed there); its privilege separation is one service account holding exactly the ACLs the
-  public handler needs.
+  its own table through `ir.http._match` and `_serve_fallback`; no website, no cookie, no route or backend page
+  reachable from the internet (Odoo's `/<module>/static/*` files are still served). It depends only on `web` and `mail` (a tenant has no Redis, so
+  `zero_sudo` cannot be installed there; `mail` is there for the service account's `notification_type`
+  and brings its own cron jobs, hence `max_cron_threads = 1`); its privilege separation is one service
+  account holding exactly the ACLs the public handler needs.
 
 ## Consequences
 
