@@ -46,3 +46,28 @@ a visitor cannot reach it by sending any Host or X-Forwarded-For header to a par
 redirect target must be valid, and the cache time is bounded [@ANCHOR: parking:COMM_domain_constraints]. The
 public handler runs as one service account that can read the domains and write inquiries and nothing
 else [@ANCHOR: parking:COMM_service_account_acl].
+
+## Scenario: How each piece behaves
+
+* A page is assembled from escaped text only [@ANCHOR: parking:COMM_page]; a for-sale page replaces the
+  form by a thank-you after a post [@ANCHOR: parking:COMM_render_for_sale]; a gone page is a plain 410
+  [@ANCHOR: parking:COMM_render_gone]; `robots.txt` follows the domain's indexing switch
+  [@ANCHOR: parking:COMM_robots_txt].
+* The visitor's address is trusted only with Cloudflare's own headers present
+  [@ANCHOR: parking:COMM_client_ip] and is stored only as a keyed hash [@ANCHOR: parking:COMM_hash_ip];
+  the operator test looks at the socket peer [@ANCHOR: parking:COMM_is_loopback_address].
+* A form token is checked against the host, the render time and a keyed signature
+  [@ANCHOR: parking:COMM_verify_form_token]; the key is set once at install and never overwritten
+  [@ANCHOR: parking:COMM_post_init_hook] and is read by the handler or the request fails
+  [@ANCHOR: parking:COMM_parking_secret].
+* A domain name is normalized when it is created [@ANCHOR: parking:COMM_domain_create], renamed
+  [@ANCHOR: parking:COMM_domain_write] or compared [@ANCHOR: parking:COMM_domain_normalize_name]; a lookup
+  tries the exact name, then the bare domain for `www.` [@ANCHOR: parking:COMM_domain_lookup]; the
+  inquiry count follows the inquiries [@ANCHOR: parking:COMM_domain_compute_inquiry_count].
+* The public handler gets its database access from one service account
+  [@ANCHOR: parking:COMM_parking_service_env], looks the host up [@ANCHOR: parking:COMM_parking_serve],
+  picks the behaviour [@ANCHOR: parking:COMM_parking_page], builds every response without a cookie and
+  with a cache policy [@ANCHOR: parking:COMM_parking_response], and strips what Odoo adds afterwards
+  [@ANCHOR: parking:COMM_post_dispatch].
+* An inquiry is limited per address and in total [@ANCHOR: parking:COMM_inquiry_rate_limited] and is
+  answered like a success even when it was refused [@ANCHOR: parking:COMM_inquiry_done].
