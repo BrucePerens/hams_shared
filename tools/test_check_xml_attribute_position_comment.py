@@ -29,14 +29,15 @@ class CheckXmlAttributePositionCommentTests(unittest.TestCase):
 
     def test_flags_a_comment_between_two_attribute_elements(self):
         # The exact shape that caused this checker to be written: a comment interspersed
-        # among several <attribute> siblings.
+        # among several <attribute> siblings. (Originally suspected to drop every attribute;
+        # disproved against Odoo 19 on 2026-10-02 -- now flagged as a style convention only.)
         self._write(
             "some_module/views/layout_overrides.xml",
             "<odoo>\n"
             '<template id="t" inherit_id="website.layout">\n'
             '<xpath expr="//html" position="attributes">\n'
             '<attribute name="t-att-data-foo">foo</attribute>\n'
-            "<!-- an explanation that breaks everything -->\n"
+            "<!-- an explanation interspersed among attributes -->\n"
             '<attribute name="t-att-data-bar">bar</attribute>\n'
             "</xpath>\n"
             "</template>\n"
@@ -47,11 +48,13 @@ class CheckXmlAttributePositionCommentTests(unittest.TestCase):
         self.assertIn("layout_overrides.xml", violations[0])
 
     def test_flags_a_comment_preceding_a_single_attribute_element(self):
-        # The real, second instance this checker actually found live, 2026-10-01:
+        # The second instance this checker found live, 2026-10-01:
         # theme_hams/views/layout_overrides.xml's hams_dynamic_filter_template_blog_post_card
         # had an audit-ignore-xpath comment directly inside the <xpath> block, immediately
         # before its one <attribute> child -- not "between" two attributes, but still a
-        # direct-child comment sibling, and still a real, confirmed silent failure.
+        # direct-child comment sibling. It was once believed to be a confirmed silent
+        # failure; a direct Odoo 19 reproduction (2026-10-02, hams_com PR #512) disproved
+        # that, so this is now flagged purely as a style convention.
         self._write(
             "theme_hams/views/layout_overrides.xml",
             "<odoo>\n"
@@ -84,7 +87,7 @@ class CheckXmlAttributePositionCommentTests(unittest.TestCase):
         self.assertEqual(violations, [])
 
     def test_does_not_flag_a_comment_inside_an_unrelated_xpath_position(self):
-        # Only position="attributes" has this trap -- a comment inside a position="inside"/
+        # Only position="attributes" is in scope -- a comment inside a position="inside"/
         # "after"/"before" xpath block is ordinary, unremarkable QWeb content.
         self._write(
             "some_module/views/layout_overrides.xml",

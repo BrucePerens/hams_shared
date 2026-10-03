@@ -1383,15 +1383,16 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
-    # 54. check_xml_attribute_position_comment -- a real Odoo-core silent-failure trap, found
-    # live 2026-09-28/29/2026-10-01: an XML comment placed as a direct sibling of <attribute>
-    # elements inside an <xpath ... position="attributes"> block parses fine and loads fine,
-    # but silently makes EVERY <attribute> in that block render as absent -- no error, no
-    # warning, no failed upgrade. This checker found a second, previously-undiscovered real
-    # instance the same day it was written (theme_hams/views/layout_overrides.xml's
-    # hams_dynamic_filter_template_blog_post_card, fixed alongside this check landing). Always
-    # scans the full repo, same reasoning as check_xml_comment_double_hyphen.py immediately
-    # above: a view's own structural shape is not a property of any single lint target module.
+    # 54. check_xml_attribute_position_comment -- a defensive, STYLE-ONLY convention: flags an
+    # XML comment placed as a direct sibling of <attribute> elements inside an
+    # <xpath ... position="attributes"> block. Originally added (2026-09-28/29/2026-10-01) as a
+    # suspected Odoo-core silent-failure trap, but a direct reproduction against Odoo 19's
+    # apply_inheritance_specs (2026-10-02, hams_com PR #512 / 551db4c1) disproved that: the
+    # attributes branch iterates only <attribute> tags and skips comments, so no attribute is
+    # lost. Kept because comments as inheritance-spec siblings are unusual and easy to move
+    # before the <xpath>. Always scans the full repo, same reasoning as
+    # check_xml_comment_double_hyphen.py immediately above: a view's own structural shape is
+    # not a property of any single lint target module.
     res = subprocess.run(
         [
             python_exec,

@@ -4,29 +4,33 @@
 """
 XML `position="attributes"` Comment Checker
 -------------------------------------------------------------------------------------------
-A real Odoo QWeb inheritance trap, found live 2026-09-28/29 fixing
-`theme_hams/views/layout_overrides.xml`'s `hams_theme_attribute` view: placing an XML `<!--
--->` comment as a direct sibling BETWEEN `<attribute>` elements inside an
-`<xpath ... position="attributes">` block does not raise, does not warn, and does not fail
-the module upgrade -- but it silently makes EVERY `<attribute>` in that block (not just the
-ones near the comment) produce nothing at all when the view renders. Confirmed twice against a
-real Odoo test run: moving the explanatory comment in between the `<attribute>` children broke
-a previously-passing real-HTTP assertion outright; moving it back out before the `<xpath>`
-element (where every other explanatory comment in that file already lives) fixed it again, with
-no other change. Full write-up:
-night_shift_todo/low/qweb-inheritance-comment-inside-position-attributes-breaks-silently-e3c4eefd.md
+A DEFENSIVE, STYLE-ONLY convention -- NOT a confirmed Odoo bug workaround.
 
-This is exactly the "arch loaded fine, output is wrong anyway" failure mode that produces no
-module-load error and no test failure unless the specific attribute happens to be covered by a
-real rendering assertion -- the same silent-failure shape check_xml_comment_double_hyphen.py
-exists to catch statically instead of via a live crash discovered by whoever next happens to run
-the affected test. Unlike that checker's hard XML syntax error, this is not illegal XML (lxml
-parses it fine) -- it is a real Odoo-core footgun this checker catches by structure, not by
-syntax validity.
+History: originally written as a suspected Odoo QWeb inheritance trap, reported live
+2026-09-28/29 while fixing `theme_hams/views/layout_overrides.xml`'s `hams_theme_attribute`
+view. The belief was that an XML `<!-- -->` comment placed as a direct sibling of `<attribute>`
+elements inside an `<xpath ... position="attributes">` block silently made EVERY `<attribute>`
+in that block render as absent. A later, direct reproduction against the real, installed Odoo
+19 `apply_inheritance_specs()` (`odoo/tools/template_inheritance.py`, 2026-10-02) DISPROVED
+that: its `position == 'attributes'` branch iterates `spec.getiterator('attribute')`, which
+filters by tag and simply skips a comment sibling wherever it sits. Every shape tried (comment
+between two `<attribute>` siblings, comment before a lone `<attribute>`, both with
+`inherit_branding=True`, and a two-view stacked-inheritance case) produced an identical,
+fully-correct arch with or without the comment. The original "confirmed twice" observation was
+most likely a misattribution confounded by an unrelated theme-copy-step timing gap. Full
+write-up: hams_com commit 551db4c1 (PR #512) and its `night_shift_history.md` 2026-10-02
+entry closing the parent to-do.
+
+The checker is kept anyway because the structural shape it flags -- a comment as a direct
+child of an `<xpath position="attributes">` element, i.e. interspersed among inheritance-spec
+siblings -- is unusual and easy to avoid: explanatory comments belong before the `<xpath>`
+element, where every other explanatory comment in this project's view files already lives.
+Do not cite this checker as evidence of an Odoo-core bug, and do not file an upstream report
+on its strength.
 
 The fix is always the same: move the comment to before the `<xpath>` element entirely (or
 inside one specific `<attribute>` element's own text, which this checker does not flag --
-only a comment interspersed as a direct SIBLING of `<attribute>` elements is the trap).
+only a comment interspersed as a direct SIBLING of `<attribute>` elements is flagged).
 
 Usage: check_xml_attribute_position_comment.py <repo_root>
 """
@@ -103,12 +107,12 @@ def check_xml_attribute_position_comment(repo_root):
                     if isinstance(child, etree._Comment):  # burn-ignore-introspection
                         violations.append(
                             f"{os.path.relpath(path, repo_root)}:{xpath_el.sourceline} "
-                            f"An XML comment is a direct child of this "
-                            f"<xpath position=\"attributes\"> block, interspersed among its "
-                            f"<attribute> elements. This parses fine but is a known Odoo-core "
-                            f"silent-failure trap: it makes EVERY <attribute> in this block "
-                            f"render as absent, with no error and no warning anywhere. Move "
-                            f"the comment to before the <xpath> element entirely instead."
+                            "An XML comment is a direct child of this "
+                            "<xpath position=\"attributes\"> block, interspersed among its "
+                            "<attribute> elements. Odoo 19 tolerates this (verified "
+                            "2026-10-02), but this project's style convention keeps "
+                            "explanatory comments out of inheritance-spec blocks. Move "
+                            "the comment to before the <xpath> element entirely instead."
                         )
                         break
     return violations
