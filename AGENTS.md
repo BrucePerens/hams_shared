@@ -91,9 +91,11 @@ cargo-deny, dependency-watch) may stay.
 workflows (hams_com `build-relay`, `build-server-daemons`, `test-jetson`, `test-pi500-runner-smoke`)
 are disabled, so GitHub CI now runs no tests at all. **Process: after a session of work on Rust code,
 build and test it on the dev box before merging** -- `cargo fmt --check`, `cargo clippy --all-targets
--- -D warnings` and `cargo test` in each crate you touched, run under `nice` with the shared
-`CARGO_TARGET_DIR=/home/bruce/.cache/hams-cargo-target` (never a per-worktree `target/`; those
-filled /home on 2026-10-03), and record the commands and results in the commit or PR. Do not wait
+-- -D warnings` and `cargo test` in each crate you touched, run under `nice` with a
+`CARGO_TARGET_DIR` of its own per concurrent job (e.g. `/home/bruce/.cache/hams-cargo-target-<job>`),
+deleted when the job is done. Do not share one target directory between worktrees building at the
+same time: they overwrite each other's test binary, so a "pass" can come from another branch's
+build (found 2026-10-03). Never a per-worktree `target/` either; those filled /home, and record the commands and results in the commit or PR. Do not wait
 for, re-enable, or restructure merges around CI ("don't munge things for a CI problem"). The
 disabled `build-relay` workflow also produced relay release binaries; publishing a release is a
 separate, deliberate step for Bruce.
