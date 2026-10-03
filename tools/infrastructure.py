@@ -634,6 +634,85 @@ def hook_migrate_relay_signing_key(env_vars, dest_dir, path, run_cmd_func):
     )
 
 
+# [@ANCHOR: infrastructure:shared_odoo_account_ratchet]
+# Every systemd unit below whose [Service] section says `User=odoo` shares one OS account with the
+# Odoo server and with every other unit on this list. daemon_key_manager gives each daemon its own
+# 0600 key file under /opt/hams/etc/keys/, but every one of those files is owned by `odoo`, so any
+# daemon running as `odoo` can read every other daemon's credential: the per-daemon keys give no
+# isolation between these units. The units that already run under their own account
+# (localhost_cert, hams_subcarrier_signer, hams_device_command_signer, hams_relay_signer, pdns,
+# hams-auth) are the pattern a fix would extend.
+#
+# Which fix (static per-daemon accounts, DynamicUser=, a high-value subset first, or an accepted
+# risk) is Bruce's open decision: hams_com night_shift_questions/open/
+# daemon-os-isolation-fleet-wide-scope-and-approach-59a738aa.md. Until it is made, this list is the
+# recorded, reviewed state of the gap and a ratchet on it: test_infrastructure.py fails when a unit
+# runs as `odoo` without being listed here (a new daemon must get its own account or be added here
+# in a reviewed change), and when a listed unit no longer runs as `odoo` (remove it, so the list
+# only shrinks as units move to their own accounts).
+SHARED_ODOO_ACCOUNT_UNITS = frozenset({
+    "adif.ingress.service",
+    "adif.processor.service",
+    "amsat.tle.sync.service",
+    "aprs.is.sync.service",
+    "arrl.hamfests.sync.service",
+    "au.acma.sync.service",
+    "au.callsign.sync.service",
+    "au.pii.sync.service",
+    "backup.worker.service",
+    "br.anatel.sync.service",
+    "callbook.dns.export.service",
+    "callbook.dns.rrl.service",
+    "callbook.geo.enrich.service",
+    "code.review.sweep.service",
+    "credential.touch.timer.service",
+    "de.bnetza.sync.service",
+    "dx.firehose.service",
+    "electronicsfleamarket.sync.service",
+    "fcc.uls.sync.service",
+    "gdpr.csv.export.service",
+    "ham.dx.daemon.service",
+    "hamcall.idx.sync.service",
+    # The key bootstrapper writes every daemon's key file, so it runs as the account that owns
+    # them; it stays here under any of the options above.
+    "hams.daemon.keys.service",
+    "hams.data.relay.service",
+    "hams.relay.bridge.service",
+    "hams.simulated.band.service",
+    "hams.simulated.bots.service",
+    "hams.simulated.observer.service",
+    "ised.canada.sync.service",
+    "ncvec.sync.service",
+    "noaa-swpc-sync.service",
+    "nz.rsm.sync.service",
+    "pdns.sync.service",
+    "pota.sync.service",
+    "qrz.scraper.service",
+    "rac.events.sync.service",
+    "relay.cert.renew.service",
+    "ses.inbound.mail.ingest.service",
+    "sm3cer.contest.sync.service",
+    "sota.sync.service",
+    "stray.odoo.shell.detector.service",
+    "uk.ofcom.sync.service",
+    "wa7bnm.contest.sync.service",
+})
+
+
+def systemd_units_running_as(manifest, user):
+    """Return the base names of the manifest's systemd .service files whose User= is `user`."""
+    names = set()
+    for entry in manifest["static_files"]:
+        path = entry["path"]
+        if not path.endswith(".service"):
+            continue
+        for line in (entry.get("content") or "").splitlines():
+            if line.strip() == f"User={user}":
+                names.add(os.path.basename(path))
+                break
+    return names
+
+
 MANIFEST = {
     "system_accounts": [
         {
