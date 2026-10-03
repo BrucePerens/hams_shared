@@ -29,20 +29,23 @@ egress path (pi500-1, `FCC_ULS_PROXY_URL`).
 ## Decision
 
 **1. Default: an honest User-Agent.** Every daemon, script or module that fetches from a server we do not
-operate sends a User-Agent that names hams.com and gives a contact. The form is a product token, a
-`+URL` and a contact address:
+operate sends a User-Agent that names hams.com and gives a contact URL. The form is a product token and a
+`+URL`, nothing else:
 
-    HamsComSyncDaemon/1.0 (+https://crawler.hams.com; bruce@perens.com)
+    HamsComSyncDaemon/1.0 (+https://crawler.hams.com)
 
 - `SYSTEM_USER_AGENT` (set for every daemon by `core.env`, provisioned in
   `hams_shared/tools/infrastructure.py`) is the value actually used in production. Code reads it with
   `os.environ.get("SYSTEM_USER_AGENT", <fallback>)`.
-- The fallback is the string above. In hams_com daemons it comes from one place,
-  `daemons/hams_config.py` (`HONEST_USER_AGENT` / `honest_user_agent()`), not a literal repeated in each
-  daemon. A daemon with a more specific identity (the club-page crawler's `HamsComCrawler/1.0
-  (+https://crawler.hams.com; ...)`) may keep it: the requirements are the product token, hams.com in
-  the URL, and a contact.
-- The identity string carries no personal phone number. A URL and an e-mail address are the contact.
+- The fallback is the string above. New hams_com daemon code takes it from `daemons/hams_config.py`
+  (`HONEST_USER_AGENT` / `honest_user_agent()`); existing daemons carry the same literal as their fallback,
+  and the lint test (decision 6) checks every one. A daemon with a more specific identity (the club-page
+  crawler's `HamsComCrawler/1.0 (+https://crawler.hams.com)`) may keep it: the requirements are a product
+  token, hams.com in a `+https://` contact URL, and no e-mail address or phone number.
+- The identity string carries **no personal phone number and no e-mail address**: it is sent to every
+  third-party server we fetch from, and those logs are not ours. The contact page at
+  `https://crawler.hams.com` carries the contact details. That page (or at least the name resolving) must
+  exist for the URL to be a real contact; it is operational work outside this ADR.
 - A daemon honours `robots.txt` where it crawls pages (as `page_cleaning.py` does), regardless of UA.
 
 **2. Exception: a browser-like User-Agent, for one named source, only after the honest one is verified
