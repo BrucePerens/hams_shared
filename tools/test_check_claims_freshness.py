@@ -405,5 +405,142 @@ class TestMainRejectsAMissingDirectory(unittest.TestCase):
         self.assertEqual(rc, 0)
 
 
+class UnclaimedAnchorTests(unittest.TestCase):
+    """`--unclaimed`: the inventory of implementation anchors that have no claim file."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        _write(os.path.join(self.tmp, "my_mod", "__manifest__.py"), "{'name': 'my_mod'}\n")
+
+    def _src(self, rel, content):
+        _write(os.path.join(self.tmp, rel), content)
+
+    def _claim(self, rel, anchor):
+        _write(
+            os.path.join(self.tmp, rel),
+            f"---\nanchor: {anchor}\ncode_hash: sha256:00\nreview_tier: 3\n---\n\n1. Claim.\n",
+        )
+
+    def _unclaimed(self, store_roots=()):
+        _init_git_repo(self.tmp)
+        return [(m, n) for m, n, _loc in ccf.find_unclaimed_anchors(self.tmp, store_roots)]
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_an_anchor_without_a_claim_file_is_listed_and_one_with_a_claim_is_not(self):
+        self._src(
+            "my_mod/models/thing.py",
+            "def claimed():\n    # [@ANCHOR: my_mod:claimed]\n    return 1\n\n\n"
+            "def unclaimed():\n    # [@ANCHOR: unclaimed]\n    return 2\n",
+        )
+        self._claim("my_mod/claims/claimed.md", "my_mod:claimed")
+        self.assertEqual(self._unclaimed(), [("my_mod", "unclaimed")])
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_the_location_is_reported_relative_to_the_scanned_directory(self):
+        self._src("my_mod/models/thing.py", "def f():\n    # [@ANCHOR: lonely]\n    pass\n")
+        _init_git_repo(self.tmp)
+        self.assertEqual(
+            ccf.find_unclaimed_anchors(self.tmp),
+            [("my_mod", "lonely", os.path.join("my_mod", "models", "thing.py") + ":2")],
+        )
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_links_doc_anchors_and_conversational_mentions_are_not_implementation_anchors(self):
+        self._src(
+            "my_mod/models/thing.py",
+            "def f():\n"
+            "    # Verified by [@ANCHOR: test_f_works]\n"
+            "    # Triggers [@ANCHOR: other_mod:handoff]\n"
+            "    # see [@ANCHOR: somewhere_else]\n"
+            "    # [@ANCHOR: doc_f_overview]\n"
+            "    # [@ANCHOR: story_f_user_story]\n"
+            "    pass\n",
+        )
+        self.assertEqual(self._unclaimed(), [])
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_anchors_in_test_files_are_test_anchors_and_skipped(self):
+        self._src(
+            "my_mod/tests/test_thing.py",
+            "# Tests [@ANCHOR: my_mod:claimed]\n"
+            "def test_it():\n    # [@ANCHOR: test_it_base_declaration]\n    pass\n",
+        )
+        self._src("my_mod/static/tests/thing.test.js", "// [@ANCHOR: js_test_anchor]\n")
+        self._src("daemons/relay/src/thing.rs.test", "// [@ANCHOR: rust_test_anchor]\n")
+        self.assertEqual(self._unclaimed(), [])
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_a_claim_matches_by_its_anchor_field_even_when_the_file_name_differs(self):
+        self._src("my_mod/models/thing.py", "def f():\n    # [@ANCHOR: COMM_mcp_f_tool]\n    pass\n")
+        self._claim("my_mod/claims/f.md", "my_mod:mcp_f_tool")
+        self.assertEqual(self._unclaimed(), [])
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_a_claim_in_another_modules_claims_directory_does_not_count(self):
+        _write(os.path.join(self.tmp, "other_mod", "__manifest__.py"), "{'name': 'other_mod'}\n")
+        self._src("my_mod/models/thing.py", "def f():\n    # [@ANCHOR: shared_name]\n    pass\n")
+        self._claim("other_mod/claims/shared_name.md", "shared_name")
+        self.assertEqual(self._unclaimed(), [("my_mod", "shared_name")])
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_rust_type_method_anchors_match_a_claim_naming_the_same_type_method(self):
+        self._src(
+            "daemons/relay/src/est.rs",
+            "impl Est {\n    // [@ANCHOR: Est::new]\n    fn new() {}\n"
+            "    // [@ANCHOR: Est::observe]\n    fn observe() {}\n}\n",
+        )
+        self._claim("daemons/relay/claims/est_new.md", "Est::new")
+        self.assertEqual(self._unclaimed(), [("Est", ":observe")])
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_a_centralized_claims_store_counts_by_anchor_name(self):
+        self._src("my_mod/models/thing.py", "def f():\n    # [@ANCHOR: stored_elsewhere]\n    pass\n")
+        store = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, store, ignore_errors=True)
+        _write(
+            os.path.join(store, "my_mod", "models", "claims", "stored_elsewhere.md"),
+            "---\nanchor: stored_elsewhere\ncode_hash: sha256:00\n---\n",
+        )
+        self.assertEqual(self._unclaimed(store_roots=[store]), [])
+        self.assertEqual(
+            [(m, n) for m, n, _loc in ccf.find_unclaimed_anchors(self.tmp)],
+            [("my_mod", "stored_elsewhere")],
+        )
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_a_retired_claim_still_counts_as_a_decision_about_its_anchor(self):
+        self._src("my_mod/models/thing.py", "def f():\n    # [@ANCHOR: old_name]\n    pass\n")
+        _write(
+            os.path.join(self.tmp, "my_mod", "claims", "old_name.md"),
+            "---\nanchor: old_name\ncode_hash: sha256:00\nretired: 2026-09-15\n"
+            "retired_reason: deleted\n---\n",
+        )
+        self.assertEqual(self._unclaimed(), [])
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_main_unclaimed_lists_and_exits_zero(self):
+        self._src("my_mod/models/thing.py", "def f():\n    # [@ANCHOR: lonely]\n    pass\n")
+        _init_git_repo(self.tmp)
+        out = io.StringIO()
+        with mock.patch("sys.argv", ["check_claims_freshness.py", "--unclaimed", self.tmp]), \
+                contextlib.redirect_stdout(out):
+            rc = ccf.main()
+        self.assertEqual(rc, 0)
+        self.assertIn("my_mod:lonely", out.getvalue())
+        self.assertIn("TOTAL: 1 implementation anchor(s) in 1 module(s)", out.getvalue())
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_main_rejects_a_missing_claims_store(self):
+        _init_git_repo(self.tmp)
+        out = io.StringIO()
+        argv = ["check_claims_freshness.py", "--unclaimed", self.tmp, "--claims-store",
+                os.path.join(self.tmp, "nope")]
+        with mock.patch("sys.argv", argv), contextlib.redirect_stdout(out):
+            rc = ccf.main()
+        self.assertEqual(rc, 2)
+        self.assertIn("not a directory", out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
