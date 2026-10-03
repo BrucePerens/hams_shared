@@ -3034,6 +3034,73 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
+            # ADR 0105 / MULTI_TENANT_ODOO.md section 12a: one instance of this template per site that needs
+            # large static files (hams-static@perens_com.service: the 1.1 GB /static/ tree of perens.com).
+            # static_site_server.py is a read-only loopback file server; the tunnel sends one path to it.
+            # It fetches nothing from anywhere and has no outbound network at all (IPAddressDeny=any
+            # leaves only loopback), no write path and no capability.
+            "path": "/opt/hams/systemd/hams-static@.service",
+            "content": """\
+[Unit]
+Description=Read-only static file server for %i (ADR 0105)
+After=network.target
+ConditionPathExists=/etc/hams-static/%i.json
+
+[Service]
+Type=simple
+User=hams_static
+Group=hams_static
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /usr/local/lib/hams-static/static_site_server.py --config /etc/hams-static/%i.json
+Restart=on-failure
+RestartSec=5
+ProtectSystem=strict
+ProtectHome=true
+InaccessiblePaths=/opt/hams /var/lib/odoo /etc/odoo /var/log/odoo /var/lib/postgresql /var/lib/redis /var/lib/rabbitmq /var/lib/hams-tenants /etc/hams-tenants /root
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# The drop-in written by static_site_ctl.py adds the one port this instance may bind.
+SocketBindDeny=any
+IPAddressDeny=any
+IPAddressAllow=localhost
+MemoryMax=256M
+TasksMax=128
+CPUQuota=50%
+LimitNOFILE=1024
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.static.%i
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "odoo_tenants",
+            "environments": ["prod", "test"],
+        },
+        {
             # Loads the nftables table that stops tenant accounts opening new connections to local
             # services (Redis, RabbitMQ, hams daemons, PostgreSQL over TCP), the WireGuard network and
             # the cloud metadata address. tenant_lib.render_nft writes the file.

@@ -306,7 +306,7 @@ def rewrite_html(html, domains, attachment_map=None, blog_map=None, post_map=Non
             count("blog_refs_unresolved")
             return match.group(0)
         result = f"/blog/{slug_b}-{new_b}"
-        post = re.match(r"^/([^/?#\"'\s]*?)-(\d+)(.*)$", tail or "", re.S)
+        post = re.match(r"^/([^/?#\"'\s]*?)-(\d+)(?=[/?#\"'\s)]|$)(.*)$", tail or "", re.S)
         if post and int(post.group(2)) in post_map:
             result += f"/{post.group(1)}-{post_map[int(post.group(2))]}{post.group(3)}"
             count("blog_refs_rewritten")
@@ -314,7 +314,9 @@ def rewrite_html(html, domains, attachment_map=None, blog_map=None, post_map=Non
             result += tail or ""
         return result
 
-    html = re.sub(r"/blog/([^/\s\"'?#]*?)-(\d+)((?:/[^\s\"'?#]*)?)", blog_link, html)
+    # The id is the digits at the END of the slug segment: `-(\d+)` must be followed by a separator, or
+    # a slug such as "my-2018-trip-7" would be read as id 2018.
+    html = re.sub(r"/blog/([^/\s\"'?#]*?)-(\d+)(?=[/?#\"'\s)]|$)((?:/[^\s\"'?#]*)?)", blog_link, html)
 
     def bare_blog(match):
         new_b = blog_map.get(int(match.group(1)))
@@ -1009,8 +1011,8 @@ class Importer:
         self.import_assets()
         self.import_pages()
         self.import_menus()
-        self.import_rewrites()
         self.import_blog()
+        self.import_rewrites()  # after the blog: redirects may point at imported posts
         self.rewrite_content()
         self.make_redirects()
         self.note_unsupported()
@@ -1318,6 +1320,10 @@ class Importer:
         for row in self.data["website.rewrite"]:
             website = self.target_website_for(row.get("website_id"))
             values = self.clean("website.rewrite", row)
+            # A converted site points old URLs at attachments and posts by their SOURCE ids (/web/image/12,
+            # /blog/blog-1/title-7); they are mapped to the target ids exactly like links inside content.
+            if values.get("url_to"):
+                values["url_to"] = self.rewrite(values["url_to"])
             values["website_id"] = website or False
             self.create_or_match(
                 "website.rewrite", row["id"], [("url_from", "=", row["url_from"]), ("website_id", "=", website or False)], values
@@ -1383,7 +1389,9 @@ class Importer:
             found = self.target.call("res.partner", "search", [[("name", "=", name)]], {"limit": 1})
             if found:
                 return found[0]
-            self.report["warnings"].append(f"blog author {name!r} has no partner in the target; post author left to the default")
+            warning = f"blog author {name!r} has no partner in the target; post author left to the default"
+            if warning not in self.report["warnings"]:
+                self.report["warnings"].append(warning)
         return False
 
     # -- second pass: rewrite internal references now that every id is known

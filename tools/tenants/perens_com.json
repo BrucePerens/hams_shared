@@ -7,5 +7,6 @@
   "memory_max": "768M",
   "memory_high": "640M",
   "modules": ["website", "website_blog"],
-  "public_site_only": true
+  "public_site_only": true,
+  "static_site": {"port": 18201, "path": "/static/"}
 }

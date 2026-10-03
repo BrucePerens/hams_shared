@@ -229,7 +229,11 @@ def build_source():
             {"id": 2, "name": "About", "url": "/about", "parent_id": 1, "page_id": 3, "website_id": 1, "sequence": 10},
             {"id": 3, "name": "Blog", "url": "/blog", "parent_id": 1, "website_id": 1, "sequence": 20},
         ],
-        "website.rewrite": [{"id": 1, "name": "old", "url_from": "/old-page", "url_to": "/about", "redirect_type": "301", "website_id": 1}],
+        "website.rewrite": [{"id": 1, "name": "old", "url_from": "/old-page", "url_to": "/about", "redirect_type": "301", "website_id": 1},
+                            {"id": 2, "name": "wp post", "url_from": "/2018/05/hello/", "url_to": "/blog/news-1/hello-12",
+                             "redirect_type": "301", "website_id": 1},
+                            {"id": 3, "name": "wp image", "url_from": "/wp-content/uploads/logo.png", "url_to": "/web/image/55",
+                             "redirect_type": "301", "website_id": 1}],
         "blog.blog": [{"id": 1, "name": "News", "website_url": "/blog/news-1"}],
         "blog.tag": [{"id": 1, "name": "radio"}],
         "blog.post": [{"id": 12, "name": "Hello", "blog_id": 1, "tag_ids": [1], "is_published": True,
@@ -461,6 +465,19 @@ class RewriteTests(unittest.TestCase):
         self.assertEqual(report["attachment_refs_unresolved"], 1)
         self.assertEqual(report["links_made_relative"], 2)
 
+    def test_the_id_is_the_digits_at_the_end_of_the_slug_segment(self):
+        # "my-2018-trip-12": the post id is 12, not 2018 (found converting a WordPress site)
+        out = mig.rewrite_html('<a href="/blog/news-1/my-2018-trip-12">x</a><a href="/blog/news-1/my-2018-trip-12?a=1#b">y</a>',
+                               [], {}, {1: 7}, {12: 90, 2018: 5})
+        self.assertIn('href="/blog/news-7/my-2018-trip-90"', out)
+        self.assertIn('href="/blog/news-7/my-2018-trip-90?a=1#b"', out)
+        # a blog slug that itself contains a year: only the trailing id counts
+        self.assertEqual(mig.rewrite_html('<a href="/blog/news-2019-3/x-4">', [], {}, {3: 8}, {4: 9}),
+                         '<a href="/blog/news-2019-8/x-9">')
+        report = {}
+        mig.rewrite_html('<a href="https://example.org/blog/releasing-bsl-11">', [], {}, {1: 7}, {}, report)
+        self.assertEqual(report["blog_refs_unresolved"], 1)
+
     def test_non_strings_pass_through(self):
         self.assertIsNone(mig.rewrite_html(None, ["x.example"]))
         self.assertEqual(mig.rewrite_html("", ["x.example"]), "")
@@ -549,6 +566,31 @@ class ImportTests(_Base):
         # what the tool could not import is said so
         self.assertTrue(any("website.snippet.filter" in item for item in report["unsupported"]))
         self.assertTrue(any("payment_secret" in item for item in report["warnings"]))
+
+    def test_redirect_targets_follow_the_id_maps_and_are_imported_after_the_blog(self):
+        # A converted site (wordpress_to_odoo.py) points old URLs at posts and attachments by SOURCE id.
+        importer, target = self.importer()
+        importer.run()
+        idmap = importer.idmap
+        rewrites = {r["url_from"]: r["url_to"] for r in target.rows["website.rewrite"]}
+        new_post, new_blog = idmap["blog.post"]["12"], idmap["blog.blog"]["1"]
+        self.assertEqual(rewrites["/2018/05/hello/"], f"/blog/news-{new_blog}/hello-{new_post}")
+        self.assertEqual(rewrites["/wp-content/uploads/logo.png"], f"/web/image/{idmap['ir.attachment']['55']}")
+        self.assertEqual(rewrites["/old-page"], "/about")
+        order = [m for m, c in target.log if c == "create" and m in ("blog.post", "website.rewrite")]
+        self.assertLess(order.index("blog.post"), order.index("website.rewrite"))
+
+    def test_a_blog_author_missing_in_the_target_is_warned_about_once(self):
+        source = build_source()
+        source.rows["blog.post"].append({"id": 13, "name": "Second", "blog_id": 1, "tag_ids": [], "is_published": True,
+                                         "content": "<p>x</p>", "website_url": "/blog/news-1/second-13", "author_id": [7, "Nobody"]})
+        source.rows["blog.post"][0]["author_id"] = [7, "Nobody"]
+        shutil.rmtree(self.out)
+        exporter, _ = self.export(source)
+        exporter.run()
+        importer, _ = self.importer()
+        report = importer.run()
+        self.assertEqual(sum("'Nobody'" in w for w in report["warnings"]), 1)
 
     def test_a_second_apply_creates_nothing(self):
         importer, target = self.importer()

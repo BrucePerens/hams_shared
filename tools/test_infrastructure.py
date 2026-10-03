@@ -3159,6 +3159,7 @@ class HostClassTests(unittest.TestCase):
             "hams-tenant@.service", "hams-tenant-firewall.service", "hams-tenant-backup.service",
             "hams-tenant-backup.timer", "hams-tenant-restore-test.service",
             "hams-tenant-restore-test.timer", "hams-tenant-health.service", "hams-tenant-health.timer",
+            "hams-static@.service",
         }
         b2_units = {
             "hams-b2-backup.service", "hams-b2-backup.timer", "hams-b2-restore-test.service",
@@ -3263,6 +3264,7 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams-relay-signer.service": "local signing socket",
         "hams-relay-ca-signer.service": "listens only on a WireGuard address for hams1's signed requests; fetches nothing",
         "hams-subcarrier-signer.service": "local signing socket",
+        "hams-static@.service": "read-only loopback file server for a tenant's static tree; no outbound network at all",
         "hams-tenant@.service": "an Odoo tenant: loopback listener, local PostgreSQL socket; fetches nothing",
         "hams-tenant-firewall.service": "loads a local nftables table",
         "hams-tenant-backup.service": "local pg_dump and tar of tenant data",
