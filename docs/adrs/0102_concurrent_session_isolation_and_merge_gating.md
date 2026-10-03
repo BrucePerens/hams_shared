@@ -82,6 +82,8 @@ status check -- with one necessary exception, `enforce_admins`, discussed below:
      registered there too (see the tracked follow-up). The full `hams_shared/tools/test.py` Odoo suite as
      a check (on either repo) is a further, separate follow-up: it needs a runner matching this dev box's
      Postgres/`odoo`-user environment, real infrastructure work, not a settings change.
+     **Superseded 2026-10-02 -- see the addendum at the end: there is no burn-list check any more, and
+     `test.py` is never to run in CI.**
 
 **4. A dedicated local script was meant to give trusted autonomous work (night-watch) a fast merge
 path, without running any agent through GitHub Actions** (standing policy: AI agents do not run in
@@ -149,6 +151,40 @@ more disk per session, and merging now goes through a PR rather than a direct pu
 night-watch's own fast path -- both `pre-push` hook the client-side layer, and none of this can enforce
 itself if a session goes looking for ways around it, which is exactly why decision 3 does not depend on
 anything running on the session's own machine.
+
+## Addendum, 2026-10-02: GitHub CI runs only the Rust tests; the burn-list gates are gone
+
+Bruce's decision, 2026-10-02, for all three repositories (hams_com, hams_open, hams_shared). The text
+above is kept as the record of what was decided on 2026-09-22; where it conflicts with this addendum,
+this addendum wins.
+
+- **The only tests GitHub CI runs are the Rust tests across architectures**: hams_com's
+  `build-relay.yml` (multi-architecture matrix: GitHub-hosted x86_64 containers plus the native arm64
+  `pi500-1` leg), `build-server-daemons.yml`, and `test-jetson.yml` (native on `jetson-1`). Advisory
+  security jobs that are not test duplicates (pip-audit, scheduled cargo-audit / cargo-deny,
+  dependency-watch) stay.
+- **CI never runs `hams_shared/tools/test.py`**, nor the Odoo-loading parts of `run_linters.py`. Odoo
+  tests are run by the working session on the dev box and the other test hosts. This replaces decision
+  3's "full `test.py` Odoo suite as a check" follow-up, which is now explicitly not wanted. The rule
+  itself lives in `AGENTS.md`'s `site_rules`.
+- **The burn-list CI workflow is removed** from hams_com (#553) and hams_shared (#75), so decision 3's
+  `required_status_checks` bullet no longer describes anything: no `burn-list` check is wanted on
+  either repository. The hams_shared follow-up to register a runner so that check could be required
+  there is retired, not pending. hams_shared has no workflow that needs a self-hosted runner.
+  Housekeeping still owed as of this addendum: hams_com's ruleset `main-pr-required-no-direct-push`
+  (id 24045180) still lists `burn-list` as a required check, which can now never report. Until Bruce
+  removes it, every hams_com PR shows that check as waiting and lands only via `--admin`, as decision 3
+  already describes.
+- **The `check_burn_list.py` gate in the shared `pre-push` hook is removed** (hams_shared #74). Decision
+  2's hook remains, but only for the fast-forward check and the refusal of `--force` to `main`.
+  `check_burn_list.py` is still the local linter sessions run themselves; it is no longer a gate in CI
+  or in a hook.
+- **The hams-devbox self-hosted runner is stopped and disabled** (hams_com #443, 2026-10-01). Its jobs
+  run on GitHub-hosted runners. The self-hosted runners still in use are the just-in-time `pi500-1` and
+  `jetson-1` boards, which hold no publish secrets.
+- Decision 4's fast-merge script gated on "required status checks have passed". With no required check,
+  that gate is vacuous. The path stays non-functional for the self-approval reason given there, and
+  reviving it would need its gate re-specified.
 
 ## Related
 

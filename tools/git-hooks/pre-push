@@ -54,6 +54,7 @@ done
 
 # The 2026-09-28 pre-push check_burn_list.py gate was removed 2026-10-02 at Bruce's direction:
 # ~20 concurrent whole-repo scans overloaded the dev box during bulk to-do processing, and the
-# coordinating session runs its own lint/test passes. CI's burn-list workflow is unchanged.
+# coordinating session runs its own lint/test passes. The burn-list CI workflow was removed the
+# same day (hams_shared #75, hams_com #553); see ADR 0102's 2026-10-02 addendum.
 
 exit 0
