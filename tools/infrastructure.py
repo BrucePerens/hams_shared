@@ -7315,7 +7315,8 @@ def load_and_prompt_env(env_vars, is_test):
     env_vars["HAMS_PROVISION_MODE"] = "test" if is_test else "prod"
 
     # The key hams_relay_bridge presents to Odoo (ham_relay_bridge.api_key). Generated in both
-    # modes: the bridge refuses to start without one outside HAMS_PROVISION_MODE=test, and a
+    # modes: the bridge refuses to start without one unless HAMS_RELAY_BRIDGE_DEV=1 (a flag
+    # provisioning never writes), and a
     # random key costs a test host nothing. Truthiness, not presence: hams1 ran 2026-09-23..10-03
     # with a 0-byte bridge.env, so no relay could uplink. _sync_bridge_api_key_to_odoo() writes the
     # same value into the database.
