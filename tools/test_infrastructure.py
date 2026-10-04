@@ -25,9 +25,12 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import stat
+import struct
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -379,6 +382,184 @@ class HookCreatePdnsSqliteSchemaTests(_TmpDirTestCase):
         self.assertIn("hook_create_pdns_sqlite_schema", names)
 
 
+class PdnsPublicConfigTests(_TmpDirTestCase):
+    """The one PowerDNS that owns port 53 has no rate limiter in front of it (Bruce, 2026-10-04), so
+    its shipped configuration is what keeps it from being an amplifier or an open resolver. The
+    first tests read the MANIFEST; the last start a real pdns_server with exactly that file."""
+
+    SCHEMA = infra._PDNS_SQLITE_SCHEMA_PATH
+    TYPE_TXT, TYPE_ANY, TYPE_A, TYPE_AXFR = 16, 255, 1, 252
+
+    @staticmethod
+    def _static(path):
+        return next(i for i in infra.MANIFEST["static_files"] if i.get("path") == path)
+
+    def _config(self):
+        return self._static("/opt/hams/etc/pdns-gsqlite3.conf")["content"]
+
+    def _settings(self):
+        return dict(l.split("=", 1) for l in self._config().splitlines() if "=" in l)
+
+    def test_no_python_proxy_second_pdns_or_rate_limit_units_remain(self):
+        paths = [i.get("path", "") for i in infra.MANIFEST["static_files"]]
+        for gone in ("pdns-callbook.conf", "pdns.callbook.service", "callbook.dns.rrl.service"):
+            self.assertFalse([p for p in paths if gone in p], gone)
+        self.assertNotIn("callbook.dns.rrl.service", infra.SHARED_ODOO_ACCOUNT_UNITS)
+        export = self._static("/opt/hams/systemd/callbook.dns.export.service")["content"]
+        self.assertIn("After=network.target pdns.service", export)
+        self.assertIn("CALLBOOK_PDNS_API_URL=http://127.0.0.1:8081/", export)
+        self.assertNotIn("pdns.callbook", export)
+
+    def test_one_instance_serves_both_zones_and_is_authoritative_only(self):
+        c = self._settings()
+        self.assertEqual(c["launch"], "gsqlite3:main,gsqlite3:callbook")
+        self.assertEqual(c["gsqlite3-callbook-database"], "/var/lib/powerdns/callbook/callbook.sqlite3")
+        self.assertNotIn("resolver", c)
+        self.assertNotIn("recursor", c)
+        self.assertNotIn("local-port", c, "port 53 is the default")
+        self.assertNotEqual(c["expand-alias"] if "expand-alias" in c else "no", "yes")
+        self.assertEqual((c["primary"], c["secondary"], c["disable-axfr"], c["allow-notify-from"]), ("no", "no", "yes", ""))
+
+    def test_amplification_and_exposure_settings(self):
+        c = self._settings()
+        self.assertEqual(c["any-to-tcp"], "yes")
+        self.assertLessEqual(int(c["udp-truncation-threshold"]), 512)
+        self.assertEqual(c["version-string"], "anonymous")
+        self.assertEqual(c["security-poll-suffix"], "")
+        self.assertEqual(c["log-dns-queries"], "no")
+        self.assertLessEqual(int(c["max-tcp-connections-per-client"]), 10)
+        self.assertGreater(int(c["max-tcp-transactions-per-conn"]), 0)
+        self.assertEqual(c["webserver-address"], "127.0.0.1")
+        self.assertEqual(c["webserver-allow-from"], "127.0.0.0/8,::1/128")
+        self.assertEqual(c["allow-dnsupdate-from"], "127.0.0.0/8,::1/128")
+
+    def test_callbook_database_is_created_before_pdns_starts(self):
+        entry = next(d for d in infra.MANIFEST["directories"] if d["path"] == "/var/lib/powerdns/callbook")
+        self.assertIn(infra.hook_create_callbook_sqlite_schema, entry["post_provision_hooks"])
+        mock_run = MagicMock()
+        self.safe_patch("infrastructure.apply_permissions")
+        self.safe_patch("infrastructure._PDNS_SQLITE_SCHEMA_PATH", os.path.join(self.tmp, "none.sql"))
+        infra.hook_create_callbook_sqlite_schema({}, "", self.tmp, mock_run)
+        mock_run.assert_not_called()
+        self.assertEqual(infra.get_hook_failures(), [], "a host without pdns needs no database")
+
+    # ---- real pdns_server ----
+    @staticmethod
+    def _packet(name, qtype, bufsize=None, qclass=1):
+        labels = b"".join(bytes([len(p)]) + p.encode() for p in name.rstrip(".").split("."))
+        extra = b"\x00\x00\x29" + struct.pack("!H", bufsize) + b"\x00\x00\x00\x00\x00\x00" if bufsize else b""
+        header = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 1 if bufsize else 0)
+        return header + labels + b"\x00" + struct.pack("!HH", qtype, qclass) + extra
+
+    @staticmethod
+    def _reply_fields(data):
+        flags = struct.unpack("!H", data[2:4])[0]
+        return {"tc": bool(flags & 0x200), "ra": bool(flags & 0x80), "rcode": flags & 15,
+                "answers": struct.unpack("!H", data[6:8])[0], "size": len(data)}
+
+    def _udp(self, port, packet):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(3)
+            sock.sendto(packet, ("127.0.0.1", port))
+            return self._reply_fields(sock.recv(65535)) | {}
+
+    def _tcp(self, port, packet):
+        with socket.create_connection(("127.0.0.1", port), timeout=3) as sock:
+            sock.sendall(struct.pack("!H", len(packet)) + packet)
+            size = struct.unpack("!H", sock.recv(2))[0]
+            data = b""
+            while len(data) < size:
+                chunk = sock.recv(size - len(data))
+                if not chunk:
+                    break
+                data += chunk
+            return self._reply_fields(data)
+
+    def _make_db(self, path, zone, label_texts):
+        import sqlite3
+        conn = sqlite3.connect(path)
+        with open(self.SCHEMA) as fh:
+            conn.executescript(fh.read())
+        conn.execute("INSERT INTO domains(id, name, type) VALUES (1, ?, 'NATIVE')", (zone,))
+        rows = [(1, zone, "SOA", f"ns1.{zone} hostmaster.{zone} 1 10800 3600 604800 3600", 300, 1)]
+        rows += [(1, zone, "NS", f"ns1.{zone}", 300, 1)]
+        rows += [(1, f"{label}.{zone}", "TXT", '"' + text + '"', 300, 1) for label, text in label_texts]
+        conn.executemany("INSERT INTO records(domain_id,name,type,content,ttl,auth) VALUES (?,?,?,?,?,1)",
+                         [r[:5] for r in rows])
+        conn.commit()
+        conn.close()
+
+    def test_a_real_pdns_with_the_shipped_config_is_not_an_amplifier_or_a_resolver(self):
+        if not shutil.which("pdns_server") or not os.path.exists(self.SCHEMA):
+            self.skipTest("pdns_server or its sqlite3 schema is not installed")
+        sockets = []
+        for _ in range(2):
+            s = socket.socket(); s.bind(("127.0.0.1", 0)); sockets.append(s)
+        dns_port, web_port = (s.getsockname()[1] for s in sockets)
+        for s in sockets:
+            s.close()
+        main_db = os.path.join(self.tmp, "main.sqlite3")
+        callbook_db = os.path.join(self.tmp, "callbook.sqlite3")
+        self._make_db(main_db, "u.example.org", [("alias", "small")])
+        self._make_db(callbook_db, "callbook.example.org", [("k6bp", "x" * 250 + '" "' + "y" * 250 + '" "' + "z" * 250)])
+        config = self._config().replace("{DOMAIN}", "example.org").replace("{PDNS_API_KEY}", "testkey")
+        config = config.replace("/var/lib/powerdns/pdns.sqlite3", main_db)
+        config = config.replace("/var/lib/powerdns/callbook/callbook.sqlite3", callbook_db)
+        config_dir = os.path.join(self.tmp, "etc")
+        os.makedirs(config_dir)
+        with open(os.path.join(config_dir, "pdns-shipped.conf"), "w") as fh:
+            fh.write(config)
+        sockdir = os.path.join(self.tmp, "run")
+        os.makedirs(sockdir)
+        log = open(os.path.join(self.tmp, "pdns.log"), "w")
+        proc = subprocess.Popen(
+            ["pdns_server", "--guardian=no", "--daemon=no", "--disable-syslog", "--write-pid=no",
+             f"--config-dir={config_dir}", "--config-name=shipped", f"--socket-dir={sockdir}",
+             "--local-address=127.0.0.1", f"--local-port={dns_port}", f"--webserver-port={web_port}"],
+            stdout=log, stderr=subprocess.STDOUT)
+        self.addCleanup(lambda: (proc.terminate(), proc.wait(10), log.close()))
+        deadline = time.time() + 15
+        while True:
+            try:
+                self._udp(dns_port, self._packet("alias.u.example.org", self.TYPE_TXT))
+                break
+            except OSError:
+                if time.time() > deadline or proc.poll() is not None:
+                    log.flush()
+                    self.fail("pdns_server did not start: " + open(os.path.join(self.tmp, "pdns.log")).read()[-800:])
+                time.sleep(0.2)
+
+        small = self._udp(dns_port, self._packet("alias.u.example.org", self.TYPE_TXT))
+        self.assertEqual((small["rcode"], small["answers"], small["tc"]), (0, 1, False), "a small answer over UDP still works")
+        for zone_name in ("alias.u.example.org", "k6bp.callbook.example.org", "u.example.org"):
+            any_reply = self._udp(dns_port, self._packet(zone_name, self.TYPE_ANY, bufsize=4096))
+            self.assertTrue(any_reply["tc"], f"ANY for {zone_name} over UDP must be truncated")
+            self.assertEqual(any_reply["answers"], 0)
+            self.assertLessEqual(any_reply["size"], 100)
+        big = self._udp(dns_port, self._packet("k6bp.callbook.example.org", self.TYPE_TXT, bufsize=4096))
+        self.assertTrue(big["tc"], "an answer over 512 bytes is never sent over UDP")
+        self.assertEqual(big["answers"], 0)
+        self.assertLessEqual(big["size"], 512)
+        over_tcp = self._tcp(dns_port, self._packet("k6bp.callbook.example.org", self.TYPE_TXT))
+        self.assertEqual((over_tcp["rcode"], over_tcp["answers"]), (0, 1), "the callbook zone is served over TCP")
+        # Not a resolver: names outside our zones are refused, nothing is recursed.
+        for qtype in (self.TYPE_A, self.TYPE_ANY):
+            outside = self._udp(dns_port, self._packet("www.example.com", qtype))
+            # An outside ANY is answered "go to TCP" before the zone is looked up, still tiny.
+            self.assertTrue(outside["rcode"] == 5 or (qtype == self.TYPE_ANY and outside["tc"]), outside)
+            self.assertFalse(outside["ra"], "recursion is not available")
+            self.assertEqual(outside["answers"], 0)
+            self.assertLessEqual(outside["size"], 60)
+        self.assertEqual(self._tcp(dns_port, self._packet("www.example.com", self.TYPE_A))["rcode"], 5)
+        root = self._udp(dns_port, self._packet(".", 2))
+        self.assertEqual(root["rcode"], 5)
+        # No zone transfer, no version disclosure.
+        axfr = self._tcp(dns_port, self._packet("callbook.example.org", self.TYPE_AXFR))
+        self.assertTrue(axfr["rcode"] != 0 or axfr["answers"] == 0, axfr)
+        version = self._udp(dns_port, self._packet("version.bind", self.TYPE_TXT, qclass=3))
+        self.assertEqual(version["answers"], 0, "no version string is revealed")
+
+
 class HookClearPycacheTests(_TmpDirTestCase):
     def test_removes_every_entry_under_the_pycache_dir(self):
         pycache = os.path.join(self.tmp, "pycache")
@@ -635,12 +816,15 @@ class ExecuteHooksTests(_TmpDirTestCase):
         # real gap this whole move exists to close (see that entry's own
         # comment: "nothing in this codebase ever created pdns.sqlite3").
         sqlite_calls = [c for c in mock_run.call_args_list if c.args[0][:1] == ["sqlite3"]]
-        self.assertEqual(len(sqlite_calls), 1)
-        self.assertIn(
-            os.path.join(self.tmp, "var/lib/powerdns/pdns.sqlite3"),
-            sqlite_calls[0].args[0],
+        # Two databases: the main one, and callbook.sqlite3 (the second backend of the one
+        # PowerDNS that owns port 53, which needs its tables before it starts).
+        self.assertEqual(len(sqlite_calls), 2)
+        self.assertEqual(
+            sorted(c.args[0][1] for c in sqlite_calls),
+            sorted(os.path.join(self.tmp, "var/lib/powerdns", n) for n in ("pdns.sqlite3", "callbook/callbook.sqlite3")),
         )
-        self.assertIn("stdin", sqlite_calls[0].kwargs)
+        for call in sqlite_calls:
+            self.assertIn("stdin", call.kwargs)
 
     def test_an_environment_with_no_hooked_directories_runs_no_hooks(self):
         mock_run = MagicMock()
@@ -3264,7 +3448,6 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "backup.worker.service": "runs only backup jobs an operator configured; idle otherwise",
         "callbook.dns.export.service": "reads Odoo, writes the local PowerDNS zone",
         "callbook.dns.export.timer": "activates callbook.dns.export.service (local)",
-        "callbook.dns.rrl.service": "local DNS rate-limiting proxy",
         "dx.firehose.service": "local websocket server over the local database",
         "gdpr.csv.export.service": "local HTTP export server",
         "hamcall.idx.sync.service": "reads a licensed file already on disk; no timer",
@@ -3299,7 +3482,6 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams.simulated.band.service": "local server; STUN only while negotiating with a peer",
         "hams.simulated.bots.service": "local band client; speech model fetched once into a cache",
         "hams.simulated.observer.service": "local band client, same as the bots",
-        "pdns.callbook.service": "local PowerDNS server",
         "pdns.sync.service": "RabbitMQ consumer writing to the local PowerDNS API",
         "stray.odoo.shell.detector.service": "inspects local processes",
         "stray.odoo.shell.detector.timer": "activates stray.odoo.shell.detector.service (local)",

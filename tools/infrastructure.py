@@ -566,7 +566,8 @@ def hook_install_wkhtmltopdf(env_vars, dest_dir, path, run_cmd_func):
 _PDNS_SQLITE_SCHEMA_PATH = "/usr/share/pdns-backend-sqlite3/schema/schema.sqlite3.sql"
 
 
-def hook_create_pdns_sqlite_schema(env_vars, dest_dir, path, run_cmd_func):
+def hook_create_pdns_sqlite_schema(env_vars, dest_dir, path, run_cmd_func, db_name="pdns.sqlite3",
+                                   hook_name="hook_create_pdns_sqlite_schema"):
     """Creates the main PowerDNS instance's gsqlite3 database (empty:
     zones are created via the API, not by this schema load) from the
     pdns-backend-sqlite3 package's own reference schema. Found missing
@@ -575,14 +576,14 @@ def hook_create_pdns_sqlite_schema(env_vars, dest_dir, path, run_cmd_func):
     that) but its API returned 404 for every zone -- there was no
     database for it to have created any in. Idempotent: skips if the
     file already exists, matching every other hook here."""
-    db_path = os.path.join(path, "pdns.sqlite3")
+    db_path = os.path.join(path, db_name)
     if os.path.exists(db_path):
         return
     schema = _PDNS_SQLITE_SCHEMA_PATH
     if not os.path.exists(schema):
         _logger.warning("pdns-backend-sqlite3's own schema file is missing: %s", schema)
         record_hook_failure(
-            "hook_create_pdns_sqlite_schema",
+            hook_name,
             FileNotFoundError(schema),
         )
         return
@@ -594,7 +595,22 @@ def hook_create_pdns_sqlite_schema(env_vars, dest_dir, path, run_cmd_func):
         apply_permissions(db_path, "pdns:pdns", 0o664)
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("Failed to create PowerDNS sqlite schema: %s", e)
-        record_hook_failure("hook_create_pdns_sqlite_schema", e)
+        record_hook_failure(hook_name, e)
+
+
+def hook_create_callbook_sqlite_schema(env_vars, dest_dir, path, run_cmd_func):
+    """The one PowerDNS that owns port 53 loads the callbook zone's database as its second
+    backend, so the file must exist with the PowerDNS schema before pdns.service starts: a
+    backend whose tables are missing makes lookups fail for every zone. callbook_dns_export
+    fills it (publish() replaces rows in an existing database). Same schema, same idempotence.
+    A host without pdns-backend-sqlite3 (a test host) has no schema file and needs no database:
+    skipped quietly here, the main hook already reports a missing schema where pdns is used."""
+    if not os.path.exists(_PDNS_SQLITE_SCHEMA_PATH):
+        return
+    hook_create_pdns_sqlite_schema(
+        env_vars, dest_dir, path, run_cmd_func,
+        db_name="callbook.sqlite3", hook_name="hook_create_callbook_sqlite_schema",
+    )
 
 
 # [@ANCHOR: infrastructure:hook_daemons_perms]
@@ -937,7 +953,6 @@ SHARED_ODOO_ACCOUNT_UNITS = frozenset({
     "backup.worker.service",
     "br.anatel.sync.service",
     "callbook.dns.export.service",
-    "callbook.dns.rrl.service",
     "callbook.geo.enrich.service",
     "club.web.search.discovery.service",
     "code.review.sweep.service",
@@ -1634,14 +1649,14 @@ MANIFEST = {
             # misplaced -- apply_production_directories() (which DOES
             # iterate "directories") is now what creates/chowns/chmods it,
             # a safe os.makedirs(..., exist_ok=True) no-op since
-            # pdns.callbook.service's own setup already created it.
+            # the callbook schema hook below creates it.
             "path": "/var/lib/powerdns/callbook",
             "owner": "pdns:pdns",
             # setgid (leading 2): callbook_dns_export runs as User=odoo with
             # SupplementaryGroups=pdns, not User=pdns, so a file it creates
             # here only lands group=pdns if this directory's own group is
             # inherited -- setgid is what makes that automatic. Without it,
-            # new files land group=odoo and pdns.callbook.service (running
+            # new files land group=odoo and pdns.service (running
             # as User=pdns Group=pdns, no supplementary groups) gets zero
             # access to its own database. Found live on hams1, 2026-09-22,
             # after fixing the group ownership by hand and still hitting
@@ -1650,6 +1665,7 @@ MANIFEST = {
             "provision_mode": "2775",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
+            "post_provision_hooks": [hook_create_callbook_sqlite_schema],
         },
         {
             # Moved here from "static_files" -- same bug as the two pdns
@@ -1775,11 +1791,35 @@ MANIFEST = {
             # 'a.misconfigured.dns.server.invalid'; existing zones keep theirs.
             # IPv4 only for now: listening on '::' too would fail pdns.service on
             # a host with IPv6 disabled (local-address-nonexist-fail).
+            #
+            # ONE PowerDNS owns port 53 and answers both the personal zones (backend
+            # "main") and callbook.{DOMAIN} (backend "callbook", its own SQLite file,
+            # written by callbook_dns_export). There is NO rate limiter in front
+            # (Bruce, 2026-10-04: a Python proxy and dnsdist were both rejected; dnsdist
+            # is the option only if we ever run more than one DNS server), so this file is
+            # what keeps the public listener from being an amplifier, using only PowerDNS's
+            # own documented settings (https://doc.powerdns.com/authoritative/settings.html):
+            #   authoritative only: no recursion exists in this server, `resolver` stays unset
+            #     (it is only for ALIAS lookups) and `expand-alias` stays at its default no;
+            #     a name outside our zones gets REFUSED. primary/secondary=no, disable-axfr=yes
+            #     and an empty allow-notify-from: no zone transfer or NOTIFY surface at all.
+            #   any-to-tcp=yes: a UDP ANY gets a tiny truncated reply that sends the (not
+            #     spoofable) TCP handshake to the client.
+            #   udp-truncation-threshold=512: any answer larger than 512 bytes (the default is
+            #     1232) is replaced by an empty truncated reply, so a callbook answer cannot be
+            #     reflected over UDP at several times the size of the spoofed query; real
+            #     resolvers retry over TCP.
+            #   TCP caps (max-tcp-connections, per client, transactions per connection, idle
+            #     timeout), version-string=anonymous, security-poll-suffix= (secpoll off),
+            #     log-dns-queries=no (a callbook lookup names a person's callsign).
+            # Tested against a real pdns_server in test_infrastructure.py (PdnsPublicConfigTests).
             "path": "/opt/hams/etc/pdns-gsqlite3.conf",
             "content": """\
-launch=gsqlite3
-gsqlite3-database=/var/lib/powerdns/pdns.sqlite3
-gsqlite3-dnssec=no
+launch=gsqlite3:main,gsqlite3:callbook
+gsqlite3-main-database=/var/lib/powerdns/pdns.sqlite3
+gsqlite3-main-dnssec=no
+gsqlite3-callbook-database=/var/lib/powerdns/callbook/callbook.sqlite3
+gsqlite3-callbook-dnssec=no
 local-address=0.0.0.0
 default-soa-content=ns1.{DOMAIN} hostmaster.{DOMAIN} 0 10800 3600 604800 3600
 api=yes
@@ -1790,7 +1830,20 @@ webserver-port=8081
 webserver-allow-from=127.0.0.0/8,::1/128
 dnsupdate=yes
 allow-dnsupdate-from=127.0.0.0/8,::1/128
-loglevel=6
+primary=no
+secondary=no
+disable-axfr=yes
+allow-notify-from=
+any-to-tcp=yes
+udp-truncation-threshold=512
+max-tcp-connections=100
+max-tcp-connections-per-client=5
+max-tcp-transactions-per-conn=10
+tcp-idle-timeout=5
+version-string=anonymous
+security-poll-suffix=
+log-dns-queries=no
+loglevel=4
 """,
             "owner": "pdns:pdns",
             "mode": "640",
@@ -4447,69 +4500,11 @@ WantedBy=timers.target
             "environments": ["prod", "test"],
         },
         {
-            # Callbook DNS service, phase 1 (docs/proposals/CALLBOOK_DNS_SERVICE.md). Second
-            # PowerDNS instance serving only callbook.<DOMAIN> from its own SQLite file. Loopback
-            # only: nothing is public until phase 2 delegates the zone and picks the public
-            # listener (the main pdns already holds port 53 on every address).
-            "path": "/opt/hams/etc/pdns-callbook.conf",
-            "content": """\
-launch=gsqlite3
-gsqlite3-database=/var/lib/powerdns/callbook/callbook.sqlite3
-gsqlite3-dnssec=no
-local-address=127.0.0.1
-local-port=5301
-api=yes
-api-key={PDNS_API_KEY}
-webserver=yes
-webserver-address=127.0.0.1
-webserver-port=8082
-webserver-allow-from=127.0.0.0/8,::1/128
-loglevel=4
-""",
-            "owner": "pdns:pdns",
-            "mode": "640",
-            "environments": ["prod"],
-        },
-        {
-            "path": "/opt/hams/systemd/pdns.callbook.service",
-            "content": """\
-[Unit]
-Description=PowerDNS Authoritative Server, callbook zone (loopback only)
-After=network.target
-
-[Service]
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-PrivateDevices=true
-NoNewPrivileges=true
-Type=simple
-User=pdns
-Group=pdns
-# Group-writable database files, so the exporter (SupplementaryGroups=pdns) can replace rows.
-UMask=0002
-RuntimeDirectory=pdns-callbook
-ReadWritePaths=/var/lib/powerdns/callbook
-ExecStart=/usr/sbin/pdns_server --daemon=no --guardian=no --config-dir=/opt/hams/etc --config-name=callbook --socket-dir=/run/pdns-callbook
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=pdns.callbook
-
-[Install]
-WantedBy=multi-user.target
-""",
-            "owner": "root:root",
-            "mode": "644",
-            "environments": ["prod"],
-        },
-        {
             "path": "/opt/hams/systemd/callbook.dns.export.service",
             "content": """\
 [Unit]
 Description=Ham Radio Callbook DNS Zone Exporter (One-Shot)
-After=network.target pdns.callbook.service
+After=network.target pdns.service
 
 [Service]
 # ADR-0070 OS-Level Daemon Restriction
@@ -4535,7 +4530,7 @@ Environment="ODOO_USER=callbook_dns_export_service_internal"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_dns_export_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="CALLBOOK_DNS_DB=/var/lib/powerdns/callbook/callbook.sqlite3"
-Environment="CALLBOOK_PDNS_API_URL=http://127.0.0.1:8082/api/v1/servers/localhost"
+Environment="CALLBOOK_PDNS_API_URL=http://127.0.0.1:8081/api/v1/servers/localhost"
 
 ExecStart=/usr/bin/python3 /opt/hams/daemons/callbook_dns_export/main.py
 
@@ -4570,47 +4565,6 @@ WantedBy=timers.target
             "owner": "root:root",
             "mode": "644",
             "environments": ["prod", "test"],
-        },
-        {
-            # Response rate limiting in front of the callbook PowerDNS instance. Loopback listener
-            # until phase 2 chooses the public address (binding port 53 needs
-            # CAP_NET_BIND_SERVICE, and the main pdns already owns 53 on every address).
-            "path": "/opt/hams/systemd/callbook.dns.rrl.service",
-            "content": """\
-[Unit]
-Description=Ham Radio Callbook DNS Response Rate Limiter
-After=network.target pdns.callbook.service
-
-[Service]
-# ADR-0070 OS-Level Daemon Restriction
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-PrivateDevices=true
-NoNewPrivileges=true
-RestrictAddressFamilies=AF_INET AF_INET6
-CapabilityBoundingSet=
-Type=simple
-User=odoo
-WorkingDirectory=/opt/hams/daemons/callbook_dns_export
-Environment="PYTHONPATH=/opt/hams/daemons"
-Environment="CALLBOOK_DNS_LISTEN=127.0.0.1:5300"
-Environment="CALLBOOK_DNS_UPSTREAM=127.0.0.1:5301"
-
-ExecStart=/usr/bin/python3 /opt/hams/daemons/callbook_dns_export/rrl_proxy.py
-
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=callbook.dns.rrl
-
-[Install]
-WantedBy=multi-user.target
-""",
-            "owner": "root:root",
-            "mode": "644",
-            "environments": ["prod"],
         },
         {
             "path": "/opt/hams/systemd/ised.canada.sync.service",
