@@ -987,6 +987,9 @@ SHARED_ODOO_ACCOUNT_UNITS = frozenset({
     "sm3cer.contest.sync.service",
     "sota.sync.service",
     "stray.odoo.shell.detector.service",
+    # Supervises the AI ticket-triage pass; the model itself runs as the dedicated nologin
+    # hams_ai_agent account (see the unit's own comment). Same shape as credential.touch.timer.
+    "ticket.triage.service",
     "uk.ofcom.sync.service",
     "wa7bnm.contest.sync.service",
 })
@@ -5791,6 +5794,96 @@ WantedBy=timers.target
             "environments": ["prod"],
         },
         {
+            # AI ticket triage on a timer. Bruce, 2026-10-04 (NIGHT_PLAN decision 199, answering
+            # night_shift_questions/answered/ticket-triage-agent-unsupervised-schedule-735ffee2.md):
+            # "run on a timer", DRAFTS ONLY. daemons/ticket_triage_agent/README.md has the full
+            # contract (what runs, caps, kill switch, what to do before enabling).
+            #
+            # The model never runs as this unit's user: ticket_triage_agent/main.py reaches the
+            # Claude Code CLI through `sudo -u hams_ai_agent run-hams-ai-agent-claude.sh`, the
+            # dedicated nologin, no-sudo account (system_accounts above), and the CLI's only tool is
+            # the hams_ticket_triage_mcp server (post_internal_note is its one write; propose_fix is
+            # closed). This unit is the supervisor, so it follows credential.touch.timer's shape:
+            # NoNewPrivileges omitted and CapabilityBoundingSet narrowed to SETUID/SETGID, because
+            # both the `sudo -u hams_ai_agent` hop and the MCP server's own `sudo -u odoo` hop need a
+            # setuid binary to work. ReadWritePaths: hams_ai_agent's home (the CLI writes session
+            # state there) and the triage repo clones (read_repo runs `git fetch`). The state
+            # directory (lock, daily counters, ledger) is systemd's StateDirectory=.
+            #
+            # Kill switch: ConditionPathExists=! skips the run cleanly while
+            # /opt/hams/etc/ticket_triage.disabled exists, and main.py checks it first as well.
+            # Limits come from EnvironmentFile=-/opt/hams/etc/ticket_triage.env
+            # (HAMS_TRIAGE_MAX_CLI_PER_DAY, _MAX_TICKETS_PER_DAY, _MAX_TICKETS_PER_RUN).
+            #
+            # opt_in: provisioning links this unit but never enables or starts it unless named with
+            # provision.py --enable-opt-in (it spends Claude quota and reads untrusted mail).
+            # Prod-only: the account, wrapper and sudoers grants exist only on hams1.
+            "path": "/opt/hams/systemd/ticket.triage.service",
+            "external_fetch": "calls Anthropic through the Claude Code CLI on every run",
+            "opt_in": "spends Claude Code subscription quota; reads untrusted ticket text",
+            "content": """\
+[Unit]
+Description=Hams.com AI Ticket Triage, Drafts Only (One-Shot)
+After=network.target
+ConditionPathExists=!/opt/hams/etc/ticket_triage.disabled
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction, with the credential.touch.timer exception (no
+# NoNewPrivileges, SETUID/SETGID kept) -- see this entry's own comment above.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+ReadWritePaths=/home/hams_ai_agent -/opt/hams/ai_triage_repo
+StateDirectory=hams-ticket-triage
+StateDirectoryMode=0700
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/ticket_triage_agent
+EnvironmentFile=-/opt/hams/etc/ticket_triage.env
+# Longer than the pre-check (60s) plus the CLI's own hard timeout (600s) and kill grace.
+TimeoutStartSec=900
+
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/ticket_triage_agent/main.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/ticket_triage_agent/main.py
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ticket.triage
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # Cadence: hourly. Production holds a few dozen tickets in total and new ones arrive a
+            # few a week, so a faster timer buys nothing a human reviewer would notice. A run with
+            # no waiting ticket spends no Claude quota (cheap pre-check), so the cost of hourly is
+            # near zero; the hard ceilings are the daily caps in the daemon (12 model calls and
+            # 20 tickets a day by default). Persistent=false: a missed run is simply skipped, never
+            # replayed as a burst after downtime. RandomizedDelaySec spreads the start.
+            "path": "/opt/hams/systemd/ticket.triage.timer",
+            "external_fetch": "activates ticket.triage.service",
+            "opt_in": "activates ticket.triage.service, which spends Claude Code quota",
+            "content": """\
+[Unit]
+Description=Hams.com AI Ticket Triage Hourly (drafts only)
+
+[Timer]
+OnCalendar=hourly
+Persistent=false
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             # night_shift_todo/medium/service-account-creation-and-sudoers-sandboxes-are-
             # untracked-infra-c3a9f714.md: every real file under hams1's /etc/sudoers.d/ was
             # hand-provisioned, with no tracked source anywhere. Confirmed directly on hams1,
@@ -5950,7 +6043,16 @@ export PYTHONPATH=/opt/hams/daemons
 export ODOO_URL=http://127.0.0.1:8069
 export ODOO_DB=hams_prod
 export ODOO_KEY_FILE=/opt/hams/etc/keys/ai_triage_service_internal.key
-exec /usr/bin/python3 /opt/hams/daemons/hams_ticket_triage_mcp/main.py
+# The sudoers grant allows ANY arguments, so this wrapper is what restricts them: no argument is
+# the MCP server (what the model's own session launches); --count-pending is the scheduled
+# agent's cheap "is any ticket waiting" check (no model call). Anything else, notably
+# --enable-propose-fix style switches, is refused. propose_fix is also closed in the server
+# unless HAMS_TRIAGE_ENABLE_PROPOSE_FIX=1, which this wrapper never sets.
+case "$1" in
+    "") exec /usr/bin/python3 /opt/hams/daemons/hams_ticket_triage_mcp/main.py ;;
+    --count-pending) exec /usr/bin/python3 /opt/hams/daemons/hams_ticket_triage_mcp/main.py --count-pending ;;
+    *) echo "run-ticket-triage-mcp.sh: unsupported argument" >&2; exit 2 ;;
+esac
 """,
             "owner": "root:root",
             "mode": "755",

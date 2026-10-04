@@ -4448,6 +4448,76 @@ class ProvisionPlanModeTests(_TmpDirTestCase):
         self.addCleanup(patcher.stop)
 
 
+class TicketTriageTimerUnitTests(unittest.TestCase):
+    """Bruce, 2026-10-04 (NIGHT_PLAN decision 199): the AI ticket-triage agent runs on a timer,
+    drafts only. The unit must be linked but never enabled until the operator opts in, must never
+    run in a test environment, and must carry the kill switch and a state directory."""
+
+    UNITS = ("ticket.triage.service", "ticket.triage.timer")
+
+    def _spec(self, name):
+        for spec in infra.MANIFEST["static_files"]:
+            if os.path.basename(spec["path"]) == name:
+                return spec
+        self.fail(f"{name} missing from the MANIFEST")
+
+    def test_both_units_are_external_fetch_and_opt_in_and_prod_only(self):
+        for name in self.UNITS:
+            spec = self._spec(name)
+            self.assertTrue(spec.get("external_fetch"), name)
+            self.assertTrue(spec.get("opt_in"), name)
+            self.assertEqual(spec["environments"], ["prod"], name)
+        self.assertLessEqual(set(self.UNITS), infra.opt_in_unit_names())
+        self.assertLessEqual(set(self.UNITS), infra.external_fetch_unit_names())
+
+    def test_the_timer_never_replays_missed_runs_and_spreads_its_start(self):
+        text = self._spec("ticket.triage.timer")["content"]
+        self.assertIn("Persistent=false", text)
+        self.assertIn("RandomizedDelaySec=", text)
+        self.assertIn("OnCalendar=hourly", text)
+
+    def test_the_service_has_the_kill_switch_state_directory_and_a_timeout_above_the_cli_ceiling(self):
+        text = self._spec("ticket.triage.service")["content"]
+        self.assertIn("ConditionPathExists=!/opt/hams/etc/ticket_triage.disabled", text)
+        self.assertIn("StateDirectory=hams-ticket-triage", text)
+        timeout = int(re.search(r"^TimeoutStartSec=(\d+)$", text, re.M).group(1))
+        self.assertGreater(timeout, 660)  # pre-check 60s + CLI hard timeout 600s
+        self.assertIn("Type=oneshot", text)
+
+    def test_the_model_is_not_given_a_shell_account_the_unit_is_only_the_supervisor(self):
+        accounts = {a["user"]: a for a in infra.MANIFEST["system_accounts"]}
+        self.assertEqual(accounts["hams_ai_agent"]["shell"], "/usr/sbin/nologin")
+        self.assertIn("ticket.triage.service", infra.SHARED_ODOO_ACCOUNT_UNITS)
+
+    def test_provisioning_links_but_does_not_enable_the_timer_unless_named(self):
+        linked = ["ticket.triage.timer", "stray.odoo.shell.detector.timer"]
+        self.assertEqual(
+            infra._activation_units_to_enable(linked, is_test_env=False),
+            ["stray.odoo.shell.detector.timer"],
+        )
+        self.assertIn(
+            "ticket.triage.timer",
+            infra._activation_units_to_enable(linked, False, opt_in_units=("ticket.triage.timer",)),
+        )
+        self.assertNotIn(
+            "ticket.triage.timer",
+            infra._activation_units_to_enable(linked, True, opt_in_units=("ticket.triage.timer",)),
+        )
+
+    def test_the_smoketest_never_starts_the_service_unless_named_and_never_in_test(self):
+        self.assertNotIn("ticket.triage.service", infra._smoketest_candidate_services(True, False))
+        self.assertNotIn(
+            "ticket.triage.service",
+            infra._smoketest_candidate_services(True, True, opt_in_units=("ticket.triage.service",)),
+        )
+
+    def test_the_mcp_wrapper_refuses_every_argument_but_count_pending(self):
+        text = self._spec("run-ticket-triage-mcp.sh")["content"]
+        self.assertIn("--count-pending)", text)
+        self.assertIn("exit 2", text)
+        self.assertNotIn("export HAMS_TRIAGE_ENABLE_PROPOSE_FIX", text)
+
+
 if __name__ == "__main__":
     unittest.main()
 
