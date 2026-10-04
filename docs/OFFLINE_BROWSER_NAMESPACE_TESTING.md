@@ -238,3 +238,33 @@ reaps Redis and RabbitMQ. A crashed run leaves nothing behind for the next one t
 * A tour that passes when it should not usually means the harness never went offline. The ham_shack
   tour's first step asserts the server is unreachable before anything else, and the offline
   navigation step re-checks it; copy that habit.
+
+## Pitfalls found by the first real end-to-end run (2026-10-03)
+
+`ham_shack`'s offline tour ran end to end for the first time on 2026-10-03 and passed after six
+fixes, none of them in the harness itself (checked with a standalone probe: the gateway refuses and
+accepts connections correctly, and the relay stand-in answers throughout). Anyone writing the next
+offline tour will meet the same walls:
+
+1. **`zero_sudo`'s `tour_failure_dump.js` turns a failed same-origin `fetch()` into a fake
+   `{}` / HTTP 200**, and aborts the test on any XHR network error. Both hide exactly what an offline
+   test creates. Set `sessionStorage.hams_real_network_failures = "1"` in the first page of the test
+   (it survives navigations inside the tab, and is read on every call) to see real failures.
+2. **`zero_sudo`'s patched CDP request filter blocks every loopback port except the test server's.**
+   The relay stand-in on 127.0.0.1:38911 needs `self.extra_allowed_fetch_hosts = ("127.0.0.1:38911",)`
+   on the test case, or the page sees `TypeError: Failed to fetch` for a relay that is up.
+3. **A tour's success signal is `tour succeeded`, not `test successful`.** When driving
+   `odoo.startTour(...)` through `browser._wait_code_ok` yourself, set `browser.success_signal`
+   first, or a passing tour ends as a silent timeout.
+4. **After a navigation, wait for `odoo.isTourReady('<tour>')`** before `odoo.startTour`.
+5. **`TourAutomatic` never removes its `beforeunload` handler**, and after the tour finishes the
+   handler throws, which the watchdog treats as fatal at the next navigation. Wrap
+   `window.addEventListener` for `beforeunload` on the first page (a later capture-phase listener does
+   not run before it at window level; checked in Chrome).
+6. **The cookies bar and onboarding overlays are Bootstrap modals** that appear after load; start the
+   tour with `TourUtils.dismissCookiesBar()`, `bypassDialogs()` and
+   `OnboardingTourUtils.exterminateOverlays()`.
+
+`test.py --offline-isolation -u ham_shack` must be run as the plain user (no `HAMS_ISOLATED_NS`); see
+"Invocation shape matters" above. It provisions the isolated environment first, which takes about
+eight minutes on this box.
