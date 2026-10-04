@@ -59,10 +59,10 @@ network call, so a plan can be compared with the live list before anything is pu
 (`perens.com` and `www.perens.com`, path `^/static/`). It is a file server, not an Odoo; Odoo's filestore is a poor
 home for 1.1 GB of PDFs and video.
 
-**6. DNS and Custom Hostnames.** The `cloudflare` module has no DNS-record model. Zones that are in the
+**6. DNS and Custom Hostnames.** The `cloudflare` module's `cloudflare.dns.record` model is data only: nothing pushes it to Cloudflare. Zones that are in the
 account already point at the tunnel, so nothing needs to change. `edge.routing.domain` creates a real
 Cloudflare Custom Hostname when a record is created for a name that matches a website's domain; it must not be
-used for a zone that is already in the account. A DNS-record model in the `cloudflare` module is future work.
+used for a zone that is already in the account. Giving `cloudflare.dns.record` a push is future work; until then existing records (including `stun.hams.com`, which must stay) are noted in it as data and never changed.
 
 ## Why not separate instances
 
