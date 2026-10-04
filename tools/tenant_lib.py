@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Declarative provisioning of single-purpose Odoo tenant instances (ADR 0105).
+"""Declarative provisioning of single-purpose Odoo tenant instances (retired design, superseded by ADR 0106).
 
 A tenant is a complete, separate Odoo instance for a low-traffic web site that is NOT hams.com
 (perens.com, postopen.org, a parking instance for many parked domains). Each one gets its own

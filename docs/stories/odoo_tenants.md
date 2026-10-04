@@ -3,7 +3,7 @@
 As a **System Administrator**, I want to **create an isolated Odoo instance for a small site from a
 short declarative spec**, so that perens.com, postopen.org and a parking instance can share the
 production machine without any of them being able to reach hams.com's database, Redis, RabbitMQ or
-daemon keys. Design: `docs/proposals/MULTI_TENANT_ODOO.md` (hams_com), ADR 0105. (These tools live under `tools/`, which the anchor
+daemon keys. Design: `docs/proposals/MULTI_TENANT_ODOO.md` (hams_com), ADR 0106 (the separate-instance design it replaced). (These tools live under `tools/`, which the anchor
 linters do not scan, so this story carries no anchors.)
 
 ## Scenario: Writing a spec

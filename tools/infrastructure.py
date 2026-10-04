@@ -1244,7 +1244,7 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
-            # ADR 0105 tenants (hams_shared/tools/tenant_lib.py), odoo_tenants host class only: the
+            # Retired separate tenant instances (hams_shared/tools/tenant_lib.py, ADR 0106), odoo_tenants host class only: the
             # per-tenant odoo.conf directories (each root:t_<name> 0750 once a tenant exists).
             "path": "/etc/hams-tenants",
             "owner": "root:root",
@@ -2969,7 +2969,7 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
-            # ADR 0105: one instance of this template per tenant (hams-tenant@perens_com.service).
+            # ADR 0106 (retired design): one instance of this template per tenant (hams-tenant@perens_com.service).
             # The account, database and limits come from the tenant spec (tenant_lib.py writes the
             # per-tenant drop-in with MemoryMax, CPUQuota, TasksMax and the allowed listening ports).
             # Fetches nothing from third parties on its own (a tenant's own outgoing mail is the
@@ -2977,7 +2977,7 @@ WantedBy=multi-user.target
             "path": "/opt/hams/systemd/hams-tenant@.service",
             "content": """\
 [Unit]
-Description=Odoo tenant instance %i (own user, database, filestore and ports; ADR 0105)
+Description=Odoo tenant instance %i (own user, database, filestore and ports; ADR 0106, retired design)
 After=network.target postgresql.service hams-tenant-firewall.service
 Wants=postgresql.service hams-tenant-firewall.service
 ConditionPathExists=/etc/hams-tenants/%i/odoo.conf
@@ -3035,7 +3035,7 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
-            # ADR 0105 / MULTI_TENANT_ODOO.md section 12a: one instance of this template per site that needs
+            # ADR 0106 / MULTI_TENANT_ODOO.md A3: one instance of this template per site that needs
             # large static files (hams-static@perens_com.service: the 1.1 GB /static/ tree of perens.com).
             # static_site_server.py is a read-only loopback file server; the tunnel sends one path to it.
             # It fetches nothing from anywhere and has no outbound network at all (IPAddressDeny=any
@@ -3043,7 +3043,7 @@ WantedBy=multi-user.target
             "path": "/opt/hams/systemd/hams-static@.service",
             "content": """\
 [Unit]
-Description=Read-only static file server for %i (ADR 0105)
+Description=Read-only static file server for %i (ADR 0106: origin of the /static/ path an Odoo tunnel row routes to it)
 After=network.target
 ConditionPathExists=/etc/hams-static/%i.json
 
@@ -3108,7 +3108,7 @@ WantedBy=multi-user.target
             "path": "/opt/hams/systemd/hams-tenant-firewall.service",
             "content": """\
 [Unit]
-Description=Firewall table for Odoo tenant accounts (ADR 0105)
+Description=Firewall table for Odoo tenant accounts (retired design, superseded by ADR 0106)
 Before=network-online.target
 ConditionPathExists=/etc/hams-tenants/firewall.nft
 
