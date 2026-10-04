@@ -60,8 +60,10 @@ MULTI_TENANT_ODOO.md` (hams_com).
   (`MULTI_TENANT_ODOO.md`, "Upgrades").
 * PostgreSQL's `max_connections` (100, about 45 used) is shared: each tenant's pool and role limit are
   small (`db_maxconn 10`, role limit 14).
-* The `/xmlrpc` and `/jsonrpc` endpoints that `parking_ctl` and `odoo_site_migrate` use are deprecated
-  in Odoo 19 and removed in 20; both tools keep their transport behind one class so a JSON-2 transport
-  can replace it.
+* The `/xmlrpc` and `/jsonrpc` endpoints are deprecated in Odoo 19 (Odoo's own notice says removal in 22).
+  `odoo_site_migrate.Json2Transport` (`POST /json/2/<model>/<method>`, bearer API key) now sits behind the same
+  `call()` interface as `XmlRpcTransport`; `--transport json2` (`parking_ctl`, `tenant_site_harden`) and
+  `--target-transport json2` (`odoo_site_migrate import|lockdown`) select it, and the password file then holds an
+  API key. XML-RPC stays the default and stays the only choice for a source Odoo below 19 (no JSON-2 there).
 * hams_open's `cloudflare` module (Odoo-driven tunnel routes) is not installed in tenants; HTML edge
   caching for tenant sites needs its own small module (to-do) or Cloudflare cache rules.

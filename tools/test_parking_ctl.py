@@ -263,6 +263,31 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn("S3CRET-PASSWORD", " ".join(seen["urls"]))
         self.assertIsNotNone(client)
 
+    def test_connect_over_json2_sends_the_key_as_a_bearer_header(self):
+        import odoo_site_migrate as mig
+
+        path = os.path.join(tempfile.mkdtemp(prefix="parking_json2_"), "key")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("API-KEY-XYZ\n")
+        seen = []
+
+        def post(url, headers, data):
+            seen.append((url, headers, json.loads(data)))
+            if url.endswith("context_get"):
+                return 200, b'{"uid": 5}'
+            return 200, b"[]"
+
+        args = ctl.build_parser().parse_args(["--transport", "json2", "--password-file", path, "report"])
+        with mock.patch.object(mig, "_urllib_http", post):
+            client = ctl.connect(args)
+            self.assertEqual(client.search_read([], ["name"]), [])
+        self.assertEqual(seen[-1][0], "http://127.0.0.1:18110/json/2/parking.domain/search_read")
+        self.assertEqual(seen[-1][1]["Authorization"], "bearer API-KEY-XYZ")
+        self.assertEqual(seen[-1][1]["X-Odoo-Database"], "parking")
+        self.assertEqual(seen[-1][2]["context"], {"active_test": False})
+        self.assertNotIn("API-KEY-XYZ", " ".join(url for url, _h, _b in seen))
+
 
 if __name__ == "__main__":
     unittest.main()
