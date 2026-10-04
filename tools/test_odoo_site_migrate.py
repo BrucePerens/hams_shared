@@ -199,7 +199,7 @@ def build_source():
         "website.page": F(url="char", name="char", view_id="many2one", website_id="many2one", is_published="boolean"),
         "website.menu": F(name="char", url="char", parent_id="many2one", page_id="many2one", website_id="many2one", sequence="integer"),
         "website.rewrite": F(name="char", url_from="char", url_to="char", redirect_type="char", website_id="many2one"),
-        "blog.blog": F(name="char", website_url="char"),
+        "blog.blog": F(name="char", website_url="char", website_id="many2one", active="boolean"),
         "blog.tag": F(name="char"),
         "blog.post": F(name="char", blog_id="many2one", tag_ids="many2many", content="html", is_published="boolean", website_url="char", author_id="many2one"),
         "ir.attachment": F(name="char", type="char", public="boolean", checksum="char", file_size="integer", url="char", mimetype="char",
@@ -267,7 +267,7 @@ def build_target():
         "website.page": F(url="char", name="char", view_id="many2one", website_id="many2one", is_published="boolean"),
         "website.menu": F(name="char", url="char", parent_id="many2one", page_id="many2one", website_id="many2one", sequence="integer"),
         "website.rewrite": F(name="char", url_from="char", url_to="char", redirect_type="char", website_id="many2one"),
-        "blog.blog": F(name="char", website_url="char"),
+        "blog.blog": F(name="char", website_url="char", website_id="many2one", active="boolean"),
         "blog.tag": F(name="char"),
         "blog.post": F(name="char", blog_id="many2one", tag_ids="many2many", content="html", is_published="boolean", website_url="char", author_id="many2one"),
         "ir.attachment": F(name="char", type="char", public="boolean", checksum="char", url="char", mimetype="char",
@@ -282,7 +282,7 @@ def build_target():
         "ir.ui.view": [{"id": 1, "name": "Homepage generic", "key": "website.homepage", "website_id": False, "type": "qweb",
                         "active": True, "arch_db": "<t>generic</t>"}],
         "website.page": [], "website.menu": [{"id": 1, "name": "Default Top", "url": "/", "website_id": 1}],
-        "website.rewrite": [], "blog.blog": [{"id": 1, "name": "Placeholder", "website_url": "/blog/placeholder-1"}],
+        "website.rewrite": [], "blog.blog": [{"id": 1, "name": "Placeholder", "website_url": "/blog/placeholder-1", "website_id": 1, "active": True}],
         "blog.tag": [], "blog.post": [], "ir.attachment": [], "res.partner": [{"id": 3, "name": "Bruce"}],
     }
     return FakeOdoo([19, 0, 0, "final", 0, ""], models, fields)
@@ -504,6 +504,25 @@ class ImportTests(_Base):
 
     def creates(self, target):
         return [(m, c) for m, c in target.log if c in ("create", "write")]
+
+    def test_archiving_extra_blogs_never_touches_another_website_or_a_shared_blog(self):
+        # ADR 0106: the target database also serves the main site; its blogs, and blogs shared by every
+        # website (no website), are not the import's to archive.
+        target = build_target()
+        target.rows["blog.blog"] += [
+            {"id": 2, "name": "Other site blog", "website_url": "/blog/o-2", "website_id": 2, "active": True},
+            {"id": 3, "name": "Shared blog", "website_url": "/blog/s-3", "website_id": False, "active": True},
+        ]
+        importer = mig.Importer(self.out, target, apply=True, source_domains=["old.example"], log=lambda m: None,
+                                archive_extra_blogs=True)
+        importer.run()
+        by_name = {row["name"]: row for row in target.rows["blog.blog"]}
+        self.assertFalse(by_name["Placeholder"]["active"])  # the target website's own extra blog
+        self.assertTrue(by_name["Other site blog"]["active"])
+        self.assertTrue(by_name["Shared blog"]["active"])
+        warnings = " ".join(importer.report["warnings"])
+        self.assertNotIn("Other site blog", warnings)
+        self.assertNotIn("Shared blog", warnings)
 
     def test_dry_run_writes_nothing(self):
         importer, target = self.importer(apply=False)

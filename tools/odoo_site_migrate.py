@@ -1510,7 +1510,11 @@ class Importer:
         """Blogs the target had before (Odoo creates "Our blog") and the source does not have. They show
         on /blog next to the imported ones; --archive-extra-blogs archives them (reversible, nothing deleted)."""
         kept = {v for v in self.idmap.get("blog.blog", {}).values() if v > 0}
-        rows = self.target.call("blog.blog", "search_read", [[]], {"fields": ["name"]})
+        # Only blogs that belong to the target website itself. On a database that serves other websites
+        # (ADR 0106: hams_prod) a blog of another website, or one shared by all websites, is not this
+        # import's to report, and above all not its to archive.
+        websites = sorted({m for m in self.idmap.get("website", {}).values() if m})
+        rows = self.target.call("blog.blog", "search_read", [[("website_id", "in", websites)]], {"fields": ["name"]})
         for row in rows:
             if row["id"] in kept:
                 continue
