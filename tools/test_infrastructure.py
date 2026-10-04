@@ -3898,14 +3898,6 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
         # The same parser must see the existing dedicated-account units, or the two checks
         # above could pass on a parser that finds nothing.
         self.assertIn(
-            "localhost.cert.renewal.service",
-            infra.systemd_units_running_as(infra.MANIFEST, "localhost_cert"),
-        )
-        self.assertNotIn(
-            "localhost.cert.renewal.service",
-            infra.systemd_units_running_as(infra.MANIFEST, "odoo"),
-        )
-        self.assertIn(
             "ncvec.sync.service",
             infra.systemd_units_running_as(infra.MANIFEST, "hamsd_ncvec_sync"),
         )

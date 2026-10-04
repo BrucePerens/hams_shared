@@ -1,7 +1,7 @@
 # ADR 0100: A Shared `localhost.hams.com` Certificate, With Its Private Key On Every Relay
 
 ## Status
-Accepted
+**Reversed 2026-10-04 by [ADR 0108](0108_relay_certificates_self_signed_or_relay_ca_only.md)**: the shared certificate, its renewal daemon and its route are removed. Kept below as the record of the earlier decision.
 
 ## Context
 

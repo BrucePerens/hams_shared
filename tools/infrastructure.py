@@ -935,7 +935,7 @@ def hook_migrate_relay_signing_key(env_vars, dest_dir, path, run_cmd_func):
 # 0600 key file under /opt/hams/etc/keys/, but every one of those files is owned by `odoo`, so any
 # daemon running as `odoo` can read every other daemon's credential: the per-daemon keys give no
 # isolation between these units. The units that already run under their own account
-# (localhost_cert, hams_subcarrier_signer, hams_device_command_signer, hams_relay_signer,
+# (hams_subcarrier_signer, hams_device_command_signer, hams_relay_signer,
 # hams_relay_ca, pdns, hams-auth) are the pattern a fix would extend.
 #
 # Bruce decided (2026-10-03, NIGHT_PLAN decision 86): a dedicated OS account per daemon family, fleet-wide,
@@ -982,7 +982,6 @@ SHARED_ODOO_ACCOUNT_UNITS = frozenset({
     "pota.sync.service",
     "qrz.scraper.service",
     "rac.events.sync.service",
-    "relay.cert.renew.service",
     "ses.inbound.mail.ingest.service",
     "sm3cer.contest.sync.service",
     "sota.sync.service",
@@ -1044,17 +1043,6 @@ MANIFEST = {
             "group": "hams_com",
             "home": "/opt/hams",
             "shell": "/bin/bash",
-            "add_to_users": ["odoo"],
-            "environments": ["prod", "test"],
-        },
-        {
-            # daemons/localhost_cert_renewal (ADR 0100): the dedicated account that owns the
-            # shared localhost.hams.com certificate's private key. odoo joins its group so the
-            # relay-bridge endpoint can read the served copy (files are 0640); nothing else can.
-            "user": "localhost_cert",
-            "group": "localhost_cert",
-            "home": "/opt/hams/etc/localhost_cert_renewal",
-            "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
             "environments": ["prod", "test"],
         },
@@ -1202,21 +1190,13 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
-            "path": "/opt/hams/etc/relay_cert_renew",
-            "owner": "odoo:odoo",
-            "provision_mode": "700",
-            "runtime_mount": "rw",
-            "environments": ["prod", "test"],
-        },
-        {
             # backup_management/daemon/main.py's _run_pgbackrest_via_sidecar():
             # the backup worker daemon's own unit (NoNewPrivileges=true, ProtectSystem=strict)
             # cannot perform a real pgbackrest backup itself -- PostgreSQL's own
             # data directory is 0700 postgres:postgres. This spool directory is
             # how it hands that one operation off to hams-pgbackrest-backup's
             # privileged, unsandboxed sidecar instead of granting itself
-            # standing root/postgres filesystem access. odoo:odoo 700, same
-            # shape as relay_cert_renew above: the sidecar runs as root before
+            # standing root/postgres filesystem access. odoo:odoo 700: the sidecar runs as root before
             # its own internal `runuser -u postgres`, so it can read this
             # directory regardless of its mode: root is not bound by
             # permission bits.
@@ -1245,15 +1225,6 @@ MANIFEST = {
             "runtime_mount": "rw",
             "host_class": "b2_backup",
             "environments": ["prod"],
-        },
-        {
-            "path": "/opt/hams/etc/localhost_cert_renewal",
-            "owner": "localhost_cert:localhost_cert",
-            "provision_mode": "750",
-            # The renewal daemon runs on the host as localhost_cert; the Odoo tier only reads the
-            # served copy (ham_relay_bridge's shared_tls_cert_bundle route), so it never needs rw.
-            "runtime_mount": "ro",
-            "environments": ["prod", "test"],
         },
         {
             # hams_com daemons/subcarrier_signer: the private Ed25519 key, 0700, owned by the
@@ -1689,7 +1660,7 @@ MANIFEST = {
             # hams_ai_agent's home directory -- see this MANIFEST's own "system_accounts" entry
             # for the account itself. `provision_system_accounts()`'s `useradd` call deliberately
             # never passes `-m` (matches the existing convention for every other account here,
-            # e.g. hams_com/localhost_cert above, which also get their home directories from a
+            # e.g. hams_com, which also gets their home directories from a
             # "directories" entry rather than from useradd itself), so without this entry
             # re-running provisioning against a fresh host would create the account but never its
             # home directory. Mode and ownership confirmed directly on hams1, 2026-10-02
@@ -2790,8 +2761,7 @@ EnvironmentFile=-/opt/hams/etc/odoo.env
 # ses-inbound-mail-ingest-service IAM user (S3 read/delete/tag on
 # incoming/*, write on processed/*+failed/*, scoped to
 # hams-com-inbound-mail only -- see docs/proposals/EMAIL_SEND_RECEIVE.md).
-# One-time provisioning, same convention as localhost_cert_renewal's
-# cloudflare.ini: a person places this file, the daemon never touches it.
+# One-time provisioning: a person places this file, the daemon never touches it.
 EnvironmentFile=-/opt/hams/etc/aws.env
 Environment="ODOO_USER=mail_ingest_service_internal"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/mail_ingest_service_internal.key"
@@ -2822,135 +2792,6 @@ Description=Poll SES Inbound Mail Every 2 Minutes
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=2min
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-""",
-            "owner": "root:root",
-            "mode": "644",
-            "environments": ["prod", "test"],
-        },
-        {
-            "path": "/opt/hams/systemd/relay.cert.renew.service",
-            "external_fetch": "renews a certificate with a public ACME CA and a DNS provider API",
-            "content": """\
-[Unit]
-Description=Relay Wildcard TLS Cert Renewal Service
-After=network.target
-
-[Service]
-# ADR-0070 OS-Level Daemon Restriction
-ProtectSystem=strict
-ProtectHome=read-only
-PrivateTmp=true
-PrivateDevices=true
-NoNewPrivileges=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/etc/relay_cert_renew
-Type=oneshot
-User=odoo
-WorkingDirectory=/opt/hams/daemons/relay_cert_renew
-
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
-Environment="ODOO_USER=relay_cert_renew_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/relay_cert_renew_service_internal.key"
-Environment="PYTHONPATH=/opt/hams/daemons"
-Environment="DAEMON_ARGS="
-
-# Smoketest Resource Verification
-ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_cert_renew/main.py --start-test
-
-# Execution via system Python
-ExecStart=/usr/bin/python3 /opt/hams/daemons/relay_cert_renew/main.py $DAEMON_ARGS
-
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=relay.cert.renew
-""",
-            "owner": "root:root",
-            "mode": "644",
-            "environments": ["prod", "test"],
-        },
-        {
-            "path": "/opt/hams/systemd/relay.cert.renew.timer",
-            "external_fetch": "activates relay.cert.renew.service",
-            "content": """\
-[Unit]
-Description=Check Relay Wildcard Cert For Renewal Twice Daily
-
-[Timer]
-OnCalendar=*-*-* 03,15:00:00
-RandomizedDelaySec=30m
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-""",
-            "owner": "root:root",
-            "mode": "644",
-            "environments": ["prod", "test"],
-        },
-        {
-            "path": "/opt/hams/systemd/localhost.cert.renewal.service",
-            "external_fetch": "renews a certificate with a public ACME CA and a DNS provider API",
-            "content": """\
-[Unit]
-Description=Shared localhost.hams.com TLS Certificate Renewal (ADR 0100)
-After=network.target
-
-[Service]
-# ADR-0070 OS-Level Daemon Restriction
-ProtectSystem=strict
-ProtectHome=read-only
-PrivateTmp=true
-PrivateDevices=true
-NoNewPrivileges=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/etc/localhost_cert_renewal
-Type=oneshot
-# A dedicated account owns the shared certificate's private key (ADR-0095 credential locality);
-# hams_com is only for traversing /opt/hams to reach the daemon code and its own directory.
-User=localhost_cert
-Group=localhost_cert
-SupplementaryGroups=hams_com
-WorkingDirectory=/opt/hams/daemons/localhost_cert_renewal
-UMask=0027
-
-Environment="LOCALHOST_CERT_BASE_DIR=/opt/hams/etc/localhost_cert_renewal"
-
-# Smoketest Resource Verification
-ExecStartPre=/usr/bin/python3 /opt/hams/daemons/localhost_cert_renewal/main.py --start-test
-
-# A nonzero exit (failed or backing-off renewal, or 14 days or fewer left) fails this unit, which
-# the pager_duty "Systemd Failed Services Tracker" check turns into an operator alert.
-ExecStart=/usr/bin/python3 /opt/hams/daemons/localhost_cert_renewal/main.py
-
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=localhost.cert.renewal
-""",
-            "owner": "root:root",
-            "mode": "644",
-            "environments": ["prod", "test"],
-        },
-        {
-            "path": "/opt/hams/systemd/localhost.cert.renewal.timer",
-            "external_fetch": "activates localhost.cert.renewal.service",
-            "content": """\
-[Unit]
-Description=Check The Shared localhost.hams.com Certificate For Renewal Daily
-
-[Timer]
-OnCalendar=*-*-* 04:00:00
-RandomizedDelaySec=2h
 Persistent=true
 
 [Install]
