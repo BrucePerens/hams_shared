@@ -3818,9 +3818,11 @@ def check_service_account_group_hygiene(root_node):
     return errors
 
 
-_DAEMON_KEY_FILE_RE = re.compile(r"ODOO_KEY_FILE=(/opt/hams/etc/keys/[a-zA-Z0-9_.-]+\.key)")
+# The optional `<family>/` directory is the per-family key directory (odoo:hamsd_<family> 0750, NIGHT_PLAN 226). A pattern
+# that stopped at the first slash would silently drop every family-directory key from the check.
+_DAEMON_KEY_FILE_RE = re.compile(r"ODOO_KEY_FILE=(/opt/hams/etc/keys/(?:[a-zA-Z0-9_.-]+/)?[a-zA-Z0-9_.-]+\.key)")
 _DAEMONS_TO_REGISTER_RE = re.compile(r"daemons_to_register\s*=\s*\[(.*?)\n\s*\]", re.DOTALL)
-_KEY_TUPLE_PATH_RE = re.compile(r'"(/opt/hams/etc/keys/[a-zA-Z0-9_.-]+\.key)"')
+_KEY_TUPLE_PATH_RE = re.compile(r'"(/opt/hams/etc/keys/(?:[a-zA-Z0-9_.-]+/)?[a-zA-Z0-9_.-]+\.key)"')
 
 
 def check_daemon_key_registration(target_dir):
