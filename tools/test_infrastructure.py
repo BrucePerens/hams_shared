@@ -4528,7 +4528,9 @@ class TicketTriageTimerUnitTests(unittest.TestCase):
     drafts only. The unit must be linked but never enabled until the operator opts in, must never
     run in a test environment, and must carry the kill switch and a state directory."""
 
-    UNITS = ("ticket.triage.service", "ticket.triage.timer")
+    UNITS = (
+        "ticket.triage.service", "ticket.triage.timer", "ticket.triage.path", "ticket.triage.event.service",
+    )
 
     def _spec(self, name):
         for spec in infra.MANIFEST["static_files"]:
@@ -4549,7 +4551,10 @@ class TicketTriageTimerUnitTests(unittest.TestCase):
         text = self._spec("ticket.triage.timer")["content"]
         self.assertIn("Persistent=false", text)
         self.assertIn("RandomizedDelaySec=", text)
-        self.assertIn("OnCalendar=hourly", text)
+        # The timer is only the FALLBACK since triage became event-driven (NIGHT_PLAN decision 222):
+        # every few hours, not hourly.
+        self.assertIn("OnCalendar=*-*-* 00/4:07:00", text)
+        self.assertNotIn("OnCalendar=hourly", text)
 
     def test_the_service_has_the_kill_switch_state_directory_and_a_timeout_above_the_cli_ceiling(self):
         text = self._spec("ticket.triage.service")["content"]
@@ -4558,6 +4563,72 @@ class TicketTriageTimerUnitTests(unittest.TestCase):
         timeout = int(re.search(r"^TimeoutStartSec=(\d+)$", text, re.M).group(1))
         self.assertGreater(timeout, 660)  # pre-check 60s + CLI hard timeout 600s
         self.assertIn("Type=oneshot", text)
+
+    def test_the_path_unit_watches_the_spool_hams_helpdesk_writes_and_starts_the_event_service(self):
+        text = self._spec("ticket.triage.path")["content"]
+        self.assertIn("PathExistsGlob=/opt/hams/spool/ticket_triage/ticket-*.json", text)
+        self.assertIn("Unit=ticket.triage.event.service", text)
+        self.assertIn("WantedBy=paths.target", text)
+        self.assertIn("TriggerLimitBurst=", text)
+
+    def test_the_spool_directory_is_odoo_owned_private_and_prod_only(self):
+        entries = [e for e in infra.MANIFEST["directories"] if e["path"] == "/opt/hams/spool/ticket_triage"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["owner"], "odoo:odoo")
+        self.assertEqual(entries[0]["provision_mode"], "700")
+        self.assertEqual(entries[0]["environments"], ["prod"])
+
+    def test_the_event_service_consumes_before_anything_can_skip_or_fail_it(self):
+        text = self._spec("ticket.triage.event.service")["content"]
+        self.assertIn("ExecStart=/usr/bin/python3 /opt/hams/daemons/ticket_triage_agent/main.py --event", text)
+        # A skipped or failed start would leave the wake-up files, and the path unit would re-fire
+        # until its trigger limit: the kill switch lives in main.py, which deletes the files first.
+        self.assertNotIn("ConditionPathExists", text)
+        self.assertNotIn("ExecStartPre", text)
+        self.assertIn("ReadWritePaths=/home/hams_ai_agent -/opt/hams/ai_triage_repo /opt/hams/spool/ticket_triage", text)
+        self.assertIn("HAMS_TRIAGE_SPOOL_DIR=/opt/hams/spool/ticket_triage", text)
+        self.assertIn("StateDirectory=hams-ticket-triage", text)  # the same lock and counters as the timer path
+        self.assertIn("Type=oneshot", text)
+        timeout = int(re.search(r"^TimeoutStartSec=(\d+)$", text, re.M).group(1))
+        self.assertGreaterEqual(timeout, 120 + 700 + 60 + 600)  # debounce + lock wait + pre-check + CLI
+
+    def test_the_event_service_has_the_same_sandbox_as_the_timer_service_apart_from_its_spool_path(self):
+        def sandbox(name):
+            text = self._spec(name)["content"]
+            keep = ("ProtectSystem=", "ProtectHome=", "PrivateTmp=", "PrivateDevices=", "RestrictAddressFamilies=",
+                    "CapabilityBoundingSet=", "User=", "StateDirectory=", "WorkingDirectory=")
+            return {line for line in text.splitlines() if line.startswith(keep)}
+        self.assertEqual(sandbox("ticket.triage.service"), sandbox("ticket.triage.event.service"))
+        directives = [
+            line for line in self._spec("ticket.triage.event.service")["content"].splitlines()
+            if not line.startswith("#")
+        ]
+        self.assertFalse([line for line in directives if line.startswith("NoNewPrivileges")])
+
+    def test_the_event_service_is_on_the_shared_odoo_account_ratchet(self):
+        self.assertIn("ticket.triage.event.service", infra.SHARED_ODOO_ACCOUNT_UNITS)
+
+    def test_provisioning_links_but_does_not_enable_the_path_unit_unless_named_and_never_in_test(self):
+        linked = ["ticket.triage.path", "ticket.triage.timer", "stray.odoo.shell.detector.timer"]
+        self.assertEqual(
+            infra._activation_units_to_enable(linked, is_test_env=False), ["stray.odoo.shell.detector.timer"],
+        )
+        self.assertIn(
+            "ticket.triage.path",
+            infra._activation_units_to_enable(linked, False, opt_in_units=("ticket.triage.path",)),
+        )
+        self.assertNotIn(
+            "ticket.triage.path",
+            infra._activation_units_to_enable(linked, True, opt_in_units=("ticket.triage.path",)),
+        )
+        for name in ("ticket.triage.event.service", "ticket.triage.path"):
+            self.assertIn(name, infra.opt_in_unit_names())
+            self.assertIn(name, infra.external_fetch_unit_names())
+        self.assertNotIn("ticket.triage.event.service", infra._smoketest_candidate_services(True, False))
+        self.assertNotIn(
+            "ticket.triage.event.service",
+            infra._smoketest_candidate_services(True, True, opt_in_units=("ticket.triage.event.service",)),
+        )
 
     def test_the_model_is_not_given_a_shell_account_the_unit_is_only_the_supervisor(self):
         accounts = {a["user"]: a for a in infra.MANIFEST["system_accounts"]}
