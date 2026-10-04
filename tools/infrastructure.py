@@ -2372,7 +2372,9 @@ WantedBy=timers.target
   "paths": [
     {{"name": "filestore_hams_prod", "path": "/var/lib/odoo/.local/share/Odoo/filestore/hams_prod",
      "content_addressed": true}},
-    {{"name": "etc", "path": "/opt/hams/etc", "exclude": ["b2_backup/b2_backup.env"]}}
+    {{"name": "etc", "path": "/opt/hams/etc", "exclude": ["b2_backup/b2_backup.env"]}},
+    {{"name": "tenant_archives", "path": "/opt/hams/backups/tenants", "optional": true}},
+    {{"name": "static_perens_com", "path": "/var/lib/hams-static/perens_com/static", "optional": true}}
   ],
   "tenant_spec_dir": "/opt/hams/etc/tenants.d",
   "tenant_data_root": "/var/lib/hams-tenants",

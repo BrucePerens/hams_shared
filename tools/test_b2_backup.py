@@ -140,6 +140,23 @@ class ConfigAndArgumentTests(_Env):
         with self.assertRaises(bb.ConfigError):
             bb.build_sources(cfg)
 
+    def test_optional_path_sources_are_skipped_when_absent_and_required_ones_are_not(self):
+        os.makedirs(self.t("archives"))
+        paths = [{"name": "archives", "path": self.t("archives"), "optional": True},
+                 {"name": "static", "path": self.t("no-such-static"), "optional": True},
+                 {"name": "etc", "path": self.t("no-such-etc")}]
+        cfg = bb.load_config(self.config(paths=paths))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            names = [s.name for s in bb.build_sources(cfg)]
+        self.assertEqual(names, ["archives", "etc"], "an absent optional source is skipped, a required one is kept")
+        self.assertIn("optional source static skipped", err.getvalue())
+        self.assertNotIn("optional source archives", err.getvalue())
+        # The kept, required, absent source still fails its own snapshot instead of vanishing from the night's run.
+        required = [s for s in bb.build_sources(cfg) if s.name == "etc"][0]
+        with self.assertRaises(bb.BackupError):
+            bb.snapshot_source(cfg, {}, required, bb.Runner())
+
     def test_no_tenant_directory_means_no_tenants(self):
         self.assertEqual(bb.discover_tenants(bb.load_config(self.config())), [])
 
