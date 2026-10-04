@@ -978,7 +978,8 @@ class Importer:
                  archive_extra_blogs=False):
         self.dir, self.target, self.apply = export_dir, target, apply
         self.domains = [d.lower() for d in source_domains]
-        self.website_map = dict(website_map or {})
+        # Target ids are integers: the command line hands them over as text, and a text id is a missing record.
+        self.website_map = {str(source): int(target) for source, target in dict(website_map or {}).items()}
         self.log = log
         self.forms_notice = forms_notice  # None keeps website forms as they are
         self.skip_menu_urls = tuple(skip_menu_urls)
@@ -1176,6 +1177,12 @@ class Importer:
         if str(source_id) in self.website_map:
             return self.website_map[str(source_id)]
         return self.mapped("website", source_id)
+
+    def sole_target_website(self):
+        """The one target website of an import that has a single source website (--website-map or the id
+        remembered for it), else False."""
+        candidates = {v for v in self.website_map.values()} | {v for v in self.idmap.get("website", {}).values() if v}
+        return next(iter(candidates)) if len(candidates) == 1 else False
 
     def import_websites(self):
         sites = self.data["website"]
@@ -1477,9 +1484,18 @@ class Importer:
         if not self.has_model("blog.post"):
             self.report["warnings"].append("source has blog content but the target has no blog module (install website_blog)")
             return
+        scoped = "website_id" in self.fields("blog.blog")
         for blog in self.data["blog.blog"]:
             values = self.clean("blog.blog", blog)
-            self.create_or_match("blog.blog", blog["id"], [("name", "=", blog["name"])], values, update=True)
+            match = [("name", "=", blog["name"])]
+            if scoped:
+                # A blog with no website shows on EVERY website of the target (ADR 0106: hams.com's own /blog
+                # would list another site's posts), and a blog of the same name on another website is not
+                # this one: a blog belongs to the target website it is imported for.
+                website = self.target_website_for(blog.get("website_id")) or self.sole_target_website()
+                values["website_id"] = website
+                match.append(("website_id", "=", website))
+            self.create_or_match("blog.blog", blog["id"], match, values, update=True)
         if self.has_model("blog.tag.category"):
             for category in self.data["blog.tag.category"]:
                 values = self.clean("blog.tag.category", category)
@@ -1510,7 +1526,11 @@ class Importer:
         """Blogs the target had before (Odoo creates "Our blog") and the source does not have. They show
         on /blog next to the imported ones; --archive-extra-blogs archives them (reversible, nothing deleted)."""
         kept = {v for v in self.idmap.get("blog.blog", {}).values() if v > 0}
-        rows = self.target.call("blog.blog", "search_read", [[]], {"fields": ["name"]})
+        # Only blogs that belong to the target website itself. On a database that serves other websites
+        # (ADR 0106: hams_prod) a blog of another website, or one shared by all websites, is not this
+        # import's to report, and above all not its to archive.
+        websites = sorted({m for m in self.idmap.get("website", {}).values() if m})
+        rows = self.target.call("blog.blog", "search_read", [[("website_id", "in", websites)]], {"fields": ["name"]})
         for row in rows:
             if row["id"] in kept:
                 continue
