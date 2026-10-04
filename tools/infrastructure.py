@@ -1243,6 +1243,36 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # Key directory of the ncvec_sync family (daemons/ncvec_sync, hamsd_ncvec_sync): owned by odoo, group = the one account that
+            # consumes the keys in it, 0750 (Bruce, NIGHT_PLAN 226). odoo writes; the group may traverse and
+            # read; nobody else may enter. The group is a group odoo is a member of: the account entry above
+            # lists odoo in add_to_users, so provision.py adds odoo as a supplementary member of the group
+            # (an unprivileged process may chgrp to a group it belongs to, and may not chown to another
+            # user). The membership takes effect only after odoo.service and hams.daemon.keys.service
+            # restart. daemon_key_manager re-asserts this owner, group and mode on every key write
+            # (KEY_GROUP_DIR_MODE in its models/key_registry.py); this entry creates the directory first.
+            "path": "/opt/hams/etc/keys/ncvec_sync",
+            "owner": "odoo:hamsd_ncvec_sync",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the club_crawl family (daemons/club_crawl, hamsd_club_crawl): owned by odoo, group = the one account that
+            # consumes the keys in it, 0750 (Bruce, NIGHT_PLAN 226). odoo writes; the group may traverse and
+            # read; nobody else may enter. The group is a group odoo is a member of: the account entry above
+            # lists odoo in add_to_users, so provision.py adds odoo as a supplementary member of the group
+            # (an unprivileged process may chgrp to a group it belongs to, and may not chown to another
+            # user). The membership takes effect only after odoo.service and hams.daemon.keys.service
+            # restart. daemon_key_manager re-asserts this owner, group and mode on every key write
+            # (KEY_GROUP_DIR_MODE in its models/key_registry.py); this entry creates the directory first.
+            "path": "/opt/hams/etc/keys/club_crawl",
+            "owner": "odoo:hamsd_club_crawl",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
             # backup_management/daemon/main.py's _run_pgbackrest_via_sidecar():
             # the backup worker daemon's own unit (NoNewPrivileges=true, ProtectSystem=strict)
             # cannot perform a real pgbackrest backup itself -- PostgreSQL's own
@@ -4815,7 +4845,7 @@ WorkingDirectory=/opt/hams/daemons/ncvec_sync
 EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=ncvec_sync_service_internal"
 Environment="HAMS_NCVEC_DATA_DIR=/opt/hams/spool/ncvec"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/ncvec_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/ncvec_sync/ncvec_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -6105,7 +6135,7 @@ TimeoutStartSec=2h
 # db.env or odoo.env is used, so none is loaded.
 EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=club_crawl_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/club_crawl_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/club_crawl/club_crawl_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS=--max-sites=30 --max-sites-per-day=300 --max-model-calls-per-run=60 --max-model-calls-per-day=400"
 
