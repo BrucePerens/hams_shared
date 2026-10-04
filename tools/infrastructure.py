@@ -929,6 +929,7 @@ SHARED_ODOO_ACCOUNT_UNITS = frozenset({
     "callbook.dns.export.service",
     "callbook.dns.rrl.service",
     "callbook.geo.enrich.service",
+    "club.web.search.discovery.service",
     "code.review.sweep.service",
     "credential.touch.timer.service",
     "de.bnetza.sync.service",
@@ -4843,6 +4844,73 @@ Description=Hams.com Code Review Sweep Quarterly (incremental mode)
 OnCalendar=quarterly
 Persistent=true
 RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/club.web.search.discovery.service",
+            "external_fetch": "asks a paid third-party search-grounded LLM API about ham clubs, then fetches each new club's homepage once",
+            # Paid per grounded request (Gemini API with Google Search grounding): never enabled or
+            # started by provisioning unless named with provision.py --enable-opt-in.
+            "opt_in": "calls the paid Gemini API with Google Search grounding",
+            "content": """\
+[Unit]
+Description=Hams.com Club Web-Search Discovery -- grounded search for ham radio clubs (One-Shot)
+After=network.target
+
+[Service]
+# docs/proposals/WEB_SEARCH_CLUB_DISCOVERY.md. Costs real money on every run (one grounded Gemini
+# request covers several regions; the daemon enforces a per-run, a per-day request and a per-day
+# search-query cap against a ledger kept in Odoo). It only ever stages CANDIDATES for an
+# administrator to review; it never creates a club. Needs no write path: nothing is kept on disk.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/club_web_search_discovery
+TimeoutStartSec=1h
+
+EnvironmentFile=-/opt/hams/etc/core.env
+EnvironmentFile=-/opt/hams/etc/db.env
+EnvironmentFile=-/opt/hams/etc/odoo.env
+Environment="ODOO_USER=club_web_search_discovery_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/club_web_search_discovery_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS=--max-requests-per-run=5 --max-requests-per-day=20 --max-queries-per-day=300"
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/club_web_search_discovery/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=club.web.search.discovery
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/club.web.search.discovery.timer",
+            "external_fetch": "activates club.web.search.discovery.service",
+            "opt_in": "calls the paid Gemini API with Google Search grounding",
+            "content": """\
+[Unit]
+Description=Hams.com Club Web-Search Discovery (daily; a run with no region due spends nothing)
+
+[Timer]
+OnCalendar=daily
+Persistent=false
+RandomizedDelaySec=2h
 
 [Install]
 WantedBy=timers.target
