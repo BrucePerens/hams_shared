@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""tenant_ctl: the coordinator's tool for Odoo tenant instances (ADR 0105).
+"""tenant_ctl: the coordinator's tool for Odoo tenant instances (retired design, superseded by ADR 0106).
 
     tenant_ctl.py validate SPEC...               check specs and the whole fleet, change nothing
     tenant_ctl.py list                           tenants that exist, with unit state

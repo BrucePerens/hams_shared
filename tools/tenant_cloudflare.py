@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Cloudflare ingress and DNS planning for Odoo tenants (ADR 0105, MULTI_TENANT_ODOO.md section 6).
+"""Cloudflare ingress and DNS planning for Odoo tenants (retired design, superseded by ADR 0106).
 
 Two kinds of use:
 
