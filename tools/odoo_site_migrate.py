@@ -978,7 +978,8 @@ class Importer:
                  archive_extra_blogs=False):
         self.dir, self.target, self.apply = export_dir, target, apply
         self.domains = [d.lower() for d in source_domains]
-        self.website_map = dict(website_map or {})
+        # Target ids are integers: the command line hands them over as text, and a text id is a missing record.
+        self.website_map = {str(source): int(target) for source, target in dict(website_map or {}).items()}
         self.log = log
         self.forms_notice = forms_notice  # None keeps website forms as they are
         self.skip_menu_urls = tuple(skip_menu_urls)

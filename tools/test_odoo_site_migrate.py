@@ -524,6 +524,10 @@ class ImportTests(_Base):
         self.assertNotIn("Other site blog", warnings)
         self.assertNotIn("Shared blog", warnings)
 
+    def test_website_map_ids_from_the_command_line_are_integers(self):
+        importer = mig.Importer(self.out, build_target(), apply=False, website_map={"1": "7"}, log=lambda m: None)
+        self.assertEqual(importer.website_map, {"1": 7})
+
     def test_dry_run_writes_nothing(self):
         importer, target = self.importer(apply=False)
         report = importer.run()
