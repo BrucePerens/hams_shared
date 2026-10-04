@@ -3269,6 +3269,7 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "gdpr.csv.export.service": "local HTTP export server",
         "hamcall.idx.sync.service": "reads a licensed file already on disk; no timer",
         "hams-auth-gateway.service": "local server",
+        "shack-console.service": "local static server on 127.0.0.1; serves embedded files, fetches nothing",
         "hams-device-command-signer.service": "local signing socket",
         "hams-pgbackrest-backup.path": "fires only on a spool file a configured backup job writes",
         "hams-pgbackrest-backup.service": "runs only for a configured backup job",

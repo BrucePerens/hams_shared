@@ -626,6 +626,9 @@ RUST_DAEMON_CRATES = [
     # client certificates over TLS 1.2, TCP 443). See its README and hams_com
     # docs/deploy/LOTW_CA_CHAIN.md section 7.
     "hams_auth_gateway",
+    # hams_com daemons/shack_console: builds the library and `shack_console_server`, the loopback static server
+    # for https://hams.com/console (unit shack-console.service).
+    "shack_console",
 ]
 
 
@@ -5343,6 +5346,75 @@ ReadOnlyPaths=/etc/hams/auth
 UMask=0077
 
 # Limits (the daemon has its own per-source and total connection limits too).
+LimitNOFILE=4096
+TasksMax=256
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # hams_com daemons/shack_console: the shack console's static server for https://hams.com/console
+            # (the Cloudflare tunnel route `^/console(/|$)` -> http://localhost:8767, prepared in ham_base's
+            # data and pushed by Bruce from the Odoo tunnel form). Text identical to hams_com
+            # daemons/shack_console/packaging/shack-console.service (hams_com's
+            # daemons/test_daemon_provisioning_coverage.py fails if the two drift). Like every .service here it
+            # is only linked into /etc/systemd/system, never enabled. It binds 127.0.0.1 in the code we ship (no
+            # setting can change that), takes no secrets, and fetches nothing, so it is not external_fetch.
+            "path": "/opt/hams/systemd/shack-console.service",
+            "content": """\
+# systemd unit for shack_console_server (https://hams.com/console, through the Cloudflare tunnel). Provisioned by
+# hams_shared/tools/infrastructure.py's MANIFEST as /opt/hams/systemd/shack-console.service;
+# daemons/shack_console/packaging/shack-console.service in hams_com must stay identical
+# (daemons/test_daemon_provisioning_coverage.py). Linked, never enabled by provisioning.
+[Unit]
+Description=hams.com shack console static server (loopback 127.0.0.1:8767)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/hams/daemons/shack_console/target/release/shack_console_server
+Restart=always
+RestartSec=5
+
+# Listens on 127.0.0.1 only: the address is fixed in the program (shack_console::bind_loopback), not read from
+# any setting. The two lines below are a second, independent layer that keeps the service off every other
+# address even if the program were ever changed.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET
+
+# No account of its own to manage, nothing to read or write: the console is embedded in the binary.
+DynamicUser=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+
 LimitNOFILE=4096
 TasksMax=256
 MemoryMax=256M
