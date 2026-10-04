@@ -5780,7 +5780,8 @@ WantedBy=timers.target
             # provision.py --enable-opt-in (it fetches from thousands of third-party servers and spends
             # Claude Code subscription quota). Prod-only: the agent account and wrapper exist only on hams1.
             # DAEMON_ARGS carry the caps: 30 sites and 60 model calls a run, 300 sites and 400 model calls a
-            # day; events are queued for a Publish click (add --auto-publish-events to publish clean ones).
+            # day. There is no review queue: every extracted item is accepted or rejected by a fixed
+            # data-quality rule, and the coverage report counts each rejection by its reason.
             "path": "/opt/hams/systemd/club.crawl.service",
             "external_fetch": "fetches club websites from thousands of third-party servers and calls Anthropic through the Claude Code CLI",
             "opt_in": "fetches third-party club websites on a schedule and spends Claude Code subscription quota",
