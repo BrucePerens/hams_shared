@@ -62,7 +62,7 @@ MULTI_TENANT_ODOO.md` (hams_com).
   small (`db_maxconn 10`, role limit 14).
 * The `/xmlrpc` and `/jsonrpc` endpoints are deprecated in Odoo 19 (Odoo's own notice says removal in 22).
   `odoo_site_migrate.Json2Transport` (`POST /json/2/<model>/<method>`, bearer API key) now sits behind the same
-  `call()` interface as `XmlRpcTransport`; `--transport json2` (`parking_ctl`, `tenant_site_harden`) and
+  `call()` interface as `XmlRpcTransport`; `--transport json2` (`parking_ctl`) and
   `--target-transport json2` (`odoo_site_migrate import|lockdown`) select it, and the password file then holds an
   API key. XML-RPC stays the default and stays the only choice for a source Odoo below 19 (no JSON-2 there).
 * hams_open's `cloudflare` module (Odoo-driven tunnel routes) is not installed in tenants; HTML edge
