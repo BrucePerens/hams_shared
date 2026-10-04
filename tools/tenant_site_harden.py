@@ -293,7 +293,7 @@ def connect(args):
     with open(args.password_file, "r", encoding="utf-8") as handle:  # audit-ignore-path
         secret = handle.read().strip()
     creds = mig.Credentials(args.url, args.db, args.login, secret)
-    return mig.XmlRpcTransport(creds, min_interval=0.0)
+    return mig.make_transport(getattr(args, "transport", "xmlrpc"), creds, min_interval=0.0)
 
 
 def build_parser():
@@ -304,7 +304,8 @@ def build_parser():
         p.add_argument("--url", required=True)
         p.add_argument("--db", required=True)
         p.add_argument("--login", default="admin")
-        p.add_argument("--password-file", required=True)
+        p.add_argument("--password-file", required=True, help="the admin password (xmlrpc) or an API key (json2)")
+        p.add_argument("--transport", choices=("xmlrpc", "json2"), default="xmlrpc")
         if name == "apply":
             p.add_argument("--site-name")
             p.add_argument("--blog-name")

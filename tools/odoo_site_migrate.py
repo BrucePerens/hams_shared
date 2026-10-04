@@ -53,6 +53,7 @@ import sys
 import time
 import unicodedata
 import urllib.error
+import urllib.request
 from xml.etree import ElementTree
 import xmlrpc.client
 from urllib.parse import urlsplit
@@ -158,11 +159,11 @@ class _UASafeTransport(xmlrpc.client.SafeTransport):
     user_agent = USER_AGENT
 
 
-class XmlRpcTransport:
-    """XML-RPC (/xmlrpc/2), which every Odoo from 8 to 19 serves. Rate limited with retries."""
+class _ThrottledTransport:
+    """Rate limit, request cap and retries shared by the two transports. A subclass raises
+    xmlrpc.client.ProtocolError for an HTTP status worth retrying (429, 500, 502, 503, 504)."""
 
-    def __init__(self, creds, min_interval=0.5, max_requests=0, sleep=time.sleep, clock=time.monotonic,
-                 proxy_factory=None, retries=3):
+    def __init__(self, creds, min_interval=0.5, max_requests=0, sleep=time.sleep, clock=time.monotonic, retries=3):
         self.creds = creds
         self.min_interval = min_interval
         self.max_requests = max_requests
@@ -170,11 +171,6 @@ class XmlRpcTransport:
         self._sleep, self._clock = sleep, clock
         self._last = None
         self._retries = retries
-        factory = proxy_factory or xmlrpc.client.ServerProxy
-        transport = _UASafeTransport() if creds.url.startswith("https") else _UATransport()
-        kwargs = {"transport": transport} if proxy_factory is None else {}
-        self._common = factory(f"{creds.url}/xmlrpc/2/common", allow_none=True, **kwargs)
-        self._object = factory(f"{creds.url}/xmlrpc/2/object", allow_none=True, **kwargs)
         self._uid = None
 
     def _throttled(self, func, *args):
@@ -198,6 +194,19 @@ class XmlRpcTransport:
             self._sleep(min(60, 2 ** (attempt + 1)))
         raise MigrateError("unreachable")
 
+
+class XmlRpcTransport(_ThrottledTransport):
+    """XML-RPC (/xmlrpc/2), which every Odoo from 8 to 19 serves (deprecated in 19). Rate limited with retries."""
+
+    def __init__(self, creds, min_interval=0.5, max_requests=0, sleep=time.sleep, clock=time.monotonic,
+                 proxy_factory=None, retries=3):
+        super().__init__(creds, min_interval, max_requests, sleep, clock, retries)
+        factory = proxy_factory or xmlrpc.client.ServerProxy
+        transport = _UASafeTransport() if creds.url.startswith("https") else _UATransport()
+        kwargs = {"transport": transport} if proxy_factory is None else {}
+        self._common = factory(f"{creds.url}/xmlrpc/2/common", allow_none=True, **kwargs)
+        self._object = factory(f"{creds.url}/xmlrpc/2/object", allow_none=True, **kwargs)
+
     def version(self):
         return self._throttled(self._common.version)
 
@@ -214,6 +223,119 @@ class XmlRpcTransport:
         return self._throttled(
             self._object.execute_kw, self.creds.db, self._uid, self.creds.secret, model, method, args, kwargs or {}
         )
+
+
+# JSON-2 (POST /json/2/<model>/<method>, Odoo 19+) takes named parameters, not execute_kw's positional
+# ones. For every method the tools call: does it act on records (`ids`), and the names of its positional
+# parameters in order. A method not listed here is refused, never guessed at.
+JSON2_SIGNATURES = {
+    "search": (False, ("domain", "offset", "limit", "order")),
+    "search_read": (False, ("domain", "fields", "offset", "limit", "order")),
+    "search_count": (False, ("domain", "limit")),
+    "read": (True, ("fields", "load")),
+    "fields_get": (False, ("allfields", "attributes")),
+    "create": (False, ("vals_list",)),
+    "write": (True, ("vals",)),
+    "unlink": (True, ()),
+    "save_asset": (False, ("url", "bundle", "content", "file_type")),
+}
+
+
+def json2_request(model, method, args, kwargs=None):
+    """(path, body) of the JSON-2 request equivalent to execute_kw(model, method, args, kwargs), and whether a
+    single-dict `create` was wrapped in a list (so the caller unwraps the one id)."""
+    if method not in JSON2_SIGNATURES:
+        raise MigrateError(f"JSON-2 transport: no parameter names known for {model}.{method}")
+    takes_ids, names = JSON2_SIGNATURES[method]
+    args = list(args)
+    body = {}
+    if takes_ids:
+        if not args:
+            raise MigrateError(f"{model}.{method} needs the record ids as its first argument")
+        body["ids"] = list(args.pop(0))
+    if len(args) > len(names):
+        raise MigrateError(f"{model}.{method}: too many positional arguments for the JSON-2 transport")
+    body.update(zip(names, args))
+    for key, value in (kwargs or {}).items():
+        if key in body:
+            raise MigrateError(f"{model}.{method}: {key!r} given both positionally and by name")
+        body[key] = value
+    unwrap = False
+    if method == "create" and isinstance(body.get("vals_list"), dict):
+        body["vals_list"] = [body["vals_list"]]
+        unwrap = True
+    return f"/json/2/{model}/{method}", body, unwrap
+
+
+def _urllib_http(url, headers, data, timeout=120):
+    """(status, body bytes); a GET when `data` is None, else a POST. An HTTP error status is returned, not raised."""
+    request = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # audit-ignore-outbound-fetch
+            return response.status, response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+class Json2Transport(_ThrottledTransport):
+    """JSON-2 (Odoo 19+): `Authorization: bearer <API key>`, one POST per call. The secret of the credentials
+    must be an API key (JSON-2 refuses a password). A server-side error is raised as xmlrpc.client.Fault, so
+    callers written for XML-RPC keep working. Use it for a target Odoo 19 or later; an older source needs XML-RPC."""
+
+    def __init__(self, creds, min_interval=0.5, max_requests=0, sleep=time.sleep, clock=time.monotonic,
+                 post=None, retries=3):
+        super().__init__(creds, min_interval, max_requests, sleep, clock, retries)
+        self._http = post or _urllib_http
+
+    def _send(self, path, body=None):
+        """POST `body` as JSON to `path` (a GET of the unauthenticated /web/version when `body` is None)."""
+        headers = {"User-Agent": USER_AGENT}
+        if body is not None:
+            headers.update({"Content-Type": "application/json", "Authorization": f"bearer {self.creds.secret}"})
+            if self.creds.db:
+                headers["X-Odoo-Database"] = self.creds.db
+        data = None if body is None else json.dumps(body).encode()
+        status, raw = self._http(self.creds.url + path, headers, data)
+        try:
+            payload = json.loads(raw.decode("utf-8")) if raw else None
+        except ValueError:
+            payload = None
+        if status == 401 and body is not None:
+            raise MigrateError("authentication failed (JSON-2 needs a valid API key, and the right database)")
+        error_body = isinstance(payload, dict) and "message" in payload
+        if status in (429, 502, 503, 504) or (status == 500 and not error_body):
+            raise xmlrpc.client.ProtocolError(self.creds.url + path, status, "retry", {})
+        if status >= 400:
+            message = payload.get("message") if error_body else (raw or b"")[:200].decode("utf-8", "replace")
+            raise xmlrpc.client.Fault(status, str(message))
+        return payload
+
+    def version(self):
+        payload = self._throttled(self._send, "/web/version") or {}
+        return {"server_version": payload.get("version"), "server_version_info": payload.get("version_info")}
+
+    def login(self):
+        context = self._throttled(self._send, "/json/2/res.users/context_get", {})
+        self._uid = (context or {}).get("uid")
+        if not self._uid:
+            raise MigrateError("authentication failed (the API key did not identify a user)")
+        return self._uid
+
+    def call(self, model, method, args, kwargs=None):
+        if self._uid is None:
+            self.login()
+        path, body, unwrap = json2_request(model, method, args, kwargs)
+        result = self._throttled(self._send, path, body)
+        return result[0] if unwrap and isinstance(result, list) and len(result) == 1 else result
+
+
+def make_transport(kind, creds, **kwargs):
+    """`xmlrpc` (any Odoo 8 to 19, password or API key) or `json2` (a target Odoo 19+, API key)."""
+    if kind == "json2":
+        return Json2Transport(creds, **kwargs)
+    if kind == "xmlrpc":
+        return XmlRpcTransport(creds, **kwargs)
+    raise MigrateError(f"unknown transport {kind!r} (xmlrpc or json2)")
 
 
 class ReadOnlySource:
@@ -1645,7 +1767,7 @@ def cmd_import(args, out):
     except OSError as exc:
         raise MigrateError(f"cannot read {args.target_password_file}: {exc}") from exc
     creds = Credentials(args.target_url, args.target_db, args.target_login, secret)
-    target = XmlRpcTransport(creds, min_interval=0.0)
+    target = make_transport(args.target_transport, creds, min_interval=0.0)
     website_map = dict(item.split(":", 1) for item in args.website_map or [])
     notice = None if args.keep_forms else args.forms_notice
     importer = Importer(args.export, target, args.apply, args.source_domain or [], website_map, out,
@@ -1669,7 +1791,7 @@ def cmd_lockdown(args, out):
     except OSError as exc:
         raise MigrateError(f"cannot read {args.target_password_file}: {exc}") from exc
     creds = Credentials(args.target_url, args.target_db, args.target_login, secret)
-    target = XmlRpcTransport(creds, min_interval=0.0)
+    target = make_transport(args.target_transport, creds, min_interval=0.0)
     out("APPLYING lockdown" if args.apply else "DRY RUN lockdown (nothing is written)")
     actions = lockdown_target(target, args.apply, out)
     changed = sum(1 for a in actions if a["changed"])
@@ -1715,7 +1837,9 @@ def build_parser():
     p.add_argument("--target-url", required=True)
     p.add_argument("--target-db", required=True)
     p.add_argument("--target-login", default="admin")
-    p.add_argument("--target-password-file", required=True)
+    p.add_argument("--target-password-file", required=True, help="the admin password (xmlrpc) or an API key (json2)")
+    p.add_argument("--target-transport", choices=("xmlrpc", "json2"), default="xmlrpc",
+                   help="json2 (Odoo 19+, API key) replaces the deprecated XML-RPC on the target; default xmlrpc")
     p.add_argument("--source-domain", action="append", help="old domain(s); links to them become relative")
     p.add_argument("--website-map", action="append", help="SRC_ID:DST_ID (repeatable)")
     p.add_argument("--forms-notice", default=DEFAULT_FORMS_NOTICE,
@@ -1732,7 +1856,9 @@ def build_parser():
     p.add_argument("--target-url", required=True)
     p.add_argument("--target-db", required=True)
     p.add_argument("--target-login", default="admin")
-    p.add_argument("--target-password-file", required=True)
+    p.add_argument("--target-password-file", required=True, help="the admin password (xmlrpc) or an API key (json2)")
+    p.add_argument("--target-transport", choices=("xmlrpc", "json2"), default="xmlrpc",
+                   help="json2 (Odoo 19+, API key) replaces the deprecated XML-RPC on the target; default xmlrpc")
     p.add_argument("--apply", action="store_true")
     p.set_defaults(func=cmd_lockdown)
     return parser

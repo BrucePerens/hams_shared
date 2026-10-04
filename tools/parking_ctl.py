@@ -21,7 +21,7 @@ route list: DNS records go through tenant_cloudflare.apply_dns_records (it refus
 record that already exists with other content), and the tunnel's catch-all rule is a one-time step in
 docs/proposals/MULTI_TENANT_ODOO.md.
 
-The Odoo connection reads the parking tenant's admin password from a root-only file
+The Odoo connection reads the parking tenant's admin password (or, with --transport json2, an API key) from a root-only file
 (/opt/hams/etc/tenants/parking/admin_password) and never prints it. Run it on the server, as root.
 """
 
@@ -36,6 +36,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import odoo_site_migrate as mig  # noqa: E402
 import tenant_lib as lib  # noqa: E402
 
 BEHAVIORS = ("parked", "redirect", "for_sale", "gone")
@@ -167,9 +168,13 @@ def dns_records(entries, tunnel_id):
 
 
 class OdooClient:
-    """Thin XML-RPC client for the parking instance (loopback, admin account)."""
+    """Thin client for the parking instance (loopback, admin account): XML-RPC, or any transport with
+    `call(model, method, args, kwargs)` (the JSON-2 one of odoo_site_migrate)."""
 
-    def __init__(self, url, db, login, password, proxy_factory):
+    def __init__(self, url, db, login, password, proxy_factory=None, transport=None):
+        self._transport = transport
+        if transport is not None:
+            return
         self._db, self._password = db, password
         common = proxy_factory(f"{url}/xmlrpc/2/common")
         self._uid = common.authenticate(db, login, password, {})
@@ -178,6 +183,8 @@ class OdooClient:
         self._models = proxy_factory(f"{url}/xmlrpc/2/object", allow_none=True)
 
     def call(self, model, method, args, kwargs=None):
+        if self._transport is not None:
+            return self._transport.call(model, method, args, kwargs)
         return self._models.execute_kw(self._db, self._uid, self._password, model, method, args, kwargs or {})
 
     def search_read(self, domain, fields):
@@ -196,6 +203,9 @@ def connect(args):
             password = handle.read().strip()
     except OSError as exc:
         raise SystemExit(f"cannot read {args.password_file}: {exc} (run as root on the server)")
+    if getattr(args, "transport", "xmlrpc") == "json2":
+        creds = mig.Credentials(args.url, args.db, args.login, password)
+        return OdooClient(args.url, args.db, args.login, password, transport=mig.Json2Transport(creds, min_interval=0.0))
     return OdooClient(args.url, args.db, args.login, password, xmlrpc.client.ServerProxy)
 
 
@@ -372,7 +382,10 @@ def build_parser():
     parser.add_argument("--url", default="http://127.0.0.1:18110")
     parser.add_argument("--db", default="parking")
     parser.add_argument("--login", default="admin")
-    parser.add_argument("--password-file", default="/opt/hams/etc/tenants/parking/admin_password")
+    parser.add_argument("--password-file", default="/opt/hams/etc/tenants/parking/admin_password",
+                        help="the admin password (xmlrpc) or an API key (json2)")
+    parser.add_argument("--transport", choices=("xmlrpc", "json2"), default="xmlrpc",
+                        help="xmlrpc is deprecated in Odoo 19; json2 needs an API key in the file (default: xmlrpc)")
     parser.add_argument("--spec-dir", default=lib.Paths().spec_dir)
     sub = parser.add_subparsers(dest="command", required=True)
 

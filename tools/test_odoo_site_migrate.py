@@ -738,6 +738,182 @@ class TransportTests(unittest.TestCase):
             transport.version()
 
 
+class Json2Tests(_Base):
+    """The JSON-2 transport (Odoo 19+): same interface as XML-RPC, named parameters, bearer API key."""
+
+    creds = mig.Credentials("http://127.0.0.1:18101", "tenant", "admin", "KEY-123")
+
+    def make(self, handler, **kw):
+        calls = []
+
+        def post(url, headers, data):
+            calls.append((url, headers, None if data is None else json.loads(data)))
+            return handler(url, headers, calls[-1][2])
+
+        kw.setdefault("min_interval", 0)
+        kw.setdefault("sleep", lambda _s: None)
+        return mig.Json2Transport(self.creds, post=post, **kw), calls
+
+    @staticmethod
+    def ok(payload, status=200):
+        return status, json.dumps(payload).encode()
+
+    def test_positional_arguments_become_named_parameters(self):
+        path, body, unwrap = mig.json2_request("website.page", "search_read", [[("url", "=", "/x")]],
+                                               {"fields": ["name"], "limit": 1, "context": {"active_test": False}})
+        self.assertEqual(path, "/json/2/website.page/search_read")
+        self.assertEqual(body, {"domain": [("url", "=", "/x")], "fields": ["name"], "limit": 1,
+                                "context": {"active_test": False}})
+        self.assertFalse(unwrap)
+        self.assertEqual(mig.json2_request("res.partner", "write", [[3, 4], {"name": "n"}])[1],
+                         {"ids": [3, 4], "vals": {"name": "n"}})
+        self.assertEqual(mig.json2_request("res.partner", "read", [[3]], {"fields": ["name"]})[1],
+                         {"ids": [3], "fields": ["name"]})
+        self.assertEqual(mig.json2_request("res.partner", "unlink", [[3]])[1], {"ids": [3]})
+        self.assertEqual(mig.json2_request("ir.model", "fields_get", [], {"attributes": ["type"]})[1],
+                         {"attributes": ["type"]})
+        path, body, unwrap = mig.json2_request("res.partner", "create", [{"name": "n"}])
+        self.assertEqual((body, unwrap), ({"vals_list": [{"name": "n"}]}, True))
+        self.assertFalse(mig.json2_request("res.partner", "create", [[{"name": "n"}]])[2])
+
+    def test_unknown_methods_and_ambiguous_arguments_are_refused(self):
+        with self.assertRaises(mig.MigrateError):
+            mig.json2_request("res.users", "action_unheard_of", [])
+        with self.assertRaises(mig.MigrateError):
+            mig.json2_request("res.partner", "write", [])
+        with self.assertRaises(mig.MigrateError):
+            mig.json2_request("res.partner", "search_count", [[], 1, 2])
+        with self.assertRaises(mig.MigrateError):
+            mig.json2_request("res.partner", "search_count", [[]], {"domain": []})
+
+    def test_request_carries_the_key_in_a_header_never_in_the_url(self):
+        def handler(url, headers, body):
+            if url.endswith("context_get"):
+                return self.ok({"uid": 7})
+            return self.ok([1, 2])
+
+        transport, calls = self.make(handler)
+        self.assertEqual(transport.call("res.partner", "search", [[]]), [1, 2])
+        self.assertEqual([c[0] for c in calls], ["http://127.0.0.1:18101/json/2/res.users/context_get",
+                                                 "http://127.0.0.1:18101/json/2/res.partner/search"])
+        for url, headers, _body in calls:
+            self.assertNotIn("KEY-123", url)
+            self.assertEqual(headers["Authorization"], "bearer KEY-123")
+            self.assertEqual(headers["X-Odoo-Database"], "tenant")
+            self.assertEqual(headers["User-Agent"], mig.USER_AGENT)
+        self.assertNotIn("KEY-123", repr(self.creds))
+
+    def test_create_of_one_dict_returns_one_id_and_none_results_pass(self):
+        transport, _ = self.make(lambda u, h, b: self.ok({"uid": 7}) if u.endswith("context_get") else self.ok([42]))
+        self.assertEqual(transport.call("res.partner", "create", [{"name": "n"}]), 42)
+        self.assertEqual(transport.call("res.partner", "create", [[{"name": "n"}]]), [42])
+        transport, _ = self.make(lambda u, h, b: self.ok({"uid": 7}) if u.endswith("context_get") else (200, b"null"))
+        self.assertIsNone(transport.call("website.assets", "save_asset", ["/a", "b", "c", "scss"]))
+
+    def test_bad_key_is_an_authentication_failure(self):
+        transport, _ = self.make(lambda u, h, b: self.ok({"message": "Invalid apikey"}, 401))
+        with self.assertRaises(mig.MigrateError) as raised:
+            transport.call("res.partner", "search", [[]])
+        self.assertIn("authentication failed", str(raised.exception))
+        self.assertNotIn("KEY-123", str(raised.exception))
+
+    def test_server_errors_arrive_as_faults_like_xml_rpc(self):
+        def handler(url, headers, body):
+            if url.endswith("context_get"):
+                return self.ok({"uid": 7})
+            return self.ok({"name": "odoo.exceptions.ValidationError", "message": "bad value"}, 422)
+
+        transport, calls = self.make(handler)
+        with self.assertRaises(xmlrpc.client.Fault) as raised:
+            transport.call("res.partner", "write", [[1], {"name": ""}])
+        self.assertEqual(raised.exception.faultString, "bad value")
+        self.assertEqual(len(calls), 2)  # a validation error is not retried
+
+    def test_a_500_with_an_error_body_is_not_retried_but_a_bare_one_is(self):
+        def app_error(url, headers, body):
+            return self.ok({"uid": 7}) if url.endswith("context_get") else self.ok({"message": "boom"}, 500)
+
+        transport, calls = self.make(app_error)
+        with self.assertRaises(xmlrpc.client.Fault):
+            transport.call("res.partner", "search", [[]])
+        self.assertEqual(len(calls), 2)
+
+        attempts = {"n": 0}
+
+        def flaky(url, headers, body):
+            if url.endswith("context_get"):
+                return self.ok({"uid": 7})
+            attempts["n"] += 1
+            return (503, b"busy") if attempts["n"] < 3 else self.ok([5])
+
+        sleeps = []
+        transport, _ = self.make(flaky, sleep=sleeps.append)
+        self.assertEqual(transport.call("res.partner", "search", [[]]), [5])
+        self.assertEqual(sleeps, [2, 4])
+        transport, _ = self.make(lambda u, h, b: (502, b"bad gateway"), retries=1, sleep=sleeps.append)
+        with self.assertRaises(mig.MigrateError) as raised:
+            transport.call("res.partner", "search", [[]])
+        self.assertIn("HTTP 502", str(raised.exception))
+
+    def test_request_cap_and_version(self):
+        def handler(url, headers, body):
+            if url.endswith("/web/version"):
+                return self.ok({"version": "19.0", "version_info": [19, 0, 0, "final", 0, ""]})
+            return self.ok({"uid": 7}) if url.endswith("context_get") else self.ok([])
+
+        transport, calls = self.make(handler, max_requests=3)
+        self.assertEqual(transport.version()["server_version"], "19.0")
+        self.assertNotIn("Authorization", calls[0][1])  # /web/version is public
+        self.assertIsNone(calls[0][2])
+        transport.call("res.partner", "search", [[]])
+        with self.assertRaises(mig.MigrateError) as raised:
+            transport.call("res.partner", "search", [[]])
+        self.assertIn("request cap", str(raised.exception))
+
+    def test_make_transport(self):
+        self.assertIsInstance(mig.make_transport("json2", self.creds), mig.Json2Transport)
+        self.assertIsInstance(mig.make_transport("xmlrpc", self.creds), mig.XmlRpcTransport)
+        with self.assertRaises(mig.MigrateError):
+            mig.make_transport("soap", self.creds)
+
+    def test_a_full_import_over_json2_gives_the_same_target_as_over_the_direct_call(self):
+        """The importer, unchanged, against the fake target reached through the JSON-2 wire format."""
+        exporter, _ = self.export()
+        exporter.run()
+        direct = build_target()
+        mig.Importer(self.out, direct, apply=True, source_domains=["old.example"], log=lambda m: None).run()
+        os.remove(os.path.join(self.out, "idmap.json"))
+        wired = build_target()
+
+        def handler(url, headers, body):
+            model, method = url.rsplit("/json/2/", 1)[1].split("/")
+            if (model, method) == ("res.users", "context_get"):
+                return self.ok({"uid": 7})
+            takes_ids, names = mig.JSON2_SIGNATURES[method]
+            body = dict(body)
+            args = [body.pop("ids")] if takes_ids else []
+            for name in names:
+                if name in body:
+                    args.append(body.pop(name))
+                else:
+                    break
+            def commands(vals):  # JSON has no tuples; the fake wants the ORM command form
+                return {k: [tuple(c) for c in v] if isinstance(v, list) and v and isinstance(v[0], list) else v
+                        for k, v in vals.items()}
+
+            if method == "create":
+                result = [wired.call(model, "create", [commands(vals)]) for vals in args[0]]
+            elif method == "write":
+                result = wired.call(model, method, [args[0], commands(args[1])], body)
+            else:
+                result = wired.call(model, method, args, body)
+            return self.ok(result)
+
+        transport, _ = self.make(handler)
+        mig.Importer(self.out, transport, apply=True, source_domains=["old.example"], log=lambda m: None).run()
+        self.assertEqual(wired.rows, direct.rows)
+
+
 class FileModeTests(unittest.TestCase):
     def test_the_export_directory_is_private(self):
         tmp = tempfile.mkdtemp(prefix="migrate_mode_")
