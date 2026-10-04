@@ -3985,6 +3985,13 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
             with self.subTest(unit=unit):
                 writable = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths")
                 self.assertTrue(writable, "a oneshot daemon with no writable path cannot spool anything")
+                if rules.get("agent_sudo"):
+                    # The documented exception: the agent's own home and nothing else (the CLI, running
+                    # as the agent, writes its session state there; the daemon's account never does).
+                    agent = rules["agent_sudo"]
+                    self.assertEqual(writable, [f"/home/{agent}"])
+                    self.assertIn(f"/home/{agent}", self._directories_owned_by(agent))
+                    continue
                 owned = self._directories_owned_by(rules["user"])
                 self.assertEqual(sorted(set(writable) - owned), [])
                 for shared in ("/opt/hams/spool", "/opt/hams/downloads", "/opt/hams/cache", "/opt/hams"):
@@ -3992,6 +3999,8 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
 
     def test_the_state_directories_are_private_to_the_account_and_readable_by_odoo(self):
         for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            if rules.get("agent_sudo"):
+                continue  # its only writable path is the agent's home, checked above
             for path in infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths"):
                 with self.subTest(unit=unit, path=path):
                     entry = [d for d in infra.MANIFEST["directories"] if d["path"] == path][0]
@@ -4035,12 +4044,57 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
             "RestrictSUIDSGID": ["true"],
             "LockPersonality": ["true"],
         }
-        for unit in infra.FAMILY_ACCOUNT_UNITS:
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
             for directive, expected in required.items():
+                if rules.get("agent_sudo") and directive == "NoNewPrivileges":
+                    # sudo's uid switch cannot work under NoNewPrivileges=true: the unit omits it and
+                    # keeps only the two capabilities the switch needs.
+                    with self.subTest(unit=unit, directive=directive):
+                        self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive), [])
+                        self.assertEqual(
+                            infra.systemd_unit_directive_values(infra.MANIFEST, unit, "CapabilityBoundingSet"),
+                            ["CAP_SETUID", "CAP_SETGID"],
+                        )
+                    continue
                 with self.subTest(unit=unit, directive=directive):
                     self.assertEqual(
                         infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive), expected
                     )
+
+    def test_an_agent_sudo_unit_reaches_the_agent_through_one_sudoers_line_and_nothing_wider(self):
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            agent = rules.get("agent_sudo")
+            if not agent:
+                continue
+            with self.subTest(unit=unit):
+                lines = [
+                    entry for entry in infra.MANIFEST["static_files"]
+                    if entry["path"].startswith("/etc/sudoers.d/")
+                    and any(l.startswith(rules["user"] + " ") for l in entry["content"].splitlines())
+                ]
+                self.assertEqual(len(lines), 1)
+                grant = lines[0]
+                self.assertEqual(
+                    grant["content"],
+                    f"{rules['user']} ALL=({agent}) NOPASSWD: /usr/local/sbin/run-hams-ai-agent-claude.sh\n",
+                )
+                self.assertEqual((grant["owner"], grant["mode"], grant["environments"]), ("root:root", "440", ["prod"]))
+                self.assertIn("run-hams-ai-agent-claude.sh", [
+                    e["path"].rsplit("/", 1)[-1] for e in infra.MANIFEST["static_files"]
+                ])
+                # The account is not in the sudo group and gets no blanket grant anywhere.
+                for entry in infra.MANIFEST["static_files"]:
+                    if entry["path"].startswith("/etc/sudoers.d/"):
+                        for line in entry["content"].splitlines():
+                            if line.startswith(rules["user"] + " "):
+                                self.assertNotIn("ALL=(ALL)", line)
+                account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == rules["user"]][0]
+                self.assertNotIn("sudo", account.get("member_of", []))
+                # The unit is prod-only and opt-in: the agent account and wrapper exist only on hams1.
+                entry = [e for e in infra.MANIFEST["static_files"] if e["path"].endswith("/" + unit)][0]
+                self.assertEqual(entry["environments"], ["prod"])
+                self.assertTrue(entry.get("opt_in"))
+                self.assertTrue(entry.get("external_fetch"))
 
     def test_the_key_file_a_migrated_unit_reads_is_under_the_key_directory(self):
         for unit in infra.FAMILY_ACCOUNT_UNITS:

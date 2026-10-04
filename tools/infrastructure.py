@@ -1016,10 +1016,23 @@ def systemd_units_running_as(manifest, user):
 # /opt/hams, and hams_com owns directories the family must not write, such as the ADIF queue; the
 # sandbox's read-only mount is what keeps it out of them, so that list must stay narrow); and it loads
 # only the environment files its daemon uses (every other file carries secrets the daemon never needed).
+#
+# `agent_sudo` names the one documented exception to those rules: a unit whose job is to reach the Claude
+# Code CLI through `sudo -u <that account> run-hams-ai-agent-claude.sh`. `NoNewPrivileges=true` makes the
+# kernel refuse sudo's uid switch (the reason credential.touch.timer and ticket.triage keep it off), so
+# such a unit omits NoNewPrivileges, narrows CapabilityBoundingSet to CAP_SETUID/CAP_SETGID, and has the
+# agent's home as its only ReadWritePaths= (the CLI, running as the agent, writes its session state
+# there; the daemon's own account never writes it). The account's whole reach into the agent is one
+# sudoers.d line naming the one wrapper. test_infrastructure.py holds such a unit to exactly that shape.
 FAMILY_ACCOUNT_UNITS = {
     "ncvec.sync.service": {
         "user": "hamsd_ncvec_sync",
         "environment_files": frozenset({"common.env"}),
+    },
+    "club.crawl.service": {
+        "user": "hamsd_club_crawl",
+        "environment_files": frozenset({"common.env"}),
+        "agent_sudo": "hams_ai_agent",
     },
 }
 
@@ -1060,6 +1073,25 @@ MANIFEST = {
             "user": "hamsd_ncvec_sync",
             "group": "hamsd_ncvec_sync",
             "home": "/opt/hams/spool/ncvec",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/club_crawl (hams_com docs/proposals/AUTOMATIC_CLUB_CRAWL.md), the automatic crawl of
+            # every club website for repeaters and events. Its own account instead of `odoo`, so a hostile
+            # page that got the crawler's Python process to misbehave could reach one API key (its own,
+            # club_crawl_service_internal.key, which odoo hands the group) and nothing else: not the other
+            # daemons' keys, not the database, Redis or RabbitMQ credentials. It writes no state on disk at
+            # all (the crawl ledger and every per-site state are in Odoo). odoo joins this group for the
+            # key hand-off (chgrp, never chown); member_of hams_com is what lets the account reach /opt/hams.
+            # No home directory is created. Its one reach into another account is the sudoers.d grant to
+            # run-hams-ai-agent-claude.sh as hams_ai_agent (club-crawl-claude-sandbox below); see
+            # FAMILY_ACCOUNT_UNITS for why that makes it the one unit with an `agent_sudo` exception.
+            "user": "hamsd_club_crawl",
+            "group": "hamsd_club_crawl",
+            "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
             "member_of": ["hams_com"],
@@ -5903,6 +5935,116 @@ WantedBy=timers.target
             "environments": ["prod"],
         },
         {
+            # Automatic club-website crawl for repeaters and events. Bruce, NIGHT_PLAN 203, 2026-10-04:
+            # "We were supposed to crawl all club sites for repeaters and events automatically. Not just
+            # three, and not manually." hams_com docs/proposals/AUTOMATIC_CLUB_CRAWL.md has the design and
+            # daemons/club_crawl/README.md the contract (politeness, caps, what is automatic, what waits
+            # for a person, how to switch it off and how to enable it).
+            #
+            # Its own account (hamsd_club_crawl). The model never runs as that account: the daemon
+            # reaches the Claude Code CLI through `sudo -u hams_ai_agent run-hams-ai-agent-claude.sh`
+            # (club-crawl-claude-sandbox grant below), as credential.touch.timer and ticket.triage do, with
+            # --tools "" and --strict-mcp-config (no tool, no MCP server: a bounded text completion over
+            # untrusted pages). So this unit has the documented `agent_sudo` shape (FAMILY_ACCOUNT_UNITS):
+            # NoNewPrivileges omitted, CapabilityBoundingSet narrowed to SETUID/SETGID, the agent's home
+            # the only ReadWritePaths=. Everything else of the family isolation set is kept, and only
+            # common.env is loaded: no database, Redis, RabbitMQ or Cloudflare credential reaches it.
+            #
+            # Kill switch: ConditionPathExists=! skips the run cleanly while /opt/hams/etc/club_crawl.disabled
+            # exists. ExecStartPre checks the Claude CLI wrapper runs under this sandbox, with no model call,
+            # so a sandbox that breaks sudo fails the unit at once instead of recording a failed crawl.
+            #
+            # opt_in: provisioning links this unit but never enables or starts it unless named with
+            # provision.py --enable-opt-in (it fetches from thousands of third-party servers and spends
+            # Claude Code subscription quota). Prod-only: the agent account and wrapper exist only on hams1.
+            # DAEMON_ARGS carry the caps: 30 sites and 60 model calls a run, 300 sites and 400 model calls a
+            # day. There is no review queue: every extracted item is accepted or rejected by a fixed
+            # data-quality rule, and the coverage report counts each rejection by its reason.
+            "path": "/opt/hams/systemd/club.crawl.service",
+            "external_fetch": "fetches club websites from thousands of third-party servers and calls Anthropic through the Claude Code CLI",
+            "opt_in": "fetches third-party club websites on a schedule and spends Claude Code subscription quota",
+            "content": """\
+[Unit]
+Description=Hams.com Automatic Club Website Crawl, Repeaters and Events (One-Shot)
+After=network.target
+ConditionPathExists=!/opt/hams/etc/club_crawl.disabled
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction and the daemon-family isolation set, with the documented
+# agent_sudo exception (no NoNewPrivileges, SETUID/SETGID kept) -- see this entry's own comment above.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/home/hams_ai_agent
+Type=oneshot
+User=hamsd_club_crawl
+Group=hamsd_club_crawl
+WorkingDirectory=/opt/hams/daemons/club_crawl
+# 30 sites at a few requests each, 6 s apart per host, plus up to 60 model calls of up to 120 s.
+TimeoutStartSec=2h
+
+# main.py and hams_config.py read SYSTEM_USER_AGENT, ODOO_URL and DB_NAME; nothing else of core.env,
+# db.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+Environment="ODOO_USER=club_crawl_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/club_crawl_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS=--max-sites=30 --max-sites-per-day=300 --max-model-calls-per-run=60 --max-model-calls-per-day=400"
+
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/club_crawl/main.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/club_crawl/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=club.crawl
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # Cadence: every two hours. A run visits at most 30 due sites, so the registry's 4,693
+            # crawlable rows take about 16 days for the first full pass (the daily cap of 300 sites binds, not the 360 a day the
+            # timer allows),
+            # after which only sites whose 30-day interval has passed come due, and an unchanged site costs
+            # conditional requests and no model call. A run with nothing due spends nothing.
+            # Persistent=false: a missed run is skipped, never replayed as a burst after downtime.
+            "path": "/opt/hams/systemd/club.crawl.timer",
+            "external_fetch": "activates club.crawl.service",
+            "opt_in": "activates club.crawl.service, which fetches third-party sites and spends Claude Code quota",
+            "content": """\
+[Unit]
+Description=Hams.com Automatic Club Website Crawl (every two hours; a run with nothing due spends nothing)
+
+[Timer]
+OnCalendar=*-*-* 00/2:15:00
+Persistent=false
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             # night_shift_todo/medium/service-account-creation-and-sudoers-sandboxes-are-
             # untracked-infra-c3a9f714.md: every real file under hams1's /etc/sudoers.d/ was
             # hand-provisioned, with no tracked source anywhere. Confirmed directly on hams1,
@@ -5989,6 +6131,21 @@ WantedBy=timers.target
             "path": "/etc/sudoers.d/odoo-ai-agent-claude-sandbox",
             "content": (
                 "odoo ALL=(hams_ai_agent) NOPASSWD: "
+                "/usr/local/sbin/run-hams-ai-agent-claude.sh\n"
+            ),
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        {
+            # Lets the club crawl's own account run the real Claude Code CLI as `hams_ai_agent`, the one
+            # reach it has into another account -- the same single wrapper the odoo grant above names, and
+            # nothing else. The CLI is started with --tools "" and --strict-mcp-config (see
+            # daemons/club_registry_recrawl/repeater_recrawl.py's CLAUDE_COMMAND): no tool and no MCP
+            # server, a bounded text completion over untrusted club pages. Prod-only, like the account.
+            "path": "/etc/sudoers.d/club-crawl-claude-sandbox",
+            "content": (
+                "hamsd_club_crawl ALL=(hams_ai_agent) NOPASSWD: "
                 "/usr/local/sbin/run-hams-ai-agent-claude.sh\n"
             ),
             "owner": "root:root",
