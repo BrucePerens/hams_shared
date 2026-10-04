@@ -12,9 +12,7 @@ substitute [@ANCHOR: tenant_sites:COMM_normalize_host] [@ANCHOR: tenant_sites:CO
 two hostnames differ is refused [@ANCHOR: tenant_sites:COMM_classify]. The router puts every request in one of
 five kinds: the main site, a tenant, a parked domain, an unknown hostname, or a refused one
 [@ANCHOR: tenant_sites:COMM_match_guard]. A name that is not a domain name (`localhost`, an address, a one-word
-name: this machine's daemons, the test harness, an operator on loopback) is never classified, and through the
-tunnel such a name is refused [@ANCHOR: tenant_sites:COMM_through_cloudflare]
-[@ANCHOR: tenant_sites:COMM_original_peer] [@ANCHOR: tenant_sites:COMM_is_loopback_address].
+name: this machine's daemons, the test harness, an operator on loopback) is never classified.
 
 The main site's hostnames are listed as patterns, `example.com` and `*.example.com`
 [@ANCHOR: tenant_sites:COMM_host_matches] [@ANCHOR: tenant_sites:COMM_valid_host_pattern]

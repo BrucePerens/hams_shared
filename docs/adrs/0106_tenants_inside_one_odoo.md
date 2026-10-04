@@ -40,7 +40,7 @@ and no database per tenant.
 A request whose Host is not a domain name (`localhost`, an IP address, a one-word name) is never
 classified: this is what keeps hams.com's own daemons (JSON-2 callers on loopback), the test harness and
 operators working. Classification does not depend on `CF-Ray` being present, because that header's
-behaviour through the tunnel was not verified; a request through the tunnel with such a Host is refused.
+behaviour through the tunnel was not verified.
 
 **3. Content isolation is enforced in the ORM, not by convention.** While a tenant request is served,
 `website.page`, `website.menu`, `website.rewrite`, `blog.blog` and `blog.post` find only records of the
