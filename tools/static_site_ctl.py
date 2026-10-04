@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""static_site_ctl: provision the read-only static file server that sits beside an Odoo tenant (ADR 0105).
+"""static_site_ctl: provision the read-only static file server that sits beside an Odoo tenant (ADR 0106).
 
     static_site_ctl.py create  TENANT_SPEC [--apply]                 plan (default) or apply: account, directories,
                                                                     config, server copy, drop-in, unit

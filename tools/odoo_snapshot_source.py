@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """odoo_snapshot_source: read an OFFLINE Odoo snapshot (a restored PostgreSQL dump plus the filestore
-directory) through the same five read methods the exporter uses on a live server (ADR 0105).
+directory) through the same five read methods the exporter uses on a live server (ADR 0106).
 
     SnapshotSource(db, filestore).call(model, "search_read" | "read" | "fields_get" | "search_count" | "search", ...)
 

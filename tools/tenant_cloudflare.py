@@ -298,6 +298,15 @@ def apply_dns_records(api, records, apply, out=print):
     return exit_code
 
 
+ODOO_ONLY = (
+    "Cloudflare tunnel rules and DNS records are changed ONLY through hams.com's own Odoo (the cloudflare "
+    "module's tunnel routes, pushed by cloudflare.tunnel.action_push_configuration). Odoo is the single "
+    "source of truth; a change made through the Cloudflare API is overwritten by the next Odoo push. "
+    "This tool no longer calls the Cloudflare API (read or write). See hams_shared/docs/adrs/"
+    "0106_tenants_inside_one_odoo.md."
+)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--spec-dir", default=lib.Paths().spec_dir)
@@ -326,21 +335,8 @@ def main(argv=None):
                 current = json.load(handle)
         print(render_plan_text(specs, current, args.tunnel_id, args.odoo_rows))
         return 0
-    if not args.tunnel_id:
-        raise SystemExit("--tunnel-id is required for API commands")
-    creds = read_credentials()
-    api = Api(creds["CLOUDFLARE_API_TOKEN"])
-    if args.command == "fetch-current":
-        live = fetch_tunnel_config(api, creds["CLOUDFLARE_ACCOUNT_ID"], args.tunnel_id)
-        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(live, handle, indent=2)
-        print(f"saved the live configuration (version {live.get('version')}) to {args.out}")
-        return 0
-    if args.command == "apply-ingress":
-        return apply_ingress(api, creds["CLOUDFLARE_ACCOUNT_ID"], args.tunnel_id, specs, args.live_file,
-                             args.approved_sha256, args.apply, args.backup_dir)
-    return plan_or_apply_dns(api, specs, args.tunnel_id, getattr(args, "apply", False))
+    print(ODOO_ONLY, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
