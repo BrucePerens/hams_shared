@@ -397,6 +397,10 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
     def _config(self):
         return self._static("/opt/hams/etc/pdns-gsqlite3.conf")["content"]
 
+    def _shipped_lua(self):
+        """The script as provisioning writes it (static file contents go through str.format)."""
+        return infra.format_env(self._static("/opt/hams/etc/pdns-prequery.lua")["content"], {})
+
     def _settings(self):
         return dict(l.split("=", 1) for l in self._config().splitlines() if "=" in l)
 
@@ -423,7 +427,10 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
     def test_amplification_and_exposure_settings(self):
         c = self._settings()
         self.assertEqual(c["any-to-tcp"], "yes")
-        self.assertLessEqual(int(c["udp-truncation-threshold"]), 512)
+        # Bruce, 2026-10-04: PowerDNS's own default, so a ~700-byte callbook answer is ONE UDP packet.
+        # The ~14x reflection factor for a forged 55-byte query is accepted (see the runbook).
+        self.assertEqual(c["udp-truncation-threshold"], "1232")
+        self.assertEqual(c["lua-prequery-script"], "/opt/hams/etc/pdns-prequery.lua")
         self.assertEqual(c["version-string"], "anonymous")
         self.assertEqual(c["security-poll-suffix"], "")
         self.assertEqual(c["log-dns-queries"], "no")
@@ -475,23 +482,37 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
                 data += chunk
             return self._reply_fields(data)
 
-    def _make_db(self, path, zone, label_texts):
+    def _make_db(self, path, zone, records):
+        """records: (name relative to the zone or '', type, content). A SOA and an NS are added."""
         import sqlite3
         conn = sqlite3.connect(path)
         with open(self.SCHEMA) as fh:
             conn.executescript(fh.read())
         conn.execute("INSERT INTO domains(id, name, type) VALUES (1, ?, 'NATIVE')", (zone,))
-        rows = [(1, zone, "SOA", f"ns1.{zone} hostmaster.{zone} 1 10800 3600 604800 3600", 300, 1)]
-        rows += [(1, zone, "NS", f"ns1.{zone}", 300, 1)]
-        rows += [(1, f"{label}.{zone}", "TXT", '"' + text + '"', 300, 1) for label, text in label_texts]
+        rows = [(1, zone, "SOA", f"ns1.{zone} hostmaster.{zone} 1 10800 3600 604800 3600", 300),
+                (1, zone, "NS", f"ns1.{zone}", 300)]
+        rows += [(1, f"{label}.{zone}" if label else zone, rtype, content, 300) for label, rtype, content in records]
         conn.executemany("INSERT INTO records(domain_id,name,type,content,ttl,auth) VALUES (?,?,?,?,?,1)",
-                         [r[:5] for r in rows])
+                         rows)
         conn.commit()
         conn.close()
 
-    def test_a_real_pdns_with_the_shipped_config_is_not_an_amplifier_or_a_resolver(self):
-        if not shutil.which("pdns_server") or not os.path.exists(self.SCHEMA):
-            self.skipTest("pdns_server or its sqlite3 schema is not installed")
+    def _udp_or_none(self, port, packet):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(1)
+                sock.sendto(packet, ("127.0.0.1", port))
+                return self._reply_fields(sock.recv(65535))
+        except socket.timeout:
+            return None
+
+    @staticmethod
+    def _txt(*strings):
+        return " ".join('"' + x + '"' for x in strings)
+
+    def _start_shipped_pdns(self):
+        """A real pdns_server with exactly the shipped config and the exact shipped Lua script
+        (only the file paths and the port differ). Returns the UDP/TCP port."""
         sockets = []
         for _ in range(2):
             s = socket.socket(); s.bind(("127.0.0.1", 0)); sockets.append(s)
@@ -500,17 +521,30 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
             s.close()
         main_db = os.path.join(self.tmp, "main.sqlite3")
         callbook_db = os.path.join(self.tmp, "callbook.sqlite3")
-        self._make_db(main_db, "u.example.org", [("alias", "small")])
-        self._make_db(callbook_db, "callbook.example.org", [("k6bp", "x" * 250 + '" "' + "y" * 250 + '" "' + "z" * 250)])
+        self._make_db(main_db, "u.example.org", [
+            ("alias", "TXT", self._txt("small")), ("alias", "A", "192.0.2.7"), ("alias", "AAAA", "2001:db8::7"),
+            ("alias", "MX", "10 mail.u.example.org"), ("alias", "CAA", '0 issue "letsencrypt.org"'),
+            ("alias", "LOC", "37 52 0.000 N 122 16 0.000 W 0.00m 1m 10000m 10m"),
+            ("_sip._tcp.alias", "SRV", "10 5 5060 alias.u.example.org"), ("www.alias", "CNAME", "alias.u.example.org"),
+        ])
+        self._make_db(callbook_db, "callbook.example.org", [
+            ("k6bp", "TXT", self._txt("x" * 250, "y" * 250, "z" * 250)),
+            ("huge", "TXT", self._txt(*["h" * 250] * 6)),
+        ])
         config = self._config().replace("{DOMAIN}", "example.org").replace("{PDNS_API_KEY}", "testkey")
         config = config.replace("/var/lib/powerdns/pdns.sqlite3", main_db)
         config = config.replace("/var/lib/powerdns/callbook/callbook.sqlite3", callbook_db)
+        shipped_lua = os.path.join(self.tmp, "pdns-prequery.lua")
+        with open(shipped_lua, "w") as fh:
+            fh.write(self._shipped_lua())
+        self.assertIn("lua-prequery-script=/opt/hams/etc/pdns-prequery.lua", config)
+        config = config.replace("/opt/hams/etc/pdns-prequery.lua", shipped_lua)
         config_dir = os.path.join(self.tmp, "etc")
         os.makedirs(config_dir)
         with open(os.path.join(config_dir, "pdns-shipped.conf"), "w") as fh:
             fh.write(config)
-        sockdir = os.path.join(self.tmp, "run")
-        os.makedirs(sockdir)
+        sockdir = tempfile.mkdtemp(prefix="pdp")  # a UNIX socket path must be short
+        self.addCleanup(lambda: shutil.rmtree(sockdir, ignore_errors=True))
         log = open(os.path.join(self.tmp, "pdns.log"), "w")
         proc = subprocess.Popen(
             ["pdns_server", "--guardian=no", "--daemon=no", "--disable-syslog", "--write-pid=no",
@@ -522,42 +556,132 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
         while True:
             try:
                 self._udp(dns_port, self._packet("alias.u.example.org", self.TYPE_TXT))
-                break
+                return dns_port
             except OSError:
                 if time.time() > deadline or proc.poll() is not None:
                     log.flush()
                     self.fail("pdns_server did not start: " + open(os.path.join(self.tmp, "pdns.log")).read()[-800:])
                 time.sleep(0.2)
 
-        small = self._udp(dns_port, self._packet("alias.u.example.org", self.TYPE_TXT))
-        self.assertEqual((small["rcode"], small["answers"], small["tc"]), (0, 1, False), "a small answer over UDP still works")
-        for zone_name in ("alias.u.example.org", "k6bp.callbook.example.org", "u.example.org"):
-            any_reply = self._udp(dns_port, self._packet(zone_name, self.TYPE_ANY, bufsize=4096))
-            self.assertTrue(any_reply["tc"], f"ANY for {zone_name} over UDP must be truncated")
-            self.assertEqual(any_reply["answers"], 0)
-            self.assertLessEqual(any_reply["size"], 100)
-        big = self._udp(dns_port, self._packet("k6bp.callbook.example.org", self.TYPE_TXT, bufsize=4096))
-        self.assertTrue(big["tc"], "an answer over 512 bytes is never sent over UDP")
-        self.assertEqual(big["answers"], 0)
-        self.assertLessEqual(big["size"], 512)
-        over_tcp = self._tcp(dns_port, self._packet("k6bp.callbook.example.org", self.TYPE_TXT))
-        self.assertEqual((over_tcp["rcode"], over_tcp["answers"]), (0, 1), "the callbook zone is served over TCP")
-        # Not a resolver: names outside our zones are refused, nothing is recursed.
-        for qtype in (self.TYPE_A, self.TYPE_ANY):
-            outside = self._udp(dns_port, self._packet("www.example.com", qtype))
-            # An outside ANY is answered "go to TCP" before the zone is looked up, still tiny.
-            self.assertTrue(outside["rcode"] == 5 or (qtype == self.TYPE_ANY and outside["tc"]), outside)
+    def _skip_without_pdns(self):
+        if not shutil.which("pdns_server") or not os.path.exists(self.SCHEMA):
+            self.skipTest("pdns_server or its sqlite3 schema is not installed")
+
+    def test_single_packet_answers_fit_at_1232_and_truncate_only_above_it(self):
+        self._skip_without_pdns()
+        port = self._start_shipped_pdns()
+        small = self._udp(port, self._packet("alias.u.example.org", self.TYPE_TXT, bufsize=1232))
+        self.assertEqual((small["rcode"], small["answers"], small["tc"]), (0, 1, False))
+        # A callbook-sized answer (~800 bytes) goes out in ONE UDP packet to a client that advertises 1232.
+        callbook = self._udp(port, self._packet("k6bp.callbook.example.org", self.TYPE_TXT, bufsize=1232))
+        self.assertEqual((callbook["rcode"], callbook["answers"], callbook["tc"]), (0, 1, False))
+        self.assertGreater(callbook["size"], 700)
+        self.assertLessEqual(callbook["size"], 1232)
+        # The same, and a bigger buffer, still fit; a client with no EDNS gets 512 bytes at most, so it is told to use TCP.
+        self.assertFalse(self._udp(port, self._packet("k6bp.callbook.example.org", self.TYPE_TXT, bufsize=4096))["tc"])
+        plain = self._udp(port, self._packet("k6bp.callbook.example.org", self.TYPE_TXT))
+        self.assertTrue(plain["tc"] and plain["answers"] == 0 and plain["size"] <= 512, plain)
+        # An answer above 1232 is never sent over UDP, whatever the client advertises.
+        huge = self._udp(port, self._packet("huge.callbook.example.org", self.TYPE_TXT, bufsize=4096))
+        self.assertTrue(huge["tc"] and huge["answers"] == 0 and huge["size"] <= 100, huge)
+        over_tcp = self._tcp(port, self._packet("k6bp.callbook.example.org", self.TYPE_TXT))
+        self.assertEqual((over_tcp["rcode"], over_tcp["answers"]), (0, 1))
+        self.assertEqual(self._tcp(port, self._packet("huge.callbook.example.org", self.TYPE_TXT))["answers"], 1)
+
+    def test_every_type_our_zones_hold_is_answered(self):
+        self._skip_without_pdns()
+        port = self._start_shipped_pdns()
+        for qtype, name in ((1, "alias.u.example.org"), (28, "alias.u.example.org"), (15, "alias.u.example.org"),
+                            (16, "alias.u.example.org"), (257, "alias.u.example.org"), (29, "alias.u.example.org"),
+                            (33, "_sip._tcp.alias.u.example.org"), (5, "www.alias.u.example.org"),
+                            (2, "u.example.org"), (6, "u.example.org"), (2, "callbook.example.org"),
+                            (6, "callbook.example.org"), (16, "k6bp.callbook.example.org")):
+            reply = self._udp(port, self._packet(name, qtype, bufsize=1232))
+            self.assertEqual(reply["rcode"], 0, (name, qtype))
+            self.assertGreaterEqual(reply["answers"], 1, (name, qtype))
+        # Types we hold no record of, but that resolvers and browsers ask for any name, are an empty
+        # NOERROR (NODATA), not REFUSED: refusing them would make resolvers distrust this server.
+        for qtype in (43, 44, 35, 64, 65):
+            reply = self._udp(port, self._packet("alias.u.example.org", qtype, bufsize=1232))
+            self.assertEqual((reply["rcode"], reply["answers"]), (0, 0), qtype)
+            self.assertLessEqual(reply["size"], 150, qtype)
+
+    def test_unusual_query_types_are_refused_with_a_reply_no_larger_than_the_query(self):
+        self._skip_without_pdns()
+        port = self._start_shipped_pdns()
+        # ANY, IXFR, AXFR, MAILB, MAILA, TKEY, TSIG, DNSKEY, RRSIG, NSEC, NSEC3, NULL, WKS, HINFO, ISDN, unassigned, 0.
+        for qtype in (255, 251, 252, 253, 254, 249, 250, 48, 46, 47, 50, 10, 11, 13, 20, 99, 0, 65280):
+            for name in ("alias.u.example.org", "k6bp.callbook.example.org", "u.example.org", "www.example.com"):
+                query = self._packet(name, qtype, bufsize=4096)
+                reply = self._udp(port, query)
+                self.assertEqual(reply["rcode"], 5, (name, qtype, reply))
+                self.assertEqual(reply["answers"], 0)
+                self.assertLessEqual(reply["size"], len(query), (name, qtype, "no amplification"))
+        # Measured: the prequery hook runs for UDP only. Over TCP (the handshake proves the source address)
+        # ANY is answered normally, which is what RFC 8482 allows and what we want.
+        any_tcp = self._tcp(port, self._packet("k6bp.callbook.example.org", self.TYPE_ANY))
+        self.assertEqual((any_tcp["rcode"], any_tcp["answers"]), (0, 1), any_tcp)
+
+    def test_what_powerdns_itself_does_with_the_rest(self):
+        """The Lua hook cannot see class, opcode or flags, so these are PowerDNS's own behavior,
+        pinned here so an upgrade that changes it fails a test."""
+        self._skip_without_pdns()
+        port = self._start_shipped_pdns()
+        for qclass in (3, 4):  # CH, HS: refused or not implemented, never an answer, never larger than the query
+            query = self._packet("alias.u.example.org", self.TYPE_TXT, qclass=qclass, bufsize=1232)
+            reply = self._udp(port, query)
+            self.assertIn(reply["rcode"], (4, 5), qclass)
+            self.assertEqual(reply["answers"], 0)
+            self.assertLessEqual(reply["size"], len(query))
+        # Class ANY (255) is answered like IN, with an answer of the same size: no amplification beyond IN.
+        as_in = self._udp(port, self._packet("alias.u.example.org", self.TYPE_TXT, bufsize=1232))
+        as_any = self._udp(port, self._packet("alias.u.example.org", self.TYPE_TXT, qclass=255, bufsize=1232))
+        self.assertEqual((as_any["rcode"], as_any["size"]), (as_in["rcode"], as_in["size"]))
+        # Opcodes IQUERY, STATUS and 3 and a reply sent as a query are dropped without any answer; NOTIFY and
+        # UPDATE are answered with an error (FORMERR/NOTIMP/REFUSED) no larger than the query.
+        for opcode in (1, 2, 3):
+            self.assertIsNone(self._udp_or_none(port, self._query_with(opcode=opcode)), opcode)
+        for opcode in (4, 5):
+            reply = self._udp_or_none(port, self._query_with(opcode=opcode))
+            self.assertIn(reply["rcode"], (1, 4, 5), opcode)
+            self.assertEqual(reply["answers"], 0)
+            self.assertLessEqual(reply["size"], len(self._query_with(opcode=opcode)))
+        self.assertIsNone(self._udp_or_none(port, self._query_with(flags=0x8100)), "a packet with the response bit set")
+        # Malformed packets are dropped by PowerDNS itself: a truncated header, a question count with no question.
+        self.assertIsNone(self._udp_or_none(port, b"\x12\x34\x01"))
+        self.assertIsNone(self._udp_or_none(port, b"\x12\x34\x01\x00\x00\x05\x00\x00\x00\x00\x00\x00"))
+
+    def _query_with(self, opcode=0, flags=0x0100):
+        packet = bytearray(self._packet("alias.u.example.org", self.TYPE_TXT))
+        struct.pack_into("!H", packet, 2, flags | (opcode << 11))
+        return bytes(packet)
+
+    def test_names_outside_our_zones_are_still_refused_and_it_is_not_a_resolver(self):
+        self._skip_without_pdns()
+        port = self._start_shipped_pdns()
+        for qtype in (self.TYPE_A, self.TYPE_TXT, 28, 2, 6):
+            query = self._packet("www.example.com", qtype, bufsize=1232)
+            outside = self._udp(port, query)
+            self.assertEqual(outside["rcode"], 5, qtype)
             self.assertFalse(outside["ra"], "recursion is not available")
             self.assertEqual(outside["answers"], 0)
-            self.assertLessEqual(outside["size"], 60)
-        self.assertEqual(self._tcp(dns_port, self._packet("www.example.com", self.TYPE_A))["rcode"], 5)
-        root = self._udp(dns_port, self._packet(".", 2))
-        self.assertEqual(root["rcode"], 5)
-        # No zone transfer, no version disclosure.
-        axfr = self._tcp(dns_port, self._packet("callbook.example.org", self.TYPE_AXFR))
+            self.assertLessEqual(outside["size"], len(query))
+        self.assertEqual(self._tcp(port, self._packet("www.example.com", self.TYPE_A))["rcode"], 5)
+        self.assertEqual(self._udp(port, self._packet(".", 2))["rcode"], 5)
+        axfr = self._tcp(port, self._packet("callbook.example.org", self.TYPE_AXFR))
         self.assertTrue(axfr["rcode"] != 0 or axfr["answers"] == 0, axfr)
-        version = self._udp(dns_port, self._packet("version.bind", self.TYPE_TXT, qclass=3))
+        version = self._udp(port, self._packet("version.bind", self.TYPE_TXT, qclass=3))
         self.assertEqual(version["answers"], 0, "no version string is revealed")
+
+    def test_the_shipped_script_fails_open_and_uses_only_the_two_documented_calls(self):
+        script = self._shipped_lua()
+        self.assertNotIn("{{", script, "provisioning's str.format turns doubled braces into one; none may remain")
+        self.assertIn("pcall(", script, "a changed PowerDNS API must not SERVFAIL every query")
+        self.assertEqual(sorted(set(re.findall(r"\bp:(\w+)\(", script))), ["getQuestion", "setRcode"])
+        served = {int(n) for n in re.findall(r"\[(\d+)\] = true", script)}
+        self.assertEqual(served, {1, 2, 5, 6, 15, 16, 28, 29, 33, 35, 43, 44, 64, 65, 257})
+        for never in (255, 251, 252, 48, 46, 47):
+            self.assertNotIn(never, served)
 
 
 class HookClearPycacheTests(_TmpDirTestCase):
