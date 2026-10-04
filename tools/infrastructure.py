@@ -988,6 +988,7 @@ SHARED_ODOO_ACCOUNT_UNITS = frozenset({
     "stray.odoo.shell.detector.service",
     # Supervises the AI ticket-triage pass; the model itself runs as the dedicated nologin
     # hams_ai_agent account (see the unit's own comment). Same shape as credential.touch.timer.
+    "ticket.triage.event.service",
     "ticket.triage.service",
     "uk.ofcom.sync.service",
     "wa7bnm.contest.sync.service",
@@ -1551,6 +1552,19 @@ MANIFEST = {
             "recursive_owner": True,
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
+        },
+        {
+            # Wake-up spool for the event-driven AI ticket triage (Bruce, NIGHT_PLAN decision 222).
+            # hams_helpdesk (inside odoo.service, which already has /opt/hams/spool read-write) drops
+            # `ticket-<id>.json` here after a ticket commits; ticket.triage.path watches it and starts
+            # ticket.triage.event.service, which consumes the files. odoo:odoo 0700: only the Odoo server
+            # writes and only the triage supervisor (also odoo) reads; systemd's path unit runs as root and
+            # is not bound by the mode. Prod only: the units that use it are prod only.
+            "path": "/opt/hams/spool/ticket_triage",
+            "owner": "odoo:odoo",
+            "provision_mode": "700",
+            "runtime_mount": "rw",
+            "environments": ["prod"],
         },
         {
             "path": "/opt/hams/failed_input",
@@ -5909,26 +5923,114 @@ SyslogIdentifier=ticket.triage
             "environments": ["prod"],
         },
         {
-            # Cadence: hourly. Production holds a few dozen tickets in total and new ones arrive a
-            # few a week, so a faster timer buys nothing a human reviewer would notice. A run with
-            # no waiting ticket spends no Claude quota (cheap pre-check), so the cost of hourly is
-            # near zero; the hard ceilings are the daily caps in the daemon (12 model calls and
-            # 20 tickets a day by default). Persistent=false: a missed run is simply skipped, never
-            # replayed as a burst after downtime. RandomizedDelaySec spreads the start.
+            # FALLBACK cadence, every four hours (Bruce, NIGHT_PLAN decision 222: triage is now event-driven,
+            # ticket.triage.path below, and this timer only catches a ticket whose wake-up was lost or
+            # dropped, for example while the daemon was disabled, the spool was full, or the daily cap had
+            # been reached). A run with no waiting ticket spends no Claude quota (cheap pre-check), so even
+            # a frequent fallback costs nothing; the hard ceilings are the daemon's daily caps (12 model
+            # calls and 20 tickets a day by default). Persistent=false: a missed run is simply skipped,
+            # never replayed as a burst after downtime. RandomizedDelaySec spreads the start.
             "path": "/opt/hams/systemd/ticket.triage.timer",
             "external_fetch": "activates ticket.triage.service",
             "opt_in": "activates ticket.triage.service, which spends Claude Code quota",
             "content": """\
 [Unit]
-Description=Hams.com AI Ticket Triage Hourly (drafts only)
+Description=Hams.com AI Ticket Triage Fallback Every Four Hours (drafts only)
 
 [Timer]
-OnCalendar=hourly
+OnCalendar=*-*-* 00/4:07:00
 Persistent=false
-RandomizedDelaySec=5m
+RandomizedDelaySec=10m
 
 [Install]
 WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # EVENT trigger for the AI ticket triage (Bruce, NIGHT_PLAN decision 222: "Can we get a
+            # notification of an incoming ticket from Odoo and run it immediately?"). hams_helpdesk writes
+            # `ticket-<id>.json` (the id only) to /opt/hams/spool/ticket_triage after a ticket commits; this
+            # path unit starts ticket.triage.event.service the moment one exists. Why a spool and a path unit
+            # and not RabbitMQ: the daemon stays a one-shot (no always-on consumer, no broker credential in
+            # the triage service), the filesystem is up whenever Odoo is, backup_management already uses this
+            # shape, and the file stays on disk until something consumes it, so a notification cannot be lost
+            # by the daemon being down. systemd starts the service at most once at a time; files written while
+            # it runs survive and start exactly one follow-up run when it exits. The service deletes the files
+            # it has seen before it does anything else, so a reached cap or the kill switch cannot leave the
+            # glob matching and re-fire this unit in a loop.
+            #
+            # opt_in and external_fetch exactly like the timer: enabling it lets ticket text start model runs.
+            # Prod only: the account, wrapper, spool directory and sudoers grants exist only on hams1.
+            "path": "/opt/hams/systemd/ticket.triage.path",
+            "external_fetch": "activates ticket.triage.event.service",
+            "opt_in": "activates ticket.triage.event.service, which spends Claude Code quota",
+            "content": """\
+[Unit]
+Description=Hams.com AI Ticket Triage Wake-Up (a new ticket was created)
+
+[Path]
+PathExistsGlob=/opt/hams/spool/ticket_triage/ticket-*.json
+Unit=ticket.triage.event.service
+# Bound how often a wake-up can fire the service; the service's own debounce is the real batching.
+TriggerLimitIntervalSec=60
+TriggerLimitBurst=10
+
+[Install]
+WantedBy=paths.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # The unit ticket.triage.path starts. Same sandbox and supervisor shape as ticket.triage.service
+            # (see its comment), with three differences, each deliberate:
+            #   * ExecStart is `main.py --event`: debounce (wait for a quiet period so a burst of tickets
+            #     becomes one run), consume the wake-up files, then the same guarded pass (kill switch, daily
+            #     and per-run caps, flock, pre-check, internal-note-only write surface);
+            #   * NO ConditionPathExists= kill switch and NO ExecStartPre: both would let the service be
+            #     skipped or fail BEFORE it deleted the wake-up files, and a path unit whose files are never
+            #     consumed re-fires and reaches its trigger limit. The kill switch is checked first, in
+            #     main.py, which then deletes the files and exits 0;
+            #   * a longer TimeoutStartSec: debounce (max 120 s) + wait for the lock (max 700 s) + pre-check
+            #     (60 s) + the CLI's hard timeout (600 s) + kill grace.
+            # ReadWritePaths adds the spool directory, so the service can delete the wake-up files.
+            "path": "/opt/hams/systemd/ticket.triage.event.service",
+            "external_fetch": "calls Anthropic through the Claude Code CLI on every run",
+            "opt_in": "spends Claude Code subscription quota; reads untrusted ticket text",
+            "content": """\
+[Unit]
+Description=Hams.com AI Ticket Triage on a New Ticket, Drafts Only (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction, with the credential.touch.timer exception (no
+# NoNewPrivileges, SETUID/SETGID kept) -- see ticket.triage.service's own comment.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+ReadWritePaths=/home/hams_ai_agent -/opt/hams/ai_triage_repo /opt/hams/spool/ticket_triage
+StateDirectory=hams-ticket-triage
+StateDirectoryMode=0700
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/ticket_triage_agent
+EnvironmentFile=-/opt/hams/etc/ticket_triage.env
+Environment="HAMS_TRIAGE_SPOOL_DIR=/opt/hams/spool/ticket_triage"
+# Debounce 120 + lock wait 700 + pre-check 60 + CLI timeout 600 + kill grace, with margin.
+TimeoutStartSec=1800
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/ticket_triage_agent/main.py --event
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ticket.triage.event
 """,
             "owner": "root:root",
             "mode": "644",
