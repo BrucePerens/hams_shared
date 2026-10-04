@@ -58,6 +58,7 @@ import xmlrpc.client
 from urllib.parse import urlsplit
 
 TOOL_VERSION = "1.0"
+PUBLICATION_FIELDS = ("is_published", "website_published", "date_publish", "published_date")
 USER_AGENT = "HamsComSyncDaemon/1.0 (+https://crawler.hams.com)"
 SECRET_FIELD_RE = re.compile(r"(password|passwd|secret|token|api_?key|private_?key|signature|credential)", re.I)
 
@@ -868,6 +869,7 @@ class Importer:
         self._target_fields = {}
         self._modules = None
         self.data = {}
+        self.hold = self._load_hold()
 
     def target_modules(self):
         """Installed module names in the target, or an empty set when it cannot be told."""
@@ -881,6 +883,14 @@ class Importer:
         return bool(known) and module not in known
 
     # -- bookkeeping
+    def _load_hold(self):
+        """hold.json of a converted export: {"blog.post": [ids], "website.page": [ids]} (source ids)."""
+        try:
+            with open(os.path.join(self.dir, "hold.json"), "r", encoding="utf-8") as handle:  # audit-ignore-path
+                return {model: {int(i) for i in ids} for model, ids in json.load(handle).items()}
+        except FileNotFoundError:
+            return {}
+
     def _load_idmap(self):
         try:
             with open(self.idmap_path, "r", encoding="utf-8") as handle:  # audit-ignore-path
@@ -969,6 +979,15 @@ class Importer:
         """Returns the target id. Matches by `domain` first (natural key). Honest in dry-run: the id
         is a negative placeholder for a record that would be created."""
         existing = self.target.call(model, "search", [domain], {"limit": 1, "context": {"active_test": False}})
+        if source_id in self.hold.get(model, set()):
+            # Held for review (hold.json of a converted export): always created unpublished, and a later import
+            # never changes the publication state, so a record Bruce has published in Odoo stays published.
+            if existing:
+                values = {k: v for k, v in values.items() if k not in PUBLICATION_FIELDS}
+            else:
+                values = dict(values, **{k: False for k in PUBLICATION_FIELDS if k in values})
+            if [model, source_id] not in self.report.setdefault("held", []):
+                self.report["held"].append([model, source_id])
         if existing:
             self._remember(model, source_id, existing[0])
             if update and self.apply and values:
@@ -1481,6 +1500,8 @@ def render_report(report, apply):
         lines.append(f"  forms replaced by a static notice: {report['forms_replaced']}")
     for item in report["unsupported"]:
         lines.append(f"  UNSUPPORTED {item}")
+    for model, ident in report.get("held", []):
+        lines.append(f"  HELD {model} {ident}: unpublished, held for review (hold.json)")
     for item in report["warnings"]:
         lines.append(f"  WARNING {item}")
     return "\n".join(lines)

@@ -14,6 +14,10 @@
 # Tests [@ANCHOR: wordpress_to_odoo:check_arch_safe]
 # [@ANCHOR: test_wordpress_to_odoo:scan_tree]
 # Tests [@ANCHOR: wordpress_to_odoo:scan_tree]
+# [@ANCHOR: test_wordpress_to_odoo:privacy_hold]
+# Tests [@ANCHOR: wordpress_to_odoo:hold_reasons]
+# [@ANCHOR: test_wordpress_to_odoo:credential_options_refused]
+# Tests [@ANCHOR: wordpress_to_odoo:credential_options_refused]
 
 import collections
 import gzip
@@ -78,7 +82,7 @@ def post(ident, title, content, name=None, kind="post", status="publish", parent
     row.update({"ID": ident, "post_author": 1, "post_date": date, "post_date_gmt": date, "post_content": content,
                 "post_title": title, "post_status": status, "comment_status": "closed", "post_password": "",
                 "post_name": name if name is not None else title.lower().replace(" ", "-"), "post_parent": parent,
-                "menu_order": 0, "post_type": kind, "comment_count": 0})
+                "menu_order": 0, "post_type": kind, "comment_count": 0, "post_modified": date})
     row.update(extra)
     return row
 
@@ -87,7 +91,7 @@ def option(name, value):
     return {"option_name": name, "option_value": value, "autoload": "yes"}
 
 
-def build_dump():
+def build_dump(extra_posts=(), extra_options=()):
     posts = [
         post(2, "Sample Page", "<!-- wp:paragraph -->\n<p>This is an example page. It's different.</p>\n<!-- /wp:paragraph -->",
              name="sample-page", kind="page"),
@@ -118,6 +122,7 @@ def build_dump():
         post(50, "", "", name="50", kind="nav_menu_item"),
         post(51, "Resume", "", name="resume", kind="nav_menu_item"),
         post(52, "", "", name="52", kind="nav_menu_item"),
+        *extra_posts,
     ]
     meta = [
         (49, "_menu_item_type", "post_type"), (49, "_menu_item_object", "page"), (49, "_menu_item_object_id", "45"),
@@ -138,6 +143,7 @@ def build_dump():
             option("stylesheet", "twentyseventeen"), option("template", "twentyseventeen"),
             option("theme_mods_twentyseventeen", 'a:2:{i:0;b:0;s:18:"nav_menu_locations";a:1:{s:3:"top";i:2;}}'),
             option("cloudflare_api_key", "not-a-real-key-0123456789"), option("active_plugins", "a:0:{}"),
+            *[option(n, v) for n, v in extra_options],
         ],
         "wp_8_posts": posts,
         "wp_8_postmeta": [{"meta_id": i, "post_id": p, "meta_key": k, "meta_value": v} for i, (p, k, v) in enumerate(meta, 1)],
@@ -431,6 +437,190 @@ class ConverterTests(Fixture):
         drafts = [p for p in data["blog.post"] if p["name"] in ("Draft Post", "Private Post")]
         self.assertEqual(len(drafts), 2)
         self.assertTrue(all(not p["is_published"] for p in drafts))
+
+
+def make_site(tmp, name, extra_posts=(), extra_options=()):
+    path = os.path.join(tmp, name)
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write(build_dump(extra_posts, extra_options))
+    return path
+
+
+class PrivacyHoldTests(unittest.TestCase):
+    """Posts and pages with other people's e-mail addresses or telephone numbers import UNPUBLISHED."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="wp2odoo-hold-")
+        cls.sql = make_site(cls.tmp, "d.sql.gz", [
+            post(20, "Letter", "From <a href=\"mailto:director@arrl.example\">him</a>, call 555-123-4567.", name="letter",
+                 date="2019-02-05 10:00:00"),
+            post(21, "Owner only", "Write to bruce@perens.com please.", name="owner-only", date="2019-02-06 10:00:00"),
+            post(22, "Third party", "Ask Jane at jane@third.example about it." + INJECTED, name="third-party",
+                 date="2019-02-07 10:00:00"),
+            post(23, "Meeting page", "Mail org@club.example", name="meeting", kind="page"),
+            post(24, "Plain", "No contact details, only 2019-02-06 and 12345.", name="plain", date="2019-02-08 10:00:00"),
+        ])
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def convert(self, **kwargs):
+        out = os.path.join(self.tmp, "out_%d" % len(os.listdir(self.tmp)))
+        report, manifest = wp.convert(self.sql, out, 8, log=lambda *_: None, **kwargs)
+        rows = {m: [json.loads(line) for line in open(os.path.join(out, "data", f"{m}.jsonl"), encoding="utf-8")]
+                for m in ("blog.post", "website.page")}
+        return out, report, rows
+
+    def test_hold_reasons_ignores_the_owner_and_never_returns_the_addresses(self):
+        self.assertIsNone(wp.hold_reasons("mail bruce@perens.com or Bruce@Perens.com"))
+        self.assertIsNone(wp.hold_reasons("dates 2019-02-06 and 12345 and 1-2-3"))
+        found = wp.hold_reasons("a@x.example, b@x.example, c@y.example, tel 510-555-0100 and (415) 555 0101")
+        self.assertEqual(found["emails"], 3)
+        self.assertEqual(found["email_domains"], ["x.example", "y.example"])
+        self.assertEqual(found["phones"], 2)
+        self.assertNotIn("a@x.example", json.dumps(found))
+        self.assertIsNone(wp.hold_reasons("call 510-555-0100", owner_contacts=("5105550100",)))
+        self.assertIsNone(wp.hold_reasons("x@mine.example", owner_contacts=("x@mine.example",)))
+        self.assertIsNotNone(wp.hold_reasons("x@other.example", owner_contacts=("x@mine.example",)))
+        self.assertIsNone(wp.hold_reasons("<script>var a='z@evil.example'</script>text"))
+
+    def test_held_posts_and_pages_are_unpublished_and_listed_the_rest_stay_published(self):
+        out, report, rows = self.convert()
+        posts = {p["id"]: p for p in rows["blog.post"]}
+        self.assertFalse(posts[20]["is_published"] or posts[20]["website_published"] or posts[20]["published_date"])
+        self.assertFalse(posts[22]["is_published"])
+        self.assertTrue(posts[21]["is_published"])
+        self.assertTrue(posts[24]["is_published"])
+        self.assertTrue([p for p in rows["website.page"] if p["id"] == 23 and not p["is_published"]])
+        self.assertEqual(json.load(open(os.path.join(out, "hold.json"))), {"blog.post": [20, 22], "website.page": [23]})
+        held = {h["id"]: h for h in report["held_for_review"]}
+        self.assertEqual(sorted(held), [20, 22, 23])
+        self.assertEqual(held[20]["phones"], 1)
+        self.assertEqual(held[22]["email_domains"], ["third.example"])
+        text = json.dumps(report) + open(os.path.join(out, "hold.json")).read()
+        for private in ("director@arrl.example", "jane@third.example", "555-123-4567", "org@club.example"):
+            self.assertNotIn(private, text)
+        sitemap = open(os.path.join(out, "reports", "sitemap.csv"), encoding="utf-8").read()
+        self.assertIn("held,", sitemap)
+        self.assertEqual(mig.verify_export(out), [])
+
+    def test_a_release_file_publishes_one_post_at_a_time(self):
+        out, report, rows = self.convert(release=[20])
+        posts = {p["id"]: p for p in rows["blog.post"]}
+        self.assertTrue(posts[20]["is_published"])
+        self.assertFalse(posts[22]["is_published"])
+        self.assertEqual(json.load(open(os.path.join(out, "hold.json")))["blog.post"], [22])
+
+    def test_the_owner_list_is_configurable_from_the_command_line(self):
+        out = os.path.join(self.tmp, "out_cli")
+        release = os.path.join(self.tmp, "release.json")
+        with open(release, "w", encoding="utf-8") as handle:
+            json.dump({"release": [22]}, handle)
+        code = wp.main(["convert", "--sql", self.sql, "--out", out, "--owner-contact", "@third.example",
+                        "--release-file", release], out=lambda *_: None)
+        self.assertEqual(code, 0)
+        held = json.load(open(os.path.join(out, "hold.json")))
+        self.assertNotIn(22, held["blog.post"])
+        self.assertIn(21, held["blog.post"])  # perens.com is no longer the owner's domain in this run
+
+
+class CredentialAndCompromiseTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="wp2odoo-cred-")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_credential_looking_option_names_are_recognised_and_refused(self):
+        for name in ("cloudflare_api_key", "mailserver_pass", "auth_key", "secure_auth_salt", "some_token", "client_secret",
+                     "stripe_private_key", "wp_credentials"):
+            self.assertTrue(wp.is_credential_option(name), name)
+        for name in ("blogname", "home", "siteurl", "permalink_structure", "posts_per_page", "_transient_keys",
+                     "wp_8_user_roles", "cron", "stylesheet"):
+            self.assertFalse(wp.is_credential_option(name), name)
+        site = wp.WordPressSite(wp.read_dump(make_site(self.tmp, "a.sql.gz")), 8)
+        with self.assertRaises(wp.CredentialRefused):
+            site.option("cloudflare_api_key")
+        self.assertEqual(site.option("blogname"), "Bruce Perens")
+
+    def test_an_export_that_contains_a_credential_value_is_refused_and_removed(self):
+        secret = "SuperSecretValue-9f8e7d6c5b"
+        sql = make_site(self.tmp, "b.sql.gz", [post(30, "Leaky", f"The key is {secret} indeed.", name="leaky")],
+                        [("my_service_token", secret)])
+        out = os.path.join(self.tmp, "leaky_out")
+        with self.assertRaises(wp.CredentialRefused) as caught:
+            wp.convert(sql, out, 8, log=lambda *_: None)
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertFalse(os.path.exists(out))
+
+    def test_a_placeholder_password_that_is_an_ordinary_word_does_not_block_the_export(self):
+        sql = make_site(self.tmp, "f.sql.gz", [post(34, "Words", "Choose a password carefully.", name="words")],
+                        [("mailserver_pass", "password")])
+        report, _ = wp.convert(sql, os.path.join(self.tmp, "words_out"), 8, log=lambda *_: None)
+        self.assertGreater(report["counts"]["posts"], 0)
+        self.assertIn("mailserver_pass", report["inventory"]["secret_looking_options_not_copied"])
+
+    def test_a_clean_export_contains_no_credential_option_value_anywhere(self):
+        out = os.path.join(self.tmp, "clean_out")
+        wp.convert(make_site(self.tmp, "c.sql.gz"), out, 8, log=lambda *_: None)
+        for directory, _dirs, files in os.walk(out):
+            for name in files:
+                self.assertNotIn(b"not-a-real-key-0123456789", open(os.path.join(directory, name), "rb").read(), name)
+        self.assertEqual(wp.check_no_option_secrets(wp.WordPressSite(wp.read_dump(make_site(self.tmp, "d.sql.gz")), 8), out), 1)
+
+    def test_compromise_facts_name_hosts_tables_sites_and_the_modification_window(self):
+        post_row = post(31, "Hit", "text" + INJECTED, name="hit", post_modified="2025-11-12 13:33:14")
+        second = post(32, "Hit2", "t" + INJECTED, name="hit2", post_modified="2025-11-12 14:30:18")
+        revision = post(33, "Rev", "r" + INJECTED, name="33", kind="revision", status="inherit")
+        sql = make_site(self.tmp, "e.sql.gz", [post_row, second, revision])
+        out = os.path.join(self.tmp, "comp_out")
+        report, _ = wp.convert(sql, out, 8, log=lambda *_: None)
+        facts = report["compromise"]
+        self.assertEqual(facts["script_hosts"], ["bad.example"])
+        # posts 10, 31, 32, the page About Me and one revision
+        self.assertEqual(facts["tables_holding_the_hosts"]["wp_8_posts"]["post_content"], 5)
+        self.assertEqual(list(facts["tables_holding_the_hosts"]), ["wp_8_posts"])
+        self.assertEqual(facts["sites_affected"], ["8"])
+        self.assertEqual(facts["injected_posts_modified_between"], ["2018-03-03 10:00:00", "2025-11-12 14:30:18"])
+        self.assertEqual(facts["injected_by_type"]["revision/inherit"], 1)
+        self.assertEqual(facts["injected_revision_bursts"], [{"hour": "2018-03-03 10", "revisions": 1}])
+        self.assertGreater(facts["verified_absent_from_export"], 5)
+        self.assertEqual(facts["published_posts_with_injection"], 3)  # posts 10, 31, 32; the page is counted in the table total
+
+    def test_assert_hosts_absent_finds_a_leftover_reference(self):
+        directory = os.path.join(self.tmp, "left")
+        os.makedirs(os.path.join(directory, "data"))
+        with open(os.path.join(directory, "data", "x.jsonl"), "w", encoding="utf-8") as handle:
+            handle.write('{"content": "<script src=https://Bad.Example/x.js>"}')
+        with self.assertRaises(mig.MigrateError):
+            wp.assert_hosts_absent(directory, ["bad.example"])
+        with open(os.path.join(directory, "content_report.json"), "w", encoding="utf-8") as handle:
+            handle.write("bad.example")  # the report names the indicator on purpose
+        os.remove(os.path.join(directory, "data", "x.jsonl"))
+        self.assertEqual(wp.assert_hosts_absent(directory, ["bad.example"]), 0)
+
+
+class UploadLayoutTests(Fixture):
+    def test_uploads_are_found_in_every_layout_and_by_any_site_id(self):
+        base = os.path.join(self.tmp, "u2")
+        # the whole multisite tree: the files live under another site id than the URL says
+        os.makedirs(os.path.join(base, "sites", "11", "2019", "01"))
+        with open(os.path.join(base, "sites", "11", "2019", "01", "pic.jpg"), "wb") as handle:
+            handle.write(b"\xff\xd8x")
+        media = wp.Media([base], collections.Counter())
+        self.assertEqual(media.resolve("/wp-content/uploads/sites/4/2019/01/pic-300x200.jpg", 1), "/web/image/1")
+        flat = os.path.join(self.tmp, "u3")
+        os.makedirs(os.path.join(flat, "2020", "03"))
+        with open(os.path.join(flat, "2020", "03", "cv.pdf"), "wb") as handle:
+            handle.write(b"%PDF")
+        media = wp.Media([flat], collections.Counter())
+        self.assertTrue(media.resolve("/wp-content/uploads/sites/4/2020/03/cv.pdf", 2).startswith("/web/content/1/cv.pdf"))
+        self.assertIsNone(media.resolve("/wp-content/uploads/sites/4/2020/03/none.pdf", 2))
+        self.assertIn("/wp-content/uploads/sites/4/2020/03/none.pdf", media.missing)
 
 
 class ScanTests(unittest.TestCase):

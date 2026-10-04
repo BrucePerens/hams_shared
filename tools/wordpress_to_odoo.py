@@ -49,6 +49,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import sys
 import urllib.error
 import urllib.parse
@@ -217,6 +218,18 @@ def php_unserialize(text):
 # --------------------------------------------------------------------------------------------
 
 
+class CredentialRefused(ValueError):
+    """A credential-looking WordPress option was about to be copied into an export or a report."""
+
+
+SECRET_OPTION = re.compile(r"(api_?key|pass(w|$|_)|secret|token|salt|private|credential|auth_key|_key$|^key_)", re.I)
+IGNORED_OPTION = re.compile(r"^(_transient|_site_transient|cron$|rewrite_rules$|wp_.*user_roles$)")
+
+
+def is_credential_option(name):
+    return bool(SECRET_OPTION.search(name or "")) and not IGNORED_OPTION.match(name or "")
+
+
 def _rows(dump, table):
     entry = dump.get(table)
     if not entry:
@@ -252,6 +265,10 @@ class WordPressSite:
             raise ValueError(f"no tables with prefix {self.prefix!r} in the dump")
 
     def option(self, name, default=""):
+        # [@ANCHOR: wordpress_to_odoo:credential_options_refused]
+        # Verified by [@ANCHOR: test_wordpress_to_odoo:credential_options_refused]
+        if is_credential_option(name):
+            raise CredentialRefused(f"refusing to read the credential-looking WordPress option {name!r}")
         value = self.options.get(name)
         return default if value is None else value
 
@@ -718,8 +735,11 @@ class Media:
         if resized:
             candidates.insert(0, resized.group(1) + resized.group(2))
         for base in self.dirs:
+            # the uploads directory of a multisite holds sites/<id>/YYYY/MM; a single site's holds YYYY/MM
+            sites = os.path.join(base, "sites")
+            prefixes = ("",) + tuple(f"sites/{n}/" for n in sorted(os.listdir(sites))) if os.path.isdir(sites) else ("",)
             for candidate in candidates:
-                for prefix in ("", "sites/4/", "sites/8/"):
+                for prefix in prefixes:
                     path = os.path.join(base, prefix + candidate)
                     if os.path.isfile(path):
                         return os.path.realpath(path), candidate
@@ -781,6 +801,27 @@ EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}(?!\d)")
 BARE_URL_LINE = re.compile(r"^\s*(https?://[^\s<>\"]+)\s*$", re.M)
 WP_DATE_ZERO = "0000-00-00 00:00:00"
+# Contact details that belong to the site owner and may stay public: an entry starting with "@" is a mail domain,
+# an entry of digits is a telephone number, anything else an exact address.
+OWNER_CONTACTS = ("@perens.com",)
+HELD_NOTE = "held for Bruce's review: unpublished"
+
+
+# [@ANCHOR: wordpress_to_odoo:hold_reasons]
+# Verified by [@ANCHOR: test_wordpress_to_odoo:privacy_hold]
+def hold_reasons(raw, owner_contacts=OWNER_CONTACTS):
+    """Other people's e-mail addresses and telephone numbers in a post's text. Returns None when there are none,
+    else {"emails": n, "email_domains": [...], "phones": n}. The addresses themselves are not returned: the
+    report names counts and domains, and Bruce reads the post."""
+    text = htmllib.unescape(_BLOCK_COMMENT.sub("", INJECTED_SCRIPT.sub("", raw or "")))
+    owners = [c.lower() for c in owner_contacts]
+    emails = {e.lower() for e in EMAIL_RE.findall(text)}
+    emails = {e for e in emails if not any((o.startswith("@") and e.endswith(o)) or e == o for o in owners)}
+    owner_digits = {re.sub(r"\D", "", o) for o in owners if re.sub(r"\D", "", o) and not o.startswith("@")}
+    phones = {p for p in PHONE_RE.findall(text) if re.sub(r"\D", "", p)[-10:] not in {d[-10:] for d in owner_digits}}
+    if not emails and not phones:
+        return None
+    return {"emails": len(emails), "email_domains": sorted({e.split("@", 1)[1] for e in emails}), "phones": len(phones)}
 
 
 def wp_datetime(value):
@@ -793,8 +834,11 @@ def wp_datetime(value):
 # Verified by [@ANCHOR: test_wordpress_to_odoo:converter]
 class Converter:
     def __init__(self, site, domains=("perens.com",), static_root=None, uploads_dirs=(), blog_name=DEFAULT_BLOG_NAME,
-                 include_unpublished=False):
+                 include_unpublished=False, owner_contacts=OWNER_CONTACTS, release=()):
         self.site = site
+        self.owner_contacts = tuple(c.lower() for c in owner_contacts)
+        self.release = {int(r) for r in release}
+        self.held = {}  # post id -> {"type", "title", "emails", "email_domains", "phones"}
         self.domains = sorted({d.lower() for d in domains} | {
             urllib.parse.urlsplit(site.option("home")).hostname or "",
             urllib.parse.urlsplit(site.option("siteurl")).hostname or ""} - {""})
@@ -1016,6 +1060,7 @@ class Converter:
                 self.sitemap.append({"old_url": old, "new_url": target, "status": "redirect-301", "kind": "page",
                                      "id": post["ID"], "note": "WordPress redirect plugin: the page was never shown"})
                 continue
+            held = self.check_hold(post, "page", url)
             body = self.convert_content(post, qweb=True)
             title = post["post_title"] or url.strip("/")
             arch = self.page_arch(post, title, body)
@@ -1025,7 +1070,7 @@ class Converter:
                 "type": "qweb", "arch_db": arch, "website_id": [SITE_ID, "site"], "active": True, "mode": "primary",
             })
             data["website.page"].append({
-                "id": post["ID"], "url": urllib.parse.unquote(url), "view_id": [view_id, title], "is_published": True,
+                "id": post["ID"], "url": urllib.parse.unquote(url), "view_id": [view_id, title], "is_published": not held,
                 "website_id": [SITE_ID, "site"], "website_indexed": True,
                 "date_publish": wp_datetime(post["post_date_gmt"]) or wp_datetime(post["post_date"]),
             })
@@ -1034,8 +1079,9 @@ class Converter:
             self.stats["pages"] += 1
             if not post["post_content"].strip():
                 self.stats["pages_empty"] += 1
-            self.sitemap.append({"old_url": old, "new_url": urllib.parse.unquote(url), "status": "kept", "kind": "page",
-                                 "id": post["ID"], "note": "same path; the trailing-slash form redirects"})
+            self.sitemap.append({"old_url": old, "new_url": urllib.parse.unquote(url),
+                                 "status": "held" if held else "kept", "kind": "page", "id": post["ID"],
+                                 "note": HELD_NOTE if held else "same path; the trailing-slash form redirects"})
             self.items["pages"].append({"id": post["ID"], "title": title, "url": url})
 
         for post in sorted(posts, key=lambda p: (p["post_date"], p["ID"])):
@@ -1061,6 +1107,8 @@ class Converter:
                 self.sitemap.append({"old_url": old, "new_url": "", "status": "dropped", "kind": "post", "id": post["ID"],
                                      "note": "empty untitled post"})
                 continue
+            held = self.check_hold(post, "post", old)
+            published = published and not held
             new_url = self.post_new_url(post)
             self.new_url[post["ID"]] = new_url
             date = wp_datetime(post["post_date_gmt"]) or wp_datetime(post["post_date"])
@@ -1072,8 +1120,9 @@ class Converter:
             })
             redirects.extend(self._permalink_variants(old, new_url))
             self.stats["posts"] += 1
-            self.sitemap.append({"old_url": old, "new_url": new_url, "status": "redirect-301", "kind": "post", "id": post["ID"],
-                                 "note": "Odoo blog URLs carry the record id"})
+            self.sitemap.append({"old_url": old, "new_url": new_url, "status": "held" if held else "redirect-301",
+                                 "kind": "post", "id": post["ID"],
+                                 "note": HELD_NOTE if held else "Odoo blog URLs carry the record id"})
             self.items["posts"].append({"id": post["ID"], "title": post["post_title"], "date": date, "old": old})
         self.stats["posts_with_comments_open"] = sum(1 for p in posts if p["comment_status"] == "open")
 
@@ -1130,6 +1179,27 @@ class Converter:
         self.stats["redirects"] = len(data["website.rewrite"])
         self.stats["attachments"] = len(data["ir.attachment"])
         return data
+
+    def check_hold(self, post, kind, url):
+        """True when the post or page holds other people's contact details and has not been released: it is
+        imported UNPUBLISHED and listed for Bruce's review (hold.json, content_report.json)."""
+        if post["ID"] in self.release:
+            self.stats["held_released"] += 1
+            return False
+        reasons = hold_reasons(post["post_content"], self.owner_contacts)
+        if not reasons:
+            return False
+        self.held[post["ID"]] = dict(reasons, type=kind, title=post["post_title"], old_url=url)
+        self.stats["held_for_review"] += 1
+        return True
+
+    def hold_list(self):
+        """The machine-readable list the importer honours: source ids per Odoo model."""
+        models = {"post": "blog.post", "page": "website.page"}
+        out = {"blog.post": [], "website.page": []}
+        for ident, info in sorted(self.held.items()):
+            out[models[info["type"]]].append(ident)
+        return out
 
     def page_url_old(self, post):
         return self._page_path(post) + "/"
@@ -1308,10 +1378,6 @@ def compare_rendered(sql_path, base_url, blog_id=8, domains=("perens.com", "www.
 # Inventory
 # --------------------------------------------------------------------------------------------
 
-SECRET_OPTION = re.compile(r"(api_?key|passw|secret|token|salt|private|credential|auth_key)", re.I)
-IGNORED_OPTION = re.compile(r"^(_transient|_site_transient|cron$|rewrite_rules$|wp_.*user_roles$)")
-
-
 def inventory(site, blogs_note=True):
     """Counts and facts about one WordPress site, read from the dump only. No content is printed."""
     types = collections.Counter((p["post_type"], p["post_status"]) for p in site.posts)
@@ -1333,8 +1399,7 @@ def inventory(site, blogs_note=True):
         if found:
             phones[p["ID"]] = sorted(found)
     comments = site.comments
-    secrets = sorted(name for name, value in site.options.items()
-                     if value and SECRET_OPTION.search(name) and not IGNORED_OPTION.match(name))
+    secrets = sorted(name for name, value in site.options.items() if value and is_credential_option(name))
     widgets = []
     sidebars = php_unserialize(site.option("sidebars_widgets", "")) or {}
     blocks_widget = php_unserialize(site.option("widget_block", "")) or {}
@@ -1421,6 +1486,108 @@ CONTENT_RULES = [
     ("DB_PASSWORD define", re.compile(r"define\(\s*['\"](?:DB_PASSWORD|AUTH_KEY|SECURE_AUTH_KEY|LOGGED_IN_KEY|NONCE_KEY)['\"]")),
 ]
 SCAN_SIZE_LIMIT = 2 * 1024 * 1024
+
+
+def _leaf_strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _leaf_strings(item)
+
+
+def check_no_option_secrets(site, out_dir):
+    """Refuses (CredentialRefused) when the value of any credential-looking WordPress option is found in a file of
+    the export directory, reports included. Values are compared, never printed."""
+    needles = set()
+    for name, value in site.options.items():
+        if value and is_credential_option(name):
+            needles.add(value)
+            for leaf in _leaf_strings(php_unserialize(value)):
+                needles.add(leaf)
+    # A placeholder such as WordPress's default mail password "password" is an ordinary word that any post may
+    # contain: a value counts only when it is long, or short but not plain letters.
+    needles = {n.encode() for n in needles if len(n) >= 12 or (len(n) >= 8 and not n.isalpha())}
+    if not needles:
+        return 0
+    for directory, _dirs, files in os.walk(out_dir):
+        for name in files:
+            path = os.path.join(directory, name)
+            with open(path, "rb") as handle:  # audit-ignore-path
+                data = handle.read()
+            if any(n in data for n in needles):
+                raise CredentialRefused(f"a credential-looking WordPress option value reached {os.path.relpath(path, out_dir)}")
+    return len(needles)
+
+
+def compromise_facts(dump, site):
+    """What the dump says about the injected code: which hosts the injected scripts load from (read from the
+    scripts of the site's own published posts), where in the whole dump (every table and column of all six sites)
+    those hosts appear, and when the injected posts were last modified."""
+    hosts = collections.Counter()
+    for post in site.posts:
+        if post["post_type"] == "post" and post["post_status"] == "publish":
+            for script in INJECTED_SCRIPT.findall(post["post_content"] or ""):
+                hosts.update(h.lower() for h in re.findall(r"https?://([A-Za-z0-9.-]+)", script))
+    hosts = {h: n for h, n in hosts.items()}
+    pattern = re.compile("|".join(re.escape(h) for h in hosts), re.I) if hosts else None
+    tables = collections.defaultdict(dict)
+    if pattern:
+        for table, entry in dump.items():
+            for row in entry["rows"]:
+                for column, value in zip(entry["columns"], row):
+                    if isinstance(value, str) and pattern.search(value):
+                        tables[table][column] = tables[table].get(column, 0) + 1
+    by_type = collections.Counter()
+    modified, total_by_type = [], collections.Counter()
+    revision_hours = collections.Counter()
+    for post in site.posts:
+        total_by_type[(post["post_type"], post["post_status"])] += 1
+        if pattern and pattern.search(post["post_content"] or ""):
+            by_type[f"{post['post_type']}/{post['post_status']}"] += 1
+            if post["post_type"] == "post":
+                modified.append(post["post_modified"])
+            elif post["post_type"] == "revision":
+                revision_hours[post["post_modified"][:13]] += 1
+    published = [p for p in site.posts if p["post_type"] == "post" and p["post_status"] == "publish"]
+    return {
+        "script_hosts": sorted(hosts),
+        "script_tags_in_published_posts": sum(
+            len(INJECTED_SCRIPT.findall(p["post_content"] or "")) for p in published),
+        "published_posts": len(published),
+        "published_posts_with_injection": sum(1 for p in published if pattern and pattern.search(p["post_content"] or "")),
+        "tables_holding_the_hosts": {t: c for t, c in sorted(tables.items())},
+        "sites_affected": sorted({re.match(r"^wp_(\d+)_", t).group(1) if re.match(r"^wp_(\d+)_", t) else "1"
+                                  for t in tables}),
+        "sites_in_dump": [{"blog_id": b["blog_id"], "domain": b["domain"]} for b in site.blogs],
+        "injected_by_type": dict(by_type),
+        "clean_by_type": {f"{t}/{s}": n for (t, s), n in sorted(total_by_type.items())
+                          if f"{t}/{s}" not in by_type},
+        "injected_posts_modified_between": [min(modified), max(modified)] if modified else None,
+        # Every bulk rewrite leaves one injected revision per post: the busiest hours show the bursts.
+        "injected_revision_bursts": [{"hour": h, "revisions": n} for h, n in revision_hours.most_common(6)],
+        "injected_revisions_first_last": [min(revision_hours), max(revision_hours)] if revision_hours else None,
+        "site_last_updated": next((b.get("last_updated") for b in site.blogs if b["blog_id"] == site.blog_id), None),
+    }
+
+
+def assert_hosts_absent(out_dir, hosts):
+    """Raises when a data file, a stored file or a CSV report of the export still names one of `hosts`.
+    (content_report.json names them on purpose, as indicators, and is not searched.) Returns the files searched."""
+    needles = [h.lower().encode() for h in hosts]
+    searched = 0
+    for directory, _dirs, files in os.walk(out_dir):
+        for name in files:
+            if name == "content_report.json":
+                continue
+            path = os.path.join(directory, name)
+            with open(path, "rb") as handle:  # audit-ignore-path
+                data = handle.read().lower()
+            searched += 1
+            for needle in needles:
+                if needle in data:
+                    raise mig.MigrateError(f"{os.path.relpath(path, out_dir)} still names {needle.decode()}")
+    return searched
 
 
 # [@ANCHOR: wordpress_to_odoo:scan_tree]
@@ -1512,6 +1679,10 @@ def write_export(out_dir, data, media, converter, report):
                     break
                 dst.write(chunk)
         manifest["files"][f"files/att_{att_id}"] = mig.sha256_file(target)
+    hold_path = os.path.join(out_dir, "hold.json")
+    with open(hold_path, "w", encoding="utf-8") as handle:  # audit-ignore-path
+        json.dump(converter.hold_list(), handle, indent=1, sort_keys=True)
+    manifest["files"]["hold.json"] = mig.sha256_file(hold_path)
     manifest["finished"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     manifest["converter"] = report.get("counts", {})
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as handle:  # audit-ignore-path
@@ -1546,10 +1717,11 @@ def export_comments_csv(site, path):
 
 
 def convert(sql_path, out_dir, blog_id=8, domains=("perens.com", "www.perens.com", "new.perens.com"), static_root=None,
-            uploads_dirs=(), blog_name=DEFAULT_BLOG_NAME, include_unpublished=False, log=print):
+            uploads_dirs=(), blog_name=DEFAULT_BLOG_NAME, include_unpublished=False, owner_contacts=OWNER_CONTACTS,
+            release=(), log=print):
     dump = read_dump(sql_path)
     site = WordPressSite(dump, blog_id)
-    converter = Converter(site, domains, static_root, uploads_dirs, blog_name, include_unpublished)
+    converter = Converter(site, domains, static_root, uploads_dirs, blog_name, include_unpublished, owner_contacts, release)
     data = converter.convert_all()
     problems = []
     arch_by_view = {v["id"]: v["arch_db"] for v in data["ir.ui.view"]}
@@ -1579,6 +1751,8 @@ def convert(sql_path, out_dir, blog_id=8, domains=("perens.com", "www.perens.com
         "static_references_missing": static_missing,
         "uploads_missing": sorted(converter.media.missing),
         "external_hosts_top": dict(converter.external_hosts.most_common(25)),
+        "held_for_review": [dict(info, id=ident) for ident, info in sorted(converter.held.items())],
+        "compromise": compromise_facts(dump, site),
     }
     manifest = write_export(out_dir, data, converter.media, converter, report)
     reports = os.path.join(out_dir, "reports")
@@ -1592,6 +1766,15 @@ def convert(sql_path, out_dir, blog_id=8, domains=("perens.com", "www.perens.com
     write_csv(os.path.join(reports, "sitemap.csv"), ["kind", "id", "old_url", "new_url", "status", "note"], converter.sitemap)
     write_csv(os.path.join(reports, "missing_references.csv"), ["kind", "url", "referenced_by"], missing_rows)
     export_comments_csv(site, os.path.join(reports, "comments_dropped.csv"))
+    # Last, after every file is written: nothing credential-like and nothing of the injected code may be in the export.
+    try:
+        check_no_option_secrets(site, out_dir)
+        report["compromise"]["verified_absent_from_export"] = assert_hosts_absent(out_dir, report["compromise"]["script_hosts"])
+    except (CredentialRefused, mig.MigrateError):
+        shutil.rmtree(out_dir, ignore_errors=True)
+        raise
+    with open(os.path.join(reports, "content_report.json"), "w", encoding="utf-8") as handle:  # audit-ignore-path
+        json.dump(report, handle, indent=2, sort_keys=True, default=str)
     log(f"pages {converter.stats['pages']}, posts {converter.stats['posts']}, attachments {converter.stats['attachments']}, "
         f"redirects {converter.stats['redirects']}, menu items {converter.stats['menu_items']}")
     log(f"injected scripts removed: {converter.stats['injected_scripts_removed']}; comments dropped: {comments}")
@@ -1640,6 +1823,10 @@ def build_parser():
     conv.add_argument("--uploads-dir", action="append", default=[], help="a wp-content/uploads directory (repeatable)")
     conv.add_argument("--blog-name", default=DEFAULT_BLOG_NAME)
     conv.add_argument("--include-unpublished", action="store_true")
+    conv.add_argument("--owner-contact", action="append",
+                      help="contact detail of the site owner that may stay public: @domain, an address or a phone number "
+                           "(default @perens.com); everything else holds the post")
+    conv.add_argument("--release-file", help="JSON {\"release\": [post or page ids]}: held posts Bruce has reviewed")
     cmp_ = sub.add_parser("compare", help="GET every converted page and post from a running Odoo and compare its text")
     cmp_.add_argument("--sql", required=True)
     cmp_.add_argument("--base-url", required=True)
@@ -1662,8 +1849,12 @@ def main(argv=None, out=print):
             out(json.dumps(inventory(site), indent=2, sort_keys=True, default=str))
         elif args.command == "convert":
             domains = args.domain or ["perens.com", "www.perens.com", "new.perens.com"]
+            release = []
+            if args.release_file:
+                with open(args.release_file, "r", encoding="utf-8") as handle:  # audit-ignore-path
+                    release = json.load(handle).get("release", [])
             convert(args.sql, args.out, args.blog_id, domains, args.static_root, args.uploads_dir, args.blog_name,
-                    args.include_unpublished, out)
+                    args.include_unpublished, tuple(args.owner_contact or OWNER_CONTACTS), release, out)
         elif args.command == "finalize-sitemap":
             out(f"{finalize_sitemap(args.export)} row(s) written to {args.export}/reports/sitemap_final.csv")
         elif args.command == "compare":
@@ -1678,7 +1869,7 @@ def main(argv=None, out=print):
                 out(f"{item['kind']:<8} {item['rule']:<34} {item['path']}" + (f":{item['line']}" if "line" in item else ""))
             out(f"{len(findings)} finding(s)")
             return 1 if findings else 0
-    except (mig.MigrateError, ValueError, OSError) as exc:
+    except (mig.MigrateError, ValueError, OSError) as exc:  # CredentialRefused is a ValueError
         out(f"error: {exc}")
         return 2
     return 0

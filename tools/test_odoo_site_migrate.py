@@ -580,6 +580,29 @@ class ImportTests(_Base):
         order = [m for m, c in target.log if c == "create" and m in ("blog.post", "website.rewrite")]
         self.assertLess(order.index("blog.post"), order.index("website.rewrite"))
 
+    def test_held_records_are_created_unpublished_and_a_later_import_never_republishes_them(self):
+        # hold.json of a converted export: source blog post 12 and page 3 are held for review
+        with open(os.path.join(self.out, "hold.json"), "w", encoding="utf-8") as handle:
+            json.dump({"blog.post": [12], "website.page": [3]}, handle)
+        importer, target = self.importer()
+        report = importer.run()
+        post = next(p for p in target.rows["blog.post"] if p["name"] == "Hello")
+        page = target.rows["website.page"][0]
+        self.assertIs(post["is_published"], False)
+        self.assertIs(page["is_published"], False)
+        self.assertEqual(sorted(report["held"]), [["blog.post", 12], ["website.page", 3]])
+        self.assertIn("HELD blog.post 12", mig.render_report(report, True))
+        # Bruce publishes the post in Odoo, then the import runs again: the state is left alone
+        post["is_published"] = True
+        again = mig.Importer(self.out, target, apply=True, source_domains=["old.example"], log=lambda m: None)
+        again.run()
+        self.assertIs(next(p for p in target.rows["blog.post"] if p["name"] == "Hello")["is_published"], True)
+        self.assertIs(target.rows["website.page"][0]["is_published"], False)
+        # without a hold list the source's own state is written
+        os.remove(os.path.join(self.out, "hold.json"))
+        mig.Importer(self.out, target, apply=True, source_domains=["old.example"], log=lambda m: None).run()
+        self.assertIs(next(p for p in target.rows["blog.post"] if p["name"] == "Hello")["is_published"], True)
+
     def test_a_blog_author_missing_in_the_target_is_warned_about_once(self):
         source = build_source()
         source.rows["blog.post"].append({"id": 13, "name": "Second", "blog_id": 1, "tag_ids": [], "is_published": True,
