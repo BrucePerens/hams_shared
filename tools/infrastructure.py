@@ -184,7 +184,11 @@ def safe_remove(path):
             _logger.debug("OSError removing file: %s", e)
 
 
-def apply_permissions(path, owner_str, mode_int):
+def apply_permissions(path, owner_str, mode_int, recursive=False):
+    """chown and chmod `path`. With `recursive`, everything below `path` is also re-owned (not
+    re-moded; symlinks are re-owned themselves and never followed), so that files an earlier run
+    left behind under another account become the new owner's. Used for a daemon family's own state
+    directories (MANIFEST "recursive_owner")."""
     uid, gid = -1, -1
     if owner_str:
         try:
@@ -204,6 +208,13 @@ def apply_permissions(path, owner_str, mode_int):
             _logger.debug("Failed chown/chmod on %s: %s", p, e)
 
     _apply(path)
+    if recursive and uid != -1 and gid != -1 and os.path.isdir(path) and not os.path.islink(path):
+        for current, dirnames, filenames in os.walk(path, followlinks=False):
+            for name in dirnames + filenames:
+                try:
+                    os.lchown(os.path.join(current, name), uid, gid)
+                except OSError as e:
+                    _logger.debug("Failed lchown on %s: %s", os.path.join(current, name), e)
 
 
 # [@ANCHOR: infrastructure:hook_failure_tracking]
@@ -908,13 +919,12 @@ def hook_migrate_relay_signing_key(env_vars, dest_dir, path, run_cmd_func):
 # (localhost_cert, hams_subcarrier_signer, hams_device_command_signer, hams_relay_signer,
 # hams_relay_ca, pdns, hams-auth) are the pattern a fix would extend.
 #
-# Which fix (static per-daemon accounts, DynamicUser=, a high-value subset first, or an accepted
-# risk) is Bruce's open decision: hams_com night_shift_questions/open/
-# daemon-os-isolation-fleet-wide-scope-and-approach-59a738aa.md. Until it is made, this list is the
-# recorded, reviewed state of the gap and a ratchet on it: test_infrastructure.py fails when a unit
-# runs as `odoo` without being listed here (a new daemon must get its own account or be added here
-# in a reviewed change), and when a listed unit no longer runs as `odoo` (remove it, so the list
-# only shrinks as units move to their own accounts).
+# Bruce decided (2026-10-03, NIGHT_PLAN decision 86): a dedicated OS account per daemon family, fleet-wide,
+# in phases, each rehearsed before any live change. The plan, the families and the phases are in hams_com
+# docs/proposals/DAEMON_OS_ISOLATION_PLAN.md. Phase 1 moved ncvec.sync (FAMILY_ACCOUNT_UNITS below). This
+# list is the countdown: test_infrastructure.py fails when a unit runs as `odoo` without being listed here
+# (a new daemon must get its own account or be added here in a reviewed change), and when a listed unit no
+# longer runs as `odoo` (remove it, so the list only shrinks as units move to their own accounts).
 SHARED_ODOO_ACCOUNT_UNITS = frozenset({
     "adif.ingress.service",
     "adif.processor.service",
@@ -948,7 +958,6 @@ SHARED_ODOO_ACCOUNT_UNITS = frozenset({
     "hams.simulated.bots.service",
     "hams.simulated.observer.service",
     "ised.canada.sync.service",
-    "ncvec.sync.service",
     "noaa-swpc-sync.service",
     "nz.rsm.sync.service",
     "pdns.sync.service",
@@ -979,6 +988,37 @@ def systemd_units_running_as(manifest, user):
     return names
 
 
+# [@ANCHOR: infrastructure:family_account_units]
+# The units that have left the shared `odoo` account for a daemon family's own account (hams_com
+# docs/proposals/DAEMON_OS_ISOLATION_PLAN.md). Each migrated unit is held to three rules by
+# test_infrastructure.py: it runs as, and in the group of, its account; its ReadWritePaths= names only
+# directories that account owns in this MANIFEST (a daemon account is in hams_com so that it can reach
+# /opt/hams, and hams_com owns directories the family must not write, such as the ADIF queue; the
+# sandbox's read-only mount is what keeps it out of them, so that list must stay narrow); and it loads
+# only the environment files its daemon uses (every other file carries secrets the daemon never needed).
+FAMILY_ACCOUNT_UNITS = {
+    "ncvec.sync.service": {
+        "user": "hamsd_ncvec_sync",
+        "environment_files": frozenset({"common.env"}),
+    },
+}
+
+
+def systemd_unit_directive_values(manifest, unit_name, directive):
+    """Every value of `directive` in the [Service] text of the MANIFEST unit file `unit_name`, one
+    entry per whitespace-separated word for the path-list directives, in file order."""
+    for entry in manifest["static_files"]:
+        if os.path.basename(entry["path"]) != unit_name:
+            continue
+        values = []
+        for line in (entry.get("content") or "").splitlines():
+            line = line.strip()
+            if line.startswith(f"{directive}="):
+                values.extend(line.split("=", 1)[1].split())
+        return values
+    raise KeyError(unit_name)
+
+
 MANIFEST = {
     "system_accounts": [
         {
@@ -998,6 +1038,22 @@ MANIFEST = {
             "home": "/opt/hams/etc/localhost_cert_renewal",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/ncvec_sync, Phase 1 of the per-family daemon accounts (hams_com
+            # docs/proposals/DAEMON_OS_ISOLATION_PLAN.md): the one unit that runs as this account is
+            # ncvec.sync, which writes only the three directories below. odoo joins this group so
+            # daemon_key_manager can hand the group its key file (an unprivileged process may chgrp to
+            # a group it belongs to and may not chown) and so odoo can read what the daemon writes.
+            # member_of hams_com is what lets the account reach /opt/hams (0750), as pdns needs; the
+            # unit's own ReadWritePaths= keeps it out of every hams_com-writable directory.
+            "user": "hamsd_ncvec_sync",
+            "group": "hamsd_ncvec_sync",
+            "home": "/opt/hams/spool/ncvec",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_com"],
             "environments": ["prod", "test"],
         },
         {
@@ -1116,9 +1172,14 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # 0710, group hams_com: odoo has full access; the group may traverse and not list. A daemon
+            # account in its own group (hamsd_<family>, a member of hams_com) can open the one key file
+            # daemon_key_manager gave that group, and cannot list this directory or open any other
+            # daemon's 0600 file. daemon_key_manager keeps this mode on every write
+            # (KEY_ROOT_DIR_MODE in its models/key_registry.py).
             "path": "/opt/hams/etc/keys",
-            "owner": "odoo:odoo",
-            "provision_mode": "700",
+            "owner": "odoo:hams_com",
+            "provision_mode": "710",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
@@ -1407,9 +1468,22 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # ncvec.sync's data directory (HAMS_NCVEC_DATA_DIR) and, below, the two directories
+            # smart_download() makes for the daemon name "ncvec_sync": owned by the daemon's own
+            # account (hamsd_ncvec_sync, Phase 1), 0750 so odoo, in its group, can read and not write.
+            # recursive_owner moves files an earlier run left here as odoo to the account.
             "path": "/opt/hams/spool/ncvec",
-            "owner": "hams_com:hams_com",
-            "provision_mode": "770",
+            "owner": "hamsd_ncvec_sync:hamsd_ncvec_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/spool/ncvec_sync",
+            "owner": "hamsd_ncvec_sync:hamsd_ncvec_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
@@ -1424,6 +1498,14 @@ MANIFEST = {
             "path": "/opt/hams/downloads",
             "owner": "hams_com:hams_com",
             "provision_mode": "770",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/downloads/ncvec_sync",
+            "owner": "hamsd_ncvec_sync:hamsd_ncvec_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
@@ -1639,6 +1721,16 @@ MANIFEST = {
         "redis.env": ["REDIS_HOST", "REDIS_PORT", "REDIS_USERNAME", "REDIS_PASSWORD", "REDIS_URL"],
         "bridge.env": ["BRIDGE_API_KEY", "BRIDGE_STUN_BIND"],
         "smtp.env": ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"],
+        # The values a daemon family's own unit needs and that are not secret, so that unit can load this
+        # file and not core.env / db.env / odoo.env (which carry HAMS_CRYPTO_KEY, POSTGRES_PASSWORD,
+        # ODOO_ADMIN_PASSWORD, CLOUDFLARE_API_TOKEN and more). The same keys also stay in their original
+        # files, so no existing unit changes; the duplicates go when the last unit that needs them moves.
+        "common.env": [
+            "DOMAIN",
+            "SYSTEM_USER_AGENT",
+            "ODOO_URL",
+            "DB_NAME",
+        ],
         "core.env": [
             "DOMAIN",
             "SYSTEM_USER_AGENT",
@@ -4604,17 +4696,33 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account, Phase 1 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). Only the account's
+# own directories are writable: the account is in hams_com, which owns directories this daemon must
+# never write (the ADIF queue), and this read-only mount is what keeps it out of them.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/ncvec /opt/hams/spool/ncvec_sync /opt/hams/downloads/ncvec_sync
 Type=oneshot
-User=odoo
+User=hamsd_ncvec_sync
+Group=hamsd_ncvec_sync
 WorkingDirectory=/opt/hams/daemons/ncvec_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: main.py and hams_config.py read SYSTEM_USER_AGENT, and ODOO_URL / DB_NAME on
+# the Odoo push path that run_sync() does not call today. No database, Redis, RabbitMQ or PowerDNS
+# credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=ncvec_sync_service_internal"
 Environment="HAMS_NCVEC_DATA_DIR=/opt/hams/spool/ncvec"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/ncvec_sync_service_internal.key"
@@ -6357,6 +6465,7 @@ def provision_system_accounts(run_cmd_func, environment="prod", dest_dir="", onl
         home = acc.get("home", "/opt/hams")
         shell = acc.get("shell", "/bin/bash")
         add_to_users = acc.get("add_to_users", [])
+        member_of = acc.get("member_of", [])
 
         try:
             grp.getgrnam(group)
@@ -6369,6 +6478,12 @@ def provision_system_accounts(run_cmd_func, environment="prod", dest_dir="", onl
             run_cmd_func(
                 ["useradd", "--system", "-g", group, "-d", home, "-s", shell, user]
             )
+
+        # `member_of`: existing groups this account itself joins (a group that does not exist makes
+        # usermod fail, which stops provisioning: an account that cannot reach /opt/hams must not be
+        # created half-configured and left to fail at run time, as pdns did on 2026-09-22).
+        for existing_group in member_of:
+            run_cmd_func(["usermod", "-a", "-G", existing_group, user])
 
         for extra_user in add_to_users:
             try:
@@ -6414,9 +6529,34 @@ def apply_production_directories(run_cmd_func=None, environment="prod", dest_dir
                     _plan("mkdir", f"{path} ({d.get('owner')}, {d['provision_mode']})")
                 else:
                     _plan_ownership(path, d.get("owner"), mode)
+                    if d.get("recursive_owner"):
+                        _plan_recursive_ownership(path, d.get("owner"))
                 continue
             os.makedirs(path, mode=mode, exist_ok=True)
-            apply_permissions(path, d.get("owner"), mode)
+            apply_permissions(
+                path, d.get("owner"), mode, recursive=bool(d.get("recursive_owner"))
+            )
+
+
+def _plan_recursive_ownership(path, owner_str):
+    """Records how many entries below `path` a recursive chown to owner_str would change."""
+    try:
+        user, group = owner_str.split(":")
+        want = (pwd.getpwnam(user).pw_uid, grp.getgrnam(group).gr_gid)
+    except (KeyError, ValueError, AttributeError):  # burn-ignore-os-account-probe
+        _plan("chown -R", f"{path}: contents -> {owner_str} (account not created yet)")
+        return
+    differing = 0
+    for current, dirnames, filenames in os.walk(path, followlinks=False):
+        for name in dirnames + filenames:
+            try:
+                info = os.lstat(os.path.join(current, name))
+            except OSError:
+                continue
+            if (info.st_uid, info.st_gid) != want:
+                differing += 1
+    if differing:
+        _plan("chown -R", f"{path}: {differing} entries -> {owner_str}")
 
 
 def _plan_ownership(path, owner_str, mode_int):
