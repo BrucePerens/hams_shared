@@ -1806,12 +1806,19 @@ MANIFEST = {
             #     (it is only for ALIAS lookups) and `expand-alias` stays at its default no;
             #     a name outside our zones gets REFUSED. primary/secondary=no, disable-axfr=yes
             #     and an empty allow-notify-from: no zone transfer or NOTIFY surface at all.
-            #   any-to-tcp=yes: a UDP ANY gets a tiny truncated reply that sends the (not
-            #     spoofable) TCP handshake to the client.
-            #   udp-truncation-threshold=512: any answer larger than 512 bytes (the default is
-            #     1232) is replaced by an empty truncated reply, so a callbook answer cannot be
-            #     reflected over UDP at several times the size of the spoofed query; real
-            #     resolvers retry over TCP.
+            #   lua-prequery-script (/opt/hams/etc/pdns-prequery.lua, the next entry): any query whose
+            #     type we do not serve (ANY, AXFR/IXFR, anything exotic) gets a REFUSED reply no larger
+            #     than the query. NOT in the settings documentation as a supported feature: it says
+            #     "used internally for regression testing ... API not guaranteed to be stable", and
+            #     `pdns_server --help` says "DO NOT USE". Chosen by Bruce 2026-10-04 anyway; the
+            #     script is two lines of API (getQuestion, setRcode) and tested against the real
+            #     binary, so a PowerDNS upgrade that changes it fails the tests, not production.
+            #   any-to-tcp=yes: kept as a second line of defense for ANY.
+            #   udp-truncation-threshold=1232 (PowerDNS's default, set explicitly): a callbook answer
+            #     (~700 bytes) goes out in ONE UDP packet. Accepted by Bruce 2026-10-04: a forged
+            #     55-byte query reflects ~700 bytes, about 14x, because single-packet lookups matter
+            #     more and nothing limits the rate. Only the network (BCP 38 egress filtering by the
+            #     host), TCP, or enforced DNS cookies address forged UDP sources; see the runbook.
             #   TCP caps (max-tcp-connections, per client, transactions per connection, idle
             #     timeout), version-string=anonymous, security-poll-suffix= (secpoll off),
             #     log-dns-queries=no (a callbook lookup names a person's callsign).
@@ -1838,7 +1845,8 @@ secondary=no
 disable-axfr=yes
 allow-notify-from=
 any-to-tcp=yes
-udp-truncation-threshold=512
+udp-truncation-threshold=1232
+lua-prequery-script=/opt/hams/etc/pdns-prequery.lua
 max-tcp-connections=100
 max-tcp-connections-per-client=5
 max-tcp-transactions-per-conn=10
@@ -1850,6 +1858,63 @@ loglevel=4
 """,
             "owner": "pdns:pdns",
             "mode": "640",
+            "environments": ["prod"],
+        },
+        {
+            # PowerDNS Authoritative's Lua "prequery" hook (settings reference: lua-prequery-script).
+            # The only API used: p:getQuestion() -> qname, qtype (a number) and p:setRcode(), inside a pcall
+            # so an API change fails open instead of SERVFAILing everything. The hook
+            # cannot see the query class, opcode or flags; PowerDNS itself already answers a non-IN
+            # class with a tiny NOTIMP/REFUSED, drops opcodes other than QUERY/NOTIFY/UPDATE, drops
+            # malformed packets and answers NOTIFY/UPDATE with REFUSED (all measured, see the runbook).
+            # The served set is what our zones can hold: SOA NS A AAAA CNAME MX TXT LOC SRV NAPTR SSHFP CAA
+            # (ham_dns's record types and the callbook exporter's SOA/NS/TXT/LOC), plus DS, SVCB and HTTPS
+            # which resolvers and browsers ask for any name and which PowerDNS answers with a small NODATA:
+            # refusing those would make a resolver treat this server as broken. DNSKEY, RRSIG, NSEC and
+            # friends are absent because the zones are unsigned (gsqlite3-*-dnssec=no).
+            "path": "/opt/hams/etc/pdns-prequery.lua",
+            "content": """\
+-- Answer REFUSED, in a reply no larger than the query, to any query type we do not serve.
+-- (Braces are doubled in this file because provisioning runs file contents through str.format.)
+local served = {{
+  [1] = true,    -- A
+  [2] = true,    -- NS
+  [5] = true,    -- CNAME
+  [6] = true,    -- SOA
+  [15] = true,   -- MX
+  [16] = true,   -- TXT (the callbook answer)
+  [28] = true,   -- AAAA
+  [29] = true,   -- LOC (the callbook position record)
+  [33] = true,   -- SRV
+  [35] = true,   -- NAPTR
+  [43] = true,   -- DS (asked at zone cuts; small NODATA, zones are unsigned)
+  [44] = true,   -- SSHFP
+  [64] = true,   -- SVCB
+  [65] = true,   -- HTTPS
+  [257] = true,  -- CAA
+}}
+
+local function refuse_unserved(p)
+  local _, qtype = p:getQuestion()
+  if served[qtype] then
+    return false
+  end
+  p:setRcode(5)  -- REFUSED
+  return true
+end
+
+-- Fail open: measured on 4.9.17, an error inside prequery makes PowerDNS answer SERVFAIL to EVERY
+-- query (and a syntax error stops it starting), so a changed API must not take DNS down.
+function prequery(p)
+  local ok, handled = pcall(refuse_unserved, p)
+  if ok then
+    return handled
+  end
+  return false
+end
+""",
+            "owner": "pdns:pdns",
+            "mode": "644",
             "environments": ["prod"],
         },
         {
