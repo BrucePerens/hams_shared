@@ -293,6 +293,7 @@ class SpecValidationTests(unittest.TestCase):
             with self.assertRaises(lib.SpecError, msg=module):
                 lib.validate_spec(dict(PERENS, extra_modules=[module]))
         lib.validate_spec(dict(PERENS, extra_modules=["parking"]))
+        lib.validate_spec(dict(PERENS, extra_modules=["edge_cache"]))
 
     def test_unknown_keys_and_a_connection_limit_below_the_pool_are_refused(self):
         with self.assertRaises(lib.SpecError):
