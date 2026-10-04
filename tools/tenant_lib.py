@@ -57,7 +57,7 @@ RESERVED_PORTS = frozenset(
 # Vanilla Odoo addons a tenant may install with `-i`. Anything else must be an `extra_modules` entry
 # from EXTRA_MODULE_ALLOWLIST (copied from hams_open) so that no proprietary hams_com module and no
 # module needing the hams daemons can reach a tenant by a typo in a spec.
-EXTRA_MODULE_ALLOWLIST = frozenset({"parking"})
+EXTRA_MODULE_ALLOWLIST = frozenset({"parking", "edge_cache"})
 
 # Tenant systemd units are instances of this template (MANIFEST static_files).
 UNIT_TEMPLATE = "hams-tenant@.service"
