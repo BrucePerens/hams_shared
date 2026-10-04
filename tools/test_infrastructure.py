@@ -4104,6 +4104,34 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 self.assertEqual(len(key_files), 1)
                 self.assertTrue(key_files[0].startswith("/opt/hams/etc/keys/"))
 
+    def test_each_family_has_its_own_key_directory_owned_by_odoo_with_the_family_group(self):
+        """Bruce, NIGHT_PLAN 226: key directories are owned by odoo with group = the consuming daemon
+        account, 0750, and the key file the unit reads is in its family's directory."""
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            with self.subTest(unit=unit):
+                user = rules["user"]
+                family = user[len("hamsd_"):]
+                directory = f"/opt/hams/etc/keys/{family}"
+                entries = [d for d in infra.MANIFEST["directories"] if d["path"] == directory]
+                self.assertEqual(len(entries), 1)
+                self.assertEqual((entries[0]["owner"], entries[0]["provision_mode"]), (f"odoo:{user}", "750"))
+                self.assertEqual(entries[0].get("environments"), ["prod", "test"])
+                # odoo must be a member of the group, or it cannot chgrp the directory or the key files.
+                account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == user][0]
+                self.assertIn("odoo", account.get("add_to_users", []))
+                values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
+                key_file = [v.strip('"').split("=", 1)[1] for v in values if v.strip('"').startswith("ODOO_KEY_FILE=")][0]
+                self.assertEqual(os.path.dirname(key_file), directory)
+
+    def test_the_key_root_stays_traversable_only_and_no_family_directory_is_group_writable(self):
+        paths = {d["path"]: d for d in infra.MANIFEST["directories"]}
+        self.assertEqual(paths["/opt/hams/etc/keys"]["provision_mode"], "710")
+        for path, entry in paths.items():
+            if path.startswith("/opt/hams/etc/keys/"):
+                with self.subTest(path=path):
+                    self.assertTrue(entry["owner"].startswith("odoo:"))
+                    self.assertEqual(int(entry["provision_mode"], 8) & 0o027, 0)
+
 
 class SystemAccountMemberOfTests(_SafePatchTestCase):
     def _provision(self, accounts):
