@@ -524,6 +524,18 @@ class ImportTests(_Base):
         self.assertNotIn("Other site blog", warnings)
         self.assertNotIn("Shared blog", warnings)
 
+    def test_imported_blogs_belong_to_the_target_website_and_never_match_another_websites_blog(self):
+        target = build_target()
+        target.rows["blog.blog"].append(
+            {"id": 9, "name": "Hello Blog", "website_url": "/blog/h-9", "website_id": 2, "active": True}
+        )
+        importer = mig.Importer(self.out, target, apply=True, source_domains=["old.example"], log=lambda m: None)
+        importer.run()
+        imported = [row for row in target.rows["blog.blog"] if row["id"] in importer.idmap["blog.blog"].values()]
+        self.assertTrue(imported)
+        self.assertTrue(all(row["website_id"] == 1 for row in imported))
+        self.assertEqual(next(row for row in target.rows["blog.blog"] if row["id"] == 9)["website_id"], 2)
+
     def test_website_map_ids_from_the_command_line_are_integers(self):
         importer = mig.Importer(self.out, build_target(), apply=False, website_map={"1": "7"}, log=lambda m: None)
         self.assertEqual(importer.website_map, {"1": 7})

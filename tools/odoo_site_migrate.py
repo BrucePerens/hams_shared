@@ -1178,6 +1178,12 @@ class Importer:
             return self.website_map[str(source_id)]
         return self.mapped("website", source_id)
 
+    def sole_target_website(self):
+        """The one target website of an import that has a single source website (--website-map or the id
+        remembered for it), else False."""
+        candidates = {v for v in self.website_map.values()} | {v for v in self.idmap.get("website", {}).values() if v}
+        return next(iter(candidates)) if len(candidates) == 1 else False
+
     def import_websites(self):
         sites = self.data["website"]
         target_sites = self.target.call("website", "search", [[]], {"order": "id"})
@@ -1478,9 +1484,18 @@ class Importer:
         if not self.has_model("blog.post"):
             self.report["warnings"].append("source has blog content but the target has no blog module (install website_blog)")
             return
+        scoped = "website_id" in self.fields("blog.blog")
         for blog in self.data["blog.blog"]:
             values = self.clean("blog.blog", blog)
-            self.create_or_match("blog.blog", blog["id"], [("name", "=", blog["name"])], values, update=True)
+            match = [("name", "=", blog["name"])]
+            if scoped:
+                # A blog with no website shows on EVERY website of the target (ADR 0106: hams.com's own /blog
+                # would list another site's posts), and a blog of the same name on another website is not
+                # this one: a blog belongs to the target website it is imported for.
+                website = self.target_website_for(blog.get("website_id")) or self.sole_target_website()
+                values["website_id"] = website
+                match.append(("website_id", "=", website))
+            self.create_or_match("blog.blog", blog["id"], match, values, update=True)
         if self.has_model("blog.tag.category"):
             for category in self.data["blog.tag.category"]:
                 values = self.clean("blog.tag.category", category)
