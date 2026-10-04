@@ -950,7 +950,7 @@ SHARED_ODOO_ACCOUNT_UNITS = frozenset({
     "ham.dx.daemon.service",
     "hamcall.idx.sync.service",
     # The key bootstrapper writes every daemon's key file, so it runs as the account that owns
-    # them; it stays here under any of the options above.
+    # them (odoo); it stays on this list in the final state too (the plan's Phase 5).
     "hams.daemon.keys.service",
     "hams.data.relay.service",
     "hams.relay.bridge.service",
