@@ -1099,20 +1099,37 @@ MANIFEST = {
             "add_to_users": ["odoo"],
             "environments": ["prod", "test"],
         },
+        # hams_com daemons/relay_ca (docs/proposals/CLOUD_HSM_CA_SIGNING.md): the three CA signer daemons, run on hams1
+        # (the "ca_signer" host class, prod only) as ONE account each, so that a flaw in one can reach only its own Google
+        # service-account key and its own state. Each account's 0700 home holds that signer's Google service-account key
+        # file (gcp_service_account.json, 0600, written there by cloudkms_setup.py), signer.env, its SQLite state and its
+        # hash-chained audit log. odoo joins the relay and identity groups only to reach their sockets in /run; nobody joins
+        # the capability root's group (root alone may ask it).
         {
-            # hams_com daemons/relay_ca: the Relay Issuing CA signer (hams_com
-            # docs/proposals/RELAY_CA_REMOTE_SIGNER.md). It runs only on the "ca_signer" host
-            # class (at Bruce's site, pi500-1 for now), never on hams1: a Vultr virtual server
-            # cannot have the SmartCard-HSM attached, so hams1 holds no CA key. This account
-            # holds the issuing key file (or the token PIN), the issuance and audit logs and
-            # the authorised client keys in its 0700 directory. No other account joins its
-            # group: hams1's Odoo reaches the signer over WireGuard, not a local socket.
             "user": "hams_relay_ca",
             "group": "hams_relay_ca",
             "home": "/opt/hams/etc/relay_ca",
             "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
             "host_class": "ca_signer",
-            "environments": ["prod", "test"],
+            "environments": ["prod"],
+        },
+        {
+            "user": "hams_identity_ca",
+            "group": "hams_identity_ca",
+            "home": "/opt/hams/etc/identity_ca",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "host_class": "ca_signer",
+            "environments": ["prod"],
+        },
+        {
+            "user": "hams_capability_ca",
+            "group": "hams_capability_ca",
+            "home": "/opt/hams/etc/capability_ca",
+            "shell": "/usr/sbin/nologin",
+            "host_class": "ca_signer",
+            "environments": ["prod"],
         },
         {
             # night_shift_todo/medium/service-account-creation-and-sudoers-sandboxes-are-
@@ -1285,16 +1302,32 @@ MANIFEST = {
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
         },
+        # hams_com daemons/relay_ca, ca_signer host class (hams1): each signer's private state directory (its Google
+        # service-account key file, signer.env, state.sqlite3, audit.jsonl; 0700, its own account only) and, for the
+        # relay and identity signers, a public directory for its two CA certificates.
         {
-            # hams_com daemons/relay_ca, ca_signer host class only: the issuing key file (software
-            # phase) or PIN file (card phase), issued.jsonl, revoked.jsonl, the CRL, audit.jsonl,
-            # authorized_clients.json and relay_ca.env. Never created on hams1.
             "path": "/opt/hams/etc/relay_ca",
             "owner": "hams_relay_ca:hams_relay_ca",
             "provision_mode": "700",
             "runtime_mount": "ro",
             "host_class": "ca_signer",
-            "environments": ["prod", "test"],
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/etc/identity_ca",
+            "owner": "hams_identity_ca:hams_identity_ca",
+            "provision_mode": "700",
+            "runtime_mount": "ro",
+            "host_class": "ca_signer",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/etc/capability_ca",
+            "owner": "hams_capability_ca:hams_capability_ca",
+            "provision_mode": "700",
+            "runtime_mount": "ro",
+            "host_class": "ca_signer",
+            "environments": ["prod"],
         },
         {
             # Retired separate tenant instances (hams_shared/tools/tenant_lib.py, ADR 0106), odoo_tenants host class only: the
@@ -1355,19 +1388,27 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
-            # The CA certificates (relay_root.pem, relay_issuing.pem): public. ca_signer only.
+            # The relay CA certificates (relay_root.pem, relay_issuing.pem): public. ca_signer only.
             "path": "/opt/hams/etc/relay_ca_public",
             "owner": "hams_relay_ca:hams_relay_ca",
             "provision_mode": "755",
             "runtime_mount": "ro",
             "host_class": "ca_signer",
-            "environments": ["prod", "test"],
+            "environments": ["prod"],
         },
         {
-            # hams_com ham_relay_bridge's client of the remote signer (models/relay_ca_client.py),
-            # on every host that runs Odoo: client.json (the signer's WireGuard URL), the
-            # request-only client_ed25519.key (0600 odoo; it can ask for signatures and nothing
-            # more) and the pinned PUBLIC relay_issuing.pem. Holds no CA key, ever.
+            # The identity CA certificates (identity_root.pem, identity_operating.pem): public. ca_signer only.
+            "path": "/opt/hams/etc/identity_ca_public",
+            "owner": "hams_identity_ca:hams_identity_ca",
+            "provision_mode": "755",
+            "runtime_mount": "ro",
+            "host_class": "ca_signer",
+            "environments": ["prod"],
+        },
+        {
+            # hams_com ham_relay_bridge's client of the relay signer (models/relay_ca_client.py),
+            # on every host that runs Odoo: the pinned PUBLIC relay_issuing.pem and an optional
+            # client.json naming the signer's socket. Holds no CA key and no credential, ever.
             "path": "/opt/hams/etc/relay_ca_client",
             "owner": "odoo:odoo",
             "provision_mode": "700",
@@ -2964,39 +3005,38 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
-            # hams_com daemons/relay_ca: the Relay Issuing CA signer, REMOTE from hams1
-            # (docs/proposals/RELAY_CA_REMOTE_SIGNER.md). Written, linked and started only on a
-            # host of the "ca_signer" class (provision.py --host-class ca_signer; at Bruce's site,
-            # pi500-1 for now), never on hams1. It listens on exactly one address, this host's
-            # WireGuard address (RELAY_CA_BIND, set in /opt/hams/etc/relay_ca/relay_ca.env
-            # together with RELAY_CA_ALLOWED_SOURCES and RELAY_CA_KEY_FILE), for signed requests
-            # from hams1's Odoo. systemd's own IP filter allows only hams1's WireGuard address, a
-            # second layer under the host firewall and the daemon's source allowlist. Fetches
-            # nothing from any third party. Skipped (not failed, not restart-looping) until a key
-            # ceremony has put the issuing certificate there and a client has been authorised.
-            "path": "/opt/hams/systemd/hams-relay-ca-signer.service",
+            # hams_com daemons/relay_ca (docs/proposals/CLOUD_HSM_CA_SIGNING.md): the Relay operating CA signer, on hams1 only
+            # (host class ca_signer, prod). It builds each certificate under its fixed policy and sends only the digest
+            # to Google Cloud KMS (HSM) with its OWN service-account key file, which can use exactly this one key to
+            # sign. It listens on a Unix socket and answers only odoo (SO_PEERCRED). It
+            # talks to Google (cloudkms.googleapis.com) and nothing else, hence external_fetch; opt_in because it is
+            # inert until cloudkms_setup.py has written its key file and signer.env and the key has been imported, so
+            # provisioning never enables or starts it. Skipped (not failed, not restart-looping) until then.
+            "path": "/opt/hams/systemd/hams-relay-ca.service",
+            "external_fetch": "calls Google Cloud KMS (cloudkms.googleapis.com) to sign",
+            "opt_in": "needs its Google service-account key file and signer.env from cloudkms_setup.py, and the HSM key imported",
             "content": """\
 [Unit]
-Description=Relay Issuing CA signer (remote: WireGuard address only, signed requests from hams1)
+Description=Relay operating CA signer (Google Cloud KMS HSM key; Unix socket for odoo only)
 Wants=network-online.target
-After=network-online.target pcscd.socket
+After=network-online.target
+ConditionPathExists=/opt/hams/etc/relay_ca/signer.env
+ConditionPathExists=/opt/hams/etc/relay_ca/gcp_service_account.json
 ConditionPathExists=/opt/hams/etc/relay_ca_public/relay_issuing.pem
-ConditionPathExists=/opt/hams/etc/relay_ca/authorized_clients.json
 
 [Service]
 # ADR-0070 OS-Level Daemon Restriction
 ProtectSystem=strict
-ProtectHome=read-only
+ProtectHome=true
 PrivateTmp=true
-# A smart card is reached through pcscd's Unix socket, never a device node.
 PrivateDevices=true
 NoNewPrivileges=true
+# Google over HTTPS, and the Unix socket.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
-# Only hams1's WireGuard address may talk to this process, in either direction.
-IPAddressDeny=any
-IPAddressAllow=10.99.0.1
 ReadWritePaths=/opt/hams/etc/relay_ca
+RuntimeDirectory=hams_relay_ca
+RuntimeDirectoryMode=0750
 Type=simple
 User=hams_relay_ca
 Group=hams_relay_ca
@@ -3004,20 +3044,25 @@ SupplementaryGroups=hams_com
 WorkingDirectory=/opt/hams/daemons/relay_ca
 UMask=0077
 
-Environment="RELAY_CA_BASE_DIR=/opt/hams/etc/relay_ca"
+Environment="RELAY_CA_PURPOSE=relay"
+Environment="RELAY_CA_STATE_DIR=/opt/hams/etc/relay_ca"
 Environment="RELAY_CA_PUBLIC_DIR=/opt/hams/etc/relay_ca_public"
+Environment="RELAY_CA_SOCKET_PATH=/run/hams_relay_ca/signer.sock"
+Environment="RELAY_CA_CREDENTIALS_FILE=/opt/hams/etc/relay_ca/gcp_service_account.json"
+Environment="RELAY_CA_ALLOWED_USERS=odoo"
 Environment="RELAY_CA_LEAF_DAYS=800"
-EnvironmentFile=-/opt/hams/etc/relay_ca/relay_ca.env
+# signer.env (written by cloudkms_setup.py, no secret in it): the KMS key version and the pinned public-key fingerprint.
+EnvironmentFile=/opt/hams/etc/relay_ca/signer.env
 
-# Smoketest Resource Verification
-ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_ca/main.py --start-test
-ExecStart=/usr/bin/python3 /opt/hams/daemons/relay_ca/main.py
+# Smoketest Resource Verification (one read-only getPublicKey call to Google)
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_ca/signer_daemon.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/relay_ca/signer_daemon.py
 
-Restart=always
-RestartSec=5
+Restart=on-failure
+RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=hams.relay.ca.signer
+SyslogIdentifier=hams.relay.ca
 
 [Install]
 WantedBy=multi-user.target
@@ -3025,7 +3070,140 @@ WantedBy=multi-user.target
             "owner": "root:root",
             "mode": "644",
             "host_class": "ca_signer",
-            "environments": ["prod", "test"],
+            "environments": ["prod"],
+        },
+        {
+            # hams_com daemons/relay_ca (docs/proposals/CLOUD_HSM_CA_SIGNING.md): the Identity operating CA signer, on hams1 only
+            # (host class ca_signer, prod). It builds each certificate under its fixed policy and sends only the digest
+            # to Google Cloud KMS (HSM) with its OWN service-account key file, which can use exactly this one key to
+            # sign. It listens on a Unix socket and answers only odoo (SO_PEERCRED). It
+            # talks to Google (cloudkms.googleapis.com) and nothing else, hence external_fetch; opt_in because it is
+            # inert until cloudkms_setup.py has written its key file and signer.env and the key has been imported, so
+            # provisioning never enables or starts it. Skipped (not failed, not restart-looping) until then.
+            "path": "/opt/hams/systemd/hams-identity-ca.service",
+            "external_fetch": "calls Google Cloud KMS (cloudkms.googleapis.com) to sign",
+            "opt_in": "needs its Google service-account key file and signer.env from cloudkms_setup.py, and the HSM key imported",
+            "content": """\
+[Unit]
+Description=Identity operating CA signer (Google Cloud KMS HSM key; Unix socket for odoo only)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/hams/etc/identity_ca/signer.env
+ConditionPathExists=/opt/hams/etc/identity_ca/gcp_service_account.json
+ConditionPathExists=/opt/hams/etc/identity_ca_public/identity_operating.pem
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+# Google over HTTPS, and the Unix socket.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/etc/identity_ca
+RuntimeDirectory=hams_identity_ca
+RuntimeDirectoryMode=0750
+Type=simple
+User=hams_identity_ca
+Group=hams_identity_ca
+SupplementaryGroups=hams_com
+WorkingDirectory=/opt/hams/daemons/relay_ca
+UMask=0077
+
+Environment="RELAY_CA_PURPOSE=identity"
+Environment="RELAY_CA_STATE_DIR=/opt/hams/etc/identity_ca"
+Environment="RELAY_CA_PUBLIC_DIR=/opt/hams/etc/identity_ca_public"
+Environment="RELAY_CA_SOCKET_PATH=/run/hams_identity_ca/signer.sock"
+Environment="RELAY_CA_CREDENTIALS_FILE=/opt/hams/etc/identity_ca/gcp_service_account.json"
+Environment="RELAY_CA_ALLOWED_USERS=odoo"
+# signer.env (written by cloudkms_setup.py, no secret in it): the KMS key version and the pinned public-key fingerprint.
+EnvironmentFile=/opt/hams/etc/identity_ca/signer.env
+
+# Smoketest Resource Verification (one read-only getPublicKey call to Google)
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_ca/signer_daemon.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/relay_ca/signer_daemon.py
+
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.identity.ca
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "ca_signer",
+            "environments": ["prod"],
+        },
+        {
+            # hams_com daemons/relay_ca (docs/proposals/CLOUD_HSM_CA_SIGNING.md): the Capability signing root signer, on hams1 only
+            # (host class ca_signer, prod). It builds each certificate under its fixed policy and sends only the digest
+            # to Google Cloud KMS (HSM) with its OWN service-account key file, which can use exactly this one key to
+            # sign. It listens on a Unix socket and answers only root (SO_PEERCRED). It
+            # talks to Google (cloudkms.googleapis.com) and nothing else, hence external_fetch; opt_in because it is
+            # inert until cloudkms_setup.py has written its key file and signer.env and the key has been imported, so
+            # provisioning never enables or starts it. Skipped (not failed, not restart-looping) until then.
+            "path": "/opt/hams/systemd/hams-capability-ca.service",
+            "external_fetch": "calls Google Cloud KMS (cloudkms.googleapis.com) to sign",
+            "opt_in": "needs its Google service-account key file and signer.env from cloudkms_setup.py, and the HSM key imported",
+            "content": """\
+[Unit]
+Description=Capability signing root signer (Google Cloud KMS HSM key; Unix socket for root only)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/hams/etc/capability_ca/signer.env
+ConditionPathExists=/opt/hams/etc/capability_ca/gcp_service_account.json
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+# Google over HTTPS, and the Unix socket.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadWritePaths=/opt/hams/etc/capability_ca
+RuntimeDirectory=hams_capability_ca
+RuntimeDirectoryMode=0750
+Type=simple
+User=hams_capability_ca
+Group=hams_capability_ca
+SupplementaryGroups=hams_com
+WorkingDirectory=/opt/hams/daemons/relay_ca
+UMask=0077
+
+Environment="RELAY_CA_PURPOSE=capability"
+Environment="RELAY_CA_STATE_DIR=/opt/hams/etc/capability_ca"
+Environment="RELAY_CA_SOCKET_PATH=/run/hams_capability_ca/signer.sock"
+Environment="RELAY_CA_CREDENTIALS_FILE=/opt/hams/etc/capability_ca/gcp_service_account.json"
+Environment="RELAY_CA_ALLOWED_USERS=root"
+Environment="RELAY_CA_CAPABILITY_ISSUERS_FILE=/opt/hams/etc/capability_ca/capability_issuers.json"
+# signer.env (written by cloudkms_setup.py, no secret in it): the KMS key version and the pinned public-key fingerprint.
+EnvironmentFile=/opt/hams/etc/capability_ca/signer.env
+
+# Smoketest Resource Verification (one read-only getPublicKey call to Google)
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_ca/signer_daemon.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/relay_ca/signer_daemon.py
+
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.capability.ca
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "ca_signer",
+            "environments": ["prod"],
         },
         {
             # ADR 0106 (retired design): one instance of this template per tenant (hams-tenant@perens_com.service).
@@ -7147,13 +7325,12 @@ def external_fetch_unit_names():
 
 # [@ANCHOR: infrastructure:host_classes]
 # Host classes: a MANIFEST account, directory or file carrying "host_class": "<name>" exists only
-# on a host that has been designated that class. The first class is "ca_signer": the machine at
-# Bruce's site that runs daemons/relay_ca (docs/proposals/RELAY_CA_REMOTE_SIGNER.md). hams1 is a
-# Vultr virtual server with no USB device service, so the SmartCard-HSM can never be attached to
-# it, and it must never hold the CA key: it is not a ca_signer, so provisioning never creates the
-# signer's account, directories or unit there. A host is designated by `provision.py --host-class
-# ca_signer`, which records it in HOST_CLASSES_FILE (so a later plain re-run keeps it), or by the
-# HAMS_HOST_CLASSES environment variable (comma separated).
+# on a host that has been designated that class. "ca_signer" is the host that runs the three CA signer
+# daemons of daemons/relay_ca (docs/proposals/CLOUD_HSM_CA_SIGNING.md): hams1, whose signers sign with
+# keys held in Google Cloud KMS (HSM). No other host, the dev box and every test host included, gets
+# their accounts, directories or units, so no other host ever holds a signing credential. A host is
+# designated by `provision.py --host-class ca_signer`, which records it in HOST_CLASSES_FILE (so a
+# later plain re-run keeps it), or by the HAMS_HOST_CLASSES environment variable (comma separated).
 KNOWN_HOST_CLASSES = frozenset({"b2_backup", "ca_signer", "odoo_tenants"})
 HOST_CLASSES_FILE = "/opt/hams/etc/host_classes"
 
@@ -8920,6 +9097,11 @@ def provision_environment(
                     # No Debian package exists for it, matching the other
                     # entries in this list.
                     "curl_cffi",
+                    # daemons/relay_ca/cloudkms_shim.py build_client(): the three CA signer daemons on hams1
+                    # (host class ca_signer) call Google Cloud KMS through this client. It is imported lazily and
+                    # only there, so every other host merely carries an unused package. No Debian package
+                    # exists (`apt-cache search google-cloud-kms` is empty), matching the entries around it.
+                    "google-cloud-kms",
                     "--ignore-installed",
                     "typing_extensions",
                     "--break-system-packages",

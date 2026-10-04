@@ -164,7 +164,7 @@ def provision():
         metavar="CLASS",
         help="Provision ONLY the entries of this host class (accounts, directories, unit files; "
         "nothing is enabled or started) instead of the whole hams.com stack. For a machine that is "
-        "not a full server, such as the Relay CA signer host: `--only-host-class ca_signer`. "
+        "not a full server, such as the CA signer accounts and units alone: `--only-host-class ca_signer`. "
         "Records the class in /opt/hams/etc/host_classes. Honours --plan",
     )
     parser.add_argument(
@@ -172,9 +172,8 @@ def provision():
         action="append",
         default=[],
         metavar="CLASS",
-        help="Designate this host as a MANIFEST host class (currently: ca_signer, the machine at "
-        "Bruce's site that runs the Relay CA signer; never hams1). Recorded in "
-        "/opt/hams/etc/host_classes so later runs keep it. Repeatable",
+        help="Designate this host as a MANIFEST host class (for example ca_signer, the host that runs the CA signer "
+        "daemons: hams1 only). Recorded in /opt/hams/etc/host_classes so later runs keep it. Repeatable",
     )
     args, _ = parser.parse_known_args()
 
