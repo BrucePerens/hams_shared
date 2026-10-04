@@ -121,8 +121,6 @@
   "daemons/pota_sync/main.py::run_sync",
   "daemons/qrz_scraper/main.py::main",
   "daemons/qrz_scraper/main.py::process_job",
-  "daemons/relay_cert_renew/main.py::_certbot_renew",
-  "daemons/relay_cert_renew/main.py::run_cycle",
   "daemons/ses_inbound_mail_ingest/main.py::_aws",
   "daemons/ses_inbound_mail_ingest/main.py::_retry_or_give_up",
   "daemons/ses_inbound_mail_ingest/main.py::fetch_object",
