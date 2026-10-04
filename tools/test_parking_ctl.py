@@ -208,29 +208,21 @@ class CommandTests(unittest.TestCase):
         names = [r["name"] for r in ctl.dns_records(entries, "t")]
         self.assertEqual(names, ["a.example", "www.a.example", "b.example", "www.c.example"])
 
-    def test_dns_command_never_changes_existing_records_and_reports_foreign_zones(self):
+    def test_dns_command_refuses_and_never_calls_the_cloudflare_api(self):
         self.write("mine.example\nforeign.example\n")
-        responses = {
-            "/zones?name=mine.example": [{"id": "z1"}],
-            "/zones/z1/dns_records?name=mine.example": [{"type": "A", "content": "1.2.3.4"}],
-            "/zones/z1/dns_records?name=www.mine.example": [],
-        }
         calls = []
 
         class Api:
             def call(self, method, path, body=None):
                 calls.append((method, path))
-                return responses.get(path, [])
+                return []
 
         out = []
         args = ctl.build_parser().parse_args(["--spec-dir", self.specs, "dns", self.file, "--tunnel-id", "t", "--apply"])
         code = ctl.cmd_dns(args, out.append, api=Api())
         self.assertEqual(code, 2)
-        self.assertIn(("POST", "/zones/z1/dns_records"), calls)  # www.mine.example only
-        self.assertEqual([c for c in calls if c[0] == "POST"], [("POST", "/zones/z1/dns_records")])
-        text = "\n".join(out)
-        self.assertIn("CONFLICT, not touched: mine.example", text)
-        self.assertIn("NOT IN THIS ACCOUNT: foreign.example", text)
+        self.assertEqual(calls, [])
+        self.assertIn("only through hams.com's own Odoo", "\n".join(out))
 
     def test_export_and_report(self):
         client = FakeClient([row("a.example"), row("b.example", behavior="gone")])

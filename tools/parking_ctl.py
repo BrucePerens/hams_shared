@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""parking_ctl: bulk management of the domains served by the Parking tenant (ADR 0105).
+"""parking_ctl: bulk management of the domains served by the Parking tenant (ADR 0106).
 
     parking_ctl.py validate FILE                 syntax, IDNA, duplicates, tenant/hams.com conflicts
     parking_ctl.py plan FILE [options]           what would be created/updated, and the Cloudflare steps
@@ -338,18 +338,11 @@ def cmd_archive(args, out):
 
 
 def cmd_dns(args, out, api=None):
-    import tenant_cloudflare as cf
-
-    entries, problems = read_entries(args)
-    if problems:
-        for problem in problems:
-            out(f"PROBLEM {problem}")
-        return 1
-    if api is None:
-        creds = cf.read_credentials()
-        api = cf.Api(creds["CLOUDFLARE_API_TOKEN"])
-    records = dns_records(entries, args.tunnel_id)
-    return cf.apply_dns_records(api, records, args.apply, out)
+    out(
+        "REFUSED: DNS records are changed only through hams.com's own Odoo (the cloudflare module), never "
+        "through the Cloudflare API. See hams_shared/docs/adrs/0106_tenants_inside_one_odoo.md."
+    )
+    return 2
 
 
 def cmd_export(args, out):

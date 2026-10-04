@@ -1,6 +1,6 @@
-# Story: Parking Many Domains on One Lightweight Odoo
+# Story: Parking Many Domains in hams.com's Odoo
 
-As a **System Administrator** who owns many domains, I want **one small Odoo instance to answer for all
+As a **System Administrator** who owns many domains, I want **the Odoo that already serves hams.com to answer for all
 of them** (a parked page, a redirect, a for-sale page, or 410 Gone, per domain), so that each domain
 needs a DNS record and one row, not its own website, and so that nothing but those few pages is ever
 reachable from the internet on those names.
@@ -9,13 +9,13 @@ reachable from the internet on those names.
 
 The request's Host is read as the client sent it, never from `X-Forwarded-Host`, which Odoo's proxy mode
 would otherwise substitute (that would let a visitor make one domain answer as another and poison the
-edge cache) [@ANCHOR: parking:COMM_normalize_host] [@ANCHOR: parking:COMM_original_host]. The Host must be a plausible DNS name; IP addresses and
+edge cache) [@ANCHOR: tenant_sites:COMM_normalize_host] [@ANCHOR: tenant_sites:COMM_original_host]. The Host must be a plausible DNS name; IP addresses and
 single labels are refused.
 
 Every public request is answered from the `parking.domain` table by the `ir.http` fallback: the router
 is told "no route" for everything except the for-sale form post, so the Odoo login, backend,
 JSON-RPC, XML-RPC and websocket routes answer exactly like any other path
-[@ANCHOR: parking:COMM_match_guard] [@ANCHOR: parking:COMM_serve_fallback].
+[@ANCHOR: tenant_sites:COMM_match_guard] [@ANCHOR: tenant_sites:COMM_serve_fallback] [@ANCHOR: parking:COMM_serve_other].
 
 A parked page is a few kilobytes of self-contained HTML with no script, no cookie and a content
 security policy that allows none [@ANCHOR: parking:COMM_render_pages]. A host that is not in the table gets a
@@ -38,14 +38,13 @@ answered like a success and stores nothing; one address may send five inquiries 
 
 ## Scenario: The operator manages the domains
 
-Only a request whose socket peer is a loopback address and that carries no Cloudflare header reaches
-the backend [@ANCHOR: parking:COMM_admin_request], so the instance is administered over an SSH tunnel and
-a visitor cannot reach it by sending any Host or X-Forwarded-For header to a parked domain
-(the socket peer is read before the proxy middleware rewrites it
-[@ANCHOR: parking:COMM_original_peer]). Names are normalized and unique, a
-redirect target must be valid, and the cache time is bounded [@ANCHOR: parking:COMM_domain_constraints]. The
-public handler runs as one service account that can read the domains and write inquiries and nothing
-else [@ANCHOR: parking:COMM_service_account_acl].
+A request counts as a parked domain's only when its hostname is in the table, and a parked domain may not
+shadow the main site's or a tenant's hostname [@ANCHOR: parking:COMM_domain_not_main]
+[@ANCHOR: parking:COMM_extra_kind]; the parked page answers every path, so the backend, login and API routes
+are not reachable there [@ANCHOR: parking:COMM_public_route] [@ANCHOR: parking:COMM_serve_other]. Names are
+normalized and unique, a redirect target must be valid, and the cache time is bounded
+[@ANCHOR: parking:COMM_domain_constraints]. The public handler runs as one service account that can read the
+domains and write inquiries and nothing else [@ANCHOR: parking:COMM_service_account_acl].
 
 ## Scenario: How each piece behaves
 
@@ -54,8 +53,7 @@ else [@ANCHOR: parking:COMM_service_account_acl].
   [@ANCHOR: parking:COMM_render_gone]; `robots.txt` follows the domain's indexing switch
   [@ANCHOR: parking:COMM_robots_txt].
 * The visitor's address is trusted only with Cloudflare's own headers present
-  [@ANCHOR: parking:COMM_client_ip] and is stored only as a keyed hash [@ANCHOR: parking:COMM_hash_ip];
-  the operator test looks at the socket peer [@ANCHOR: parking:COMM_is_loopback_address].
+  [@ANCHOR: parking:COMM_client_ip] and is stored only as a keyed hash [@ANCHOR: parking:COMM_hash_ip].
 * A form token is checked against the host, the render time and a keyed signature
   [@ANCHOR: parking:COMM_verify_form_token]; the key is set once at install and never overwritten
   [@ANCHOR: parking:COMM_post_init_hook] and is read by the handler or the request fails

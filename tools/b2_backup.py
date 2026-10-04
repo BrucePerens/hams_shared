@@ -9,7 +9,7 @@ Backblaze B2, using kopia over B2's S3-compatible API.
 
 What goes up (all of it encrypted on this host before it leaves, so B2 only ever holds ciphertext):
   * hams.com's Odoo filestore (the attachments pgBackRest cannot see);
-  * every tenant's filestore and a logical dump of every tenant database (ADR 0105; the tenants are
+  * every tenant's filestore and a logical dump of every tenant database (ADR 0106; the tenants are
     discovered from the spec directory at run time, so a new tenant is covered the night after it
     exists without a code change);
   * a logical dump of hams_prod (pgBackRest and hams.db.local.backup remain the primary database
@@ -218,7 +218,7 @@ class Source:
 
 
 def discover_tenants(cfg):
-    """Names from every *.json spec in the tenant spec directory (ADR 0105). A missing directory
+    """Names from every *.json spec in the tenant spec directory (ADR 0106). A missing directory
     means no tenants yet; a spec that cannot be read is an error, never a silent gap."""
     try:
         entries = sorted(os.listdir(cfg.tenant_spec_dir))

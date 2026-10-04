@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""static_site_server: a small, read-only static file server for one site's `/static/` tree (ADR 0105).
+"""static_site_server: a small, read-only static file server for one site's `/static/` tree (ADR 0106).
 
     static_site_server.py --config /etc/hams-static/perens_com.json
 

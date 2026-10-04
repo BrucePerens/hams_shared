@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""odoo_site_migrate: copy the website content of an existing Odoo site into a tenant (ADR 0105).
+"""odoo_site_migrate: copy the website content of an existing Odoo site into a tenant (ADR 0106).
 
     odoo_site_migrate.py probe  --creds FILE
     odoo_site_migrate.py export --creds FILE --out DIR [--include contacts,mail] [--resume]

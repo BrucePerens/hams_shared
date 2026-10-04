@@ -932,6 +932,20 @@ class CloudflareApplyTests(unittest.TestCase):
             cf.read_credentials(path)
 
 
+class CloudflareCommandsRefuseTests(unittest.TestCase):
+    """Cloudflare is changed only through hams.com's Odoo: the command line makes no API call at all."""
+
+    def test_every_api_command_refuses_without_reading_credentials(self):
+        for command in (["fetch-current", "--out", "/dev/null"], ["apply-ingress", "--live-file", "/dev/null"],
+                        ["plan-dns"], ["apply-dns"]):
+            with mock.patch.object(cf, "read_credentials", side_effect=AssertionError("credentials read")), \
+                    mock.patch.object(cf, "Api", side_effect=AssertionError("API used")), \
+                    mock.patch("sys.stderr", io.StringIO()) as err:
+                code = cf.main(["--tunnel-id", "t"] + command)
+            self.assertEqual(code, 2, command)
+            self.assertIn("ONLY through hams.com's own Odoo", err.getvalue())
+
+
 class ManifestTests(unittest.TestCase):
     def test_tenant_units_are_all_host_class_gated(self):
         names = [os.path.basename(s["path"]) for s in infra.MANIFEST["static_files"]
