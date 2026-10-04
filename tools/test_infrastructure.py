@@ -3722,6 +3722,60 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         self.assertIn("system-startup.service", infra.external_fetch_unit_names())
 
 
+class BootServiceUnitTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:boot_service_unit_names]
+
+    Fails if a long-running production daemon would be left link-only (never started again after
+    a reboot), or if a unit that needs a deliberate release step would be enabled at boot."""
+
+    def test_the_known_production_daemons_are_enabled_at_boot(self):
+        names = infra.boot_service_unit_names()
+        for expected in (
+            "backup.worker.service",
+            "adif.ingress.service",
+            "dx.firehose.service",
+            "hams.simulated.band.service",
+            "hams.simulated.bots.service",
+            "hams.relay.bridge.service",
+            "qrz.scraper.service",
+        ):
+            self.assertIn(expected, names)
+
+    def test_release_time_and_custody_units_stay_link_only(self):
+        names = infra.boot_service_unit_names()
+        for excluded in infra.BOOT_ENABLE_EXCLUDED_SERVICES:
+            self.assertNotIn(excluded, names)
+        self.assertIn("hams-auth-gateway.service", infra.BOOT_ENABLE_EXCLUDED_SERVICES)
+        self.assertIn("hams-relay-ca.service", infra.BOOT_ENABLE_EXCLUDED_SERVICES)
+
+    def test_no_oneshot_template_or_opt_in_unit_is_enabled_at_boot(self):
+        names = infra.boot_service_unit_names()
+        by_name = {os.path.basename(spec["path"]): spec for spec in infra.MANIFEST["static_files"]}
+        for name in names:
+            self.assertNotIn("@", name)
+            self.assertNotIn("Type=oneshot", by_name[name]["content"], name)
+            self.assertIn("WantedBy=multi-user.target", by_name[name]["content"], name)
+        self.assertEqual(names & infra.opt_in_unit_names(), set())
+
+    def test_every_excluded_unit_is_a_real_manifest_unit(self):
+        # A stale exclusion would silently stop excluding anything if the unit were renamed.
+        by_name = {os.path.basename(spec["path"]) for spec in infra.MANIFEST["static_files"]}
+        for name in infra.BOOT_ENABLE_EXCLUDED_SERVICES:
+            self.assertIn(name, by_name)
+
+    def test_provisioning_only_enables_them_outside_test_and_hold_runs(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn(
+            "boot_services = set() if (is_test_env or hold_odoo) else boot_service_unit_names()",
+            source,
+        )
+
+    def test_a_production_run_enables_the_boot_services_it_links(self):
+        linked = ["backup.worker.service", "odoo-fake.timer"]
+        enabled = infra._activation_units_to_enable(linked, is_test_env=False)
+        self.assertEqual(enabled, linked)
+
+
 class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
     """Tests [@ANCHOR: infrastructure:activation_units_to_enable]
     Tests [@ANCHOR: infrastructure:smoketest_candidate_services]

@@ -7747,6 +7747,56 @@ def _activation_units_to_enable(linked_units, is_test_env, opt_in_units=()):
     return [unit for unit in linked_units if unit not in held]
 
 
+# Long-running daemons that production must start again after a reboot.
+#
+# Found by the 2026-10-04 production-readiness audit of hams1: provisioning linked every
+# /opt/hams/systemd/*.service into /etc/systemd/system but only ever ran `systemctl enable`
+# for .timer and .path units, so on hams1 sixteen daemons (adif.ingress, backup.worker,
+# dx.firehose, hams.simulated.band, hams.simulated.bots ...) were "linked",
+# running only because the smoketest had started them. `systemctl is-enabled` said "linked",
+# `WantedBy=` was empty, and none appeared in multi-user.target's dependencies, so the first
+# reboot (one is overdue: a newer kernel has been waiting since 2026-09-30) would have
+# brought up Odoo and PostgreSQL and none of those daemons.
+#
+# A unit is enabled at boot when it is a plain long-running service (not a oneshot, not an
+# instance template) that asks for multi-user.target, is shipped for "prod", and is not
+# opt-in. Units that need a deliberate release step stay link-only (listed below). Only
+# production-style runs enable them: a test environment and a --hold-odoo run never do.
+BOOT_ENABLE_EXCLUDED_SERVICES = {
+    # Binds TCP 443 for auth.hams.com and needs a certificate, anchors and a derived secret;
+    # its release steps are documented in PROVISION_PRODUCTION_NOTES.md.
+    "hams-auth-gateway.service": "release-time unit: needs certificate, anchors and secret first",
+    # The relay certificate authority runs only on the custody host and needs its key unlocked.
+    "hams-relay-ca.service": "CA custody host only; key must be unlocked deliberately",
+}
+
+
+# [@ANCHOR: infrastructure:boot_service_unit_names]
+def boot_service_unit_names():
+    """Basenames of the long-running MANIFEST services that should be enabled at boot in production.
+
+    See BOOT_ENABLE_EXCLUDED_SERVICES and the comment above it. Derived from the MANIFEST so a
+    new daemon is covered without a second list to forget; the audited exclusions are explicit."""
+    opt_in = opt_in_unit_names()
+    names = set()
+    for spec in MANIFEST.get("static_files", []):
+        path = spec.get("path", "")
+        name = os.path.basename(path)
+        content = spec.get("content", "")
+        if (
+            os.path.dirname(path) == "/opt/hams/systemd"
+            and name.endswith(".service")
+            and "@" not in name
+            and "prod" in spec.get("environments", [])
+            and "WantedBy=multi-user.target" in content
+            and "Type=oneshot" not in content
+            and name not in opt_in
+            and name not in BOOT_ENABLE_EXCLUDED_SERVICES
+        ):
+            names.add(name)
+    return names
+
+
 # [@ANCHOR: infrastructure:smoketest_candidate_services]
 def _smoketest_candidate_services(has_hams_com=True, is_test_env=False, opt_in_units=()):
     """Services run_post_provision_smoketest() may start, in start order.
@@ -9662,6 +9712,10 @@ def provision_environment(
         # same explicit `systemctl enable` below, not just the symlink, to actually
         # fire. Named linked_activation_units (was linked_timers) to reflect that.
         linked_activation_units = []
+        # Long-running daemons are enabled at boot too (see boot_service_unit_names()), but only
+        # by a production-style run: never in a test environment, and never in a prepare-only
+        # --hold-odoo run, whose units must stay link-only until the real release run.
+        boot_services = set() if (is_test_env or hold_odoo) else boot_service_unit_names()
         try:
             systemd_dir = "/opt/hams/systemd"
             if os.path.exists(systemd_dir):
@@ -9673,7 +9727,7 @@ def provision_environment(
                         dst = os.path.join("/etc/systemd/system", item)
                         if not os.path.exists(dst) and not _plan("link", f"{dst} -> {src}"):
                             os.symlink(src, dst)
-                        if item.endswith((".timer", ".path")):
+                        if item.endswith((".timer", ".path")) or item in boot_services:
                             linked_activation_units.append(item)
             if _planning():
                 # Units provision_static_files() would write but which are not on disk yet.
@@ -9690,7 +9744,9 @@ def provision_environment(
                         and not os.path.exists(os.path.join("/etc/systemd/system", item))
                     ):
                         _plan("link", f"/etc/systemd/system/{item} -> {unit_path}")
-                        if item.endswith((".timer", ".path")) and item not in linked_activation_units:
+                        if (
+                            item.endswith((".timer", ".path")) or item in boot_services
+                        ) and item not in linked_activation_units:
                             linked_activation_units.append(item)
         except OSError as e:
             _logger.warning("Failed to link systemd units: %s", e)
@@ -9729,7 +9785,7 @@ def provision_environment(
             )
         if units_to_enable:
             _logger.info(
-                "[*] Enabling %d linked systemd timer/path unit(s)...",
+                "[*] Enabling %d linked systemd timer/path/boot-service unit(s)...",
                 len(units_to_enable),
             )
             try:
