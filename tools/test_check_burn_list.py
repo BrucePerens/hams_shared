@@ -5985,6 +5985,39 @@ def test_daemon_key_registration_flags_an_unregistered_key_and_passes_a_register
         assert check_burn_list.check_daemon_key_registration(tmpdir) == []
 
 
+def test_daemon_key_registration_sees_a_key_file_in_a_family_key_directory():
+    """A key under /opt/hams/etc/keys/<family>/ is checked like a flat one: not silently dropped."""
+    infra_src = (
+        "MANIFEST = {\n"
+        '    "static_files": [\n'
+        '        {"path": "/opt/hams/systemd/c.service", "content": """[Service]\n'
+        'Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/fam_c/c_service_internal.key"\n"""},\n'
+        "    ]\n"
+        "}\n"
+    )
+    hooks_src = (
+        "def post_init_hook(env):\n"
+        "    daemons_to_register = [\n"
+        "%s"
+        "    ]\n"
+        "    for name, xml_id, path in daemons_to_register:\n"
+        "        pass\n"
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        (root / "hams_shared" / "tools").mkdir(parents=True)
+        (root / "ham_init").mkdir()
+        (root / "hams_shared" / "tools" / "infrastructure.py").write_text(infra_src, encoding="utf-8")
+        (root / "ham_init" / "hooks.py").write_text(hooks_src % "", encoding="utf-8")
+        errors = check_burn_list.check_daemon_key_registration(str(root))
+        assert len(errors) == 1 and "fam_c/c_service_internal.key" in errors[0], errors
+        (root / "ham_init" / "hooks.py").write_text(
+            hooks_src % '        ("C", "mod.user_c", "/opt/hams/etc/keys/fam_c/c_service_internal.key"),\n',
+            encoding="utf-8",
+        )
+        assert check_burn_list.check_daemon_key_registration(str(root)) == []
+
+
 # CRITICAL HARDCODED CREDENTIAL DEFAULT: a credential env read under daemons/, scripts/ or
 # tools/ must not fall back to a literal (2026-09-15: RMQ_PASS="guest", DB_PASS="odoo").
 _CRED_DEFAULT_MSG = "HARDCODED CREDENTIAL DEFAULT"
