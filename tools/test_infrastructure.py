@@ -3424,6 +3424,36 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
         )
         self.assertNotIn("code.review.sweep.timer", enabled_test)
 
+    def test_club_web_search_discovery_units_never_run_on_test_hosts_or_unasked(self):
+        # Tests [@ANCHOR: infrastructure:external_fetch_unit_names]
+        # Tests [@ANCHOR: infrastructure:opt_in_unit_names]
+        # NIGHT_PLAN decision 67: a paid, third-party, search-grounded discovery pass. Both
+        # the .service and the .timer must be external_fetch (never on a test host) AND opt_in
+        # (never enabled in production until Bruce names it).
+        units = {
+            "club.web.search.discovery.service",
+            "club.web.search.discovery.timer",
+        }
+        self.assertTrue(units <= infra.external_fetch_unit_names())
+        self.assertTrue(units <= infra.opt_in_unit_names())
+        linked = self._linked_activation_units()
+        self.assertIn("club.web.search.discovery.timer", linked)
+        for is_test_env in (True, False):
+            enabled = infra._activation_units_to_enable(linked, is_test_env=is_test_env)
+            self.assertFalse(units & set(enabled))
+        for is_test_env in (True, False):
+            started = infra._smoketest_candidate_services(True, is_test_env=is_test_env)
+            self.assertNotIn("club.web.search.discovery.service", started)
+        service = next(
+            spec for spec in infra.MANIFEST["static_files"]
+            if spec["path"].endswith("club.web.search.discovery.service")
+        )
+        self.assertIn(
+            "ODOO_KEY_FILE=/opt/hams/etc/keys/club_web_search_discovery_service_internal.key",
+            service["content"],
+        )
+        self.assertIn("--max-requests-per-day=", service["content"])
+
     def test_smoketest_never_starts_an_opt_in_service_unless_named(self):
         self.assertNotIn(
             "code.review.sweep.service", infra._smoketest_candidate_services(True, is_test_env=False)
