@@ -25,6 +25,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -3597,6 +3598,226 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
             "localhost.cert.renewal.service",
             infra.systemd_units_running_as(infra.MANIFEST, "odoo"),
         )
+        self.assertIn(
+            "ncvec.sync.service",
+            infra.systemd_units_running_as(infra.MANIFEST, "hamsd_ncvec_sync"),
+        )
+
+
+class FamilyAccountUnitTests(_SafePatchTestCase):
+    """Tests [@ANCHOR: infrastructure:family_account_units]: a unit that has left the shared `odoo`
+    account is held to the account, directory and environment rules of the isolation plan."""
+
+    SECRET_NAME = re.compile(r"(PASSWORD|PASS|TOKEN|SECRET|KEY)$")
+
+    def _directories_owned_by(self, user):
+        return {
+            d["path"]
+            for d in infra.MANIFEST["directories"]
+            if d.get("owner", "").split(":")[0] == user
+        }
+
+    def test_each_migrated_unit_runs_as_and_in_the_group_of_its_account(self):
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            with self.subTest(unit=unit):
+                user = rules["user"]
+                self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "User"), [user])
+                self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Group"), [user])
+                self.assertIn(unit, infra.systemd_units_running_as(infra.MANIFEST, user))
+                self.assertNotIn(unit, infra.systemd_units_running_as(infra.MANIFEST, "odoo"))
+                self.assertNotIn(unit, infra.SHARED_ODOO_ACCOUNT_UNITS)
+
+    def test_every_unit_running_as_a_daemon_family_account_is_listed_with_its_rules(self):
+        accounts = {a["user"] for a in infra.MANIFEST["system_accounts"] if a["user"].startswith("hamsd_")}
+        running = set()
+        for account in accounts:
+            running |= infra.systemd_units_running_as(infra.MANIFEST, account)
+        self.assertEqual(
+            sorted(running), sorted(infra.FAMILY_ACCOUNT_UNITS),
+            "A unit under a hamsd_ account must be in FAMILY_ACCOUNT_UNITS so the narrow-write and "
+            "environment rules apply to it.",
+        )
+
+    def test_a_daemon_family_account_is_provisioned_the_way_the_key_flow_needs(self):
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            with self.subTest(unit=unit):
+                matches = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == rules["user"]]
+                self.assertEqual(len(matches), 1)
+                account = matches[0]
+                self.assertEqual(account["group"], rules["user"])
+                self.assertEqual(account["shell"], "/usr/sbin/nologin")
+                # odoo must be in the group to hand it a key file (chgrp, never chown).
+                self.assertIn("odoo", account["add_to_users"])
+                # hams_com is what lets the account reach /opt/hams.
+                self.assertIn("hams_com", account["member_of"])
+                self.assertEqual(account["environments"], ["prod", "test"])
+
+    def test_the_writable_paths_are_only_directories_the_account_owns(self):
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            with self.subTest(unit=unit):
+                writable = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths")
+                self.assertTrue(writable, "a oneshot daemon with no writable path cannot spool anything")
+                owned = self._directories_owned_by(rules["user"])
+                self.assertEqual(sorted(set(writable) - owned), [])
+                for shared in ("/opt/hams/spool", "/opt/hams/downloads", "/opt/hams/cache", "/opt/hams"):
+                    self.assertNotIn(shared, writable)
+
+    def test_the_state_directories_are_private_to_the_account_and_readable_by_odoo(self):
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            for path in infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths"):
+                with self.subTest(unit=unit, path=path):
+                    entry = [d for d in infra.MANIFEST["directories"] if d["path"] == path][0]
+                    self.assertEqual(entry["owner"], f"{rules['user']}:{rules['user']}")
+                    self.assertEqual(entry["provision_mode"], "750")
+                    self.assertTrue(entry["recursive_owner"])
+                    self.assertEqual(entry["environments"], ["prod", "test"])
+
+    def test_a_migrated_unit_loads_only_the_environment_files_it_uses(self):
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            with self.subTest(unit=unit):
+                loaded = {
+                    os.path.basename(value.lstrip("-"))
+                    for value in infra.systemd_unit_directive_values(infra.MANIFEST, unit, "EnvironmentFile")
+                }
+                self.assertEqual(loaded, set(rules["environment_files"]))
+                self.assertLessEqual(loaded, set(infra.MANIFEST["env_groups"]))
+
+    def test_common_env_carries_no_secret(self):
+        keys = infra.MANIFEST["env_groups"]["common.env"]
+        self.assertEqual(sorted(k for k in keys if self.SECRET_NAME.search(k)), [])
+        # A value duplicated here must stay in its own file too: no existing unit changes behavior.
+        for key in keys:
+            self.assertTrue(
+                any(key in values for name, values in infra.MANIFEST["env_groups"].items() if name != "common.env"),
+                f"{key} is only in common.env: remove the original deliberately, in its own change",
+            )
+
+    def test_the_key_directory_is_traversable_by_hams_com_and_not_listable(self):
+        entry = [d for d in infra.MANIFEST["directories"] if d["path"] == "/opt/hams/etc/keys"][0]
+        self.assertEqual((entry["owner"], entry["provision_mode"]), ("odoo:hams_com", "710"))
+
+    def test_a_migrated_unit_keeps_the_sandbox_and_adds_the_isolation_directives(self):
+        required = {
+            "ProtectSystem": ["strict"],
+            "PrivateTmp": ["true"],
+            "NoNewPrivileges": ["true"],
+            "ProtectProc": ["invisible"],
+            "ProcSubset": ["pid"],
+            "ProtectKernelTunables": ["true"],
+            "RestrictSUIDSGID": ["true"],
+            "LockPersonality": ["true"],
+        }
+        for unit in infra.FAMILY_ACCOUNT_UNITS:
+            for directive, expected in required.items():
+                with self.subTest(unit=unit, directive=directive):
+                    self.assertEqual(
+                        infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive), expected
+                    )
+
+    def test_the_key_file_a_migrated_unit_reads_is_under_the_key_directory(self):
+        for unit in infra.FAMILY_ACCOUNT_UNITS:
+            with self.subTest(unit=unit):
+                values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
+                key_files = [v.strip('"').split("=", 1)[1] for v in values if v.strip('"').startswith("ODOO_KEY_FILE=")]
+                self.assertEqual(len(key_files), 1)
+                self.assertTrue(key_files[0].startswith("/opt/hams/etc/keys/"))
+
+
+class SystemAccountMemberOfTests(_SafePatchTestCase):
+    def _provision(self, accounts):
+        calls = []
+        self.safe_patch_dict(infra.MANIFEST, {"system_accounts": accounts})
+        self.safe_patch_object(infra.pwd, "getpwnam", side_effect=KeyError("no such user"))
+        self.safe_patch_object(infra.grp, "getgrnam", side_effect=KeyError("no such group"))
+        infra.provision_system_accounts(calls.append, environment="prod")
+        return calls
+
+    def safe_patch_dict(self, target, values):
+        patcher = patch.dict(target, values)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_member_of_adds_the_account_to_each_existing_group_after_creating_it(self):
+        calls = self._provision([{
+            "user": "hamsd_example", "group": "hamsd_example", "shell": "/usr/sbin/nologin",
+            "member_of": ["hams_com", "other_group"], "environments": ["prod"],
+        }])
+        self.assertEqual(calls[0], ["groupadd", "--system", "hamsd_example"])
+        self.assertEqual(calls[1][0], "useradd")
+        self.assertEqual(calls[2:], [
+            ["usermod", "-a", "-G", "hams_com", "hamsd_example"],
+            ["usermod", "-a", "-G", "other_group", "hamsd_example"],
+        ])
+
+    def test_an_account_without_member_of_gets_no_extra_usermod(self):
+        calls = self._provision([{
+            "user": "plain", "group": "plain", "environments": ["prod"],
+        }])
+        self.assertEqual([c[0] for c in calls], ["groupadd", "useradd"])
+
+
+class RecursiveOwnerTests(_TmpDirTestCase):
+    """apply_permissions(recursive=True) re-owns what an earlier run left below a state directory."""
+
+    def _fake_account(self):
+        self.safe_patch_object(infra.pwd, "getpwnam", return_value=MagicMock(pw_uid=4242))
+        self.safe_patch_object(infra.grp, "getgrnam", return_value=MagicMock(gr_gid=4343))
+
+    def test_every_entry_below_is_re_owned_and_symlinks_are_not_followed(self):
+        outside = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(outside, ignore_errors=True))
+        with open(os.path.join(outside, "victim"), "w", encoding="utf-8") as victim:
+            victim.write("x")
+        top = os.path.join(self.tmp, "state")
+        os.makedirs(os.path.join(top, "images"))
+        with open(os.path.join(top, "images", "a.png"), "w", encoding="utf-8") as png:
+            png.write("x")
+        os.symlink(outside, os.path.join(top, "escape"))
+        self._fake_account()
+        chowned = []
+        self.safe_patch_object(infra.os, "chown", side_effect=lambda p, u, g: chowned.append(("chown", p, u, g)))
+        self.safe_patch_object(infra.os, "lchown", side_effect=lambda p, u, g: chowned.append(("lchown", p, u, g)))
+        infra.apply_permissions(top, "acct:acct", 0o750, recursive=True)
+        self.assertIn(("chown", top, 4242, 4343), chowned)
+        lchowned = {path for kind, path, _u, _g in chowned if kind == "lchown"}
+        self.assertEqual(
+            lchowned,
+            {
+                os.path.join(top, "images"),
+                os.path.join(top, "images", "a.png"),
+                os.path.join(top, "escape"),
+            },
+        )
+        self.assertFalse(any(p.startswith(outside) for _k, p, _u, _g in chowned), "a symlink target was followed")
+        self.assertEqual(stat_mode(top), 0o750)
+        self.assertNotEqual(stat_mode(os.path.join(top, "images")), 0o750, "children keep their own mode")
+
+    def test_without_recursive_only_the_directory_itself_is_touched(self):
+        top = os.path.join(self.tmp, "state")
+        os.makedirs(os.path.join(top, "images"))
+        self._fake_account()
+        chowned = []
+        self.safe_patch_object(infra.os, "chown", side_effect=lambda p, u, g: chowned.append(p))
+        self.safe_patch_object(infra.os, "lchown", side_effect=lambda p, u, g: chowned.append(p))
+        infra.apply_permissions(top, "acct:acct", 0o750)
+        self.assertEqual(chowned, [top])
+
+    def test_apply_production_directories_passes_recursive_owner_through(self):
+        directories = [
+            {"path": "/opt/hams/x_state", "owner": "acct:acct", "provision_mode": "750",
+             "recursive_owner": True, "environments": ["prod"]},
+            {"path": "/opt/hams/y_plain", "owner": "acct:acct", "provision_mode": "750",
+             "environments": ["prod"]},
+        ]
+        self.safe_patch_object(infra, "apply_permissions")
+        with patch.dict(infra.MANIFEST, {"directories": directories}):
+            infra.apply_production_directories(environment="prod", dest_dir=self.tmp)
+        flags = {call.args[0].rsplit("/", 1)[1]: call.kwargs["recursive"] for call in infra.apply_permissions.call_args_list}
+        self.assertEqual(flags, {"x_state": True, "y_plain": False})
+
+
+def stat_mode(path):
+    return stat.S_IMODE(os.stat(path).st_mode)
 
 
 class RedactCommandTests(unittest.TestCase):
