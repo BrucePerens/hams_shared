@@ -3230,6 +3230,17 @@ class B2BackupManifestTests(unittest.TestCase):
         self.assertEqual(cfg.retention, {"daily": 14, "weekly": 8, "monthly": 12})
         etc = [p for p in cfg.paths if p["path"] == "/opt/hams/etc"][0]
         self.assertEqual(etc["exclude"], ["b2_backup/b2_backup.env"])
+        # ADR 0106: the tenants live in hams_prod, so its filestore and database cover them. What is still
+        # per tenant: the retired instances' archives (including tenant_ctl delete's final one) and the
+        # static tree, both optional so a host without them does not fail the night.
+        by_name = {p["name"]: p for p in cfg.paths}
+        self.assertIn("filestore_hams_prod", by_name)
+        self.assertEqual(cfg.databases, ["hams_prod"])
+        self.assertEqual((by_name["tenant_archives"]["path"], by_name["tenant_archives"]["optional"]),
+                         ("/opt/hams/backups/tenants", True))
+        self.assertEqual((by_name["static_perens_com"]["path"], by_name["static_perens_com"]["optional"]),
+                         ("/var/lib/hams-static/perens_com/static", True))
+        self.assertFalse(by_name["filestore_hams_prod"]["optional"])
         self.assertEqual(cfg.env_file, "/opt/hams/etc/b2_backup/b2_backup.env")
         filestore = [p for p in cfg.paths if p["name"] == "filestore_hams_prod"][0]
         self.assertEqual(filestore["path"], "/var/lib/odoo/.local/share/Odoo/filestore/hams_prod")

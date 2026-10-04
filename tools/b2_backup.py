@@ -9,9 +9,18 @@ Backblaze B2, using kopia over B2's S3-compatible API.
 
 What goes up (all of it encrypted on this host before it leaves, so B2 only ever holds ciphertext):
   * hams.com's Odoo filestore (the attachments pgBackRest cannot see);
-  * every tenant's filestore and a logical dump of every tenant database (ADR 0106; the tenants are
-    discovered from the spec directory at run time, so a new tenant is covered the night after it
-    exists without a code change);
+  * the tenants of ADR 0106 (perens.com, postopen.org, parking) live INSIDE hams_prod: their pages,
+    posts and attachments are rows of the hams_prod database and files of the hams_prod filestore,
+    so the hams_prod filestore and database sources below already cover them. Nothing here is per
+    tenant any more;
+  * the RETIRED separate tenant instances (stopped, not yet removed): each spec still in the tenant
+    spec directory gets its filestore and a dump of its own database, found at run time, until
+    `tenant_ctl.py delete` removes the spec (devbox_tools/tenants_in_odoo_remove_instances.sh). That
+    loop is a no-op once the specs are gone;
+  * /opt/hams/backups/tenants (optional path source): the per-tenant pg_dump and filestore archives,
+    including the final one `tenant_ctl.py delete` takes before it removes an instance, which stays on
+    disk and would otherwise exist nowhere else;
+  * the static file tree of perens.com (optional path source), the origin of https://perens.com/static/;
   * a logical dump of hams_prod (pgBackRest and hams.db.local.backup remain the primary database
     backups; this one is the extra copy that lives outside the PostgreSQL cluster format);
   * /opt/hams/etc (daemon keys, signer public material, host configuration), with the repository
@@ -82,7 +91,7 @@ class Config:
     max_upload_bytes_per_sec: int
     max_download_bytes_per_sec: int
     retention: dict
-    paths: list            # [{"name":..., "path":..., "exclude":[...], "content_addressed": bool}]
+    paths: list            # [{"name":..., "path":..., "exclude":[...], "content_addressed": bool, "optional": bool}]
     tenant_spec_dir: str
     tenant_data_root: str
     databases: list        # ["hams_prod"]
@@ -152,7 +161,8 @@ def load_config(path):
         seen.add(item["name"])
         paths.append({"name": item["name"], "path": item["path"],
                       "exclude": list(item.get("exclude", [])),
-                      "content_addressed": bool(item.get("content_addressed", False))})
+                      "content_addressed": bool(item.get("content_addressed", False)),
+                      "optional": bool(item.get("optional", False))})
     restore = raw.get("restore_test", {})
     return Config(
         backend=backend,
@@ -218,8 +228,9 @@ class Source:
 
 
 def discover_tenants(cfg):
-    """Names from every *.json spec in the tenant spec directory (ADR 0106). A missing directory
-    means no tenants yet; a spec that cannot be read is an error, never a silent gap."""
+    """Names from every *.json spec in the tenant spec directory: the retired separate tenant
+    instances (ADR 0106 moved the tenants into hams_prod, whose own sources cover them). A missing
+    directory means none are left; a spec that cannot be read is an error, never a silent gap."""
     try:
         entries = sorted(os.listdir(cfg.tenant_spec_dir))
     except FileNotFoundError:
@@ -239,6 +250,12 @@ def discover_tenants(cfg):
 def build_sources(cfg):
     sources = []
     for item in cfg.paths:
+        # "optional": a directory that exists on some hosts only (the retired instances' archives, the static
+        # tree). Absent means skipped with a notice. A directory that is not optional and is missing still
+        # fails the night's backup, which is how a silent gap is avoided.
+        if item["optional"] and not os.path.isdir(item["path"]):
+            print(f"note: optional source {item['name']} skipped, {item['path']} does not exist", file=sys.stderr)
+            continue
         sources.append(Source(name=item["name"], kind="path", path=item["path"],
                               exclude=tuple(item["exclude"]),
                               content_addressed=item["content_addressed"]))
