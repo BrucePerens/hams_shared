@@ -3864,7 +3864,7 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
             if spec["path"].endswith("club.web.search.discovery.service")
         )
         self.assertIn(
-            "ODOO_KEY_FILE=/opt/hams/etc/keys/club_web_search_discovery_service_internal.key",
+            "ODOO_KEY_FILE=/opt/hams/etc/keys/club_search/club_web_search_discovery_service_internal.key",
             service["content"],
         )
         self.assertIn("--max-requests-per-day=", service["content"])
@@ -4041,16 +4041,26 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 account = matches[0]
                 self.assertEqual(account["group"], rules["user"])
                 self.assertEqual(account["shell"], "/usr/sbin/nologin")
-                # odoo must be in the group to hand it a key file (chgrp, never chown).
-                self.assertIn("odoo", account["add_to_users"])
-                # hams_com is what lets the account reach /opt/hams.
-                self.assertIn("hams_com", account["member_of"])
+                # odoo must be in the group to hand it a key file (chgrp, never chown); a unit with no key
+                # file has nothing to hand over and odoo is not in its group.
+                if rules.get("no_key"):
+                    self.assertNotIn("odoo", account.get("add_to_users", []))
+                else:
+                    self.assertIn("odoo", account["add_to_users"])
+                # The traversal group (not hams_com) is what lets the account reach /opt/hams, and the
+                # account is taken out of hams_com so it cannot read the ADIF queue or other hams_com data.
+                self.assertEqual(account["member_of"], ["hams_traverse"])
+                self.assertEqual(account["not_member_of"], ["hams_com"])
                 self.assertEqual(account["environments"], ["prod", "test"])
 
     def test_the_writable_paths_are_only_directories_the_account_owns(self):
         for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
             with self.subTest(unit=unit):
                 writable = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths")
+                if rules.get("no_state"):
+                    # A daemon that fetches and pushes to Odoo and writes no file has no writable path at all.
+                    self.assertEqual(writable, [])
+                    continue
                 self.assertTrue(writable, "a oneshot daemon with no writable path cannot spool anything")
                 if rules.get("agent_sudo"):
                     # The documented exception: the agent's own home and nothing else (the CLI, running
@@ -4084,7 +4094,7 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     for value in infra.systemd_unit_directive_values(infra.MANIFEST, unit, "EnvironmentFile")
                 }
                 self.assertEqual(loaded, set(rules["environment_files"]))
-                self.assertLessEqual(loaded, set(infra.MANIFEST["env_groups"]))
+                self.assertLessEqual(loaded - set(rules.get("operator_env_files", ())), set(infra.MANIFEST["env_groups"]))
 
     def test_common_env_carries_no_secret(self):
         keys = infra.MANIFEST["env_groups"]["common.env"]
@@ -4164,8 +4174,13 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 self.assertTrue(entry.get("external_fetch"))
 
     def test_the_key_file_a_migrated_unit_reads_is_under_the_key_directory(self):
-        for unit in infra.FAMILY_ACCOUNT_UNITS:
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
             with self.subTest(unit=unit):
+                if rules.get("no_key"):
+                    # A unit that holds no Odoo key (dx.firehose connects to the database itself): none is named.
+                    values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
+                    self.assertEqual([v for v in values if "ODOO_KEY_FILE" in v], [])
+                    continue
                 values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
                 key_files = [v.strip('"').split("=", 1)[1] for v in values if v.strip('"').startswith("ODOO_KEY_FILE=")]
                 self.assertEqual(len(key_files), 1)
@@ -4179,6 +4194,9 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 user = rules["user"]
                 family = user[len("hamsd_"):]
                 directory = f"/opt/hams/etc/keys/{family}"
+                if rules.get("no_key"):
+                    self.assertEqual([d for d in infra.MANIFEST["directories"] if d["path"] == directory], [])
+                    continue
                 entries = [d for d in infra.MANIFEST["directories"] if d["path"] == directory]
                 self.assertEqual(len(entries), 1)
                 self.assertEqual((entries[0]["owner"], entries[0]["provision_mode"]), (f"odoo:{user}", "750"))
@@ -4189,6 +4207,32 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
                 key_file = [v.strip('"').split("=", 1)[1] for v in values if v.strip('"').startswith("ODOO_KEY_FILE=")][0]
                 self.assertEqual(os.path.dirname(key_file), directory)
+
+    def test_no_key_file_is_read_by_the_units_of_two_different_accounts(self):
+        """The reason for one account per key: a key file readable by two accounts isolates nothing."""
+        readers = {}
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
+            for v in values:
+                v = v.strip('"')
+                if v.startswith("ODOO_KEY_FILE="):
+                    readers.setdefault(v.split("=", 1)[1], set()).add(rules["user"])
+        for key_file, users in readers.items():
+            with self.subTest(key_file=key_file):
+                self.assertEqual(len(users), 1, f"{key_file} is read by {sorted(users)}")
+
+    def test_the_hamcall_directory_belongs_to_the_one_daemon_that_reads_it(self):
+        entry = [d for d in infra.MANIFEST["directories"] if d["path"] == "/opt/hams/hamcall"][0]
+        self.assertEqual((entry["owner"], entry["provision_mode"]), ("hamsd_hamcall_sync:hamsd_hamcall_sync", "750"))
+        self.assertTrue(entry["recursive_owner"])
+        values = infra.systemd_unit_directive_values(infra.MANIFEST, "hamcall.idx.sync.service", "Environment")
+        self.assertIn('"HAMCALL_IDX_PATH=/opt/hams/hamcall/hamcall.idx"', values)
+
+    def test_au_pii_has_its_own_key_not_the_country_syncs(self):
+        pii = infra.systemd_unit_directive_values(infra.MANIFEST, "au.pii.sync.service", "Environment")
+        country = infra.systemd_unit_directive_values(infra.MANIFEST, "au.acma.sync.service", "Environment")
+        self.assertIn('"ODOO_KEY_FILE=/opt/hams/etc/keys/au_pii/au_pii_sync_service_internal.key"', pii)
+        self.assertIn('"ODOO_KEY_FILE=/opt/hams/etc/keys/country_sync/callbook_sync_service_internal.key"', country)
 
     def test_the_key_root_stays_traversable_only_and_no_family_directory_is_group_writable(self):
         paths = {d["path"]: d for d in infra.MANIFEST["directories"]}
@@ -4250,6 +4294,7 @@ class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
             side_effect=lambda p: False if p.endswith("/common.env") else real_exists(p),
         )
         self.safe_patch_object(infra, "provision_system_accounts", side_effect=lambda *a, **k: written.append("accounts"))
+        self.safe_patch_object(infra, "_derived_env_values", return_value=None)
         with self.assertRaisesRegex(RuntimeError, "common.env"):
             infra.provision_daemon_families(["hamsd_ncvec_sync"], lambda cmd, **kw: written.append(cmd), {})
         self.assertEqual(written, [])
@@ -4270,6 +4315,144 @@ class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
         found = infra.daemon_family_unit_paths(accounts)
         for unit in infra.FAMILY_ACCOUNT_UNITS:
             self.assertIn(f"/opt/hams/systemd/{unit}", found)
+
+
+class DerivedEnvFileTests(_TmpDirTestCase):
+    """Tests [@ANCHOR: infrastructure:derived_env_files]: an env group that is a split of others is cut from them."""
+
+    def _etc(self, files):
+        for name, text in files.items():
+            with open(os.path.join(self.tmp, name), "w", encoding="utf-8") as f:
+                f.write(text)
+        return os.path.join(self.tmp, "common.env")
+
+    def test_common_env_is_cut_from_core_odoo_and_db_env(self):
+        target = self._etc({
+            "core.env": "DOMAIN=example.test\nSYSTEM_USER_AGENT=Agent/1 (+x; y)\nHAMS_CRYPTO_KEY=secretsecret\n",
+            "odoo.env": "ODOO_ADMIN_PASSWORD=adminsecret\nODOO_URL=http://odoo:8069\n",
+            "db.env": "DB_NAME=hams_prod\nPOSTGRES_PASSWORD=pgsecret\n",
+        })
+        values = infra._derived_env_values(target)
+        self.assertEqual(values, {
+            "DOMAIN": "example.test", "SYSTEM_USER_AGENT": "Agent/1 (+x; y)",
+            "ODOO_URL": "http://odoo:8069", "DB_NAME": "hams_prod",
+        })
+
+    def test_a_key_with_no_source_means_the_file_cannot_be_derived(self):
+        target = self._etc({"core.env": "DOMAIN=example.test\n"})
+        self.assertIsNone(infra._derived_env_values(target))
+
+    def test_a_file_that_is_not_an_env_group_is_never_derived(self):
+        self._etc({"core.env": "DOMAIN=example.test\n"})
+        self.assertIsNone(infra._derived_env_values(os.path.join(self.tmp, "aws.env")))
+
+    def test_the_derived_file_is_private_and_holds_exactly_the_group_keys(self):
+        target = self._etc({"db.env": "DB_NAME=n\nPOSTGRES_PASSWORD=super\nDB_PASS=app\nDB_HOST=h\nDB_PORT=5\nDB_USER=u\n"})
+        target = os.path.join(self.tmp, "db_app.env")
+        values = infra._derived_env_values(target)
+        self.safe_patch_object(infra, "apply_permissions")
+        infra._write_derived_env_file(target, values)
+        with open(target, encoding="utf-8") as f:
+            text = f.read()
+        self.assertEqual(stat_mode(target), 0o400)
+        self.assertNotIn("POSTGRES_PASSWORD", text)
+        self.assertNotIn("super", text)
+        self.assertEqual(sorted(line.split("=")[0] for line in text.splitlines()), sorted(infra.MANIFEST["env_groups"]["db_app.env"]))
+
+    def test_the_application_role_file_never_carries_the_superuser_password(self):
+        groups = infra.MANIFEST["env_groups"]
+        self.assertNotIn("POSTGRES_PASSWORD", groups["db_app.env"])
+        for key in groups["db_app.env"]:
+            self.assertIn(key, groups["db.env"], f"{key} must also stay in db.env: no existing unit changes")
+
+    def test_provisioning_plans_the_derived_file_instead_of_refusing(self):
+        real_exists = os.path.exists
+        self.safe_patch_object(infra.os.path, "exists", side_effect=lambda p: False if p.endswith("/common.env") else real_exists(p))
+        self.safe_patch_object(infra, "_derived_env_values", return_value={"DOMAIN": "x", "ODOO_URL": "y", "DB_NAME": "z", "SYSTEM_USER_AGENT": "a"})
+        with infra.planning() as plan:
+            infra.provision_daemon_families(["hamsd_ncvec_sync"], lambda cmd, **kw: None, {})
+        writes = [d for kind, d in plan.actions if kind == "write" and "derived" in d]
+        self.assertEqual(len(writes), 1)
+        self.assertIn("/opt/hams/etc/common.env", writes[0])
+        self.assertNotIn("example", writes[0])
+        self.assertEqual([d for kind, d in plan.actions if kind == "missing"], [])
+
+
+class TraversalGrantTests(_SafePatchTestCase):
+    """Tests [@ANCHOR: infrastructure:directory_acl]: a daemon family account reaches its own paths
+    through an execute-only ACL for hams_traverse, not through hams_com."""
+
+    GRANTED = ["/opt/hams", "/opt/hams/etc", "/opt/hams/etc/keys", "/opt/hams/spool", "/opt/hams/downloads"]
+
+    def _dirs(self):
+        return {d["path"]: d for d in infra.MANIFEST["directories"]}
+
+    def test_the_directories_a_family_passes_through_grant_execute_only_to_the_traversal_group(self):
+        dirs = self._dirs()
+        for path in self.GRANTED:
+            with self.subTest(path=path):
+                self.assertEqual(dirs[path]["acl"], ["g:hams_traverse:--x"])
+
+    def test_nothing_else_carries_an_acl_and_no_grant_is_more_than_execute(self):
+        for d in infra.MANIFEST["directories"]:
+            for entry in d.get("acl", []):
+                with self.subTest(path=d["path"], entry=entry):
+                    self.assertIn(d["path"], self.GRANTED)
+                    self.assertTrue(entry.endswith(":--x"), "a traversal grant must never read or write")
+
+    def test_the_traversal_group_has_no_member_but_the_family_accounts_and_is_created_first(self):
+        accounts = infra.MANIFEST["system_accounts"]
+        names = [a["user"] for a in accounts]
+        traverse = accounts[names.index("hams_traverse")]
+        self.assertEqual((traverse["group"], traverse["shell"]), ("hams_traverse", "/usr/sbin/nologin"))
+        self.assertNotIn("add_to_users", traverse)
+        for acc in accounts:
+            if acc["user"].startswith("hamsd_"):
+                self.assertLess(names.index("hams_traverse"), names.index(acc["user"]))
+
+    def test_no_family_account_is_in_hams_com(self):
+        for acc in infra.MANIFEST["system_accounts"]:
+            if acc["user"].startswith("hamsd_"):
+                with self.subTest(account=acc["user"]):
+                    self.assertNotIn("hams_com", acc.get("member_of", []))
+                    self.assertIn("hams_com", acc["not_member_of"])
+
+    def test_a_directory_acl_runs_setfacl_in_production_and_is_planned_without_running(self):
+        calls = []
+        spec = {"path": "/opt/hams/x", "owner": None, "provision_mode": "750", "environments": ["prod"],
+                "acl": ["g:hams_traverse:--x"]}
+        self.safe_patch_object(infra.shutil, "which", return_value="/usr/bin/setfacl")
+        infra._apply_directory_acl(spec, "/opt/hams/x", "prod", calls.append)
+        self.assertEqual(calls, [["setfacl", "-m", "g:hams_traverse:--x", "/opt/hams/x"]])
+        calls.clear()
+        infra._apply_directory_acl(spec, "/opt/hams/x", "test", calls.append)
+        self.assertEqual(calls, [], "a test host does not need the grant and may not have setfacl")
+        with infra.planning() as plan:
+            infra._apply_directory_acl(spec, "/opt/hams/x", "prod", calls.append)
+        self.assertEqual(calls, [])
+        self.assertEqual(plan.actions, [("setfacl", "/opt/hams/x: g:hams_traverse:--x")])
+
+    def test_a_missing_setfacl_is_refused_with_the_package_name(self):
+        spec = {"path": "/opt/hams/x", "acl": ["g:hams_traverse:--x"]}
+        self.safe_patch_object(infra.shutil, "which", return_value=None)
+        with self.assertRaisesRegex(RuntimeError, "apt-get install acl"):
+            infra._apply_directory_acl(spec, "/opt/hams/x", "prod", lambda c: None)
+
+    def test_the_acl_package_is_installed_by_provisioning(self):
+        self.assertIn("acl", [p["debian_name"] for p in infra.MANIFEST["apt_packages"]])
+
+    def test_not_member_of_removes_only_an_existing_membership(self):
+        account = [{"user": "hamsd_x", "group": "hamsd_x", "not_member_of": ["hams_com"], "environments": ["prod"]}]
+        for members, expected in ((["odoo", "hamsd_x"], [["gpasswd", "-d", "hamsd_x", "hams_com"]]), (["odoo"], [])):
+            with self.subTest(members=members):
+                calls = []
+                patcher = patch.dict(infra.MANIFEST, {"system_accounts": account})
+                patcher.start()
+                self.addCleanup(patcher.stop)
+                self.safe_patch_object(infra.pwd, "getpwnam", return_value=MagicMock())
+                self.safe_patch_object(infra.grp, "getgrnam", return_value=MagicMock(gr_mem=members))
+                infra.provision_system_accounts(calls.append, environment="prod")
+                self.assertEqual([c for c in calls if c[0] == "gpasswd"], expected)
 
 
 class SystemAccountMemberOfTests(_SafePatchTestCase):

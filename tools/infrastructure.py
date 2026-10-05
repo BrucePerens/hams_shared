@@ -947,28 +947,12 @@ def hook_migrate_relay_signing_key(env_vars, dest_dir, path, run_cmd_func):
 SHARED_ODOO_ACCOUNT_UNITS = frozenset({
     "adif.ingress.service",
     "adif.processor.service",
-    "amsat.tle.sync.service",
-    "aprs.is.sync.service",
-    "arrl.hamfests.sync.service",
-    "au.acma.sync.service",
-    "au.callsign.sync.service",
-    "au.pii.sync.service",
     "backup.worker.service",
-    "br.anatel.sync.service",
     "callbook.dns.export.service",
-    "callbook.geo.enrich.service",
-    "club.web.search.discovery.service",
     "code.review.sweep.service",
     "credential.touch.timer.service",
-    "de.bnetza.sync.service",
-    "dx.firehose.service",
     # AI correction of scraped hamfest listings; the model runs as hams_event_agent (see the unit's comment).
     "event.ai.enrichment.service",
-    "electronicsfleamarket.sync.service",
-    "fcc.uls.sync.service",
-    "gdpr.csv.export.service",
-    "ham.dx.daemon.service",
-    "hamcall.idx.sync.service",
     # The key bootstrapper writes every daemon's key file, so it runs as the account that owns
     # them (odoo); it stays on this list in the final state too (the plan's Phase 5).
     "hams.daemon.keys.service",
@@ -977,24 +961,18 @@ SHARED_ODOO_ACCOUNT_UNITS = frozenset({
     "hams.simulated.band.service",
     "hams.simulated.bots.service",
     "hams.simulated.observer.service",
-    "ised.canada.sync.service",
-    "noaa-swpc-sync.service",
-    "nz.rsm.sync.service",
-    "pdns.sync.service",
-    "pota.sync.service",
-    "qrz.scraper.service",
-    "rac.events.sync.service",
-    "ses.inbound.mail.ingest.service",
-    "sm3cer.contest.sync.service",
-    "sota.sync.service",
     "stray.odoo.shell.detector.service",
     # Supervises the AI ticket-triage pass; the model itself runs as the dedicated nologin
     # hams_ai_agent account (see the unit's own comment). Same shape as credential.touch.timer.
     "ticket.triage.event.service",
     "ticket.triage.service",
-    "uk.ofcom.sync.service",
-    "wa7bnm.contest.sync.service",
 })
+
+
+def _is_server_unit(entry):
+    """True for a unit file of the hams.com server (the prod or test environment). A unit of another host,
+    such as the FCC sync on pi500-1, which has its own User=, is not part of the account ratchets."""
+    return bool({"prod", "test"} & set(entry.get("environments", ["prod", "test"])))
 
 
 def systemd_units_running_as(manifest, user):
@@ -1002,7 +980,7 @@ def systemd_units_running_as(manifest, user):
     names = set()
     for entry in manifest["static_files"]:
         path = entry["path"]
-        if not path.endswith(".service"):
+        if not path.endswith(".service") or not _is_server_unit(entry):
             continue
         for line in (entry.get("content") or "").splitlines():
             if line.strip() == f"User={user}":
@@ -1032,6 +1010,140 @@ FAMILY_ACCOUNT_UNITS = {
         "user": "hamsd_ncvec_sync",
         "environment_files": frozenset({"common.env"}),
     },
+    "pota.sync.service": {
+        "user": "hamsd_activator_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "sota.sync.service": {
+        "user": "hamsd_activator_sync",
+        "environment_files": frozenset({"common.env"}),
+    },
+    "amsat.tle.sync.service": {
+        "user": "hamsd_satellite_sync",
+        "environment_files": frozenset({"common.env"}),
+    },
+    "arrl.hamfests.sync.service": {
+        "user": "hamsd_event_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "electronicsfleamarket.sync.service": {
+        "user": "hamsd_event_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "rac.events.sync.service": {
+        "user": "hamsd_event_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "sm3cer.contest.sync.service": {
+        "user": "hamsd_event_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "wa7bnm.contest.sync.service": {
+        "user": "hamsd_event_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "au.acma.sync.service": {
+        "user": "hamsd_country_sync",
+        "environment_files": frozenset({"common.env"}),
+    },
+    "au.callsign.sync.service": {
+        "user": "hamsd_country_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "br.anatel.sync.service": {
+        "user": "hamsd_country_sync",
+        "environment_files": frozenset({"common.env"}),
+    },
+    "de.bnetza.sync.service": {
+        "user": "hamsd_country_sync",
+        "environment_files": frozenset({"common.env"}),
+    },
+    "ised.canada.sync.service": {
+        "user": "hamsd_country_sync",
+        "environment_files": frozenset({"common.env"}),
+    },
+    "nz.rsm.sync.service": {
+        "user": "hamsd_country_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "uk.ofcom.sync.service": {
+        "user": "hamsd_country_sync",
+        "environment_files": frozenset({"common.env"}),
+    },
+    "fcc.uls.sync.service": {
+        "user": "hamsd_country_sync",
+        "environment_files": frozenset({"common.env"}),
+    },
+    "au.pii.sync.service": {
+        "user": "hamsd_au_pii",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "callbook.geo.enrich.service": {
+        "user": "hamsd_callbook_geo",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "hamcall.idx.sync.service": {
+        "user": "hamsd_hamcall_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "club.web.search.discovery.service": {
+        "user": "hamsd_club_search",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "ses.inbound.mail.ingest.service": {
+        "user": "hamsd_mail_ingest",
+        "environment_files": frozenset({"common.env", "aws.env"}),
+        # aws.env is placed by a person (the IAM identity's keys), not generated by provisioning.
+        "operator_env_files": frozenset({"aws.env"}),
+        "no_state": True,
+    },
+    "noaa-swpc-sync.service": {
+        "user": "hamsd_space_weather",
+        "environment_files": frozenset({"common.env"}),
+    },
+    "aprs.is.sync.service": {
+        "user": "hamsd_aprs_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "ham.dx.daemon.service": {
+        "user": "hamsd_dx_daemon",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
+    "qrz.scraper.service": {
+        "user": "hamsd_qrz_scraper",
+        "environment_files": frozenset({"common.env", "rabbitmq.env"}),
+        "no_state": True,
+    },
+    "gdpr.csv.export.service": {
+        "user": "hamsd_gdpr_export",
+        "environment_files": frozenset({"common.env", "redis.env"}),
+        "no_state": True,
+    },
+    "pdns.sync.service": {
+        "user": "hamsd_dns_sync",
+        "environment_files": frozenset({"common.env", "pdns.env", "rabbitmq.env"}),
+        "no_state": True,
+    },
+    "dx.firehose.service": {
+        "user": "hamsd_dx_firehose",
+        "environment_files": frozenset({"common.env", "db_app.env"}),
+        "no_state": True,
+        "no_key": True,
+    },
     "club.crawl.service": {
         "user": "hamsd_club_crawl",
         "environment_files": frozenset({"common.env"}),
@@ -1044,7 +1156,7 @@ def systemd_unit_directive_values(manifest, unit_name, directive):
     """Every value of `directive` in the [Service] text of the MANIFEST unit file `unit_name`, one
     entry per whitespace-separated word for the path-list directives, in file order."""
     for entry in manifest["static_files"]:
-        if os.path.basename(entry["path"]) != unit_name:
+        if os.path.basename(entry["path"]) != unit_name or not _is_server_unit(entry):
             continue
         values = []
         for line in (entry.get("content") or "").splitlines():
@@ -1066,6 +1178,18 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # The traversal group of the daemon family accounts (DAEMON_OS_ISOLATION_PLAN.md, Phase 2). A
+            # family account is NOT in hams_com (whose group access reads the ADIF queue, uploads and
+            # every other hams_com directory); each directory it must pass through carries an ACL entry
+            # for this group with execute only (MANIFEST directories "acl"). No account lives here: the
+            # entry exists to create the group, and each family account lists it in member_of.
+            "user": "hams_traverse",
+            "group": "hams_traverse",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "environments": ["prod", "test"],
+        },
+        {
             # daemons/ncvec_sync, Phase 1 of the per-family daemon accounts (hams_com
             # docs/proposals/DAEMON_OS_ISOLATION_PLAN.md): the one unit that runs as this account is
             # ncvec.sync, which writes only the three directories below. odoo joins this group so
@@ -1078,7 +1202,8 @@ MANIFEST = {
             "home": "/opt/hams/spool/ncvec",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
-            "member_of": ["hams_com"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
             "environments": ["prod", "test"],
         },
         {
@@ -1097,7 +1222,204 @@ MANIFEST = {
             "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
-            "member_of": ["hams_com"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/pota_sync and daemons/sota_sync, Phase 2 of the per-family daemon accounts (hams_com
+            # docs/proposals/DAEMON_OS_ISOLATION_PLAN.md): the two reference-data syncs that share activator_data_service_internal.key.
+            # odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on
+            # the directories it passes through are all it has, so it cannot read the ADIF queue.
+            "user": "hamsd_activator_sync",
+            "group": "hamsd_activator_sync",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/amsat_tle_sync, Phase 2 of the per-family daemon accounts (hams_com
+            # docs/proposals/DAEMON_OS_ISOLATION_PLAN.md): the AMSAT TLE sync and its own key (satellite_sync_service_internal.key).
+            # odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on
+            # the directories it passes through are all it has.
+            "user": "hamsd_satellite_sync",
+            "group": "hamsd_satellite_sync",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/event_sync: the five event and contest syncs that share event_sync_service_internal.key. All are one-shot units that
+            # fetch a public page or feed and push the result to Odoo; none writes a file. odoo joins this group for the key hand-off
+            # (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_event_sync",
+            "group": "hamsd_event_sync",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # The country callbook syncs (au.acma, au.callsign, br.anatel, de.bnetza, ised.canada, nz.rsm, uk.ofcom, fcc.uls), Phase 3 of the
+            # per-family daemon accounts (hams_com docs/proposals/DAEMON_OS_ISOLATION_PLAN.md). They share callbook_sync_service_internal.key, so one account per
+            # key is the boundary. au.pii.sync (personal data) is in its own account, hamsd_au_pii. odoo joins this group for the key hand-off
+            # (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_country_sync",
+            "group": "hamsd_country_sync",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/au_pii_sync: the Australian register's personal data. Its own account and its own key file (a second registry row for the
+            # same Odoo service user as the country syncs, so the key can be rotated and revoked on its own) mean the country syncs cannot read this
+            # unit's key or anything it writes. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_au_pii",
+            "group": "hamsd_au_pii",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/ham_callbook_geo_enrich: the Census geocoder enrichment of callbook records. One key (callbook_geo_service_internal.key), one
+            # account. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_callbook_geo",
+            "group": "hamsd_callbook_geo",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/hamcall_idx_sync: the presence sync of HamCall's licensed hamcall.idx. The account owns /opt/hams/hamcall, where the licensed
+            # file lives, so no other account (and not hams_com) reads it. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_hamcall_sync",
+            "group": "hamsd_hamcall_sync",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/club_web_search_discovery: the grounded club search, which spends real Gemini money on each run (opt-in unit). One key
+            # (club_web_search_discovery_service_internal.key), one account. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_club_search",
+            "group": "hamsd_club_search",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/ses_inbound_mail_ingest: the inbound mail reader. It holds AWS credentials (aws.env, read by systemd, which the account itself
+            # never opens), so it has its own account and key (mail_ingest_service_internal.key). odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_mail_ingest",
+            "group": "hamsd_mail_ingest",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/noaa_swpc_sync: the NOAA space-weather poller, a long-running daemon. One key (space_weather_service.key), one account. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_space_weather",
+            "group": "hamsd_space_weather",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/aprs_is_sync: the APRS-IS client, a long-running daemon. One key (aprs_sync_service_internal.key), one account. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_aprs_sync",
+            "group": "hamsd_aprs_sync",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/ham_dx_daemon: the DX cluster telnet client, a long-running daemon. One key (dx_daemon_service.key), one account. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_dx_daemon",
+            "group": "hamsd_dx_daemon",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/qrz_scraper: the QRZ scraper, a long-running RabbitMQ consumer. One key (onboarding_service_internal.key), one account. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_qrz_scraper",
+            "group": "hamsd_qrz_scraper",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/gdpr_csv_export: the GDPR export builder, which handles members' personal data. Its own account and key
+            # (gdpr_export_service_internal.key) mean no other daemon reads the key or anything the unit holds. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_gdpr_export",
+            "group": "hamsd_gdpr_export",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/pdns_sync: the PowerDNS sync, a long-running RabbitMQ consumer that holds the PowerDNS API key. One key
+            # (dns_api_service_internal.key), one account. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_dns_sync",
+            "group": "hamsd_dns_sync",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/dx_firehose: the live DX WebSocket, which holds a database connection (LISTEN/NOTIFY) as the application role and no Odoo key.
+            # Its own account, and db_app.env instead of db.env, so it never holds the PostgreSQL superuser password. It has no key file, so odoo is not
+            # in its group. Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_dx_firehose",
+            "group": "hamsd_dx_firehose",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
             "environments": ["prod", "test"],
         },
         {
@@ -1223,6 +1545,7 @@ MANIFEST = {
             "owner": "hams_com:hams_com",
             "provision_mode": "750",
             "runtime_mount": "ro",
+            "acl": ["g:hams_traverse:--x"],
             "environments": ["prod", "test"],
         },
         {
@@ -1230,6 +1553,7 @@ MANIFEST = {
             "owner": "hams_com:hams_com",
             "provision_mode": "750",
             "runtime_mount": "ro",
+            "acl": ["g:hams_traverse:--x"],
             "environments": ["prod", "test"],
         },
         {
@@ -1243,6 +1567,7 @@ MANIFEST = {
             "provision_mode": "710",
             "daemon_family_shared": True,
             "runtime_mount": "rw",
+            "acl": ["g:hams_traverse:--x"],
             "environments": ["prod", "test"],
         },
         {
@@ -1271,6 +1596,141 @@ MANIFEST = {
             # (KEY_GROUP_DIR_MODE in its models/key_registry.py); this entry creates the directory first.
             "path": "/opt/hams/etc/keys/club_crawl",
             "owner": "odoo:hamsd_club_crawl",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the activator_sync family (hamsd_activator_sync): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/activator_sync",
+            "owner": "odoo:hamsd_activator_sync",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the satellite_sync family (hamsd_satellite_sync): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/satellite_sync",
+            "owner": "odoo:hamsd_satellite_sync",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the event_sync family (hamsd_event_sync): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/event_sync",
+            "owner": "odoo:hamsd_event_sync",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the country_sync family (hamsd_country_sync): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/country_sync",
+            "owner": "odoo:hamsd_country_sync",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the au_pii family (hamsd_au_pii): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/au_pii",
+            "owner": "odoo:hamsd_au_pii",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the callbook_geo family (hamsd_callbook_geo): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/callbook_geo",
+            "owner": "odoo:hamsd_callbook_geo",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the hamcall_sync family (hamsd_hamcall_sync): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/hamcall_sync",
+            "owner": "odoo:hamsd_hamcall_sync",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the club_search family (hamsd_club_search): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/club_search",
+            "owner": "odoo:hamsd_club_search",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the mail_ingest family (hamsd_mail_ingest): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/mail_ingest",
+            "owner": "odoo:hamsd_mail_ingest",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the space_weather family (hamsd_space_weather): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/space_weather",
+            "owner": "odoo:hamsd_space_weather",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the aprs_sync family (hamsd_aprs_sync): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/aprs_sync",
+            "owner": "odoo:hamsd_aprs_sync",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the dx_daemon family (hamsd_dx_daemon): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/dx_daemon",
+            "owner": "odoo:hamsd_dx_daemon",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the qrz_scraper family (hamsd_qrz_scraper): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/qrz_scraper",
+            "owner": "odoo:hamsd_qrz_scraper",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the gdpr_export family (hamsd_gdpr_export): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/gdpr_export",
+            "owner": "odoo:hamsd_gdpr_export",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the dns_sync family (hamsd_dns_sync): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/dns_sync",
+            "owner": "odoo:hamsd_dns_sync",
             "provision_mode": "750",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
@@ -1577,6 +2037,7 @@ MANIFEST = {
             "owner": "hams_com:hams_com",
             "provision_mode": "770",
             "runtime_mount": "rw",
+            "acl": ["g:hams_traverse:--x"],
             "environments": ["prod", "test"],
         },
         {
@@ -1638,11 +2099,140 @@ MANIFEST = {
             "owner": "hams_com:hams_com",
             "provision_mode": "770",
             "runtime_mount": "rw",
+            "acl": ["g:hams_traverse:--x"],
             "environments": ["prod", "test"],
         },
         {
             "path": "/opt/hams/downloads/ncvec_sync",
             "owner": "hamsd_ncvec_sync:hamsd_ncvec_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/spool/sota_sync",
+            "owner": "hamsd_activator_sync:hamsd_activator_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/downloads/sota_sync",
+            "owner": "hamsd_activator_sync:hamsd_activator_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/spool/amsat_tle_sync",
+            "owner": "hamsd_satellite_sync:hamsd_satellite_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/downloads/amsat_tle_sync",
+            "owner": "hamsd_satellite_sync:hamsd_satellite_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/spool/au_acma_sync",
+            "owner": "hamsd_country_sync:hamsd_country_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/downloads/au_acma_sync",
+            "owner": "hamsd_country_sync:hamsd_country_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/spool/br_anatel_sync",
+            "owner": "hamsd_country_sync:hamsd_country_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/spool/de_bnetza_sync",
+            "owner": "hamsd_country_sync:hamsd_country_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/downloads/de_bnetza_sync",
+            "owner": "hamsd_country_sync:hamsd_country_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/downloads/ised_canada_sync",
+            "owner": "hamsd_country_sync:hamsd_country_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/spool/uk_ofcom_sync",
+            "owner": "hamsd_country_sync:hamsd_country_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/downloads/uk_ofcom_sync",
+            "owner": "hamsd_country_sync:hamsd_country_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/spool/fcc_uls_sync",
+            "owner": "hamsd_country_sync:hamsd_country_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/downloads/fcc_uls_sync",
+            "owner": "hamsd_country_sync:hamsd_country_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/spool/noaa_swpc_sync",
+            "owner": "hamsd_space_weather:hamsd_space_weather",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/downloads/noaa_swpc_sync",
+            "owner": "hamsd_space_weather:hamsd_space_weather",
             "provision_mode": "750",
             "recursive_owner": True,
             "runtime_mount": "rw",
@@ -1800,9 +2390,12 @@ MANIFEST = {
             # Licensed HamCall index (ADR-0092): hand-delivered by K6BP, never published,
             # used only to validate callsigns behind the scenes. Operator steps are in
             # daemons/hamcall_idx_sync/README.md ("Placing the licensed file").
+            # Owned by hamsd_hamcall_sync (Phase 3 of the daemon accounts): the one daemon that reads the file runs as that
+            # account, and no other account, hams_com included, can. recursive_owner re-owns a file an operator already placed.
             "path": "/opt/hams/hamcall",
-            "owner": "hams_com:hams_com",
+            "owner": "hamsd_hamcall_sync:hamsd_hamcall_sync",
             "provision_mode": "750",
+            "recursive_owner": True,
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
         },
@@ -1842,6 +2435,10 @@ MANIFEST = {
             "DB_PORT",
             "DB_USER",
         ],
+        # The application database role only (not the PostgreSQL superuser password db.env also holds), for the
+        # one daemon that connects to the database itself (dx.firehose). A host that has only db.env gets this file cut
+        # from it by provision.py --daemon-family; a full run writes it from the same values.
+        "db_app.env": ["DB_NAME", "DB_PASS", "DB_HOST", "DB_PORT", "DB_USER"],
         "pdns.env": [
             "PDNS_API_KEY",
             "PDNS_API_URL",
@@ -2380,17 +2977,29 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_dx_firehose), Phase 4 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It serves a WebSocket on 127.0.0.1 and listens to PostgreSQL notifications and writes no file, so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=simple
-User=odoo
+User=hamsd_dx_firehose
+Group=hamsd_dx_firehose
 WorkingDirectory=/opt/hams/daemons/dx_firehose
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: dx_firehose/main.py reads the application database role (DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASS) for its LISTEN connection, its own DX_FIREHOSE_* settings (bind address 127.0.0.1 by default, port set in this unit) and the optional CF_ACCESS_* pair that no file sets. It holds no Odoo key. db_app.env carries the application role only: not the PostgreSQL superuser password that db.env also holds. No Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+EnvironmentFile=/opt/hams/etc/db_app.env
 Environment="DX_FIREHOSE_WS_PORT=8765"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
@@ -2433,19 +3042,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_dx_daemon), Phase 4 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It runs all the time, holds a DX cluster telnet connection and writes no file, so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=simple
-User=odoo
+User=hamsd_dx_daemon
+Group=hamsd_dx_daemon
 WorkingDirectory=/opt/hams/daemons/ham_dx_daemon
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: ham_dx_daemon/main.py reads DX_NODE_HOST, DX_NODE_PORT, DX_NODE_CALLSIGN and DX_DAEMON_MAX_PENDING_SPOTS (defaults in code, no environment file sets them) and it reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=dx_daemon_service"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/dx_daemon_service.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/dx_daemon/dx_daemon_service.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -2485,20 +3105,32 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_space_weather), Phase 4 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It runs all the time and writes only its own spool and downloads directories (smart_download() with the daemon name noaa_swpc_sync). Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/noaa_swpc_sync /opt/hams/downloads/noaa_swpc_sync
 Type=simple
-User=odoo
+User=hamsd_space_weather
+Group=hamsd_space_weather
 WorkingDirectory=/opt/hams/daemons/noaa_swpc_sync
 
 # Odoo JSON2-RPC Credentials
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: noaa_swpc_sync/main.py reads SYSTEM_USER_AGENT and POLL_INTERVAL (set in this unit) and it reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=space_weather_service"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/space_weather_service.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/space_weather/space_weather_service.key"
 # noaa_swpc_sync/main.py polls at this interval (default 1800). NOAA publishes the Kp bins every three hours and the
 # flux a few times a day, so 30 minutes keeps the homepage within a bin of the source without re-downloading.
 Environment="POLL_INTERVAL=1800"
@@ -2541,19 +3173,32 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_dns_sync), Phase 4 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It consumes RabbitMQ jobs and talks to the local PowerDNS API and writes no file, so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=simple
-User=odoo
+User=hamsd_dns_sync
+Group=hamsd_dns_sync
 WorkingDirectory=/opt/hams/daemons/pdns_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: pdns_sync/main.py reads DOMAIN, the PDNS_* settings (the PowerDNS API key among them) and the RabbitMQ settings and it reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). pdns.env and rabbitmq.env are therefore loaded; no database or Redis credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+EnvironmentFile=/opt/hams/etc/pdns.env
+EnvironmentFile=/opt/hams/etc/rabbitmq.env
 Environment="ODOO_USER=dns_api_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/dns_api_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/dns_sync/dns_api_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -2593,19 +3238,31 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_satellite_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It writes only its own spool and downloads directories (smart_download() with the daemon name amsat_tle_sync). Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/amsat_tle_sync /opt/hams/downloads/amsat_tle_sync
 Type=oneshot
-User=odoo
+User=hamsd_satellite_sync
+Group=hamsd_satellite_sync
 WorkingDirectory=/opt/hams/daemons/amsat_tle_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: amsat_tle_sync/main.py reads SYSTEM_USER_AGENT for its request headers and reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=satellite_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/satellite_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/satellite_sync/satellite_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -2899,16 +3556,28 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+# Its own account (hamsd_mail_ingest), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It spools each message through a temporary file in the unit's private /tmp, so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_mail_ingest
+Group=hamsd_mail_ingest
 WorkingDirectory=/opt/hams/daemons/ses_inbound_mail_ingest
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: daemons/ses_inbound_mail_ingest/main.py reads SES_INBOUND_BUCKET and AWS_REGION (defaults in code), shells out to the aws CLI, which needs the AWS_* credentials of aws.env, and reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded; aws.env stays as the optional file it was.
+EnvironmentFile=/opt/hams/etc/common.env
 # Real IAM identity for the `odoo` user, resolved 2026-09-22 --
 # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY for the dedicated
 # ses-inbound-mail-ingest-service IAM user (S3 read/delete/tag on
@@ -2917,7 +3586,7 @@ EnvironmentFile=-/opt/hams/etc/odoo.env
 # One-time provisioning: a person places this file, the daemon never touches it.
 EnvironmentFile=-/opt/hams/etc/aws.env
 Environment="ODOO_USER=mail_ingest_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/mail_ingest_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/mail_ingest/mail_ingest_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -3615,18 +4284,31 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+# Its own account (hamsd_gdpr_export), Phase 4 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It builds each export in memory or in the unit's private /tmp and writes no other file, so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=simple
-User=odoo
+User=hamsd_gdpr_export
+Group=hamsd_gdpr_export
 WorkingDirectory=/opt/hams/daemons/gdpr_csv_export
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: gdpr_csv_export/main.py reads the GDPR_EXPORT_* caps (defaults in code) and the Redis settings REDIS_HOST, REDIS_PORT, REDIS_USERNAME and REDIS_PASSWORD and it reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). redis.env is therefore loaded; no database, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+EnvironmentFile=/opt/hams/etc/redis.env
 Environment="ODOO_USER=gdpr_export_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/gdpr_export_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/gdpr_export/gdpr_export_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -3668,19 +4350,31 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_qrz_scraper), Phase 4 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It consumes RabbitMQ jobs and writes no file, so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=simple
-User=odoo
+User=hamsd_qrz_scraper
+Group=hamsd_qrz_scraper
 WorkingDirectory=/opt/hams/daemons/qrz_scraper
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: qrz_scraper/main.py reads SYSTEM_USER_AGENT and the RabbitMQ settings RABBITMQ_HOST, RMQ_PORT, RMQ_USER and RMQ_PASS and it reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). rabbitmq.env is therefore loaded; no database, Redis or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+EnvironmentFile=/opt/hams/etc/rabbitmq.env
 Environment="ODOO_USER=onboarding_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/onboarding_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/qrz_scraper/onboarding_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -3724,19 +4418,31 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_country_sync), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). Each daemon writes only its own spool and downloads directories (smart_download() with its daemon name, br_anatel's spool directory, ised_canada's HAMS_DOWNLOAD_DIR), and au.callsign.sync and nz.rsm.sync write no file. Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/au_acma_sync /opt/hams/downloads/au_acma_sync
 Type=oneshot
-User=odoo
+User=hamsd_country_sync
+Group=hamsd_country_sync
 WorkingDirectory=/opt/hams/daemons/au_acma_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: each daemon in the family reads only SYSTEM_USER_AGENT (and the Odoo client's ODOO_URL, DB_NAME and the key file through hams_config), plus its own source URL overrides (ANATEL_ZIP_URL, DE_MIRRORS, ISED_URL, RSM_*, UK_MIRRORS) and, for fcc_uls_sync, FCC_ULS_PROXY_URL and RANDOM_DELAY_MAX, none of which any environment file sets. No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=callbook_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/country_sync/callbook_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -3787,19 +4493,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads /opt/hams/cache/ms-playwright
+# Its own account (hamsd_country_sync), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). Each daemon writes only its own spool and downloads directories (smart_download() with its daemon name, br_anatel's spool directory, ised_canada's HAMS_DOWNLOAD_DIR), and au.callsign.sync and nz.rsm.sync write no file. Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_country_sync
+Group=hamsd_country_sync
 WorkingDirectory=/opt/hams/daemons/au_callsign_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: each daemon in the family reads only SYSTEM_USER_AGENT (and the Odoo client's ODOO_URL, DB_NAME and the key file through hams_config), plus its own source URL overrides (ANATEL_ZIP_URL, DE_MIRRORS, ISED_URL, RSM_*, UK_MIRRORS) and, for fcc_uls_sync, FCC_ULS_PROXY_URL and RANDOM_DELAY_MAX, none of which any environment file sets. No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=callbook_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/country_sync/callbook_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -3850,19 +4567,31 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_country_sync), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). Each daemon writes only its own spool and downloads directories (smart_download() with its daemon name, br_anatel's spool directory, ised_canada's HAMS_DOWNLOAD_DIR), and au.callsign.sync and nz.rsm.sync write no file. Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/br_anatel_sync
 Type=oneshot
-User=odoo
+User=hamsd_country_sync
+Group=hamsd_country_sync
 WorkingDirectory=/opt/hams/daemons/br_anatel_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: each daemon in the family reads only SYSTEM_USER_AGENT (and the Odoo client's ODOO_URL, DB_NAME and the key file through hams_config), plus its own source URL overrides (ANATEL_ZIP_URL, DE_MIRRORS, ISED_URL, RSM_*, UK_MIRRORS) and, for fcc_uls_sync, FCC_ULS_PROXY_URL and RANDOM_DELAY_MAX, none of which any environment file sets. No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=callbook_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/country_sync/callbook_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -3913,19 +4642,31 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_country_sync), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). Each daemon writes only its own spool and downloads directories (smart_download() with its daemon name, br_anatel's spool directory, ised_canada's HAMS_DOWNLOAD_DIR), and au.callsign.sync and nz.rsm.sync write no file. Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/de_bnetza_sync /opt/hams/downloads/de_bnetza_sync
 Type=oneshot
-User=odoo
+User=hamsd_country_sync
+Group=hamsd_country_sync
 WorkingDirectory=/opt/hams/daemons/de_bnetza_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: each daemon in the family reads only SYSTEM_USER_AGENT (and the Odoo client's ODOO_URL, DB_NAME and the key file through hams_config), plus its own source URL overrides (ANATEL_ZIP_URL, DE_MIRRORS, ISED_URL, RSM_*, UK_MIRRORS) and, for fcc_uls_sync, FCC_ULS_PROXY_URL and RANDOM_DELAY_MAX, none of which any environment file sets. No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=callbook_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/country_sync/callbook_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -3976,19 +4717,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_country_sync), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). Each daemon writes only its own spool and downloads directories (smart_download() with its daemon name, br_anatel's spool directory, ised_canada's HAMS_DOWNLOAD_DIR), and au.callsign.sync and nz.rsm.sync write no file. Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_country_sync
+Group=hamsd_country_sync
 WorkingDirectory=/opt/hams/daemons/nz_rsm_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: each daemon in the family reads only SYSTEM_USER_AGENT (and the Odoo client's ODOO_URL, DB_NAME and the key file through hams_config), plus its own source URL overrides (ANATEL_ZIP_URL, DE_MIRRORS, ISED_URL, RSM_*, UK_MIRRORS) and, for fcc_uls_sync, FCC_ULS_PROXY_URL and RANDOM_DELAY_MAX, none of which any environment file sets. No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=callbook_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/country_sync/callbook_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -4039,19 +4791,31 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_country_sync), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). Each daemon writes only its own spool and downloads directories (smart_download() with its daemon name, br_anatel's spool directory, ised_canada's HAMS_DOWNLOAD_DIR), and au.callsign.sync and nz.rsm.sync write no file. Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/uk_ofcom_sync /opt/hams/downloads/uk_ofcom_sync
 Type=oneshot
-User=odoo
+User=hamsd_country_sync
+Group=hamsd_country_sync
 WorkingDirectory=/opt/hams/daemons/uk_ofcom_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: each daemon in the family reads only SYSTEM_USER_AGENT (and the Odoo client's ODOO_URL, DB_NAME and the key file through hams_config), plus its own source URL overrides (ANATEL_ZIP_URL, DE_MIRRORS, ISED_URL, RSM_*, UK_MIRRORS) and, for fcc_uls_sync, FCC_ULS_PROXY_URL and RANDOM_DELAY_MAX, none of which any environment file sets. No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=callbook_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/country_sync/callbook_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -4106,19 +4870,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_event_sync
+Group=hamsd_event_sync
 WorkingDirectory=/opt/hams/daemons/event_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: the five scripts in daemons/event_sync read SYSTEM_USER_AGENT for their request headers and reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=event_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -4169,19 +4944,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_event_sync
+Group=hamsd_event_sync
 WorkingDirectory=/opt/hams/daemons/event_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: the five scripts in daemons/event_sync read SYSTEM_USER_AGENT for their request headers and reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=event_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -4232,19 +5018,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_event_sync
+Group=hamsd_event_sync
 WorkingDirectory=/opt/hams/daemons/event_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: the five scripts in daemons/event_sync read SYSTEM_USER_AGENT for their request headers and reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=event_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -4295,19 +5092,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_event_sync
+Group=hamsd_event_sync
 WorkingDirectory=/opt/hams/daemons/event_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: the five scripts in daemons/event_sync read SYSTEM_USER_AGENT for their request headers and reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=event_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -4362,19 +5170,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_event_sync
+Group=hamsd_event_sync
 WorkingDirectory=/opt/hams/daemons/event_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: the five scripts in daemons/event_sync read SYSTEM_USER_AGENT for their request headers and reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=event_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -4425,7 +5244,22 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_country_sync), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). Each daemon writes only its own spool and downloads directories (smart_download() with its daemon name, br_anatel's spool directory, ised_canada's HAMS_DOWNLOAD_DIR), and au.callsign.sync and nz.rsm.sync write no file. Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/fcc_uls_sync /opt/hams/downloads/fcc_uls_sync
 # Real bug found live on hams1, 2026-09-22: this was Type=simple with
 # Restart=always/RestartSec=10 -- but run_sync() (main.py) processes every
 # configured download once per invocation and exits; it was never meant to
@@ -4439,17 +5273,14 @@ ReadWritePaths=/opt/hams/spool /opt/hams/downloads
 # fcc.uls.sync.timer), the same shape every other daily sync daemon in
 # this codebase already uses, not Restart=always.
 Type=oneshot
-User=odoo
+User=hamsd_country_sync
+Group=hamsd_country_sync
 WorkingDirectory=/opt/hams/daemons/fcc_uls_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: each daemon in the family reads only SYSTEM_USER_AGENT (and the Odoo client's ODOO_URL, DB_NAME and the key file through hams_config), plus its own source URL overrides (ANATEL_ZIP_URL, DE_MIRRORS, ISED_URL, RSM_*, UK_MIRRORS) and, for fcc_uls_sync, FCC_ULS_PROXY_URL and RANDOM_DELAY_MAX, none of which any environment file sets. No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=callbook_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/country_sync/callbook_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -4594,19 +5425,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=
+# Its own account (hamsd_hamcall_sync), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It only reads the licensed hamcall.idx in /opt/hams/hamcall, which the account owns (the operator installs the file as that account), so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_hamcall_sync
+Group=hamsd_hamcall_sync
 WorkingDirectory=/opt/hams/daemons/hamcall_idx_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: daemons/hamcall_idx_sync/main.py reads HAMCALL_IDX_PATH (set in this unit) and RANDOM_DELAY_MAX (no environment file sets it) and reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=hamcall_verify_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/hamcall_verify_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/hamcall_sync/hamcall_verify_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="HAMCALL_IDX_PATH=/opt/hams/hamcall/hamcall.idx"
 Environment="DAEMON_ARGS="
@@ -4652,19 +5494,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=
+# Its own account (hamsd_callbook_geo), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It writes no file (its temporary upload file is in the unit's private /tmp), so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_callbook_geo
+Group=hamsd_callbook_geo
 WorkingDirectory=/opt/hams/daemons/ham_callbook_geo_enrich
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: daemons/ham_callbook_geo_enrich/main.py reads GEO_ENRICH_FULL_PASS and GEO_ENRICH_MAX_RECORDS (neither is set by any environment file) and reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=callbook_geo_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_geo_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_geo/callbook_geo_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -4786,19 +5639,32 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_country_sync), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). Each daemon writes only its own spool and downloads directories (smart_download() with its daemon name, br_anatel's spool directory, ised_canada's HAMS_DOWNLOAD_DIR), and au.callsign.sync and nz.rsm.sync write no file. Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/downloads/ised_canada_sync
 Type=oneshot
-User=odoo
+User=hamsd_country_sync
+Group=hamsd_country_sync
 WorkingDirectory=/opt/hams/daemons/ised_canada_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: each daemon in the family reads only SYSTEM_USER_AGENT (and the Odoo client's ODOO_URL, DB_NAME and the key file through hams_config), plus its own source URL overrides (ANATEL_ZIP_URL, DE_MIRRORS, ISED_URL, RSM_*, UK_MIRRORS) and, for fcc_uls_sync, FCC_ULS_PROXY_URL and RANDOM_DELAY_MAX, none of which any environment file sets. No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=callbook_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/country_sync/callbook_sync_service_internal.key"
+Environment="HAMS_DOWNLOAD_DIR=/opt/hams/downloads/ised_canada_sync"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -4930,19 +5796,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_activator_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). pota.sync writes no file; sota.sync writes only its own spool and downloads directories (smart_download() with the daemon name sota_sync). Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_activator_sync
+Group=hamsd_activator_sync
 WorkingDirectory=/opt/hams/daemons/pota_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: pota_sync/main.py reads POTA_API_BASE (a public default), SYSTEM_USER_AGENT and the pause setting; sota_sync/main.py reads SYSTEM_USER_AGENT and a URL default; both reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=activator_data_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/activator_data_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/activator_sync/activator_data_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -4993,19 +5870,31 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_activator_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). pota.sync writes no file; sota.sync writes only its own spool and downloads directories (smart_download() with the daemon name sota_sync). Everything else is read-only in the unit's sandbox.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/sota_sync /opt/hams/downloads/sota_sync
 Type=oneshot
-User=odoo
+User=hamsd_activator_sync
+Group=hamsd_activator_sync
 WorkingDirectory=/opt/hams/daemons/sota_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: pota_sync/main.py reads POTA_API_BASE (a public default), SYSTEM_USER_AGENT and the pause setting; sota_sync/main.py reads SYSTEM_USER_AGENT and a URL default; both reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=activator_data_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/activator_data_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/activator_sync/activator_data_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -5138,16 +6027,31 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+# Its own account (hamsd_club_search), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It writes no file (nothing is kept on disk), so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_club_search
+Group=hamsd_club_search
 WorkingDirectory=/opt/hams/daemons/club_web_search_discovery
 TimeoutStartSec=1h
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: daemons/club_web_search_discovery/main.py reads CLUB_WEB_SEARCH_MODEL (no environment file sets it); the Gemini key it spends comes from the Odoo parameter gemini.api_key through the daemon's own Odoo key, not from the environment, so core.env's GEMINI_API_KEY is not used. It reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=club_web_search_discovery_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/club_web_search_discovery_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/club_search/club_web_search_discovery_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS=--max-requests-per-run=5 --max-requests-per-day=20 --max-queries-per-day=300"
 
@@ -5199,19 +6103,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_aprs_sync), Phase 4 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It runs all the time, holds an APRS-IS socket and writes no file, so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=simple
-User=odoo
+User=hamsd_aprs_sync
+Group=hamsd_aprs_sync
 WorkingDirectory=/opt/hams/daemons/aprs_is_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: aprs_is_sync/main.py reads no environment variable of its own and it reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=aprs_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/aprs_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/aprs_sync/aprs_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -5248,19 +6163,30 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/spool /opt/hams/downloads
+# Its own account (hamsd_au_pii), Phase 3 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It writes no file, so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
-User=odoo
+User=hamsd_au_pii
+Group=hamsd_au_pii
 WorkingDirectory=/opt/hams/daemons/au_pii_sync
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-04: daemons/au_pii_sync/main.py reads no environment variable of its own and reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=callbook_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/au_pii/au_pii_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -6707,6 +7633,9 @@ WantedBy=timers.target
         # /opt/hams/nginx entry above). The dev box uses it for its local
         # 127.0.0.1:8080 bus proxy (hams_com CLAUDE.md).
         {"name": "nginx", "debian_name": "nginx", "environments": ["early_prod"]},
+        # setfacl: the traversal grant on /opt/hams, /opt/hams/etc, ... that lets a daemon family's account
+        # open its own paths without being in hams_com (MANIFEST directories "acl").
+        {"name": "acl", "debian_name": "acl", "environments": ["early_prod"]},
         # hook_build_rust_daemons() runs `cargo build`; without this a fresh box (no rustup)
         # reports PROVISIONING DEGRADED and the three Rust daemons are never built.
         # Debian 13's plain `cargo` is 1.85, too old for the daemons' dependencies (icu_* crates need
@@ -7192,6 +8121,18 @@ def provision_system_accounts(run_cmd_func, environment="prod", dest_dir="", onl
         for existing_group in member_of:
             run_cmd_func(["usermod", "-a", "-G", existing_group, user])
 
+        # `not_member_of`: groups the account must NOT be in. A migrated daemon family leaves hams_com
+        # (its membership gave read access to the ADIF queue and every other hams_com-readable
+        # directory; the traversal grant on the directories it really needs replaces it). Removal runs
+        # only when the account is a member, so a clean host sees no command, and it is the one place
+        # provisioning takes a membership away.
+        for left_group in acc.get("not_member_of", []):
+            try:
+                if user in grp.getgrnam(left_group).gr_mem:
+                    run_cmd_func(["gpasswd", "-d", user, left_group])
+            except KeyError:  # burn-ignore-os-account-probe
+                _logger.debug("Group %s not found, nothing to leave.", left_group)
+
         for extra_user in add_to_users:
             try:
                 pwd.getpwnam(extra_user)
@@ -7243,6 +8184,32 @@ def apply_production_directories(run_cmd_func=None, environment="prod", dest_dir
             apply_permissions(
                 path, d.get("owner"), mode, recursive=bool(d.get("recursive_owner"))
             )
+            _apply_directory_acl(d, path, environment, run_cmd_func)
+
+
+# [@ANCHOR: infrastructure:directory_acl]
+def _apply_directory_acl(spec, path, environment, run_cmd_func):
+    """Applies the entry's "acl" list (setfacl -m specs, such as "g:hams_traverse:--x") to `path`.
+    Production only: the daemon accounts that need the grant exist on every environment, but the
+    sandboxes of a test host never run them. `setfacl -m` is idempotent. The traversal group is
+    the replacement for hams_com membership (DAEMON_OS_ISOLATION_PLAN.md, Phase 2): execute
+    permission on a directory lets an account open a path it already knows and never list it."""
+    entries = spec.get("acl")
+    if not entries or environment != "prod":
+        return
+    for entry in entries:
+        if _plan("setfacl", f"{path}: {entry}"):
+            continue
+        if not shutil.which("setfacl"):
+            raise RuntimeError(
+                "setfacl is not installed (apt package acl); the traversal grant on "
+                f"{path} cannot be applied. Install it: apt-get install acl"
+            )
+        command = ["setfacl", "-m", entry, path]
+        if run_cmd_func is not None:
+            run_cmd_func(command)
+        else:
+            subprocess.run(command, check=True)
 
 
 def _plan_recursive_ownership(path, owner_str):
@@ -7937,9 +8904,9 @@ def _in_host_class(spec, classes=None):
 # hand, unit by unit, because a full run starts every daemon and differs from the host in many other
 # ways). While _DAEMON_FAMILY_ACCOUNTS is set, _spec_selected() answers by what the entry says about
 # those accounts, so there is no second list of "the family's entries" to drift out of step:
-#   * the account entry whose user is one of them;
-#   * a directory owned by one of them (user or group part), or marked "daemon_family_shared": True
-#     (the directories every family needs in a known state, such as the key root);
+#   * the account entry whose user is one of them, and any account whose group they join (member_of);
+#   * a directory owned by one of them (user or group part), or one every family needs in a known state
+#     (marked "daemon_family_shared": True, or carrying the traversal "acl" grant);
 #   * a unit file whose [Service] says User=<account>, the .timer / .path of the same name, and a
 #     sudoers.d file whose lines start with the account.
 _DAEMON_FAMILY_ACCOUNTS = None
@@ -7987,9 +8954,16 @@ def daemon_family_unit_paths(accounts, manifest=None):
 def _spec_in_daemon_family(spec):
     accounts = _DAEMON_FAMILY_ACCOUNTS
     if "user" in spec and "group" in spec and "provision_mode" not in spec:
-        return spec["user"] in accounts
+        if spec["user"] in accounts:
+            return True
+        # An account whose group a selected family account must join (hams_traverse) is created first.
+        return any(
+            spec["user"] in acc.get("member_of", [])
+            for acc in MANIFEST["system_accounts"]
+            if acc["user"] in accounts
+        )
     if "provision_mode" in spec:
-        if spec.get("daemon_family_shared"):
+        if spec.get("daemon_family_shared") or spec.get("acl"):
             return True
         return bool(set((spec.get("owner") or ":").split(":")) & accounts)
     path = spec.get("path", "")
@@ -8070,14 +9044,49 @@ def provision_host_class(host_class, run_cmd_func, env_vars=None, environment="p
     _logger.info("[*] Host class %s provisioned. Nothing was enabled or started.", host_class)
 
 
+# [@ANCHOR: infrastructure:derived_env_files]
+def _derived_env_values(target):
+    """The KEY=value pairs for the MANIFEST env_groups file at `target`, taken from the environment files that
+    already sit next to it, or None when the file is not a MANIFEST env group or any of its keys has no source.
+    A split such as common.env (the non-secret values) or db_app.env (the application database role without the
+    superuser password) is cut from the files an earlier provisioning run wrote, so no secret is re-entered."""
+    name = os.path.basename(target)
+    keys = MANIFEST["env_groups"].get(name)
+    if not keys:
+        return None
+    found = {}
+    for sibling in sorted(glob.glob(os.path.join(os.path.dirname(target), "*.env"))):
+        if os.path.basename(sibling) == name:
+            continue
+        try:
+            with open(sibling, "r", encoding="utf-8") as f:  # audit-ignore-path: provisioning reads its own env files
+                for line in f.read().splitlines():
+                    key, sep, value = line.partition("=")
+                    if sep and key in keys and key not in found:
+                        found[key] = value
+        except OSError:
+            continue
+    return found if set(found) == set(keys) else None
+
+
+def _write_derived_env_file(target, values):
+    """Writes `target` (root:root, 0400, no secret in the plan or the log) from `values`."""
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+    os.fchmod(fd, 0o400)
+    with open(fd, "w", encoding="utf-8") as f:
+        f.write("".join(f"{key}={values[key]}\n" for key in MANIFEST["env_groups"][os.path.basename(target)]))
+    apply_permissions(target, "root:root", 0o400)
+
+
 # [@ANCHOR: infrastructure:provision_daemon_families]
 def provision_daemon_families(accounts, run_cmd_func, env_vars=None, environment="prod"):
     """Provisions ONLY the named daemon families (hamsd_<family> accounts): the account and its group
     (odoo joins it), the directories it owns, the unit files and sudoers grant that run as it, and the
     unit links, then `systemctl daemon-reload`. It enables, starts and restarts nothing and never
     rewrites a unit that is not the family's. A unit file whose EnvironmentFile= (not the `-` optional
-    form) is missing is refused before anything is written, because the unit would not start. Honours
-    plan mode. `provision.py --daemon-family hamsd_<family>` runs this."""
+    form) is missing is refused before anything is written, because the unit would not start, unless the
+    file is a MANIFEST env group that can be cut from the environment files already on the host
+    (common.env, db_app.env): then it is written, root:root 0400. Honours plan mode. `provision.py --daemon-family hamsd_<family>` runs this."""
     accounts = list(accounts)
     known = {acc["user"] for acc in MANIFEST["system_accounts"]}
     for account in accounts:
@@ -8086,12 +9095,18 @@ def provision_daemon_families(accounts, run_cmd_func, env_vars=None, environment
     env_vars = dict(os.environ) if env_vars is None else env_vars
     wanted_paths = daemon_family_unit_paths(accounts)
     missing = []
+    derive = {}
     for spec in MANIFEST["static_files"]:
         if spec["path"] in wanted_paths and spec["path"].endswith(".service"):
             for line in (spec.get("content") or "").splitlines():
                 if line.startswith("EnvironmentFile=") and not line.startswith("EnvironmentFile=-"):
                     target = line.split("=", 1)[1].strip()
-                    if not os.path.exists(target):
+                    if os.path.exists(target):
+                        continue
+                    values = _derived_env_values(target)
+                    if values is not None:
+                        derive[target] = values
+                    else:
                         missing.append(f"{target} (needed by {os.path.basename(spec['path'])})")
     if missing and not _planning():
         raise RuntimeError(
@@ -8099,6 +9114,10 @@ def provision_daemon_families(accounts, run_cmd_func, env_vars=None, environment
         )
     for item in sorted(set(missing)):
         _plan("missing", item)
+    for target, values in sorted(derive.items()):
+        if _plan("write", f"{target} (derived from the existing environment files; keys: {' '.join(sorted(values))})"):
+            continue
+        _write_derived_env_file(target, values)
     with only_daemon_families(accounts):
         provision_system_accounts(run_cmd_func, environment)
         apply_production_directories(run_cmd_func, environment)
