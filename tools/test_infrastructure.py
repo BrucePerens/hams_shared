@@ -4364,11 +4364,46 @@ class DerivedEnvFileTests(_TmpDirTestCase):
         self.assertEqual([d for kind, d in plan.actions if kind == "missing"], [])
 
 
+class BrowserFetchingFamilyUnitTests(_SafePatchTestCase):
+    """uk.ofcom.sync fetches the Ofcom file through Chromium (daemons/uk_ofcom_sync fetch_with_browser):
+    it must find the shared Playwright install, reach it as a family account, and still write nothing
+    outside its own directories."""
+
+    UNIT = "uk.ofcom.sync.service"
+    BROWSERS = "/opt/hams/cache/ms-playwright"
+
+    def _unit_text(self):
+        for entry in infra.MANIFEST["static_files"]:
+            if entry["path"].endswith("/" + self.UNIT):
+                return entry["content"]
+        self.fail("unit not found")
+
+    def test_the_unit_points_playwright_at_the_shared_install(self):
+        self.assertIn(f'Environment="PLAYWRIGHT_BROWSERS_PATH={self.BROWSERS}"', self._unit_text())
+
+    def test_the_install_is_reachable_by_the_family_account_and_never_writable_by_it(self):
+        dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
+        for path in ("/opt/hams/cache", self.BROWSERS):
+            self.assertEqual(dirs[path]["acl"], ["g:hams_traverse:--x"])
+            self.assertEqual(dirs[path]["owner"], "hams_com:hams_com")
+        writable = infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, "ReadWritePaths")
+        self.assertNotIn(self.BROWSERS, writable)
+        self.assertNotIn("/opt/hams/cache", writable)
+
+    def test_the_other_cache_directories_are_not_opened_up(self):
+        for d in infra.MANIFEST["directories"]:
+            if d["path"].startswith("/opt/hams/cache/") and d["path"] != self.BROWSERS:
+                self.assertNotIn("acl", d, d["path"])
+
+
 class TraversalGrantTests(_SafePatchTestCase):
     """Tests [@ANCHOR: infrastructure:directory_acl]: a daemon family account reaches its own paths
     through an execute-only ACL for hams_traverse, not through hams_com."""
 
-    GRANTED = ["/opt/hams", "/opt/hams/etc", "/opt/hams/etc/keys", "/opt/hams/spool", "/opt/hams/downloads"]
+    GRANTED = [
+        "/opt/hams", "/opt/hams/etc", "/opt/hams/etc/keys", "/opt/hams/spool", "/opt/hams/downloads",
+        "/opt/hams/cache", "/opt/hams/cache/ms-playwright",
+    ]
 
     def _dirs(self):
         return {d["path"]: d for d in infra.MANIFEST["directories"]}

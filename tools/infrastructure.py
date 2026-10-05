@@ -1945,17 +1945,28 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # Execute-only traversal for the family accounts (like /opt/hams/downloads): uk.ofcom.sync
+            # starts Chromium from the shared browser install below and must pass through here to reach
+            # it. Nothing else in the cache is opened up: every other directory under it keeps its own
+            # hams_com-only mode.
             "path": "/opt/hams/cache",
             "owner": "hams_com:hams_com",
             "provision_mode": "770",
             "runtime_mount": "rw",
+            "acl": ["g:hams_traverse:--x"],
             "environments": ["prod", "test"],
         },
         {
+            # The Playwright browser install shared by the daemons that drive a browser. A family account
+            # (uk.ofcom.sync, hamsd_country_sync) reaches it by the same execute-only grant and READS the
+            # world-readable browser files; it never writes here (a launch does not write to the install),
+            # so it is not in that unit's ReadWritePaths= (a path the account cannot write is a
+            # sandbox hole for nothing; test_infrastructure.py pins this).
             "path": "/opt/hams/cache/ms-playwright",
             "owner": "hams_com:hams_com",
             "provision_mode": "770",
             "runtime_mount": "rw",
+            "acl": ["g:hams_traverse:--x"],
             "environments": ["prod", "test"],
         },
         {
@@ -4731,6 +4742,10 @@ WorkingDirectory=/opt/hams/daemons/uk_ofcom_sync
 EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=callbook_sync_service_internal"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/country_sync/callbook_sync_service_internal.key"
+# The Chromium visit (fetch_with_browser) launches the browser from the shared install; the variable is set here
+# because it lives in core.env, which this unit does not load. Playwright starts Chromium without its own
+# sandbox by default, which is why RestrictNamespaces above does not stop it.
+Environment="PLAYWRIGHT_BROWSERS_PATH=/opt/hams/cache/ms-playwright"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
