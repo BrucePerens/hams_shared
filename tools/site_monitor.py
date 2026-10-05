@@ -9,9 +9,10 @@ that works and it does not depend on Odoo, so it still pages when Odoo is the th
   * Checks: Odoo's `/web/health`, PostgreSQL (`pg_isready`), the Cloudflare tunnel's own readiness endpoint,
     the public site through the tunnel, every unit the MANIFEST says is a long-running production daemon (the
     signers included), and disk space.
-  * Paging path, with no Odoo and no mail server of ours in it: an HTTPS webhook (`PAGER_WEBHOOK_URL`, the same
-    variable the pager_duty monitor reads, so the same Discord/Slack/ntfy address serves both) and, if set, SMTP
-    (`PAGER_FALLBACK_EMAIL`, `SMTP_HOST`, ... the same variables as pager_duty's fallback). A check must fail on
+  * Paging path, with no Odoo in it. Primary: EMAIL by direct SMTP (`PAGER_FALLBACK_EMAIL` is the recipient, with
+    `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`; the same variables as pager_duty's fallback).
+    Optional: an HTTPS webhook (`PAGER_WEBHOOK_URL`). The channel list `CHANNELS` is open to more (an SMS channel is
+    one function and one entry); none is built.  Recipient and heartbeat target are configuration, never code. A check must fail on
     `FAILS_BEFORE_PAGE` consecutive runs before it pages; a recovery is announced once; a check that stays down is
     repeated every `REPAGE_SECONDS`.
   * Dead-man switch: when every check passes, the monitor GETs `HAMS_MONITOR_HEARTBEAT_URL`. An off-host service
@@ -284,30 +285,41 @@ def send_email(env, title, text, smtp=smtplib.SMTP):
         server.send_message(message)
 
 
-def channels_configured(env):
-    return {"webhook": bool(env.get("PAGER_WEBHOOK_URL")),
-            "email": bool(env.get("PAGER_FALLBACK_EMAIL") and env.get("SMTP_HOST"))}
+# Paging channels. Each is (name, configured(env), send(env, kind, title, text)). EMAIL is the primary channel
+# (Bruce's decision, 2026-10-05): direct SMTP to PAGER_FALLBACK_EMAIL, which needs no Odoo. The webhook is optional.
+# To add a channel such as SMS, write a send function and append one entry to CHANNELS; nothing else changes.
+def _send_email_channel(env, kind, title, text):
+    send_email(env, title, text)
 
 
-def deliver(messages, env, host, webhook=send_webhook, email=send_email):
+def _send_webhook_channel(env, kind, title, text):
+    send_webhook(env["PAGER_WEBHOOK_URL"], title, text, kind, style=env.get("HAMS_MONITOR_WEBHOOK_STYLE", "json"))
+
+
+CHANNELS = (
+    ("email", lambda env: bool(env.get("PAGER_FALLBACK_EMAIL") and env.get("SMTP_HOST")), _send_email_channel),
+    ("webhook", lambda env: bool(env.get("PAGER_WEBHOOK_URL")), _send_webhook_channel),
+)
+
+
+def channels_configured(env, channels=CHANNELS):
+    return {name: configured(env) for name, configured, _send in channels}
+
+
+def deliver(messages, env, host, channels=CHANNELS):
     """Send each message on every configured channel; it counts as delivered when at least one accepts it."""
-    configured = channels_configured(env)
     delivered = []
     for kind, check, detail in messages:
         title, text = format_message(kind, check, detail, host)
         sent = False
-        if configured["webhook"]:
+        for name, configured, send in channels:
+            if not configured(env):
+                continue
             try:
-                webhook(env["PAGER_WEBHOOK_URL"], title, text, kind, style=env.get("HAMS_MONITOR_WEBHOOK_STYLE", "json"))
+                send(env, kind, title, text)
                 sent = True
-            except (OSError, urllib.error.URLError, ValueError) as exc:
-                logger.error("Webhook page failed: %s", exc)
-        if configured["email"]:
-            try:
-                email(env, title, text)
-                sent = True
-            except (OSError, smtplib.SMTPException) as exc:
-                logger.error("Email page failed: %s", exc)
+            except (OSError, urllib.error.URLError, ValueError, smtplib.SMTPException) as exc:
+                logger.error("%s page failed: %s", name, exc)
         if sent:
             delivered.append((kind, check, detail))
     return delivered
@@ -340,7 +352,7 @@ def main(env=None, now=None, deps=None, host=None):
     configured = channels_configured(env)
     status = 0 if all(ok for ok, _d in results.values()) else 1
     if not any(configured.values()):
-        logger.critical("No paging channel is configured (PAGER_WEBHOOK_URL, or PAGER_FALLBACK_EMAIL with SMTP_HOST): "
+        logger.critical("No paging channel is configured (PAGER_FALLBACK_EMAIL with SMTP_HOST, or PAGER_WEBHOOK_URL): "
                         "this monitor cannot page anyone. See docs/runbooks/SITE_MONITORING.md in hams_com.")
         status = 2
     elif messages:
