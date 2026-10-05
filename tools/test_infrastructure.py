@@ -4041,8 +4041,12 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 account = matches[0]
                 self.assertEqual(account["group"], rules["user"])
                 self.assertEqual(account["shell"], "/usr/sbin/nologin")
-                # odoo must be in the group to hand it a key file (chgrp, never chown).
-                self.assertIn("odoo", account["add_to_users"])
+                # odoo must be in the group to hand it a key file (chgrp, never chown); a unit with no key
+                # file has nothing to hand over and odoo is not in its group.
+                if rules.get("no_key"):
+                    self.assertNotIn("odoo", account.get("add_to_users", []))
+                else:
+                    self.assertIn("odoo", account["add_to_users"])
                 # The traversal group (not hams_com) is what lets the account reach /opt/hams, and the
                 # account is taken out of hams_com so it cannot read the ADIF queue or other hams_com data.
                 self.assertEqual(account["member_of"], ["hams_traverse"])
@@ -4170,8 +4174,13 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 self.assertTrue(entry.get("external_fetch"))
 
     def test_the_key_file_a_migrated_unit_reads_is_under_the_key_directory(self):
-        for unit in infra.FAMILY_ACCOUNT_UNITS:
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
             with self.subTest(unit=unit):
+                if rules.get("no_key"):
+                    # A unit that holds no Odoo key (dx.firehose connects to the database itself): none is named.
+                    values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
+                    self.assertEqual([v for v in values if "ODOO_KEY_FILE" in v], [])
+                    continue
                 values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
                 key_files = [v.strip('"').split("=", 1)[1] for v in values if v.strip('"').startswith("ODOO_KEY_FILE=")]
                 self.assertEqual(len(key_files), 1)
@@ -4185,6 +4194,9 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 user = rules["user"]
                 family = user[len("hamsd_"):]
                 directory = f"/opt/hams/etc/keys/{family}"
+                if rules.get("no_key"):
+                    self.assertEqual([d for d in infra.MANIFEST["directories"] if d["path"] == directory], [])
+                    continue
                 entries = [d for d in infra.MANIFEST["directories"] if d["path"] == directory]
                 self.assertEqual(len(entries), 1)
                 self.assertEqual((entries[0]["owner"], entries[0]["provision_mode"]), (f"odoo:{user}", "750"))
