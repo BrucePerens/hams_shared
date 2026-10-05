@@ -2620,6 +2620,29 @@ end
             "environments": ["prod"],
         },
         {
+            # hams1 readiness audit 2026-10-04, row 19: Odoo's log rotated weekly, uncompressed, four kept, so
+            # odoo-server.log.2 was 921 MB and .1 580 MB (0.6-0.9 GB a week at INFO). Daily, 14 kept, compressed
+            # (delaycompress keeps the newest rotation readable by a tailing process), and a 300 MB size cap so a
+            # noisy day rotates early. copytruncate because Odoo keeps its log file open. Braces are doubled
+            # because provision_static_files formats content with str.format.
+            "path": "/etc/logrotate.d/odoo",
+            "content": """\
+/var/log/odoo/*.log {{
+    daily
+    rotate 14
+    maxsize 300M
+    compress
+    delaycompress
+    copytruncate
+    missingok
+    notifempty
+}}
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             "path": "/etc/hosts",
             "content": """\
 127.0.0.1 localhost
@@ -8827,6 +8850,22 @@ ODOO_CONF_GEVENT_MEMORY_LIMITS = (
     ("limit_memory_hard_gevent", 4 * 1024 * 1024 * 1024),
 )
 
+# Worker limits for the ordinary HTTP/cron worker pool, written explicitly instead of left to Odoo's
+# defaults (hams1 readiness audit 2026-10-04, row 16 / P6). hams1 ran `workers = 25` with
+# limit_memory_hard 4 GiB and limit_memory_soft, limit_time_* and max_cron_threads unset, so the real
+# ceilings were whatever Odoo's version happened to default to. `workers` itself is unchanged (cpu * 2 + 1).
+# Soft 2 GiB (a worker is ~330 MB resident, so this only trips on a runaway request and recycles that
+# worker cleanly), hard 4 GiB (the value already live, now stated), 120 s CPU and 240 s real time per
+# request, 1800 s for a cron job, two cron threads. The gevent worker keeps its own pair above.
+ODOO_CONF_WORKER_LIMITS = (
+    ("limit_memory_soft", 2 * 1024 * 1024 * 1024),
+    ("limit_memory_hard", 4 * 1024 * 1024 * 1024),
+    ("limit_time_cpu", 120),
+    ("limit_time_real", 240),
+    ("limit_time_real_cron", 1800),
+    ("max_cron_threads", 2),
+)
+
 
 # [@ANCHOR: infrastructure:initialize_odoo_database]
 def initialize_odoo_database(
@@ -8909,7 +8948,7 @@ def initialize_odoo_database(
         # removing one key never also deletes a longer key sharing its
         # prefix (e.g. a bare /^limit_memory_soft/d would take out
         # limit_memory_soft_gevent too).
-        for key, value in ODOO_CONF_GEVENT_MEMORY_LIMITS:
+        for key, value in ODOO_CONF_GEVENT_MEMORY_LIMITS + ODOO_CONF_WORKER_LIMITS:
             run_cmd_func(["sudo", "sed", "-i", f"/^{key}[[:space:]]*=/d", "/etc/odoo/odoo.conf"])
             run_cmd_func(["sudo", "bash", "-c", f"echo {shlex.quote(f'{key} = {value}')} >> /etc/odoo/odoo.conf"])
     except Exception as e: # audit-ignore-catch-all
