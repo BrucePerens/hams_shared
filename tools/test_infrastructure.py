@@ -2179,7 +2179,7 @@ class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
         run_cmd = MagicMock()
         self._run_with_dirs("/tmp/hams_open", "/tmp/hams_com", run_cmd)
         cmds = [c.args[0] for c in run_cmd.call_args_list]
-        limits = dict(infra.ODOO_CONF_GEVENT_MEMORY_LIMITS)
+        limits = dict(infra.ODOO_CONF_GEVENT_MEMORY_LIMITS + infra.ODOO_CONF_WORKER_LIMITS)
         self.assertEqual(limits["limit_memory_soft_gevent"], 3 * 1024 ** 3)
         self.assertEqual(limits["limit_memory_hard_gevent"], 4 * 1024 ** 3)
         self.assertLess(limits["limit_memory_soft_gevent"], limits["limit_memory_hard_gevent"])
@@ -2194,20 +2194,72 @@ class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
             # Delete before append, or a re-provision would remove the fresh line.
             self.assertLess(cmds.index(delete), cmds.index(append[0]))
         # The actual sed address used must match the key's own line but not
-        # a longer key sharing its prefix, and no sed in this function may
-        # delete the operator-managed limit_memory_soft/limit_memory_hard.
+        # a longer key sharing its prefix (limit_memory_soft must not take out
+        # limit_memory_soft_gevent, nor limit_time_real take out limit_time_real_cron).
         conf_lines = [
             "limit_memory_soft = 1", "limit_memory_hard = 4294967296",
             "limit_memory_soft_gevent = 1", "limit_memory_hard_gevent = 1",
             "limit_memory_soft_gevent_x = 1",
+            "limit_time_real = 1", "limit_time_real_cron = 1", "limit_time_cpu = 1", "max_cron_threads = 1",
         ]
         for c in cmds:
-            if c[:3] != ["sudo", "sed", "-i"] or "limit_memory" not in c[3]:
+            if c[:3] != ["sudo", "sed", "-i"] or not ("limit_" in c[3] or "max_cron" in c[3]):
                 continue
             address = c[3][1:-2].replace("[[:space:]]", r"\s")  # strip "/" ... "/d"
             matched = [line for line in conf_lines if re.match(address, line)]
             self.assertEqual(len(matched), 1, f"{c[3]} must delete exactly one key, got {matched}")
             self.assertIn(matched[0].split(" = ")[0], limits)
+
+
+class OdooLogrotateTests(unittest.TestCase):
+    """Audit row 19: Odoo's log is rotated daily, compressed and kept for two weeks."""
+
+    def _entry(self):
+        return next(s for s in infra.MANIFEST["static_files"] if s["path"] == "/etc/logrotate.d/odoo")
+
+    def test_rendered_file_has_the_audited_directives(self):
+        text = infra.format_env(self._entry()["content"], {})
+        self.assertTrue(text.startswith("/var/log/odoo/*.log {\n"), text)
+        directives = {line.strip() for line in text.splitlines()}
+        for wanted in ("daily", "rotate 14", "maxsize 300M", "compress", "delaycompress", "copytruncate",
+                       "missingok", "notifempty"):
+            self.assertIn(wanted, directives)
+        self.assertNotIn("weekly", directives)
+        self.assertEqual(text.count("{"), 1)
+        self.assertEqual(text.count("}"), 1)
+
+    def test_it_is_for_production_and_root_owned(self):
+        entry = self._entry()
+        self.assertEqual(entry["environments"], ["prod"])
+        self.assertEqual((entry["owner"], entry["mode"]), ("root:root", "644"))
+
+    def test_the_path_matches_the_log_odoo_writes(self):
+        self.assertIn("/var/log/odoo/", self._entry()["content"])
+
+
+class OdooWorkerLimitsTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:odoo_conf_gevent_memory_limits] for the worker pool's explicit limits (audit row 16)."""
+
+    def test_the_limits_are_the_audited_values(self):
+        limits = dict(infra.ODOO_CONF_WORKER_LIMITS)
+        self.assertEqual(limits["limit_memory_soft"], 2 * 1024 ** 3)
+        self.assertEqual(limits["limit_memory_hard"], 4 * 1024 ** 3)
+        self.assertEqual((limits["limit_time_cpu"], limits["limit_time_real"], limits["limit_time_real_cron"]),
+                         (120, 240, 1800))
+        self.assertEqual(limits["max_cron_threads"], 2)
+
+    def test_soft_is_below_hard_and_a_request_cannot_outlast_a_cron_job(self):
+        limits = dict(infra.ODOO_CONF_WORKER_LIMITS)
+        self.assertLess(limits["limit_memory_soft"], limits["limit_memory_hard"])
+        self.assertLess(limits["limit_time_cpu"], limits["limit_time_real"])
+        self.assertLessEqual(limits["limit_time_real"], limits["limit_time_real_cron"])
+
+    def test_workers_is_not_changed_by_this(self):
+        self.assertNotIn("workers", dict(infra.ODOO_CONF_WORKER_LIMITS))
+
+    def test_the_limits_are_in_the_provisioning_loop(self):
+        source = inspect.getsource(infra.initialize_odoo_database)
+        self.assertIn("ODOO_CONF_GEVENT_MEMORY_LIMITS + ODOO_CONF_WORKER_LIMITS", source)
 
 
 class RustToolchainPackageTests(unittest.TestCase):
