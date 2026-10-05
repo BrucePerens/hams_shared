@@ -6557,6 +6557,9 @@ RestrictAddressFamilies=AF_INET
 
 # No account of its own to manage, nothing to read or write: the console is embedded in the binary.
 DynamicUser=yes
+# hams1's /opt/hams is mode 750 with an execute-only ACL for the hams_traverse group; without this group the
+# dynamic user cannot exec the binary under /opt/hams (found on the live deploy, 2026-10-05).
+SupplementaryGroups=hams_traverse
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=

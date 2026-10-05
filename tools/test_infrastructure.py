@@ -5345,3 +5345,20 @@ class FirewallRulesProvisioningTests(_TmpDirTestCase):
 
     def test_the_bind_default_is_written_to_bridge_env(self):
         self.assertIn("BRIDGE_STUN_BIND", infra.MANIFEST["env_groups"]["bridge.env"])
+
+
+class ShackConsoleUnitTests(unittest.TestCase):
+    """The shack console's unit as provisioned (hams_com daemons/shack_console/packaging/shack-console.service is identical)."""
+
+    def _unit(self):
+        entry = next(i for i in infra.MANIFEST["static_files"] if i.get("path") == "/opt/hams/systemd/shack-console.service")
+        return entry["content"]
+
+    def test_the_dynamic_user_can_reach_the_binary_under_opt_hams(self):
+        # hams1's /opt/hams is mode 750 with an execute-only ACL for hams_traverse; DynamicUser cannot exec without it.
+        self.assertIn("\nSupplementaryGroups=hams_traverse\n", self._unit())
+
+    def test_it_stays_loopback_only_and_dynamic(self):
+        unit = self._unit()
+        for line in ("DynamicUser=yes", "IPAddressDeny=any", "IPAddressAllow=localhost"):
+            self.assertIn(line, unit)
