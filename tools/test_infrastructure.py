@@ -3864,7 +3864,7 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
             if spec["path"].endswith("club.web.search.discovery.service")
         )
         self.assertIn(
-            "ODOO_KEY_FILE=/opt/hams/etc/keys/club_web_search_discovery_service_internal.key",
+            "ODOO_KEY_FILE=/opt/hams/etc/keys/club_search/club_web_search_discovery_service_internal.key",
             service["content"],
         )
         self.assertIn("--max-requests-per-day=", service["content"])
@@ -4090,7 +4090,7 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     for value in infra.systemd_unit_directive_values(infra.MANIFEST, unit, "EnvironmentFile")
                 }
                 self.assertEqual(loaded, set(rules["environment_files"]))
-                self.assertLessEqual(loaded, set(infra.MANIFEST["env_groups"]))
+                self.assertLessEqual(loaded - set(rules.get("operator_env_files", ())), set(infra.MANIFEST["env_groups"]))
 
     def test_common_env_carries_no_secret(self):
         keys = infra.MANIFEST["env_groups"]["common.env"]
@@ -4195,6 +4195,32 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
                 key_file = [v.strip('"').split("=", 1)[1] for v in values if v.strip('"').startswith("ODOO_KEY_FILE=")][0]
                 self.assertEqual(os.path.dirname(key_file), directory)
+
+    def test_no_key_file_is_read_by_the_units_of_two_different_accounts(self):
+        """The reason for one account per key: a key file readable by two accounts isolates nothing."""
+        readers = {}
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
+            for v in values:
+                v = v.strip('"')
+                if v.startswith("ODOO_KEY_FILE="):
+                    readers.setdefault(v.split("=", 1)[1], set()).add(rules["user"])
+        for key_file, users in readers.items():
+            with self.subTest(key_file=key_file):
+                self.assertEqual(len(users), 1, f"{key_file} is read by {sorted(users)}")
+
+    def test_the_hamcall_directory_belongs_to_the_one_daemon_that_reads_it(self):
+        entry = [d for d in infra.MANIFEST["directories"] if d["path"] == "/opt/hams/hamcall"][0]
+        self.assertEqual((entry["owner"], entry["provision_mode"]), ("hamsd_hamcall_sync:hamsd_hamcall_sync", "750"))
+        self.assertTrue(entry["recursive_owner"])
+        values = infra.systemd_unit_directive_values(infra.MANIFEST, "hamcall.idx.sync.service", "Environment")
+        self.assertIn('"HAMCALL_IDX_PATH=/opt/hams/hamcall/hamcall.idx"', values)
+
+    def test_au_pii_has_its_own_key_not_the_country_syncs(self):
+        pii = infra.systemd_unit_directive_values(infra.MANIFEST, "au.pii.sync.service", "Environment")
+        country = infra.systemd_unit_directive_values(infra.MANIFEST, "au.acma.sync.service", "Environment")
+        self.assertIn('"ODOO_KEY_FILE=/opt/hams/etc/keys/au_pii/au_pii_sync_service_internal.key"', pii)
+        self.assertIn('"ODOO_KEY_FILE=/opt/hams/etc/keys/country_sync/callbook_sync_service_internal.key"', country)
 
     def test_the_key_root_stays_traversable_only_and_no_family_directory_is_group_writable(self):
         paths = {d["path"]: d for d in infra.MANIFEST["directories"]}
