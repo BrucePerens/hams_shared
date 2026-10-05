@@ -962,6 +962,8 @@ SHARED_ODOO_ACCOUNT_UNITS = frozenset({
     "credential.touch.timer.service",
     "de.bnetza.sync.service",
     "dx.firehose.service",
+    # AI correction of scraped hamfest listings; the model runs as hams_event_agent (see the unit's comment).
+    "event.ai.enrichment.service",
     "electronicsfleamarket.sync.service",
     "fcc.uls.sync.service",
     "gdpr.csv.export.service",
@@ -6209,6 +6211,109 @@ Description=Hams.com Automatic Club Website Crawl (every two hours; a run with n
 
 [Timer]
 OnCalendar=*-*-* 00/2:15:00
+Persistent=false
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # AI correction of scraped ARRL hamfest listings on a timer (hams_com daemons/event_ai_enrichment;
+            # Bruce, NIGHT_PLAN 203: the club crawl became automatic and this job is wanted automatic too,
+            # night_shift_todo schedule-event-ai-enrichment-on-a-timer-after-the-club-crawl-3b8d7e15).
+            # Different job from club.crawl: this one corrects an event listing by finding the event's own page
+            # (the Python crawl plus one batched Gemini-grounded search for events ARRL's link cannot lead from),
+            # then asks the Claude Code CLI to write the correction through the event enrichment MCP server.
+            #
+            # Account: `odoo`, on the SHARED_ODOO_ACCOUNT_UNITS list, as ticket.triage does and for the same two
+            # reasons. (1) The unit reaches the CLI through `sudo -u hams_event_agent run-hams-event-agent-claude.sh`
+            # (the existing odoo grant), so it has the credential.touch.timer exception: NoNewPrivileges omitted,
+            # CapabilityBoundingSet narrowed to SETUID/SETGID, hams_event_agent's home the only ReadWritePaths=.
+            # (2) Its Odoo key is event_ai_correction_service_internal.key, the SAME file the MCP server reads
+            # (run-event-enrichment-mcp.sh runs it as odoo through a sudo hop): a hamsd_ family account would need
+            # that key moved into a family key directory (NIGHT_PLAN 226) and a second key registered for the same
+            # service account, which is its own reviewed change. Moving this unit to its own account belongs to that
+            # later phase of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md; the model itself never runs as odoo.
+            #
+            # Guard rails live in main.py `--scheduled`: kill switch file /opt/hams/etc/event_ai_enrichment.disabled
+            # (also ConditionPathExists=! below), one run at a time, at most 30 model dispatches a UTC day, and an
+            # event the model left uncorrected is not asked about again for 7 days (the state directory,
+            # StateDirectory=hams-event-ai-enrichment, holds the ledger). Without that ledger the same first five
+            # unresolved events would be redispatched on every run. Politeness: page_cleaning.fetch_page() honors
+            # robots.txt and is SSRF-safe, and a run crawls at most five events (see main.py's docstring).
+            #
+            # The Gemini key for the search fallback is read from odoo's own ~/.secrets/google_search/api_key.txt
+            # (/var/lib/odoo/.secrets/google_search/api_key.txt); without it the fallback logs one line and is skipped.
+            #
+            # opt_in: provisioning links this unit but never enables or starts it unless named with
+            # provision.py --enable-opt-in (it fetches third-party sites and spends Claude Code subscription quota).
+            # Prod-only: hams_event_agent and its wrapper exist only on hams1. Bruce enables it.
+            "path": "/opt/hams/systemd/event.ai.enrichment.service",
+            "external_fetch": "fetches hamfest and club websites from third-party servers, calls Google (Gemini grounded search) and Anthropic through the Claude Code CLI",
+            "opt_in": "fetches third-party websites on a schedule and spends Claude Code subscription quota",
+            "content": """\
+[Unit]
+Description=Hams.com AI Event Enrichment, Corrects Scraped Hamfest Listings (One-Shot)
+After=network.target
+ConditionPathExists=!/opt/hams/etc/event_ai_enrichment.disabled
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction, with the credential.touch.timer exception (no NoNewPrivileges,
+# SETUID/SETGID kept) -- see this entry's own comment above.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+ReadWritePaths=/home/hams_event_agent
+StateDirectory=hams-event-ai-enrichment
+StateDirectoryMode=0700
+Type=oneshot
+User=odoo
+WorkingDirectory=/opt/hams/daemons/event_ai_enrichment
+# Five events a run, each a short crawl, an optional shared search call and one model call of up to 240 s.
+TimeoutStartSec=1h
+
+# main.py and hams_config.py read SYSTEM_USER_AGENT, ODOO_URL and DB_NAME; nothing else of core.env, db.env or
+# odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+Environment="ODOO_USER=event_ai_correction_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_ai_correction_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="EVENT_AI_ENRICHMENT_STATE_DIR=/var/lib/hams-event-ai-enrichment"
+Environment="EVENT_AI_ENRICHMENT_BATCH_SIZE=5"
+Environment="EVENT_AI_ENRICHMENT_MAX_EVENTS_PER_DAY=30"
+
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/event_ai_enrichment/main.py --start-test
+ExecStart=/usr/bin/python3 /opt/hams/daemons/event_ai_enrichment/main.py --scheduled
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=event.ai.enrichment
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # Cadence: every three hours, five events a run, at most 30 dispatches a day (main.py's cap), so a
+            # backlog of a few hundred scraped listings clears in about a week and an idle day costs nothing: a
+            # run with no eligible event ends at the first query. Persistent=false: a missed run is skipped, never
+            # replayed as a burst after downtime.
+            "path": "/opt/hams/systemd/event.ai.enrichment.timer",
+            "external_fetch": "activates event.ai.enrichment.service",
+            "opt_in": "activates event.ai.enrichment.service, which fetches third-party sites and spends Claude Code quota",
+            "content": """\
+[Unit]
+Description=Hams.com AI Event Enrichment (every three hours; a run with nothing eligible spends nothing)
+
+[Timer]
+OnCalendar=*-*-* 00/3:40:00
 Persistent=false
 RandomizedDelaySec=10m
 
