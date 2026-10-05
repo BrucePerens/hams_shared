@@ -549,7 +549,7 @@ class ImporterClassTests(unittest.TestCase):
             "website.menu": [{"id": 1, "name": "Top Menu", "url": "#", "website_id": 1, "parent_id": False},
                              {"id": 2, "name": "Home", "url": "/", "website_id": 1, "parent_id": 1},
                              {"id": 3, "name": "Blog", "url": "/blog", "website_id": 1, "parent_id": 1}],
-            "blog.blog": [{"id": 1, "name": "Our blog", "active": True}], "blog.post": [],
+            "blog.blog": [{"id": 1, "name": "Our blog", "website_id": 1, "active": True}], "blog.post": [],
             "ir.module.module": [{"id": 1, "name": "website", "state": "installed"}, {"id": 2, "name": "website_blog", "state": "installed"}],
             "ir.attachment": [], "ir.asset": [],
         }
