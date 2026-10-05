@@ -3110,7 +3110,7 @@ class TimerDrivenUnitTests(unittest.TestCase):
 class SigningKeyMigrationHookTests(_TmpDirTestCase):
     """Tests [@ANCHOR: infrastructure:migrate_signing_key]
 
-    hams_com's relay_signer/subcarrier_signer/device_command_signer daemons
+    hams_com's relay_signer/subcarrier_signer daemons
     take over keys that older Odoo code kept in /var/lib/odoo. The hooks run as root
     in production; here the account lookups resolve to the test runner's
     own uid/gid, so the real fchown/rename/remove path runs unpatched."""
@@ -3205,17 +3205,6 @@ class SigningKeyMigrationHookTests(_TmpDirTestCase):
         self.assertEqual(os.listdir(self.new_dir), [])
         self.assertEqual(len(infra.get_hook_failures()), 1)
 
-    def test_device_command_hook_uses_its_own_key_and_account(self):
-        key_name = "hams_device_command_signing_ed25519.key"
-        old_path = os.path.join(self.old_dir, key_name)
-        with open(old_path, "wb") as f:
-            f.write(b"d" * 32)
-        getpwnam = infra.pwd.getpwnam
-        infra.hook_migrate_device_command_signing_key({}, self.tmp, self.new_dir, None)
-        self.assertFalse(os.path.exists(old_path))
-        self.assertTrue(os.path.exists(os.path.join(self.new_dir, key_name)))
-        getpwnam.assert_called_with("hams_device_command_signer")
-
     def test_relay_hook_moves_the_noise_key_to_its_own_account(self):
         # The relay key's file name is the historical
         # hams_noise_signing_ed25519.key (daemons/relay_signer/main.py's
@@ -3243,7 +3232,6 @@ class SignerDaemonManifestTests(unittest.TestCase):
 
     SIGNERS = {
         "subcarrier_signer": ("subcarrier-signer", "SUBCARRIER_SIGNER"),
-        "device_command_signer": ("device-command-signer", "DEVICE_COMMAND_SIGNER"),
         "relay_signer": ("relay-signer", "RELAY_SIGNER"),
     }
 
@@ -3266,7 +3254,6 @@ class SignerDaemonManifestTests(unittest.TestCase):
         dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
         hooks = {
             "subcarrier_signer": infra.hook_migrate_subcarrier_signing_key,
-            "device_command_signer": infra.hook_migrate_device_command_signing_key,
             "relay_signer": infra.hook_migrate_relay_signing_key,
         }
         for name in self.SIGNERS:
@@ -3620,7 +3607,6 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hamcall.idx.sync.service": "reads a licensed file already on disk; no timer",
         "hams-auth-gateway.service": "local server",
         "shack-console.service": "local static server on 127.0.0.1; serves embedded files, fetches nothing",
-        "hams-device-command-signer.service": "local signing socket",
         "hams-pgbackrest-backup.path": "fires only on a spool file a configured backup job writes",
         "hams-pgbackrest-backup.service": "runs only for a configured backup job",
         "hams-pycache.service": "compiles local Python files",
