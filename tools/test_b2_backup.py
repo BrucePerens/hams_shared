@@ -231,8 +231,16 @@ class EndToEndTests(_Env):
             os.makedirs(os.path.join(self.filestore, digest[:2]), exist_ok=True)
             with open(os.path.join(self.filestore, digest[:2], digest), "wb") as f:
                 f.write(body)
+        # Odoo's checklist/ bookkeeping: SHA-1-looking names whose content is NOT that hash.
+        for i in range(12):
+            name = hashlib.sha1(b"attachment-%d" % i).hexdigest()  # burn-ignore-legacy-protocol-hash: Odoo naming
+            os.makedirs(os.path.join(self.filestore, "checklist", name[:2]), exist_ok=True)
+            with open(os.path.join(self.filestore, "checklist", name[:2], name), "wb") as f:
+                f.write(b"not the hash of this")
         self.etc = self.t("etc")
         os.makedirs(os.path.join(self.etc, "keys"))
+        # A symlink such as letsencrypt's live/privkey.pem -> ../archive/... (here a dangling one, as in a copy).
+        os.symlink("../archive/privkey1.pem", os.path.join(self.etc, "keys", "privkey.pem"))
         with open(os.path.join(self.etc, "keys", "daemon.key"), "w") as f:
             f.write("daemon-key\n")
         with open(os.path.join(self.etc, "keys", "b2_backup.env"), "w") as f:
@@ -290,6 +298,19 @@ class EndToEndTests(_Env):
         self.assertEqual(scratch_dbs, "")
         self.assertEqual(self.run_main(self.cfg_path, "check")[0], 0)
 
+    def test_restore_test_samples_every_file_so_checklist_and_symlinks_cannot_fail_it(self):
+        raw = _load(self.cfg_path)
+        raw["restore_test"]["sample_files"] = 500
+        with open(self.cfg_path, "w") as f:
+            json.dump(raw, f)
+        self.init_and_backup()
+        code, out, err = self.run_main(self.cfg_path, "restore-test")
+        self.assertEqual(code, 0, out + err)
+        report = _load(self.t("state", "restore_test_status.json"))
+        self.assertTrue(report["ok"], report.get("problems"))
+        by = {s["source"]: s for s in report["samples"]}
+        self.assertEqual(by["filestore_hams_prod"]["sampled"], 12)
+
     def test_second_run_is_incremental_and_same_day_reruns_replace_rather_than_pile_up(self):
         self.init_and_backup()
         with open(os.path.join(self.filestore, "late"), "w") as f:
@@ -299,8 +320,8 @@ class EndToEndTests(_Env):
         # Retention keeps one snapshot per day, so a rerun the same day supersedes the earlier one.
         self.assertEqual(len(snaps), 1)
         self.assertEqual(snaps[-1]["stats"]["nonCachedFiles"], 1, "only the new file is read")
-        self.assertEqual(snaps[-1]["stats"]["cachedFiles"], 12, "unchanged files must not be re-read")
-        self.assertEqual(snaps[-1]["rootEntry"]["summ"]["files"], 13)
+        self.assertEqual(snaps[-1]["stats"]["cachedFiles"], 24, "unchanged files must not be re-read")
+        self.assertEqual(snaps[-1]["rootEntry"]["summ"]["files"], 25)
 
     def test_changed_password_file_stops_the_run(self):
         self.init_and_backup()
@@ -346,7 +367,7 @@ class EndToEndTests(_Env):
 
     def test_restore_test_catches_a_filestore_file_whose_content_does_not_match_its_name(self):
         self.assertEqual(self.run_main(self.cfg_path, "init")[0], 0)
-        for name in os.listdir(self.filestore):
+        for name in [n for n in os.listdir(self.filestore) if n != "checklist"]:
             directory = os.path.join(self.filestore, name)
             for entry in os.listdir(directory):
                 with open(os.path.join(directory, entry), "wb") as f:
