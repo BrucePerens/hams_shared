@@ -1023,6 +1023,11 @@ FAMILY_ACCOUNT_UNITS = {
         "environment_files": frozenset({"common.env"}),
         "no_state": True,
     },
+    "radio.history.events.sync.service": {
+        "user": "hamsd_event_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
     "rac.events.sync.service": {
         "user": "hamsd_event_sync",
         "environment_files": frozenset({"common.env"}),
@@ -5124,6 +5129,84 @@ SyslogIdentifier=electronicsfleamarket.sync
             "content": """\
 [Unit]
 Description=Ham Radio Electronics Flea Market Swap Meet Sync Weekly
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Historic radio societies and museums as event sources (the California Historical
+            # Radio Society's iCalendar feed, the Museum Ships Weekend rule) and the registration
+            # of each one as a "historic_radio_society" club. Same shape as the sibling event
+            # syncs; hams_com daemons/event_sync/radio_history_events_sync.py.
+            "path": "/opt/hams/systemd/radio.history.events.sync.service",
+            "external_fetch": "fetches a historic radio society calendar feed from a third-party website",
+            "content": """\
+[Unit]
+Description=Ham Radio Historic Radio Societies Event Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+Type=oneshot
+User=hamsd_event_sync
+Group=hamsd_event_sync
+WorkingDirectory=/opt/hams/daemons/event_sync
+
+# Code audit, 2026-10-04: the five scripts in daemons/event_sync read SYSTEM_USER_AGENT for their request headers and reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+Environment="ODOO_USER=event_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/radio_history_events_sync.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=radio.history.events.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/radio.history.events.sync.timer",
+            "external_fetch": "activates radio.history.events.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Historic Radio Societies Event Sync Weekly
 
 [Timer]
 OnCalendar=weekly
