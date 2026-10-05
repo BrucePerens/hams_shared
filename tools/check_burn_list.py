@@ -268,7 +268,7 @@ GENERAL_ERROR_RULES = [
         "CRITICAL TEST ISOLATION: Tests must not make real external HTTP requests. Mock the network call (e.g., via unittest.mock.patch).",
     ),
     (
-        r"^(?!.*(?:/|^)tools/).*\.py$",
+        r"^(?!.*(?:/|^)(?:devbox_)?tools/).*\.py$",
         re.compile(r"(127\.0\.0\.1|localhost)"),
         "CRITICAL NETWORK HARDCODING: 'localhost' and '127.0.0.1' are prohibited. In containerized environments, these resolve to the container's internal loopback, NOT the target service. Use Docker DNS names (e.g., 'odoo', 'redis').",
     ),
@@ -288,7 +288,7 @@ GENERAL_ERROR_RULES = [
         # STRING CONTENT itself contains "/tmp/thing" as bait for the checker being tested to
         # catch). Real Odoo test files (this rule's actual intended target) never live under any
         # tools/ directory in this codebase -- only meta-tests for the linter tooling itself do.
-        r"^(?!.*(?:/|^)tools/).*test_.*\.py$",
+        r"^(?!.*(?:/|^)(?:devbox_)?tools/).*test_.*\.py$",
         re.compile(r"['\"]/tmp(?:/|['\"])"),
         "CRITICAL TEST REALISM / PATHING: Hardcoding '/tmp' is forbidden. Tests must use the exact same paths as the production environment per AGENTS.md.",
     ),

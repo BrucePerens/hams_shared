@@ -470,6 +470,19 @@ def test_patch_ban_exempts_devbox_tools():
     assert errors == []
 
 
+def test_loopback_and_tmp_rules_exempt_devbox_tools_but_not_modules():
+    # devbox_tools/ holds operator scripts that run on the dev box and reach a test VM through a forwarded loopback
+    # port or a scratch file; the container-DNS and production-path concerns of these two rules do not apply to
+    # them, as they already do not to a tools/ directory. A module file with the same text is still flagged.
+    content = 'HOST = "ai@127.0.0.1"\nSCRATCH = "/tmp/x"\n'
+    errors, _warnings = _scan_file(content, "devbox_tools/some_script.py", is_odoo_module=False)
+    assert [e for e in errors if "NETWORK HARDCODING" in e or "/tmp" in e] == []
+    errors, _warnings = _scan_file(content, "devbox_tools/test_some_script.py", is_odoo_module=False)
+    assert [e for e in errors if "NETWORK HARDCODING" in e or "'/tmp'" in e] == []
+    errors, _warnings = _scan_file(content, "ham_some_module/models/some_model.py", is_odoo_module=False)
+    assert [e for e in errors if "NETWORK HARDCODING" in e]
+
+
 def _qweb_numeric_separator_errors(source):
     # GENERAL_ERROR_RULES is only exercised via scan_file()'s own line-by-line regex pass, not
     # check_ast_vulnerabilities()/_dict_findings() -- matching _patch_ban_errors's own pattern
