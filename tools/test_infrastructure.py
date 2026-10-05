@@ -5450,5 +5450,18 @@ class AuthGatewayDirectoriesTests(unittest.TestCase):
         self.assertIn("hams-auth", users)
         self.assertEqual(users["hams-auth"]["shell"], "/usr/sbin/nologin")
         self.assertEqual(users["hams-auth"]["environments"], ["prod"])
+
+    def test_the_account_can_reach_its_binary_under_opt_hams_but_is_not_in_hams_com(self):
+        # /opt/hams is 0750 hams_com with an execute-only ACL for hams_traverse; the unit's ExecStart is under it.
+        accounts = infra.MANIFEST["system_accounts"]
+        names = [a["user"] for a in accounts]
+        account = accounts[names.index("hams-auth")]
+        self.assertEqual(account["member_of"], ["hams_traverse"])
+        self.assertEqual(account["not_member_of"], ["hams_com"])
+        self.assertLess(names.index("hams_traverse"), names.index("hams-auth"))
+        unit = next(f for f in infra.MANIFEST["static_files"] if f["path"].endswith("/hams-auth-gateway.service"))
+        self.assertIn("ExecStart=/opt/hams/daemons/", unit["content"])
+        dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
+        self.assertEqual(dirs["/opt/hams"]["acl"], ["g:hams_traverse:--x"])
         paths = {f["path"] for f in infra.MANIFEST["static_files"]}
         self.assertIn("/opt/hams/systemd/hams-auth-gateway.service", paths)

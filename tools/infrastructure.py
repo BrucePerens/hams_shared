@@ -1519,12 +1519,17 @@ MANIFEST = {
             # its own unprivileged account, the only user that can read the TLS key and the
             # token secret under /etc/hams/auth (both 0640, group hams-auth). Binds TCP 443
             # through CAP_NET_BIND_SERVICE in its own unit (hams-auth-gateway.service below),
-            # never as root. Not a member of any other group, and no other account joins its
-            # group. Prod-only: auth.hams.com exists only on the production server.
+            # never as root. No other account joins its group. Its only other group is
+            # hams_traverse: hams1's /opt/hams is mode 750 with an execute-only ACL for that group, and
+            # the binary lives at /opt/hams/daemons/hams_auth_gateway/target/release, so without it
+            # systemd cannot exec the service (the same finding as shack-console.service's, 2026-10-05).
+            # It is not in hams_com. Prod-only: auth.hams.com exists only on the production server.
             "user": "hams-auth",
             "group": "hams-auth",
             "home": "/etc/hams/auth",
             "shell": "/usr/sbin/nologin",
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
             "environments": ["prod"],
         },
     ],
