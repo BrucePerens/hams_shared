@@ -1098,9 +1098,9 @@ class Importer:
             self.report["dropped_fields"][key] = self.report["dropped_fields"].get(key, 0) + 1
         return values
 
-    def create_or_match(self, model, source_id, domain, values, update=False):
+    def create_or_match(self, model, source_id, domain, values, update=False, context=None):
         """Returns the target id. Matches by `domain` first (natural key). Honest in dry-run: the id
-        is a negative placeholder for a record that would be created."""
+        is a negative placeholder for a record that would be created. `context` goes to the create call."""
         existing = self.target.call(model, "search", [domain], {"limit": 1, "context": {"active_test": False}})
         if source_id in self.hold.get(model, set()):
             # Held for review (hold.json of a converted export): always created unpublished, and a later import
@@ -1124,7 +1124,7 @@ class Importer:
             placeholder = -int(source_id)
             self._remember(model, source_id, placeholder)
             return placeholder
-        new_id = self.target.call(model, "create", [values])
+        new_id = self.target.call(model, "create", [values], {"context": context} if context else {})
         new_id = new_id[0] if isinstance(new_id, list) else new_id
         self._remember(model, source_id, new_id)
         return new_id
@@ -1244,7 +1244,10 @@ class Importer:
             domain = [("name", "=", row["name"]), ("public", "=", True)]
             if checksum:
                 domain.append(("checksum", "=", checksum))
-            self.create_or_match("ir.attachment", row["id"], domain, values)
+            # image_no_postprocess: Odoo would otherwise shrink every photo over 1920 px and re-encode it at
+            # quality 80. That changes the bytes (so the checksum above no longer matches and a second run
+            # created every such photo again, found 2026-10-05) and loses the original. Keep the original.
+            self.create_or_match("ir.attachment", row["id"], domain, values, context={"image_no_postprocess": True})
             done += 1
             if done % 100 == 0:
                 self._save_idmap()
