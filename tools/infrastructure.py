@@ -1023,6 +1023,11 @@ FAMILY_ACCOUNT_UNITS = {
         "environment_files": frozenset({"common.env"}),
         "no_state": True,
     },
+    "monthly.events.recheck.service": {
+        "user": "hamsd_event_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
     "radio.history.events.sync.service": {
         "user": "hamsd_event_sync",
         "environment_files": frozenset({"common.env"}),
@@ -5225,6 +5230,84 @@ Description=Ham Radio Historic Radio Societies Event Sync Weekly
 
 [Timer]
 OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Re-reads the page of each recurring event (Electronics Flea Market, Flea at MIT, ...)
+            # about a week before it happens, to catch a moved parking lot, gate or venue; hams_com
+            # daemons/event_sync/event_series_recheck.py. Odoo decides what is due (occurrences 5 to
+            # 9 days away, not checked in the last 6 days), so a daily run acts about once per event.
+            "path": "/opt/hams/systemd/monthly.events.recheck.service",
+            "external_fetch": "re-reads the pages of recurring events on third-party websites",
+            "content": """\
+[Unit]
+Description=Ham Radio Recurring Event Pre-Event Re-check (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+Type=oneshot
+User=hamsd_event_sync
+Group=hamsd_event_sync
+WorkingDirectory=/opt/hams/daemons/event_sync
+
+# Code audit, 2026-10-04: the five scripts in daemons/event_sync read SYSTEM_USER_AGENT for their request headers and reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+Environment="ODOO_USER=event_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/event_series_recheck.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=monthly.events.recheck
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/monthly.events.recheck.timer",
+            "external_fetch": "activates monthly.events.recheck.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Recurring Event Pre-Event Re-check Daily
+
+[Timer]
+OnCalendar=daily
 Persistent=true
 RandomizedDelaySec=15m
 
