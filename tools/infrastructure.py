@@ -5572,8 +5572,10 @@ WorkingDirectory=/opt/hams/daemons/hams_simulated_band
 # hand-placed at this path, mode 0600/0640, never in this unit text. Without
 # the variable the SFU starts but refuses every QAI (bot) client; with it set
 # and the file missing, the SFU fails fast at startup by design (bot_auth.rs).
-# Provisioning only links this unit, it never enables it, so a host without
-# the key file is unaffected until someone deliberately turns the band on.
+# Since 2026-10-04 a production-style provisioning run also enables this unit at boot
+# (boot_service_unit_names(): production must get the band back after a reboot; a test
+# environment and a --hold-odoo run still only link it). A host without the key file is
+# still safe: the SFU starts and refuses every bot, as described above.
 Environment="HAMS_BAND_BOT_KEYS_FILE=/etc/hams-band/band_bot_keys"
 
 ExecStart=/opt/hams/daemons/hams_simulated_band/target/release/hams_simulated_band
