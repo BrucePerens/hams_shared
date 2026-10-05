@@ -1013,6 +1013,11 @@ FAMILY_ACCOUNT_UNITS = {
         "user": "hamsd_satellite_sync",
         "environment_files": frozenset({"common.env"}),
     },
+    "event.cover.image.sync.service": {
+        "user": "hamsd_event_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
     "arrl.hamfests.sync.service": {
         "user": "hamsd_event_sync",
         "environment_files": frozenset({"common.env"}),
@@ -4961,6 +4966,80 @@ Description=Ham Radio ARRL Hamfests Sync Weekly
 
 [Timer]
 OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/event.cover.image.sync.service",
+            "external_fetch": "queries Wikidata and Wikimedia Commons for openly licensed event cover pictures",
+            "content": """\
+[Unit]
+Description=Ham Radio Event Cover Picture Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# The event_sync family account (hamsd_event_sync). The script writes no file: it asks Wikidata and Commons for a licensed picture and pushes it to Odoo, so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+Type=oneshot
+User=hamsd_event_sync
+Group=hamsd_event_sync
+WorkingDirectory=/opt/hams/daemons/event_sync
+
+# Code audit, 2026-10-05: event_cover_image_sync.py reads SYSTEM_USER_AGENT for its request headers and reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+Environment="ODOO_USER=event_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/event_cover_image_sync.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=event.cover.image.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/event.cover.image.sync.timer",
+            "external_fetch": "activates event.cover.image.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Event Cover Picture Sync Daily
+
+[Timer]
+OnCalendar=daily
 Persistent=true
 RandomizedDelaySec=15m
 
