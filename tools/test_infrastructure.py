@@ -5416,3 +5416,39 @@ class ShackConsoleUnitTests(unittest.TestCase):
         unit = self._unit()
         for line in ("DynamicUser=yes", "IPAddressDeny=any", "IPAddressAllow=localhost"):
             self.assertIn(line, unit)
+
+
+class AuthGatewayDirectoriesTests(unittest.TestCase):
+    """The auth.hams.com gateway (hams_com daemons/hams_auth_gateway) reads its pinned trust anchors from one
+    directory per anchor under /etc/hams/auth/anchors. Its config pins files in `arrl_lotw` and `hams_member`;
+    a directory missing here makes install_config.py (hams_com) fail at release time, so both are ratcheted."""
+
+    ANCHOR_DIRECTORIES = (
+        "/etc/hams/auth/anchors/arrl_lotw",
+        "/etc/hams/auth/anchors/hams_member",
+    )
+
+    def _directories(self):
+        return {d["path"]: d for d in infra.MANIFEST["directories"]}
+
+    def test_the_configuration_and_both_anchor_directories_exist(self):
+        directories = self._directories()
+        for path in ("/etc/hams/auth",) + self.ANCHOR_DIRECTORIES:
+            self.assertIn(path, directories)
+
+    def test_they_are_production_only_group_hams_auth_and_never_mounted_elsewhere(self):
+        directories = self._directories()
+        for path in ("/etc/hams/auth",) + self.ANCHOR_DIRECTORIES:
+            spec = directories[path]
+            self.assertEqual(spec["owner"], "root:hams-auth", path)
+            self.assertEqual(spec["provision_mode"], "750", path)
+            self.assertEqual(spec["environments"], ["prod"], path)
+            self.assertNotIn("runtime_mount", spec, path)
+
+    def test_the_account_and_unit_are_still_provisioned(self):
+        users = {u["user"]: u for u in infra.MANIFEST["system_accounts"]}
+        self.assertIn("hams-auth", users)
+        self.assertEqual(users["hams-auth"]["shell"], "/usr/sbin/nologin")
+        self.assertEqual(users["hams-auth"]["environments"], ["prod"])
+        paths = {f["path"] for f in infra.MANIFEST["static_files"]}
+        self.assertIn("/opt/hams/systemd/hams-auth-gateway.service", paths)

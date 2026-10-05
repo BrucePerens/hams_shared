@@ -2257,6 +2257,16 @@ MANIFEST = {
             "provision_mode": "750",
             "environments": ["prod"],
         },
+        {
+            # The pinned hams.com member-identity trust anchors (gateway.toml's hams_member
+            # [[anchor.certificate]] files: Root A, Root B, the Identity Root and the Identity
+            # Issuing CA, copied from hams_com daemons/relay_ca/public_certs/ at release time by
+            # hams_com daemons/hams_auth_gateway/tools/install_config.py).
+            "path": "/etc/hams/auth/anchors/hams_member",
+            "owner": "root:hams-auth",
+            "provision_mode": "750",
+            "environments": ["prod"],
+        },
 
         {
             "path": "/var/lib/odoo/backups",
