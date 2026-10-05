@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # Copyright © Bruce Perens K6BP. All Rights Reserved. This software is proprietary and confidential.
 
-"""Mirrors a specific, pinned upstream release of an optional hams_local_relay tool (pat,
-Direwolf) onto hams.com, via /api/relay_bridge/tool/publish (tool_publish_api.py).
+"""Mirrors a specific, pinned upstream release of an optional hams_local_relay tool (pat)
+onto hams.com, via /api/relay_bridge/tool/publish (tool_publish_api.py).
 
-Deliberately maintainer-run, not CI-scheduled: pat/Direwolf release cadence is slow (pat's
+Deliberately maintainer-run, not CI-scheduled: pat's release cadence is slow (pat's
 last tagged release as of this writing is v1.0.0), so a scheduled job re-checking on every
 push -- or even daily -- would be pure overhead for something that changes rarely. Run this by
 hand when a new upstream version is worth mirroring, after reviewing what changed.
@@ -24,10 +24,7 @@ Usage:
     python3 tools/mirror_relay_tool_releases.py --tool pat --tag v1.0.0 \\
         --odoo-url https://hams.com --publish-key "$(cat ~/.secrets/hams_relay_tool_publish_key)"
 
-    python3 tools/mirror_relay_tool_releases.py --tool direwolf --tag 1.8.1 \\
-        --odoo-url https://hams.com --publish-key "..."
-
-Refuses to publish anything it has not been told to trust. Neither la5nta/pat nor wb2osz/direwolf
+Refuses to publish anything it has not been told to trust. la5nta/pat
 publishes a checksum or signature asset (checked 2026-09-13), so there is nothing upstream to verify
 against; instead every (tool, tag, platform, asset filename) must have a sha256 pinned in
 relay_tool_release_pins.json, recorded by a maintainer after reviewing that release. A download
@@ -54,18 +51,17 @@ import urllib.request
 
 # One entry per (tool, platform) this project actually supports mirroring, per
 # relay_tool_release.py's own documented reasoning: pat has real upstream release assets for
-# every platform; Direwolf only ships one, Windows-only (Linux/macOS users are expected to use
-# apt/Homebrew, already covered by this project's own install_relay_runtime_deps.sh and
-# packaging -- not this mechanism). Each value is a regex matched against the real asset
+# every platform. The radio modem programs (Direwolf, ardopcf, Mercury) are deliberately NOT here:
+# stock builds listen on every network interface, and the relay runs only its own loopback-patched
+# builds (NIGHT_PLAN 75, 186), never a mirrored stock one. Each value is a regex matched against the real asset
 # filenames GitHub's own release API returns for the given tag -- confirmed directly against a
 # real `gh api repos/<owner>/<repo>/releases/latest` call for each project before writing
 # these, not guessed.
-GITHUB_REPO = {"pat": "la5nta/pat", "direwolf": "wb2osz/direwolf"}
+GITHUB_REPO = {"pat": "la5nta/pat"}
 ASSET_PATTERNS = {
     ("pat", "windows"): re.compile(r"^pat_.*_windows_i386\.zip$"),
     ("pat", "macos"): re.compile(r"^pat_.*_darwin_amd64\.pkg$"),
     ("pat", "linux"): re.compile(r"^pat_.*_linux_amd64\.tar\.gz$"),
-    ("direwolf", "windows"): re.compile(r"^direwolf-.*_x86_64\.zip$"),
 }
 
 
@@ -198,8 +194,7 @@ def main() -> int:
     parser.add_argument("--tool", required=True, choices=sorted(GITHUB_REPO))
     parser.add_argument("--tag", required=True,
                          help="The upstream project's own release tag exactly as it names it "
-                              "(pat's tags have a leading 'v', e.g. 'v1.0.0'; Direwolf's don't, "
-                              "e.g. '1.8.1') -- check the project's own GitHub Releases page.")
+                              "(pat's tags have a leading 'v', e.g. 'v1.0.0') -- check the project's own GitHub Releases page.")
     parser.add_argument("--odoo-url", required=True)
     parser.add_argument("--publish-key", required=True)
     parser.add_argument("--pins-file", default=DEFAULT_PINS_PATH,
