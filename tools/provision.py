@@ -207,7 +207,29 @@ def provision():
         help="Designate this host as a MANIFEST host class (for example ca_signer, the host that runs the CA signer "
         "daemons: hams1 only). Recorded in /opt/hams/etc/host_classes so later runs keep it. Repeatable",
     )
+    parser.add_argument(
+        "--fetch-models",
+        action="store_true",
+        help="Fetch ONLY the simulated-band bots' speech models (MANIFEST model_files) into "
+        "/opt/hams/models, each verified against its pinned size and SHA-256, and exit. Production "
+        "hosts only: refused with --test. Honours --plan",
+    )
     args, _ = parser.parse_known_args()
+
+    if args.fetch_models:
+        if args.test:
+            _logger.error("[!] --fetch-models is for production hosts; a test host never downloads models")
+            sys.exit(1)
+        if args.plan:
+            with infrastructure.planning():
+                infrastructure.provision_model_files(environment="prod")
+            return
+        failed = infrastructure.provision_model_files(environment="prod")
+        if failed:
+            _logger.error("[!] %d model file(s) were not installed: %s", len(failed), ", ".join(failed))
+            sys.exit(2)
+        _logger.info("[*] Every speech model file is present and verified")
+        return
 
     if os_id not in ("ubuntu", "debian"):
         _logger.error(

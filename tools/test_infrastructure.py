@@ -4818,6 +4818,130 @@ class TicketTriageTimerUnitTests(unittest.TestCase):
         self.assertNotIn("export HAMS_TRIAGE_ENABLE_PROPOSE_FIX", text)
 
 
+class ModelFilesTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:provision_model_files]
+
+    The simulated-band bots' Piper voice and faster-whisper model are fetched on a production
+    host only, checksum-verified. No test here touches the network: the transport is injected."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        infra.reset_hook_failures()
+
+    def _manifest(self, contents):
+        specs = []
+        for name, data in contents.items():
+            specs.append({
+                "path": os.path.join(self.tmp, name),
+                "url": f"https://example.invalid/{name}",
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "size": len(data),
+                "owner": "hams_com:hams_com",
+                "mode": "640",
+            })
+        return patch.dict(infra.MANIFEST, {"model_files": specs})
+
+    def _fetcher(self, served, calls):
+        def fetch(url, part_path, expected_size):
+            calls.append(url)
+            with open(part_path, "wb") as f:
+                f.write(served[url.rsplit("/", 1)[1]])
+        return fetch
+
+    def test_the_manifest_pins_every_file_and_has_a_directory_for_it(self):
+        specs = infra.MANIFEST["model_files"]
+        self.assertGreaterEqual(len(specs), 6)
+        directories = {d["path"] for d in infra.MANIFEST["directories"]}
+        seen = set()
+        for spec in specs:
+            self.assertRegex(spec["sha256"], r"^[0-9a-f]{64}$")
+            self.assertGreater(spec["size"], 0)
+            self.assertTrue(spec["url"].startswith("https://"))
+            self.assertTrue(spec["path"].startswith("/opt/hams/models/"))
+            self.assertNotIn(spec["path"], seen)
+            seen.add(spec["path"])
+            self.assertIn(os.path.dirname(spec["path"]), directories)
+
+    def test_the_bot_units_point_the_daemon_at_exactly_the_manifest_paths(self):
+        paths = {s["path"] for s in infra.MANIFEST["model_files"]}
+        for unit in ("hams.simulated.bots.service", "hams.simulated.observer.service"):
+            spec = next(s for s in infra.MANIFEST["static_files"] if s["path"].endswith("/" + unit))
+            self.assertIn('Environment="HAMS_PIPER_VOICE_PATH=/opt/hams/models/piper/en_US-lessac-low.onnx"', spec["content"])
+            self.assertIn('Environment="HAMS_WHISPER_MODEL_DIR=/opt/hams/models/faster-whisper-tiny.en"', spec["content"])
+        self.assertIn("/opt/hams/models/piper/en_US-lessac-low.onnx", paths)
+        for name in ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"):
+            self.assertIn("/opt/hams/models/faster-whisper-tiny.en/" + name, paths)
+
+    def test_a_test_environment_never_fetches(self):
+        calls = []
+        with self._manifest({"a.bin": b"abc"}):
+            self.assertEqual(infra.provision_model_files(environment="test", fetch=self._fetcher({"a.bin": b"abc"}, calls)), [])
+            with patch.dict(os.environ, {"HAMS_ISOLATED_NS": "1"}):
+                self.assertEqual(infra.provision_model_files(environment="prod", fetch=self._fetcher({"a.bin": b"abc"}, calls)), [])
+            self.assertEqual(infra.provision_model_files(environment="prod", dest_dir=self.tmp, fetch=self._fetcher({"a.bin": b"abc"}, calls)), [])
+        self.assertEqual(calls, [])
+
+    def test_the_default_transport_is_never_reached_by_a_test_environment(self):
+        with self._manifest({"a.bin": b"abc"}), patch.object(infra, "_fetch_model_to") as real:
+            infra.provision_model_files(environment="test")
+        real.assert_not_called()
+
+    def test_a_missing_file_is_fetched_verified_and_installed(self):
+        calls = []
+        data = {"a.bin": b"abc" * 100}
+        with self._manifest(data), patch.object(infra, "apply_permissions"):
+            failed = infra.provision_model_files(environment="prod", fetch=self._fetcher(data, calls))
+        self.assertEqual(failed, [])
+        self.assertEqual(len(calls), 1)
+        with open(os.path.join(self.tmp, "a.bin"), "rb") as f:
+            self.assertEqual(f.read(), data["a.bin"])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "a.bin.part")))
+
+    def test_a_file_that_already_verifies_is_not_fetched_again(self):
+        calls = []
+        data = {"a.bin": b"hello"}
+        with open(os.path.join(self.tmp, "a.bin"), "wb") as f:
+            f.write(data["a.bin"])
+        with self._manifest(data), patch.object(infra, "apply_permissions"):
+            self.assertEqual(infra.provision_model_files(environment="prod", fetch=self._fetcher(data, calls)), [])
+        self.assertEqual(calls, [])
+
+    def test_a_download_that_fails_the_checksum_is_not_installed_and_is_recorded(self):
+        calls = []
+        wrong = {"a.bin": b"WRONG"}
+        with self._manifest({"a.bin": b"right"}), patch.object(infra, "apply_permissions"):
+            failed = infra.provision_model_files(environment="prod", fetch=self._fetcher(wrong, calls))
+        self.assertEqual(failed, [os.path.join(self.tmp, "a.bin")])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "a.bin")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "a.bin.part")))
+        self.assertTrue(any(name.startswith("model_files:") for name, _ in infra.get_hook_failures()))
+
+    def test_a_bad_download_never_replaces_an_installed_file(self):
+        installed = os.path.join(self.tmp, "a.bin")
+        with open(installed, "wb") as f:
+            f.write(b"OLD")  # does not verify, so a refetch is attempted
+        calls = []
+        with self._manifest({"a.bin": b"right"}), patch.object(infra, "apply_permissions"):
+            failed = infra.provision_model_files(environment="prod", fetch=self._fetcher({"a.bin": b"bad!!"}, calls))
+        self.assertEqual(failed, [installed])
+        with open(installed, "rb") as f:
+            self.assertEqual(f.read(), b"OLD")
+
+    def test_a_transport_error_is_recorded_not_raised(self):
+        def broken(url, part_path, expected_size):
+            raise OSError("network down")
+        with self._manifest({"a.bin": b"x"}), patch.object(infra, "apply_permissions"):
+            failed = infra.provision_model_files(environment="prod", fetch=broken)
+        self.assertEqual(len(failed), 1)
+
+    def test_plan_mode_downloads_nothing(self):
+        calls = []
+        with self._manifest({"a.bin": b"x"}), patch("builtins.print"), infra.planning():
+            infra.provision_model_files(environment="prod", fetch=self._fetcher({"a.bin": b"x"}, calls))
+        self.assertEqual(calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
 
