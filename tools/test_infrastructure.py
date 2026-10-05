@@ -3257,25 +3257,6 @@ class SigningKeyMigrationHookTests(_TmpDirTestCase):
         self.assertEqual(os.listdir(self.new_dir), [])
         self.assertEqual(len(infra.get_hook_failures()), 1)
 
-    def test_relay_hook_moves_the_noise_key_to_its_own_account(self):
-        # The relay key's file name is the historical
-        # hams_noise_signing_ed25519.key (daemons/relay_signer/main.py's
-        # SIGNING_KEY_PATH), not hams_relay_signing_ed25519.key.
-        key_name = "hams_noise_signing_ed25519.key"
-        old_path = os.path.join(self.old_dir, key_name)
-        with open(old_path, "wb") as f:
-            f.write(b"r" * 32)
-        os.utime(old_path, (self.OLD_MTIME, self.OLD_MTIME))
-        getpwnam = infra.pwd.getpwnam
-        infra.hook_migrate_relay_signing_key({}, self.tmp, self.new_dir, None)
-        self.assertFalse(os.path.exists(old_path))
-        new_path = os.path.join(self.new_dir, key_name)
-        with open(new_path, "rb") as f:
-            self.assertEqual(f.read(), b"r" * 32)
-        self.assertEqual(int(os.stat(new_path).st_mtime), self.OLD_MTIME)
-        getpwnam.assert_called_with("hams_relay_signer")
-        self.assertEqual(infra.get_hook_failures(), [])
-
 
 class SignerDaemonManifestTests(unittest.TestCase):
     """The MANIFEST pieces hams_com's three signer daemons need to start at
@@ -3305,8 +3286,8 @@ class SignerDaemonManifestTests(unittest.TestCase):
     def test_private_dir_is_0700_and_public_dir_is_0755(self):
         dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
         hooks = {
-            "subcarrier_signer": infra.hook_migrate_subcarrier_signing_key,
-            "relay_signer": infra.hook_migrate_relay_signing_key,
+            "subcarrier_signer": [infra.hook_migrate_subcarrier_signing_key],
+            "relay_signer": None,
         }
         for name in self.SIGNERS:
             owner = f"hams_{name}:hams_{name}"
@@ -3314,7 +3295,10 @@ class SignerDaemonManifestTests(unittest.TestCase):
             public = dirs[f"/opt/hams/etc/{name}_public"]
             self.assertEqual((private["owner"], private["provision_mode"]), (owner, "700"))
             self.assertEqual((public["owner"], public["provision_mode"]), (owner, "755"))
-            self.assertEqual(private["post_provision_hooks"], [hooks[name]])
+            if hooks[name] is None:
+                self.assertNotIn("post_provision_hooks", private)
+            else:
+                self.assertEqual(private["post_provision_hooks"], hooks[name])
 
     def test_unit_can_start_and_odoo_can_reach_its_socket(self):
         for name, (unit_name, env_prefix) in self.SIGNERS.items():
