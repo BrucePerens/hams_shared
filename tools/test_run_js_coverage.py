@@ -16,10 +16,13 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from run_js_coverage import (  # noqa: E402
+    function_hits_for_script,
     line_hits_for_script,
     map_coverage_records,
     merge_file_reports,
+    merge_function_reports,
     parse_bundle_module_offsets,
+    parse_minified_bundle_files,
     resolve_addon_static_path,
 )
 
@@ -267,7 +270,7 @@ class MapCoverageRecordsTests(unittest.TestCase):
     def test_script_without_bundle_body_is_skipped(self):
         record = {"scripts": [{"url": "u", "functions": []}], "bundles": {}}
         out = map_coverage_records([record], [], "/")
-        self.assertEqual(out, {"files": {}, "unresolved": []})
+        self.assertEqual(out, {"files": {}, "functions": {}, "unresolved": []})
 
     def test_merge_prefers_executed_over_missing(self):
         a = {"f.js": {"executed_lines": [1], "missing_lines": [2, 3]}}
@@ -278,3 +281,69 @@ class MapCoverageRecordsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+def _utf16(text):
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+MIN_BUNDLE = (
+    "\n/* /web/static/src/a.js */\nfunction foo(){return 1}const x='\U0001F600';"
+    "\n/* /my_mod/static/src/b.js */\nclass B{setup(){}run(){}}(()=>1)();\n"
+)
+
+
+class MinifiedBundleTests(unittest.TestCase):
+    def test_files_are_found_from_the_per_file_headers_with_utf16_offsets(self):
+        files = parse_minified_bundle_files(MIN_BUNDLE)
+        self.assertEqual([f[2] for f in files], ["/web/static/src/a.js", "/my_mod/static/src/b.js"])
+        a_start, a_end, _ = files[0]
+        b_start, b_end, _ = files[1]
+        self.assertEqual(a_start, _utf16("\n/* /web/static/src/a.js */\n"))
+        # The first file's range stops where the second header begins; the emoji counts as 2 units.
+        self.assertEqual(a_end, _utf16(MIN_BUNDLE[: MIN_BUNDLE.index("\n/* /my_mod")]))
+        self.assertEqual(b_end, _utf16(MIN_BUNDLE))
+        self.assertEqual(b_start, a_end + _utf16("\n/* /my_mod/static/src/b.js */\n"))
+
+    def test_a_bundle_without_headers_has_no_files(self):
+        self.assertEqual(parse_minified_bundle_files("var a=1;"), [])
+
+    def _offset(self, needle):
+        return _utf16(MIN_BUNDLE[: MIN_BUNDLE.index(needle)])
+
+    def test_functions_are_attributed_to_their_file_and_counted_executed_or_not(self):
+        functions = [
+            {"functionName": "", "ranges": [{"startOffset": 0, "endOffset": _utf16(MIN_BUNDLE), "count": 1}]},
+            {"functionName": "foo", "ranges": [{"startOffset": self._offset("function foo"), "endOffset": self._offset("function foo") + 22, "count": 3}]},
+            {"functionName": "setup", "ranges": [{"startOffset": self._offset("setup()"), "endOffset": self._offset("setup()") + 9, "count": 0}]},
+            {"functionName": "run", "ranges": [{"startOffset": self._offset("run()"), "endOffset": self._offset("run()") + 6, "count": 1}]},
+            {"functionName": "", "ranges": [{"startOffset": self._offset("(()=>1)"), "endOffset": self._offset("(()=>1)") + 5, "count": 1}]},
+        ]
+        out = function_hits_for_script(MIN_BUNDLE, functions)
+        self.assertEqual(out["/web/static/src/a.js"]["functions"], {"foo": {"executed": 1, "total": 1}})
+        self.assertEqual(
+            out["/my_mod/static/src/b.js"]["functions"],
+            {"setup": {"executed": 0, "total": 1}, "run": {"executed": 1, "total": 1}},
+        )
+        self.assertEqual(out["/my_mod/static/src/b.js"]["anonymous"], {"executed": 1, "total": 1})
+
+    def test_merge_adds_counts_across_runs(self):
+        one = {"f.js": {"functions": {"a": {"executed": 0, "total": 1}}, "anonymous": {"executed": 0, "total": 2}}}
+        two = {"f.js": {"functions": {"a": {"executed": 1, "total": 1}}, "anonymous": {"executed": 1, "total": 2}}}
+        merged = merge_function_reports([one, two])
+        self.assertEqual(merged["f.js"]["functions"]["a"], {"executed": 1, "total": 2})
+        self.assertEqual(merged["f.js"]["anonymous"], {"executed": 1, "total": 4})
+
+    def test_map_coverage_records_maps_a_minified_record_to_repo_files(self):
+        with tempfile.TemporaryDirectory() as addons:
+            os.makedirs(os.path.join(addons, "my_mod", "static", "src"))
+            open(os.path.join(addons, "my_mod", "static", "src", "b.js"), "w").close()
+            record = {
+                "scripts": [{"url": "http://h/x.min.js", "functions": [
+                    {"functionName": "run", "ranges": [{"startOffset": self._offset("run()"), "endOffset": self._offset("run()") + 6, "count": 2}]},
+                ]}],
+                "bundles": {"http://h/x.min.js": MIN_BUNDLE},
+            }
+            out = map_coverage_records([record], [addons], addons)
+        self.assertEqual(out["functions"]["my_mod/static/src/b.js"]["functions"]["run"], {"executed": 1, "total": 1})
+        self.assertEqual(out["files"], {})
+        self.assertEqual(out["unresolved"], [])
