@@ -4955,6 +4955,78 @@ class ModelFilesTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+class EventAiEnrichmentTimerUnitTests(unittest.TestCase):
+    """NIGHT_PLAN 203 (Bruce, 2026-10-04): the AI correction of scraped hamfest listings runs on a timer next to
+    the automatic club crawl. Linked but never enabled until the operator opts in, never run in a test
+    environment, with a kill switch, a state directory for its ledger, and the credential.touch.timer
+    exception (it reaches the CLI through sudo)."""
+
+    UNITS = ("event.ai.enrichment.service", "event.ai.enrichment.timer")
+
+    def _spec(self, name):
+        for spec in infra.MANIFEST["static_files"]:
+            if os.path.basename(spec["path"]) == name:
+                return spec
+        self.fail(f"{name} missing from the MANIFEST")
+
+    def test_both_units_are_external_fetch_opt_in_and_prod_only(self):
+        for name in self.UNITS:
+            spec = self._spec(name)
+            self.assertTrue(spec.get("external_fetch"), name)
+            self.assertTrue(spec.get("opt_in"), name)
+            self.assertEqual(spec["environments"], ["prod"], name)
+        self.assertLessEqual(set(self.UNITS), infra.opt_in_unit_names())
+        self.assertLessEqual(set(self.UNITS), infra.external_fetch_unit_names())
+
+    def test_provisioning_links_but_enables_and_starts_only_when_the_operator_names_the_unit(self):
+        timer = "event.ai.enrichment.timer"
+        linked = [timer, "stray.odoo.shell.detector.timer"]
+        self.assertNotIn(timer, infra._activation_units_to_enable(linked, False))
+        self.assertNotIn(timer, infra._activation_units_to_enable(linked, True))
+        self.assertIn(timer, infra._activation_units_to_enable(linked, False, opt_in_units=(timer,)))
+        self.assertNotIn(timer, infra._activation_units_to_enable(linked, True, opt_in_units=(timer,)))
+        service = "event.ai.enrichment.service"
+        self.assertNotIn(service, infra._smoketest_candidate_services(True, False))
+        self.assertNotIn(service, infra._smoketest_candidate_services(False, False))
+
+    def test_the_timer_never_replays_missed_runs_and_spreads_its_start(self):
+        text = self._spec("event.ai.enrichment.timer")["content"]
+        self.assertIn("Persistent=false", text)
+        self.assertIn("RandomizedDelaySec=", text)
+        self.assertIn("OnCalendar=*-*-* 00/3:40:00", text)
+        self.assertNotIn("OnCalendar=hourly", text)
+
+    def test_the_service_has_the_kill_switch_state_directory_caps_and_a_smoketest(self):
+        text = self._spec("event.ai.enrichment.service")["content"]
+        self.assertIn("ConditionPathExists=!/opt/hams/etc/event_ai_enrichment.disabled", text)
+        self.assertIn("StateDirectory=hams-event-ai-enrichment", text)
+        self.assertIn("EVENT_AI_ENRICHMENT_STATE_DIR=/var/lib/hams-event-ai-enrichment", text)
+        self.assertIn("EVENT_AI_ENRICHMENT_MAX_EVENTS_PER_DAY=", text)
+        self.assertIn("ExecStartPre=/usr/bin/python3 /opt/hams/daemons/event_ai_enrichment/main.py --start-test", text)
+        self.assertIn("ExecStart=/usr/bin/python3 /opt/hams/daemons/event_ai_enrichment/main.py --scheduled", text)
+        self.assertIn("Type=oneshot", text)
+        self.assertIn("ODOO_KEY_FILE=/opt/hams/etc/keys/event_ai_correction_service_internal.key", text)
+        timeout = int(re.search(r"^TimeoutStartSec=(\d+)h$", text, re.M).group(1))
+        self.assertGreaterEqual(timeout, 1)
+
+    def test_the_service_has_the_agent_sudo_shape_and_no_credential_beyond_common_env(self):
+        text = self._spec("event.ai.enrichment.service")["content"]
+        self.assertNotRegex(text, r"(?m)^NoNewPrivileges=")  # the sudo hop to hams_event_agent needs a setuid binary
+        self.assertIn("CapabilityBoundingSet=CAP_SETUID CAP_SETGID", text)
+        self.assertIn("ReadWritePaths=/home/hams_event_agent\n", text)
+        env_files = re.findall(r"^EnvironmentFile=-?(\S+)$", text, re.M)
+        self.assertEqual(env_files, ["/opt/hams/etc/common.env"])
+        self.assertIn("event.ai.enrichment.service", infra.SHARED_ODOO_ACCOUNT_UNITS)
+
+    def test_the_odoo_grant_to_the_agent_wrapper_it_uses_exists(self):
+        grants = [
+            spec for spec in infra.MANIFEST["static_files"]
+            if spec["path"] == "/etc/sudoers.d/odoo-event-agent-claude-sandbox"
+        ]
+        self.assertEqual(len(grants), 1)
+        self.assertIn("odoo ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-agent-claude.sh", grants[0]["content"])
+
+
 if __name__ == "__main__":
     unittest.main()
 
