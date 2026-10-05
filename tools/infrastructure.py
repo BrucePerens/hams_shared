@@ -1149,6 +1149,15 @@ FAMILY_ACCOUNT_UNITS = {
         "environment_files": frozenset({"common.env"}),
         "agent_sudo": "hams_ai_agent",
     },
+    # The Web Bot Auth key directory publisher (daemons/web_bot_auth.py `refresh`): signs the public key directory with its
+    # own key and writes the bundle hams.com serves. It holds no Odoo key and loads no environment file; odoo is in its group
+    # only to READ the bundle (`odoo_reads`).
+    "web.bot.auth.directory.service": {
+        "user": "hamsd_web_bot_auth",
+        "environment_files": frozenset(),
+        "no_key": True,
+        "odoo_reads": True,
+    },
 }
 
 
@@ -1200,6 +1209,21 @@ MANIFEST = {
             "user": "hamsd_ncvec_sync",
             "group": "hamsd_ncvec_sync",
             "home": "/opt/hams/spool/ncvec",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/web_bot_auth.py: the publisher of the Web Bot Auth key directory that hams.com serves at
+            # /.well-known/http-message-signatures-directory (night_shift_todo register-the-sync-daemons-as-a-cloudflare-signed-agent).
+            # It alone holds the directory-signing private key, so a compromised Odoo worker can stop serving the
+            # directory and cannot sign one. odoo joins this group to read the bundle it writes (never to write it).
+            # Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_web_bot_auth",
+            "group": "hamsd_web_bot_auth",
+            "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
             "member_of": ["hams_traverse"],
@@ -2045,6 +2069,17 @@ MANIFEST = {
             # recursive_owner moves files an earlier run left here as odoo to the account.
             "path": "/opt/hams/spool/ncvec",
             "owner": "hamsd_ncvec_sync:hamsd_ncvec_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # The Web Bot Auth publisher's private key (publisher.key, 0600: odoo, in the group, cannot read it), the public JWKs
+            # (jwks/) and the signed bundle hams.com serves (directory.json, 0644 world-readable content, in a 0750 directory only the
+            # group may enter).
+            "path": "/opt/hams/spool/web_bot_auth",
+            "owner": "hamsd_web_bot_auth:hamsd_web_bot_auth",
             "provision_mode": "750",
             "recursive_owner": True,
             "runtime_mount": "rw",
@@ -5846,6 +5881,74 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=ncvec.sync
 
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # The Web Bot Auth key directory publisher: creates its signing key once, then signs and writes the directory bundle
+            # hams.com serves. Local only: reads and writes its own directory, no network (RestrictAddressFamilies=AF_UNIX).
+            "path": "/opt/hams/systemd/web.bot.auth.directory.service",
+            "content": """\
+[Unit]
+Description=Sign and Publish the Web Bot Auth Key Directory
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/web_bot_auth
+Type=oneshot
+User=hamsd_web_bot_auth
+Group=hamsd_web_bot_auth
+WorkingDirectory=/opt/hams/daemons
+
+# No secret is loaded and no network is reachable: the private key is a file this account creates (mode 0600) in its own directory.
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth/publisher.key --jwk-file /opt/hams/spool/web_bot_auth/jwks/publisher.jwk
+ExecStart=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py refresh --key-file /opt/hams/spool/web_bot_auth/publisher.key --jwk-dir /opt/hams/spool/web_bot_auth/jwks --out /opt/hams/spool/web_bot_auth/directory.json
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=web.bot.auth.directory
+
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/web.bot.auth.directory.timer",
+            "content": """\
+[Unit]
+Description=Refresh the Web Bot Auth Key Directory Daily
+
+[Timer]
+# The directory's signature lasts seven days; a daily refresh leaves six days of slack for a failed run.
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
