@@ -4282,6 +4282,7 @@ class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
             side_effect=lambda p: False if p.endswith("/common.env") else real_exists(p),
         )
         self.safe_patch_object(infra, "provision_system_accounts", side_effect=lambda *a, **k: written.append("accounts"))
+        self.safe_patch_object(infra, "_derived_env_values", return_value=None)
         with self.assertRaisesRegex(RuntimeError, "common.env"):
             infra.provision_daemon_families(["hamsd_ncvec_sync"], lambda cmd, **kw: written.append(cmd), {})
         self.assertEqual(written, [])
@@ -4302,6 +4303,67 @@ class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
         found = infra.daemon_family_unit_paths(accounts)
         for unit in infra.FAMILY_ACCOUNT_UNITS:
             self.assertIn(f"/opt/hams/systemd/{unit}", found)
+
+
+class DerivedEnvFileTests(_TmpDirTestCase):
+    """Tests [@ANCHOR: infrastructure:derived_env_files]: an env group that is a split of others is cut from them."""
+
+    def _etc(self, files):
+        for name, text in files.items():
+            with open(os.path.join(self.tmp, name), "w", encoding="utf-8") as f:
+                f.write(text)
+        return os.path.join(self.tmp, "common.env")
+
+    def test_common_env_is_cut_from_core_odoo_and_db_env(self):
+        target = self._etc({
+            "core.env": "DOMAIN=example.test\nSYSTEM_USER_AGENT=Agent/1 (+x; y)\nHAMS_CRYPTO_KEY=secretsecret\n",
+            "odoo.env": "ODOO_ADMIN_PASSWORD=adminsecret\nODOO_URL=http://odoo:8069\n",
+            "db.env": "DB_NAME=hams_prod\nPOSTGRES_PASSWORD=pgsecret\n",
+        })
+        values = infra._derived_env_values(target)
+        self.assertEqual(values, {
+            "DOMAIN": "example.test", "SYSTEM_USER_AGENT": "Agent/1 (+x; y)",
+            "ODOO_URL": "http://odoo:8069", "DB_NAME": "hams_prod",
+        })
+
+    def test_a_key_with_no_source_means_the_file_cannot_be_derived(self):
+        target = self._etc({"core.env": "DOMAIN=example.test\n"})
+        self.assertIsNone(infra._derived_env_values(target))
+
+    def test_a_file_that_is_not_an_env_group_is_never_derived(self):
+        self._etc({"core.env": "DOMAIN=example.test\n"})
+        self.assertIsNone(infra._derived_env_values(os.path.join(self.tmp, "aws.env")))
+
+    def test_the_derived_file_is_private_and_holds_exactly_the_group_keys(self):
+        target = self._etc({"db.env": "DB_NAME=n\nPOSTGRES_PASSWORD=super\nDB_PASS=app\nDB_HOST=h\nDB_PORT=5\nDB_USER=u\n"})
+        target = os.path.join(self.tmp, "db_app.env")
+        values = infra._derived_env_values(target)
+        self.safe_patch_object(infra, "apply_permissions")
+        infra._write_derived_env_file(target, values)
+        with open(target, encoding="utf-8") as f:
+            text = f.read()
+        self.assertEqual(stat_mode(target), 0o400)
+        self.assertNotIn("POSTGRES_PASSWORD", text)
+        self.assertNotIn("super", text)
+        self.assertEqual(sorted(line.split("=")[0] for line in text.splitlines()), sorted(infra.MANIFEST["env_groups"]["db_app.env"]))
+
+    def test_the_application_role_file_never_carries_the_superuser_password(self):
+        groups = infra.MANIFEST["env_groups"]
+        self.assertNotIn("POSTGRES_PASSWORD", groups["db_app.env"])
+        for key in groups["db_app.env"]:
+            self.assertIn(key, groups["db.env"], f"{key} must also stay in db.env: no existing unit changes")
+
+    def test_provisioning_plans_the_derived_file_instead_of_refusing(self):
+        real_exists = os.path.exists
+        self.safe_patch_object(infra.os.path, "exists", side_effect=lambda p: False if p.endswith("/common.env") else real_exists(p))
+        self.safe_patch_object(infra, "_derived_env_values", return_value={"DOMAIN": "x", "ODOO_URL": "y", "DB_NAME": "z", "SYSTEM_USER_AGENT": "a"})
+        with infra.planning() as plan:
+            infra.provision_daemon_families(["hamsd_ncvec_sync"], lambda cmd, **kw: None, {})
+        writes = [d for kind, d in plan.actions if kind == "write" and "derived" in d]
+        self.assertEqual(len(writes), 1)
+        self.assertIn("/opt/hams/etc/common.env", writes[0])
+        self.assertNotIn("example", writes[0])
+        self.assertEqual([d for kind, d in plan.actions if kind == "missing"], [])
 
 
 class TraversalGrantTests(_SafePatchTestCase):

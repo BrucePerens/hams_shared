@@ -2257,6 +2257,10 @@ MANIFEST = {
             "DB_PORT",
             "DB_USER",
         ],
+        # The application database role only (not the PostgreSQL superuser password db.env also holds), for the
+        # one daemon that connects to the database itself (dx.firehose). A host that has only db.env gets this file cut
+        # from it by provision.py --daemon-family; a full run writes it from the same values.
+        "db_app.env": ["DB_NAME", "DB_PASS", "DB_HOST", "DB_PORT", "DB_USER"],
         "pdns.env": [
             "PDNS_API_KEY",
             "PDNS_API_URL",
@@ -8778,14 +8782,49 @@ def provision_host_class(host_class, run_cmd_func, env_vars=None, environment="p
     _logger.info("[*] Host class %s provisioned. Nothing was enabled or started.", host_class)
 
 
+# [@ANCHOR: infrastructure:derived_env_files]
+def _derived_env_values(target):
+    """The KEY=value pairs for the MANIFEST env_groups file at `target`, taken from the environment files that
+    already sit next to it, or None when the file is not a MANIFEST env group or any of its keys has no source.
+    A split such as common.env (the non-secret values) or db_app.env (the application database role without the
+    superuser password) is cut from the files an earlier provisioning run wrote, so no secret is re-entered."""
+    name = os.path.basename(target)
+    keys = MANIFEST["env_groups"].get(name)
+    if not keys:
+        return None
+    found = {}
+    for sibling in sorted(glob.glob(os.path.join(os.path.dirname(target), "*.env"))):
+        if os.path.basename(sibling) == name:
+            continue
+        try:
+            with open(sibling, "r", encoding="utf-8") as f:  # audit-ignore-path: provisioning reads its own env files
+                for line in f.read().splitlines():
+                    key, sep, value = line.partition("=")
+                    if sep and key in keys and key not in found:
+                        found[key] = value
+        except OSError:
+            continue
+    return found if set(found) == set(keys) else None
+
+
+def _write_derived_env_file(target, values):
+    """Writes `target` (root:root, 0400, no secret in the plan or the log) from `values`."""
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+    os.fchmod(fd, 0o400)
+    with open(fd, "w", encoding="utf-8") as f:
+        f.write("".join(f"{key}={values[key]}\n" for key in MANIFEST["env_groups"][os.path.basename(target)]))
+    apply_permissions(target, "root:root", 0o400)
+
+
 # [@ANCHOR: infrastructure:provision_daemon_families]
 def provision_daemon_families(accounts, run_cmd_func, env_vars=None, environment="prod"):
     """Provisions ONLY the named daemon families (hamsd_<family> accounts): the account and its group
     (odoo joins it), the directories it owns, the unit files and sudoers grant that run as it, and the
     unit links, then `systemctl daemon-reload`. It enables, starts and restarts nothing and never
     rewrites a unit that is not the family's. A unit file whose EnvironmentFile= (not the `-` optional
-    form) is missing is refused before anything is written, because the unit would not start. Honours
-    plan mode. `provision.py --daemon-family hamsd_<family>` runs this."""
+    form) is missing is refused before anything is written, because the unit would not start, unless the
+    file is a MANIFEST env group that can be cut from the environment files already on the host
+    (common.env, db_app.env): then it is written, root:root 0400. Honours plan mode. `provision.py --daemon-family hamsd_<family>` runs this."""
     accounts = list(accounts)
     known = {acc["user"] for acc in MANIFEST["system_accounts"]}
     for account in accounts:
@@ -8794,12 +8833,18 @@ def provision_daemon_families(accounts, run_cmd_func, env_vars=None, environment
     env_vars = dict(os.environ) if env_vars is None else env_vars
     wanted_paths = daemon_family_unit_paths(accounts)
     missing = []
+    derive = {}
     for spec in MANIFEST["static_files"]:
         if spec["path"] in wanted_paths and spec["path"].endswith(".service"):
             for line in (spec.get("content") or "").splitlines():
                 if line.startswith("EnvironmentFile=") and not line.startswith("EnvironmentFile=-"):
                     target = line.split("=", 1)[1].strip()
-                    if not os.path.exists(target):
+                    if os.path.exists(target):
+                        continue
+                    values = _derived_env_values(target)
+                    if values is not None:
+                        derive[target] = values
+                    else:
                         missing.append(f"{target} (needed by {os.path.basename(spec['path'])})")
     if missing and not _planning():
         raise RuntimeError(
@@ -8807,6 +8852,10 @@ def provision_daemon_families(accounts, run_cmd_func, env_vars=None, environment
         )
     for item in sorted(set(missing)):
         _plan("missing", item)
+    for target, values in sorted(derive.items()):
+        if _plan("write", f"{target} (derived from the existing environment files; keys: {' '.join(sorted(values))})"):
+            continue
+        _write_derived_env_file(target, values)
     with only_daemon_families(accounts):
         provision_system_accounts(run_cmd_func, environment)
         apply_production_directories(run_cmd_func, environment)
