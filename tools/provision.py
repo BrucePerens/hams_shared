@@ -98,6 +98,29 @@ def _provision_only_host_class(host_class, plan, env_vars):
     infrastructure.provision_host_class(host_class, run_only, env_vars)
 
 
+def _provision_only_daemon_families(accounts, plan, env_vars):
+    """`--daemon-family`: the entries of the named daemon families and nothing else (see
+    infrastructure.provision_daemon_families)."""
+
+    def run_only(cmd, **kw):
+        printable = " ".join(infrastructure.redact_command(cmd))
+        if plan:
+            print(f"PLAN run: {printable}", flush=True)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        _logger.info(f"[*] Running: {printable}")
+        return subprocess.run(cmd, check=True, **kw)
+
+    try:
+        if plan:
+            with infrastructure.planning():
+                infrastructure.provision_daemon_families(accounts, run_only, env_vars)
+        else:
+            infrastructure.provision_daemon_families(accounts, run_only, env_vars)
+    except (ValueError, RuntimeError) as e:
+        _logger.error(f"[!] {e}")
+        sys.exit(1)
+
+
 def provision():
     os.chdir(repo_root)
 
@@ -168,6 +191,15 @@ def provision():
         "Records the class in /opt/hams/etc/host_classes. Honours --plan",
     )
     parser.add_argument(
+        "--daemon-family",
+        action="append",
+        default=[],
+        metavar="ACCOUNT",
+        help="Provision ONLY this daemon family (a hamsd_<family> account: the account, the directories "
+        "it owns, its unit files and sudoers grant) instead of the whole stack. Nothing is enabled, "
+        "started or restarted. Repeatable. Honours --plan. docs/proposals/DAEMON_OS_ISOLATION_PLAN.md",
+    )
+    parser.add_argument(
         "--host-class",
         action="append",
         default=[],
@@ -199,6 +231,10 @@ def provision():
 
     if args.only_host_class:
         _provision_only_host_class(args.only_host_class, args.plan, env_vars)
+        return
+
+    if args.daemon_family:
+        _provision_only_daemon_families(args.daemon_family, args.plan, env_vars)
         return
 
     infrastructure.load_and_prompt_env(env_vars, args.test)

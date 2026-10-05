@@ -4187,6 +4187,78 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     self.assertEqual(int(entry["provision_mode"], 8) & 0o027, 0)
 
 
+class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
+    """Tests [@ANCHOR: infrastructure:daemon_family_selection] and
+    [@ANCHOR: infrastructure:provision_daemon_families]: `provision.py --daemon-family` touches one
+    family's entries and nothing else."""
+
+    def _plan(self, accounts, env_exists=True):
+        commands = []
+        real_exists = os.path.exists
+        self.safe_patch_object(
+            infra.os.path, "exists",
+            side_effect=lambda p: True if p.endswith("/common.env") and env_exists else real_exists(p),
+        )
+        # Nothing exists on this machine for the planner to find, so every entry is "new".
+        with infra.planning() as plan:
+            infra.provision_daemon_families(
+                accounts, lambda cmd, **kw: commands.append(list(cmd)), {"DOMAIN": "example.test"}
+            )
+        return plan.actions, commands
+
+    def test_only_the_named_familys_entries_are_selected(self):
+        actions, commands = self._plan(["hamsd_ncvec_sync"])
+        details = " ".join(detail for _kind, detail in actions) + " " + " ".join(" ".join(c) for c in commands)
+        self.assertIn("hamsd_ncvec_sync", details)
+        self.assertIn("/opt/hams/systemd/ncvec.sync.service", details)
+        self.assertIn("/opt/hams/systemd/ncvec.sync.timer", details)
+        self.assertIn("/opt/hams/etc/keys/ncvec_sync", details)
+        for other in ("club_crawl", "club-crawl", "pota.sync", "hams_subcarrier_signer", "pdns", "odoo.service"):
+            self.assertNotIn(other, details, f"{other} is not part of the ncvec_sync family")
+
+    def test_a_sudoers_grant_and_the_shared_key_root_come_with_the_family_that_needs_them(self):
+        actions, commands = self._plan(["hamsd_club_crawl"])
+        details = " ".join(detail for _kind, detail in actions)
+        self.assertIn("/etc/sudoers.d/club-crawl-claude-sandbox", details)
+        self.assertIn("/opt/hams/etc/keys (odoo:hams_com, 710)", details)
+
+    def test_nothing_is_enabled_started_or_restarted(self):
+        actions, commands = self._plan(["hamsd_ncvec_sync"])
+        for command in commands:
+            self.assertNotIn(command[:2], (["systemctl", "enable"], ["systemctl", "start"], ["systemctl", "restart"]))
+        self.assertEqual([c for c in commands if c[0] == "systemctl"], [])
+        self.assertEqual([d for kind, d in actions if kind == "run"], ["systemctl daemon-reload"])
+
+    def test_a_missing_required_environment_file_is_refused_before_anything_is_written(self):
+        written = []
+        real_exists = os.path.exists
+        self.safe_patch_object(
+            infra.os.path, "exists",
+            side_effect=lambda p: False if p.endswith("/common.env") else real_exists(p),
+        )
+        self.safe_patch_object(infra, "provision_system_accounts", side_effect=lambda *a, **k: written.append("accounts"))
+        with self.assertRaisesRegex(RuntimeError, "common.env"):
+            infra.provision_daemon_families(["hamsd_ncvec_sync"], lambda cmd, **kw: written.append(cmd), {})
+        self.assertEqual(written, [])
+
+    def test_an_account_that_is_not_a_daemon_family_is_refused(self):
+        for bad in ("odoo", "hams_com", "hamsd_no_such_family"):
+            with self.subTest(account=bad):
+                with self.assertRaises(ValueError):
+                    infra.provision_daemon_families([bad], lambda cmd, **kw: None, {})
+
+    def test_the_selection_is_off_again_after_the_block(self):
+        self._plan(["hamsd_ncvec_sync"])
+        self.assertIsNone(infra._DAEMON_FAMILY_ACCOUNTS)
+        self.assertTrue(infra._spec_selected({"path": "/x", "environments": ["prod"]}))
+
+    def test_every_unit_of_every_family_account_is_found_by_the_selection(self):
+        accounts = [a["user"] for a in infra.MANIFEST["system_accounts"] if a["user"].startswith("hamsd_")]
+        found = infra.daemon_family_unit_paths(accounts)
+        for unit in infra.FAMILY_ACCOUNT_UNITS:
+            self.assertIn(f"/opt/hams/systemd/{unit}", found)
+
+
 class SystemAccountMemberOfTests(_SafePatchTestCase):
     def _provision(self, accounts):
         calls = []

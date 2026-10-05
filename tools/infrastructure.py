@@ -1239,6 +1239,7 @@ MANIFEST = {
             "path": "/opt/hams/etc/keys",
             "owner": "odoo:hams_com",
             "provision_mode": "710",
+            "daemon_family_shared": True,
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
@@ -7656,9 +7657,83 @@ def _in_host_class(spec, classes=None):
     return wanted in (host_classes() if classes is None else classes)
 
 
+# [@ANCHOR: infrastructure:daemon_family_selection]
+# `provision.py --daemon-family hamsd_<family>`: provision one daemon family's account, key and state
+# directories, unit files and sudoers grant, and nothing else (hams1 is installed from the MANIFEST by
+# hand, unit by unit, because a full run starts every daemon and differs from the host in many other
+# ways). While _DAEMON_FAMILY_ACCOUNTS is set, _spec_selected() answers by what the entry says about
+# those accounts, so there is no second list of "the family's entries" to drift out of step:
+#   * the account entry whose user is one of them;
+#   * a directory owned by one of them (user or group part), or marked "daemon_family_shared": True
+#     (the directories every family needs in a known state, such as the key root);
+#   * a unit file whose [Service] says User=<account>, the .timer / .path of the same name, and a
+#     sudoers.d file whose lines start with the account.
+_DAEMON_FAMILY_ACCOUNTS = None
+
+
+@contextlib.contextmanager
+def only_daemon_families(accounts):
+    """Restricts the provisioning helpers to `accounts` (hamsd_<family> names) inside the block."""
+    global _DAEMON_FAMILY_ACCOUNTS
+    previous = _DAEMON_FAMILY_ACCOUNTS
+    _DAEMON_FAMILY_ACCOUNTS = frozenset(accounts)
+    try:
+        yield
+    finally:
+        _DAEMON_FAMILY_ACCOUNTS = previous
+
+
+def _unit_user(spec):
+    """The User= of a MANIFEST unit file entry, or None."""
+    for line in (spec.get("content") or "").splitlines():
+        if line.startswith("User="):
+            return line.split("=", 1)[1].strip()
+    return None
+
+
+def daemon_family_unit_paths(accounts, manifest=None):
+    """The /opt/hams/systemd paths of every unit file (service, and the timer or path of the same
+    name) for the daemon accounts `accounts`."""
+    manifest = MANIFEST if manifest is None else manifest
+    accounts = frozenset(accounts)
+    stems = set()
+    for spec in manifest["static_files"]:
+        if spec["path"].endswith(".service") and _unit_user(spec) in accounts:
+            stems.add(os.path.splitext(spec["path"])[0])
+    # A path unit named for a service that starts a different one (ticket.triage.path -> the event
+    # service) is not matched by name; no family unit uses that shape yet.
+    return sorted(
+        spec["path"]
+        for spec in manifest["static_files"]
+        if os.path.splitext(spec["path"])[0] in stems
+        and spec["path"].endswith((".service", ".timer", ".path"))
+    )
+
+
+def _spec_in_daemon_family(spec):
+    accounts = _DAEMON_FAMILY_ACCOUNTS
+    if "user" in spec and "group" in spec and "provision_mode" not in spec:
+        return spec["user"] in accounts
+    if "provision_mode" in spec:
+        if spec.get("daemon_family_shared"):
+            return True
+        return bool(set((spec.get("owner") or ":").split(":")) & accounts)
+    path = spec.get("path", "")
+    if path in daemon_family_unit_paths(accounts):
+        return True
+    if path.startswith("/etc/sudoers.d/"):
+        return any(
+            line.split(" ", 1)[0] in accounts for line in (spec.get("content") or "").splitlines()
+        )
+    return False
+
+
 def _spec_selected(spec, only_host_class=None):
-    """With `only_host_class` (provision_host_class), exactly that class's entries; otherwise
-    every entry that is for all hosts or for a class this host has."""
+    """With `only_host_class` (provision_host_class), exactly that class's entries; with
+    only_daemon_families(), exactly those families' entries; otherwise every entry that is for all
+    hosts or for a class this host has."""
+    if _DAEMON_FAMILY_ACCOUNTS is not None:
+        return _spec_in_daemon_family(spec)
     if only_host_class:
         return spec.get("host_class") == only_host_class
     return _in_host_class(spec)
@@ -7719,6 +7794,48 @@ def provision_host_class(host_class, run_cmd_func, env_vars=None, environment="p
     if not _plan("run", "systemctl daemon-reload"):
         run_cmd_func(["systemctl", "daemon-reload"])
     _logger.info("[*] Host class %s provisioned. Nothing was enabled or started.", host_class)
+
+
+# [@ANCHOR: infrastructure:provision_daemon_families]
+def provision_daemon_families(accounts, run_cmd_func, env_vars=None, environment="prod"):
+    """Provisions ONLY the named daemon families (hamsd_<family> accounts): the account and its group
+    (odoo joins it), the directories it owns, the unit files and sudoers grant that run as it, and the
+    unit links, then `systemctl daemon-reload`. It enables, starts and restarts nothing and never
+    rewrites a unit that is not the family's. A unit file whose EnvironmentFile= (not the `-` optional
+    form) is missing is refused before anything is written, because the unit would not start. Honours
+    plan mode. `provision.py --daemon-family hamsd_<family>` runs this."""
+    accounts = list(accounts)
+    known = {acc["user"] for acc in MANIFEST["system_accounts"]}
+    for account in accounts:
+        if not account.startswith("hamsd_") or account not in known:
+            raise ValueError(f"not a daemon family account in the MANIFEST: {account}")
+    env_vars = dict(os.environ) if env_vars is None else env_vars
+    wanted_paths = daemon_family_unit_paths(accounts)
+    missing = []
+    for spec in MANIFEST["static_files"]:
+        if spec["path"] in wanted_paths and spec["path"].endswith(".service"):
+            for line in (spec.get("content") or "").splitlines():
+                if line.startswith("EnvironmentFile=") and not line.startswith("EnvironmentFile=-"):
+                    target = line.split("=", 1)[1].strip()
+                    if not os.path.exists(target):
+                        missing.append(f"{target} (needed by {os.path.basename(spec['path'])})")
+    if missing and not _planning():
+        raise RuntimeError(
+            "environment file(s) missing, nothing was changed: " + ", ".join(sorted(set(missing)))
+        )
+    for item in sorted(set(missing)):
+        _plan("missing", item)
+    with only_daemon_families(accounts):
+        provision_system_accounts(run_cmd_func, environment)
+        apply_production_directories(run_cmd_func, environment)
+        provision_static_files(run_cmd_func, env_vars, environment)
+    for unit_path in wanted_paths:
+        dst = os.path.join("/etc/systemd/system", os.path.basename(unit_path))
+        if not os.path.lexists(dst) and not _plan("link", f"{dst} -> {unit_path}"):
+            os.symlink(unit_path, dst)
+    if not _plan("run", "systemctl daemon-reload"):
+        run_cmd_func(["systemctl", "daemon-reload"])
+    _logger.info("[*] Daemon families %s provisioned. Nothing was enabled, started or restarted.", ", ".join(accounts))
 
 
 # [@ANCHOR: infrastructure:opt_in_unit_names]
