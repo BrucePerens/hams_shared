@@ -157,6 +157,9 @@ class FakeOdoo:
             row["tag_ids"] = list(row["tag_ids"][0][2])
         if model == "ir.attachment" and row.get("datas"):
             row["checksum"] = hashlib.sha1(base64.b64decode(row["datas"])).hexdigest()  # as Odoo computes it
+            if not (kwargs or {}).get("context", {}).get("image_no_postprocess") and row["datas"]:
+                # as Odoo does for an image over 1920 px: other bytes, so another checksum
+                row["checksum"] = "resized-" + row["checksum"]
         if model in ("blog.post", "blog.blog"):
             self._set_url(model, row)
         self.rows.setdefault(model, []).append(row)
@@ -937,7 +940,7 @@ class Json2Tests(_Base):
                         for k, v in vals.items()}
 
             if method == "create":
-                result = [wired.call(model, "create", [commands(vals)]) for vals in args[0]]
+                result = [wired.call(model, "create", [commands(vals)], body) for vals in args[0]]
             elif method == "write":
                 result = wired.call(model, method, [args[0], commands(args[1])], body)
             else:
