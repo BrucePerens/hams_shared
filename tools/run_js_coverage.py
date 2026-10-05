@@ -37,6 +37,9 @@ starts, and takes the result just before Chrome stops, writing one JSON record p
 directory. Run the tour under `debug=assets` (`HAMS_TOUR_TOUR_DEBUG=assets`) so the bundle bodies
 carry the module headers this script parses. `map_coverage_records()` below then turns those
 records into `{"files": {relpath: {"executed_lines": [...], "missing_lines": [...]}}}`.
+Minified bundles (what tours actually get) are mapped by file and function instead of by line
+(`parse_minified_bundle_files` / `function_hits_for_script`, NIGHT_PLAN decision 79); the output's
+`functions` key holds `{relpath: {"functions": {name: {"executed", "total"}}, "anonymous": {...}}}`.
 Line granularity is V8 block coverage sampled at each line's first non-blank character, so a
 comment or closing-brace line inside an executed range counts as executed.
 """
@@ -79,6 +82,83 @@ def parse_bundle_module_offsets(bundle_text):
         body_end_line = body_start_line + line_count - 1
         modules.append((body_start_line, body_end_line, match.group("filepath")))
     return modules
+
+
+# Odoo 19's minified bundles (`*.min.js`, what every tour gets: `debug=assets` does not reach the
+# page bundles, see the to-do) carry no `Filepath:` block, but `JavascriptAsset.minify()` returns
+# `with_header(rjsmin(content))`, so every file is preceded by a one-line header
+# `\n/* /<module>/static/<path> */\n`. rjsmin rewrites the lines inside a file, so per-LINE
+# attribution is impossible from these bundles; per-FILE and per-FUNCTION (V8 `functionName`)
+# attribution is not. NIGHT_PLAN decision 79 (2026-10-04) accepts file-and-function granularity.
+_MINIFIED_HEADER_RE = re.compile(r"\n/\* (?P<filepath>/[^\n]*?) \*/\n")
+
+
+def parse_minified_bundle_files(bundle_text):
+    """Returns `[(start_offset, end_offset, filepath), ...]`, one per file in a minified bundle,
+    in bundle order. Offsets are UTF-16 code units (V8's unit) into `bundle_text`; a file's range
+    starts after its own header line and ends where the next header begins (or at the end)."""
+    matches = list(_MINIFIED_HEADER_RE.finditer(bundle_text))
+    files = []
+    position = 0
+    utf16_position = 0
+    starts = []
+    for match in matches:
+        utf16_position += _utf16_len(bundle_text[position : match.end()])
+        position = match.end()
+        starts.append(utf16_position)
+    total = utf16_position + _utf16_len(bundle_text[position:])
+    for index, match in enumerate(matches):
+        end = starts[index + 1] - _utf16_len(matches[index + 1].group(0)) if index + 1 < len(matches) else total
+        files.append((starts[index], end, match.group("filepath")))
+    return files
+
+
+def function_hits_for_script(bundle_text, functions, files=None):
+    """Attributes each V8 function of one minified bundle to the file that contains its start and
+    returns `{filepath: {"functions": {name: {"executed": n, "total": m}}, "anonymous": {"executed": n,
+    "total": m}}}`. A function counts as executed when the outermost range of its coverage entry
+    has `count > 0`. The whole-script wrapper (one entry spanning the entire bundle) is skipped."""
+    if files is None:
+        files = parse_minified_bundle_files(bundle_text)
+    starts = [f[0] for f in files]
+    script_length = _utf16_len(bundle_text)
+    result = {}
+    for fn in functions:
+        ranges = fn.get("ranges") or []
+        if not ranges:
+            continue
+        outer = ranges[0]
+        if outer["startOffset"] == 0 and outer["endOffset"] >= script_length:
+            continue
+        index = bisect.bisect_right(starts, outer["startOffset"]) - 1
+        if index < 0 or outer["startOffset"] >= files[index][1]:
+            continue
+        entry = result.setdefault(
+            files[index][2],
+            {"functions": {}, "anonymous": {"executed": 0, "total": 0}},
+        )
+        executed = 1 if outer["count"] > 0 else 0
+        name = fn.get("functionName") or ""
+        bucket = entry["anonymous"] if not name else entry["functions"].setdefault(name, {"executed": 0, "total": 0})
+        bucket["executed"] += executed
+        bucket["total"] += 1
+    return result
+
+
+def merge_function_reports(reports):
+    """Sums several `function_hits_for_script` results: executed and total counts add up, so a
+    function executed in any run shows `executed > 0`."""
+    merged = {}
+    for report in reports:
+        for path, entry in report.items():
+            target = merged.setdefault(path, {"functions": {}, "anonymous": {"executed": 0, "total": 0}})
+            for key in ("executed", "total"):
+                target["anonymous"][key] += entry["anonymous"][key]
+            for name, counts in entry["functions"].items():
+                bucket = target["functions"].setdefault(name, {"executed": 0, "total": 0})
+                bucket["executed"] += counts["executed"]
+                bucket["total"] += counts["total"]
+    return {path: merged[path] for path in sorted(merged)}
 
 
 def resolve_addon_static_path(addon_relative_path, addons_path_dirs):
@@ -162,9 +242,11 @@ def map_coverage_record(record, addons_path_dirs, repo_root):
         hits = line_hits_for_script(text, script["functions"])
         modules = parse_bundle_module_offsets(text)
         if not modules:
-            # Minified bundle (no debug=assets, or debug lost on a redirect): no module headers,
-            # so there is nothing to map. Reported, never silently dropped.
-            unresolved.add(f"(no module headers: {script['url']})")
+            # No debug-mode module headers. A minified bundle with per-file headers is mapped at
+            # file and function level by map_function_coverage_record(); a bundle with neither is
+            # reported, never silently dropped.
+            if not _MINIFIED_HEADER_RE.search(text):
+                unresolved.add(f"(no module headers: {script['url']})")
             continue
         for start, end, addon_path in modules:
             real = resolve_addon_static_path(addon_path, addons_path_dirs)
@@ -187,16 +269,47 @@ def map_coverage_record(record, addons_path_dirs, repo_root):
     return report, sorted(unresolved)
 
 
-def map_coverage_records(records, addons_path_dirs, repo_root):
-    """Maps and merges many records into the final `{"files": ...}` document plus the sorted list
-    of unresolved addon paths."""
+def map_function_coverage_record(record, addons_path_dirs, repo_root):
+    """Maps one record's minified bundles to `{relpath: {"functions": ..., "anonymous": ...}}`
+    (see function_hits_for_script) plus the sorted unresolved addon paths. Bundles with debug-mode
+    module headers are mapped by line in map_coverage_record() instead."""
     reports = []
+    unresolved = set()
+    for script in record.get("scripts", []):
+        text = record.get("bundles", {}).get(script["url"])
+        if text is None or parse_bundle_module_offsets(text):
+            continue
+        per_file = function_hits_for_script(text, script["functions"])
+        mapped = {}
+        for addon_path, entry in per_file.items():
+            real = resolve_addon_static_path(addon_path, addons_path_dirs)
+            if real is None:
+                unresolved.add(addon_path)
+                continue
+            mapped[os.path.relpath(real, repo_root)] = entry
+        reports.append(mapped)
+    return merge_function_reports(reports), sorted(unresolved)
+
+
+def map_coverage_records(records, addons_path_dirs, repo_root):
+    """Maps and merges many records into the final document plus the sorted list of unresolved
+    addon paths. `files` holds line coverage from debug-mode bundles, `functions` holds file and
+    function coverage from minified bundles."""
+    reports = []
+    function_reports = []
     unresolved = set()
     for record in records:
         report, missing = map_coverage_record(record, addons_path_dirs, repo_root)
         reports.append(report)
         unresolved.update(missing)
-    return {"files": merge_file_reports(reports), "unresolved": sorted(unresolved)}
+        function_report, function_missing = map_function_coverage_record(record, addons_path_dirs, repo_root)
+        function_reports.append(function_report)
+        unresolved.update(function_missing)
+    return {
+        "files": merge_file_reports(reports),
+        "functions": merge_function_reports(function_reports),
+        "unresolved": sorted(unresolved),
+    }
 
 
 def main():
