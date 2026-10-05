@@ -643,11 +643,21 @@ def restore_sample(cfg, env, source, snap, rng, runner, scratch):
     files = _relative_files(cfg, env, root, runner)
     if not files:
         raise BackupError(f"{source.name}: the snapshot lists no files")
-    picks = rng.sample(files, min(cfg.restore_sample_files, len(files)))
+    if source.content_addressed:
+        # Odoo's filestore/checklist/ holds garbage-collection bookkeeping named after an attachment's SHA-1 but
+        # not containing it, so it cannot be checked by name. Sample only the real content-addressed objects.
+        objects = [f for f in files if SHA1_NAME_RE.match(os.path.basename(f)) and not f.startswith("checklist/")]
+        files = objects or files
+    picks =rng.sample(files, min(cfg.restore_sample_files, len(files)))
     checked = changed = 0
     for index, rel in enumerate(picks):
         target = os.path.join(scratch, f"{source.name}-{index}")
         runner.run([cfg.kopia, "restore", f"{root}/{rel}", target], env=env, capture=True)
+        if os.path.islink(target):
+            # kopia restores a symlink as a symlink (e.g. letsencrypt's live/privkey.pem); it has no content of
+            # its own to compare, so it is neither verified nor a failure.
+            os.unlink(target)
+            continue
         if not os.path.isfile(target):
             raise BackupError(f"{source.name}: {rel} did not restore as a file")
         if source.content_addressed:
