@@ -2686,6 +2686,9 @@ WantedBy=timers.target
             # so a host without the B2 key never runs them. They upload to our own bucket and fetch nothing
             # from any third party. Not the ConditionPathExists-skips-silently trap: b2_backup.py check
             # (hams-b2-backup-check.timer) fails when no good backup was recorded recently.
+            # The units run the root-owned deployed tree (/opt/hams/src/hams_open, written by
+            # devbox_tools/deploy_to_production.py), not /opt/hams/hams_shared: on hams1 that one is a stale,
+            # hams_com-owned copy without this tool, and a root job must not execute code another account can edit.
             "path": "/opt/hams/etc/b2_backup/config.json",
             "content": """\
 {{
@@ -2746,7 +2749,7 @@ CPUQuota=100%
 MemoryHigh=1G
 MemoryMax=2G
 TimeoutStartSec=4h
-ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/b2_backup.py backup
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_shared/tools/b2_backup.py backup
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams.b2.backup
@@ -2803,7 +2806,7 @@ CPUQuota=100%
 MemoryHigh=1G
 MemoryMax=2G
 TimeoutStartSec=3h
-ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/b2_backup.py restore-test
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_shared/tools/b2_backup.py restore-test
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams.b2.restore.test
@@ -2847,7 +2850,7 @@ Type=oneshot
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/b2_backup.py check
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_shared/tools/b2_backup.py check
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams.b2.backup.check

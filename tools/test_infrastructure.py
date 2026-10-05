@@ -3533,6 +3533,14 @@ class B2BackupManifestTests(unittest.TestCase):
         backend = json.loads(spec["content"].replace("{{", "{").replace("}}", "}"))["backend"]
         self.assertEqual((backend["bucket"], backend["prefix"]), ("hams-com-prod-backups", "files/"))
 
+    def test_services_run_the_root_owned_deployed_tool(self):
+        services = [s for s in self._specs() if s["path"].endswith(".service")]
+        self.assertEqual(len(services), 3)
+        for spec in services:
+            self.assertIn("ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_shared/tools/b2_backup.py ",
+                          spec["content"], spec["path"])
+            self.assertNotIn("/opt/hams/hams_shared", spec["content"], spec["path"])
+
     def test_units_are_opt_in_so_provisioning_never_enables_or_starts_them(self):
         names = {os.path.basename(s["path"]) for s in self._specs() if s["path"].endswith((".service", ".timer"))}
         self.assertEqual(len(names), 6)
