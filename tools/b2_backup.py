@@ -140,6 +140,14 @@ def load_config(path):
                 raise ConfigError(f"backend.{field} is required for an s3 backend")
         if not backend["endpoint"].endswith("backblazeb2.com"):
             raise ConfigError("backend.endpoint must be a Backblaze B2 S3 endpoint (*.backblazeb2.com)")
+        # The bucket may be shared with pgBackRest (hams-com-prod-backups: /hams_prod and /hams_prod_enc), so
+        # kopia must live under its own prefix and never touch those.
+        prefix = backend.get("prefix", "")
+        if not prefix or not prefix.endswith("/") or prefix.startswith("/"):
+            raise ConfigError("backend.prefix is required for an s3 backend (e.g. 'files/'): it keeps kopia's blobs "
+                              "apart from anything else in the bucket")
+        if prefix.startswith("hams_prod"):
+            raise ConfigError(f"backend.prefix {prefix!r} collides with pgBackRest's repository prefixes")
     elif kind == "filesystem":
         if not backend.get("path"):
             raise ConfigError("backend.path is required for a filesystem backend")
