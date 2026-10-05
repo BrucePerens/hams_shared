@@ -2691,10 +2691,10 @@ WantedBy=timers.target
 {{
   "backend": {{
     "type": "s3",
-    "bucket": "hams-com-prod-files",
+    "bucket": "hams-com-prod-backups",
     "endpoint": "s3.us-east-005.backblazeb2.com",
     "region": "us-east-1",
-    "prefix": "hams1/"
+    "prefix": "files/"
   }},
   "env_file": "/opt/hams/etc/b2_backup/b2_backup.env",
   "state_dir": "/var/lib/hams-b2-backup",

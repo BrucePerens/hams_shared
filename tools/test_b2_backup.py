@@ -85,14 +85,14 @@ class ConfigAndArgumentTests(_Env):
     """Tests [@ANCHOR: b2_backup:tool]"""
 
     def test_s3_arguments_carry_endpoint_and_rate_limits_but_no_secret(self):
-        path = self.config(backend={"type": "s3", "bucket": "hams-com-prod-files",
+        path = self.config(backend={"type": "s3", "bucket": "hams-com-prod-backups",
                                     "endpoint": "s3.us-east-005.backblazeb2.com",
-                                    "region": "us-east-1", "prefix": "hams1/"})
+                                    "region": "us-east-1", "prefix": "files/"})
         cfg = bb.load_config(path)
         argv = bb.repo_connect_argv(cfg)
         self.assertIn("--endpoint=s3.us-east-005.backblazeb2.com", argv)
-        self.assertIn("--bucket=hams-com-prod-files", argv)
-        self.assertIn("--prefix=hams1/", argv)
+        self.assertIn("--bucket=hams-com-prod-backups", argv)
+        self.assertIn("--prefix=files/", argv)
         self.assertIn("--max-upload-speed=5000000", argv)
         self.assertIn("--no-persist-credentials", argv)
         for token in bb.repo_create_argv(cfg) + argv:
@@ -105,7 +105,7 @@ class ConfigAndArgumentTests(_Env):
         cfg = bb.load_config(self.config())
         self.assertFalse([a for a in bb.repo_create_argv(cfg) if a.startswith("--retention")])
         locked = bb.load_config(self.config(backend={
-            "type": "s3", "bucket": "b", "endpoint": "s3.us-east-005.backblazeb2.com",
+            "type": "s3", "bucket": "b", "endpoint": "s3.us-east-005.backblazeb2.com", "prefix": "files/",
             "object_lock": {"mode": "GOVERNANCE", "period": "720h"}}))
         self.assertIn("--retention-mode=GOVERNANCE", bb.repo_create_argv(locked))
         self.assertIn("--retention-period=720h", bb.repo_create_argv(locked))
@@ -114,6 +114,15 @@ class ConfigAndArgumentTests(_Env):
         argv = bb.global_policy_argv(bb.load_config(self.config()))
         for flag in ("--keep-daily=14", "--keep-weekly=8", "--keep-monthly=12", "--compression=zstd"):
             self.assertIn(flag, argv)
+
+    def test_s3_prefix_is_required_and_cannot_collide_with_pgbackrest(self):
+        ep = "s3.us-east-005.backblazeb2.com"
+        for prefix in (None, "", "files", "/files/", "hams_prod/", "hams_prod_enc/"):
+            backend = {"type": "s3", "bucket": "hams-com-prod-backups", "endpoint": ep}
+            if prefix is not None:
+                backend["prefix"] = prefix
+            with self.assertRaises(bb.ConfigError, msg=repr(prefix)):
+                bb.load_config(self.config(backend=backend))
 
     def test_bad_configuration_is_refused(self):
         for backend in ({"type": "s3", "bucket": "b", "endpoint": "s3.amazonaws.com"},
@@ -181,7 +190,7 @@ class PlanModeTests(_Env):
         os.makedirs(self.t("fs"))
         path = self.config(paths=[{"name": "filestore_hams_prod", "path": self.t("fs")}],
                            databases=["hams_prod"],
-                           backend={"type": "s3", "bucket": "b", "endpoint": "s3.us-east-005.backblazeb2.com"})
+                           backend={"type": "s3", "bucket": "b", "endpoint": "s3.us-east-005.backblazeb2.com", "prefix": "files/"})
         os.remove(self.t("b2_backup.env"))
         for command in ("init", "backup", "restore-test", "check"):
             code, out, err = self.run_main(path, command, plan=True)

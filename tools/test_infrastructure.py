@@ -3528,6 +3528,11 @@ class B2BackupManifestTests(unittest.TestCase):
                              ("root:root", "700", "b2_backup", ["prod"]))
         self.assertIn("b2_backup", infra.KNOWN_HOST_CLASSES)
 
+    def test_config_uses_the_shared_bucket_under_its_own_files_prefix(self):
+        spec = [s for s in self._specs() if s["path"].endswith("b2_backup/config.json")][0]
+        backend = json.loads(spec["content"].replace("{{", "{").replace("}}", "}"))["backend"]
+        self.assertEqual((backend["bucket"], backend["prefix"]), ("hams-com-prod-backups", "files/"))
+
     def test_units_are_opt_in_so_provisioning_never_enables_or_starts_them(self):
         names = {os.path.basename(s["path"]) for s in self._specs() if s["path"].endswith((".service", ".timer"))}
         self.assertEqual(len(names), 6)
