@@ -352,6 +352,131 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.sent, ["[hams.com DOWN] odoo"])
 
 
+class MaintenanceTests(MainTests):
+    """The pagerduty maintenance flag (/etc/pagerduty/maintenance): checks run, nothing pages, and state restarts."""
+
+    NOW = 1_000_000
+
+    def _flag(self, **data):
+        path = os.path.join(self.tmp.name, "flag")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        return path
+
+    def _menv(self, path):
+        return self._env(PAGERDUTY_MAINTENANCE_FILE=path)
+
+    def _active(self, minutes=20, **extra):
+        return self._flag(set_at=self.NOW, until=self.NOW + minutes * 60, reason="deploy", set_by="ai", **extra)
+
+    def test_default_path_and_variable_name(self):
+        self.assertEqual(sm.maintenance_flag_path({}), "/etc/pagerduty/maintenance")
+        self.assertEqual(sm.maintenance_flag_path({"PAGERDUTY_MAINTENANCE_FILE": "/x"}), "/x")
+
+    def test_no_page_and_no_recovery_notice_during_maintenance_but_checks_still_run(self):
+        flag = self._active()
+        down, up = self._deps(ok=False), self._deps(ok=True)
+        with self.assertLogs("site_monitor", level="INFO") as logs:
+            for step in range(4):
+                sm.main(env=self._menv(flag), now=self.NOW + 60 * step, deps=down, host="h")
+        text = "\n".join(logs.output)
+        self.assertEqual(self.sent, [])
+        self.assertEqual(text.count("pagerduty maintenance active until"), 4, "one INFO line per pass")
+        self.assertIn("odoo: FAIL", text, "the check ran and was logged")
+        with self.assertLogs("site_monitor", level="INFO"):
+            sm.main(env=self._menv(flag), now=self.NOW + 300, deps=up, host="h")
+        self.assertEqual(self.sent, [], "no recovered notice")
+
+    def test_failures_during_maintenance_do_not_count_toward_paging(self):
+        flag = self._active()
+        deps = self._deps(ok=False)
+        for step in range(5):
+            sm.main(env=self._menv(flag), now=self.NOW + 60 * step, deps=deps, host="h")
+        self.assertEqual(sm.main(env=self._menv(os.path.join(self.tmp.name, "none")), now=self.NOW + 1500, deps=deps, host="h"), 1)
+        self.assertEqual(self.sent, [], "the first failing pass after maintenance is only failure number one")
+        sm.main(env=self._menv(os.path.join(self.tmp.name, "none")), now=self.NOW + 1560, deps=deps, host="h")
+        self.assertEqual(self.sent, ["[hams.com DOWN] odoo"], "the normal consecutive failures then page")
+
+    def test_a_failure_that_spans_the_end_of_maintenance_is_paged_normally(self):
+        flag = self._active(minutes=2)
+        deps = self._deps(ok=False)
+        for now in (self.NOW, self.NOW + 60):
+            sm.main(env=self._menv(flag), now=now, deps=deps, host="h")
+        for now in (self.NOW + 121, self.NOW + 181):
+            sm.main(env=self._menv(flag), now=now, deps=deps, host="h")   # the flag has expired by itself
+        self.assertEqual(self.sent, ["[hams.com DOWN] odoo"])
+
+    def test_paged_state_before_maintenance_is_forgotten(self):
+        deps = self._deps(ok=False)
+        for now in (self.NOW - 200, self.NOW - 140):
+            sm.main(env=self._env(), now=now, deps=deps, host="h")
+        self.assertEqual(len(self.sent), 1)
+        flag = self._active()
+        sm.main(env=self._menv(flag), now=self.NOW, deps=self._deps(ok=True), host="h")
+        self.sent.clear()
+        sm.main(env=self._menv(os.path.join(self.tmp.name, "none")), now=self.NOW + 1500, deps=deps, host="h")
+        self.assertEqual(self.sent, [], "starts fresh: one failure is not yet a page")
+
+    def test_expired_flag_is_ignored_and_never_deleted_by_the_monitor(self):
+        flag = self._flag(set_at=self.NOW - 600, until=self.NOW - 60, reason="old", set_by="x")
+        deps = self._deps(ok=False)
+        sm.main(env=self._menv(flag), now=self.NOW, deps=deps, host="h")
+        sm.main(env=self._menv(flag), now=self.NOW + 60, deps=deps, host="h")
+        self.assertEqual(self.sent, ["[hams.com DOWN] odoo"])
+        self.assertTrue(os.path.exists(flag), "the unit's /etc is read-only; the commands tidy the file")
+
+    def test_until_is_capped_at_two_hours_after_it_was_set(self):
+        flag = self._flag(set_at=self.NOW, until=self.NOW + 24 * 3600, reason="forgot", set_by="x")
+        self.assertEqual(sm.read_maintenance(flag, self.NOW + 7199)["state"], "active")
+        self.assertEqual(sm.read_maintenance(flag, self.NOW + 7201)["state"], "expired")
+
+    def test_malformed_unreadable_or_future_flags_are_not_maintenance(self):
+        bad = os.path.join(self.tmp.name, "bad")
+        for content in ("not json", "[]", '{"until": 5}', '{"set_at": "x", "until": 9}', '{"set_at": 1e999, "until": 2e999}'):
+            with open(bad, "w") as handle:
+                handle.write(content)
+            self.assertEqual(sm.read_maintenance(bad, self.NOW)["state"], "malformed", content)
+        future = self._flag(set_at=self.NOW + 10_000, until=self.NOW + 20_000)
+        self.assertEqual(sm.read_maintenance(future, self.NOW)["state"], "malformed")
+        self.assertEqual(sm.read_maintenance(self.tmp.name, self.NOW)["state"], "malformed", "a directory is unreadable")
+        deps = self._deps(ok=False)
+        with self.assertLogs("site_monitor", level="ERROR") as logs:
+            for now in (self.NOW, self.NOW + 60):
+                sm.main(env=self._menv(bad), now=now, deps=deps, host="h")
+        self.assertEqual(self.sent, ["[hams.com DOWN] odoo"])
+        self.assertTrue(any("paging stays ON" in line for line in logs.output))
+
+    def test_absent_flag_is_normal_operation(self):
+        self.assertEqual(sm.read_maintenance(os.path.join(self.tmp.name, "none"), self.NOW)["state"], "absent")
+
+    def test_heartbeat_is_still_sent_during_maintenance(self):
+        sm.main(env=self._menv(self._active()), now=self.NOW, deps=self._deps(ok=False), host="h")
+        self.assertEqual(self.pings, ["https://beat/ping"])
+
+    def test_no_paging_channel_is_still_loud_during_maintenance(self):
+        env = self._menv(self._active())
+        del env["PAGER_FALLBACK_EMAIL"]
+        self.assertEqual(sm.main(env=env, now=self.NOW, deps=self._deps(), host="h"), 2)
+
+    def test_the_manifest_provisions_the_flag_directory_and_the_operator_command(self):
+        directory = next(d for d in infra.MANIFEST["directories"] if d["path"] == "/etc/pagerduty")
+        self.assertEqual((directory["owner"], directory["provision_mode"]), ("root:root", "755"))
+        command = next(f for f in infra.MANIFEST["static_files"] if f["path"] == "/usr/local/sbin/pagerduty-maintenance")
+        self.assertEqual((command["owner"], command["mode"]), ("root:root", "755"))
+        self.assertTrue(command["src"].endswith("pager_duty/daemon/pagerduty_maintenance.py"))
+
+    def test_the_unit_can_read_the_flag_under_its_hardening(self):
+        unit = next(s for s in infra.MANIFEST["static_files"] if s["path"].endswith("hams-site-monitor.service"))
+        content = unit["content"]
+        self.assertIn("ProtectSystem=strict", content, "read-only /etc is the assumption: the monitor must only read")
+        for directive in ("InaccessiblePaths", "TemporaryFileSystem", "BindPaths"):
+            self.assertNotIn(directive, content)
+        self.assertNotIn("ProtectSystem=full", content)
+        import inspect
+        self.assertNotIn("unlink", inspect.getsource(sm.read_maintenance))
+        self.assertNotIn("os.remove", inspect.getsource(sm.main))
+
+
 class ManifestUnitTests(unittest.TestCase):
     """Tests the MANIFEST entries for hams-site-monitor.service and .timer."""
 

@@ -20,6 +20,12 @@ that works and it does not depend on Odoo, so it still pages when Odoo is the th
     report: the host, its network or this timer being dead. That service is chosen and configured by the operator
     (docs/runbooks/SITE_MONITORING.md in hams_com); nothing here signs up for anything.
 
+Maintenance: while the pagerduty maintenance flag (`/etc/pagerduty/maintenance`, or `$PAGERDUTY_MAINTENANCE_FILE`; set
+by `pagerduty-maintenance start`, root only) is active, every check still runs and is logged, but no page and no
+"recovered" notice is sent, failures do not count toward FAILS_BEFORE_PAGE, and check state is reset on each pass so
+paging restarts from zero afterwards. The flag expires by itself, is capped at 2 hours, and a malformed one is ignored
+(paging stays on). The monitor only reads it. The dead-man heartbeat is still sent during maintenance.
+
 Configuration is read from the environment (the unit loads `/opt/hams/etc/site_monitor.env`, root only, optional).
 With no paging channel configured the monitor says so loudly on every run and exits 2, so the unit shows as failed
 instead of looking like protection that is not there.
@@ -53,6 +59,42 @@ DEFAULT_TUNNEL_READY_URL = "http://127.0.0.1:20241/ready"
 DEFAULT_PUBLIC_URL = "https://hams.com/"
 DEFAULT_STATE_DIR = "/var/lib/hams-monitor"
 USER_AGENT = "hams-site-monitor/1.0 (self-check; +https://hams.com)"
+
+# Read-only copy of the pagerduty maintenance flag's path and rules. The command that sets it and the original of
+# this reader are hams_open's pager_duty/daemon/pagerduty_maintenance.py; this tool must not import from a module,
+# so it carries the few lines it needs. pager_duty/tests/test_pagerduty_maintenance.py fails if the default path,
+# the variable name or the rules ever disagree. The monitor only reads the flag (its unit has a read-only /etc).
+MAINTENANCE_DEFAULT_PATH = "/etc/pagerduty/maintenance"
+MAINTENANCE_PATH_ENV = "PAGERDUTY_MAINTENANCE_FILE"
+MAINTENANCE_MAX_SECONDS = 120 * 60
+MAINTENANCE_CLOCK_SKEW = 300
+
+def maintenance_flag_path(env):
+    return env.get(MAINTENANCE_PATH_ENV) or MAINTENANCE_DEFAULT_PATH
+
+
+def read_maintenance(path, now):
+    """{"state": active/expired/absent/malformed, "until", "reason", "set_by"}. A malformed, unreadable or future-dated
+    flag is NOT maintenance (fail loud); `until` is capped at set_at + 2 hours. Never raises."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        return {"state": "absent"}
+    except (OSError, ValueError) as exc:
+        return {"state": "malformed", "error": f"{path}: {exc}"}
+    try:
+        set_at, until = float(data["set_at"]), float(data["until"])
+        if abs(set_at) == float("inf") or abs(until) == float("inf") or set_at != set_at or until != until:
+            raise ValueError("not finite")
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        return {"state": "malformed", "error": f"{path}: needs numeric set_at and until ({exc!r})"}
+    if set_at > now + MAINTENANCE_CLOCK_SKEW:
+        return {"state": "malformed", "error": f"{path}: set_at is in the future"}
+    until = min(until, set_at + MAINTENANCE_MAX_SECONDS)
+    return {"state": "active" if now < until else "expired", "until": until,
+            "reason": str(data.get("reason", "")), "set_by": str(data.get("set_by", ""))}
+
 
 # A check is (ok, detail). A check function never raises: a crash inside a check is a failed check.
 
@@ -348,14 +390,29 @@ def main(env=None, now=None, deps=None, host=None):
     for name, (ok, detail) in results.items():
         (logger.info if ok else logger.error)("%s: %s (%s)", name, "ok" if ok else "FAIL", detail)
 
-    state, messages = decide(load_state(state_path), results, now)
+    flag = read_maintenance(maintenance_flag_path(env), now)
+    if flag["state"] == "malformed":
+        logger.error("pagerduty maintenance flag ignored, so paging stays ON: %s", flag["error"])
+    elif flag["state"] == "expired":
+        logger.info("pagerduty maintenance flag expired %s; ignored (`pagerduty-maintenance status` removes it)",
+                    time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(flag["until"])))
+    in_maintenance = flag["state"] == "active"
+    if in_maintenance:
+        logger.info("pagerduty maintenance active until %s (reason: %s; set by %s): checks still run, no page and no recovery "
+                    "notice is sent", time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(flag["until"])),
+                    flag["reason"] or "none given", flag["set_by"] or "unknown")
+        # Failures during maintenance do not count, and what was paged before it is forgotten: when maintenance
+        # ends the checks start fresh, so a check still down then needs the normal consecutive failures to page.
+        state, messages = {}, []
+    else:
+        state, messages = decide(load_state(state_path), results, now)
     configured = channels_configured(env)
     status = 0 if all(ok for ok, _d in results.values()) else 1
     if not any(configured.values()):
         logger.critical("No paging channel is configured (PAGER_FALLBACK_EMAIL with SMTP_HOST, or PAGER_WEBHOOK_URL): "
                         "this monitor cannot page anyone. See docs/runbooks/SITE_MONITORING.md in hams_com.")
         status = 2
-    elif messages:
+    elif messages and not in_maintenance:
         delivered = deliver(messages, env, host, **deps.get("delivery", {}))
         state = commit_paged(state, delivered, now)
         if len(delivered) != len(messages):
@@ -367,7 +424,9 @@ def main(env=None, now=None, deps=None, host=None):
         logger.error("Could not save state %s: %s", state_path, exc)
 
     heartbeat = env.get("HAMS_MONITOR_HEARTBEAT_URL")
-    if heartbeat and status == 0:
+    # During maintenance the heartbeat is sent even though checks fail: the planned restart must not trip the
+    # off-host dead-man page, and the monitor having run proves the host and timer are alive. It is capped by the flag.
+    if heartbeat and (status == 0 or (in_maintenance and status == 1)):
         ping_heartbeat(heartbeat, **deps.get("heartbeat", {}))
     elif not heartbeat:
         logger.warning("HAMS_MONITOR_HEARTBEAT_URL is not set: nothing outside this host notices if the host dies")
