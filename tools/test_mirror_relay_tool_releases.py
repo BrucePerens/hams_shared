@@ -97,17 +97,16 @@ class AssetPatternTests(unittest.TestCase):
         pattern = mirror.ASSET_PATTERNS[("pat", "linux")]
         self.assertTrue(pattern.match("pat_1.0.0_linux_amd64.tar.gz"))
 
-    def test_direwolf_windows_pattern_matches_a_git_hash_suffixed_filename(self):
-        pattern = mirror.ASSET_PATTERNS[("direwolf", "windows")]
-        self.assertTrue(pattern.match("direwolf-1.8.1-a231971_x86_64.zip"))
-
     def test_an_unrelated_filename_does_not_match(self):
         pattern = mirror.ASSET_PATTERNS[("pat", "linux")]
         self.assertFalse(pattern.match("README.md"))
 
-    def test_direwolf_has_no_linux_or_macos_pattern(self):
-        self.assertNotIn(("direwolf", "linux"), mirror.ASSET_PATTERNS)
-        self.assertNotIn(("direwolf", "macos"), mirror.ASSET_PATTERNS)
+    def test_no_radio_modem_program_can_be_mirrored(self):
+        # Stock Direwolf, ardopcf and Mercury listen on every interface; only the relay's own
+        # loopback-patched builds may reach users.
+        for tool in ("direwolf", "ardopcf", "mercury"):
+            self.assertNotIn(tool, mirror.GITHUB_REPO)
+            self.assertFalse([k for k in mirror.ASSET_PATTERNS if k[0] == tool])
 
 
 SHA_A = "a" * 64
