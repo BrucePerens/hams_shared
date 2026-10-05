@@ -4043,14 +4043,20 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 self.assertEqual(account["shell"], "/usr/sbin/nologin")
                 # odoo must be in the group to hand it a key file (chgrp, never chown).
                 self.assertIn("odoo", account["add_to_users"])
-                # hams_com is what lets the account reach /opt/hams.
-                self.assertIn("hams_com", account["member_of"])
+                # The traversal group (not hams_com) is what lets the account reach /opt/hams, and the
+                # account is taken out of hams_com so it cannot read the ADIF queue or other hams_com data.
+                self.assertEqual(account["member_of"], ["hams_traverse"])
+                self.assertEqual(account["not_member_of"], ["hams_com"])
                 self.assertEqual(account["environments"], ["prod", "test"])
 
     def test_the_writable_paths_are_only_directories_the_account_owns(self):
         for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
             with self.subTest(unit=unit):
                 writable = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths")
+                if rules.get("no_state"):
+                    # A daemon that fetches and pushes to Odoo and writes no file has no writable path at all.
+                    self.assertEqual(writable, [])
+                    continue
                 self.assertTrue(writable, "a oneshot daemon with no writable path cannot spool anything")
                 if rules.get("agent_sudo"):
                     # The documented exception: the agent's own home and nothing else (the CLI, running
@@ -4270,6 +4276,83 @@ class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
         found = infra.daemon_family_unit_paths(accounts)
         for unit in infra.FAMILY_ACCOUNT_UNITS:
             self.assertIn(f"/opt/hams/systemd/{unit}", found)
+
+
+class TraversalGrantTests(_SafePatchTestCase):
+    """Tests [@ANCHOR: infrastructure:directory_acl]: a daemon family account reaches its own paths
+    through an execute-only ACL for hams_traverse, not through hams_com."""
+
+    GRANTED = ["/opt/hams", "/opt/hams/etc", "/opt/hams/etc/keys", "/opt/hams/spool", "/opt/hams/downloads"]
+
+    def _dirs(self):
+        return {d["path"]: d for d in infra.MANIFEST["directories"]}
+
+    def test_the_directories_a_family_passes_through_grant_execute_only_to_the_traversal_group(self):
+        dirs = self._dirs()
+        for path in self.GRANTED:
+            with self.subTest(path=path):
+                self.assertEqual(dirs[path]["acl"], ["g:hams_traverse:--x"])
+
+    def test_nothing_else_carries_an_acl_and_no_grant_is_more_than_execute(self):
+        for d in infra.MANIFEST["directories"]:
+            for entry in d.get("acl", []):
+                with self.subTest(path=d["path"], entry=entry):
+                    self.assertIn(d["path"], self.GRANTED)
+                    self.assertTrue(entry.endswith(":--x"), "a traversal grant must never read or write")
+
+    def test_the_traversal_group_has_no_member_but_the_family_accounts_and_is_created_first(self):
+        accounts = infra.MANIFEST["system_accounts"]
+        names = [a["user"] for a in accounts]
+        traverse = accounts[names.index("hams_traverse")]
+        self.assertEqual((traverse["group"], traverse["shell"]), ("hams_traverse", "/usr/sbin/nologin"))
+        self.assertNotIn("add_to_users", traverse)
+        for acc in accounts:
+            if acc["user"].startswith("hamsd_"):
+                self.assertLess(names.index("hams_traverse"), names.index(acc["user"]))
+
+    def test_no_family_account_is_in_hams_com(self):
+        for acc in infra.MANIFEST["system_accounts"]:
+            if acc["user"].startswith("hamsd_"):
+                with self.subTest(account=acc["user"]):
+                    self.assertNotIn("hams_com", acc.get("member_of", []))
+                    self.assertIn("hams_com", acc["not_member_of"])
+
+    def test_a_directory_acl_runs_setfacl_in_production_and_is_planned_without_running(self):
+        calls = []
+        spec = {"path": "/opt/hams/x", "owner": None, "provision_mode": "750", "environments": ["prod"],
+                "acl": ["g:hams_traverse:--x"]}
+        self.safe_patch_object(infra.shutil, "which", return_value="/usr/bin/setfacl")
+        infra._apply_directory_acl(spec, "/opt/hams/x", "prod", calls.append)
+        self.assertEqual(calls, [["setfacl", "-m", "g:hams_traverse:--x", "/opt/hams/x"]])
+        calls.clear()
+        infra._apply_directory_acl(spec, "/opt/hams/x", "test", calls.append)
+        self.assertEqual(calls, [], "a test host does not need the grant and may not have setfacl")
+        with infra.planning() as plan:
+            infra._apply_directory_acl(spec, "/opt/hams/x", "prod", calls.append)
+        self.assertEqual(calls, [])
+        self.assertEqual(plan.actions, [("setfacl", "/opt/hams/x: g:hams_traverse:--x")])
+
+    def test_a_missing_setfacl_is_refused_with_the_package_name(self):
+        spec = {"path": "/opt/hams/x", "acl": ["g:hams_traverse:--x"]}
+        self.safe_patch_object(infra.shutil, "which", return_value=None)
+        with self.assertRaisesRegex(RuntimeError, "apt-get install acl"):
+            infra._apply_directory_acl(spec, "/opt/hams/x", "prod", lambda c: None)
+
+    def test_the_acl_package_is_installed_by_provisioning(self):
+        self.assertIn("acl", [p["debian_name"] for p in infra.MANIFEST["apt_packages"]])
+
+    def test_not_member_of_removes_only_an_existing_membership(self):
+        account = [{"user": "hamsd_x", "group": "hamsd_x", "not_member_of": ["hams_com"], "environments": ["prod"]}]
+        for members, expected in ((["odoo", "hamsd_x"], [["gpasswd", "-d", "hamsd_x", "hams_com"]]), (["odoo"], [])):
+            with self.subTest(members=members):
+                calls = []
+                patcher = patch.dict(infra.MANIFEST, {"system_accounts": account})
+                patcher.start()
+                self.addCleanup(patcher.stop)
+                self.safe_patch_object(infra.pwd, "getpwnam", return_value=MagicMock())
+                self.safe_patch_object(infra.grp, "getgrnam", return_value=MagicMock(gr_mem=members))
+                infra.provision_system_accounts(calls.append, environment="prod")
+                self.assertEqual([c for c in calls if c[0] == "gpasswd"], expected)
 
 
 class SystemAccountMemberOfTests(_SafePatchTestCase):
