@@ -187,25 +187,72 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(seen[1].data, b"body")
         self.assertEqual(seen[1].get_header("Priority"), "urgent")
 
+    def _channels(self, email=None, webhook=None, sms=None):
+        def fail(*a, **k):
+            raise OSError("down")
+        chans = [("email", sm.CHANNELS[0][1], email or (lambda env, kind, title, text: None)),
+                 ("webhook", sm.CHANNELS[1][1], webhook or (lambda env, kind, title, text: None))]
+        if sms:
+            chans.append(("sms", lambda env: bool(env.get("SMS_TO")), sms))
+        return tuple(chans)
+
+    def test_email_is_the_primary_channel_and_its_recipient_comes_from_the_environment(self):
+        self.assertEqual(sm.CHANNELS[0][0], "email")
+        env = {"PAGER_FALLBACK_EMAIL": "someone@example.org", "SMTP_HOST": "m", "SMTP_USER": "u", "SMTP_PASS": "p"}
+        sent = []
+
+        class Smtp:
+            def __init__(self, host, port, timeout=0):
+                sent.append(("connect", host, port))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def starttls(self):
+                pass
+
+            def login(self, u, p):
+                pass
+
+            def send_message(self, message):
+                sent.append(("to", message["To"], message["Subject"]))
+
+        sm.send_email(env, "[hams.com DOWN] odoo", "text", smtp=Smtp)
+        self.assertIn(("to", "someone@example.org", "[hams.com DOWN] odoo"), sent)
+        source = open(sm.__file__, encoding="utf-8").read()
+        self.assertNotIn("perens.com", source)
+        self.assertNotIn("http://", source.replace("http://127.0.0.1", ""))
+
     def test_message_is_delivered_when_any_channel_accepts(self):
         env = {"PAGER_WEBHOOK_URL": "https://h", "PAGER_FALLBACK_EMAIL": "a@b", "SMTP_HOST": "m"}
-
-        def bad_webhook(*a, **k):
-            raise OSError("down")
-
-        mails = []
-        done = sm.deliver([("page", "odoo", "dead")], env, "hams1", webhook=bad_webhook,
-                          email=lambda e, t, x: mails.append(t))
-        self.assertEqual(len(done), 1)
-        self.assertEqual(mails, ["[hams.com DOWN] odoo"])
-
-    def test_message_is_not_delivered_when_every_channel_fails(self):
-        env = {"PAGER_WEBHOOK_URL": "https://h"}
 
         def bad(*a, **k):
             raise OSError("down")
 
-        self.assertEqual(sm.deliver([("page", "odoo", "dead")], env, "h", webhook=bad), [])
+        mails = []
+        done = sm.deliver([("page", "odoo", "dead")], env, "hams1",
+                          channels=self._channels(webhook=bad, email=lambda e, k, t, x: mails.append(t)))
+        self.assertEqual(len(done), 1)
+        self.assertEqual(mails, ["[hams.com DOWN] odoo"])
+
+    def test_message_is_not_delivered_when_every_channel_fails(self):
+        env = {"PAGER_FALLBACK_EMAIL": "a@b", "SMTP_HOST": "m", "PAGER_WEBHOOK_URL": "https://h"}
+
+        def bad(*a, **k):
+            raise OSError("down")
+
+        self.assertEqual(sm.deliver([("page", "odoo", "dead")], env, "h", channels=self._channels(bad, bad)), [])
+
+    def test_a_new_channel_is_one_entry_and_unconfigured_channels_are_skipped(self):
+        got = []
+        env = {"PAGER_FALLBACK_EMAIL": "a@b", "SMTP_HOST": "m", "SMS_TO": "+1"}
+        chans = self._channels(sms=lambda e, k, t, x: got.append(t))
+        self.assertEqual(len(sm.deliver([("page", "odoo", "d")], env, "h", channels=chans)), 1)
+        self.assertEqual(got, ["[hams.com DOWN] odoo"])
+        self.assertEqual(sm.channels_configured({}, chans), {"email": False, "webhook": False, "sms": False})
 
     def test_no_odoo_or_ses_anywhere_in_the_paging_path(self):
         source = open(sm.__file__, encoding="utf-8").read()
@@ -228,6 +275,10 @@ class MainTests(unittest.TestCase):
         self.sent = []
         self.pings = []
 
+    @staticmethod
+    def _chan(send):
+        return (("email", sm.CHANNELS[0][1], send),)
+
     def _beat(self, req, timeout=0):
         self.pings.append(req.full_url)
         return _Ctx()
@@ -245,13 +296,13 @@ class MainTests(unittest.TestCase):
             "units_list": {"manifest_units": ()},
             "units": {"run": lambda cmd, **k: SimpleNamespace(stdout="active\n" * (len(cmd) - 2), returncode=0)},
             "disk": {"usage": lambda p: (100, 10, 90)},
-            "delivery": {"webhook": lambda url, title, text, kind, style="json": self.sent.append(title)},
+            "delivery": {"channels": self._chan(lambda env, kind, title, text: self.sent.append(title))},
             "heartbeat": {"urlopen": self._beat},
         }
 
     def _env(self, **extra):
         env = {"STATE_DIRECTORY": self.tmp.name, "HAMS_MONITOR_PUBLIC_URL": "",
-               "PAGER_WEBHOOK_URL": "https://hook", "HAMS_MONITOR_HEARTBEAT_URL": "https://beat/ping"}
+               "PAGER_FALLBACK_EMAIL": "ops@example.org", "SMTP_HOST": "mx", "HAMS_MONITOR_HEARTBEAT_URL": "https://beat/ping"}
         env.update(extra)
         return env
 
@@ -280,20 +331,20 @@ class MainTests(unittest.TestCase):
 
     def test_no_channel_configured_is_loud(self):
         env = self._env()
-        del env["PAGER_WEBHOOK_URL"]
+        del env["PAGER_FALLBACK_EMAIL"]
         self.assertEqual(sm.main(env=env, now=1, deps=self._deps(), host="h"), 2)
 
     def test_undelivered_page_is_retried_next_run(self):
         deps = self._deps(ok=False)
         fails = {"n": 0}
 
-        def flaky(url, title, text, kind, style="json"):
+        def flaky(env, kind, title, text):
             fails["n"] += 1
             if fails["n"] == 1:
                 raise OSError("down")
             self.sent.append(title)
 
-        deps["delivery"] = {"webhook": flaky}
+        deps["delivery"] = {"channels": self._chan(flaky)}
         sm.main(env=self._env(), now=1000, deps=deps, host="h")
         self.assertEqual(sm.main(env=self._env(), now=1060, deps=deps, host="h"), 3)
         self.assertEqual(self.sent, [])
