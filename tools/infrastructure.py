@@ -1535,6 +1535,33 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # Speech models for the simulated-band bots (MANIFEST["model_files"]). Read-only at runtime:
+            # root's provisioning fetch is the only writer.
+            "path": "/opt/hams/models",
+            "owner": "hams_com:hams_com",
+            "provision_mode": "750",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Speech models for the simulated-band bots (MANIFEST["model_files"]). Read-only at runtime:
+            # root's provisioning fetch is the only writer.
+            "path": "/opt/hams/models/piper",
+            "owner": "hams_com:hams_com",
+            "provision_mode": "750",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Speech models for the simulated-band bots (MANIFEST["model_files"]). Read-only at runtime:
+            # root's provisioning fetch is the only writer.
+            "path": "/opt/hams/models/faster-whisper-tiny.en",
+            "owner": "hams_com:hams_com",
+            "provision_mode": "750",
+            "runtime_mount": "ro",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/pycache",
             "owner": "hams_com:hams_com",
             "provision_mode": "770",
@@ -5616,6 +5643,11 @@ User=odoo
 WorkingDirectory=/opt/hams/daemons/hams_simulated_bots
 
 Environment="HF_HOME=/opt/hams/cache/whisper"
+# Speech models live at a stable path outside the daemon tree (MANIFEST["model_files"], placed by
+# `provision.py --fetch-models` on a production host only). Set, the daemon loads exactly these files and
+# never reaches for the network; a missing file is a loud error, not a silent download.
+Environment="HAMS_PIPER_VOICE_PATH=/opt/hams/models/piper/en_US-lessac-low.onnx"
+Environment="HAMS_WHISPER_MODEL_DIR=/opt/hams/models/faster-whisper-tiny.en"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 # Added 2026-09-30 -- these previously existed ONLY in a hand-maintained,
@@ -5681,6 +5713,11 @@ User=odoo
 WorkingDirectory=/opt/hams/daemons/hams_simulated_bots
 
 Environment="HF_HOME=/opt/hams/cache/whisper"
+# Speech models live at a stable path outside the daemon tree (MANIFEST["model_files"], placed by
+# `provision.py --fetch-models` on a production host only). Set, the daemon loads exactly these files and
+# never reaches for the network; a missing file is a loud error, not a silent download.
+Environment="HAMS_PIPER_VOICE_PATH=/opt/hams/models/piper/en_US-lessac-low.onnx"
+Environment="HAMS_WHISPER_MODEL_DIR=/opt/hams/models/faster-whisper-tiny.en"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 # Same rationale as hams.simulated.bots.service's own 2026-09-30 comment above --
@@ -6479,6 +6516,64 @@ WantedBy=timers.target
             "owner": "root:root",
             "mode": "644",
             "environments": ["prod"],
+        },
+    ],
+    # Speech models for the simulated-band bots (daemons/hams_simulated_bots). Fetched by
+    # provision_model_files() ONLY on a production-class provisioning run (never --test, never
+    # HAMS_ISOLATED_NS=1, never a test environment), each file verified against `sha256` and `size`
+    # before it is moved into place; nothing is downloaded when the installed copy already verifies.
+    # Checksums and sizes were taken from the dev box's copies of these exact files (2026-10-04), not
+    # from a download. The Hugging Face whisper URLs pin a commit (`resolve/<sha>/`); the Piper voice
+    # repository is read at `main`, which is still safe because the content is checksum-pinned (a
+    # changed upstream file fails verification and is not installed).
+    "model_files": [
+        {
+            "path": "/opt/hams/models/piper/en_US-lessac-low.onnx",
+            "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/low/en_US-lessac-low.onnx",
+            "sha256": "f7d01dde371555732c4c314111ac79672b1a5ce2fc19266ab42178fd8df7f375",
+            "size": 63201294,
+            "owner": "hams_com:hams_com",
+            "mode": "640",
+        },
+        {
+            "path": "/opt/hams/models/piper/en_US-lessac-low.onnx.json",
+            "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/low/en_US-lessac-low.onnx.json",
+            "sha256": "45754dfdebb3b8661c3fc564713772deec6e064feeb5b4e9594857dc7305193a",
+            "size": 4882,
+            "owner": "hams_com:hams_com",
+            "mode": "640",
+        },
+        {
+            "path": "/opt/hams/models/faster-whisper-tiny.en/config.json",
+            "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/config.json",
+            "sha256": "14b1b421a90349bc551b881461426b561a874049cb9e4c4864f2ca384f6a7cc5",
+            "size": 2317,
+            "owner": "hams_com:hams_com",
+            "mode": "640",
+        },
+        {
+            "path": "/opt/hams/models/faster-whisper-tiny.en/model.bin",
+            "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/model.bin",
+            "sha256": "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a",
+            "size": 75537502,
+            "owner": "hams_com:hams_com",
+            "mode": "640",
+        },
+        {
+            "path": "/opt/hams/models/faster-whisper-tiny.en/tokenizer.json",
+            "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/tokenizer.json",
+            "sha256": "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df",
+            "size": 2128466,
+            "owner": "hams_com:hams_com",
+            "mode": "640",
+        },
+        {
+            "path": "/opt/hams/models/faster-whisper-tiny.en/vocabulary.txt",
+            "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/vocabulary.txt",
+            "sha256": "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf",
+            "size": 422309,
+            "owner": "hams_com:hams_com",
+            "mode": "640",
         },
     ],
     "apt_packages": [
@@ -7281,6 +7376,77 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
 
         for hook in hooks:
             hook(env_vars or {}, dest_dir, path, run_cmd_func)
+
+
+# [@ANCHOR: infrastructure:provision_model_files]
+def _sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:  # audit-ignore-path
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _model_file_verifies(path, spec):
+    """True when `path` exists with exactly the pinned size and SHA-256."""
+    try:
+        return os.path.getsize(path) == spec["size"] and _sha256_of(path) == spec["sha256"]
+    except OSError:
+        return False
+
+
+def _fetch_model_to(url, part_path, expected_size):
+    """Streams `url` to `part_path`, refusing to read past `expected_size` bytes. Raises on any failure."""
+    ua = "HamsComProvisioning/1.0 (+https://hams.com)"
+    req = urllib.request.Request(url, headers={"User-Agent": ua})
+    got = 0
+    with urllib.request.urlopen(req, timeout=60) as response, open(part_path, "wb") as out:  # audit-ignore-path
+        while True:
+            chunk = response.read(1 << 20)
+            if not chunk:
+                break
+            got += len(chunk)
+            if got > expected_size:
+                raise ValueError(f"{url}: more than the expected {expected_size} bytes")
+            out.write(chunk)
+
+
+def provision_model_files(environment="prod", dest_dir="", fetch=None):
+    """Places the files of MANIFEST["model_files"] under /opt/hams/models, checksum-verified.
+
+    Production only: anything but environment "prod" (a test environment), a HAMS_ISOLATED_NS=1
+    run (test.py's own provisioning) or a `dest_dir` staging run does nothing and returns [], so a
+    test host never downloads a model. A file that already verifies (size and SHA-256) is left alone
+    with no network access. A missing or wrong one is fetched to `<path>.part`, verified, and only
+    then renamed into place; a download that fails or does not verify leaves nothing at the path
+    (an installed good copy is never replaced by a bad one) and is recorded as a hook failure.
+    `fetch(url, part_path, expected_size)` is the injectable transport (tests pass a fake).
+    Returns the list of paths that failed. Honours plan mode."""
+    if environment != "prod" or dest_dir or os.environ.get("HAMS_ISOLATED_NS") == "1":
+        return []
+    fetch = fetch or _fetch_model_to
+    failed = []
+    for spec in MANIFEST.get("model_files", []):
+        path = spec["path"]
+        if _model_file_verifies(path, spec):
+            continue
+        if _plan("download", f"{spec['url']} -> {path} ({spec['size']} bytes, sha256 {spec['sha256']})"):
+            continue
+        part = path + ".part"
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fetch(spec["url"], part, spec["size"])
+            if not _model_file_verifies(part, spec):
+                raise ValueError(f"{path}: downloaded file does not match the pinned size/SHA-256")
+            apply_permissions(part, spec.get("owner"), int(spec.get("mode", "640"), 8))
+            os.replace(part, path)
+        except Exception as e:  # audit-ignore-catch-all
+            _logger.error("[!] Model file %s was not installed: %s", path, e)
+            record_hook_failure(f"model_files:{path}", e)
+            failed.append(path)
+            with contextlib.suppress(OSError):
+                os.unlink(part)
+    return failed
 
 
 # [@ANCHOR: infrastructure:provision_systemd_override]
@@ -9523,6 +9689,8 @@ def provision_environment(
 
         provision_static_files(run_cmd_func, env_vars, environment="prod")
         provision_static_files(run_cmd_func, env_vars, environment="test")
+        # Speech models for the bots: production-class runs only (see provision_model_files).
+        provision_model_files(environment="test" if is_test else "prod")
 
         is_isolated_ns_early = os.environ.get("HAMS_ISOLATED_NS") == "1"
         if (
