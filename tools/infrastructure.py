@@ -7586,6 +7586,67 @@ exec /home/hams_event_agent/.local/bin/agy "$@"
             "environments": ["prod"],
         },
         {
+            # hams1 readiness audit (docs/runbooks/PRODUCTION_READINESS_2026-10.md in hams_com), row 3: nothing
+            # watched the site and nothing outside the host could page anyone. One pass per minute (timer below)
+            # of tools/site_monitor.py: Odoo's health endpoint, PostgreSQL, the tunnel's edge connections, the
+            # public site, every long-running daemon (signers included) and disk space. It pages through the
+            # operator's webhook and/or SMTP (PAGER_WEBHOOK_URL, PAGER_FALLBACK_EMAIL, SMTP_HOST ... in the
+            # optional /opt/hams/etc/site_monitor.env) with no Odoo and no mail server of ours in the path, and
+            # pings HAMS_MONITOR_HEARTBEAT_URL only when everything passes, so an off-host dead-man service
+            # pages when the host, its network or this timer dies. Local checks and the operator's own
+            # webhook only, so not external_fetch. Runs as root with every capability but read-anywhere dropped:
+            # `systemctl is-active` and the state file need none, and reading the root-only env file needs only that.
+            "path": "/opt/hams/systemd/hams-site-monitor.service",
+            "content": """\
+[Unit]
+Description=One pass of the hams.com site monitor (checks, page on failure, dead-man heartbeat)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/opt/hams/etc/site_monitor.env
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_shared/tools/site_monitor.py
+# A hung check must not stack up passes: the longest legitimate pass is a few HTTP timeouts.
+TimeoutStartSec=120
+StateDirectory=hams-monitor
+StateDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.site.monitor
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-site-monitor.timer",
+            "content": """\
+[Unit]
+Description=Run the hams.com site monitor every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             # night_shift_todo/low/detect-stray-long-running-interactive-odoo-processes-
             # b3f8a672.md: a forgotten `odoo shell` process once ran on hams1 for 4+ days
             # undetected (night_shift_todo/medium/stray-odoo-shell-process-ran-4-days-on-

@@ -3636,6 +3636,8 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams.simulated.bots.service": "local band client; speech model fetched once into a cache",
         "hams.simulated.observer.service": "local band client, same as the bots",
         "pdns.sync.service": "RabbitMQ consumer writing to the local PowerDNS API",
+        "hams-site-monitor.service": "probes local ports, our own site and units; posts only to the operator's own webhook or SMTP",
+        "hams-site-monitor.timer": "activates hams-site-monitor.service (local)",
         "stray.odoo.shell.detector.service": "inspects local processes",
         "stray.odoo.shell.detector.timer": "activates stray.odoo.shell.detector.service (local)",
     }
