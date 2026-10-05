@@ -3692,6 +3692,8 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams-site-monitor.timer": "activates hams-site-monitor.service (local)",
         "stray.odoo.shell.detector.service": "inspects local processes",
         "stray.odoo.shell.detector.timer": "activates stray.odoo.shell.detector.service (local)",
+        "web.bot.auth.directory.service": "signs a file in its own directory; AF_UNIX only, no network",
+        "web.bot.auth.directory.timer": "activates web.bot.auth.directory.service (local)",
     }
 
     # Units seen running on test hosts in the 2026-10-02 incident; each must stay classified.
@@ -4083,9 +4085,10 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 self.assertEqual(account["shell"], "/usr/sbin/nologin")
                 # odoo must be in the group to hand it a key file (chgrp, never chown); a unit with no key
                 # file has nothing to hand over and odoo is not in its group.
-                if rules.get("no_key"):
+                if rules.get("no_key") and not rules.get("odoo_reads"):
                     self.assertNotIn("odoo", account.get("add_to_users", []))
                 else:
+                    # `odoo_reads`: no key to hand over, but odoo reads what the unit writes (group read, never write).
                     self.assertIn("odoo", account["add_to_users"])
                 # The traversal group (not hams_com) is what lets the account reach /opt/hams, and the
                 # account is taken out of hams_com so it cannot read the ADIF queue or other hams_com data.

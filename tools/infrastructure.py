@@ -1013,6 +1013,11 @@ FAMILY_ACCOUNT_UNITS = {
         "user": "hamsd_satellite_sync",
         "environment_files": frozenset({"common.env"}),
     },
+    "event.cover.image.sync.service": {
+        "user": "hamsd_event_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
     "arrl.hamfests.sync.service": {
         "user": "hamsd_event_sync",
         "environment_files": frozenset({"common.env"}),
@@ -1149,6 +1154,15 @@ FAMILY_ACCOUNT_UNITS = {
         "environment_files": frozenset({"common.env"}),
         "agent_sudo": "hams_ai_agent",
     },
+    # The Web Bot Auth key directory publisher (daemons/web_bot_auth.py `refresh`): signs the public key directory with its
+    # own key and writes the bundle hams.com serves. It holds no Odoo key and loads no environment file; odoo is in its group
+    # only to READ the bundle (`odoo_reads`).
+    "web.bot.auth.directory.service": {
+        "user": "hamsd_web_bot_auth",
+        "environment_files": frozenset(),
+        "no_key": True,
+        "odoo_reads": True,
+    },
 }
 
 
@@ -1200,6 +1214,21 @@ MANIFEST = {
             "user": "hamsd_ncvec_sync",
             "group": "hamsd_ncvec_sync",
             "home": "/opt/hams/spool/ncvec",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/web_bot_auth.py: the publisher of the Web Bot Auth key directory that hams.com serves at
+            # /.well-known/http-message-signatures-directory (night_shift_todo register-the-sync-daemons-as-a-cloudflare-signed-agent).
+            # It alone holds the directory-signing private key, so a compromised Odoo worker can stop serving the
+            # directory and cannot sign one. odoo joins this group to read the bundle it writes (never to write it).
+            # Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_web_bot_auth",
+            "group": "hamsd_web_bot_auth",
+            "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
             "member_of": ["hams_traverse"],
@@ -2050,6 +2079,17 @@ MANIFEST = {
             # recursive_owner moves files an earlier run left here as odoo to the account.
             "path": "/opt/hams/spool/ncvec",
             "owner": "hamsd_ncvec_sync:hamsd_ncvec_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # The Web Bot Auth publisher's private key (publisher.key, 0600: odoo, in the group, cannot read it), the public JWKs
+            # (jwks/) and the signed bundle hams.com serves (directory.json, 0644 world-readable content, in a 0750 directory only the
+            # group may enter).
+            "path": "/opt/hams/spool/web_bot_auth",
+            "owner": "hamsd_web_bot_auth:hamsd_web_bot_auth",
             "provision_mode": "750",
             "recursive_owner": True,
             "runtime_mount": "rw",
@@ -4975,6 +5015,80 @@ WantedBy=timers.target
             "environments": ["prod", "test"],
         },
         {
+            "path": "/opt/hams/systemd/event.cover.image.sync.service",
+            "external_fetch": "queries Wikidata and Wikimedia Commons for openly licensed event cover pictures",
+            "content": """\
+[Unit]
+Description=Ham Radio Event Cover Picture Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# The event_sync family account (hamsd_event_sync). The script writes no file: it asks Wikidata and Commons for a licensed picture and pushes it to Odoo, so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+Type=oneshot
+User=hamsd_event_sync
+Group=hamsd_event_sync
+WorkingDirectory=/opt/hams/daemons/event_sync
+
+# Code audit, 2026-10-05: event_cover_image_sync.py reads SYSTEM_USER_AGENT for its request headers and reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+Environment="ODOO_USER=event_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/event_cover_image_sync.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=event.cover.image.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/event.cover.image.sync.timer",
+            "external_fetch": "activates event.cover.image.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Event Cover Picture Sync Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/systemd/rac.events.sync.service",
             "external_fetch": "scrapes a third-party event calendar",
             "content": """\
@@ -5884,6 +5998,74 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=ncvec.sync
 
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            # The Web Bot Auth key directory publisher: creates its signing key once, then signs and writes the directory bundle
+            # hams.com serves. Local only: reads and writes its own directory, no network (RestrictAddressFamilies=AF_UNIX).
+            "path": "/opt/hams/systemd/web.bot.auth.directory.service",
+            "content": """\
+[Unit]
+Description=Sign and Publish the Web Bot Auth Key Directory
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/web_bot_auth
+Type=oneshot
+User=hamsd_web_bot_auth
+Group=hamsd_web_bot_auth
+WorkingDirectory=/opt/hams/daemons
+
+# No secret is loaded and no network is reachable: the private key is a file this account creates (mode 0600) in its own directory.
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth/publisher.key --jwk-file /opt/hams/spool/web_bot_auth/jwks/publisher.jwk
+ExecStart=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py refresh --key-file /opt/hams/spool/web_bot_auth/publisher.key --jwk-dir /opt/hams/spool/web_bot_auth/jwks --out /opt/hams/spool/web_bot_auth/directory.json
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=web.bot.auth.directory
+
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/web.bot.auth.directory.timer",
+            "content": """\
+[Unit]
+Description=Refresh the Web Bot Auth Key Directory Daily
+
+[Timer]
+# The directory's signature lasts seven days; a daily refresh leaves six days of slack for a failed run.
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
