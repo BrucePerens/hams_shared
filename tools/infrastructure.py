@@ -907,18 +907,6 @@ def hook_migrate_subcarrier_signing_key(env_vars, dest_dir, path, run_cmd_func):
     )
 
 
-def hook_migrate_relay_signing_key(env_vars, dest_dir, path, run_cmd_func):
-    # The relay key keeps its historical "noise" file name (daemons/
-    # relay_signer/main.py's SIGNING_KEY_PATH), unlike the other two.
-    _run_signing_key_migration(
-        "hook_migrate_relay_signing_key",
-        "hams_noise_signing_ed25519.key",
-        "hams_relay_signer:hams_relay_signer",
-        dest_dir,
-        path,
-    )
-
-
 # [@ANCHOR: infrastructure:shared_odoo_account_ratchet]
 # Every systemd unit below whose [Service] section says `User=odoo` shares one OS account with the
 # Odoo server and with every other unit on this list. daemon_key_manager gives each daemon its own
@@ -1819,14 +1807,14 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
-            # hams_com daemons/relay_signer: same shape as subcarrier_signer above. The
-            # hook moves /var/lib/odoo/hams_noise_signing_ed25519.key, if present.
+            # hams_com daemons/relay_signer: same shape as subcarrier_signer above, holding the hams.com
+            # capability issuer key. (The Ed25519 attestation key it used to hold is gone with the Noise
+            # attestation, NIGHT_PLAN 131, 147; so is the hook that migrated it.)
             "path": "/opt/hams/etc/relay_signer",
             "owner": "hams_relay_signer:hams_relay_signer",
             "provision_mode": "700",
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
-            "post_provision_hooks": [hook_migrate_relay_signing_key],
         },
         {
             "path": "/opt/hams/etc/relay_signer_public",
