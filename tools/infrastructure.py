@@ -2849,7 +2849,7 @@ WantedBy=multi-user.target
             # setting this file does not control. Installed by hand on hams1 2026-10-05; the hook
             # links it, drops Debian's default and any acme-only site (nothing may bind port 80) and
             # enables nginx. Self-hosters: Odoo needs a buffering reverse proxy in front, see
-            # hams_com docs/deploy/BUFFERING_REVERSE_PROXY.md. Prod only; test hosts never need it.
+            # hams_shared docs/SELF_HOSTING_REVERSE_PROXY.md. Prod only; test hosts never need it.
             "src": "{HAMS_COM_DIR}/nginx/prod/hams-tunnel-origin.conf",
             "path": NGINX_TUNNEL_ORIGIN_CONF,
             "owner": "root:root",
