@@ -32,7 +32,7 @@ authentication would accept.
 
 **1. Both certificates coexist; neither replaces the other.** The relay serves the per-user
 `u<id>.local.hams.com` certificate (LAN devices; key stays on the machine) and one shared
-`localhost.hams.com` certificate (a browser on the same machine). The relay chooses by SNI:
+`localhost.hams.com` certificate (a browser on the same machine). The relay chooses by SNI (server name indication, the host name a browser announces when it opens a TLS connection):
 `localhost.hams.com` gets the shared certificate; every other name, an IP address or no SNI at all
 gets what the relay served before (its per-user certificate when it has one, otherwise the
 distributed wildcard, otherwise self-signed).

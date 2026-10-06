@@ -13,8 +13,8 @@ This directory contains the Architecture Decision Records (ADRs) that define the
 * [MASTER 04: Modularity & Shared Services](MASTER_04_MODULARITY_SHARED_SERVICES.md)
   Mandates centralizing shared logic and Service Accounts into the `core_base` module to prevent monolithic cross-module entanglement.
 * [MASTER 05: SWL Lifecycle & Automated Progression](MASTER_05_SWL_LIFECYCLE.md)
-  Defines the SWL sandbox and automated correlation heuristics for licensing upgrades.
-* [MASTER 06: DNS CQRS Architecture](MASTER_06_DNS_CQRS.md)
+  Defines the SWL (short-wave listener) sandbox and automated correlation heuristics for licensing upgrades.
+* [MASTER 06: DNS CQRS (Command Query Responsibility Segregation) Architecture](MASTER_06_DNS_CQRS.md)
   Isolates DNS read infrastructure from Odoo state using RabbitMQ and PowerDNS SQLite.
 * [MASTER 07: Zero-DB Architecture](MASTER_07_ZERO_DB_ARCHITECTURE.md)
   Prevents database bloat by caching real-time ephemeral data in Redis and broadcasting via WebSockets.

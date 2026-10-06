@@ -36,7 +36,7 @@ started.
    that do not treat plain localhost as a secure context get the same click-through as every other
    browser; the measured behaviour on phones is in NIGHT_PLAN decision 155.
 5. **Kept:** the Relay CA (`relay_ca_cert.rs`, `device_cert_renewal.rs`, `daemons/relay_ca/`, its Odoo
-   models, crons, CRL and the `ca_signer` host class). ADR 0097 is unaffected: nothing the relay serves
+   models, crons, CRL (certificate revocation list) and the `ca_signer` host class). ADR 0097 is unaffected: nothing the relay serves
    depends on a hams.com reachable at connection time.
 
 ## Consequences

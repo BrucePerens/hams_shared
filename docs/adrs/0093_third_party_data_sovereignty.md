@@ -7,7 +7,7 @@ Accepted
 This ADR governs how this codebase (`hams_com`, `hams_open`, `hams_shared`) treats its dependence
 on **non-government, commercial third parties** for data or verification capability this platform
 relies on. It explicitly does **not** cover government/regulatory data sources (FCC, ISED, ACMA,
-Ofcom, ANATEL, BNetzA, RSM, NCVEC, and similar) -- those already have their own well-established
+Ofcom, ANATEL, BNetzA, RSM, NCVEC, and similar: the national radio regulators of the United States, Canada, Australia, the United Kingdom, Brazil, Germany and New Zealand, plus NCVEC, the National Conference of Volunteer Examiner Coordinators, which runs the US amateur exam program) -- those already have their own well-established
 sync daemons (`daemons/*_sync`) built on the assumption of long-term, stable public-record access,
 and a government regulator withdrawing access to its own public licensing records is a different
 kind of risk this ADR isn't written to address. It also doesn't cover ordinary code

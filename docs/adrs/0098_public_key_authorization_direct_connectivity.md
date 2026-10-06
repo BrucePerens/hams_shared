@@ -52,7 +52,7 @@ carrying routine traffic that two directly-reachable endpoints don't need it for
 the prevalence of NAT compared to IPv4, meaning direct connectivity (per decision 2) is achievable
 far more often when both endpoints have real IPv6 connectivity. Connection-establishment logic
 should prefer direct IPv6 connectivity when both endpoints support it, fall back to NAT-traversal
-techniques (STUN-equivalent hole-punching) for IPv4/NAT'd endpoints, and only fall back to the
+techniques (STUN-equivalent hole-punching, which lets two machines behind home routers open a direct connection by first exchanging their public addresses through a third party) for IPv4/NAT'd endpoints, and only fall back to the
 hams.com-proxied path (decision 2) when neither achieves a direct connection.
 
 ## Consequences

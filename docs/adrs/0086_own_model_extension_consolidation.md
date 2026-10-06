@@ -6,7 +6,7 @@ Accepted
 ## Scope
 This ADR governs how in-house modules (any module in `hams_com` or
 `hams_open`) extend a *model this codebase itself defines*. It does not
-apply to `_inherit` of genuine Odoo/OCA core models (`res.users`,
+apply to `_inherit` of genuine Odoo/OCA (Odoo Community Association, which maintains widely used add-on modules) core models (`res.users`,
 `res.partner`, `mail.thread`, etc.), and it does not apply to mixins
 designed for multiple modules to compose (e.g. `user_websites.owned.mixin`).
 

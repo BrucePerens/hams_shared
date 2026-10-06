@@ -32,5 +32,5 @@ When orchestrating via Docker Compose, the system will set specific environment 
 
 ## Consequences
 * **Community Portability:** Developers can run the application directly on their local workstation without manually editing `/etc/hosts` or installing Docker.
-* **CI/CD Enforcement:** The AST linter `check_burn_list.py` physically prevents developers from merging host lookups that omit the `"localhost"` fallback, eliminating "missing host" regressions in production.
+* **CI/CD Enforcement:** The AST (abstract syntax tree) linter `check_burn_list.py`, which parses Python source and rejects code by its structure, physically prevents developers from merging host lookups that omit the `"localhost"` fallback, eliminating "missing host" regressions in production.
 * **Orchestration Flexibility:** Allows infrastructure teams to dynamically decouple microservices onto separate physical servers simply by updating the `.env` vault.
