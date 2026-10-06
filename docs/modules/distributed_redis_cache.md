@@ -9,7 +9,7 @@ Fine-grained distributed caching and phase coherence for horizontally scaled Odo
 - **Multi-Website Awareness**: Isolated cache keys per website (`website_id`) to ensure strict data separation.
 - **Cache Drift Prevention**: Ensures all Odoo nodes stay synchronized in real-time.
 - **Fail-Open Design**: Automatically falls back to local memory if Redis is unavailable, ensuring high availability.
-- **Fine-grained Invalidation**: Precisely flushes specific models instead of the entire cache, minimizing performance impact.
+- **Fine-grained Invalidation**: Precisely flushes specific models instead of the entire cache, minimizing performance impact. (This applies to the Redis-side entries; on any invalidation each Odoo worker clears its entire local LRU cache, not a per-model subset -- see section 1, step 3.)
 - **Batch Processing**: Uses Redis `SCAN` in batches for efficient cleanup of millions of keys without blocking the server.
 - **Management UI**: Dedicated interface for health checks and manual cache invalidation.
 - **Zero-Sudo Architecture**: All background operations execute with minimal privileges using dedicated service accounts.
@@ -27,11 +27,11 @@ Configure the Redis connection via environment variables:
 ## Architecture
 - **Postgres NOTIFY**: Triggered on model mutation to signal invalidation.
 - **Cache Manager Daemon**: A standalone service bridging Postgres NOTIFY to Redis Pub/Sub. Includes robust reconnection and payload validation logic.
-- **Redis Pub/Sub**: Distributes invalidation signals across all Odoo workers.
-- **Middleware Interceptor**: Odoo workers check signals in `ir.http` and flush local caches before processing requests.
+- **Redis Pub/Sub**: The cache-manager daemon publishes invalidation signals here, but no Odoo worker subscribes; workers instead poll a global counter on each request (see section 1, step 3).
+- **Middleware Interceptor**: Each Odoo worker checks the global invalidation counter in `ir.http` and, when it has changed, flushes its local cache before processing the request.
 
 ## Security
-Built with the **Zero-Sudo** architecture. Operations are performed by dedicated service accounts with minimal privileges. The `cache_manager_sys` user handles daemon-to-database communication.
+Built with the **Zero-Sudo** architecture ([zero_sudo.md](zero_sudo.md)). Operations are performed by dedicated service accounts with minimal privileges. The `cache_manager_sys` user handles daemon-to-database communication.
 
 ## Documentation
 Comprehensive user documentation is available via the **Knowledge** module after installation.
@@ -46,7 +46,7 @@ Comprehensive user documentation is available via the **Knowledge** module after
 
 <architecture>
 ## 1. Architecture & Overview
-Standard Odoo `@tools.ormcache` relies on a local worker registry cache, which can drift out of sync in multi-node environments. This module provides a fine-grained, distributed Redis-backed cache enforcing strict phase coherence.
+Standard Odoo `@tools.ormcache` relies on a local worker registry cache, which can drift out of sync in multi-node environments. This module provides a fine-grained, distributed Redis-backed cache enforcing strict phase coherence. "Phase coherence" here means that all workers act on the same invalidation state: a mutation on one worker bumps a shared counter, and every other worker clears its local cache before serving its next request (steps 1-3 below); while Redis is unreachable that coherence is temporarily lost (section 2).
 
 **The Invalidation Pipeline:**
 1. An Odoo worker mutates a cached model and fires a PostgreSQL `NOTIFY` on the `distributed_cache_invalidation` channel.

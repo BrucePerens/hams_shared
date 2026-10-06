@@ -15,7 +15,7 @@ To guarantee the stability and security of the platform without a massive QA dep
 * We explicitly ban the use of regular expressions for extracting, evaluating, or parsing any structured data. You MUST use native parsers (`lxml.etree`, `ast`, `json`, `yaml`). Regex is strictly confined to evaluating flat text or log lines.
 
 ### 3. AST Linter Anti-Evasion Protocols
-* The Burn List linter actively blocks "dead code evasion" (placing required assertions after a `return`, `raise`, `break`, or `continue`) and "loop evasion" (wrapping rendering validations like `get_view` inside `for`/`while` loops). Tests must be written securely with genuine, sequentially executed assertions.
+* The Burn List linter (`check_burn_list.py`, which fails the build when a rule is broken; see [ADR 0076](0076_ui_tour_mandate_and_bypass_governance.md)) actively blocks "dead code evasion" (placing required assertions after a `return`, `raise`, `break`, or `continue`) and "loop evasion" (wrapping rendering validations like `get_view` inside `for`/`while` loops). Tests must be written securely with genuine, sequentially executed assertions.
 
 ### 4. Linter Bypass Testing & AST Verification
 * Using a bypass tag (`# burn-ignore`, `# audit-ignore-*`) requires an explicit automated test to prove the bypassed logic is safe. The bypass comment MUST cross-reference the test anchor. The linter performs Deep AST Test Verification to ensure the test function actually contains the required functional assertions.

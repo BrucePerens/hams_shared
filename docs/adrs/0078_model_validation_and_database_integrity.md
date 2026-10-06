@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-To guarantee data integrity across the platform, we require a defense-in-depth approach that combines application-layer Python validation with strict PostgreSQL database constraints. However, implementing these validations must not violate the platform's core performance mandates (preventing OOM (out-of-memory) crashes and N+1 queries) or its security architecture (Zero-Sudo). Furthermore, Odoo 19 introduces modernized syntactical requirements for defining database constraints that our AST (abstract syntax tree) linters, which parse the Python source and reject code by its structure, strictly enforce.
+To guarantee data integrity across the platform, we require a defense-in-depth approach that combines application-layer Python validation with strict PostgreSQL database constraints. However, implementing these validations must not violate the platform's core performance mandates (preventing OOM (out-of-memory) crashes and N+1 queries) or its security architecture (Zero-Sudo: no use of Odoo's `.sudo()`, which bypasses access rules; automated work runs as narrowly scoped service accounts instead, see [MASTER_01](MASTER_01_SECURITY_ZERO_SUDO.md)). Furthermore, Odoo 19 introduces modernized syntactical requirements for defining database constraints that our AST (abstract syntax tree) linters, which parse the Python source and reject code by its structure, strictly enforce.
 
 ## Decision
 We mandate a two-tiered validation architecture for all data models, adhering to the following strict implementation rules:

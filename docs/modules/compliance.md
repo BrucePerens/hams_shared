@@ -76,7 +76,7 @@ Dependent modules requiring legal links MUST use:
 
 <security_architecture>
 ## 4. Security & Zero-Sudo
-This module adheres to **ADR-0002 (Zero-Sudo)** and **ADR-0005 (Service Account Web Isolation)**.
+This module adheres to **ADR-0002 (Zero-Sudo)** and **ADR-0005 (Service Account Web Isolation)**, both consolidated in [MASTER_01_SECURITY_ZERO_SUDO.md](../adrs/MASTER_01_SECURITY_ZERO_SUDO.md) (Zero-Sudo: no `.sudo()`; privileged work runs as a dedicated service account, see [zero_sudo.md](zero_sudo.md); Web Isolation: service accounts cannot log in through the web interface).
 
 * **Micro-Privilege Account:** Automated post-install configuration is executed via the `compliance.user_compliance_service` service account.
 * **ACLs:** The service account is granted minimal read/write access to `website`, `website.page`, and `ir.ui.view` models. `[@ANCHOR: compliance_security_acls]`

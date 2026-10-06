@@ -66,7 +66,7 @@ The module follows a **Command Query Responsibility Segregation (CQRS)** pattern
 *   **Inter-Process Communication (IPC):** Uses Redis Pub/Sub and Queues for high-speed communication between Odoo workers and background daemons.
 
 ### Security & Micro-Privileges:
-*   **Zero-Sudo RPC:** Daemons authenticate via the `pager_service_internal` service account. No `sudo()` is used.
+*   **Zero-Sudo RPC:** (Zero-Sudo: no `.sudo()`; see [zero_sudo.md](zero_sudo.md).) Daemons authenticate via the `pager_service_internal` service account. No `sudo()` is used.
 *   **Sandboxing:** Synthetic checks run inside a strict **Bubblewrap (bwrap)** sandbox with optional network isolation.
 *   **Service Accounts:** The module uses `zero_sudo.security.utils` to securely escalate privileges within Odoo's ACL framework.
 *   **Multi-Website Isolation:** Data is partitioned by `website_id`. The NOC Dashboard respects `website_id` passed via query parameters or context.

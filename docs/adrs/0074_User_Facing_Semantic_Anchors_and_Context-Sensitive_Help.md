@@ -7,6 +7,8 @@ Accepted
 
 We need a standardized methodology to bind frontend interactive elements to our centralized system help documentation manuals across different modules. This architecture ensures that contextual help links remain completely unbreakable and highly traceable even when view layouts or route endpoints shift.
 
+A semantic anchor is an anchor tag (the bracketed `@ANCHOR` marker) that links a piece of code to the test and the documentation that justify it, so a verifier script (`verify_anchors.py`, see [ADR 0090](0090_universal_function_test_anchor_ratchet.md)) can check the link instead of trusting it. The general scheme and the `UX_` prefix used below for user-facing anchors are defined in [MASTER_11](MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md), section 1.
+
 ## Specification Rules
 
 1. **Inline HTML Tracking Attributes:** User-facing text nodes or layout headings in documentation manuals must utilize an explicit tracking token identifier matching the designated features framework.

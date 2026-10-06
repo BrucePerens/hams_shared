@@ -2,6 +2,8 @@
 
 ## Technical Specification
 
+*Anchor tags: each bracketed anchor tag below is a Semantic Anchor, a marker that ties one function to its test and to its documentation; the `COMM_` prefix marks anchors owned by `hams_open`. See [MASTER 11](../adrs/MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md) and [ADR-0090](../adrs/0090_universal_function_test_anchor_ratchet.md).*
+
 ### 1. Public Email-Policy Pages
 Public, unauthenticated compliance pages required for anti-spam/legal disclosure.
 * **Email Policy Disclosure Page:** `[@ANCHOR: hams_base:COMM_email_policy_route]`

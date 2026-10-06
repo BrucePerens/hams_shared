@@ -13,6 +13,8 @@ correctly (see MASTER_10/MASTER_12 and the multi-tenant test-coverage audit
 this ADR's companion work performed against `hams_open`).
 
 ## Context
+Read the single-website statements below together with [ADR 0106](0106_tenants_inside_one_odoo.md), which later adds tenant sites as further `website` records inside the same hams.com database (no company per tenant).
+
 `hams_com` is the application code for exactly one production deployment:
 hams.com. There is exactly one `res.company` and one `website` record in a
 real hams.com database. A candidate feature that might once have argued for

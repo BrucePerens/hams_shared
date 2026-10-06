@@ -4,6 +4,8 @@
 Accepted
 
 ## Context
+See also [ADR 0085](0085_hams_com_single_site_deployment_policy.md), which tells `hams_com`-authored code not to add new `company_id`/`website_id` scoping to models, fields and `ir.rule` records (it does not address the cache-key rule in decision 2 below), and [ADR 0106](0106_tenants_inside_one_odoo.md), where other sites are `website` records inside the hams.com database.
+
 The Hams.com infrastructure leverages Odoo's native multi-company and multi-website capabilities to support decentralized user websites, global privacy compliance, and multi-tenant domain mapping. Consequently, background daemons, API controllers, and ORM operations frequently access data that must be explicitly scoped to a specific tenant.
 
 Historically, AI models and developers have failed to properly scope environment contexts, relying entirely on the default `self.env` state. This causes two critical failure modes:

@@ -4,6 +4,8 @@ This document details the Service User IDs (`is_service_account=True`) defined a
 
 Under the Zero-Sudo architecture, no Python code is allowed to use `sudo()`. Instead, operations that require elevated privileges must execute within the context of a dedicated service account using `with_user()`.
 
+A service account is a `res.users` record flagged `is_service_account` (the flag comes from the `zero_sudo` module). The rule and its reasoning are in [MASTER 01](adrs/MASTER_01_SECURITY_ZERO_SUDO.md) and [`modules/zero_sudo.md`](modules/zero_sudo.md): service accounts are blocked from interactive web login, and `_get_service_uid` refuses any service account that holds `base.group_system` or `base.group_erp_manager`, so none of the accounts below is a superuser.
+
 ## Core System Accounts (`zero_sudo`)
 
 | XML ID | Description | Privileges |

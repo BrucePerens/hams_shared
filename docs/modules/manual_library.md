@@ -73,7 +73,7 @@ Uses a standard parent-child relationship for hierarchy. Inherits from `mail.thr
 
 * **Dynamic TOC:** Automatically parses article HTML on the frontend to generate a dynamic Table of Contents `[@ANCHOR: manual_toc_logic]`.
 
-* **Automated Documentation Installation:** Utilizes the central `_bootstrap_knowledge_docs` facility from the `zero_sudo` module to automatically discover and install documentation for all installed modules via the `knowledge_docs` manifest key. This supports soft dependencies on `knowledge.article` or `knowledge.article` `[@ANCHOR: manual_doc_auto_install]`. `[@ANCHOR: manual_doc_injection]`
+* **Automated Documentation Installation:** Utilizes the central `_bootstrap_knowledge_docs` facility from the `zero_sudo` module to automatically discover and install documentation for all installed modules via the `knowledge_docs` manifest key. This supports a soft dependency on whichever provider of `knowledge.article` is installed: this open-source `knowledge` module or Odoo Enterprise's Knowledge app `[@ANCHOR: manual_doc_auto_install]`. `[@ANCHOR: manual_doc_injection]`
 * **Zero-Sudo Execution:** All automated operations and frontend feedback increments are performed using the `knowledge.user_knowledge_service_account` micro-privilege account.
 * **Multi-Website Isolation:** Articles are isolated by `website_id`. Controllers and sidebar logic strictly filter content to the current website context.
 * **Hierarchical Breadcrumbs:** Provides a recursive breadcrumb trail in the frontend view to maintain user context within deep folder structures.

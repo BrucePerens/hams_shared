@@ -17,7 +17,7 @@ Domain-specific rules for verifying Amateur Radio operator identities securely w
     5. Manual ID Upload
 
 ### 2. Shadow Profile Indexing (Search Indexes)
-The platform relies on background daemons to perform cross-user lookups. Querying `res.users` directly requires `base.group_user`, which violates the Zero-Sudo mandate by exposing the ERP to microservices. We mandate the **Shadow Profile Pattern**:
+The platform relies on background daemons to perform cross-user lookups. Querying `res.users` directly requires `base.group_user`, which violates the Zero-Sudo mandate by exposing the ERP to microservices. We mandate the **Shadow Profile Pattern** (a "shadow profile" is a view that stands beside `res.users` and is queried in its place, so daemons never read the real user table):
 1. **Isolated PostgreSQL Views:** Introduce dedicated, domain-specific views (`ham.operator.index`) that exist entirely outside of the `res.users` Python security hierarchy using `_auto = False`.
 2. **Strict Group Gating:** The views use SQL `JOIN` constraints to exclusively expose users belonging to the required domain groups. Standard Odoo ERP users are natively excluded.
 3. **Daemon Rerouting:** All external daemons, webhooks, and APIs MUST execute their searches against these shadow indexes.

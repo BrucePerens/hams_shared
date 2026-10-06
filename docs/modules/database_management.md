@@ -21,7 +21,7 @@ The `database_management` module provides a comprehensive suite of Database Admi
 ## 🛠 Architecture & Security
 
 ### Micro-Privilege Architecture
-This module strictly adheres to a Zero-Sudo policy. Sensitive operations are delegated to the `user_database_management_service` service account. Privilege elevation is handled via `_get_service_env()` from the `zero_sudo` module, ensuring that no `sudo()` calls are used in the codebase.
+This module strictly adheres to a Zero-Sudo policy (no `.sudo()`; see [zero_sudo.md](zero_sudo.md)). Sensitive operations are delegated to the `user_database_management_service` service account. Privilege elevation is handled via `_get_service_env()` from the `zero_sudo` module, ensuring that no `sudo()` calls are used in the codebase.
 
 ### Security Hardening
 *   **SQL Injection Prevention:** All raw SQL queries utilize the `psycopg2.sql` library for AST-compliant parameterization. `[@ANCHOR: pg_optimize_wizard]`
@@ -42,7 +42,7 @@ This module strictly adheres to a Zero-Sudo policy. Sensitive operations are del
 
 ## 📚 Documentation & Help
 
-User-facing documentation is available directly within the Odoo Knowledge or Knowledge modules.
+User-facing documentation is available directly within Odoo's Knowledge app, whether this repository's open-source `knowledge` module or Odoo Enterprise's Knowledge app.
 *   **Guide:** `Database Management Guide` (installed from `data/documentation.html`).
 
 ---

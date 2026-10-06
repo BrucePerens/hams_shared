@@ -2,8 +2,10 @@
 
 ## Technical Specification
 
+*Anchor tags: each bracketed anchor tag below is a Semantic Anchor, a marker that ties one function to its test and to its documentation; the `COMM_` prefix marks anchors owned by `hams_open`. See [MASTER 11](../adrs/MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md) and [ADR-0090](../adrs/0090_universal_function_test_anchor_ratchet.md).*
+
 ### 1. Custom Domain Mapping
-Maps an externally-owned FQDN (e.g. a club's own `www.myclub.org`) onto an internal `website_slug`, so a custom domain can front any record implementing `edge.routing.mixin`.
+Maps an externally-owned FQDN (e.g. a club's own `www.myclub.org`) onto an internal `website_slug`, so a custom domain can front any record implementing `edge.routing.mixin`. The domain table is a registry, not a request router: per the module's own README (`edge_routing/README.md` in `hams_open`), nothing in `hams_open` reads `target_slug` when serving a request, and custom-domain traffic is served through Odoo core's `website.domain`.
 * **FQDN and Reserved-Slug Validation:** `[@ANCHOR: edge_routing:COMM_domain_check_name]`
 
 * **Domain Create/Write/Unlink Cache-Invalidation Cycle:** `[@ANCHOR: edge_routing:COMM_domain_crud_cycle]`
@@ -34,4 +36,4 @@ Maps an externally-owned FQDN (e.g. a club's own `www.myclub.org`) onto an inter
 ## Cross-Module Interfaces
 
 ### PagerDuty Domain Sync
-`edge.routing.domain.push_all_to_pager_duty()` pushes the full custom-domain routing table to PagerDuty asynchronously via `ir.cron`, triggered by `_invalidate_cache()` on any domain create/write/unlink.
+`edge.routing.domain.push_all_to_pager_duty()` pushes the custom-domain list to PagerDuty asynchronously via `ir.cron`, triggered by `_invalidate_cache()` on any domain create/write/unlink. Per the module's README, "PagerDuty" here is hams_open's own `pager_duty` monitoring module ([pager_duty.md](pager_duty.md)), not the commercial PagerDuty service, and what is pushed is the deduplicated list of domain names only (every `edge.routing.domain` name, plus every `ham.dns.zone` name when `ham_dns` is installed), with no slugs or routes; `pager_duty` uses the list as the target of its Let's Encrypt "certbot" readiness check.

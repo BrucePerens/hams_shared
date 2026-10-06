@@ -15,7 +15,7 @@ The **Binary Downloader** is a secure, database-backed orchestration module desi
 <security_design>
 ## 1. Security Design
 * **DB-Backed Manifests:** Download targets and cryptographic SHA-256 checksums are stored in the `binary.manifest` model, preventing reliance on insecure flat-file manifests.
-* **Least Privilege:** Executes downloads and installations under the dedicated `user_binary_downloader_service` service account. The module is fully compliant with the **Zero-Sudo** mandate.
+* **Least Privilege:** Executes downloads and installations under the dedicated `user_binary_downloader_service` service account. The module is fully compliant with the **Zero-Sudo** mandate (no `.sudo()`; privileged work runs as a dedicated, narrowly scoped service account -- defined in [zero_sudo.md](zero_sudo.md), accounts catalogued in [service_accounts.md](../service_accounts.md)).
 * **Integrity Enforcement:** Verifies SHA-256 hashes before moving binaries to the execution path (`hams_bin`).
 * **Concurrency Protection:** Implements PostgreSQL **advisory locks** (via `pg_advisory_xact_lock`) during the installation process to prevent race conditions and file corruption when multiple Odoo workers trigger installations simultaneously.
 * **Archive Security (Tar/Zip Slip):** Implements strict path validation and member name sanitization during archive extraction (both `.tar.gz` and `.zip`). Extracted files are strictly confined to the `hams_bin` directory. Symbolic links and hard links within archives are strictly forbidden.

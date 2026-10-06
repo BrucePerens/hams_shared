@@ -9,7 +9,7 @@ Communication with third-party networks, local hardware, and headless logging so
 ## Decisions & Mandates
 
 ### 1. Zero-Knowledge API Proofs (HMAC-SHA256)
-Users and headless clients MUST NEVER transmit their raw API secret over the network for authenticated endpoints (where standard cookies are unavailable). Instead, they must transmit:
+Users and headless clients MUST NEVER transmit their raw API secret over the network for authenticated endpoints (where standard cookies are unavailable). ("Zero-knowledge" here means only that the secret itself is never sent; the proof is the HMAC signature below, not a cryptographic zero-knowledge proof.) Instead, they must transmit:
 1. Their `user` identifier.
 2. A Unix `timestamp`.
 3. A highly entropic `nonce`.

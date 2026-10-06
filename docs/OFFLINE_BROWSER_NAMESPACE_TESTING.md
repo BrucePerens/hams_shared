@@ -7,7 +7,9 @@ operator is in, and the one no test in this codebase could express until now.
 Implemented in `hams_shared/tools/offline_browser_ns.py`, wired into `hams_shared/tools/test.py`
 behind `--offline-isolation`. First user:
 `ham_shack/tests/test_shack_offline_isolation_tour.py` plus
-`ham_shack/static/tests/tours/shack_offline_isolation_tour.js`.
+`ham_shack/static/tests/tours/shack_offline_isolation_tour.js`. (`ham_shack` is a module of the proprietary `hams_com` repository, not of `hams_open`, so those two files, and the `docs/proposals/` and `CLAUDE.md` files cited below, are not in a public checkout.)
+
+The "local service" above is the **local relay**: `hams_local_relay`, a program from the `hams_com` codebase that an operator installs on their own machine so that radio functions keep working when the hams.com server is unreachable (see [ADR 0097](adrs/0097_server_independent_relay_operation.md)). This harness never runs the real relay; it uses a stand-in (see "The local-relay stand-in").
 
 ## The problem this solves
 
@@ -44,7 +46,7 @@ test.py's own network namespace ("parent")          nested namespace ("child")
 +-------------------------------------------+       +-----------------------------+
 ```
 
-The browser's only route to anything outside its namespace is the veth pair. Chrome must see the
+(CDP is the Chrome DevTools Protocol, the channel the test framework uses to control the browser.) The browser's only route to anything outside its namespace is the veth pair. Chrome must see the
 Odoo server at exactly `127.0.0.1:8075`, because that is what `HttpCase.base_url()` says and what the
 session cookie's domain is, so a **gateway** forwarder inside the child namespace listens there and
 carries the traffic across.

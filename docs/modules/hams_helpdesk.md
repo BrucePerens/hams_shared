@@ -9,7 +9,7 @@ Zero-Sudo compliant, lightweight helpdesk management system designed for SRE (Si
 </system_role>
 
 <architecture>
-The module implements a reactive ticketing system where assignment is driven by on-duty status. It uses a wizard-based handoff mechanism to ensure context is preserved during operator shifts.
+The module implements a reactive ticketing system where assignment is driven by on-duty status. "On-duty" means the user that `calendar.event.get_current_on_duty_admin()` returns. This module's own version of that method returns nobody; the `pager_duty` module ([pager_duty.md](pager_duty.md)) overrides it to return the user of the calendar event marked "Pager Duty Shift" that is in force now. This module does not depend on `pager_duty`, so without it, or when no shift is in force, new tickets are left unassigned (see `hams_open/hams_helpdesk/README.md`). It uses a wizard-based handoff mechanism to ensure context is preserved during operator shifts.
 
 - **Models**:
     - `hams_helpdesk.ticket`: Main ticket entity, inherits `mail.thread` for communication.
@@ -33,7 +33,7 @@ This module operates within strict DevSecOps parameters, ensuring all actions ar
 
     - Verified by [@ANCHOR: test_01_ticket_creation_and_routing]
 
-* **Ticket Creation (`[@ANCHOR: helpdesk_ticket_creation]`)**: Intercepts the ORM `create` method to automatically execute pre-shift CC logic and route to the currently on-duty personnel based on calendar availability.
+* **Ticket Creation (`[@ANCHOR: helpdesk_ticket_creation]`)**: Intercepts the ORM `create` method to automatically execute pre-shift CC logic and route to the currently on-duty personnel based on calendar availability. "Pre-shift CC" subscribes the users returned by `calendar.event.get_upcoming_duty_shifts()` (people whose shift starts soon) and sends them an internal "Shift CC" note; this module's own version of that method returns no shifts and no module in this repository overrides it, so the step currently does nothing (see `hams_open/hams_helpdesk/README.md`).
 
     - Verified by [@ANCHOR: test_01_ticket_creation_and_routing]
 

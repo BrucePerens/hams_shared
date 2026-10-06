@@ -4,6 +4,8 @@
 Accepted (Bruce, 2026-10-03: "We are honest unless a firewall forces us to masquerade as a browser. We
 still have reverse DNS identifying us as a crawler.")
 
+Related: [ADR 0080](0080_good_bot_compliance_and_scraping_ethics.md) (status Proposed) lists browser spoofing, headless browsers and IP rotation as "Exception Mode" techniques; decision 2(e) below excludes everything beyond the `User-Agent` string.
+
 This replaces the 2026-10-02 hold ("never a browser string, stop and report a 403") that the
 `sync-daemons-honest-user-agent` branches carried. The hold was stricter than Bruce's final decision: it
 allowed no exception at all. This ADR allows one narrow, documented, verified exception.
