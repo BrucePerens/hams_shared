@@ -19,7 +19,7 @@ Maintaining architectural cohesion across a large platform relies on strict docu
 
 ### 2. LLM Context Management (See MASTER 14)
 * To prevent instruction drift and cognitive overload, LLM interactions MUST strictly adhere to the Context Management mandates outlined in MASTER 14.
-* This includes targeting API contracts over raw implementations and enforcing the Patch Protocol to minimize output token generation.
+* This includes targeting API contracts over raw implementations.
 
 ### 3. Clear, Conversational Writing Style
 * "Oblique" AI tones, passive voice, and dense corporate jargon are strictly forbidden. All documentation MUST be written conversationally, directly, and plainly.

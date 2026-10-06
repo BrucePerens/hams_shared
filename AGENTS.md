@@ -189,7 +189,6 @@ Tickets, incidents, inbound mail to the support aliases, report forms (forum, ev
 <definition_of_done>
 ## 4. FINAL VERIFICATION & AUDIT PROTOCOL
 **Mentally check these off before completing a task:**
-* [ ] **Patch Protocol:** Used `overwrite` mode exclusively for files <= 500 lines?
 * [ ] **Transport Terminator:** Used the exact same boundary string and appended `--` to the final one?
 * [ ] **Security:** Zero-Sudo pattern adhered to? Inputs validated?
 * [ ] **Reliability:** Tests cover BDD Acceptance Criteria?
