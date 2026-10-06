@@ -1552,6 +1552,15 @@ MANIFEST = {
     ],
     "directories": [
         {
+            # The pagerduty maintenance flag lives here (/etc/pagerduty/maintenance, written by root only, mode 0644).
+            # 0755 so the monitors, which run as other users with a read-only /etc, can read it. See hams_open's
+            # pager_duty/daemon/pagerduty_maintenance.py.
+            "path": "/etc/pagerduty",
+            "owner": "root:root",
+            "provision_mode": "755",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams",
             "owner": "hams_com:hams_com",
             "provision_mode": "750",
@@ -2793,6 +2802,15 @@ WantedBy=multi-user.target
             "mode": "755",
             "environments": ["prod", "test"],
             "post_provision_hooks": [hook_build_rust_daemons, hook_build_cloudflared_ffi, hook_daemons_perms],
+        },
+        {
+            # The operator command for the pagerduty maintenance flag (start, end, status), from the pager_duty
+            # module: a single stdlib-only file, so installing it anywhere is one copy. Root only for start and end.
+            "src": "{HAMS_COMMUNITY_DIR}/pager_duty/daemon/pagerduty_maintenance.py",
+            "path": "/usr/local/sbin/pagerduty-maintenance",
+            "owner": "root:root",
+            "mode": "755",
+            "environments": ["prod", "test"],
         },
         {
             "src": "{HAMS_COMMUNITY_DIR}/hams_shared",
