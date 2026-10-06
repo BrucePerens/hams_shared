@@ -15,7 +15,7 @@ We need a standardized approach to identifying ourselves to the internet. We mus
 We adopt a **Dual-Mode Bot Architecture**:
 
 ### 1. Default Mode: The "Good Bot" Standard
-By default, all outgoing automated requests MUST conform to industry "Good Bot" standards. This ensures we are not blocked by generic WAF rules and can participate in CDN allowlisting programs.
+By default, all outgoing automated requests MUST conform to industry "Good Bot" standards. This ensures we are not blocked by generic WAF (web application firewall) rules and can participate in CDN (content delivery network) allowlisting programs.
 
 **Core Requirements:**
 *   **Descriptive User-Agent:** All requests must use a custom, descriptive `User-Agent` string (e.g., `MyProjectBot/1.0 (+https://example.com/bot-info)`). Generic user agents (like `python-requests` or `curl`) are strictly prohibited.

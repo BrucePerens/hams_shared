@@ -10,10 +10,10 @@ Domain-specific rules for verifying Amateur Radio operator identities securely w
 
 ### 1. Identity Verification Fallback Matrix
 * Operator verification MUST support a diverse, international matrix to guarantee accessibility:
-    1. Cryptographic LoTW (Golden Path)
-    2. Knowledge-based (Ham-CAPTCHA / QRZ)
+    1. Cryptographic LoTW (the ARRL's Logbook of The World; Golden Path)
+    2. Knowledge-based (Ham-CAPTCHA, a test of amateur-radio knowledge, or a challenge on the applicant's QRZ.com profile)
     3. Skill-based (Dynamic Morse Code Challenge)
-    4. Regulatory (Official FCC Email OTP)
+    4. Regulatory (Official FCC Email OTP, a one-time password sent to the email address on the regulator's public record)
     5. Manual ID Upload
 
 ### 2. Shadow Profile Indexing (Search Indexes)

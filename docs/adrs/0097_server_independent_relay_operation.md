@@ -32,7 +32,7 @@ engineering concerns, which apply here too.
 club's relay, or a repeater) directly reachable over the Internet, the following must work with
 hams.com's own server completely unreachable:**
 
-1. **Controlling your own radio** -- CAT control, PTT, audio I/O. Already true by this codebase's
+1. **Controlling your own radio** -- CAT (computer-aided transceiver) control, PTT (push-to-talk, the transmit switch), audio I/O. Already true by this codebase's
    existing design (`hams_local_relay` talks to the radio directly; hams.com is not in that loop
    today). This ADR names it explicitly so it is never regressed, not because it needs new work.
 2. **Controlling a friend's or club's radio you are authorized to use** (the `ham_station_timeshare`
@@ -48,7 +48,7 @@ hams.com's own server completely unreachable:**
    repeater-linking system this platform supports or will support. The same authorization-caching
    requirement in (2) applies: whatever proves you're authorized for a given repeater must be
    checkable without hams.com being reachable at connection time.
-4. **Logging queues, it never blocks.** QSO records, usage tracking, and any other data destined for
+4. **Logging queues, it never blocks.** QSO (a contact between two stations) records, usage tracking, and any other data destined for
    Odoo must be written locally first and synced when hams.com becomes reachable again -- this
    pattern already exists (`hams_local_relay`'s own SQLite-backed QSO tracker, three independent
    status flags including `pushed_to_hams_com`) and is the model for every other operational record

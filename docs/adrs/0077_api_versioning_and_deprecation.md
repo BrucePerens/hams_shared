@@ -22,7 +22,7 @@ When an endpoint is marked for deprecation:
 
 ### 3. Deprecation Windows
 * **Local Hardware Relays:** Due to the difficulty of updating user-installed desktop software, V1 hardware relay endpoints have a **12-month** sunset window.
-* **Third-Party Integrations:** REST APIs for ADIF uploads/downloads have a **6-month** sunset window after the release of a stable V+1 replacement.
+* **Third-Party Integrations:** REST APIs for ADIF (Amateur Data Interchange Format, the standard logbook file format) uploads/downloads have a **6-month** sunset window after the release of a stable V+1 replacement.
 
 ### 4. Breakage Prevention
 A version MUST NOT be removed from the codebase until the CI/CD pipeline verifies that zero active production log entries (via `ir.logging`) have hit that version's route in the last 30 days.

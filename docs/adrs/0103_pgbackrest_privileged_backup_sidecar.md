@@ -121,4 +121,4 @@ unprivileged daemon is the one polling for a result rather than being polled).
   the sidecar's own privileged-exec tests, since the dev box doesn't run as `postgres`).
 - Production end-to-end verification (`hams1`, after deploy): a real `backup.snapshot` row created from a
   triggered backup job, real bytes visible in `b2 file list --long hams-com-prod-backups`, and
-  `sudo -u postgres pgbackrest --stanza=hams_prod check` passing (confirms WAL archiving is unaffected).
+  `sudo -u postgres pgbackrest --stanza=hams_prod check` passing (confirms WAL, PostgreSQL's write-ahead log, archiving is unaffected).

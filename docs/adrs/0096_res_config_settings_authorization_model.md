@@ -8,7 +8,7 @@ Accepted
 2026-09-13) found that `user_websites/models/res_config_settings.py`'s own `set_values()` override
 unconditionally rewrote `group_user_websites_administrator.user_ids` on every single Settings save,
 company-wide, regardless of which page's fields actually changed. `res.config.settings` is one
-`TransientModel` Odoo's own MRO chains through EVERY installed module's own `get_values()`/
+`TransientModel` Odoo's own MRO (method resolution order, Python's rule for which class's method runs first and how overrides chain) chains through EVERY installed module's own `get_values()`/
 `set_values()` override, unconditionally, on every save -- so this one module's side effect on a
 security group's membership cascaded into `mail`'s own discuss-channel resubscription, which needed
 a real `ir.config_parameter` secret a service account is correctly never granted, crashing the

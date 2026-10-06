@@ -1,4 +1,4 @@
-# MASTER 06: DNS CQRS Architecture
+# MASTER 06: DNS CQRS (Command Query Responsibility Segregation) Architecture
 
 ## Status
 Accepted (Consolidates ADRs 0012, 0034)

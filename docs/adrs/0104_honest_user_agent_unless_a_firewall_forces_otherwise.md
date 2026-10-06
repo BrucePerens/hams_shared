@@ -10,8 +10,8 @@ allowed no exception at all. This ADR allows one narrow, documented, verified ex
 
 ## Context
 
-hams.com runs many daemons that fetch from servers we do not own: government callsign databases (FCC ULS,
-Ofcom, ACMA, ANATEL, ISED, NZ RSM, BNetzA), QRZ, POTA/SOTA, contest and hamfest calendars, club web pages,
+hams.com runs many daemons that fetch from servers we do not own: government callsign databases (FCC ULS, the Universal Licensing System;
+Ofcom, ACMA, ANATEL, ISED, NZ RSM, BNetzA, the regulators of the other countries), QRZ (the QRZ.com callsign site), POTA/SOTA (Parks on the Air and Summits on the Air, portable-operating award programs), contest and hamfest calendars, club web pages,
 and so on. Until 2026-10-02 several of them sent a Chrome `User-Agent` string by default, and the FCC
 daemon also sent fake `Sec-Fetch-*` navigation headers and a Chrome TLS fingerprint (`curl_cffi`
 `impersonate="chrome"`). The reason given in `project-experience` was "government CDNs block default Python
@@ -22,7 +22,7 @@ Disguising a crawler as a person is dishonest to the site operator, it is the ex
 protection exists to ban, and it puts our egress IPs (several are Bruce's home connection) at risk of a
 ban that would also take down legitimate use. The only real evidence of a block we have is the FCC case:
 `data.fcc.gov` (Akamai) answered 403 to hams1. Later, controlled testing showed that block was **by
-IP/ASN (Vultr datacenter), identical for every User-Agent and every TLS impersonation profile**, and a
+IP/ASN (autonomous system number, the network operator the address belongs to: here the Vultr datacenter), identical for every User-Agent and every TLS impersonation profile**, and a
 residential IP got a clean 200. So the browser string never helped there. The fix that worked was an
 egress path (pi500-1, `FCC_ULS_PROXY_URL`).
 
