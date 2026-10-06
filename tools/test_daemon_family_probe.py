@@ -23,7 +23,9 @@ class DaemonFamilyProbeTests(unittest.TestCase):
         self.assertEqual(pairs["EnvironmentFile"], "/opt/hams/etc/common.env")
         self.assertEqual(pairs["ProtectSystem"], "strict")
         self.assertEqual(pairs["ProtectProc"], "invisible")
-        self.assertEqual(pairs["ReadWritePaths"], "/opt/hams/spool/sota_sync /opt/hams/downloads/sota_sync")
+        # One -p ReadWritePaths= per line in the unit; systemd appends them, so the transient unit has the union.
+        writable = " ".join(v for k, v in probe.properties(_unit("sota.sync.service")) if k == "ReadWritePaths").split()
+        self.assertEqual(writable[:2], ["/opt/hams/spool/sota_sync", "/opt/hams/downloads/sota_sync"])
 
     def test_environment_assignments_are_split_and_unquoted(self):
         env = [v for k, v in probe.properties(_unit("sota.sync.service")) if k == "Environment"]
@@ -45,6 +47,11 @@ class DaemonFamilyProbeTests(unittest.TestCase):
                 argv = probe.command(text)
                 users = [a for a in argv if a.startswith("User=")]
                 self.assertEqual(len(users), 1)
+
+    def test_a_unit_group_grant_reaches_the_probe_so_it_runs_with_the_groups_the_daemon_has(self):
+        argv = probe.command(_unit("callbook.dns.export.service"))
+        self.assertIn("SupplementaryGroups=pdns", argv)
+        self.assertIn("User=hamsd_dns_export", argv)
 
     def test_an_environment_value_with_spaces_stays_one_assignment(self):
         self.assertEqual(

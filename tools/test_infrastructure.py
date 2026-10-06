@@ -4001,7 +4001,7 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
 
     def test_every_unit_running_as_odoo_is_on_the_reviewed_list(self):
         running_as_odoo = infra.systemd_units_running_as(infra.MANIFEST, "odoo")
-        unlisted = sorted(running_as_odoo - infra.SHARED_ODOO_ACCOUNT_UNITS)
+        unlisted = sorted(running_as_odoo - set(infra.SHARED_ODOO_ACCOUNT_UNITS))
         self.assertEqual(
             unlisted, [],
             "These units run as User=odoo and so can read every other daemon's key file. Give "
@@ -4010,11 +4010,24 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
 
     def test_no_listed_unit_has_already_moved_off_the_odoo_account(self):
         running_as_odoo = infra.systemd_units_running_as(infra.MANIFEST, "odoo")
-        stale = sorted(infra.SHARED_ODOO_ACCOUNT_UNITS - running_as_odoo)
+        stale = sorted(set(infra.SHARED_ODOO_ACCOUNT_UNITS) - running_as_odoo)
         self.assertEqual(
             stale, [],
             "These units no longer run as User=odoo; remove them from SHARED_ODOO_ACCOUNT_UNITS.",
         )
+
+    def test_every_exemption_names_a_real_reason(self):
+        """A unit stays on the shared account only with a written reason, so the list is a list of decisions."""
+        for unit, reason in infra.SHARED_ODOO_ACCOUNT_UNITS.items():
+            with self.subTest(unit=unit):
+                self.assertIsInstance(reason, str)
+                self.assertGreaterEqual(len(reason.split()), 12, "a reason, not a label")
+                self.assertTrue(reason.strip().endswith((".", ")")), "a finished sentence")
+
+    def test_the_two_permanently_privileged_units_say_so(self):
+        for unit in ("hams.daemon.keys.service", "stray.odoo.shell.detector.service"):
+            with self.subTest(unit=unit):
+                self.assertIn("permanent", infra.SHARED_ODOO_ACCOUNT_UNITS[unit])
 
     def test_the_units_with_their_own_account_are_found_under_that_account(self):
         # The same parser must see the existing dedicated-account units, or the two checks
@@ -4023,6 +4036,76 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
             "ncvec.sync.service",
             infra.systemd_units_running_as(infra.MANIFEST, "hamsd_ncvec_sync"),
         )
+
+
+class SandboxBaselineTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:sandbox_baseline]: every server unit carries the ADR-0070 sandbox or is listed, with the
+    directives it lacks and the reason."""
+
+    def _server_units(self):
+        return sorted(
+            os.path.basename(e["path"]) for e in infra.MANIFEST["static_files"]
+            if e["path"].endswith(".service") and infra._is_server_unit(e)
+        )
+
+    def test_the_parser_sees_a_gap_and_an_empty_capability_set(self):
+        # A parser that reads every unit as complete would pass the ratchet below with nothing checked.
+        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, "hams-pycache.service"), set(infra.SANDBOX_BASELINE))
+        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, "ncvec.sync.service"), set())
+        self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, "ncvec.sync.service", "CapabilityBoundingSet"), [])
+
+    def test_the_gap_check_rejects_a_weaker_value_than_the_baseline(self):
+        manifest = {"static_files": [{
+            "path": "/opt/hams/systemd/x.service", "environments": ["prod"],
+            "content": "[Service]\nProtectSystem=full\nProtectHome=no\nPrivateTmp=false\nNoNewPrivileges=false\n"
+                       "PrivateDevices=true\nRestrictAddressFamilies=AF_UNIX\nCapabilityBoundingSet=\n",
+        }]}
+        self.assertEqual(
+            infra.systemd_unit_sandbox_gaps(manifest, "x.service"),
+            {"ProtectSystem", "ProtectHome", "PrivateTmp", "NoNewPrivileges"},
+        )
+
+    def test_every_server_unit_has_the_baseline_or_an_exact_listed_exemption(self):
+        wrong = {}
+        for unit in self._server_units():
+            gaps = infra.systemd_unit_sandbox_gaps(infra.MANIFEST, unit)
+            exempt = infra.SANDBOX_BASELINE_EXEMPTIONS.get(unit, (frozenset(), ""))[0]
+            if gaps != set(exempt):
+                wrong[unit] = {"lacks": sorted(gaps), "exempt": sorted(exempt)}
+        self.assertEqual(
+            wrong, {},
+            "Each unit must carry ProtectSystem=strict, ProtectHome, PrivateTmp, NoNewPrivileges, PrivateDevices, "
+            "RestrictAddressFamilies and CapabilityBoundingSet=, or be listed in SANDBOX_BASELINE_EXEMPTIONS with exactly "
+            "the directives it lacks and a reason. A listed directive the unit now has must be removed from the list.",
+        )
+
+    def test_every_exemption_names_a_server_unit_and_gives_a_reason(self):
+        units = set(self._server_units())
+        for unit, (directives, reason) in infra.SANDBOX_BASELINE_EXEMPTIONS.items():
+            with self.subTest(unit=unit):
+                self.assertIn(unit, units)
+                self.assertTrue(directives and directives <= set(infra.SANDBOX_BASELINE))
+                self.assertGreaterEqual(len(reason.split()), 12)
+
+    def test_a_unit_running_as_a_family_account_has_no_exemption(self):
+        for unit in infra.FAMILY_ACCOUNT_UNITS:
+            with self.subTest(unit=unit):
+                exempt = infra.SANDBOX_BASELINE_EXEMPTIONS.get(unit, (frozenset(),))[0]
+                if infra.FAMILY_ACCOUNT_UNITS[unit].get("agent_sudo"):
+                    self.assertEqual(exempt, {"NoNewPrivileges"})
+                else:
+                    self.assertEqual(exempt, frozenset())
+
+    def test_the_key_bootstrapper_is_hardened_and_only_protect_system_is_relaxed(self):
+        unit = "hams.daemon.keys.service"
+        self.assertEqual(infra.SANDBOX_BASELINE_EXEMPTIONS[unit][0], {"ProtectSystem"})
+        values = lambda d: infra.systemd_unit_directive_values(infra.MANIFEST, unit, d)
+        self.assertEqual(values("ProtectSystem"), ["full"])
+        self.assertEqual(values("NoNewPrivileges"), ["true"])
+        self.assertEqual(values("User"), ["odoo"])
+        # It must still be able to write every key directory: nothing narrows ReadWritePaths for it.
+        self.assertEqual(values("ReadWritePaths"), [])
+        self.assertEqual(values("ProtectHome"), ["read-only"])
 
 
 class FamilyAccountUnitTests(_SafePatchTestCase):
@@ -4097,6 +4180,9 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     self.assertEqual(writable, [f"/home/{agent}"])
                     self.assertIn(f"/home/{agent}", self._directories_owned_by(agent))
                     continue
+                # `group_write`: a path owned by another account's group that the unit writes through SupplementaryGroups=
+                # (checked in its own test below); every other writable path is the account's own.
+                writable = [p for p in writable if p not in rules.get("group_write", {})]
                 owned = self._directories_owned_by(rules["user"])
                 self.assertEqual(sorted(set(writable) - owned), [])
                 for shared in ("/opt/hams/spool", "/opt/hams/downloads", "/opt/hams/cache", "/opt/hams"):
@@ -4109,12 +4195,51 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
             for path in infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths"):
                 if path.startswith(WEB_BOT_AUTH_KEY_ROOT + "/"):
                     continue  # the account's own key directory: mode 755 on purpose, tested below
+                if path in rules.get("group_write", {}):
+                    continue  # another account's directory, written through a unit-level group: tested below
                 with self.subTest(unit=unit, path=path):
                     entry = [d for d in infra.MANIFEST["directories"] if d["path"] == path][0]
                     self.assertEqual(entry["owner"], f"{rules['user']}:{rules['user']}")
                     self.assertEqual(entry["provision_mode"], "750")
                     self.assertTrue(entry["recursive_owner"])
                     self.assertEqual(entry["environments"], ["prod", "test"])
+
+    def test_a_group_write_path_is_the_groups_setgid_directory_and_the_unit_alone_holds_the_group(self):
+        """The one way a family account writes a directory it does not own (callbook.dns.export into PowerDNS's
+        database directory): the directory is that group's, setgid so new files inherit the group, group-writable;
+        the unit names the group (SupplementaryGroups=) and the account is NOT a member of it, so no other process
+        of that account, and no login, ever holds it."""
+        checked = 0
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            for path, group in rules.get("group_write", {}).items():
+                checked += 1
+                with self.subTest(unit=unit, path=path):
+                    entry = [d for d in infra.MANIFEST["directories"] if d["path"] == path][0]
+                    self.assertEqual(entry["owner"].split(":")[1], group)
+                    mode = int(entry["provision_mode"], 8)
+                    self.assertTrue(mode & 0o2000, "setgid, or a new file does not take the group")
+                    self.assertTrue(mode & 0o020, "group-writable")
+                    self.assertFalse(mode & 0o002, "never world-writable")
+                    self.assertIn(path, infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths"))
+                    self.assertEqual(
+                        infra.systemd_unit_directive_values(infra.MANIFEST, unit, "SupplementaryGroups"), [group]
+                    )
+                    account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == rules["user"]][0]
+                    self.assertNotIn(group, account.get("member_of", []))
+                    self.assertNotIn(rules["user"], [
+                        u for a in infra.MANIFEST["system_accounts"] if a["user"] == group for u in a.get("add_to_users", [])
+                    ])
+                    # The group's database files must stay group-writable: the unit keeps the umask that makes them so.
+                    self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "UMask"), ["0002"])
+        self.assertGreaterEqual(checked, 1)
+
+    def test_a_unit_takes_no_supplementary_group_except_a_declared_group_write_group(self):
+        for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
+            with self.subTest(unit=unit):
+                self.assertEqual(
+                    infra.systemd_unit_directive_values(infra.MANIFEST, unit, "SupplementaryGroups"),
+                    sorted(set(rules.get("group_write", {}).values())),
+                )
 
     def test_a_migrated_unit_loads_only_the_environment_files_it_uses(self):
         for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():

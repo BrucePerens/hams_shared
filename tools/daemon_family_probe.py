@@ -27,7 +27,7 @@ UNIT_DIRS = ("/etc/systemd/system", "/opt/hams/systemd")
 
 # Directives copied from the unit into the transient one. Exec lines, Restart and the like are not.
 COPIED = (
-    "User", "Group", "WorkingDirectory", "UMask", "ProtectSystem", "ProtectHome", "PrivateTmp", "PrivateDevices",
+    "User", "Group", "SupplementaryGroups", "WorkingDirectory", "UMask", "ProtectSystem", "ProtectHome", "PrivateTmp", "PrivateDevices",
     "NoNewPrivileges", "RestrictAddressFamilies", "CapabilityBoundingSet", "ProtectProc", "ProcSubset",
     "ProtectKernelTunables", "ProtectKernelModules", "ProtectKernelLogs", "ProtectControlGroups", "ProtectClock",
     "RestrictNamespaces", "RestrictRealtime", "RestrictSUIDSGID", "LockPersonality", "SystemCallArchitectures",

@@ -968,29 +968,74 @@ def hook_migrate_subcarrier_signing_key(env_vars, dest_dir, path, run_cmd_func):
 # list is the countdown: test_infrastructure.py fails when a unit runs as `odoo` without being listed here
 # (a new daemon must get its own account or be added here in a reviewed change), and when a listed unit no
 # longer runs as `odoo` (remove it, so the list only shrinks as units move to their own accounts).
-SHARED_ODOO_ACCOUNT_UNITS = frozenset({
-    "adif.ingress.service",
-    "adif.processor.service",
-    "backup.worker.service",
-    "callbook.dns.export.service",
-    "code.review.sweep.service",
-    "credential.touch.timer.service",
+SHARED_ODOO_ACCOUNT_UNITS = {
+    "adif.ingress.service": (
+        "Writes the hams_com 770 directories adif_queue, adif_uploads and failed_input, which Odoo (a hams_com member) also "
+        "uses. Moving it needs those directories' ownership and the Odoo side's access redesigned: not mechanical (plan section 13)."
+    ),
+    "adif.processor.service": (
+        "Same directories as adif.ingress (adif_queue, adif_uploads, failed_input, hams_com 770, shared with Odoo): "
+        "migrates together with it, after the ownership redesign (plan section 13)."
+    ),
+    "backup.worker.service": (
+        "Writes /opt/hams/etc/keys today, so a family account cannot hold it until its key-directory write access is removed; "
+        "its own phase, the pgbackrest sidecar (ADR-0103) already took the root part (plan section 13)."
+    ),
+    "code.review.sweep.service": (
+        "Writes into a repository checkout (/opt/hams/hams_com/docs/code_review_reports) that does not exist on hams1; "
+        "opt-in, linked but never enabled in production, so there is no live exposure to close first (plan section 13)."
+    ),
+    "credential.touch.timer.service": (
+        "The agent-account shape: touches the AI agents' home directories through the Claude Code CLI wrapper, so it cannot "
+        "take NoNewPrivileges and needs its own review before it can leave the shared account (plan section 13)."
+    ),
     # AI correction of scraped hamfest listings; the model runs as hams_event_agent (see the unit's comment).
-    "event.ai.enrichment.service",
+    "event.ai.enrichment.service": (
+        "The agent-account shape (supervises a model that runs as hams_event_agent through the CLI wrapper, so no "
+        "NoNewPrivileges); needs the same review as ticket.triage before it moves."
+    ),
     # The key bootstrapper writes every daemon's key file, so it runs as the account that owns
     # them (odoo); it stays on this list in the final state too (the plan's Phase 5).
-    "hams.daemon.keys.service",
-    "hams.data.relay.service",
-    "hams.relay.bridge.service",
-    "hams.simulated.band.service",
-    "hams.simulated.bots.service",
-    "hams.simulated.observer.service",
-    "stray.odoo.shell.detector.service",
+    "hams.daemon.keys.service": (
+        "Privileged by design and permanent: it writes every daemon's key file (daemon_key_manager), so it runs as the "
+        "account that owns the key directories and is a member of every family group. Hardened instead: see "
+        "SANDBOX_BASELINE_EXEMPTIONS."
+    ),
+    "hams.data.relay.service": (
+        "Relay and auth behavior: Bruce reviews and merges changes to the relay units himself (night rules), so it is not "
+        "migrated unattended (plan section 13)."
+    ),
+    "hams.relay.bridge.service": (
+        "Relay and auth behavior: Bruce reviews and merges changes to the relay units himself (night rules), so it is not "
+        "migrated unattended (plan section 13)."
+    ),
+    "hams.simulated.band.service": (
+        "Its credentials in /etc/hams-band are hand-placed odoo-owned files outside the key flow; an account change needs "
+        "those files provisioned in the MANIFEST first (plan section 13)."
+    ),
+    "hams.simulated.bots.service": (
+        "Credentials in /etc/hams-bots are hand-placed odoo-owned files outside the key flow, and the bots write "
+        "/opt/hams/cache/whisper; both need MANIFEST ownership before an account change (plan section 13)."
+    ),
+    "hams.simulated.observer.service": (
+        "Credentials in /etc/hams-bots are hand-placed odoo-owned files outside the key flow, and the observer writes "
+        "/opt/hams/cache/whisper; migrates with the bots (plan section 13)."
+    ),
+    "stray.odoo.shell.detector.service": (
+        "Privileged by design and permanent: it inspects other processes of the odoo account (a one-off odoo shell left "
+        "running), which an account of its own, or ProtectProc=invisible, would hide from it."
+    ),
     # Supervises the AI ticket-triage pass; the model itself runs as the dedicated nologin
     # hams_ai_agent account (see the unit's own comment). Same shape as credential.touch.timer.
-    "ticket.triage.event.service",
-    "ticket.triage.service",
-})
+    "ticket.triage.event.service": (
+        "The agent-account shape: supervises the triage model that runs as hams_ai_agent through the CLI wrapper, so no "
+        "NoNewPrivileges; needs its own review (plan section 13)."
+    ),
+    "ticket.triage.service": (
+        "The agent-account shape: supervises the triage model that runs as hams_ai_agent through the CLI wrapper, so no "
+        "NoNewPrivileges; needs its own review (plan section 13)."
+    ),
+}
 
 
 def _is_server_unit(entry):
@@ -1177,6 +1222,14 @@ FAMILY_ACCOUNT_UNITS = {
         "environment_files": frozenset({"common.env", "pdns.env", "rabbitmq.env"}),
         "no_state": True,
     },
+    # callbook.dns.export writes PowerDNS's own database directory, which belongs to `pdns`: `group_write` names the one path it may
+    # write that its account does not own, the group the unit takes through SupplementaryGroups= (never account membership), and
+    # test_infrastructure.py checks that directory is that group's, setgid and group-writable, and that the unit names the group.
+    "callbook.dns.export.service": {
+        "user": "hamsd_dns_export",
+        "environment_files": frozenset({"common.env", "pdns.env"}),
+        "group_write": {"/var/lib/powerdns/callbook": "pdns"},
+    },
     "dx.firehose.service": {
         "user": "hamsd_dx_firehose",
         "environment_files": frozenset({"common.env", "db_app.env"}),
@@ -1198,6 +1251,120 @@ FAMILY_ACCOUNT_UNITS = {
         "odoo_reads": True,
     },
 }
+
+
+# [@ANCHOR: infrastructure:sandbox_baseline]
+# The ADR-0070 sandbox every server unit carries, each directive with the one value that satisfies it
+# (None: any value, because the empty `CapabilityBoundingSet=` is the strictest setting and the narrowed
+# CAP_SETUID CAP_SETGID of an agent_sudo unit is the documented exception). A unit that cannot carry a directive is
+# listed in SANDBOX_BASELINE_EXEMPTIONS with exactly the directives it lacks and the reason; test_infrastructure.py fails
+# when a unit lacks a directive without being listed, and when a listed unit has since gained it (the list only shrinks).
+SANDBOX_BASELINE = {
+    "ProtectSystem": {"strict"},
+    "ProtectHome": {"read-only", "true", "yes", "tmpfs"},
+    "PrivateTmp": {"true", "yes"},
+    "NoNewPrivileges": {"true", "yes"},
+    "PrivateDevices": {"true", "yes"},
+    "RestrictAddressFamilies": None,
+    "CapabilityBoundingSet": None,
+}
+
+_ROOT_HOST_UNIT = (
+    "A root unit that administers the host itself (%s), so it cannot give up the filesystem, device and capability "
+    "access the sandbox removes. Not a daemon family: it holds no per-daemon key, and the isolation plan does not apply to it."
+)
+_B2_UNIT = (
+    "A root unit that %s. It already has ProtectSystem=strict and ProtectHome, and a narrow ReadWritePaths; which of "
+    "NoNewPrivileges, PrivateDevices, RestrictAddressFamilies and an empty CapabilityBoundingSet the kopia and database tooling "
+    "tolerates has not been measured, so they stay exempt until the backup rehearsal measures them (docs/proposals/DAEMON_OS_ISOLATION_PLAN.md, Phase 5)."
+)
+_AGENT_UNIT = (
+    "The agent-account shape: it reaches the Claude Code CLI through `sudo -u <agent> run-hams-ai-agent-claude.sh`, and "
+    "NoNewPrivileges=true makes the kernel refuse sudo's uid switch. It keeps CapabilityBoundingSet to CAP_SETUID and CAP_SETGID "
+    "and writes only the agent's home (FAMILY_ACCOUNT_UNITS, `agent_sudo`)."
+)
+SANDBOX_BASELINE_EXEMPTIONS = {
+    "hams-pycache.service": (
+        frozenset(SANDBOX_BASELINE),
+        _ROOT_HOST_UNIT % "it compiles the bytecode of all of /opt/hams and re-owns /opt/hams/pycache to hams_com",
+    ),
+    "system-startup.service": (
+        frozenset(SANDBOX_BASELINE),
+        _ROOT_HOST_UNIT % "it issues `systemctl start` for the timed daemons at boot, which needs control of systemd"
+    ),
+    "hams-pgbackrest-backup.service": (
+        frozenset(SANDBOX_BASELINE),
+        _ROOT_HOST_UNIT % "the privileged pgbackrest sidecar of ADR-0103: PostgreSQL's data directory is 0700 postgres:postgres, so it runs as root and drops to postgres itself",
+    ),
+    "hams.db.local.backup.service": (
+        frozenset(SANDBOX_BASELINE),
+        _ROOT_HOST_UNIT % "it runs pg_dump as the postgres account through runuser, which needs root",
+    ),
+    "hams-tenant-firewall.service": (
+        frozenset(SANDBOX_BASELINE),
+        _ROOT_HOST_UNIT % "it loads nftables rules, which needs CAP_NET_ADMIN; the tenant design is retired (ADR 0106) and the unit goes with it",
+    ),
+    "hams-tenant-health.service": (
+        frozenset(SANDBOX_BASELINE),
+        _ROOT_HOST_UNIT % "tenant_ctl.py health checks every tenant's unit, HTTP answer and backup age as root",
+    ),
+    "hams-tenant-backup.service": (
+        frozenset(SANDBOX_BASELINE),
+        _ROOT_HOST_UNIT % "tenant_ctl.py backup dumps every tenant's database and filestore as root",
+    ),
+    "hams-tenant-restore-test.service": (
+        frozenset(SANDBOX_BASELINE),
+        _ROOT_HOST_UNIT % "tenant_ctl.py restore-test restores into a scratch database as root",
+    ),
+    "hams-b2-backup.service": (
+        frozenset({"NoNewPrivileges", "PrivateDevices", "RestrictAddressFamilies", "CapabilityBoundingSet"}),
+        _B2_UNIT % "backs up files that belong to other accounts and database dumps to Backblaze B2",
+    ),
+    "hams-b2-restore-test.service": (
+        frozenset({"NoNewPrivileges", "PrivateDevices", "RestrictAddressFamilies", "CapabilityBoundingSet"}),
+        _B2_UNIT % "restores sampled files and one database",
+    ),
+    "hams-b2-backup-check.service": (
+        frozenset({"NoNewPrivileges", "PrivateDevices", "RestrictAddressFamilies", "CapabilityBoundingSet"}),
+        _B2_UNIT % "checks the age of the last good backup and restore test",
+    ),
+    "hams.daemon.keys.service": (
+        frozenset({"ProtectSystem"}),
+        "ProtectSystem=full, not strict: the unit runs an `odoo shell` (filestore, Odoo logs and data, every key family's directory) "
+        "and a read-only tree would have to enumerate all of them. /usr, /boot and /etc are read-only; it can never be what stops a "
+        "key being written. It carries every other baseline directive and no capability.",
+    ),
+    "credential.touch.timer.service": (frozenset({"NoNewPrivileges"}), _AGENT_UNIT),
+    "ticket.triage.service": (frozenset({"NoNewPrivileges"}), _AGENT_UNIT),
+    "ticket.triage.event.service": (frozenset({"NoNewPrivileges"}), _AGENT_UNIT),
+    "event.ai.enrichment.service": (frozenset({"NoNewPrivileges"}), _AGENT_UNIT),
+    "club.crawl.service": (frozenset({"NoNewPrivileges"}), _AGENT_UNIT),
+}
+
+
+def systemd_unit_sandbox_gaps(manifest, unit_name):
+    """The SANDBOX_BASELINE directives the MANIFEST unit file `unit_name` lacks: absent, or set to a value that does not
+    satisfy the baseline. A directive written with an empty value counts as present (the empty CapabilityBoundingSet= drops
+    every capability). The last assignment wins, as in systemd."""
+    for entry in manifest["static_files"]:
+        if os.path.basename(entry["path"]) != unit_name or not _is_server_unit(entry):
+            continue
+        text = entry.get("content") or ""
+        service = text.split("[Service]", 1)[1] if "[Service]" in text else ""
+        service = service.split("\n[", 1)[0]
+        set_values = {}
+        for line in service.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            set_values[key.strip()] = value.strip()
+        gaps = set()
+        for directive, accepted in SANDBOX_BASELINE.items():
+            if directive not in set_values or (accepted is not None and set_values[directive] not in accepted):
+                gaps.add(directive)
+        return gaps
+    raise KeyError(unit_name)
 
 
 def systemd_unit_directive_values(manifest, unit_name, directive):
@@ -1466,6 +1633,20 @@ MANIFEST = {
             # (dns_api_service_internal.key), one account. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
             "user": "hamsd_dns_sync",
             "group": "hamsd_dns_sync",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/callbook_dns_export: reads the masked callbook view over RPC with its own key (callbook_dns_export_service_internal.key)
+            # and rewrites the callbook zone's SQLite database that PowerDNS serves. One key, one account. odoo joins this group for the key
+            # hand-off (chgrp, never chown). The account is NOT a member of the `pdns` group: the unit alone names it (SupplementaryGroups=pdns),
+            # so the group is held only while the export runs and only for its one writable directory, never by a login or any other process.
+            "user": "hamsd_dns_export",
+            "group": "hamsd_dns_export",
             "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
@@ -1797,6 +1978,15 @@ MANIFEST = {
             # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
             "path": "/opt/hams/etc/keys/dns_sync",
             "owner": "odoo:hamsd_dns_sync",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the dns_export family (hamsd_dns_export): owned by odoo, group = the one account that consumes
+            # the key in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/dns_export",
+            "owner": "odoo:hamsd_dns_export",
             "provision_mode": "750",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
@@ -2579,11 +2769,11 @@ MANIFEST = {
             # the callbook schema hook below creates it.
             "path": "/var/lib/powerdns/callbook",
             "owner": "pdns:pdns",
-            # setgid (leading 2): callbook_dns_export runs as User=odoo with
+            # setgid (leading 2): callbook_dns_export runs as User=hamsd_dns_export with
             # SupplementaryGroups=pdns, not User=pdns, so a file it creates
             # here only lands group=pdns if this directory's own group is
             # inherited -- setgid is what makes that automatic. Without it,
-            # new files land group=odoo and pdns.service (running
+            # new files land group=hamsd_dns_export and pdns.service (running
             # as User=pdns Group=pdns, no supplementary groups) gets zero
             # access to its own database. Found live on hams1, 2026-09-22,
             # after fixing the group ownership by hand and still hitting
@@ -2913,6 +3103,29 @@ Requires=odoo.service
 After=odoo.service
 
 [Service]
+# Hardened, but deliberately not at the ADR-0070 ProtectSystem=strict of the sync daemons (docs/proposals/DAEMON_OS_ISOLATION_PLAN.md,
+# Phase 5; SANDBOX_BASELINE_EXEMPTIONS): the unit runs a full `odoo shell` as the account that owns every key directory, and a shell
+# writes to places a read-only tree would have to enumerate (the filestore, the Odoo log and data directories, the key directories and
+# every key family's directory). `full` makes /usr, /boot and /etc read-only and leaves /var and /opt/hams writable, so it can never
+# be what stops a key from being written. No capability is kept: the key hand-off is a chgrp to a group the account is a member of,
+# which needs none. NOT set: ProcSubset=pid, because psutil in Odoo reads /proc/meminfo.
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
 User=odoo
 Environment="ODOO_RC=/etc/odoo/odoo.conf"
@@ -6106,19 +6319,33 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+# Its own account (hamsd_dns_export), Phase 5 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The one directory it writes is PowerDNS's callbook database directory (/var/lib/powerdns/callbook, pdns:pdns 2775): the account reaches it through SupplementaryGroups=pdns on this unit alone, not through membership of the pdns group.
+ProtectProc=invisible
+ProcSubset=pid
+# UMask 0002, deliberately NOT the 0027 of the other family units: the database files this run creates or rewrites (the staging file, the -wal and -shm files) must stay group-writable for `pdns`, because pdns.service (User=pdns, no supplementary groups) needs write access to a WAL-mode SQLite database to read it. Found live 2026-09-22: "attempt to write a readonly database" after the first publish. The setgid bit on the directory supplies the group.
+UMask=0002
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 ReadWritePaths=/var/lib/powerdns/callbook
 Type=oneshot
-User=odoo
+User=hamsd_dns_export
+Group=hamsd_dns_export
 SupplementaryGroups=pdns
-UMask=0002
 WorkingDirectory=/opt/hams/daemons/callbook_dns_export
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+# Code audit, 2026-10-06: callbook_dns_export/main.py reads DOMAIN, CALLBOOK_DNS_DB, CALLBOOK_DNS_NAMESERVERS (optional), CALLBOOK_PDNS_API_URL and PDNS_API_KEY (the PowerDNS API key, for the cache flush), and reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file, SYSTEM_USER_AGENT). common.env and pdns.env are therefore loaded; no database, Redis or RabbitMQ credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+EnvironmentFile=/opt/hams/etc/pdns.env
 Environment="ODOO_USER=callbook_dns_export_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/callbook_dns_export_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/dns_export/callbook_dns_export_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="CALLBOOK_DNS_DB=/var/lib/powerdns/callbook/callbook.sqlite3"
 Environment="CALLBOOK_PDNS_API_URL=http://127.0.0.1:8081/api/v1/servers/localhost"
