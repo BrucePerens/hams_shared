@@ -8271,6 +8271,93 @@ WantedBy=timers.target
             "mode": "644",
             "environments": ["prod"],
         },
+        {
+            # hams_com daemons/auth_cert_renew: renews the auth.hams.com certificate on hams1 itself through
+            # hams1's own PowerDNS (DNS-01), replacing the dev-box renewal (Bruce, 2026-10-05; to-do
+            # night_shift_todo/medium/auth-hams-com-certificate-renewal-on-hams1-3e8d61b4.md). `_acme-challenge.
+            # auth.hams.com` is a CNAME (entered through Odoo's Cloudflare panel) to a TXT name in the dedicated
+            # zone acme.hams.com, delegated to ns1/ns2.hams.com, which this host already serves on port 53: no new
+            # port, and no Cloudflare or other third-party credential on this host. certbot keeps its own state
+            # under /var/lib/hams-acme (StateDirectory), not /etc/letsencrypt, so it cannot touch the unused
+            # hams.com lineage and Debian's certbot.timer cannot drive this one. The deploy hook streams the
+            # renewed pair to /usr/local/sbin/hams-install-auth-cert (hams_com nginx/prod/cert-deploy/), which
+            # checks it and installs /etc/hams/auth/auth.crt and auth.key for hams_auth_gateway to reload.
+            #
+            # It talks to Let's Encrypt, hence external_fetch (never enabled or started on a test host). opt_in:
+            # provisioning links it but never enables it; the coordinator enables it only after the delegation,
+            # the CNAME and the first issuance exist (the ConditionPathExists lines also keep it inert until
+            # then). Runs as root because it reads the root-only pdns.env and the installer chowns the key to
+            # root:hams-auth; the sandbox leaves only its own state, its logs, /etc/hams/auth and a private
+            # runtime directory writable, and only three capabilities (chown, read a root-only file, set mode).
+            "path": "/opt/hams/systemd/hams-auth-cert-renew.service",
+            "external_fetch": "talks to Let's Encrypt (the ACME directory) to renew the certificate",
+            "opt_in": "needs the acme.hams.com delegation, the _acme-challenge CNAME and a first issuance; see hams_com night_shift_todo/medium/auth-hams-com-certificate-renewal-on-hams1-3e8d61b4.md",
+            "content": """\
+[Unit]
+Description=Renew the auth.hams.com certificate through our own PowerDNS (DNS-01) and install it for hams_auth_gateway
+After=network-online.target pdns.service
+Wants=network-online.target
+ConditionPathExists=/var/lib/hams-acme/config/renewal/auth-hams-com.conf
+ConditionPathExists=/usr/local/sbin/hams-install-auth-cert
+
+[Service]
+Type=oneshot
+User=root
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+StateDirectory=hams-acme
+StateDirectoryMode=0700
+LogsDirectory=hams-acme
+LogsDirectoryMode=0700
+RuntimeDirectory=hams-auth-cert-renew
+RuntimeDirectoryMode=0700
+ReadWritePaths=/etc/hams/auth
+Environment=HAMS_INSTALL_TMPDIR=/run/hams-auth-cert-renew
+WorkingDirectory=/opt/hams/daemons/auth_cert_renew
+TimeoutStartSec=15min
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/auth_cert_renew/main.py renew
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams-auth-cert-renew
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-auth-cert-renew.timer",
+            "external_fetch": "activates hams-auth-cert-renew.service, which talks to Let's Encrypt",
+            "opt_in": "activates hams-auth-cert-renew.service; see that unit",
+            "content": """\
+[Unit]
+Description=Twice-daily renewal check for the auth.hams.com certificate
+
+[Timer]
+# certbot renews only when 30 days or fewer remain, so most runs do nothing. Twice a day, so one missed
+# run (the host was down) is retried the same day, well inside the 30-day window.
+OnCalendar=*-*-* 04,16:23:00
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
     ],
     # Speech models for the simulated-band bots (daemons/hams_simulated_bots). Fetched by
     # provision_model_files() ONLY on a production-class provisioning run (never --test, never
