@@ -71,7 +71,7 @@ Identify material:
 - named states, gates, layers, stages, and transitions;
 - formulas, variables, thresholds, and symbols;
 - framework and architecture names;
-- imported terminology from another document, patent, discipline, or system;
+- imported terminology from another document, discipline, or system;
 - ordinary words being used in a specialized technical sense.
 
 Ignore incidental words that do not carry conceptual load.
@@ -374,31 +374,3 @@ missing information?**
 Answer one of: YES / MOSTLY / NO.
 
 Then identify only the remaining blockers.
-
-## Optional Patent Mode
-
-When the writing is a patent specification or patent-oriented technical disclosure, also check:
-
-- whether coined terminology has enough literal support to avoid being merely aspirational;
-- whether broad parent concepts and narrower embodiments are clearly distinguished;
-- whether imported portfolio terminology is independently explained rather than merely referenced;
-- for every referenced external specification, determine whether the present document merely cites
-  it as context, uses it as an optional implementation, requires it to practice the present
-  invention, or imports terminology from it; flag any case where an allegedly independent
-  disclosure cannot be understood or practiced without unstated information from the referenced
-  document;
-- whether state transitions and authority boundaries are machine-operational rather than narrative
-  only;
-- whether proposal, scoring, review, commitment, authorization, denial, promotion, release, and
-  closure authority are assigned to identified components with explicit predicates or gates;
-- whether load-bearing mechanisms disclose technically meaningful denial, exception, escalation,
-  unresolved, and recovery paths rather than only success paths;
-- whether a claimed technical effect has an explicit technical cause;
-- whether economic effects are traced to technical mechanisms rather than asserted as business
-  outcomes;
-- whether "preferred," "optional," "representative," and "required" are used consistently;
-- whether the abstract, summary, definitions, detailed embodiments, figures, and claim concepts use
-  the same key vocabulary consistently.
-
-Do not provide legal opinions on patentability, validity, infringement, enforceability, or claim
-construction unless separately requested and appropriately supported.
