@@ -1387,6 +1387,32 @@ def get_local_modules(base_dir, ignore_patterns):
     return sorted(mods)
 
 
+def warn_if_sibling_checkout_is_behind(path):
+    """Warn when the sibling checkout picked as the other repo is behind its origin/main.
+
+    The sibling scan takes the first directory under the parent whose name starts with hams_open (or
+    hams_com), so a stale ~/workspace/hams_open can silently supply the test harness (zero_sudo's
+    HamsHttpCase) and every shared module. That is how hoot suites kept answering 404 for
+    /web/tests after the harness fix had merged: the fix was in origin/main, not in the checkout
+    the run used. Local refs only, no fetch (no network from a test run); silent when it cannot tell.
+    """
+    try:
+        res = subprocess.run(
+            ["git", "-c", f"safe.directory={path}", "-C", path, "rev-list", "--count", "HEAD..origin/main"],
+            capture_output=True, text=True, timeout=10,
+        )
+        behind = int(res.stdout.strip()) if res.returncode == 0 else 0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return
+    if behind > 0:
+        print(
+            f"⚠️  WARNING: the sibling checkout {path} is {behind} commit(s) behind origin/main. "
+            "Tests run against ITS code (harness and shared modules), so a fix already merged may be "
+            "missing. Update it, or point at a current tree with HAMS_OPEN_TREE=<path>.",
+            file=sys.stderr,
+        )
+
+
 def get_addons_path(base_dir):
     paths = ["/usr/lib/python3/dist-packages/odoo/addons", base_dir]
 
@@ -1394,6 +1420,15 @@ def get_addons_path(base_dir):
 
     parent_dir, repo_root = resolve_repo_layout(base_dir)
     exclude_paths = {base_dir, repo_root}
+    # Explicit override: HAMS_OPEN_TREE names the sibling checkout to use instead of scanning.
+    override = os.environ.get("HAMS_OPEN_TREE", "").strip()
+    if override:
+        override = os.path.abspath(override)
+        if not os.path.isdir(override):
+            print(f"🛑 HAMS_OPEN_TREE={override} is not a directory.", file=sys.stderr)
+            sys.exit(2)
+        paths.append(override)
+        found_community = True
     try:
         for item in os.listdir(parent_dir):
             item_path = os.path.join(parent_dir, item)
@@ -1428,6 +1463,8 @@ def get_addons_path(base_dir):
                 found_community = True
                 break
 
+    if found_community and paths[-1] not in (base_dir, repo_root) and not override:
+        warn_if_sibling_checkout_is_behind(paths[-1])
     return ",".join(paths)
 
 

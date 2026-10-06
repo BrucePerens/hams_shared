@@ -1291,5 +1291,45 @@ class CheckLintersBurnListScopeTests(unittest.TestCase):
                 )
 
 
+class SiblingCheckoutSelectionTests(unittest.TestCase):
+    """A stale sibling hams_open silently supplied the harness; HAMS_OPEN_TREE and a warning fix that."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def test_hams_open_tree_overrides_the_sibling_scan(self):
+        base = os.path.join(self.tmp, "hams_com")
+        stale = os.path.join(self.tmp, "hams_open")
+        fresh = os.path.join(self.tmp, "elsewhere", "fresh_open")
+        for d in (base, stale, fresh):
+            os.makedirs(d)
+        with patch.dict(os.environ, {"HAMS_OPEN_TREE": fresh}):
+            paths = _test_runner.get_addons_path(base).split(",")
+        self.assertIn(fresh, paths)
+        self.assertNotIn(stale, paths)
+
+    def test_a_missing_hams_open_tree_is_fatal(self):
+        base = os.path.join(self.tmp, "hams_com")
+        os.makedirs(base)
+        with patch.dict(os.environ, {"HAMS_OPEN_TREE": os.path.join(self.tmp, "nope")}):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                _test_runner.get_addons_path(base)
+
+    def test_a_checkout_behind_origin_main_is_warned_about(self):
+        result = MagicMock(returncode=0, stdout="7\n")
+        err = io.StringIO()
+        with patch.object(_test_runner.subprocess, "run", return_value=result), contextlib.redirect_stderr(err):
+            _test_runner.warn_if_sibling_checkout_is_behind("/some/hams_open")
+        self.assertIn("7 commit(s) behind", err.getvalue())
+
+    def test_a_current_or_unreadable_checkout_is_silent(self):
+        for result in (MagicMock(returncode=0, stdout="0\n"), MagicMock(returncode=128, stdout="")):
+            err = io.StringIO()
+            with patch.object(_test_runner.subprocess, "run", return_value=result), contextlib.redirect_stderr(err):
+                _test_runner.warn_if_sibling_checkout_is_behind("/some/hams_open")
+            self.assertEqual(err.getvalue(), "")
+
+
 if __name__ == "__main__":
     unittest.main()
