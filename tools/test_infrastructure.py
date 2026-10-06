@@ -4083,7 +4083,8 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
     def test_the_writable_paths_are_only_directories_the_account_owns(self):
         for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
             with self.subTest(unit=unit):
-                writable = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths")
+                writable = [p for p in infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths")
+                            if not p.startswith(WEB_BOT_AUTH_KEY_ROOT + "/")]  # the account's own key directory, tested below
                 if rules.get("no_state"):
                     # A daemon that fetches and pushes to Odoo and writes no file has no writable path at all.
                     self.assertEqual(writable, [])
@@ -4106,6 +4107,8 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
             if rules.get("agent_sudo"):
                 continue  # its only writable path is the agent's home, checked above
             for path in infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths"):
+                if path.startswith(WEB_BOT_AUTH_KEY_ROOT + "/"):
+                    continue  # the account's own key directory: mode 755 on purpose, tested below
                 with self.subTest(unit=unit, path=path):
                     entry = [d for d in infra.MANIFEST["directories"] if d["path"] == path][0]
                     self.assertEqual(entry["owner"], f"{rules['user']}:{rules['user']}")
@@ -4437,13 +4440,83 @@ class BrowserFetchingFamilyUnitTests(_SafePatchTestCase):
                 self.assertNotIn("acl", d, d["path"])
 
 
+WEB_BOT_AUTH_KEY_ROOT = "/opt/hams/spool/web_bot_auth_keys"
+
+
+class WebBotAuthSigningUnitTests(_SafePatchTestCase):
+    """Bruce's decision, 2026-10-05: every source that downloads from a third-party server signs its requests with Web Bot Auth,
+    each signing account with its own key; the directory publisher reads each account's public JWK by path."""
+
+    # The units whose daemon sends requests to third-party web servers (daemons/web_bot_auth.py signed_headers / smart_download).
+    SIGNING_UNITS = {
+        "noaa-swpc-sync.service": "hamsd_space_weather", "amsat.tle.sync.service": "hamsd_satellite_sync",
+        "qrz.scraper.service": "hamsd_qrz_scraper", "au.acma.sync.service": "hamsd_country_sync",
+        "au.callsign.sync.service": "hamsd_country_sync", "br.anatel.sync.service": "hamsd_country_sync",
+        "de.bnetza.sync.service": "hamsd_country_sync", "nz.rsm.sync.service": "hamsd_country_sync",
+        "uk.ofcom.sync.service": "hamsd_country_sync", "fcc.uls.sync.service": "hamsd_country_sync",
+        "ised.canada.sync.service": "hamsd_country_sync", "wa7bnm.contest.sync.service": "hamsd_event_sync",
+        "arrl.hamfests.sync.service": "hamsd_event_sync", "event.cover.image.sync.service": "hamsd_event_sync",
+        "rac.events.sync.service": "hamsd_event_sync", "sm3cer.contest.sync.service": "hamsd_event_sync",
+        "electronicsfleamarket.sync.service": "hamsd_event_sync", "radio.history.events.sync.service": "hamsd_event_sync",
+        "monthly.events.recheck.service": "hamsd_event_sync", "callbook.geo.enrich.service": "hamsd_callbook_geo",
+        "ncvec.sync.service": "hamsd_ncvec_sync", "pota.sync.service": "hamsd_activator_sync",
+        "sota.sync.service": "hamsd_activator_sync", "club.web.search.discovery.service": "hamsd_club_search",
+        "club.crawl.service": "hamsd_club_crawl", "event.ai.enrichment.service": "odoo",
+    }
+
+    def _unit_text(self, unit):
+        return [e for e in infra.MANIFEST["static_files"]
+                if e["path"] == f"/opt/hams/systemd/{unit}"][0]["content"]
+
+    def test_every_signing_unit_creates_and_uses_its_accounts_own_key(self):
+        for unit, account in self.SIGNING_UNITS.items():
+            with self.subTest(unit=unit):
+                text = self._unit_text(unit)
+                self.assertIn(f"User={account}\n", text)
+                directory = f"{WEB_BOT_AUTH_KEY_ROOT}/{account}"
+                key, jwk = f"{directory}/{account}.key", f"{directory}/{account}.jwk"
+                self.assertIn(f"ReadWritePaths={directory}\n", text)
+                self.assertIn(f'Environment="HAMS_WEB_BOT_AUTH_KEY_FILE={key}"\n', text)
+                self.assertIn(
+                    f"ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file {key} --jwk-file {jwk}\n", text)
+                self.assertLess(text.index("ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py"), text.index("\nExecStart="))
+
+    def test_each_signing_account_has_a_key_directory_it_owns_that_the_publisher_can_pass_through(self):
+        dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
+        self.assertEqual(dirs[WEB_BOT_AUTH_KEY_ROOT]["acl"], ["g:hams_traverse:--x"])
+        publisher = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == "hamsd_web_bot_auth"][0]
+        self.assertIn("hams_traverse", publisher["member_of"])
+        for account in set(self.SIGNING_UNITS.values()):
+            with self.subTest(account=account):
+                entry = dirs[f"{WEB_BOT_AUTH_KEY_ROOT}/{account}"]
+                self.assertEqual(entry["owner"], f"{account}:{account}")
+                self.assertEqual(entry["provision_mode"], "755")  # the key file is 0600 (ensure-key); only the public JWK is read
+                self.assertEqual(entry["environments"], ["prod", "test"])
+
+    def test_the_publisher_lists_one_jwk_file_per_signing_account(self):
+        text = self._unit_text("web.bot.auth.directory.service")
+        for account in set(self.SIGNING_UNITS.values()):
+            with self.subTest(account=account):
+                self.assertIn(f"--jwk-file {WEB_BOT_AUTH_KEY_ROOT}/{account}/{account}.jwk", text)
+        self.assertEqual(len(re.findall(r"^\s+--jwk-file ", text, re.M)), len(set(self.SIGNING_UNITS.values())))
+
+    def test_no_unit_that_fetches_from_a_third_party_through_the_shared_helpers_is_left_unsigned(self):
+        signing = set(self.SIGNING_UNITS)
+        for entry in infra.MANIFEST["static_files"]:
+            path = entry["path"]
+            if not path.startswith("/opt/hams/systemd/") or not path.endswith(".service"):
+                continue
+            if "HAMS_WEB_BOT_AUTH_KEY_FILE" in entry["content"]:
+                self.assertIn(os.path.basename(path), signing, f"{path} signs but is not listed here")
+
+
 class TraversalGrantTests(_SafePatchTestCase):
     """Tests [@ANCHOR: infrastructure:directory_acl]: a daemon family account reaches its own paths
     through an execute-only ACL for hams_traverse, not through hams_com."""
 
     GRANTED = [
         "/opt/hams", "/opt/hams/etc", "/opt/hams/etc/keys", "/opt/hams/spool", "/opt/hams/downloads",
-        "/opt/hams/cache", "/opt/hams/cache/ms-playwright",
+        "/opt/hams/cache", "/opt/hams/cache/ms-playwright", "/opt/hams/spool/web_bot_auth_keys",
     ]
 
     def _dirs(self):

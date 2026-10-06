@@ -2128,6 +2128,137 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # Parent of the per-family Web Bot Auth key directories below: traversal only (execute for hams_traverse), so a family
+            # account and the directory publisher can reach exactly the paths they are given.
+            "path": "/opt/hams/spool/web_bot_auth_keys",
+            "owner": "hams_com:hams_com",
+            "provision_mode": "750",
+            "runtime_mount": "ro",
+            "acl": ["g:hams_traverse:--x"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the hamsd_activator_sync account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_activator_sync",
+            "owner": "hamsd_activator_sync:hamsd_activator_sync",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the hamsd_callbook_geo account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_callbook_geo",
+            "owner": "hamsd_callbook_geo:hamsd_callbook_geo",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the hamsd_club_crawl account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_club_crawl",
+            "owner": "hamsd_club_crawl:hamsd_club_crawl",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the hamsd_club_search account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_club_search",
+            "owner": "hamsd_club_search:hamsd_club_search",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the hamsd_country_sync account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync",
+            "owner": "hamsd_country_sync:hamsd_country_sync",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the hamsd_event_sync account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync",
+            "owner": "hamsd_event_sync:hamsd_event_sync",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the hamsd_ncvec_sync account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_ncvec_sync",
+            "owner": "hamsd_ncvec_sync:hamsd_ncvec_sync",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the hamsd_qrz_scraper account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper",
+            "owner": "hamsd_qrz_scraper:hamsd_qrz_scraper",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the hamsd_satellite_sync account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync",
+            "owner": "hamsd_satellite_sync:hamsd_satellite_sync",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the hamsd_space_weather account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_space_weather",
+            "owner": "hamsd_space_weather:hamsd_space_weather",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the odoo account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/odoo",
+            "owner": "odoo:odoo",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
             # The Web Bot Auth publisher's private key (publisher.key, 0600: odoo, in the group, cannot read it), the public JWKs
             # (jwks/) and the signed bundle hams.com serves (directory.json, 0644 world-readable content, in a 0750 directory only the
             # group may enter).
@@ -3273,6 +3404,11 @@ Environment="DAEMON_ARGS="
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/noaa_swpc_sync/main.py --start-test
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_space_weather.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_space_weather
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_space_weather/hamsd_space_weather.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_space_weather/hamsd_space_weather.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_space_weather/hamsd_space_weather.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/noaa_swpc_sync/main.py $DAEMON_ARGS
 
 # Resiliency
@@ -3402,6 +3538,11 @@ Environment="DAEMON_ARGS="
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/amsat_tle_sync/main.py --start-test
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_satellite_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync/hamsd_satellite_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync/hamsd_satellite_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync/hamsd_satellite_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/amsat_tle_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -4461,6 +4602,11 @@ Environment="DAEMON_ARGS="
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/qrz_scraper/main.py --start-test
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_qrz_scraper.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper/hamsd_qrz_scraper.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper/hamsd_qrz_scraper.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper/hamsd_qrz_scraper.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/qrz_scraper/main.py $DAEMON_ARGS
 
 Restart=always
@@ -4526,6 +4672,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_country_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/au_acma_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -4600,6 +4751,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_country_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/au_callsign_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -4675,6 +4831,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_country_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/br_anatel_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -4750,6 +4911,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_country_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/de_bnetza_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -4824,6 +4990,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_country_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/nz_rsm_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -4903,6 +5074,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_country_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/uk_ofcom_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -4981,6 +5157,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_event_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/wa7bnm_contest_sync.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -5055,6 +5236,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_event_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/arrl_hamfests_sync.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -5129,6 +5315,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_event_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/event_cover_image_sync.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -5203,6 +5394,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_event_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/rac_events_sync.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -5277,6 +5473,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_event_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/sm3cer_contest_sync.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -5355,6 +5556,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_event_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/electronicsfleamarket_sync.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -5433,6 +5639,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_event_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/radio_history_events_sync.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -5511,6 +5722,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_event_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/event_series_recheck.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -5598,6 +5814,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_country_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/fcc_uls_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -5835,6 +6056,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_callbook_geo.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_callbook_geo
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_callbook_geo/hamsd_callbook_geo.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_callbook_geo/hamsd_callbook_geo.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_callbook_geo/hamsd_callbook_geo.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/ham_callbook_geo_enrich/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -5982,6 +6208,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_country_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/ised_canada_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -6062,6 +6293,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_ncvec_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_ncvec_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_ncvec_sync/hamsd_ncvec_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_ncvec_sync/hamsd_ncvec_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_ncvec_sync/hamsd_ncvec_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/ncvec_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -6111,7 +6347,20 @@ WorkingDirectory=/opt/hams/daemons
 
 # No secret is loaded and no network is reachable: the private key is a file this account creates (mode 0600) in its own directory.
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth/publisher.key --jwk-file /opt/hams/spool/web_bot_auth/jwks/publisher.jwk
-ExecStart=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py refresh --key-file /opt/hams/spool/web_bot_auth/publisher.key --jwk-dir /opt/hams/spool/web_bot_auth/jwks --out /opt/hams/spool/web_bot_auth/directory.json
+# One --jwk-file per signing family: the public JWK that family's own ExecStartPre= writes (a family that has not run yet is skipped with a warning).
+ExecStart=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py refresh --key-file /opt/hams/spool/web_bot_auth/publisher.key --jwk-dir /opt/hams/spool/web_bot_auth/jwks \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_activator_sync/hamsd_activator_sync.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_callbook_geo/hamsd_callbook_geo.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_club_crawl/hamsd_club_crawl.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_club_search/hamsd_club_search.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_ncvec_sync/hamsd_ncvec_sync.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper/hamsd_qrz_scraper.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync/hamsd_satellite_sync.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_space_weather/hamsd_space_weather.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/odoo/odoo.jwk \\
+    --out /opt/hams/spool/web_bot_auth/directory.json
 
 StandardOutput=journal
 StandardError=journal
@@ -6205,6 +6454,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_activator_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_activator_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_activator_sync/hamsd_activator_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_activator_sync/hamsd_activator_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_activator_sync/hamsd_activator_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/pota_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -6280,6 +6534,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_activator_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_activator_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_activator_sync/hamsd_activator_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_activator_sync/hamsd_activator_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_activator_sync/hamsd_activator_sync.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/sota_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -6437,6 +6696,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS=--max-requests-per-run=5 --max-requests-per-day=20 --max-queries-per-day=300"
 
 # Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_club_search.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_club_search
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_club_search/hamsd_club_search.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_club_search/hamsd_club_search.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_club_search/hamsd_club_search.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/club_web_search_discovery/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -7495,6 +7759,11 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS=--max-sites=30 --max-sites-per-day=300 --max-model-calls-per-run=60 --max-model-calls-per-day=400"
 
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/club_crawl/main.py --start-test
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_club_crawl.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_club_crawl
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_club_crawl/hamsd_club_crawl.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_club_crawl/hamsd_club_crawl.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_club_crawl/hamsd_club_crawl.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/club_crawl/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -7600,6 +7869,11 @@ Environment="EVENT_AI_ENRICHMENT_BATCH_SIZE=5"
 Environment="EVENT_AI_ENRICHMENT_MAX_EVENTS_PER_DAY=30"
 
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/event_ai_enrichment/main.py --start-test
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, odoo.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/odoo
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/odoo/odoo.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/odoo/odoo.key --jwk-file /opt/hams/spool/web_bot_auth_keys/odoo/odoo.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/event_ai_enrichment/main.py --scheduled
 
 StandardOutput=journal
