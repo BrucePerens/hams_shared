@@ -629,6 +629,52 @@ def hook_daemons_perms(env_vars, dest_dir, path, run_cmd_func):
         run_cmd_func(["chmod", "-R", "a+rX", target])
 
 
+# Where the buffering front end's site file lives, and what Debian's nginx package leaves enabled.
+NGINX_TUNNEL_ORIGIN_CONF = "/etc/nginx/hams/hams-tunnel-origin.conf"
+NGINX_SITES_ENABLED = "/etc/nginx/sites-enabled"
+# Sites that must NOT stay enabled next to the front end: Debian's own `default` listens on 0.0.0.0:80
+# (the Debian package enables and starts it on install), and `acme-only.conf` was a hand-made port-80
+# Let's Encrypt challenge site from 2026-09-21 that nothing provisions. Port 80 is closed on hams1.
+NGINX_SITES_TO_DISABLE = ("default", "acme-only.conf")
+
+
+# [@ANCHOR: infrastructure:hook_enable_nginx_front_end]
+def hook_enable_nginx_front_end(env_vars, dest_dir, path, run_cmd_func):
+    """Turns on the loopback buffering reverse proxy in front of Odoo (hams_com
+    nginx/prod/hams-tunnel-origin.conf, 127.0.0.1:8085, the Cloudflare tunnel's catch-all).
+
+    Odoo's prefork HTTP workers cut any send that stalls for 2 seconds, which truncated 35 MB
+    downloads to a browser behind the tunnel; a buffering proxy takes Odoo's reply at full speed.
+    Found and installed by hand on hams1, 2026-10-05; this makes a fresh provision reproduce it.
+
+    Links the site into sites-enabled, removes the sites that would bind a public port (see
+    NGINX_SITES_TO_DISABLE), refuses to go further unless `nginx -t` passes, then enables nginx at
+    boot and reloads (or starts) it. A failure is recorded as a degraded step, never raised."""
+    sites_enabled = os.path.join(dest_dir, NGINX_SITES_ENABLED.lstrip("/")) if dest_dir else NGINX_SITES_ENABLED
+    link = os.path.join(sites_enabled, "hams-tunnel-origin.conf")
+    if not os.path.exists(path):
+        _logger.warning("nginx front end not enabled: %s was not installed (no hams_com checkout?)", path)
+        return
+    try:
+        os.makedirs(sites_enabled, exist_ok=True)
+        for name in NGINX_SITES_TO_DISABLE:
+            stale = os.path.join(sites_enabled, name)
+            if os.path.lexists(stale):
+                os.remove(stale)
+        # The link target is the on-host path even when dest_dir stages the tree elsewhere.
+        if os.path.lexists(link):
+            os.remove(link)
+        os.symlink(NGINX_TUNNEL_ORIGIN_CONF, link)
+        if dest_dir:
+            return
+        run_cmd_func(["/usr/sbin/nginx", "-t"])
+        run_cmd_func(["systemctl", "enable", "nginx.service"])
+        run_cmd_func(["systemctl", "reload-or-restart", "nginx.service"])
+    except (OSError, subprocess.CalledProcessError) as e:
+        _logger.warning("Could not enable the nginx front end: %s", e)
+        record_hook_failure("hook_enable_nginx_front_end", e)
+
+
 # Rust-crate daemons under daemons/ with no Python entry point -- each of
 # these needs a real compiled release binary at target/release/<crate_name>
 # before its systemd unit's ExecStart can run. Runs before
@@ -1945,12 +1991,12 @@ MANIFEST = {
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
         },
-        # /opt/hams/nginx and its self-signed ssl/ pair: nginx is NOT the
-        # production front end. On hams1 nginx is installed but disabled
-        # and was never in the request path; ingress is the Cloudflare
-        # Tunnel plus hams_auth_gateway on auth.hams.com (hams_com
-        # docs/proposals/PROVISION_PRODUCTION_NOTES.md, "Update
-        # 2026-10-03"). Nothing on hams1 reads these files.
+        # /opt/hams/nginx and its self-signed ssl/ pair: unused. nginx is not a public
+        # front end; ingress is the Cloudflare Tunnel plus hams_auth_gateway on
+        # auth.hams.com (hams_com docs/proposals/PROVISION_PRODUCTION_NOTES.md, "Update
+        # 2026-10-03"). The only nginx on hams1 is the loopback buffering proxy on
+        # 127.0.0.1:8085 ("Update 2026-10-05"), which needs no certificate. Nothing on
+        # hams1 reads these files.
         {
             "path": "/opt/hams/nginx",
             "owner": "hams_com:hams_com",
@@ -2793,6 +2839,24 @@ WantedBy=multi-user.target
             "post_provision_hooks": [hook_install_wkhtmltopdf],
         },
 
+        {
+            # The buffering reverse proxy between the Cloudflare tunnel and Odoo (hams_com
+            # nginx/prod/hams-tunnel-origin.conf): 127.0.0.1:8085 only, `/` -> Odoo 8069, `/websocket` ->
+            # 8072. Odoo's prefork HTTP workers cut a send that stalls 2 seconds, which truncated the
+            # 35 MB relay installer for any browser behind the tunnel; Odoo's own source says to put a
+            # buffering reverse proxy in front. The tunnel's catch-all service (Odoo tunnel form,
+            # `cloudflare.tunnel.catch_all_service`) must be http://localhost:8085, a database
+            # setting this file does not control. Installed by hand on hams1 2026-10-05; the hook
+            # links it, drops Debian's default and any acme-only site (nothing may bind port 80) and
+            # enables nginx. Self-hosters: Odoo needs a buffering reverse proxy in front, see
+            # hams_shared docs/SELF_HOSTING_REVERSE_PROXY.md. Prod only; test hosts never need it.
+            "src": "{HAMS_COM_DIR}/nginx/prod/hams-tunnel-origin.conf",
+            "path": NGINX_TUNNEL_ORIGIN_CONF,
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+            "post_provision_hooks": [hook_enable_nginx_front_end],
+        },
         {
             "src": "{HAMS_COM_DIR}/daemons",
             "path": "/opt/hams/daemons",
@@ -8009,9 +8073,10 @@ WantedBy=timers.target
             "debian_name": "postgresql-client",
             "environments": ["early_prod"],
         },
-        # Installed, but not production's front end: hams1 keeps
-        # nginx.service disabled (ingress is the Cloudflare Tunnel; see the
-        # /opt/hams/nginx entry above). The dev box uses it for its local
+        # Since 2026-10-05 nginx runs on production as a loopback-only buffering proxy
+        # (127.0.0.1:8085) between the Cloudflare Tunnel and Odoo: see the
+        # /etc/nginx/hams/hams-tunnel-origin.conf static_files entry. It is still not a
+        # public listener (no port 80 or 443). The dev box also uses it for its local
         # 127.0.0.1:8080 bus proxy (hams_com CLAUDE.md).
         {"name": "nginx", "debian_name": "nginx", "environments": ["early_prod"]},
         # setfacl: the traversal grant on /opt/hams, /opt/hams/etc, ... that lets a daemon family's account
