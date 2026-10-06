@@ -1,7 +1,7 @@
 # MASTER 14: LLM Context & Cognitive Load Management
 
 ## Status
-Accepted (Consolidates ADR 0016, 0072, Patch Protocol, API Contracts)
+Accepted (Consolidates ADR 0016, 0072, API Contracts)
 
 ## Context & Philosophy
 The platform is governed by a massive edifice of operational rules, linters, and architectural constraints. If an LLM is fed the entire repository alongside these meta-rules, its attention dilutes, leading to instruction drift, hallucination, and security regressions. We must aggressively prune input and output context to preserve reasoning capacity.

@@ -83,7 +83,7 @@ expecting this skill to define it:
 ## What was dropped, and why
 
 A few things in the old file were specific to an earlier Gemini/Antigravity-based workflow with its
-own file-editing transport format and context-window constraints -- a "Patch Protocol"/"Transport
+own file-editing transport format and context-window constraints -- a "Transport
 Terminator" boundary-string convention for that tool's own diff format, and an "Autonomous Chunking"
 rule about splitting large outputs into batches and saying "continue." Neither applies to Claude
 Code's own tool-based editing model, so they're not carried forward here. A specific Python
