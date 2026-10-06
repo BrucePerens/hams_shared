@@ -5452,3 +5452,100 @@ class AuthGatewayDirectoriesTests(unittest.TestCase):
         self.assertIn("ExecStart=/opt/hams/daemons/", unit["content"])
         dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
         self.assertEqual(dirs["/opt/hams"]["acl"], ["g:hams_traverse:--x"])
+
+
+class NginxFrontEndManifestTests(_TmpDirTestCase):
+    """Tests [@ANCHOR: infrastructure:hook_enable_nginx_front_end]
+
+    Production's loopback buffering proxy (127.0.0.1:8085, the Cloudflare tunnel's catch-all) was
+    installed by hand on 2026-10-05 because Odoo's prefork workers cut a send that stalls for 2
+    seconds. These tests make a fresh provision reproduce it, and keep Debian's port-80 default
+    site and the hand-made acme-only site from coming back."""
+
+    def _entry(self):
+        return next(
+            e for e in infra.MANIFEST["static_files"]
+            if e["path"] == "/etc/nginx/hams/hams-tunnel-origin.conf"
+        )
+
+    def test_the_site_is_copied_from_hams_com_in_production_only(self):
+        entry = self._entry()
+        self.assertEqual(entry["src"], "{HAMS_COM_DIR}/nginx/prod/hams-tunnel-origin.conf")
+        self.assertEqual(entry["environments"], ["prod"])
+        self.assertEqual(entry["owner"], "root:root")
+        self.assertIn(infra.hook_enable_nginx_front_end, entry["post_provision_hooks"])
+
+    def test_nginx_package_is_still_installed(self):
+        self.assertTrue(any(p["name"] == "nginx" for p in infra.MANIFEST["apt_packages"]))
+
+    def test_no_manifest_entry_writes_an_acme_only_or_port_80_site(self):
+        for entry in infra.MANIFEST["static_files"]:
+            path = entry["path"]
+            if path.startswith("/etc/nginx/"):
+                self.assertNotIn("acme-only", path)
+                self.assertNotIn("sites-available", path)
+                self.assertNotIn("listen 80", entry.get("content", ""))
+        self.assertIn("default", infra.NGINX_SITES_TO_DISABLE)
+        self.assertIn("acme-only.conf", infra.NGINX_SITES_TO_DISABLE)
+
+    def _stage(self):
+        sites = os.path.join(self.tmp, "sites-enabled")
+        os.makedirs(sites)
+        for name in ("default", "acme-only.conf"):
+            os.symlink("/nonexistent", os.path.join(sites, name))
+        conf = os.path.join(self.tmp, "hams-tunnel-origin.conf")
+        with open(conf, "w") as f:
+            f.write("server { listen 127.0.0.1:8085; }\n")
+        self.safe_patch_object(infra, "NGINX_SITES_ENABLED", sites)
+        return sites, conf
+
+    def test_hook_links_the_site_removes_port_80_sites_then_tests_before_enabling(self):
+        sites, conf = self._stage()
+        run = MagicMock()
+        infra.hook_enable_nginx_front_end({}, "", conf, run)
+        self.assertEqual(sorted(os.listdir(sites)), ["hams-tunnel-origin.conf"])
+        self.assertEqual(
+            os.readlink(os.path.join(sites, "hams-tunnel-origin.conf")), infra.NGINX_TUNNEL_ORIGIN_CONF
+        )
+        self.assertEqual(
+            [c.args[0] for c in run.call_args_list],
+            [
+                ["/usr/sbin/nginx", "-t"],
+                ["systemctl", "enable", "nginx.service"],
+                ["systemctl", "reload-or-restart", "nginx.service"],
+            ],
+        )
+
+    def test_hook_does_not_enable_nginx_when_the_config_test_fails(self):
+        self._stage()
+        conf = os.path.join(self.tmp, "hams-tunnel-origin.conf")
+        run = MagicMock(side_effect=subprocess.CalledProcessError(1, "nginx -t"))
+        infra.hook_enable_nginx_front_end({}, "", conf, run)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["hook_enable_nginx_front_end"])
+
+    def test_hook_is_idempotent(self):
+        sites, conf = self._stage()
+        run = MagicMock()
+        infra.hook_enable_nginx_front_end({}, "", conf, run)
+        infra.hook_enable_nginx_front_end({}, "", conf, run)
+        self.assertEqual(os.listdir(sites), ["hams-tunnel-origin.conf"])
+        self.assertEqual(infra.get_hook_failures(), [])
+
+    def test_hook_does_nothing_when_the_site_file_was_not_installed(self):
+        sites, _ = self._stage()
+        run = MagicMock()
+        infra.hook_enable_nginx_front_end({}, "", os.path.join(self.tmp, "missing.conf"), run)
+        run.assert_not_called()
+        self.assertEqual(len(os.listdir(sites)), 2)
+
+    def test_a_staged_tree_is_only_linked_never_started(self):
+        stage = os.path.join(self.tmp, "stage")
+        conf = os.path.join(stage, "etc/nginx/hams/hams-tunnel-origin.conf")
+        os.makedirs(os.path.dirname(conf))
+        with open(conf, "w") as f:
+            f.write("x\n")
+        run = MagicMock()
+        infra.hook_enable_nginx_front_end({}, stage, conf, run)
+        run.assert_not_called()
+        self.assertTrue(os.path.islink(os.path.join(stage, "etc/nginx/sites-enabled/hams-tunnel-origin.conf")))
