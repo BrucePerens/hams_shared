@@ -3,6 +3,8 @@
 ## Status
 Proposed
 
+Related: [ADR 0104](0104_honest_user_agent_unless_a_firewall_forces_otherwise.md) (Accepted) sets a narrower rule for the browser-like `User-Agent` exception: its decision 2(e) states that a forged TLS fingerprint, challenge or CAPTCHA solving, and IP rotation each need a new decision recorded as an amendment to that ADR. Read "Exception Mode" below together with it.
+
 ## Context
 Our system operates automated agents that fetch external resources for various purposes. A critical function of our platform is verifying that users are licensed amateur radio operators ("hams"). To achieve this, we must query data from licensing authorities (such as the FCC) and other related databases.
 

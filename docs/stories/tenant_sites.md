@@ -3,13 +3,13 @@
 As the **owner of hams.com** I want **perens.com, postopen.org and other sites to be websites of the same Odoo**
 (one database, one Cloudflare tunnel, one place that says what the tunnel does), so that each site shows only
 its own public content, nothing of hams.com's members or backend is reachable on its names, and the Cloudflare
-configuration has a single source of truth. The decision is ADR 0106.
+configuration has a single source of truth. The decision is [ADR 0106](../adrs/0106_tenants_inside_one_odoo.md): a *tenant* is a website of hams.com's own Odoo, bound to one or more hostnames, with no company or database of its own.
 
 ## Scenario: What a request for a hostname is
 
 The hostname used is the one the client sent, never `X-Forwarded-Host`, which Odoo's proxy mode would otherwise
 substitute [@ANCHOR: tenant_sites:COMM_normalize_host] [@ANCHOR: tenant_sites:COMM_original_host]; a request whose
-two hostnames differ is refused [@ANCHOR: tenant_sites:COMM_classify]. The router puts every request in one of
+two hostnames (the one the client sent and `X-Forwarded-Host`) differ is refused [@ANCHOR: tenant_sites:COMM_classify]. The router puts every request in one of
 five kinds: the main site, a tenant, a parked domain, an unknown hostname, or a refused one
 [@ANCHOR: tenant_sites:COMM_match_guard]. A name that is not a domain name (`localhost`, an address, a one-word
 name: this machine's daemons, the test harness, an operator on loopback) is never classified.

@@ -52,7 +52,7 @@ status check -- with one necessary exception, `enforce_admins`, discussed below:
      hours). `BrucePerens` is the only GitHub identity with write access to either repo, and a
      fine-grained PAT scoped down to that same account is still that same account as far as
      GitHub's self-approval rule is concerned -- confirmed live: `gh api user` under the
-     dedicated night-watch reviewer PAT (decision 4) returns `BrucePerens`, identical to the
+     dedicated night-watch reviewer PAT (GitHub personal access token; decision 4) returns `BrucePerens`, identical to the
      identity that opens every PR. With `enforce_admins: true`, this makes required review
      literally unsatisfiable on this repo: no PR, from any session, by any mechanism, could ever
      be approved by anyone, since the sole account able to review is always also the author.
@@ -77,8 +77,8 @@ status check -- with one necessary exception, `enforce_admins`, discussed below:
      runners registered to it (confirmed live via the GitHub API) -- `hams-devbox` is registered only at
      the `hams_com` repo level, and GitHub does not share repo-scoped runners across unrelated personal
      repos (that needs an organization, which these are not). Requiring a check with no runner able to
-     ever run it would deadlock every future `hams_shared` PR, so `hams_shared` currently has
-     `enforce_admins: true` and the required review only, no required status check, until a runner is
+     ever run it would deadlock every future `hams_shared` PR, so `hams_shared` has
+     `enforce_admins: false` (as in the first bullet above) and the required review only, no required status check, until a runner is
      registered there too (see the tracked follow-up). The full `hams_shared/tools/test.py` Odoo suite as
      a check (on either repo) is a further, separate follow-up: it needs a runner matching this dev box's
      Postgres/`odoo`-user environment, real infrastructure work, not a settings change.
@@ -137,7 +137,7 @@ reach: crashes, force-quits, and worktrees created by hand with `git worktree ad
 **6. A pure `hams_shared` submodule-pointer bump in `hams_open` is pushed directly to `main`, no PR**
 (Bruce's decision, 2026-10-02). Its content was already reviewed and gated as `hams_shared`'s own PR, so a
 second PR around a one-line gitlink change reviews nothing new and only delays production pickup (a
-`hams_shared` change reaches `hams1` only once `hams_open` records it). Server side, `hams_open`'s ruleset
+`hams_shared` change reaches `hams1` (the production server, see [ADR 0103](0103_pgbackrest_privileged_backup_sidecar.md) and [ADR 0106](0106_tenants_inside_one_odoo.md)) only once `hams_open` records it). Server side, `hams_open`'s ruleset
 `main-pr-required-no-direct-push` (id 24045234) had its admin-role bypass changed from `pull_request` to
 `always` the same day so the push is accepted. That bypass cannot be scoped to submodule changes on a
 personal (non-organization) repository, so it lets **any** direct admin push through, and every session on
@@ -153,8 +153,9 @@ the failure mode that actually happened on 2026-09-22 cannot recur in the same f
 protection, not a client-side procedure, is what actually stops a bad push from landing on `main`, and it
 applies identically to every session including an admin-authenticated one. The cost is real: worktrees use
 more disk per session, and merging now goes through a PR rather than a direct push (every PR, including
-night-watch's own `night-shift/*` ones, lands via `--admin` by Bruce -- see decision 4's withdrawal) --
-both `pre-push` hook the client-side layer, and none of this can enforce itself if a session goes looking
+night-watch's own `night-shift/*` ones, lands via `--admin` by Bruce -- see decision 4's withdrawal); the one
+exception is the direct push of a `hams_shared` submodule-pointer bump to `hams_open` (decision 6). The shared
+`pre-push` hook (decision 2) is only the client-side early-warning layer, and none of this can enforce itself if a session goes looking
 for ways around it, which is exactly why decision 3 does not depend on anything running on the session's
 own machine.
 

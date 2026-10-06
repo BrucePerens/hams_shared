@@ -14,7 +14,7 @@ Odoo's native ORM and relational data structures (e.g., traversing `res.partner.
 Financial identifiers MUST ALWAYS be protected by multiple, redundant layers of security. The architecture must assume that any single layer (like a specific Access Control List or UI restriction) will eventually fail or be bypassed.
 
 ### 2. Mandatory Data Masking via SQL Views
-To permanently neutralize Odoo's relational leakage, raw financial tables MUST NOT be directly queried or exposed throughout the general software.
+To permanently neutralize Odoo's relational leakage (this is the same view-abstraction mechanism as [MASTER 01](MASTER_01_SECURITY_ZERO_SUDO.md) section 4), raw financial tables MUST NOT be directly queried or exposed throughout the general software.
 * **Mandatory Masking:** PostgreSQL Views (`_auto = False`) that mask privileged financial data MUST be mandatory everywhere in the software.
 * **Opaque Abstraction:** These views must only expose safe, aggregated, or masked representations (e.g., returning a boolean `has_payment_method` or a masked string `****-1234`).
 * **Transaction Exclusivity:** The unmasked, raw financial data is strictly forbidden from entering the application's WSGI memory EXCEPT during the exact execution context where the financial data is actually required (i.e., actively processing a payment gateway transaction).

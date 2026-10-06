@@ -37,10 +37,12 @@ root and, where relevant, the sibling repo, from whichever one it's given.
   verification checklist every change goes through.
 * **`tools/`** (114 Python scripts plus `rust_function_scan/`, a small standalone Rust crate): the
   CI/CD linter and verification suite `run_linters.py` orchestrates. Highlights: `check_burn_list.py`
-  (the AST-based security/architecture "Burn List" linter, ADR-0083/ADR-0022), `verify_anchors.py`
+  (the AST-based security/architecture "Burn List" linter, ADR-0083/ADR-0022; the Burn List is explained in the
+  [`hams_open` README](https://github.com/BrucePerens/hams_open#the-ai-instruction-suite--memory)), `verify_anchors.py`
   and `check_function_test_anchors.py`/`check_js_function_test_anchors.py`/
   `check_rust_function_test_anchors.py` (the bidirectional Semantic Anchor System's enforcement,
-  per-language), `run_rust_coverage.py` (real per-line Rust coverage via `cargo llvm-cov`, joined
+  per-language; the system is explained in the
+  [`hams_open` README](https://github.com/BrucePerens/hams_open#the-semantic-anchor-system)), `run_rust_coverage.py` (real per-line Rust coverage via `cargo llvm-cov`, joined
   against anchor claims), `odoo_mypy_plugin.py` (Odoo-model-aware static typing, with a generated
   Odoo-core type-stub tree at `tools/odoo_type_stubs/`), `pre_flight_check.py`, `mcp_watchdog.py`
   (the shared MCP queue/executor coordination layer described in the `avoiding-api-costs` skill

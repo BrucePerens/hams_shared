@@ -61,8 +61,6 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   Every function must carry a real test anchor (documentation is routed by audience -- README.md for infrastructure, docs/stories or data/documentation.html for user-visible features -- never exempted); a CI-enforced ratchet (`check_function_test_anchors.py`, run_linters.py step 38) blocks new unanchored code starting now, with the real pre-existing backlog (1193 functions, both repos) grandfathered into a committed baseline pending the full sweep.
 * ADR 0091: Function-Level Claims Directory and Bug-Hunt Integration -- **relocated to
   `hams_com/docs/adrs/0091_function_level_claims_and_bug_hunt_integration.md`** (2026-09-09).
-* [ADR 0094: Server-Gated Test-Only Hooks in Client-Shipped JavaScript](0094_js_test_only_hook_gating.md)
-  Mandates that a `TEST_*`-prefixed postMessage/event hook in client-shipped JS be gated behind a real, per-deployment `ir.config_parameter` substituted server-side into a `TEST_HOOKS_ENABLED` constant -- never Odoo's own `test_enable` flag, which is banned for this purpose. Enforced by a new CI linter (`check_js_test_hook_gating.py`, run_linters.py step 46) via a real acorn AST scan, no baseline/ratchet needed at introduction.
   `hams_shared` is a public repo; the bug-hunt review method itself (the claim-then-verify
   technique, the accumulated bug-class checklist, the cost-tiered model-routing strategy) is a
   competitive/trade-secret asset and doesn't belong here. What DOES stay in this public repo and
@@ -71,6 +69,8 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   `docs/odoo_orm_reference.md` (generic third-party Odoo-framework facts). A per-function claim
   itself still lives at `<module>/claims/<anchor_name>.md`, inside whichever repo owns that
   module -- that part of the design is unchanged, only the review method's own document moved.
+* [ADR 0094: Server-Gated Test-Only Hooks in Client-Shipped JavaScript](0094_js_test_only_hook_gating.md)
+  Mandates that a `TEST_*`-prefixed postMessage/event hook in client-shipped JS be gated behind a real, per-deployment `ir.config_parameter` substituted server-side into a `TEST_HOOKS_ENABLED` constant -- never Odoo's own `test_enable` flag, which is banned for this purpose. Enforced by a new CI linter (`check_js_test_hook_gating.py`, run_linters.py step 46) via a real acorn AST scan, no baseline/ratchet needed at introduction.
 * ADR 0092: HamCall Licensed Callsign Verify-Only Integration -- lives at
   `hams_com/docs/adrs/0092_hamcall_licensed_verify_only_integration.md` (written there directly,
   matching ADR 0091's relocation above, not moved after the fact). `hams_shared` is a public repo
@@ -142,3 +142,17 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   Bruce's 2026-10-03 decision (86) for the ~40 units that run as `User=odoo` and so can read each other's key files: a dedicated `hamsd_<family>` account and group per daemon family, provisioned from the MANIFEST for every user of the code. `daemon_key_manager` hands a key file to the family's group (`odoo:<group> 0640`, because an unprivileged `odoo` can chgrp to a group it belongs to and cannot chown); `/opt/hams/etc/keys` is `0710`; a migrated unit's `ReadWritePaths=` and `EnvironmentFile=` list are narrowed and a ratchet enforces both. Phased, each phase rehearsed on a restored-dump host first; Phase 1 moved `ncvec.sync`.
 * [ADR 0108: Relay Certificates Are Self-Signed or From the Relay CA, Nothing Else (Reverses ADR 0100)](0108_relay_certificates_self_signed_or_relay_ca_only.md)
   Bruce's 2026-10-04 decision (NIGHT_PLAN 126, 127): a relay presents its own Relay CA leaf when it holds a valid one, else its own self-signed certificate, over HTTPS only. The fleet-shared `*.relay.hams.com` wildcard, the per-user ACME certificate and the shared `localhost.hams.com` certificate of ADR 0100 are removed with their routes, daemons, accounts and units, and a source scan in the relay's tests fails if one returns. No wall-clock check gates a local connection; the self-signed click-through always works.
+
+## Further Standard ADRs (listed by title only)
+
+These ADRs are in this directory and are cited by other documents; they have no summary above yet.
+
+* [ADR 0077: API Versioning and Deprecation Strategy](0077_api_versioning_and_deprecation.md)
+* [ADR 0078: Model Validation and Database Integrity](0078_model_validation_and_database_integrity.md)
+* [ADR 0080: Good Bot Compliance and Scraping Ethics](0080_good_bot_compliance_and_scraping_ethics.md)
+* [ADR 0081: Native Odoo Tour Resilience Architecture](0081_ui_testability_and_tour_friendly_design.md)
+* [ADR 0082: Strict Daemon Integration Testing](0082_strict_daemon_integration_testing.md)
+* [ADR 0083: Multi-Tenant Context Management (company_id and website_id)](0083_multi_tenant_context_management.md)
+* [ADR 0084: Strict Content Security Policy (CSP) Preparation and Inline Style Prohibition](0084_strict_content_security_policy_preparation.md)
+* [ADR 0085: hams_com Single-Site Deployment Policy](0085_hams_com_single_site_deployment_policy.md)
+* [ADR 0106: Other Sites Are Tenants Inside hams.com's Odoo](0106_tenants_inside_one_odoo.md)

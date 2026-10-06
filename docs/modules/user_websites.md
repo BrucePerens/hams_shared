@@ -33,7 +33,7 @@ Go to **Settings > General Settings > User Websites** to configure the app.
 
 We used a few neat tricks to make this secure and fast:
 
-* **Just-In-Time Creation:** We don't waste database space creating empty blogs for users who never use them. The system only creates the website records the exact moment the user visits their URL for the first time.
+* **Just-In-Time Creation:** We don't waste database space creating empty blogs for users who never use them. The system only creates the website records the moment the user visits their URL for the first time and triggers site creation there (a POST to `/<slug>/create_site`, which doubles as the user's explicit consent to publish; see section 1 below).
 * **One Big Blog:** Instead of creating a thousand separate blog containers, everyone shares a single Odoo `blog.blog` record named "Community Blog". We just filter the posts so users only see their own stuff.
 * **Proxy Ownership:** Odoo normally only lets admins build web pages. We get around this securely. When a user creates a page, the system briefly logs in as a background Service Account to save the HTML to the database, but tags the user as the real "owner" so only they can edit it later.
 * **Security Shield:** The module includes an automated sanitization engine that intercepts and neutralizes XSS and SSTI attempts. If a user tries to inject malicious code, the system strips it, notifies administrators, and issues a strike.
@@ -69,7 +69,7 @@ The `user_websites` module enables decentralized content creation. It employs th
 ### Extended `res.users`
 * **`website_slug`**: URL-safe identifier.
 * **`privacy_show_in_directory`**: Opt-in for the public `/community` directory.
-* **`violation_strike_count`**: Number of upheld content violations.
+* **`violation_strike_count`**: Number of upheld content violations (strikes). Past 3 strikes the account is suspended from the module's websites, per the 3-strike rule (`user_websites/docs/stories/moderation.md` in `hams_open`).
 * **`is_suspended_from_websites`**: If True, all personal content is forcefully unpublished.
 * **`appeal_ids`** (`One2many`): Links to Moderation Appeals.
 
@@ -141,7 +141,7 @@ DO NOT USE user_websites_settings_dropzone. All settings views must now inherit 
 * **GDPR Actions:** Privacy dashboard `/my/privacy` `[@ANCHOR: controller_my_privacy_dashboard]`. Data exports `/my/privacy/export` `[@ANCHOR: UX_GDPR_EXPORT]`. Data erasure via background cascading unlinks `/my/privacy/delete_content` `[@ANCHOR: UX_GDPR_ERASURE]`.
 
 ### 🚨 Privilege Deprecation & Cross-Module Execution (CRITICAL)
-In adherence to the Micro-Service Account Pattern (ADR-0062), the `user_websites` internal service account (`user_websites.user_websites_service_account`) has been stripped of omnipotent ERP privileges. It **can no longer create or delete** core identity records (`res.users`, `res.partner`). Furthermore, it retains only microscopic read-only access (`1,0,0,0`) to framework tables like `discuss.channel`, `res.company`, and `res.partner.bank` strictly to satisfy Odoo's internal ORM cascade requirements (The Framework ACL Tax - ADR-0064).
+In adherence to the Micro-Service Account Pattern (ADR-0062; ADR-0062 and ADR-0064 are consolidated in [MASTER_01_SECURITY_ZERO_SUDO.md](../adrs/MASTER_01_SECURITY_ZERO_SUDO.md); see also [zero_sudo.md](zero_sudo.md)), the `user_websites` internal service account (`user_websites.user_websites_service_account`) has been stripped of omnipotent ERP privileges. It **can no longer create or delete** core identity records (`res.users`, `res.partner`). Furthermore, it retains only microscopic read-only access (`1,0,0,0`) to framework tables like `discuss.channel`, `res.company`, and `res.partner.bank` strictly to satisfy Odoo's internal ORM cascade requirements (The Framework ACL Tax - ADR-0064).
 
 If your dependent module (e.g., `cloudflare`, `custom_dns`) needs to programmatically resolve slugs or provision websites, **you MUST NOT rely on the `user_websites` service account to bypass ACLs for you.** Instead, you must fetch your own domain-specific service account and pass it using the `override_svc_uid` parameter. Your module must explicitly declare the necessary Access Control Lists (`ir.model.access.csv`) for its own service account to perform the required operations.
 
@@ -164,7 +164,7 @@ If your dependent module (e.g., `cloudflare`, `custom_dns`) needs to programmati
 
 * **GDPR Hooks**: The module extends `_get_gdpr_export_data()` `[@ANCHOR: res_users_gdpr_export]`, tested by `[@ANCHOR: test_gdpr_export_hook]`, and `_execute_gdpr_erasure()` `[@ANCHOR: gdpr_sudo_erasure]`, tested by `[@ANCHOR: test_gdpr_erasure_pages]` and `[@ANCHOR: test_gdpr_erasure_posts]`. Dependent modules storing PII MUST override these to append their data to the export payload and hard-delete it during erasure.
 
-* **Documentation Injection**: The module follows the soft-dependency pattern for documentation. It attempts to install its `data/documentation.html` into `knowledge.article` or `knowledge.article` via `res.users._register_hook()`. This ensures compatibility with both Odoo Enterprise and the Community `knowledge` module without hard dependencies `[@ANCHOR: documentation_bootstrap]`.
+* **Documentation Injection**: The module follows the soft-dependency pattern for documentation. It attempts to install its `data/documentation.html` into `knowledge.article` (provided by either this repository's open-source `knowledge` module or Odoo Enterprise's Knowledge app) via `res.users._register_hook()`. This ensures compatibility with both Odoo Enterprise and the Community `knowledge` module without hard dependencies `[@ANCHOR: documentation_bootstrap]`.
 </public_api>
 
 ---

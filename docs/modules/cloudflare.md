@@ -50,7 +50,7 @@ Control plane for the CDN edge. Manages Cache-Tags, WAF bans, and Turnstile CAPT
 * **Content Hooks:** Automatically enqueues purges for `website.page`, `blog.post`, and `product.template` modifications.
 
 ## 4. Zero-Sudo & Micro-Privilege Architecture
-Strictly adheres to Zero-Sudo architecture using dedicated service accounts:
+Strictly adheres to Zero-Sudo architecture (no `.sudo()`; privileged work runs as a dedicated, narrowly scoped service account -- defined in [zero_sudo.md](zero_sudo.md), accounts catalogued in [service_accounts.md](../service_accounts.md)) using dedicated service accounts:
 * `cloudflare.user_cloudflare_purge`: Cache purging.
 * `cloudflare.user_cloudflare_waf`: WAF and IP banning.
 * `cloudflare.user_cloudflare_tunnel`: Tunnel management.
@@ -116,7 +116,7 @@ Strictly adheres to Zero-Sudo architecture using dedicated service accounts:
 * **Deploy/Pull WAF from Settings:** `[@ANCHOR: cloudflare:COMM_action_deploy_cf_waf]`, `[@ANCHOR: cloudflare:COMM_action_pull_cf_waf]`
 
 **Encrypted credential storage (`website.py`):**
-* **Fernet Key Resolution:** `[@ANCHOR: cloudflare:COMM_get_fernet]` -- reads from the daemon key registry, never an environment variable, to preserve multi-tenant isolation.
+* **Fernet Key Resolution:** `[@ANCHOR: cloudflare:COMM_get_fernet]` -- reads from the daemon key registry (`daemon.key.registry`, see [daemon_key_manager.md](daemon_key_manager.md)), never an environment variable, to preserve multi-tenant isolation.
 
 * **Symmetric Encrypt/Decrypt Primitive:** `[@ANCHOR: cloudflare:COMM_crypt_field]`
 

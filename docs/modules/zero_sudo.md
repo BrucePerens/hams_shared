@@ -4,6 +4,8 @@
 
 This is the core security cop for our Odoo ecosystem. It enforces our strict **Zero-Sudo Architecture** (ADR-0002) to stop privilege escalation hacks, and it physically locks down background service accounts so they can't be used to log into the website (ADR-0005).
 
+The ADRs cited in this document (0002, 0005, 0062, 0064) are consolidated in [MASTER_01_SECURITY_ZERO_SUDO.md](../adrs/MASTER_01_SECURITY_ZERO_SUDO.md). A **service account** is a `res.users` record flagged `is_service_account=True` that runs one module's background or privileged work with only the access that module grants it; the accounts are catalogued in [service_accounts.md](../service_accounts.md).
+
 ## 🌟 What It Does
 
 * **Safe Privilege Escalation:** Instead of letting developers use Odoo's dangerous `.sudo()` command, this module provides safe, cached functions (like `_get_service_uid`) to run background tasks securely.
@@ -91,7 +93,7 @@ When a daemon or unprivileged user strictly requires native ERP framework intera
 
 ### A. Central Mail Service Account
 * **XML ID:** `zero_sudo.mail_service_internal`
-* **Privileges:** Holds `base.group_user`. Granted explicit `1,1,1,0` ACLs to `mail.message`, `mail.mail`, `mail.template`, and `res.partner`. It is also granted `1,1,1,1` (unlink) to `mail.followers`, and read-only (`1,0,0,0`) to `res.users`, `res.company`, and `mail.alias.domain`.
+* **Privileges:** Holds `base.group_user`. (ACL triples such as `1,1,1,0` are the read, write, create, unlink permission flags of an `ir.model.access.csv` row.) Granted explicit `1,1,1,0` ACLs to `mail.message`, `mail.mail`, `mail.template`, and `res.partner`. It is also granted `1,1,1,1` (unlink) to `mail.followers`, and read-only (`1,0,0,0`) to `res.users`, `res.company`, and `mail.alias.domain`.
 * **Use Case:** You MUST use this account exclusively when your code needs to execute `message_post()`, `send_mail()`, or interact with the `mail.thread` chatter.
 
 ### B. Odoo Facility Service Account
@@ -176,7 +178,7 @@ Sets a key-value pair in a lightweight service account storage.
 ## 7. Additional Utilities
 
 ### Web Login Security
-* **Key-Value Store:** Lightweight SA key-value storage `[@ANCHOR: COMM_set_kv_sql_check]`.
+* **Key-Value Store:** Lightweight service-account (SA) key-value storage `[@ANCHOR: COMM_set_kv_sql_check]`.
 
 * **Field:** `is_service_account` `[@ANCHOR: COMM_is_service_account_field]` on `res.users`.
 
@@ -187,7 +189,7 @@ Sets a key-value pair in a lightweight service account storage.
 </additional_features>
 
 ## 8. Automated Document Installation Facility
-The `zero_sudo` module provides a centralized facility to inject standalone HTML documentation into the `knowledge.article` or `knowledge.article` APIs. This structurally eliminates the need to maintain fragile ad-hoc `post_init_hook` scripts in every downstream module.
+The `zero_sudo` module provides a centralized facility to inject standalone HTML documentation into the `knowledge.article` model, which is provided by either this repository's open-source `knowledge` module or Odoo Enterprise's Knowledge app. This structurally eliminates the need to maintain fragile ad-hoc `post_init_hook` scripts in every downstream module.
 
 **How to use it:**
 1. Add a hard dependency on `\"zero_sudo\"` in your module's `__manifest__.py`.

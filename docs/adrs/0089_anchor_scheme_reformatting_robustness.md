@@ -4,6 +4,8 @@
 Accepted
 
 ## Scope
+(An anchor is defined in [MASTER_11](MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md), section 1, and in the Context of [ADR 0090](0090_universal_function_test_anchor_ratchet.md); `check_burn_list.py` is the linter described in [ADR 0076](0076_ui_tour_mandate_and_bypass_governance.md).)
+
 This ADR governs `check_burn_list.py`'s anchor mechanism -- the `[@ANCHOR: name]` tags that link
 a bypass/exception declaration in source code (`# burn-ignore-financial`, `# audit-ignore-*`, an
 Odoo XML tour-mandate comment) to a test or documentation citation proving it's justified. It does

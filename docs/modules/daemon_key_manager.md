@@ -2,7 +2,7 @@
 
 *Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).*
 
-The **Daemon Key Manager** is the centralized authority for managing Odoo API keys for external background services (daemons). It implements the **Service Account Pattern** by generating native Odoo API keys and exporting them to highly restricted local `.env` files, eliminating the need for hardcoded credentials or manual token rotation. This module is a critical component of the **Zero-Sudo Architecture**, ensuring that background processes operate with minimum privilege and without human intervention for credential management.
+The **Daemon Key Manager** is the centralized authority for managing Odoo API keys for external background services (daemons). It implements the **Service Account Pattern** (a dedicated, narrowly scoped `res.users` record per daemon, flagged `is_service_account`; see [zero_sudo.md](zero_sudo.md) and [service_accounts.md](../service_accounts.md)) by generating native Odoo API keys and exporting them to highly restricted local `.env` files, eliminating the need for hardcoded credentials or manual token rotation. This module is a critical component of the **Zero-Sudo Architecture**, ensuring that background processes operate with minimum privilege and without human intervention for credential management.
 
 ## 🚀 Quick Start: Integration API
 
@@ -22,7 +22,7 @@ def setup_daemon_credentials(env):
 ## 🛡️ Security Architecture
 
 ### Zero-Sudo Compliance
-The module operates under the `user_daemon_key_manager_service` account. It uses `.sudo()` only for the strictly necessary administrative tasks of API key allocation and revocation, which are restricted operations in Odoo that normally require administrative privileges. This specific module is granted an exemption to use `.sudo()` for these operations to maintain the security of the broader system while enabling automated service account management.
+The module operates under the `user_daemon_key_manager_service` account and does not use `.sudo()`. API-key allocation and revocation, which Odoo normally restricts to administrators, run through `with_user()` as that service account (and, for the daemon's own account, its explicit ACLs), as `key_registry.py` states: "with_user and explicit ACLs remove the need for sudo".
 
 ### OS-Level Sandboxing
 * **Strict Permissions:** `.env` files are created with `0600` (read/write only for the Odoo server process user).

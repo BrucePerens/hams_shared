@@ -38,6 +38,7 @@ To prevent CPU/RAM exhaustion, all heavy lifting MUST be distributed asynchronou
 
 ### 7. Asynchronous Bastion Pattern for External I/O
 To prevent hanging WSGI workers and "split-brain" states, all heavy OS-level or external network tasks MUST follow this four-step pattern:
+(The "bastion" is the standalone daemon of step 3: the one isolated process that performs the dangerous operation, so that no Odoo web worker does.)
 1. **State Initialization:** Odoo creates a tracking record and sets its status to `pending`.
 2. **Transactional Dispatch:** Odoo uses `env.cr.postcommit.add()` to push the task payload to RabbitMQ.
 3. **Isolated Execution:** The standalone Python daemon consumes the message and executes the dangerous operation.

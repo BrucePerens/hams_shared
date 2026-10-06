@@ -10,6 +10,7 @@ Maintaining architectural cohesion across a large platform relies on strict docu
 
 ### 1. Semantic Anchor Traceability & Multi-Repo Governance
 * Source code and Agile documentation (Stories, Runbooks) MUST be mathematically linked using Semantic Anchors (`[@ANCHOR: example_feature_name%]`).
+* A Semantic Anchor is a tag with a unique name that is placed in the code that implements a rule, in the automated test that proves it, and inline in the documentation that describes it; the pipeline fails the build when any of the three is missing (the "Verified by" and "Tests" tags are in [MASTER 12](MASTER_12_QA_TESTING_MANDATES.md) section 5; the overview is "The Semantic Anchor System" in hams_open's README).
 * **Multi-Repository Prefixing:** To prevent collisions across the platform's multi-repository architecture, all new anchors MUST utilize the following prefixing convention:
     * **`COMM_`**: Reserved for `hams_open`.
     * **`PRI_`**: Reserved for `hams_private_primary`.
@@ -32,9 +33,10 @@ Maintaining architectural cohesion across a large platform relies on strict docu
 ### 5. Solo-Maintainer Automation & SRE
 * The platform MUST prioritize self-healing infrastructure, zero-touch CI/CD, and highly centralized unified moderation queues.
 * **Fail-Fast Dependency Resolution:** All external Python libraries MUST be declared in the `external_dependencies` dictionary of a module's `__manifest__.py`.
-* **JIT Self-Healing Dependencies:** Daemons and modules MUST implement Just-In-Time (JIT) binary resolution. If an expected OS-level package is missing, the Python code must dynamically download the static standalone executable from official sources.
+* **JIT Self-Healing Dependencies:** Daemons and modules MUST implement Just-In-Time (JIT) binary resolution. If an expected OS-level package is missing, the Python code must dynamically download the static standalone executable from official sources. (The shared download-verify-share mechanism is described in [binary_downloader.md](../stories/binary_downloader.md).)
 
 ### 6. No Cybercrud Policy (Log Hygiene)
+("Cybercrud" here means repetitive, non-actionable log noise.)
 * Repetitive, non-actionable warnings occurring inside high-frequency loops or controllers MUST use a "run-once" global boolean flag per WSGI worker to ensure they print exactly once to the logs and then fall silent.
 
 ### 7. Human Time vs. Machine Time (The Time Protection Mandate)

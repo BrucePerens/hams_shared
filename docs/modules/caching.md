@@ -22,7 +22,7 @@ As long as you place your Javascript, CSS, and UI icons inside your module's sta
 This module eliminates the need for manual version bumping or complex cache-busting query parameters.
 
 **Filesystem-Linked Invalidation:**
-- **Boot Scan:** During server startup, the module performs an efficient recursive scan using `os.scandir` of all `static/` directories across all installed modules ([@ANCHOR: caching_fs_scan_logic]).
+- **Boot Scan:** During server startup, the module performs an efficient recursive scan using `os.scandir` of all `static/` directories across all installed modules ([@ANCHOR: caching_fs_scan_logic]). (The module's own README, `hams_open/caching/README.md`, is more precise: nothing scans at server startup itself; the scan runs when `/sw.js` is first requested without a cached scan result, and the result is then cached (per worker, and in Redis for up to 24 hours). Read "boot" in this document accordingly.)
 - **MTime Tracking:** It identifies the latest modification timestamp (`mtime`) among all discovered assets.
 - **Dynamic SW Generation:** This timestamp is injected into the `/sw.js` payload, effectively versioning the Service Worker script itself.
 - **Automatic Refresh:** When any static file is modified and the server restarts, the Service Worker's signature changes. Browsers detect this update on the next visit, triggering a background installation of the new worker and an immediate purge of the stale cache.
@@ -31,7 +31,7 @@ This module eliminates the need for manual version bumping or complex cache-bust
 
 Browsers give Service Workers a strict storage limit. If a Service Worker tries to cache massive files, it will max out the quota and the browser will panic and delete the entire cache—destroying the performance benefits of this module.
 
-**The Dynamic Safety Valve:** To protect against this, our Service Worker runs a mathematical calculation on the server during boot. It sums up the sizes of all static files across all installed modules. If the total size exceeds the safe limits of the browser's cache quota (configurable, default 35MB), it automatically calculates a dynamic max file size limit. It instructs the browser to cache as many small files as possible while intentionally rejecting the largest, heaviest files, keeping the total cache footprint safely underneath the browser's panic threshold.
+**The Dynamic Safety Valve:** To protect against this, our Service Worker runs a mathematical calculation on the server during boot. It sums up the sizes of all static files across all installed modules. If the total size exceeds the safe limits of the browser's cache quota (configurable, default 35MB), it automatically calculates a dynamic max file size limit. It instructs the browser to cache as many small files as possible while intentionally rejecting the largest, heaviest files, keeping the total cache footprint safely underneath the browser's panic threshold. Concretely (per `hams_open/caching/README.md`): the module drops the largest files one at a time until the rest fit in the quota minus 10MB (set aside for Odoo's `/web/assets/` bundles and overhead), and sets the per-file limit just below the size of the last file dropped; the bundles themselves are exempt from that per-file limit.
 
 **The Golden Rule:** Keep your `static/` folders strictly reserved for lightweight UI code (JS, CSS) and small layout graphics. If you need to serve heavy media, user uploads, or large datasets, use Odoo's standard attachment routes (`/web/image` or `/web/content`). The Service Worker explicitly ignores those routes, allowing Cloudflare to handle the heavy lifting safely.
 
@@ -55,7 +55,7 @@ Implements a global, root-scoped Service Worker (`/sw.js`) that proxies and cach
 * **Settings Layout Injection**: The settings UI is injected into `website.res_config_settings_view_form` via XPath [@ANCHOR: xpath_rendering_caching_settings].
 
 ## 3. Zero-Sudo Architecture
-This module is built with security as a primary concern, adhering strictly to the Zero-Sudo architecture:
+This module is built with security as a primary concern, adhering strictly to the Zero-Sudo architecture (no `.sudo()`; privileged work runs as a dedicated, narrowly scoped service account -- defined in [zero_sudo.md](zero_sudo.md), accounts catalogued in [service_accounts.md](../service_accounts.md)):
 - **Micro-Privileged Service Account**: A dedicated service user `caching.user_caching_service` is utilized for the filesystem scan ([@ANCHOR: caching_fs_scan_logic]). This account has zero access to business data.
 - **Secure Parameter Access**: System parameters are retrieved through the `zero_sudo.security.utils` abstraction layer, preventing direct access to `ir.config_parameter` and maintaining strict audit trails.
 - **Configuration Whitelisting**: Only specifically approved parameters (`caching.safe_quota_mb`, `caching.invalidation_version`) are accessible to the caching service, preventing unauthorized configuration leakage.

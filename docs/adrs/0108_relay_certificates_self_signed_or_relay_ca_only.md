@@ -19,7 +19,7 @@ started.
 ## Decision
 
 1. **A relay presents exactly one of two certificates.** Its own Relay CA leaf, when it holds one that
-   has not expired and the client named `<relay-id>.local` or sent no SNI; otherwise its own
+   has not expired and the client named `<relay-id>.local` or sent no SNI (server name indication, the host name a browser announces when it opens a TLS connection; see [ADR 0100](0100_shared_localhost_certificate_on_every_relay.md)); otherwise its own
    self-signed certificate. There is no third branch (`sni_cert.rs`).
 2. **The wildcard, the per-user ACME certificate and the shared `localhost.hams.com` certificate are
    removed** with their code, routes, daemons, accounts, units and tests: `/api/relay_bridge/tls_cert_bundle`,

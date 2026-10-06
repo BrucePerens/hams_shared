@@ -51,7 +51,17 @@ credential, and it is not used by hams.com for anything: hams.com is not in the 
 **4. Transmit responsibility.** There is no server or relay in this path, so no hams.com licence gate can be
 enforced on it (Bruce, 2026-09-21: the operator's login to their own repeater is their authorization). The
 endpoint does not apply the "Verified Ham" gate that guards `webrtc_credentials`, because it returns the
-user's own secret and is not a transmit authorization. The UI carries a notice that the operator is
+user's own secret and is not a transmit authorization.
+
+**Verified Ham** is the account status that records that hams.com has verified the person is a licensed radio
+amateur; it is stored separately from, and is narrower than, the general "identity verified" status. An account
+reaches it by one of these routes: (a) a Logbook of the World (LoTW) certificate; (b) an uploaded copy of the
+licence that the system accepts automatically: for a US applicant, the exact digital copy downloaded from the FCC,
+once it passes the system's structure and currency check, and for a non-US applicant, an approved licence image;
+(c) for a non-US applicant, the HamCall address-knowledge check; (d) an explicit action by an administrator
+(approving an uploaded licence, setting Verified Ham by hand, or an invitation that grants it), which always
+grants it whatever the administrator was shown, including a photo or scan of a US licence. Other verification
+methods (a QRZ profile token, Morse, an emailed one-time code) confirm identity only and never grant Verified Ham. The UI carries a notice that the operator is
 responsible for staying within licence and band limits.
 
 ## Consequences

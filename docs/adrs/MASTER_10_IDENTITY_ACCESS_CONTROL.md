@@ -26,7 +26,7 @@ Balancing an open community platform with stringent anti-spam and anti-hijacking
 
 ### 5. Domain Sandbox Mandate (No ERP Group Escalation)
 * Standard community users MUST NOT be assigned native Odoo ERP backend groups. Specifically, you MUST NEVER grant `base.group_user` (Internal User) to a community member, as this exposes the `/web` backend, employee directories, and internal chatter.
-* * All community users must be restricted to `base.group_portal` combined with domain-specific groups (e.g., `custom_module.group_custom_operator`).
+* * All community users must be restricted to `base.group_portal` combined with domain-specific groups (e.g., `custom_module.group_custom_operator`; "domain" here means a feature area of the platform, not a DNS domain).
 * * Record Rules and ACLs across all custom modules must evaluate against `base.group_portal` or the specific domain groups, NOT `base.group_user`.
 * * If a user requires elevated rights to interact with a native Odoo model (such as submitting a `survey.user_input`), the transaction MUST be proxied through a Service Account using the Zero-Sudo architecture. Remember that views must be used preferentially rather than increasing privilege when a view will work..
 

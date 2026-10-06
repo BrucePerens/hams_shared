@@ -102,7 +102,7 @@ If a tour times out or an assertion fails, the `tour_failure_dump.js` intercepto
 ---
 
 ## 5. Orphaned Tour Class Audits
-To prevent CSS bloat, the AST Burn List linter (`check_burn_list.py`) automatically extracts any class starting with `o_tour_` from backend XML views and cross-references it against all JavaScript tour files. If an `o_tour_` class is found in the DOM but never targeted by a test runner, the CI/CD pipeline will fail, mandating the removal of the dead code.
+To prevent CSS bloat, the AST Burn List linter (`check_burn_list.py`; the Burn List is the project's list of banned code patterns and deprecated APIs, enforced by custom linters, see the "Burn List" entry in `hams_open/README.md`) automatically extracts any class starting with `o_tour_` from backend XML views and cross-references it against all JavaScript tour files. If an `o_tour_` class is found in the DOM but never targeted by a test runner, the CI/CD pipeline will fail, mandating the removal of the dead code.
 
 ---
 

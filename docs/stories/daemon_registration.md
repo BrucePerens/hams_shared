@@ -19,4 +19,4 @@ so that it receives a secure, auto-rotating API key without me having to manage 
 
 - Security constraints ensure that only service accounts can be used [@ANCHOR: daemon_key_manager:COMM_security_constraints_user] and files are written to allowed paths [@ANCHOR: daemon_key_manager:COMM_security_constraints_path].
 
-- Automated privilege assignment ensures the daemon has the correct permissions for long-lived keys [@ANCHOR: daemon_key_manager:COMM_privilege_escalation_bypass].
+- Automated privilege assignment ensures the daemon has the correct permissions for long-lived keys [@ANCHOR: daemon_key_manager:COMM_privilege_escalation_bypass]. ("Long-lived" means the 90-day keys that [key_rotation.md](key_rotation.md) replaces every 60 days; "service account" is the Odoo user kind catalogued in [service_accounts.md](../service_accounts.md).)

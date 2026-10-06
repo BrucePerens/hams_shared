@@ -12,7 +12,7 @@ cited path -- not assumed from documentation or a name -- before being recorded 
 bug-hunt pass touches multi-company access, record rules, or mail sending, check here first
 instead of re-deriving these facts by trial-and-error search.
 
-**Odoo location on this box**: `/usr/lib/python3/dist-packages/odoo/`. Scope `find`/`grep` to this
+**Odoo location on this box** (the project's dev box; adjust the path for another installation): `/usr/lib/python3/dist-packages/odoo/`. Scope `find`/`grep` to this
 path (or the target repo itself) rather than searching from `/` -- a full-filesystem search with
 `-prune` was one of the concrete waste patterns the retrospective found.
 
@@ -27,7 +27,7 @@ File: `odoo/orm/environments.py`, `Environment.company` (~line 216) and `.compan
 - **Non-sudo**: if `allowed_company_ids` names any company not in `self.user._get_company_ids()`
   (the acting user's own real company scope), this raises `AccessError` -- immediately, from the
   cached-property getter, before any query executes. This is why a per-company loop that calls
-  `.with_company(company)` for a company the acting user/service-account isn't actually scoped to
+  `.with_company(company)` for a company the acting user/service-account (see [`service_accounts.md`](service_accounts.md)) isn't actually scoped to
   crashes hard, not silently skips.
 - **Sudo mode is explicitly unchecked**: the docstring's own words, "No sanity checks applied in
   sudo mode! When in sudo mode, a user can access any company, even if not in his allowed

@@ -39,7 +39,7 @@ answered like a success and stores nothing; one address may send five inquiries 
 ## Scenario: The operator manages the domains
 
 A request counts as a parked domain's only when its hostname is in the table, and a parked domain may not
-shadow the main site's or a tenant's hostname [@ANCHOR: parking:COMM_domain_not_main]
+shadow the main site's or a tenant's hostname (a tenant is another website of the same Odoo; see [tenant_sites.md](tenant_sites.md)) [@ANCHOR: parking:COMM_domain_not_main]
 [@ANCHOR: parking:COMM_extra_kind]; the parked page answers every path, so the backend, login and API routes
 are not reachable there [@ANCHOR: parking:COMM_public_route] [@ANCHOR: parking:COMM_serve_other]. Names are
 normalized and unique, a redirect target must be valid, and the cache time is bounded
