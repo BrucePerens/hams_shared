@@ -5527,6 +5527,52 @@ class AuthGatewayDirectoriesTests(unittest.TestCase):
         self.assertEqual(dirs["/opt/hams"]["acl"], ["g:hams_traverse:--x"])
 
 
+class AuthCertRenewUnitTests(unittest.TestCase):
+    """The auth.hams.com certificate renewal unit pair (hams_com daemons/auth_cert_renew)."""
+
+    def _unit(self, name):
+        for spec in infra.MANIFEST["static_files"]:
+            if spec["path"] == f"/opt/hams/systemd/{name}":
+                return spec
+        self.fail(f"{name} is not in the MANIFEST")
+
+    def test_both_units_are_external_fetch_and_opt_in(self):
+        # It talks to Let's Encrypt, so no test host may ever enable it; and it must not be enabled by a
+        # production provisioning run before the delegation, the CNAME and the first issuance exist.
+        for name in ("hams-auth-cert-renew.service", "hams-auth-cert-renew.timer"):
+            spec = self._unit(name)
+            self.assertTrue(spec.get("external_fetch"), name)
+            self.assertTrue(spec.get("opt_in"), name)
+            self.assertEqual(spec["environments"], ["prod"], name)
+            self.assertIn(name, infra.external_fetch_unit_names())
+            self.assertIn(name, infra.opt_in_unit_names())
+
+    def test_service_is_inert_until_issued_and_runs_the_renew_subcommand(self):
+        content = self._unit("hams-auth-cert-renew.service")["content"]
+        self.assertIn("ConditionPathExists=/var/lib/hams-acme/config/renewal/auth-hams-com.conf", content)
+        self.assertIn("ConditionPathExists=/usr/local/sbin/hams-install-auth-cert", content)
+        self.assertIn("ExecStart=/usr/bin/python3 /opt/hams/daemons/auth_cert_renew/main.py renew", content)
+        self.assertIn("Type=oneshot", content)
+
+    def test_service_is_sandboxed_with_a_narrow_write_set_and_no_third_party_credential(self):
+        content = self._unit("hams-auth-cert-renew.service")["content"]
+        for line in ("ProtectSystem=strict", "NoNewPrivileges=true", "PrivateTmp=true", "ProtectHome=true",
+                     "StateDirectory=hams-acme", "StateDirectoryMode=0700", "ReadWritePaths=/etc/hams/auth",
+                     "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER",
+                     "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"):
+            self.assertIn(line, content)
+        self.assertEqual(re.findall(r"^ReadWritePaths=(.*)$", content, re.M), ["/etc/hams/auth"])
+        # The PowerDNS key is read by the hook from its root-only file; the unit carries no credential file.
+        self.assertNotIn("EnvironmentFile", content)
+        self.assertNotIn("cloudflare", content.lower())
+
+    def test_timer_runs_twice_a_day_and_is_persistent(self):
+        content = self._unit("hams-auth-cert-renew.timer")["content"]
+        self.assertIn("OnCalendar=*-*-* 04,16:23:00", content)
+        self.assertIn("Persistent=true", content)
+        self.assertIn("WantedBy=timers.target", content)
+
+
 class NginxFrontEndManifestTests(_TmpDirTestCase):
     """Tests [@ANCHOR: infrastructure:hook_enable_nginx_front_end]
 
