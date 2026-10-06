@@ -189,7 +189,6 @@ Tickets, incidents, inbound mail to the support aliases, report forms (forum, ev
 <definition_of_done>
 ## 4. FINAL VERIFICATION & AUDIT PROTOCOL
 **Mentally check these off before completing a task:**
-* [ ] **Transport Terminator:** Used the exact same boundary string and appended `--` to the final one?
 * [ ] **Security:** Zero-Sudo pattern adhered to? Inputs validated?
 * [ ] **Reliability:** Tests cover BDD Acceptance Criteria?
 * [ ] **Documentation:** README.md and documentation.html updated?

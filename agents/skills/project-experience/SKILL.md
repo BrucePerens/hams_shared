@@ -178,13 +178,6 @@ session.
 **Trap**: Repeatedly instantiating `ChromeBrowser(self)` inside helpers like `navigate_and_screenshot` creates a new Chrome instance per call without cleaning up previous instances, because `self.browser` only tracks the most recent one for teardown. This causes massive memory exhaustion, random `psutil.NoSuchProcess` test runner crashes, and `Fetch API Error` watchdog alarms as the Odoo Werkzeug backend fails under OOM pressure.
 **Solution**: NEVER instantiate raw `ChromeBrowser(self)` manually inside test helpers. Always use the built-in `self.start_hams_browser()` which correctly checks for an existing browser instance on `self.browser` and reuses it, preventing headless instance leakage.
 
-## Trap: Parcel Transport Formatting Failure
-* **Date:** 2026-06-10
-* **Trap:** Improper usage of boundary strings across multiple files and failure to strictly place the `--` terminator inside the 6-backtick block. This led to extraction errors in the previous session.
-* **Solution:** 1. Define ONE unique boundary string (e.g., `@@BOUNDARY_PARCEL_001@@`) and use it for every file in the parcel.
-    2. Ensure the final boundary in the sequence strictly includes `--` (e.g., `@@BOUNDARY_PARCEL_001@@--`).
-    3. Verify the terminator is inside the 6-backtick wrapper, immediately before the closing backticks.
-
 ## The Custom AST File Extractor (`parcel_extract.py`) Constraints
 * **The Bug:** The pipeline's file modification tool uses Python's native `tokenize` and AST parsing. If a `SEARCH` block contains syntactically incomplete Python (e.g., an open `try:` without an `except:`, an unclosed list `[`, or a trailing `if` without a body), the tokenizer fails. This causes the script to fall back to a fuzzy string matcher, which previously contained a bug that corrupted indentation.
 * **The Fix:** We patched `parcel_extract.py` to be more fault-tolerant and fixed the fuzzy-matcher's indentation logic.
