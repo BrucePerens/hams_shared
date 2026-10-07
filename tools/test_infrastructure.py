@@ -1969,6 +1969,26 @@ class SplitModulesByInstallStateTests(unittest.TestCase):
         self.assertEqual(to_update, ["ham_base", "ham_communications_consent"])
 
 
+class OptInOnlyModuleTests(_TmpDirTestCase):
+    def _module(self, name, manifest_text):
+        directory = os.path.join(self.tmp, name)
+        os.makedirs(directory)
+        with open(os.path.join(directory, "__manifest__.py"), "w") as handle:
+            handle.write(manifest_text)
+
+    # [@ANCHOR: test_opt_in_only_modules_are_found_from_their_manifests]
+    def test_opt_in_only_modules_are_found_from_their_manifests(self):
+        # Tests [@ANCHOR: infrastructure:_opt_in_only_modules]
+        self._module("ham_demo_mode", '# header\n{"name": "x", "hams_opt_in_only": True}\n')
+        self._module("ham_base", '{"name": "y"}\n')
+        self._module("ham_off", '{"name": "z", "hams_opt_in_only": False}\n')
+        self._module("ham_broken", "this is not python (")
+        found = infra._opt_in_only_modules(
+            [self.tmp, None], {"ham_demo_mode", "ham_base", "ham_off", "ham_broken", "ham_absent"}
+        )
+        self.assertEqual(found, {"ham_demo_mode"})
+
+
 class DiscoverHamsComDirTests(_TmpDirTestCase):
     """Regression test for a real production incident, 2026-09-23: fixing
     provision.py's own repo_root computation (a separate, earlier fix)
