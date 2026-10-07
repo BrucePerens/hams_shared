@@ -5774,6 +5774,8 @@ class SharedPort443Tests(unittest.TestCase):
         self.assertIn("ExecStartPre=/usr/sbin/haproxy -f /etc/hams/mux/haproxy.cfg -c -q", unit)
         self.assertEqual(self._directive("hams-mux.service", "ExecReload")[0], "/usr/sbin/haproxy -f /etc/hams/mux/haproxy.cfg -c -q")
         self.assertIn("ConditionPathExists=/etc/hams/mux/haproxy.cfg", unit)
+        self.assertEqual(self._directive("hams-mux.service", "KillMode"), ["mixed"])
+        self.assertEqual(self._directive("hams-mux.service", "SuccessExitStatus"), ["143"])
 
     def test_the_two_coturn_instances_read_their_own_files_and_only_the_tls_one_waits_for_the_certificate(self):
         tls, udp = self._unit("hams-turn.service"), self._unit("hams-turn-udp.service")

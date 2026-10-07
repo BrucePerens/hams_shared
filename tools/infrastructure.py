@@ -8823,6 +8823,9 @@ ExecStartPre=/usr/sbin/haproxy -f /etc/hams/mux/haproxy.cfg -c -q
 ExecStart=/usr/sbin/haproxy -Ws -f /etc/hams/mux/haproxy.cfg
 ExecReload=/usr/sbin/haproxy -f /etc/hams/mux/haproxy.cfg -c -q
 ExecReload=/bin/kill -USR2 $MAINPID
+# As Debian's own unit: stop the master with SIGTERM and let it stop its workers (mixed), and exit status 143 is a clean stop.
+KillMode=mixed
+SuccessExitStatus=143
 Restart=always
 RestartSec=2
 
