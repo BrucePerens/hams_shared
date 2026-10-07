@@ -1679,9 +1679,8 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
-            # hams_com daemons/relay_signer: same shape, for the relay-bridge Noise
-            # attestation / transmit-grant key (a forged DENIAL could take a licensed
-            # operator off the air).
+            # hams_com daemons/relay_signer: same shape; its home holds the one Google service-account key
+            # file (0600) that may ask Cloud KMS to sign with the relay issuer key, and signer.env.
             "user": "hams_relay_signer",
             "group": "hams_relay_signer",
             "home": "/opt/hams/etc/relay_signer",
@@ -2077,9 +2076,9 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
-            # hams_com daemons/relay_signer: same shape as subcarrier_signer above, holding the hams.com
-            # capability issuer key. (The Ed25519 attestation key it used to hold is gone with the Noise
-            # attestation, NIGHT_PLAN 131, 147; so is the hook that migrated it.)
+            # hams_com daemons/relay_signer: same shape as subcarrier_signer above, holding the one Google service-account
+            # key file (and signer.env) of the hams.com relay issuer, whose signing key is in Cloud KMS HSM and on no disk.
+            # (The Ed25519 attestation key it used to hold is gone with the Noise attestation, NIGHT_PLAN 131, 147.)
             "path": "/opt/hams/etc/relay_signer",
             "owner": "hams_relay_signer:hams_relay_signer",
             "provision_mode": "700",
@@ -4208,17 +4207,25 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
-            # hams_com daemons/relay_signer: a long-running signing helper, one
-            # per key. odoo reaches it over the Unix socket in
-            # /run/hams_relay_signer (RuntimeDirectory, 0750; odoo is in that
-            # group). It writes both its 0700 key directory and the public sibling, so
-            # both are ReadWritePaths. SupplementaryGroups=hams_com lets it traverse
-            # /opt/hams (0750 hams_com) to reach its code and directories.
+            # hams_com daemons/relay_signer (docs/proposals/OPERATOR_LIST_HSM_SIGNING.md): the signing helper behind the signed operator
+            # list and the theft check-in answer. It holds NO signing key: it sends the digest to Google Cloud KMS (HSM key
+            # relay-issuer) with its own service-account key file, which can use exactly that one key to sign (cloudkms_setup.py
+            # --purposes issuer writes the file and signer.env). odoo reaches it over the Unix socket in /run/hams_relay_signer
+            # (RuntimeDirectory, 0750; odoo is in that group). It publishes the issuer's public half in the public sibling
+            # directory, so both are ReadWritePaths. SupplementaryGroups=hams_com lets it traverse /opt/hams (0750 hams_com) to
+            # reach its code and directories. It talks to Google (cloudkms.googleapis.com) and nothing else, hence external_fetch (a
+            # test host links the unit and never starts it). NOT opt_in, deliberately: Odoo cannot sign a list or a check-in answer
+            # without it, so it stays in the boot set and the site monitor's unit list (an opt_in unit is in neither). The Condition
+            # lines keep it skipped, not restart-looping, until the key's credential and signer.env exist.
             "path": "/opt/hams/systemd/hams-relay-signer.service",
+            "external_fetch": "calls Google Cloud KMS (cloudkms.googleapis.com) to sign",
             "content": """\
 [Unit]
-Description=Privilege-isolated relay-bridge attestation and transmit-grant signing helper
-After=network.target
+Description=Privilege-isolated relay issuer signing helper (signed operator lists and check-in answers; key in Google Cloud KMS HSM)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/hams/etc/relay_signer/signer.env
+ConditionPathExists=/opt/hams/etc/relay_signer/gcp_service_account.json
 
 [Service]
 # ADR-0070 OS-Level Daemon Restriction
@@ -4227,7 +4234,8 @@ ProtectHome=read-only
 PrivateTmp=true
 PrivateDevices=true
 NoNewPrivileges=true
-RestrictAddressFamilies=AF_UNIX
+# Google over HTTPS, and the Unix socket.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 ReadWritePaths=/opt/hams/etc/relay_signer /opt/hams/etc/relay_signer_public
 RuntimeDirectory=hams_relay_signer
@@ -4242,13 +4250,16 @@ UMask=0027
 Environment="RELAY_SIGNER_BASE_DIR=/opt/hams/etc/relay_signer"
 Environment="RELAY_SIGNER_PUBLIC_DIR=/opt/hams/etc/relay_signer_public"
 Environment="RELAY_SIGNER_SOCKET_PATH=/run/hams_relay_signer/signer.sock"
+Environment="RELAY_CA_CREDENTIALS_FILE=/opt/hams/etc/relay_signer/gcp_service_account.json"
+# signer.env (written by cloudkms_setup.py, no secret in it): the KMS key version and the pinned public-key fingerprint.
+EnvironmentFile=/opt/hams/etc/relay_signer/signer.env
 
-# Smoketest Resource Verification
+# Smoketest Resource Verification (one read-only getPublicKey call to Google; the key must be the pinned one)
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_signer/main.py --start-test
 ExecStart=/usr/bin/python3 /opt/hams/daemons/relay_signer/main.py
 
-Restart=always
-RestartSec=5
+Restart=on-failure
+RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams.relay.signer
