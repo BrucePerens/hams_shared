@@ -1776,6 +1776,19 @@ MANIFEST = {
             "not_member_of": ["hams_com"],
             "environments": ["prod"],
         },
+        {
+            # hams_com daemons/hams_turn (turn.hams.com, the members-only TURN server, run by coturn): its own
+            # unprivileged account, the only user that can read the TLS key and the shared secret under
+            # /etc/hams/turn (0640, group hams-turn). Binds 443/udp and 443/tcp on one public address through
+            # CAP_NET_BIND_SERVICE in hams-turn.service. It belongs to no other group: the binary is
+            # /usr/bin/turnserver, which is world-executable, so it needs no traversal into /opt/hams. Prod-only.
+            "user": "hams-turn",
+            "group": "hams-turn",
+            "home": "/etc/hams/turn",
+            "shell": "/usr/sbin/nologin",
+            "not_member_of": ["hams_com"],
+            "environments": ["prod"],
+        },
     ],
     "directories": [
         {
@@ -2673,6 +2686,17 @@ MANIFEST = {
             # hams_com daemons/hams_auth_gateway/tools/install_config.py).
             "path": "/etc/hams/auth/anchors/hams_member",
             "owner": "root:hams-auth",
+            "provision_mode": "750",
+            "environments": ["prod"],
+        },
+
+        # hams_com daemons/hams_turn: coturn's configuration directory. Holds turnserver.conf (with the shared secret),
+        # turn.crt and turn.key, none of which is in this public repository: the install steps in hams_com
+        # docs/runbooks/TURN_GO_LIVE.md write them. Readable only by root and the hams-turn group, and never mounted
+        # into any other runtime (no "runtime_mount" key).
+        {
+            "path": "/etc/hams/turn",
+            "owner": "root:hams-turn",
             "provision_mode": "750",
             "environments": ["prod"],
         },
@@ -8595,6 +8619,154 @@ Description=Twice-daily renewal check for the auth.hams.com certificate
 # certbot renews only when 30 days or fewer remain, so most runs do nothing. Twice a day, so one missed
 # run (the host was down) is retried the same day, well inside the 30-day window.
 OnCalendar=*-*-* 04,16:23:00
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # hams_com daemons/hams_turn: coturn as turn.hams.com, relaying UDP between a signed-in member's browser (or a
+            # relay) and a relay, on 443/udp and 443/tcp (turns:) of hams1's one public address. Text identical to hams_com
+            # daemons/hams_turn/packaging/hams-turn.service (hams_com's daemons/hams_turn/test_turnserver_conf.py fails if the
+            # two drift). It is OPT-IN and prod-only: provisioning links it and never enables or starts it, and the
+            # smoketest never starts it; the install steps in hams_com docs/runbooks/TURN_GO_LIVE.md do, after the certificate,
+            # the DNS record and the secret exist (the ConditionPathExists lines keep it inert until then). It fetches
+            # nothing from a third party (it only relays what a credentialed client sends), so it is not external_fetch.
+            # The package's own coturn.service is masked by the install step before the package is installed, and is not
+            # used: it would run on coturn's default settings.
+            "path": "/opt/hams/systemd/hams-turn.service",
+            "opt_in": "needs the certificate, the shared secret and the DNS record, and opens a public port; started only by hams_com docs/runbooks/TURN_GO_LIVE.md",
+            "content": """\
+# systemd unit for coturn as turn.hams.com. Provisioned by hams_shared/tools/infrastructure.py's MANIFEST as
+# /opt/hams/systemd/hams-turn.service; daemons/hams_turn/packaging/hams-turn.service in hams_com must stay identical
+# (daemons/hams_turn/test_turnserver_conf.py). It is linked, never enabled, by provisioning: it is started only by the
+# install steps in docs/runbooks/TURN_GO_LIVE.md (its `enable` step), after the certificate and the DNS record exist.
+[Unit]
+Description=hams.com members-only TURN server (turn.hams.com, 443/udp and 443/tcp)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/hams/turn/turnserver.conf
+ConditionPathExists=/etc/hams/turn/turn.crt
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/turnserver -c /etc/hams/turn/turnserver.conf --pidfile=
+Restart=always
+RestartSec=5
+
+# Unprivileged. Port 443 is bound with CAP_NET_BIND_SERVICE only.
+User=hams-turn
+Group=hams-turn
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Hardening: no new privileges, read-only system, private /tmp and devices, nothing writable at all.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadOnlyPaths=/etc/hams/turn
+UMask=0077
+
+# No limits of our own: coturn raises its own open-file limit to the system's, and its per-user and total
+# quotas are left at coturn's defaults (Bruce, 2026-10-07: no caps).
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams-turn
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # hams_com daemons/auth_cert_renew, `--profile turn`: renews the turn.hams.com certificate on hams1 through its own
+            # PowerDNS, exactly as hams-auth-cert-renew.service does for auth.hams.com (read that unit's comment): the
+            # CNAME `_acme-challenge.turn.hams.com` (entered through Odoo's Cloudflare panel) points into acme.hams.com,
+            # which this host serves on port 53. Its own lineage, key and installer (/usr/local/sbin/hams-install-turn-cert,
+            # hams_com nginx/prod/cert-deploy/), which installs /etc/hams/turn/turn.crt and turn.key and restarts
+            # hams-turn.service (coturn re-reads a certificate only when it starts). It talks to Let's Encrypt, hence
+            # external_fetch; opt_in: the coordinator enables it after the first issuance.
+            "path": "/opt/hams/systemd/hams-turn-cert-renew.service",
+            "external_fetch": "talks to Let's Encrypt (the ACME directory) to renew the certificate",
+            "opt_in": "needs the _acme-challenge.turn CNAME and a first issuance; see hams_com docs/runbooks/TURN_GO_LIVE.md",
+            "content": """\
+[Unit]
+Description=Renew the turn.hams.com certificate through our own PowerDNS (DNS-01) and install it for coturn
+After=network-online.target pdns.service
+Wants=network-online.target
+ConditionPathExists=/var/lib/hams-acme/config/renewal/turn-hams-com.conf
+ConditionPathExists=/usr/local/sbin/hams-install-turn-cert
+
+[Service]
+Type=oneshot
+User=root
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+StateDirectory=hams-acme
+StateDirectoryMode=0700
+LogsDirectory=hams-acme
+LogsDirectoryMode=0700
+RuntimeDirectory=hams-turn-cert-renew
+RuntimeDirectoryMode=0700
+ReadWritePaths=/etc/hams/turn
+Environment=HAMS_INSTALL_TMPDIR=/run/hams-turn-cert-renew
+WorkingDirectory=/opt/hams/daemons/auth_cert_renew
+TimeoutStartSec=15min
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/auth_cert_renew/main.py renew --profile turn
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams-turn-cert-renew
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-turn-cert-renew.timer",
+            "external_fetch": "activates hams-turn-cert-renew.service, which talks to Let's Encrypt",
+            "opt_in": "activates hams-turn-cert-renew.service; see that unit",
+            "content": """\
+[Unit]
+Description=Twice-daily renewal check for the turn.hams.com certificate
+
+[Timer]
+# certbot renews only when 30 days or fewer remain, so most runs do nothing. Twice a day, at other minutes than the
+# auth.hams.com timer, so the two never hold certbot's lock together.
+OnCalendar=*-*-* 04,16:41:00
 Persistent=true
 RandomizedDelaySec=30m
 

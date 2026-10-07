@@ -3642,6 +3642,7 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "gdpr.csv.export.service": "local HTTP export server",
         "hamcall.idx.sync.service": "reads a licensed file already on disk; no timer",
         "hams-auth-gateway.service": "local server",
+        "hams-turn.service": "coturn relays only what a credentialed client sends it; fetches nothing from a third party",
         "shack-console.service": "local static server on 127.0.0.1; serves embedded files, fetches nothing",
         "hams-pgbackrest-backup.path": "fires only on a spool file a configured backup job writes",
         "hams-pgbackrest-backup.service": "runs only for a configured backup job",
@@ -5745,6 +5746,66 @@ class AuthCertRenewUnitTests(unittest.TestCase):
         self.assertIn("OnCalendar=*-*-* 04,16:23:00", content)
         self.assertIn("Persistent=true", content)
         self.assertIn("WantedBy=timers.target", content)
+
+
+class TurnServerManifestTests(unittest.TestCase):
+    """turn.hams.com (hams_com daemons/hams_turn): the members-only TURN server on hams1 and its certificate renewal."""
+
+    def _unit(self, name):
+        for spec in infra.MANIFEST["static_files"]:
+            if spec["path"] == f"/opt/hams/systemd/{name}":
+                return spec
+        self.fail(f"{name} is not in the MANIFEST")
+
+    def test_the_server_is_prod_only_opt_in_and_never_enabled_or_started_by_provisioning(self):
+        spec = self._unit("hams-turn.service")
+        self.assertEqual(spec["environments"], ["prod"])
+        self.assertTrue(spec.get("opt_in"))
+        self.assertIn("hams-turn.service", infra.opt_in_unit_names())
+        self.assertNotIn("hams-turn.service", infra.boot_service_unit_names())
+        self.assertNotIn("hams-turn.service", infra._smoketest_candidate_services(True, False))
+        # coturn fetches nothing from a third party, so it is classified local (AUDITED_LOCAL_ONLY_UNITS), not external_fetch.
+        self.assertNotIn("hams-turn.service", infra.external_fetch_unit_names())
+
+    def test_it_runs_as_its_own_account_with_only_the_bind_capability_and_a_read_only_configuration(self):
+        content = self._unit("hams-turn.service")["content"]
+        self.assertIn("User=hams-turn", content)
+        self.assertIn("AmbientCapabilities=CAP_NET_BIND_SERVICE", content)
+        self.assertIn("CapabilityBoundingSet=CAP_NET_BIND_SERVICE", content)
+        self.assertIn("ReadOnlyPaths=/etc/hams/turn", content)
+        self.assertIn("ExecStart=/usr/bin/turnserver -c /etc/hams/turn/turnserver.conf", content)
+        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, "hams-turn.service"), set())
+        accounts = {a["user"]: a for a in infra.MANIFEST["system_accounts"]}
+        self.assertEqual(accounts["hams-turn"]["shell"], "/usr/sbin/nologin")
+        self.assertEqual(accounts["hams-turn"]["environments"], ["prod"])
+        self.assertNotIn("member_of", accounts["hams-turn"])
+        directory = {d["path"]: d for d in infra.MANIFEST["directories"]}["/etc/hams/turn"]
+        self.assertEqual((directory["owner"], directory["provision_mode"], directory["environments"]), ("root:hams-turn", "750", ["prod"]))
+        self.assertNotIn("runtime_mount", directory)
+
+    def test_the_provisioning_has_no_firewall_rule_for_it(self):
+        # The ports are opened by the reviewed install step only (TURN_GO_LIVE.md), never by a provisioning run that
+        # would open them before the service exists. MANIFEST["firewall_rules"] is applied on every production run.
+        for rule in infra.MANIFEST["firewall_rules"]:
+            self.assertNotIn("443", " ".join(rule["args"]), rule)
+
+    def test_the_certificate_units_are_external_fetch_opt_in_and_use_the_turn_profile(self):
+        for name in ("hams-turn-cert-renew.service", "hams-turn-cert-renew.timer"):
+            spec = self._unit(name)
+            self.assertTrue(spec.get("external_fetch"), name)
+            self.assertTrue(spec.get("opt_in"), name)
+            self.assertEqual(spec["environments"], ["prod"], name)
+            self.assertIn(name, infra.external_fetch_unit_names())
+        content = self._unit("hams-turn-cert-renew.service")["content"]
+        self.assertIn("ExecStart=/usr/bin/python3 /opt/hams/daemons/auth_cert_renew/main.py renew --profile turn", content)
+        self.assertIn("ConditionPathExists=/var/lib/hams-acme/config/renewal/turn-hams-com.conf", content)
+        self.assertIn("ConditionPathExists=/usr/local/sbin/hams-install-turn-cert", content)
+        self.assertEqual(re.findall(r"^ReadWritePaths=(.*)$", content, re.M), ["/etc/hams/turn"])
+        self.assertNotIn("EnvironmentFile", content)
+        auth = self._unit("hams-auth-cert-renew.timer")["content"]
+        turn = self._unit("hams-turn-cert-renew.timer")["content"]
+        self.assertNotEqual(re.search(r"OnCalendar=(.*)", auth).group(1), re.search(r"OnCalendar=(.*)", turn).group(1),
+                            "the two renewals must not run at the same minute (certbot's lock)")
 
 
 class NginxFrontEndManifestTests(_TmpDirTestCase):
