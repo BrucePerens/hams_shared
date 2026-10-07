@@ -7391,7 +7391,13 @@ ProtectHome=read-only
 PrivateTmp=true
 PrivateDevices=true
 NoNewPrivileges=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_NETLINK is required: the WebRTC library lists the host's network interfaces over a
+# netlink socket to build its ICE host candidates. Without it the SFU logs "Failed to
+# enumerate local interfaces ... Address family not supported (os error 97)" and offers a
+# browser no host candidate, so audio connects only when a public STUN server answers and
+# never on a network without internet. (Production hams1 carried a hand-placed drop-in,
+# hams.simulated.band.service.d/30-netlink.conf, for this; this line makes it unnecessary.)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 CapabilityBoundingSet=
 ReadWritePaths=
 Type=simple
@@ -7445,6 +7451,16 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 CapabilityBoundingSet=
 ReadWritePaths=/opt/hams/cache/whisper
+# The robots' one process runs about 24 threads per robot just idling (ten robots: about 242,
+# measured with `ps -o nlwp`) and gains about 16 per person who transmits: the band server
+# adds a media line per person, every robot's aiortc connection starts a receiver and decoder
+# thread for it, and aiortc never stops a receiver whose line the server retired. A small
+# limit ends in "RuntimeError: can't start new thread" inside aiortc, which leaves a robot's
+# new receiver silently deaf. 4096 is the Pacificon demo kit's measured-safe value; the limit
+# is a runaway guard, not a sizing tool. Follow-up: night_shift_todo/medium/
+# bots-threads-grow-with-every-person-and-the-shipped-tasksmax-is-below-the-baseline-1f6c9e83.md
+# (recycle a connection after N retired lines, or stop the retired receivers).
+TasksMax=4096
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/hams_simulated_bots
@@ -7515,6 +7531,10 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 CapabilityBoundingSet=
 ReadWritePaths=/opt/hams/cache/whisper
+# One band connection and one transcriber (no robots), so far fewer threads than the bot fleet,
+# but its receiver count also grows with each person who transmits (see
+# hams.simulated.bots.service above). 1024 matches the Pacificon demo kit's Observer.
+TasksMax=1024
 Type=simple
 User=odoo
 WorkingDirectory=/opt/hams/daemons/hams_simulated_bots
