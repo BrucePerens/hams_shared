@@ -5773,6 +5773,7 @@ class TurnServerManifestTests(unittest.TestCase):
         self.assertIn("AmbientCapabilities=CAP_NET_BIND_SERVICE", content)
         self.assertIn("CapabilityBoundingSet=CAP_NET_BIND_SERVICE", content)
         self.assertIn("ReadOnlyPaths=/etc/hams/turn", content)
+        self.assertIn("ExecReload=/bin/kill -USR2 $MAINPID", content)
         self.assertIn("ExecStart=/usr/bin/turnserver -c /etc/hams/turn/turnserver.conf", content)
         self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, "hams-turn.service"), set())
         accounts = {a["user"]: a for a in infra.MANIFEST["system_accounts"]}

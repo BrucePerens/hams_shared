@@ -8656,6 +8656,8 @@ ConditionPathExists=/etc/hams/turn/turn.crt
 [Service]
 Type=simple
 ExecStart=/usr/bin/turnserver -c /etc/hams/turn/turnserver.conf --pidfile=
+# A renewed certificate is picked up with SIGUSR2, without dropping live allocations (tested in the rehearsal).
+ExecReload=/bin/kill -USR2 $MAINPID
 Restart=always
 RestartSec=5
 
@@ -8705,8 +8707,8 @@ WantedBy=multi-user.target
             # PowerDNS, exactly as hams-auth-cert-renew.service does for auth.hams.com (read that unit's comment): the
             # CNAME `_acme-challenge.turn.hams.com` (entered through Odoo's Cloudflare panel) points into acme.hams.com,
             # which this host serves on port 53. Its own lineage, key and installer (/usr/local/sbin/hams-install-turn-cert,
-            # hams_com nginx/prod/cert-deploy/), which installs /etc/hams/turn/turn.crt and turn.key and restarts
-            # hams-turn.service (coturn re-reads a certificate only when it starts). It talks to Let's Encrypt, hence
+            # hams_com nginx/prod/cert-deploy/), which installs /etc/hams/turn/turn.crt and turn.key and reloads
+            # hams-turn.service (the unit's ExecReload sends SIGUSR2, which makes coturn serve the new certificate with no restart). It talks to Let's Encrypt, hence
             # external_fetch; opt_in: the coordinator enables it after the first issuance.
             "path": "/opt/hams/systemd/hams-turn-cert-renew.service",
             "external_fetch": "talks to Let's Encrypt (the ACME directory) to renew the certificate",
