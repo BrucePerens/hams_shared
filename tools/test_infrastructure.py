@@ -4108,6 +4108,55 @@ class SandboxBaselineTests(unittest.TestCase):
         self.assertEqual(values("ProtectHome"), ["read-only"])
 
 
+class SimulatedBandUnitHardeningTests(unittest.TestCase):
+    """The simulated-band units' ADR-0070 lines, pinned against what their libraries need.
+
+    The SFU's WebRTC library lists the host's interfaces over a netlink socket; a unit without AF_NETLINK
+    offers no host candidates, so audio never connects on a network without internet. The bots' one process
+    runs a thread per receiver and decoder, so a small TasksMax silently deafens a robot."""
+
+    SERVICES = ("hams.simulated.band.service", "hams.simulated.bots.service", "hams.simulated.observer.service")
+
+    def _values(self, unit, directive):
+        return infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive)
+
+    def test_every_webrtc_unit_may_open_a_netlink_socket(self):
+        for unit in self.SERVICES:
+            with self.subTest(unit=unit):
+                families = self._values(unit, "RestrictAddressFamilies")
+                self.assertEqual(sorted(families), ["AF_INET", "AF_INET6", "AF_NETLINK", "AF_UNIX"])
+
+    def test_the_band_server_needs_no_hand_placed_netlink_drop_in(self):
+        # Production once carried hams.simulated.band.service.d/30-netlink.conf by hand; the unit itself now says it.
+        content = next(e["content"] for e in infra.MANIFEST["static_files"] if e["path"].endswith("/hams.simulated.band.service"))
+        self.assertRegex(content, r"(?m)^RestrictAddressFamilies=.*\bAF_NETLINK\b")
+        self.assertNotIn("\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n", content)
+
+    def test_the_rest_of_the_sandbox_is_still_whole(self):
+        for unit in self.SERVICES:
+            with self.subTest(unit=unit):
+                self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, unit), set())
+                self.assertNotIn(unit, infra.SANDBOX_BASELINE_EXEMPTIONS)
+                # No capability is added back: the network stack needs none for unprivileged UDP and netlink reads.
+                self.assertEqual(self._values(unit, "CapabilityBoundingSet"), [])
+
+    def test_the_bot_fleet_has_a_thread_limit_above_its_measured_baseline_with_room_for_people(self):
+        # Ten robots idle at about 242 threads and gain about 16 per person who transmits.
+        limit = self._values("hams.simulated.bots.service", "TasksMax")
+        self.assertEqual(len(limit), 1)
+        self.assertGreaterEqual(int(limit[0]), 4096)
+        self.assertGreaterEqual(int(limit[0]), 242 + 16 * 100)
+
+    def test_the_observer_has_a_thread_limit_for_one_receiver_per_person(self):
+        limit = self._values("hams.simulated.observer.service", "TasksMax")
+        self.assertEqual(len(limit), 1)
+        self.assertGreaterEqual(int(limit[0]), 1024)
+
+    def test_the_band_server_keeps_the_default_thread_limit_not_a_small_one(self):
+        # The async runtime sizes its own pool; a low cap would be a new way to fail silently.
+        self.assertEqual(self._values("hams.simulated.band.service", "TasksMax"), [])
+
+
 class FamilyAccountUnitTests(_SafePatchTestCase):
     """Tests [@ANCHOR: infrastructure:family_account_units]: a unit that has left the shared `odoo`
     account is held to the account, directory and environment rules of the isolation plan."""
