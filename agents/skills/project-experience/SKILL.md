@@ -348,3 +348,12 @@ back to the same URL. Our `web_login` overrides (`zero_sudo`, `ham_onboarding`) 
 **The Solution:** grep the Odoo log for WARNING `Database or registry unusable, trying without`; it carries the real traceback.
 `/web/session/authenticate` (JSON-RPC) also shows the real error, because it is not rerouted. Then fix the schema
 (`-u <modules> --stop-after-init`, after a `pg_dump`). Do not hunt in the hams login controllers.
+
+## 50. Two Network-Rehearsal Traps: `s_client`'s "Verify return code: 0" and coturn's `listening-ip` (2026-10-07)
+**The Trap:** (a) `openssl s_client` prints `Verify return code: 0 (ok)` and `Verification: OK` even when no handshake happened (a server that accepts the TCP
+connection and closes it). A rehearsal check that counted that line "passed" 7 of 7 handshakes against a rate limit of 5. (b) coturn's `listening-ip` applies to
+every listener type it starts: `no-tcp` does not remove the TLS listener's TCP socket, so one coturn process cannot serve UDP on a public address and TLS on
+loopback. Also, `turnutils_uclient` sends no TLS server name, so it cannot reach a coturn that sits behind a router which routes by server name.
+**The Solution:** (a) Judge a handshake by what was negotiated: count the `New, TLSv1.2, Cipher is <name>` line, not the verify code. (b) Run two coturn instances
+from one policy (UDP on the public address with `no-tcp no-tls`; TLS on loopback with `no-udp` and `relay-ip=<public address>`), and test the TLS one from
+inside the host, or with a client that sends a server name (a browser, or a native probe that sets SNI).

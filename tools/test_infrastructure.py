@@ -3643,6 +3643,8 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hamcall.idx.sync.service": "reads a licensed file already on disk; no timer",
         "hams-auth-gateway.service": "local server",
         "hams-turn.service": "coturn relays only what a credentialed client sends it; fetches nothing from a third party",
+        "hams-turn-udp.service": "coturn's UDP instance: relays only what a credentialed client sends it; fetches nothing from a third party",
+        "hams-mux.service": "TLS router between our own listeners on one host: copies bytes to loopback ports, fetches nothing",
         "shack-console.service": "local static server on 127.0.0.1; serves embedded files, fetches nothing",
         "hams-pgbackrest-backup.path": "fires only on a spool file a configured backup job writes",
         "hams-pgbackrest-backup.service": "runs only for a configured backup job",
@@ -5702,6 +5704,89 @@ class AuthGatewayDirectoriesTests(unittest.TestCase):
         self.assertEqual(dirs["/opt/hams"]["acl"], ["g:hams_traverse:--x"])
 
 
+class SharedPort443Tests(unittest.TestCase):
+    """Public TCP 443 on the production host is shared by server name: a TLS router (hams-mux, HAProxy, no TLS termination)
+    sends turn.hams.com to coturn's loopback TLS listener and everything else (the auth.hams.com client-certificate login) to
+    hams-auth-gateway on loopback. coturn's UDP half is a second instance on the public address. This pins the provisioned
+    pieces: who may bind a privileged port, who can read what, and that nothing here starts by itself."""
+
+    def _static(self, path):
+        return next(f for f in infra.MANIFEST["static_files"] if f["path"] == path)
+
+    def _unit(self, name):
+        return self._static(f"/opt/hams/systemd/{name}")["content"]
+
+    def _directive(self, name, key):
+        return [line.split("=", 1)[1] for line in self._unit(name).splitlines() if line.startswith(key + "=")]
+
+    def test_the_mux_account_is_its_own_unprivileged_account_in_no_other_daemons_group(self):
+        accounts = {a["user"]: a for a in infra.MANIFEST["system_accounts"]}
+        mux = accounts["hams-mux"]
+        self.assertEqual((mux["group"], mux["shell"], mux["home"], mux["environments"]),
+                         ("hams-mux", "/usr/sbin/nologin", "/etc/hams/mux", ["prod"]))
+        self.assertNotIn("member_of", mux)
+        for other in ("hams_com", "hams-auth", "hams-turn"):
+            self.assertIn(other, mux["not_member_of"])
+        # Nobody else joins its group, and it cannot read the gateway's key or coturn's secret: no shared group.
+        for user, account in accounts.items():
+            if user != "hams-mux":
+                self.assertNotIn("hams-mux", account.get("member_of", []), user)
+
+    def test_the_mux_directory_is_root_and_the_mux_group_only_and_never_mounted_elsewhere(self):
+        spec = {d["path"]: d for d in infra.MANIFEST["directories"]}["/etc/hams/mux"]
+        self.assertEqual((spec["owner"], spec["provision_mode"], spec["environments"]), ("root:hams-mux", "750", ["prod"]))
+        self.assertNotIn("runtime_mount", spec)
+
+    def test_the_mux_configuration_is_copied_from_hams_com_to_the_directory_and_is_production_only(self):
+        config = self._static("/etc/hams/mux/haproxy.cfg")
+        self.assertEqual(config["src"], "{HAMS_COM_DIR}/daemons/hams_mux/config/haproxy.cfg")
+        self.assertEqual((config["owner"], config["mode"], config["environments"]), ("root:root", "644", ["prod"]))
+        self.assertNotIn("content", config, "HAProxy's braces would be swallowed by the content formatting; the file is copied, not written")
+
+    def test_all_three_units_are_opt_in_production_only_and_never_enabled_by_provisioning(self):
+        names = {"hams-mux.service", "hams-turn.service", "hams-turn-udp.service"}
+        self.assertEqual(names & infra.opt_in_unit_names(), names)
+        self.assertEqual(names & infra.boot_service_unit_names(), set(), "an opt-in unit is never enabled at boot by provisioning")
+        for name in names:
+            self.assertEqual(self._static(f"/opt/hams/systemd/{name}")["environments"], ["prod"], name)
+            self.assertNotIn(name, infra.external_fetch_unit_names(), name)
+
+    def test_only_the_mux_and_the_udp_instance_may_bind_a_privileged_port_and_the_tls_instance_has_no_capability(self):
+        for name in ("hams-mux.service", "hams-turn-udp.service"):
+            self.assertEqual(self._directive(name, "AmbientCapabilities"), ["CAP_NET_BIND_SERVICE"], name)
+            self.assertEqual(self._directive(name, "CapabilityBoundingSet"), ["CAP_NET_BIND_SERVICE"], name)
+        tls = "hams-turn.service"
+        self.assertEqual(self._directive(tls, "AmbientCapabilities"), [])
+        self.assertEqual(self._directive(tls, "CapabilityBoundingSet"), [""], "an empty bounding set: no capability at all")
+
+    def test_each_unit_runs_as_its_own_account_with_no_new_privileges_and_a_read_only_configuration(self):
+        expect = {"hams-mux.service": ("hams-mux", "/etc/hams/mux"), "hams-turn.service": ("hams-turn", "/etc/hams/turn"),
+                  "hams-turn-udp.service": ("hams-turn", "/etc/hams/turn")}
+        for name, (account, directory) in expect.items():
+            self.assertEqual(self._directive(name, "User"), [account], name)
+            self.assertEqual(self._directive(name, "Group"), [account], name)
+            self.assertEqual(self._directive(name, "NoNewPrivileges"), ["yes"], name)
+            self.assertEqual(self._directive(name, "ProtectSystem"), ["strict"], name)
+            self.assertEqual(self._directive(name, "ReadOnlyPaths"), [directory], name)
+
+    def test_the_mux_unit_checks_its_configuration_before_it_starts_and_before_it_reloads(self):
+        unit = self._unit("hams-mux.service")
+        self.assertIn("ExecStartPre=/usr/sbin/haproxy -f /etc/hams/mux/haproxy.cfg -c -q", unit)
+        self.assertEqual(self._directive("hams-mux.service", "ExecReload")[0], "/usr/sbin/haproxy -f /etc/hams/mux/haproxy.cfg -c -q")
+        self.assertIn("ConditionPathExists=/etc/hams/mux/haproxy.cfg", unit)
+        self.assertEqual(self._directive("hams-mux.service", "KillMode"), ["mixed"])
+        self.assertEqual(self._directive("hams-mux.service", "SuccessExitStatus"), ["143"])
+
+    def test_the_two_coturn_instances_read_their_own_files_and_only_the_tls_one_waits_for_the_certificate(self):
+        tls, udp = self._unit("hams-turn.service"), self._unit("hams-turn-udp.service")
+        self.assertIn("-c /etc/hams/turn/turnserver.conf ", tls)
+        self.assertIn("-c /etc/hams/turn/turnserver-udp.conf ", udp)
+        self.assertIn("ConditionPathExists=/etc/hams/turn/turn.crt", tls)
+        self.assertNotIn("turn.crt", udp)
+        self.assertIn("ExecReload=/bin/kill -USR2 $MAINPID", tls, "a renewed certificate is picked up by the tls instance")
+        self.assertNotIn("ExecReload", udp)
+
+
 class AuthCertRenewUnitTests(unittest.TestCase):
     """The auth.hams.com certificate renewal unit pair (hams_com daemons/auth_cert_renew)."""
 
@@ -5764,18 +5849,29 @@ class TurnServerManifestTests(unittest.TestCase):
         self.assertIn("hams-turn.service", infra.opt_in_unit_names())
         self.assertNotIn("hams-turn.service", infra.boot_service_unit_names())
         self.assertNotIn("hams-turn.service", infra._smoketest_candidate_services(True, False))
+        udp = self._unit("hams-turn-udp.service")
+        self.assertEqual(udp["environments"], ["prod"])
+        self.assertTrue(udp.get("opt_in"))
+        self.assertNotIn("hams-turn-udp.service", infra.boot_service_unit_names())
+        self.assertNotIn("hams-turn-udp.service", infra._smoketest_candidate_services(True, False))
         # coturn fetches nothing from a third party, so it is classified local (AUDITED_LOCAL_ONLY_UNITS), not external_fetch.
         self.assertNotIn("hams-turn.service", infra.external_fetch_unit_names())
 
-    def test_it_runs_as_its_own_account_with_only_the_bind_capability_and_a_read_only_configuration(self):
-        content = self._unit("hams-turn.service")["content"]
-        self.assertIn("User=hams-turn", content)
-        self.assertIn("AmbientCapabilities=CAP_NET_BIND_SERVICE", content)
-        self.assertIn("CapabilityBoundingSet=CAP_NET_BIND_SERVICE", content)
-        self.assertIn("ReadOnlyPaths=/etc/hams/turn", content)
-        self.assertIn("ExecReload=/bin/kill -USR2 $MAINPID", content)
-        self.assertIn("ExecStart=/usr/bin/turnserver -c /etc/hams/turn/turnserver.conf", content)
-        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, "hams-turn.service"), set())
+    def test_the_server_is_two_instances_the_tls_one_on_loopback_with_no_capability_and_the_udp_one_with_only_the_bind_capability(self):
+        tls = self._unit("hams-turn.service")["content"]
+        udp = self._unit("hams-turn-udp.service")["content"]
+        for content in (tls, udp):
+            self.assertIn("User=hams-turn", content)
+            self.assertIn("ReadOnlyPaths=/etc/hams/turn", content)
+        self.assertNotIn("AmbientCapabilities=", tls)
+        self.assertIn("\nCapabilityBoundingSet=\n", tls)
+        self.assertIn("AmbientCapabilities=CAP_NET_BIND_SERVICE", udp)
+        self.assertIn("CapabilityBoundingSet=CAP_NET_BIND_SERVICE", udp)
+        self.assertIn("ExecReload=/bin/kill -USR2 $MAINPID", tls)
+        self.assertIn("ExecStart=/usr/bin/turnserver -c /etc/hams/turn/turnserver.conf", tls)
+        self.assertIn("ExecStart=/usr/bin/turnserver -c /etc/hams/turn/turnserver-udp.conf", udp)
+        for name in ("hams-turn.service", "hams-turn-udp.service", "hams-mux.service"):
+            self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, name), set(), name)
         accounts = {a["user"]: a for a in infra.MANIFEST["system_accounts"]}
         self.assertEqual(accounts["hams-turn"]["shell"], "/usr/sbin/nologin")
         self.assertEqual(accounts["hams-turn"]["environments"], ["prod"])
