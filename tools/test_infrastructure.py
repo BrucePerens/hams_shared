@@ -3328,6 +3328,51 @@ class SignerDaemonManifestTests(unittest.TestCase):
 
 
 
+class RelayIssuerSignerManifestTests(unittest.TestCase):
+    """The unit for hams_com's daemons/relay_signer (docs/proposals/OPERATOR_LIST_HSM_SIGNING.md in hams_com): the signed operator
+    list and the theft check-in answer are signed by a Google Cloud KMS HSM key, so the daemon asks Google (one narrow
+    service-account key file) and holds no signing key. It is external_fetch like the CA signers, waits for its credential and
+    signer.env, and reaches Google over HTTPS plus its own Unix socket. Unlike them it is NOT opt_in: Odoo cannot sign without it, so it
+    stays in the boot set and the site monitor's unit list."""
+
+    def _unit(self):
+        for entry in infra.MANIFEST["static_files"]:
+            if entry["path"] == "/opt/hams/systemd/hams-relay-signer.service":
+                return entry
+        self.fail("no hams-relay-signer.service in static_files")
+
+    def test_the_unit_asks_google_and_waits_for_its_credential_and_pin(self):
+        spec = self._unit()
+        unit = spec["content"]
+        self.assertIn("ConditionPathExists=/opt/hams/etc/relay_signer/signer.env\n", unit)
+        self.assertIn("ConditionPathExists=/opt/hams/etc/relay_signer/gcp_service_account.json\n", unit)
+        self.assertIn("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\n", unit)
+        self.assertIn('Environment="RELAY_CA_CREDENTIALS_FILE=/opt/hams/etc/relay_signer/gcp_service_account.json"\n', unit)
+        self.assertIn("EnvironmentFile=/opt/hams/etc/relay_signer/signer.env\n", unit)
+        self.assertIn("ReadWritePaths=/opt/hams/etc/relay_signer /opt/hams/etc/relay_signer_public\n", unit)
+        self.assertIn("User=hams_relay_signer\nGroup=hams_relay_signer\n", unit)
+        self.assertIn("NoNewPrivileges=true\n", unit)
+        self.assertIn("CapabilityBoundingSet=\n", unit)
+        self.assertIn("ExecStartPre=/usr/bin/python3 /opt/hams/daemons/relay_signer/main.py --start-test\n", unit)
+        self.assertIn("Restart=on-failure\n", unit)
+        self.assertNotIn("capability_issuer", unit, "no software issuer key or chain is named any more")
+
+    def test_it_is_external_fetch_so_a_test_host_never_starts_it_and_stays_monitored_in_production(self):
+        name = "hams-relay-signer.service"
+        self.assertIn(name, infra.external_fetch_unit_names())
+        self.assertNotIn(name, infra.opt_in_unit_names())
+        self.assertFalse(infra._activation_units_to_enable([name], is_test_env=True))
+        self.assertIn(name, infra.boot_service_unit_names())
+        self.assertEqual(self._unit()["environments"], ["prod", "test"])
+
+    def test_the_account_and_its_private_directory_are_unchanged_so_odoo_still_reaches_only_the_socket(self):
+        accounts = {a["user"]: a for a in infra.MANIFEST["system_accounts"]}
+        self.assertEqual(accounts["hams_relay_signer"].get("add_to_users"), ["odoo"])
+        dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
+        private = dirs["/opt/hams/etc/relay_signer"]
+        self.assertEqual((private["owner"], private["provision_mode"]), ("hams_relay_signer:hams_relay_signer", "700"))
+
+
 class RelayCaSignerManifestTests(unittest.TestCase):
     """The MANIFEST pieces for hams_com's daemons/relay_ca: THREE signer daemons on hams1 (docs/proposals/
     CLOUD_HSM_CA_SIGNING.md), each its own account, state directory, Unix socket and unit, each holding its own Google
@@ -3649,7 +3694,6 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams-pgbackrest-backup.path": "fires only on a spool file a configured backup job writes",
         "hams-pgbackrest-backup.service": "runs only for a configured backup job",
         "hams-pycache.service": "compiles local Python files",
-        "hams-relay-signer.service": "local signing socket",
         "hams-subcarrier-signer.service": "local signing socket",
         "hams-static@.service": "read-only loopback file server for a tenant's static tree; no outbound network at all",
         "hams-tenant@.service": "an Odoo tenant: loopback listener, local PostgreSQL socket; fetches nothing",
