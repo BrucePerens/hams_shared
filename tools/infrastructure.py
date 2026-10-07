@@ -1779,14 +1779,26 @@ MANIFEST = {
         {
             # hams_com daemons/hams_turn (turn.hams.com, the members-only TURN server, run by coturn): its own
             # unprivileged account, the only user that can read the TLS key and the shared secret under
-            # /etc/hams/turn (0640, group hams-turn). Binds 443/udp and 443/tcp on one public address through
-            # CAP_NET_BIND_SERVICE in hams-turn.service. It belongs to no other group: the binary is
+            # /etc/hams/turn (0640, group hams-turn). Its UDP instance binds 443/udp on one public address through
+            # CAP_NET_BIND_SERVICE in hams-turn-udp.service; its turns: instance binds only loopback 5349/tcp (behind hams-mux). It belongs to no other group: the binary is
             # /usr/bin/turnserver, which is world-executable, so it needs no traversal into /opt/hams. Prod-only.
             "user": "hams-turn",
             "group": "hams-turn",
             "home": "/etc/hams/turn",
             "shell": "/usr/sbin/nologin",
             "not_member_of": ["hams_com"],
+            "environments": ["prod"],
+        },
+        {
+            # hams_com daemons/hams_mux (the TLS router on public TCP 443, HAProxy): its own unprivileged account. It reads one
+            # public configuration file under /etc/hams/mux and binds 443/tcp through CAP_NET_BIND_SERVICE in hams-mux.service. It
+            # belongs to no other group (the binary is /usr/sbin/haproxy, world-executable, so it needs no traversal into /opt/hams,
+            # and it can reach neither the gateway's nor coturn's files). Prod-only.
+            "user": "hams-mux",
+            "group": "hams-mux",
+            "home": "/etc/hams/mux",
+            "shell": "/usr/sbin/nologin",
+            "not_member_of": ["hams_com", "hams-auth", "hams-turn"],
             "environments": ["prod"],
         },
     ],
@@ -2697,6 +2709,15 @@ MANIFEST = {
         {
             "path": "/etc/hams/turn",
             "owner": "root:hams-turn",
+            "provision_mode": "750",
+            "environments": ["prod"],
+        },
+
+        # hams_com daemons/hams_mux: the TLS router's configuration directory (haproxy.cfg, which holds nothing secret). Root and
+        # the hams-mux group only, and never mounted into any other runtime (no "runtime_mount" key).
+        {
+            "path": "/etc/hams/mux",
+            "owner": "root:hams-mux",
             "provision_mode": "750",
             "environments": ["prod"],
         },
@@ -8630,10 +8651,12 @@ WantedBy=timers.target
             "environments": ["prod"],
         },
         {
-            # hams_com daemons/hams_turn: coturn as turn.hams.com, relaying UDP between a signed-in member's browser (or a
-            # relay) and a relay, on 443/udp and 443/tcp (turns:) of hams1's one public address. Text identical to hams_com
-            # daemons/hams_turn/packaging/hams-turn.service (hams_com's daemons/hams_turn/test_turnserver_conf.py fails if the
-            # two drift). It is OPT-IN and prod-only: provisioning links it and never enables or starts it, and the
+            # hams_com daemons/hams_turn: coturn as turn.hams.com, the turns: (TLS over TCP) instance. It listens on 127.0.0.1:5349
+            # only, with no capability at all, and is reached through hams-mux (below), which owns public TCP 443 and routes the TLS
+            # server name turn.hams.com to it; its UDP relays are allocated on the public address. The UDP half of the service is
+            # a second instance, hams-turn-udp.service, because coturn's listening-ip applies to every listener type. Text identical
+            # to hams_com daemons/hams_turn/packaging/hams-turn.service (hams_com's daemons/hams_turn/test_turnserver_conf.py fails
+            # if the two drift). It is OPT-IN and prod-only: provisioning links it and never enables or starts it, and the
             # smoketest never starts it; the install steps in hams_com docs/runbooks/TURN_GO_LIVE.md do, after the certificate,
             # the DNS record and the secret exist (the ConditionPathExists lines keep it inert until then). It fetches
             # nothing from a third party (it only relays what a credentialed client sends), so it is not external_fetch.
@@ -8642,12 +8665,14 @@ WantedBy=timers.target
             "path": "/opt/hams/systemd/hams-turn.service",
             "opt_in": "needs the certificate, the shared secret and the DNS record, and opens a public port; started only by hams_com docs/runbooks/TURN_GO_LIVE.md",
             "content": """\
-# systemd unit for coturn as turn.hams.com. Provisioned by hams_shared/tools/infrastructure.py's MANIFEST as
+# systemd unit for coturn as turn.hams.com, the turns: (TLS over TCP) instance: it listens on 127.0.0.1:5349 only and is reached
+# through hams-mux (the TLS router that owns public TCP 443). Provisioned by hams_shared/tools/infrastructure.py's MANIFEST as
 # /opt/hams/systemd/hams-turn.service; daemons/hams_turn/packaging/hams-turn.service in hams_com must stay identical
 # (daemons/hams_turn/test_turnserver_conf.py). It is linked, never enabled, by provisioning: it is started only by the
 # install steps in docs/runbooks/TURN_GO_LIVE.md (its `enable` step), after the certificate and the DNS record exist.
+# The UDP instance is hams-turn-udp.service.
 [Unit]
-Description=hams.com members-only TURN server (turn.hams.com, 443/udp and 443/tcp)
+Description=hams.com members-only TURN server, turns: instance (turn.hams.com via hams-mux, loopback 5349/tcp)
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/etc/hams/turn/turnserver.conf
@@ -8658,6 +8683,71 @@ Type=simple
 ExecStart=/usr/bin/turnserver -c /etc/hams/turn/turnserver.conf --pidfile=
 # A renewed certificate is picked up with SIGUSR2, without dropping live allocations (tested in the rehearsal).
 ExecReload=/bin/kill -USR2 $MAINPID
+Restart=always
+RestartSec=5
+
+# Unprivileged, and with no capability at all: it binds a loopback port above 1024.
+User=hams-turn
+Group=hams-turn
+CapabilityBoundingSet=
+
+# Hardening: no new privileges, read-only system, private /tmp and devices, nothing writable at all.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadOnlyPaths=/etc/hams/turn
+UMask=0077
+
+# No limits of our own: coturn raises its own open-file limit to the system's, and its per-user and total
+# quotas are left at coturn's defaults (Bruce, 2026-10-07: no caps).
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams-turn
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # hams_com daemons/hams_turn: the UDP instance of coturn, UDP 443 on hams1's public address and nothing else (no TCP, no
+            # TLS, no certificate). Text identical to hams_com daemons/hams_turn/packaging/hams-turn-udp.service. Opt-in and
+            # prod-only for the same reasons as hams-turn.service; started by hams_com docs/runbooks/TURN_GO_LIVE.md. Binds 443/udp
+            # through CAP_NET_BIND_SERVICE. It fetches nothing from a third party.
+            "path": "/opt/hams/systemd/hams-turn-udp.service",
+            "opt_in": "needs the shared secret and the DNS record, and opens a public port; started only by hams_com docs/runbooks/TURN_GO_LIVE.md",
+            "content": """\
+# systemd unit for coturn as turn.hams.com, the UDP instance: UDP 443 on the public address and nothing else (no TCP, no TLS,
+# no certificate). The turns: instance is hams-turn.service, behind hams-mux. Provisioned by hams_shared/tools/infrastructure.py's
+# MANIFEST as /opt/hams/systemd/hams-turn-udp.service; daemons/hams_turn/packaging/hams-turn-udp.service in hams_com must stay
+# identical (daemons/hams_turn/test_turnserver_conf.py). It is linked, never enabled, by provisioning: it is started only by the
+# install steps in docs/runbooks/TURN_GO_LIVE.md, after the DNS record exists.
+[Unit]
+Description=hams.com members-only TURN server, UDP instance (turn.hams.com, 443/udp)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/hams/turn/turnserver-udp.conf
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/turnserver -c /etc/hams/turn/turnserver-udp.conf --pidfile=
 Restart=always
 RestartSec=5
 
@@ -8693,11 +8783,97 @@ UMask=0077
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=hams-turn
+SyslogIdentifier=hams-turn-udp
 
 [Install]
 WantedBy=multi-user.target
 """,
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # hams_com daemons/hams_mux: the TLS router that shares public TCP 443 on hams1 by server name (HAProxy, no TLS
+            # termination): turn.hams.com goes to coturn's loopback listener (hams-turn.service), everything else, which is the
+            # auth.hams.com client-certificate login, to hams-auth-gateway, now on 127.0.0.1:8443, with a PROXY protocol line so the
+            # gateway still sees the real client address. Text identical to hams_com daemons/hams_mux/packaging/hams-mux.service
+            # (hams_com's daemons/hams_mux/test_mux_conf.py fails if the two drift). OPT-IN and prod-only: provisioning links it and
+            # never enables or starts it; hams_com docs/runbooks/TURN_GO_LIVE.md ("Port 443 is shared") starts it in the same minute
+            # the gateway moves to loopback, because the two cannot both hold 443. It forwards bytes between our own services and
+            # fetches nothing from a third party. The package's own haproxy.service is masked by the install step before the package
+            # is installed and is not used (it would run Debian's default configuration).
+            "path": "/opt/hams/systemd/hams-mux.service",
+            "opt_in": "takes over public TCP 443 from hams-auth-gateway; started only by hams_com docs/runbooks/TURN_GO_LIVE.md, in the cutover step",
+            "content": """\
+# systemd unit for hams-mux: the TLS router that owns public TCP 443 on hams1 (HAProxy, config /etc/hams/mux/haproxy.cfg).
+# Provisioned by hams_shared/tools/infrastructure.py's MANIFEST as /opt/hams/systemd/hams-mux.service;
+# daemons/hams_mux/packaging/hams-mux.service in hams_com must stay identical (daemons/hams_mux/test_mux_conf.py). It is linked,
+# never enabled, by provisioning: the cutover steps in docs/runbooks/TURN_GO_LIVE.md ("Port 443 is shared") start it, in the
+# same minute that hams-auth-gateway moves to loopback. The package's own haproxy.service is masked and never used.
+[Unit]
+Description=hams.com TLS router on TCP 443 (turn.hams.com to coturn, everything else to hams-auth-gateway)
+After=network-online.target hams-auth-gateway.service hams-turn.service
+Wants=network-online.target
+ConditionPathExists=/etc/hams/mux/haproxy.cfg
+
+[Service]
+# haproxy -Ws is HAProxy's master-worker mode for systemd: it tells systemd when it is ready and re-executes itself on reload.
+Type=notify
+ExecStartPre=/usr/sbin/haproxy -f /etc/hams/mux/haproxy.cfg -c -q
+ExecStart=/usr/sbin/haproxy -Ws -f /etc/hams/mux/haproxy.cfg
+ExecReload=/usr/sbin/haproxy -f /etc/hams/mux/haproxy.cfg -c -q
+ExecReload=/bin/kill -USR2 $MAINPID
+Restart=always
+RestartSec=2
+
+# Unprivileged. Port 443 is bound with CAP_NET_BIND_SERVICE only.
+User=hams-mux
+Group=hams-mux
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Hardening: no new privileges, read-only system, private /tmp and devices, nothing writable at all. (No
+# MemoryDenyWriteExecute: HAProxy's regular-expression library compiles patterns just in time.)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadOnlyPaths=/etc/hams/mux
+UMask=0077
+
+# No limits of our own (Bruce, 2026-10-07: no caps): HAProxy sizes its connection table from the system's file limit.
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams-mux
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # The mux's routing configuration, copied from hams_com (not carried here as text: HAProxy's syntax uses braces, which
+            # this file's content formatting would swallow, and the routing belongs next to the gateway and coturn settings it must
+            # agree with, all of which hams_com's tests read together). Nothing in it is secret. The directory is 0750 root:hams-mux and
+            # the file 0644, so only root and hams-mux can reach it.
+            "src": "{HAMS_COM_DIR}/daemons/hams_mux/config/haproxy.cfg",
+            "path": "/etc/hams/mux/haproxy.cfg",
             "owner": "root:root",
             "mode": "644",
             "environments": ["prod"],
