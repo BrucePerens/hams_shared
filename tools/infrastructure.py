@@ -7,6 +7,7 @@ Serves as the Single Source of Truth for test.py and provision.py.
 Supports environment scoping, lifecycle hooks, and precise runtime mount states.
 """
 
+import ast
 import compileall
 import contextlib
 import glob
@@ -10144,6 +10145,13 @@ def initialize_odoo_database(
     # each into the right flag: `-i` for a module not yet installed (unchanged
     # behavior), `-u` for one that already is (the one that was missing).
     installed_modules = _get_installed_module_names(db_name)
+    # A module that sets "hams_opt_in_only" in its manifest is installed by a person who means to
+    # (a demonstration instance), never by provisioning: it is left out unless it is already installed.
+    opt_in_only = _opt_in_only_modules([hams_open_dir, hams_com_dir], modules)
+    skipped_opt_in = sorted(opt_in_only - set(installed_modules))
+    if skipped_opt_in:
+        _logger.info("[*] Not installing opt-in-only modules: %s", ",".join(skipped_opt_in))
+    modules -= set(skipped_opt_in)
     to_install, to_update = _split_modules_by_install_state(modules, installed_modules)
     mod_string = "base," + ",".join(sorted(modules))
     _logger.info("Initializing modules: %s", mod_string)
@@ -11585,6 +11593,29 @@ def _get_installed_module_names(db_name):
             "modules are installed, because an empty answer would turn every module update into a silent no-op."
         )
     return {line.strip() for line in res.stdout.splitlines() if line.strip()}
+
+
+# [@ANCHOR: infrastructure:_opt_in_only_modules]
+# Verified by [@ANCHOR: test_opt_in_only_modules_are_found_from_their_manifests]
+def _opt_in_only_modules(addon_dirs, modules):
+    """The names in `modules` whose `__manifest__.py` sets `"hams_opt_in_only": True`, looked up in
+    `addon_dirs`. Such a module (ham_demo_mode) must be installed deliberately by a person on an
+    instance meant for it, so provisioning must never install it on its own, least of all on a real
+    site. The manifest is read as data (`ast.literal_eval`), never imported or run."""
+    found = set()
+    for directory in filter(None, addon_dirs):
+        for name in modules:
+            manifest_path = os.path.join(directory, name, "__manifest__.py")
+            if not os.path.isfile(manifest_path):
+                continue
+            try:
+                with open(manifest_path, encoding="utf-8") as handle:
+                    manifest = ast.literal_eval(handle.read())
+            except (OSError, SyntaxError, ValueError):
+                continue
+            if isinstance(manifest, dict) and manifest.get("hams_opt_in_only") is True:
+                found.add(name)
+    return found
 
 
 # [@ANCHOR: infrastructure:_split_modules_by_install_state]
