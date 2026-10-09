@@ -5582,6 +5582,7 @@ EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=event_sync_service_internal"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="EVENT_COVER_PLACES_PER_PROMPT=20"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
