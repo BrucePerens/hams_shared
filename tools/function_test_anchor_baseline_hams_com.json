@@ -317,7 +317,6 @@
   "ham_satellite/models/res_users.py::ResUsers.SELF_WRITEABLE_FIELDS",
   "ham_satellite/models/res_users.py::ResUsers._execute_gdpr_erasure",
   "ham_shack/controllers/api.py::HamShackAPI.sync_offline_logs",
-  "ham_shack/tests/verify_noise_xx_handshake.py::main",
   "ham_sk_workflow/wizard/sk_processor_wizard.py::SkProcessorWizard.action_process_sk",
   "ham_testing/models/res_users.py::ResUsersTesting._execute_gdpr_erasure",
   "ham_training/data/create_review_html.py::_global_exception_handler",

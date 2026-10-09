@@ -2063,7 +2063,6 @@
   "duplicate|ham_shack:test_api_lookup_callsign",
   "duplicate|ham_shack:test_swl_operator_is_forbidden",
   "duplicate|ham_shack:test_tour_webrtc_transceiver",
-  "duplicate|ham_shack:verify_noise_xx_handshake_main",
   "duplicate|ham_shack:web_shack_app_route",
   "duplicate|ham_shack:web_shack_apply_relay_status",
   "duplicate|ham_shack:web_shack_auto_scan_dispatch",
