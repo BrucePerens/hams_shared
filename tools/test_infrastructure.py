@@ -3394,7 +3394,7 @@ class RelayIssuerSignerManifestTests(unittest.TestCase):
 
 
 class RelayCaSignerManifestTests(unittest.TestCase):
-    """The MANIFEST pieces for hams_com's daemons/relay_ca: THREE signer daemons on hams1 (docs/proposals/
+    """The MANIFEST pieces for hams_com's daemons/relay_ca: TWO signer daemons on hams1 (docs/proposals/
     CLOUD_HSM_CA_SIGNING.md), each its own account, state directory, Unix socket and unit, each holding its own Google
     service-account key file and signing with one Google Cloud KMS HSM key. They belong to the "ca_signer" host class
     and to prod only, so no other host (the dev box, every test host) gets an account, a directory or a unit, and no
@@ -3404,7 +3404,6 @@ class RelayCaSignerManifestTests(unittest.TestCase):
         # purpose: (unit, account, state dir, public dir or None, allowed socket users, odoo joins the group)
         "relay": ("hams-relay-ca.service", "hams_relay_ca", "relay_ca", "relay_ca_public", "odoo", True),
         "identity": ("hams-identity-ca.service", "hams_identity_ca", "identity_ca", "identity_ca_public", "odoo", True),
-        "capability": ("hams-capability-ca.service", "hams_capability_ca", "capability_ca", None, "root", False),
     }
 
     def _spec(self, unit):
@@ -3421,7 +3420,7 @@ class RelayCaSignerManifestTests(unittest.TestCase):
                              (account, f"/opt/hams/etc/{state}", "/usr/sbin/nologin"), purpose)
             self.assertEqual((spec["host_class"], spec["environments"]), ("ca_signer", ["prod"]), purpose)
             self.assertEqual(spec.get("add_to_users"), ["odoo"] if odoo_joins else None, purpose)
-        self.assertEqual(len({a["user"] for a in accounts.values() if a["user"] in {v[1] for v in self.SIGNERS.values()}}), 3)
+        self.assertEqual(len({a["user"] for a in accounts.values() if a["user"] in {v[1] for v in self.SIGNERS.values()}}), 2)
 
     def test_private_dirs_are_0700_public_dirs_0755_and_all_are_class_gated_and_prod_only(self):
         dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
@@ -3433,10 +3432,10 @@ class RelayCaSignerManifestTests(unittest.TestCase):
                 self.assertEqual((entry["host_class"], entry["environments"]), ("ca_signer", ["prod"]), purpose)
             if public:
                 self.assertEqual(dirs[f"/opt/hams/etc/{public}"]["provision_mode"], "755")
-        self.assertNotIn("/opt/hams/etc/capability_ca_public", dirs)
+        self.assertNotIn("/opt/hams/etc/capability_ca", dirs, "the capability root signer is gone")
 
     def test_nothing_naming_a_signer_account_or_directory_exists_on_a_host_without_the_class(self):
-        pattern = re.compile(r"hams_(relay|identity|capability)_ca|/opt/hams/etc/(relay|identity|capability)_ca(?!_client)")
+        pattern = re.compile(r"hams_(relay|identity)_ca|/opt/hams/etc/(relay|identity)_ca(?!_client)")
         for kind in ("static_files", "directories", "system_accounts"):
             for spec in infra.MANIFEST[kind]:
                 text = json.dumps(spec, default=str)
@@ -3481,11 +3480,10 @@ class RelayCaSignerManifestTests(unittest.TestCase):
             self.assertNotIn("WireGuard", unit)
             self.assertEqual((spec["host_class"], spec["environments"]), ("ca_signer", ["prod"]), purpose)
 
-    def test_the_capability_root_answers_root_alone_and_reads_its_issuer_allowlist_from_its_own_directory(self):
-        unit = self._spec("hams-capability-ca.service")["content"]
-        self.assertIn('Environment="RELAY_CA_ALLOWED_USERS=root"\n', unit)
-        self.assertIn('RELAY_CA_CAPABILITY_ISSUERS_FILE=/opt/hams/etc/capability_ca/capability_issuers.json', unit)
-        self.assertNotIn("RELAY_CA_PUBLIC_DIR", unit)
+    def test_the_capability_root_signer_is_gone_from_the_manifest(self):
+        text = json.dumps(infra.MANIFEST, default=str)
+        for retired in ("hams-capability-ca", "hams_capability_ca", "capability_ca", "RELAY_CA_PURPOSE=capability"):
+            self.assertNotIn(retired, text)
 
     def test_the_signers_call_google_so_they_are_external_fetch_and_opt_in_and_never_started_by_provisioning(self):
         names = {v[0] for v in self.SIGNERS.values()}
@@ -3542,7 +3540,7 @@ class HostClassTests(unittest.TestCase):
             pwd.getpwnam.side_effect = KeyError
             infra.provision_system_accounts(lambda cmd, **kw: calls.append(cmd), environment="prod")
         created = " ".join(" ".join(c) for c in calls)
-        for account in ("hams_relay_ca", "hams_identity_ca", "hams_capability_ca"):
+        for account in ("hams_relay_ca", "hams_identity_ca"):
             self.assertNotIn(account, created)
         self.assertIn("hams_relay_signer", created, "the other signers are still created")
         with patch.object(infra, "host_classes", return_value={"ca_signer"}), \
@@ -3552,7 +3550,7 @@ class HostClassTests(unittest.TestCase):
             calls.clear()
             infra.provision_system_accounts(lambda cmd, **kw: calls.append(cmd), environment="prod")
         joined = " ".join(" ".join(c) for c in calls)
-        for account in ("hams_relay_ca", "hams_identity_ca", "hams_capability_ca"):
+        for account in ("hams_relay_ca", "hams_identity_ca"):
             self.assertIn(account, joined)
         with patch.object(infra, "host_classes", return_value=set()):
             self.assertNotIn("/opt/hams/etc/relay_ca", infra.get_mount_paths("prod", "ro"))
@@ -3568,12 +3566,12 @@ class HostClassTests(unittest.TestCase):
             infra.provision_host_class("ca_signer", lambda cmd, **kw: commands.append(cmd))
         details = " ".join(f"{kind} {detail}" for kind, detail in plan.actions) + " " + " ".join(
             " ".join(c) for c in commands)
-        for expected in ("hams_relay_ca", "hams_identity_ca", "hams_capability_ca", "/opt/hams/etc/relay_ca ",
-                         "/opt/hams/etc/relay_ca_public", "/opt/hams/etc/identity_ca", "/opt/hams/etc/capability_ca",
-                         "hams-relay-ca.service", "hams-identity-ca.service", "hams-capability-ca.service",
+        for expected in ("hams_relay_ca", "hams_identity_ca", "/opt/hams/etc/relay_ca ",
+                         "/opt/hams/etc/relay_ca_public", "/opt/hams/etc/identity_ca",
+                         "hams-relay-ca.service", "hams-identity-ca.service",
                          "daemon-reload"):
             self.assertIn(expected, details)
-        for unexpected in ("hams_relay_signer", "relay_ca_client", "enable", " start", "apt", "-G hams_capability_ca"):
+        for unexpected in ("hams_relay_signer", "relay_ca_client", "enable", " start", "apt"):
             self.assertNotIn(unexpected, details)
         self.assertIn("usermod -a -G hams_relay_ca odoo", details)
         self.assertIn("usermod -a -G hams_identity_ca odoo", details)
@@ -3593,7 +3591,7 @@ class HostClassTests(unittest.TestCase):
         }
         self.assertEqual(
             infra.host_class_unit_names(),
-            {"hams-relay-ca.service", "hams-identity-ca.service", "hams-capability-ca.service"} | tenant_units | b2_units
+            {"hams-relay-ca.service", "hams-identity-ca.service"} | tenant_units | b2_units
         )
 
 
