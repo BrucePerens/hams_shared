@@ -10,10 +10,13 @@ The `database_management` module provides a comprehensive suite of Database Admi
 
 *   **Stat Tracking:** Real-time visibility into table bloat, index usage, and cache hit ratios.
 *   **Slow Query Monitoring (APM):** Identifies the most resource-intensive SQL queries using `pg_stat_statements`.
-*   **Active Session Management:** View and terminate runaway database sessions.
+*   **Active Session Management:** View and terminate runaway database sessions, using batch operations.
+*   **Slow Query Explain:** Generate `EXPLAIN (ANALYZE, BUFFERS)` plans for slow queries; only `SELECT` and `WITH` queries are accepted.
+*   **Index Advisor:** Lists candidate tables for a missing index: those with more than 100 sequential scans and larger than 10 MB. It does not propose specific index definitions.
+*   **Replication Monitoring:** Tracks PostgreSQL replication lag and status across the cluster.
 *   **Performance Tuning Wizard:** Automatically calculates optimal PostgreSQL parameters based on hardware specifications and applies them via `ALTER SYSTEM`.
-*   **High Availability Orchestrator:** Generates production-ready configurations for Patroni, etcd, and PgBouncer clusters.
-*   **Automated Alerts:** Integrates with PagerDuty to notify SREs when table bloat exceeds critical thresholds.
+*   **High Availability Orchestrator:** Generates production-ready configurations for a two-node cluster: a Patroni YAML file for each node (pointing at your existing etcd hosts) and a PgBouncer INI file. It displays them for copying; it does not deploy anything and does not generate etcd's own configuration.
+*   **Automated Alerts:** Integrates with PagerDuty to notify SREs when table bloat exceeds critical thresholds. "PagerDuty" here is this project's own `pager_duty` Odoo module, not the commercial service. A daily cron job opens one incident (severity medium) listing every table with more than 20% dead tuples and more than 10,000 dead tuples.
 *   **Zero-Sudo Architecture:** Ensures all operations are performed with minimum necessary privileges using dedicated service accounts.
 
 ---
@@ -21,18 +24,21 @@ The `database_management` module provides a comprehensive suite of Database Admi
 ## 🛠 Architecture & Security
 
 ### Micro-Privilege Architecture
-This module strictly adheres to a Zero-Sudo policy (no `.sudo()`; see [zero_sudo.md](zero_sudo.md)). Sensitive operations are delegated to the `user_database_management_service` service account. Privilege elevation is handled via `_get_service_env()` from the `zero_sudo` module, ensuring that no `sudo()` calls are used in the codebase.
+This module strictly adheres to a Zero-Sudo policy (no `.sudo()`; see [zero_sudo.md](zero_sudo.md)). Session termination (`pg_terminate_backend`), query-statistics reset (`pg_stat_statements_reset`) and Explain run as the `user_database_management_service` service account. Privilege elevation is handled via `_get_service_env()` from the `zero_sudo` module, ensuring that no `sudo()` calls are used in the codebase. The Optimization Wizard's `ALTER SYSTEM` statements do not use the service account; they run on a separate database cursor opened from the Odoo registry. The service account is an Odoo user, not a PostgreSQL role: its SQL still runs over Odoo's own database connection, so PostgreSQL-level permissions are those of Odoo's database user.
+
+### Global Scope
+The models are logically global: they report PostgreSQL system statistics for the whole current database (for replication, the whole PostgreSQL server), not for any one Odoo company.
 
 ### Security Hardening
-*   **SQL Injection Prevention:** All raw SQL queries utilize the `psycopg2.sql` library for AST-compliant parameterization. `[@ANCHOR: pg_optimize_wizard]`
+*   **SQL Injection Prevention:** The Optimization Wizard builds its `ALTER SYSTEM` statements with the `psycopg2.sql` library (`sql.Identifier` for the parameter name, `sql.Literal` for the value). Other runtime values are passed as bound query parameters. `[@ANCHOR: pg_optimize_wizard]`
 
-*   **Input Validation:** Strict regex validation for IP addresses and complexity requirements for replication passwords. `[@ANCHOR: pg_ha_wizard]`
+*   **Input Validation:** The HA wizard parses node IP addresses with Python's `ipaddress` module, requires cluster and user names to match `^[a-zA-Z0-9_]+$`, and requires a replication password of at least 8 characters. `[@ANCHOR: pg_ha_wizard]`
 
-*   **Binary Safety:** Execution of external binaries (e.g., `vacuumdb`) is restricted to authorized paths and managed via `zero_sudo.security.utils`. `[@ANCHOR: vacuum_analyze]`
-*   **Access Control:** All DBA functionality is restricted to the `base.group_system` role, with additional granular privileges defined in `res.groups.privilege`. Managers have the `database_management.group_database_management_manager` group.
+*   **Binary Safety:** Execution of external binaries (e.g., `vacuumdb`) is managed via `zero_sudo.security.utils._ensure_executable()`, which uses the binary found on `PATH` or, if there is none, asks `binary_downloader` to install it; `vacuumdb` runs without a shell and with a minimal environment. `[@ANCHOR: vacuum_analyze]`
+*   **Access Control:** Model access rights are granted to the `database_management.group_database_management_manager` group ("Database Manager"). Odoo's `base.group_system` (Settings) implies that group, and the **Database & SRE** menu is shown only to `base.group_system`.
 
 ### Components
-*   **Stat Views:** Native PostgreSQL statistics are exposed via Odoo models (`database.table.stat`, `database.index.stat`, `database.query.stat`, `database.activity`) using PostgreSQL views. `[@ANCHOR: db_index_stats]`
+*   **Stat Views:** Native PostgreSQL statistics are exposed via Odoo models (`database.table.stat`, `database.index.stat`, `database.query.stat`, `database.activity`, `database.replication.stat`, `database.index.advisor`, `database.pg.setting`) using PostgreSQL views. `[@ANCHOR: db_index_stats]`
 
 *   **Vacuum Automation:** Manual `VACUUM ANALYZE` is triggered via `subprocess` calling `vacuumdb`, bypassing Odoo's transaction blocks to allow physical cleanup. `[@ANCHOR: vacuum_analyze]`
 
@@ -42,8 +48,14 @@ This module strictly adheres to a Zero-Sudo policy (no `.sudo()`; see [zero_sudo
 
 ## 📚 Documentation & Help
 
-User-facing documentation is available directly within Odoo's Knowledge app, whether this repository's open-source `knowledge` module or Odoo Enterprise's Knowledge app.
+User-facing documentation is available within the Knowledge module when it is installed (this repository's open-source `knowledge` module or Odoo Enterprise's Knowledge app): `zero_sudo`'s knowledge-doc bootstrap creates the article from this module's `knowledge_docs` manifest entry.
 *   **Guide:** `Database Management Guide` (installed from `data/documentation.html`).
+
+---
+
+## 📦 External Dependencies
+
+Only `vacuumdb` is declared in `__manifest__.py`. `patroni`, `pgbouncer` and `etcd` are needed only by the High Availability Orchestrator, which checks for them on the Odoo host before generating configuration.
 
 ---
 

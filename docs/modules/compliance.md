@@ -2,13 +2,13 @@
 
 *Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).*
 
-This module automatically handles the annoying parts of running a legal website. It makes sure your Odoo instance complies with GDPR, CCPA, and ePrivacy rules without you having to configure anything manually.
+This module automatically handles the annoying parts of running a legal website. It makes sure your Odoo instance complies with GDPR (the EU General Data Protection Regulation), CCPA (the California Consumer Privacy Act), and ePrivacy (the EU ePrivacy Directive, the "Cookie Law") rules without you having to configure anything manually.
 
 ## 🌟 What It Does
 
 * **Turns on the Cookie Banner:** As soon as you install this, it flips the switch to turn on Odoo's native Cookie Consent Bar across all your websites. It also ensures that any **new** websites created later have this enabled by default. This stops optional tracking scripts until the user clicks "Accept."
-* **Writes Your Legal Pages:** It automatically creates standard, editable pages for your Privacy Policy (`/privacy`), Cookie Policy (`/cookie-policy`), and Terms of Service (`/terms`).
-* **Doesn't Break Your Edits:** If you've already written a privacy policy at `/privacy`, the module detects it and leaves yours alone. If you edit the pages it creates, it won't overwrite your work when you update the module.
+* **Writes Your Legal Pages:** It automatically creates standard, editable pages for your Privacy Policy (`/privacy`), Cookie Policy (`/cookie-policy`), Terms of Service (`/terms`) and Accessibility Statement (`/accessibility`). It also adds footer links to them and to the `/my/privacy` dashboard, and a public index of active compliance documents at `/compliance`.
+* **Doesn't Break Your Edits:** If you've already written a privacy policy at `/privacy` when the module is installed, the module detects it and leaves yours alone (it unpublishes its own copy). If you edit the pages it creates, it won't overwrite your work when you update the module.
 
 ## ⚖️ Included Policy Coverage
 The boilerplate policies we generate are written specifically to cover the features in our other open-source modules. They explain:
@@ -59,7 +59,7 @@ A non-interactive configuration module that enforces baseline regulatory complia
 
     * Terms of Service Template `[@ANCHOR: compliance_terms_of_service_template]`
 
-* **Non-Destructive Mandate:** If a page already exists at one of the target URLs, the module's boilerplate is unpublished to avoid duplication. `[@ANCHOR: test_compliance_non_destructive_mandate]`
+* **Non-Destructive Mandate:** If, at install time, a page already exists at one of the target URLs (`/privacy`, `/cookie-policy`, `/terms`, `/accessibility`), the module's boilerplate is unpublished to avoid duplication. A page counts as custom when its view key does not start with `compliance.compliance_` and its `website_id` equals the boilerplate's. `[@ANCHOR: test_compliance_non_destructive_mandate]`
 * **Editability Mandate:** Legal pages are standard `website.page` records, allowing administrators to use the Odoo website builder for customization.
 
 ## 3. API & Integration
@@ -68,6 +68,7 @@ Dependent modules requiring legal links MUST use:
 * `/privacy` : Privacy Policy
 * `/cookie-policy` : Cookie Policy
 * `/terms` : Terms of Service
+* `/accessibility` : Accessibility Statement
 
 ### Integration Rules
 1. **Do Not Build Custom Banners:** Rely entirely on Odoo's native `website.cookies_bar`.
@@ -79,12 +80,16 @@ Dependent modules requiring legal links MUST use:
 This module adheres to **ADR-0002 (Zero-Sudo)** and **ADR-0005 (Service Account Web Isolation)**, both consolidated in [MASTER_01_SECURITY_ZERO_SUDO.md](../adrs/MASTER_01_SECURITY_ZERO_SUDO.md) (Zero-Sudo: no `.sudo()`; privileged work runs as a dedicated service account, see [zero_sudo.md](zero_sudo.md); Web Isolation: service accounts cannot log in through the web interface).
 
 * **Micro-Privilege Account:** Automated post-install configuration is executed via the `compliance.user_compliance_service` service account.
-* **ACLs:** The service account is granted minimal read/write access to `website`, `website.page`, and `ir.ui.view` models. `[@ANCHOR: compliance_security_acls]`
+* **ACLs:** The service account (group `group_compliance_service`) is granted read and write on `website`, read, write and create on `website.page` and `ir.ui.view`, and read-only on `res.groups` and `res.company` (`security/ir.model.access.csv`); it has no delete rights on these models. `[@ANCHOR: compliance_security_acls]`
 
 * **Impersonation:** Escalation is handled via `env.with_user(svc_uid)` instead of `.sudo()` for core operations. `[@ANCHOR: compliance_zero_sudo_impersonation]`
 
+## 4b. Documents Portal and GDPR Base Contract
+* **Compliance Documents:** Dependent modules provision `compliance.document` records (via `noupdate` XML, as `data/compliance_data.xml` does). The public `/compliance` page lists up to 100 active ones.
+* **GDPR (General Data Protection Regulation) hooks on `res.users`:** `_execute_gdpr_erasure()` deactivates the account (writing as the `zero_sudo.gdpr_service_internal` service account) `[@ANCHOR: compliance_execute_gdpr_erasure]`; `_get_gdpr_export_data()` returns an empty dict that overriding modules extend `[@ANCHOR: compliance_get_gdpr_export_data]`; `_get_gdpr_streamed_keys()` returns an empty dict to which modules add `{key: generator_function}` entries for datasets too large to hold in memory `[@ANCHOR: compliance_get_gdpr_streamed_keys]`. Every override must call `super()` and merge into, not replace, the returned dict.
+
 ## 5. Website-Aware Scope
-The module is multi-website aware. When detecting custom pages at target URLs, it only unpublishes the boilerplate for the specific website scope (or global scope) where the custom page is found. If a custom page is removed, the boilerplate is automatically restored. `[@ANCHOR: compliance_website_aware_scope]`
+The module is multi-website aware. When detecting custom pages at target URLs, it only unpublishes a boilerplate page whose `website_id` matches the custom page's (both global, or both the same website); a website-specific custom page does not unpublish the global boilerplate. The check that unpublishes and restores the boilerplate lives in a PostgreSQL function the module's `post_init_hook` creates and runs, so it runs only when the module is installed (Odoo runs the hook only then), not when a page is deleted or the module is updated: after a custom page is removed, the boilerplate returns on the next install, and between installs a site owner re-publishes it manually in Site > Pages. `[@ANCHOR: compliance_website_aware_scope]`
 
 ## 6. Documentation Installation
 This module implements a **soft dependency** on documentation providers (`knowledge` or Odoo Enterprise `knowledge`).
