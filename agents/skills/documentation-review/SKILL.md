@@ -17,6 +17,15 @@ They are to ensure that the `README.md` documents all functions of the module an
 They are to make sure that the documents under `data/` document all UI functionality, both for users and admins.
 If `README.md` or `documentation.html` do not exist, they MUST generate entirely new ones.
 
+**No placeholder screenshots (Bruce, 2026-10-11).** When generating or revising `documentation.html`,
+never add an `<img>` unless it is a real screenshot of hams.com's own UI of that module, and never a
+"Below are representative screenshots of the user interface" lead-in. A page without a real
+screenshot has no image: do not generate a mock-up, copy `form_screenshot.png` / `list_screenshot.png`
+/ `map_screenshot.png` from another module, or use a stock or AI-made picture. Page candidates that
+would benefit from a real screenshot go in the report. `tools/check_doc_images.py` (a `run_linters.py`
+step) fails the build on those names, on denylisted images, on missing files, and on one image shown
+by three or more modules.
+
 **CRITICAL ADDITION: Index File Synchronization**
 Any new features or documentation discovered/written for a module MUST be synchronized by updating the central index files located in the `ham_base` module:
 - `hams_com/ham_base/data/backend_features.html`

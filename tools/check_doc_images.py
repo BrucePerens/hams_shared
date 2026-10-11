@@ -4,7 +4,7 @@
 """
 Documentation Image Checker
 -------------------------------------------------------------------------------------------
-Every module's `data/documentation.html` (and `data/*documentation*.html`, and a module's
+Every module's `data/documentation.html` (and `data/*.html` pages, a daemon's `manuals/*.html`, and a module's
 `README.md`) is end-user or developer documentation. Until 2026-10-11 about 40 of them showed
 AI-generated mock-up "screenshots" of fictional products (a "Nexus ERP" New Sales Order form, a
 "GeoTrack Pro" map, a generic purchase-order list, a "NexusFlow" settings page) under captions
@@ -47,6 +47,7 @@ DENYLIST = {
     "1df6c6691e3b1d53d4d450118473c014": "blank white page",
     "e1fb9eeefc3623ad8eab78d98e4fe5b6": "login page, captioned as the portal home screen",
     "85d14c919706d0f83a6834af543fa474": "404 error page, captioned as the community directory",
+    "e27986899363e29df32266a474820e16": "AI-generated stock image of a NOC control room (pager_duty, never referenced)",
     "75e261dcf9f9ed9b60ef5796c4d322fe": "a Knowledge manual page, captioned as the User Websites dashboard",
 }
 
@@ -60,7 +61,7 @@ def _is_doc_file(rel_path):
     name = parts[-1]
     if len(parts) == 2 and name == "README.md":
         return True
-    if len(parts) >= 3 and parts[-2] == "data" and "documentation" in name and name.endswith(".html"):
+    if len(parts) >= 3 and parts[-2] == "data" and name.endswith(".html"):
         return True
     return len(parts) >= 3 and parts[-2] == "manuals" and name.endswith(".html")
 
@@ -128,7 +129,7 @@ def check_doc_images(repo_root, extra_roots=()):
                 print(f"Warning: could not read {path}: {error}")
                 continue
             module = rel.split(os.sep)[0]
-            for ref in _image_refs(text, filename.endswith(".md")):
+            for ref in (r.strip() for r in _image_refs(text, filename.endswith(".md"))):
                 if re.match(r"^(?:[a-z][a-z0-9+.-]*:|//)", ref, re.IGNORECASE):
                     continue
                 base = os.path.basename(ref.split("?")[0])
@@ -140,7 +141,7 @@ def check_doc_images(repo_root, extra_roots=()):
                     continue
                 image = _resolve(ref, path, repo_roots)
                 if image is None:
-                    violations.append(f"{rel}: image '{ref}' does not exist.")
+                    violations.append(f"{rel}: image '{ref[:100]}' does not exist.")
                     continue
                 digest = _md5(image)
                 if digest in DENYLIST:

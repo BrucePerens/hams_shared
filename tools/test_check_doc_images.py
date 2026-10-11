@@ -103,6 +103,10 @@ class CheckDocImagesTests(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertIn("placeholder name", found[0])
 
+    def test_any_html_page_under_data_is_scanned(self):
+        self._doc("mod_a", "/mod_a/static/gone.png", name="portal_features.html")
+        self.assertEqual(len(chk.check_doc_images(self.tmp)), 1)
+
     def test_files_that_are_not_documentation_are_not_scanned(self):
         _write(os.path.join(self.tmp, "mod_a", "views", "page.html"), '<img src="/mod_a/form_screenshot.png">')
         self.assertEqual(chk.check_doc_images(self.tmp), [])
