@@ -1411,6 +1411,28 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 55. check_doc_images -- no documentation page may show a fake, blank or copied placeholder
+    # "screenshot" (the AI-generated 'Nexus ERP' New Sales Order form that ~40 manuals carried until
+    # 2026-10-11), and every image a manual references must exist. Always scans both repos, same
+    # reasoning as check_xml_comment_double_hyphen.py: not a property of any one target module.
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_doc_images.py"),
+            dir_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)

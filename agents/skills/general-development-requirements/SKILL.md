@@ -43,6 +43,17 @@ app itself, not just a developer-facing README. The current, verified mechanism 
   something unrelated -- admin bootstrap, daemon key registration, i18n loading -- not
   `knowledge_docs`). The `knowledge` module's own install/upgrade path picks up the manifest key
   directly.
+- **No placeholder screenshots.** Include an image in `documentation.html` only if it is a real
+  screenshot of hams.com's own UI of that module. Never an AI-generated mock-up, a stock photo, a
+  copied `form_screenshot.png` / `list_screenshot.png` / `map_screenshot.png`, or a screenshot of
+  another module's page; with no real screenshot, the page has no image. `tools/check_doc_images.py`
+  (a `run_linters.py` step, tests in `tools/test_check_doc_images.py`) fails a manual that references
+  one of those names, a denylisted image (add its MD5 to `DENYLIST` when you delete it), a missing
+  file, or the same image in three or more modules.
+- Documentation reaches the Help articles by itself: `zero_sudo`'s `_bootstrap_knowledge_docs`
+  runs from `_register_hook` on every registry load and rewrites an article whenever the SHA-256 of
+  `documentation.html` differs from the stored one, so a doc edit goes live after an Odoo restart
+  (no `-u`, no migration). Image files are static and need the code deployed.
 - Real modules test that this documentation is actually reachable and public where it should be
   (see e.g. `ham_shack/tests/test_help_manual_public.py`, `ham_repeater_dir/tests/test_help_manual_public.py`)
   -- write the equivalent test for a new module's own manual rather than treating the manifest entry
