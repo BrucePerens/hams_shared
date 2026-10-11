@@ -44,6 +44,7 @@ carry the record id) forces a change, and a report lists every difference.
 
 import argparse
 import base64
+import collections
 import hashlib
 import json
 import os
@@ -57,6 +58,8 @@ import urllib.request
 from xml.etree import ElementTree
 import xmlrpc.client
 from urllib.parse import urlsplit
+
+import wp_leftovers
 
 TOOL_VERSION = "1.0"
 PUBLICATION_FIELDS = ("is_published", "website_published", "date_publish", "published_date")
@@ -975,8 +978,9 @@ class Importer:
 
     def __init__(self, export_dir, target, apply=False, source_domains=(), website_map=None, log=print,
                  forms_notice=DEFAULT_FORMS_NOTICE, skip_menu_urls=(), remove_extra_menus=False,
-                 archive_extra_blogs=False):
+                 archive_extra_blogs=False, strip_wordpress=False):
         self.dir, self.target, self.apply = export_dir, target, apply
+        self.strip_wordpress = strip_wordpress  # sweep WordPress leftovers out of content (wordpress_to_odoo)
         self.domains = [d.lower() for d in source_domains]
         # Target ids are integers: the command line hands them over as text, and a text id is a missing record.
         self.website_map = {str(source): int(target) for source, target in dict(website_map or {}).items()}
@@ -988,7 +992,8 @@ class Importer:
         self.idmap_path = os.path.join(export_dir, "idmap.json")
         self.idmap = self._load_idmap()
         self.report = {"created": {}, "updated": {}, "matched": {}, "dropped_fields": {}, "unsupported": [],
-                       "redirects": [], "html": {}, "warnings": [], "lost": [], "forms_replaced": 0, "skipped": []}
+                       "redirects": [], "html": {}, "warnings": [], "lost": [], "forms_replaced": 0, "skipped": [],
+                       "wordpress_leftovers": {}}
         self._target_fields = {}
         self._modules = None
         self.data = {}
@@ -1569,6 +1574,8 @@ class Importer:
                 if not value or not new_id or (new_id < 0 and self.apply) or field not in self.fields(model):
                     continue
                 rewritten = self.rewrite(value)
+                if self.strip_wordpress and field in ("arch_db", "content"):
+                    rewritten = self.sweep_wordpress(model, rewritten)
                 if self.forms_notice is not None and field in ("arch_db", "content"):
                     rewritten, replaced = neutralize_forms(rewritten, self.forms_notice)
                     if replaced and model != "ir.ui.view":
@@ -1579,6 +1586,25 @@ class Importer:
                     self._count("updated", f"{model}.{field}")
                 elif rewritten != value:
                     self._count("matched", f"{model}.{field} (would be rewritten)")
+
+    # [@ANCHOR: odoo_site_migrate:sweep_wordpress]
+    # Verified by [@ANCHOR: test_odoo_site_migrate:sweep_wordpress]
+    def sweep_wordpress(self, model, value):
+        """Content with WordPress's leftovers removed (wp_leftovers.strip_wordpress_leftovers). A blog post's
+        content is swept whole; a page's arch only inside the body column page_arch() wrote, so the QWeb around it is
+        never touched, and a page edited in the website builder (a different shape) is left as it is."""
+        stats = collections.Counter()
+        if model == "ir.ui.view":
+            parts = wp_leftovers.split_page_arch(value)
+            if not parts:
+                return value
+            head, body, tail = parts
+            result = head + wp_leftovers.strip_wordpress_leftovers(body, stats) + tail
+        else:
+            result = wp_leftovers.strip_wordpress_leftovers(value, stats)
+        for key, number in stats.items():
+            self.report["wordpress_leftovers"][key] = self.report["wordpress_leftovers"].get(key, 0) + number
+        return result
 
     def make_redirects(self):
         """A blog URL carries the record id, so imported posts get new URLs. Old ones redirect."""
@@ -1633,6 +1659,8 @@ def render_report(report, apply):
             lines.append(f"  {bucket:<8} {model}: {number}")
     if report["html"]:
         lines.append(f"  links: {json.dumps(report['html'], sort_keys=True)}")
+    if report.get("wordpress_leftovers"):
+        lines.append(f"  WordPress leftovers removed: {json.dumps(report['wordpress_leftovers'], sort_keys=True)}")
     for key, number in sorted(report["dropped_fields"].items()):
         lines.append(f"  dropped field {key} on {number} record(s) (not in the target model)")
     for item in report["redirects"]:
@@ -1795,7 +1823,8 @@ def cmd_import(args, out):
     notice = None if args.keep_forms else args.forms_notice
     importer = Importer(args.export, target, args.apply, args.source_domain or [], website_map, out,
                         forms_notice=notice, skip_menu_urls=args.skip_menu_url or [],
-                        remove_extra_menus=args.remove_extra_menus, archive_extra_blogs=args.archive_extra_blogs)
+                        remove_extra_menus=args.remove_extra_menus, archive_extra_blogs=args.archive_extra_blogs,
+                        strip_wordpress=args.strip_wordpress)
     problems = verify_export(args.export)
     if problems:
         raise MigrateError(f"the export is damaged: {problems[:3]}")
@@ -1873,6 +1902,9 @@ def build_parser():
                    help="delete the target's own default menu entries the source does not have (default: only list them)")
     p.add_argument("--archive-extra-blogs", action="store_true",
                    help="archive the target's own default blog(s) the source does not have (default: only list them)")
+    p.add_argument("--strip-wordpress", action="store_true",
+                   help="also remove WordPress leftovers from the content (wp-* classes, shortcodes, block comments, "
+                        "scripts, inline styles, empty paragraphs); for an export made by wordpress_to_odoo.py")
     p.add_argument("--apply", action="store_true")
     p.set_defaults(func=cmd_import)
     p = sub.add_parser("lockdown", help="make the target a public site only: no signup, no invitations, no mail")
