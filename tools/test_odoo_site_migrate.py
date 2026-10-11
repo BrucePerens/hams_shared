@@ -11,6 +11,8 @@
 # Tests [@ANCHOR: odoo_site_migrate:rewrite_html]
 # [@ANCHOR: test_odoo_site_migrate:verify_export]
 # Tests [@ANCHOR: odoo_site_migrate:verify_export]
+# [@ANCHOR: test_odoo_site_migrate:sweep_wordpress]
+# Tests [@ANCHOR: odoo_site_migrate:sweep_wordpress]
 
 import base64
 import hashlib
@@ -493,6 +495,41 @@ class RewriteTests(unittest.TestCase):
         report = {}
         mig.rewrite_html('<a href="/blog/news-1/hello-12">', [], {}, {}, {}, report)
         self.assertEqual(report["blog_refs_unresolved"], 1)
+
+
+class SweepWordpressTests(_Base):
+    def importer(self, **kw):
+        return mig.Importer(self.out, build_target(), apply=False, log=lambda m: None, **kw)
+
+    def test_a_post_is_swept_whole_and_a_page_only_inside_its_body_column(self):
+        importer = self.importer(strip_wordpress=True)
+        post = importer.sweep_wordpress("blog.post", '<!-- wp:paragraph --><p class="wp-block-x">a</p><!-- /wp:paragraph --><p>&nbsp;</p>')
+        self.assertEqual(post, "<p>a</p>")
+        arch = ('<t name="n" t-name="website.wp_1_x"><t t-call="website.layout"><t t-set="pageName" t-value="\'wp_1_x\'"/>'
+                '<div id="wrap" class="oe_structure oe_empty wp-keep"><section class="s_text_block pt24 pb48">'
+                '<div class="container"><div class="row"><div class="col-lg-10 offset-lg-1"><h1>T</h1>'
+                '<p class="aligncenter" style="x">b</p>[gallery ids="1"]</div></div></div></section></div></t></t>')
+        swept = importer.sweep_wordpress("ir.ui.view", arch)
+        self.assertIn('class="oe_structure oe_empty wp-keep"', swept)  # outside the body column: untouched
+        self.assertIn('<p class="text-center">b</p></div>', swept)
+        self.assertNotIn("[gallery", swept)
+        self.assertEqual(importer.sweep_wordpress("ir.ui.view", swept), swept)  # idempotent
+        edited = '<t t-name="website.x"><div class="wp-block-x"><p style="a">built in the editor</p></div></t>'
+        self.assertEqual(importer.sweep_wordpress("ir.ui.view", edited), edited)  # not the converter's shape: left alone
+        self.assertEqual(importer.report["wordpress_leftovers"]["wordpress_comments_removed"], 2)
+
+    def test_the_rewrite_pass_applies_it_only_when_asked(self):
+        for strip in (False, True):
+            source = build_source()
+            source.rows["blog.post"][0]["content"] = '<p class="wp-block-x">hi</p><p>&nbsp;</p>'
+            exporter, _ = self.export(source)
+            exporter.run()
+            target = build_target()
+            mig.Importer(self.out, target, apply=True, source_domains=["old.example"], log=lambda m: None,
+                         strip_wordpress=strip).run()
+            content = next(p for p in target.rows["blog.post"] if p["name"] == "Hello")["content"]
+            self.assertEqual(content, "<p>hi</p>" if strip else '<p class="wp-block-x">hi</p><p>&nbsp;</p>')
+            shutil.rmtree(self.out)
 
 
 class ImportTests(_Base):

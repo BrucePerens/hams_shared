@@ -37,10 +37,12 @@ Odoo shows a record that has no website on every website. On a tenant the page o
 [@ANCHOR: tenant_sites:COMM_scoped_page_info], a redirect [@ANCHOR: tenant_sites:COMM_serve_redirect], the blogs
 and posts [@ANCHOR: tenant_sites:COMM_scoped_search] and a record named in a URL
 [@ANCHOR: tenant_sites:COMM_scoped_access] must belong to the tenant's own website, so hams.com's pages, blogs
-and redirects never show. A tenant site gets Odoo's plain layout: no "Sign in" link, and none of what a module of another author adds to every
+and redirects never show. A tenant site gets Odoo's plain layout: no "Sign in" link, and none of what a module of another author (any module outside Odoo's own addons directories, whatever
+its manifest says: html_editor names its author "odoo" and is stock) adds to every
 website's layout, in views or in frontend scripts and styles, unless the module is listed as kept
 [@ANCHOR: tenant_sites:COMM_site_create] [@ANCHOR: tenant_sites:COMM_apply_public_layout]
-[@ANCHOR: tenant_sites:COMM_foreign_modules] [@ANCHOR: tenant_sites:COMM_foreign_layout_views]
+[@ANCHOR: tenant_sites:COMM_foreign_modules] [@ANCHOR: tenant_sites:COMM_is_stock_module]
+[@ANCHOR: tenant_sites:COMM_foreign_layout_views]
 [@ANCHOR: tenant_sites:COMM_is_tenant_website] [@ANCHOR: tenant_sites:COMM_asset_addons]
 [@ANCHOR: tenant_sites:COMM_asset_related].
 

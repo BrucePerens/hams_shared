@@ -57,6 +57,10 @@ import urllib.parse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import odoo_site_migrate as mig  # noqa: E402
+from wp_leftovers import (  # noqa: E402,F401
+    ALIGN_CLASSES, EMOJI_IMAGE, WORDPRESS_LINK, expand_shortcodes, prune_blank_elements, remove_references,
+    shortcode_attrs, split_page_arch, strip_wordpress_leftovers,
+)
 from lxml import etree  # noqa: E402
 from lxml import html as lxml_html  # noqa: E402
 
@@ -384,58 +388,6 @@ def wpautop(text, br=True):
 
 
 _BLOCK_COMMENT = re.compile(r"<!--\s*/?wp:[^>]*?-->\s*", re.S)
-_ATTR_RE = re.compile(r"""([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'\]]+))""")
-
-
-def shortcode_attrs(text):
-    return {m.group(1).lower(): next(g for g in m.groups()[1:] if g is not None) for m in _ATTR_RE.finditer(text)}
-
-
-_CAPTION = re.compile(r"\[caption([^\]]*)\](.*?)\[/caption\]", re.S)
-_VIDEO = re.compile(r"\[video([^\]]*)\]\s*(?:\[/video\])?", re.S)
-_AUDIO = re.compile(r"\[audio([^\]]*)\]\s*(?:\[/audio\])?", re.S)
-
-
-def expand_shortcodes(text, stats):
-    """The shortcodes WordPress core registers that appear in classic content: caption, video, audio.
-    Anything else in square brackets is plain text, exactly as WordPress treats an unregistered shortcode."""
-    text = re.sub(r"<p>\s*(\[(?:caption|video|audio)\b.*?(?:\[/(?:caption|video|audio)\]|\]))\s*(?:<br />)?\s*</p>",
-                  r"\1", text, flags=re.S)
-
-    def caption(match):
-        stats["shortcode_caption"] += 1
-        attrs = shortcode_attrs(match.group(1))
-        inner = match.group(2).strip()
-        image = re.match(r"^(<a\b[^>]*>\s*<img\b[^>]*>\s*</a>|<img\b[^>]*>)\s*(.*)$", inner, re.S)
-        if not image:
-            return f"<p>{inner}</p>"
-        align = attrs.get("align", "alignnone")
-        text_part = re.sub(r"<br\s*/?>", " ", image.group(2)).strip()
-        return (f'<figure class="wp2odoo-caption wp2odoo-{align}">{image.group(1)}'
-                f"<figcaption>{text_part}</figcaption></figure>")
-
-    def video(match):
-        stats["shortcode_video"] += 1
-        attrs = shortcode_attrs(match.group(1))
-        src = attrs.get("src") or attrs.get("mp4") or attrs.get("webm") or attrs.get("ogv") or attrs.get("m4v")
-        if not src:
-            return ""
-        size = "".join(f' {k}="{attrs[k]}"' for k in ("width", "height") if attrs.get(k, "").isdigit())
-        return f'<video controls="controls" preload="metadata"{size} src="{htmllib.escape(src, quote=True)}"></video>'
-
-    def audio(match):
-        stats["shortcode_audio"] += 1
-        attrs = shortcode_attrs(match.group(1))
-        src = attrs.get("src") or attrs.get("mp3") or attrs.get("ogg") or attrs.get("wav") or attrs.get("m4a")
-        if not src:
-            return ""
-        return f'<audio controls="controls" preload="none" src="{htmllib.escape(src, quote=True)}"></audio>'
-
-    text = _CAPTION.sub(caption, text)
-    text = _VIDEO.sub(video, text)
-    return _AUDIO.sub(audio, text)
-
-
 # --------------------------------------------------------------------------------------------
 # Cleaning
 # --------------------------------------------------------------------------------------------
@@ -466,10 +418,26 @@ SAFE_URL = re.compile(r"^(?:https?:|mailto:|tel:|ftp:|/(?!/)|#|\.\.?/|[\w%~.-]+(
 SAFE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_:.-]{0,63}$")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 TRACKING_IMAGE = re.compile(r"cleardot\.gif|/pixel\b|1x1\.(?:gif|png)|spacer\.gif", re.I)
-ALIGN_CLASSES = {
-    "alignleft": "float-start me-3 mb-2", "alignright": "float-end ms-3 mb-2",
-    "aligncenter": "mx-auto d-block text-center", "alignnone": "",
-}
+# Text a paragraph may hold and still count as empty.
+_BLANK_TEXT = re.compile(r"^[\s\u00a0\u200b\u200c\u200d\ufeff]*$")
+BLANK_INLINE = frozenset("span strong em b i u s small code mark sub sup".split())
+BLANK_CONTAINERS = frozenset({"p", "div"}) | BLANK_INLINE
+# Nothing inside an element that holds one of these is blank.
+HAS_CONTENT = frozenset("img video audio table ul ol li hr pre blockquote figure figcaption h1 h2 h3 h4 h5 h6 dl".split())
+
+
+def is_blank(element):
+    """True for an element with no visible content: whitespace, non-breaking spaces, <br> and other blank
+    wrappers only. An anchor with an id or name is kept (it is a link target)."""
+    if not _BLANK_TEXT.match("".join(element.itertext())):
+        return False
+    for descendant in element.iterdescendants():
+        if not isinstance(descendant.tag, str):
+            continue
+        name = descendant.tag.lower()
+        if name in HAS_CONTENT or (name == "a" and (descendant.get("id") or descendant.get("name"))):
+            return False
+    return True
 
 
 def _drop(element):
@@ -511,6 +479,20 @@ def _unwrap(element):
             last.tail = (last.tail or "") + tail
         else:
             parent.text = (parent.text or "") + tail
+
+
+def _replace_with_text(element, text):
+    """Replaces an element by `text`, keeping its tail."""
+    parent = element.getparent()
+    if parent is None:
+        return
+    previous = element.getprevious()
+    glued = text + (element.tail or "")
+    if previous is not None:
+        previous.tail = (previous.tail or "") + glued
+    else:
+        parent.text = (parent.text or "") + glued
+    parent.remove(element)
 
 
 def unwrap_google_redirect(href):
@@ -613,6 +595,10 @@ class Cleaner:
             if not element.get("href") and not element.get("id") and not element.get("name"):
                 _unwrap(element)
                 return
+            if element.get("href") and WORDPRESS_LINK.search(element.get("href")):
+                self.stats["wordpress_links_unwrapped"] += 1
+                _unwrap(element)
+                return
             # A link whose visible text is a URL of the old site: show it without the scheme. The importer
             # turns every absolute link to an old domain into a relative one, text included, and a visible
             # "/static/RV.pdf" is no use to a reader.
@@ -630,6 +616,10 @@ class Cleaner:
                 del element.attrib["target"]
         if tag == "img":
             src = element.get("src") or ""
+            if EMOJI_IMAGE.search(src):
+                self.stats["emoji_images_replaced"] += 1
+                _replace_with_text(element, element.get("alt") or "")
+                return
             if not src or TRACKING_IMAGE.search(src):
                 self.stats["tracking_images_removed"] += 1
                 _drop(element)
@@ -674,9 +664,14 @@ class Cleaner:
         root = lxml_html.fragment_fromstring(html_text, create_parent="div")
         for child in list(root):
             self.clean_element(child)
-        # Empty paragraphs and wrappers left behind
-        for element in list(root.iter("p", "div", "span")):
-            if (element.text or "").strip() == "" and len(element) == 0 and element is not root and element.get("class") is None:
+        # Empty paragraphs and wrappers left behind: `<p></p>`, `<p>&nbsp;</p>`, `<p><br /></p>`, `<p><span></span></p>`
+        # (what a removed gallery, image or script leaves). Children go before their parents, so a wrapper that
+        # only held blank wrappers is gone in the same pass.
+        for element in reversed(list(root.iter())):
+            if element is root or not isinstance(element.tag, str) or element.tag.lower() not in BLANK_CONTAINERS:
+                continue
+            if is_blank(element):
+                self.stats["empty_elements_removed"] += 1
                 _drop(element)
         return root
 

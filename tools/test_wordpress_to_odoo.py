@@ -10,6 +10,10 @@
 # Tests [@ANCHOR: wordpress_to_odoo:cleaner]
 # [@ANCHOR: test_wordpress_to_odoo:converter]
 # Tests [@ANCHOR: wordpress_to_odoo:converter]
+# [@ANCHOR: test_wordpress_to_odoo:strip_wordpress_leftovers]
+# Tests [@ANCHOR: wp_leftovers:strip_wordpress_leftovers]
+# [@ANCHOR: test_wordpress_to_odoo:remove_references]
+# Tests [@ANCHOR: wp_leftovers:remove_references]
 # [@ANCHOR: test_wordpress_to_odoo:check_arch_safe]
 # Tests [@ANCHOR: wordpress_to_odoo:check_arch_safe]
 # [@ANCHOR: test_wordpress_to_odoo:scan_tree]
@@ -281,6 +285,93 @@ class CleanerTests(unittest.TestCase):
         self.assertIn(">perens.com/static/RV.pdf<", out)
 
 
+# What a WordPress post looks like after the plain converter of an earlier version, and what a Gutenberg/classic
+# post carries that a first pass can miss.
+LEFTOVERS = (
+    '<!-- wp:paragraph {"align":"center"} --><p class="has-text-align-center wp-block-paragraph">Centered</p><!-- /wp:paragraph -->'
+    '<!--more--><p>&nbsp;</p><p><br /></p><p><span> </span></p>'
+    '[gallery ids="12,13" columns="2"]'
+    '<p>[embed]https://www.youtube.com/watch?v=abc[/embed]</p>'
+    '<figure class="wp-block-image size-large"><img class="wp-image-12 aligncenter size-full" src="/a.png" '
+    'style="width:10px" onerror="x()" /></figure>'
+    '<p>Smile <img class="emoji" src="https://s.w.org/images/core/emoji/14.0.0/72x72/1f600.png" alt="\U0001F600" /> '
+    '<a href="/wp-admin/post.php?post=5&action=edit">edit</a> '
+    '<a href="/?attachment_id=77">attachment page</a></p>'
+    '<script>var x=1</script><span id="more-12"></span><p class="keep-me">kept</p>'
+    '[caption id="attachment_9" align="alignright" width="300"]<img class="size-medium wp-image-9" src="/b.png" /> A caption[/caption]'
+)
+
+
+class LeftoverTests(unittest.TestCase):
+    def test_every_wordpress_leftover_is_removed_and_the_rest_is_kept(self):
+        stats = collections.Counter()
+        out = wp.strip_wordpress_leftovers(LEFTOVERS, stats)
+        for gone in ("wp-block", "wp-image", "size-", "has-text-align", "align", "<!--", "[gallery", "[embed", "[caption",
+                     "style=", "onerror", "<script", "s.w.org", "/wp-admin", "attachment_id", "&nbsp;", "more-12", "emoji"):
+            self.assertNotIn(gone, out, gone)
+        self.assertIn("<p>Centered</p>", out)
+        self.assertIn('<p class="keep-me">kept</p>', out)
+        self.assertIn("Smile \U0001F600 edit attachment page", out)  # the emoji is its character, the links keep their text
+        # [embed] becomes the link it embedded
+        self.assertIn('<figure class="figure text-center"><img class="mx-auto d-block text-center" src="/a.png" /></figure>', out)
+        self.assertIn('<p><a href="https://www.youtube.com/watch?v=abc">', out)
+        self.assertIn("float-end", out)  # [caption align="alignright"] became a right-floated figure
+        self.assertIn("<figcaption>A caption</figcaption>", out)
+        self.assertNotIn("<p></p>", out)
+        for key in ("scripts_removed", "wordpress_comments_removed", "shortcode_gallery_removed", "shortcode_embed",
+                    "shortcode_caption", "emoji_images_replaced", "wordpress_links_unwrapped", "style_attributes_removed",
+                    "event_handlers_removed", "empty_elements_removed", "wordpress_classes_removed"):
+            self.assertGreater(stats[key], 0, key)
+
+    def test_sweeping_twice_changes_nothing(self):
+        once = wp.strip_wordpress_leftovers(LEFTOVERS)
+        stats = collections.Counter()
+        self.assertEqual(wp.strip_wordpress_leftovers(once, stats), once)
+        self.assertEqual(sum(stats.values()), 0)
+
+    def test_other_markup_and_a_qweb_arch_pass_through_unchanged(self):
+        arch = ('<t t-name="website.x"><t t-call="website.layout"><t t-set="pageName" t-value="\'x\'"/><div class="o_has-x s_card" '
+                'data-snippet="s_card"><p class="lead">Hello &amp; <b>bye</b></p><ul class="list-unstyled"><li>1</li></ul></div></t></t>')
+        self.assertEqual(wp.strip_wordpress_leftovers(arch), arch)
+        self.assertEqual(wp.strip_wordpress_leftovers(""), "")
+        self.assertIsNone(wp.strip_wordpress_leftovers(None))
+        self.assertEqual(wp.strip_wordpress_leftovers("<p>[not-a-shortcode] [more] [1]</p>"), "<p>[not-a-shortcode] [more] [1]</p>")
+
+    def test_converted_content_is_already_swept(self):
+        for qweb in (False, True):
+            cleaner = wp.Cleaner(["perens.com"], collections.Counter())
+            out = wp.serialize_children(cleaner.clean_fragment(wp.expand_shortcodes(wp.wpautop(LEFTOVERS), collections.Counter())), qweb)
+            self.assertEqual(wp.strip_wordpress_leftovers(out), out, qweb)
+
+
+class RemoveReferencesTests(unittest.TestCase):
+    PIC = r"OceanAvenueToSLC-4(?:-\d+x\d+)?\.jpe?g"
+    PDF = r"OpenResearchInstitute_18_86\.pdf"
+
+    def test_a_figure_with_the_missing_picture_goes_whole_and_the_text_around_it_stays(self):
+        html = ('<p>Before.</p><figure class="figure"><a href="/wp-content/uploads/2018/OceanAvenueToSLC-4.jpg">'
+                '<img src="/wp-content/uploads/2018/OceanAvenueToSLC-4-300x200.jpg"></a><figcaption>Ocean</figcaption></figure>'
+                '<p>After.</p><figure><img src="/web/image/5"><figcaption>Other</figcaption></figure>')
+        stats = collections.Counter()
+        out = wp.remove_references(html, [self.PIC], stats)
+        self.assertEqual(out, '<p>Before.</p><p>After.</p><figure><img src="/web/image/5"><figcaption>Other</figcaption></figure>')
+        self.assertEqual(stats["figures_removed"], 1)
+
+    def test_a_text_link_loses_the_link_and_keeps_its_words_and_a_linked_picture_goes_with_its_picture(self):
+        html = ('<p>Read the <a href="/wp-content/uploads/sites/10/2018/07/OpenResearchInstitute_18_86.pdf">annual report</a> now.</p>'
+                '<p>Pic <a href="/wp-content/uploads/OceanAvenueToSLC-4.jpg"><img src="/wp-content/uploads/OceanAvenueToSLC-4-1024x768.jpg"></a> end</p>'
+                '<p><img src="/wp-content/uploads/OceanAvenueToSLC-4.jpg"></p><p><a href="/keep.pdf">keep</a></p>')
+        out = wp.remove_references(html, [self.PDF, self.PIC])
+        self.assertEqual(out, "<p>Read the annual report now.</p><p>Pic  end</p><p><a href=\"/keep.pdf\">keep</a></p>")
+
+    def test_it_is_idempotent_and_ignores_text_that_only_mentions_the_file(self):
+        html = "<p>The file OceanAvenueToSLC-4.jpg is gone.</p><p>See <a href=\"/x\">x</a></p>"
+        self.assertEqual(wp.remove_references(html, [self.PIC]), html)
+        once = wp.remove_references('<p><a href="/a/OpenResearchInstitute_18_86.pdf">r</a></p>', [self.PDF])
+        self.assertEqual(wp.remove_references(once, [self.PDF]), once)
+        self.assertEqual(wp.remove_references(html, []), html)
+
+
 class SafetyCheckTests(unittest.TestCase):
     def test_check_arch_safe_reports_what_the_page_sanitizer_would_strip(self):
         bad = ('<div onclick="x()"><script>1</script><a href="javascript:1" t-att-href="x">a</a>'
@@ -359,6 +450,25 @@ class ConverterTests(Fixture):
         self.assertIn("<p>Line one.</p>", about)
         self.assertIn("<h1>About Me</h1>", about)
         self.assertIn("&amp;amp; more", about)  # the page text is written raw by QWeb: escaped twice in the arch
+
+    def test_gallery_embed_emoji_and_empty_paragraph_leftovers_do_not_reach_the_export(self):
+        extra = (post(70, "Leftovers", "Intro.\n\n[gallery ids=\"1,2\"]\n\n[embed]https://example.org/v[/embed]\n\n&nbsp;\n\n"
+                      "Smile <img class=\"emoji\" src=\"https://s.w.org/images/core/emoji/14/72x72/1f600.png\" alt=\"\U0001F600\" />"
+                      " <a href=\"https://perens.com/wp-admin/\">admin</a>.", name="leftovers", date="2020-02-02 00:00:00"),)
+        with tempfile.TemporaryDirectory() as tmp:
+            sql = os.path.join(tmp, "d.sql.gz")
+            with gzip.open(sql, "wt", encoding="utf-8") as handle:
+                handle.write(build_dump(extra_posts=extra))
+            converter = wp.Converter(wp.WordPressSite(wp.read_dump(sql), 8), ("perens.com",))
+            row = next(r for r in converter.convert_all()["blog.post"] if r["name"] == "Leftovers")
+        content = row["content"]
+        for gone in ("[gallery", "[embed", "s.w.org", "wp-admin", "<p></p>", "&nbsp;", "<br"):
+            self.assertNotIn(gone, content, gone)
+        self.assertIn("Smile \U0001F600 admin.", content)
+        self.assertIn('<a href="https://example.org/v"', content)
+        self.assertEqual(converter.stats["shortcode_gallery_removed"], 1)
+        self.assertEqual(converter.stats["emoji_images_replaced"], 1)
+        self.assertEqual(wp.strip_wordpress_leftovers(content), content)
 
     def test_caption_shortcode_becomes_a_figure_and_missing_uploads_are_reported(self):
         converter, data = self.converter()
