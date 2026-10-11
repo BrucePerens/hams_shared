@@ -5814,13 +5814,13 @@ class TurnOwnAddressTests(unittest.TestCase):
         self.assertIn("-c /etc/hams/turn/turnserver.conf ", unit)
         self.assertIn("ConditionPathExists=/etc/hams/turn/turn.crt", unit)
         self.assertIn("ExecReload=/bin/kill -USR2 $MAINPID", unit, "a renewed certificate is picked up without a restart")
-        # The address is bound by name, so a boot where the interface is not ready yet must retry rather than stay down.
+        # coturn retries a bind to an address that is not there yet or is held by itself (tested, hams_com TURN_GO_LIVE.md section 6); the policy covers a crash.
         self.assertEqual(self._directive("hams-turn.service", "Restart"), ["always"])
         self.assertEqual(self._directive("hams-turn.service", "RestartSec"), ["5"])
 
     def test_the_gateway_unit_restarts_itself_because_it_binds_its_own_address_by_name(self):
         # hams_auth_gateway listens on the host's primary address, which the DHCP client configures: if it is not there yet at boot the bind
-        # fails, and only a restart policy brings the login back.
+        # fails and the daemon EXITS (status 1, tested), and only a restart policy brings the login back.
         self.assertEqual(self._directive("hams-auth-gateway.service", "Restart"), ["always"])
         self.assertEqual(self._directive("hams-auth-gateway.service", "RestartSec"), ["5"])
 
