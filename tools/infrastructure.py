@@ -982,6 +982,11 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "Writes /opt/hams/etc/keys today, so a family account cannot hold it until its key-directory write access is removed; "
         "its own phase, the pgbackrest sidecar (ADR-0103) already took the root part (plan section 13)."
     ),
+    "cache-manager.service": (
+        "Reads /opt/hams/etc/keys/cache_manager_db.env (odoo-owned, 0600) directly, a fixed path in cache_manager.py; "
+        "it holds only a CONNECT-only PostgreSQL login, but a family account needs that file's ownership changed first "
+        "(plan section 13)."
+    ),
     "code.review.sweep.service": (
         "Writes into a repository checkout (/opt/hams/hams_com/docs/code_review_reports) that does not exist on hams1; "
         "opt-in, linked but never enabled in production, so there is no live exposure to close first (plan section 13)."
@@ -8471,6 +8476,60 @@ RandomizedDelaySec=5m
 
 [Install]
 WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # distributed_redis_cache's cache-invalidation daemon (hams_open distributed_redis_cache/daemons/
+            # cache_manager.py). It LISTENs for the PostgreSQL NOTIFY that notify_model_invalidation() sends and
+            # increments Redis's global_cache_invalidation_counter, which every Odoo worker polls before each request
+            # and cron job to flush its in-memory ormcache. Without it that counter never exists, so no worker ever
+            # learns that another worker changed cached data (found on hams1, 2026-10-12: the counter was empty and no
+            # unit existed -- nothing had ever installed this daemon; hams_open's own sample unit pointed at
+            # /opt/odoo/addons and had no Redis credentials).
+            #
+            # It runs the module's file from the root-owned deployed tree (/opt/hams/src/hams_open, written by
+            # devbox_tools/deploy_to_production.py), like the B2 backup units, so it is always the same code as the
+            # installed module and needs no second copy under /opt/hams/daemons. Redis requires an ACL login on hams1,
+            # so redis.env is loaded (REDIS_HOST/PORT/USERNAME/PASSWORD); the restricted PostgreSQL login
+            # (cache_manager_ro, CONNECT only) is read by the daemon itself from keys/cache_manager_db.env, which
+            # provisioning writes (_provision_cache_manager_role). It writes nothing to disk. Runs as odoo because
+            # that key file is odoo-owned 0600 (see SHARED_ODOO_ACCOUNT_UNITS).
+            "path": "/opt/hams/systemd/cache-manager.service",
+            "content": """\
+[Unit]
+Description=Odoo Distributed Cache Manager (PostgreSQL NOTIFY to the Redis invalidation counter)
+After=network.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/src/hams_open/distributed_redis_cache/daemons
+
+EnvironmentFile=/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/keys/cache_manager.env
+
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/distributed_redis_cache/daemons/cache_manager.py
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cache-manager
+
+[Install]
+WantedBy=multi-user.target
 """,
             "owner": "root:root",
             "mode": "644",
