@@ -3067,7 +3067,9 @@ end
             # odoo-server.log.2 was 921 MB and .1 580 MB (0.6-0.9 GB a week at INFO). Daily, 14 kept, compressed
             # (delaycompress keeps the newest rotation readable by a tailing process), and a 300 MB size cap so a
             # noisy day rotates early. copytruncate because Odoo keeps its log file open. Braces are doubled
-            # because provision_static_files formats content with str.format.
+            # because provision_static_files formats content with str.format (render_static_content). Install this
+            # by hand ONLY with `tools/render_static_file.py /etc/logrotate.d/odoo`: a copy of this text carries the
+            # doubled braces to the box and logrotate fails ("{{ ... }}" on hams1 until 2026-10-11).
             "path": "/etc/logrotate.d/odoo",
             "content": """\
 /var/log/odoo/*.log {{
@@ -9584,6 +9586,31 @@ def _skip_deployed_copy(file_spec, path):
     )
 
 
+# [@ANCHOR: infrastructure:render_static_content]
+def render_static_content(file_spec, env_vars):
+    """The exact text provisioning writes for a MANIFEST `static_files` entry that has inline `content`:
+    placeholders filled by str.format (so a literal brace is written doubled in the MANIFEST and comes out single).
+
+    This is the ONLY way an entry's content may reach a file -- provision_static_files() (plan and write) uses it, and a
+    person installing one entry by hand uses `python3 hams_shared/tools/render_static_file.py <path>`, never a copy of the
+    MANIFEST text. Found 2026-10-11: /etc/logrotate.d/odoo on hams1 held the raw MANIFEST text with its doubled braces
+    ("{{ ... }}") and logrotate failed for days; the runbook then told an operator to "write each file by hand from its
+    MANIFEST entry". A doubled brace surviving the format means the text was formatted twice or an author wrote four braces,
+    so it is refused here (fail fast) unless the entry says `"allow_double_braces": True`."""
+    content = file_spec.get("content", "")
+    if "{DEB_CODENAME}" in content and "DEB_CODENAME" not in env_vars:
+        env_vars["DEB_CODENAME"] = get_os_codename()
+    _ensure_local_hostname(content, env_vars)
+    rendered = format_env(content, env_vars)
+    if ("{{" in rendered or "}}" in rendered) and not file_spec.get("allow_double_braces"):
+        raise ValueError(
+            f"{file_spec.get('path')}: the rendered content still contains a doubled brace ('{{{{' or '}}}}'); "
+            "a literal brace is written doubled in the MANIFEST and must come out single. "
+            "If a doubled brace is really wanted in the file, set allow_double_braces on the entry."
+        )
+    return rendered
+
+
 # [@ANCHOR: infrastructure:provision_static_files]
 def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir="", only_host_class=None):
     for file_spec in MANIFEST.get("static_files", []):
@@ -9626,10 +9653,7 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
             elif url:
                 _plan("download", f"{url} -> {path}")
             else:
-                if "{DEB_CODENAME}" in file_spec.get("content", "") and "DEB_CODENAME" not in env_vars:
-                    env_vars["DEB_CODENAME"] = get_os_codename()
-                _ensure_local_hostname(file_spec.get("content", ""), env_vars)
-                content = format_env(file_spec.get("content", ""), env_vars)
+                content = render_static_content(file_spec, env_vars)
                 state = _file_state(path, content)
                 if state != "unchanged":
                     _plan("write", f"{path} ({state}, owner {file_spec.get('owner')}, mode {mode:o})")
@@ -9675,13 +9699,7 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
                 env_vars["KOPIA_ARCH"] = _kopia_release_arch(env_vars)
             download_file(format_env(url, env_vars), path, mode, env_vars)
         else:
-            if (
-                "{DEB_CODENAME}" in file_spec.get("content", "")
-                and "DEB_CODENAME" not in env_vars
-            ):
-                env_vars["DEB_CODENAME"] = get_os_codename()
-            _ensure_local_hostname(file_spec.get("content", ""), env_vars)
-            content = format_env(file_spec.get("content", ""), env_vars)
+            content = render_static_content(file_spec, env_vars)
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
             fd = os.open(path, flags, mode)
             # See write_env_files' own comment: os.open()'s mode argument is

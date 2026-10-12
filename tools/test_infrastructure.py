@@ -2257,6 +2257,86 @@ class OdooLogrotateTests(unittest.TestCase):
         self.assertIn("/var/log/odoo/", self._entry()["content"])
 
 
+class StaticFilesRenderTests(unittest.TestCase):
+    """Every MANIFEST static_files entry is a str.format template; the text written to disk is the rendered one.
+
+    Bug 2026-10-11: /etc/logrotate.d/odoo on hams1 held the raw template ("{{ ... }}") and logrotate failed for days.
+    No provisioning path writes raw content (they all go through render_static_content); the file reached the box by a
+    hand copy of the MANIFEST text. These tests pin the rendering and refuse a doubled brace in any rendered file."""
+
+    LOGROTATE = (
+        "/var/log/odoo/*.log {\n    daily\n    rotate 14\n    maxsize 300M\n    compress\n    delaycompress\n"
+        "    copytruncate\n    missingok\n    notifempty\n}\n"
+    )
+
+    @staticmethod
+    def _env_for(content):
+        import string
+        return {name: f"<{name}>" for _, name, _, _ in string.Formatter().parse(content) if name}
+
+    def _entries(self):
+        return [spec for spec in infra.MANIFEST["static_files"] if spec.get("content") is not None]
+
+    def test_logrotate_odoo_renders_to_exactly_the_expected_file(self):
+        # Tests [@ANCHOR: infrastructure:render_static_content]
+        entry = next(s for s in infra.MANIFEST["static_files"] if s["path"] == "/etc/logrotate.d/odoo")
+        self.assertEqual(infra.render_static_content(entry, {}), self.LOGROTATE)
+
+    def test_no_rendered_entry_contains_a_doubled_brace_unless_it_opts_in(self):
+        # Tests [@ANCHOR: infrastructure:render_static_content]
+        checked = 0
+        for spec in self._entries():
+            env = self._env_for(spec["content"])
+            rendered = infra.format_env(spec["content"], env)
+            checked += 1
+            if spec.get("allow_double_braces"):
+                continue
+            self.assertNotIn("{{", rendered, spec["path"])
+            self.assertNotIn("}}", rendered, spec["path"])
+        self.assertGreater(checked, 50)
+
+    def test_every_rendered_entry_has_balanced_braces_unless_it_opts_out(self):
+        for spec in self._entries():
+            rendered = infra.format_env(spec["content"], self._env_for(spec["content"]))
+            if spec.get("allow_unbalanced_braces"):
+                continue
+            self.assertEqual(rendered.count("{"), rendered.count("}"), spec["path"])
+
+    def test_brace_structured_configs_have_real_single_braces_after_rendering(self):
+        for spec in self._entries():
+            path = spec["path"]
+            if not ("/logrotate.d/" in path or "/nginx/" in path):
+                continue
+            rendered = infra.render_static_content(spec, self._env_for(spec["content"]))
+            self.assertEqual(rendered.count("{"), rendered.count("}"), path)
+            self.assertTrue(rendered.count("{") >= 1 or "/nginx/" in path, path)
+
+    def test_render_refuses_a_doubled_brace_that_survives_formatting(self):
+        # Tests [@ANCHOR: infrastructure:render_static_content]
+        spec = {"path": "/etc/x", "content": "a {{{{ b\n"}
+        with self.assertRaisesRegex(ValueError, "doubled brace"):
+            infra.render_static_content(spec, {})
+        self.assertEqual(infra.render_static_content({**spec, "allow_double_braces": True}, {}), "a {{ b\n")
+
+    def test_provisioning_writes_the_rendered_logrotate_file_not_the_template(self):
+        # Tests [@ANCHOR: infrastructure:provision_static_files]
+        entry = next(s for s in infra.MANIFEST["static_files"] if s["path"] == "/etc/logrotate.d/odoo")
+        with tempfile.TemporaryDirectory() as dest, \
+                patch.dict(infra.MANIFEST, {"static_files": [entry]}), \
+                patch.object(infra, "apply_permissions"):
+            infra.provision_static_files(MagicMock(), {}, environment="prod", dest_dir=dest)
+            with open(os.path.join(dest, "etc/logrotate.d/odoo"), encoding="utf-8") as handle:
+                written = handle.read()
+        self.assertEqual(written, self.LOGROTATE)
+        self.assertNotIn("{{", written)
+
+    def test_the_hand_install_tool_prints_the_rendered_text(self):
+        import render_static_file
+        self.assertEqual(render_static_file.render("/etc/logrotate.d/odoo"), self.LOGROTATE)
+        with self.assertRaises(KeyError):
+            render_static_file.render("/etc/no/such/file")
+
+
 class OdooWorkerLimitsTests(unittest.TestCase):
     """Tests [@ANCHOR: infrastructure:odoo_conf_gevent_memory_limits] for the worker pool's explicit limits (audit row 16)."""
 
