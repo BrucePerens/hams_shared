@@ -1331,5 +1331,24 @@ class SiblingCheckoutSelectionTests(unittest.TestCase):
             self.assertEqual(err.getvalue(), "")
 
 
+class OdooLauncherTests(unittest.TestCase):
+    """Odoo is started through the launcher that installs the third-party warning policy (pyasn1/ldap3)."""
+
+    def test_the_odoo_entry_point_is_the_launcher_beside_test_py(self):
+        launcher = _test_runner.ODOO_LAUNCHER
+        self.assertEqual(os.path.dirname(launcher), os.path.dirname(_TEST_PY_PATH))
+        self.assertTrue(os.path.isfile(launcher))
+        with open(launcher, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn("odoo_warning_policy.install(odoo.netsvc)", source)
+        self.assertIn("odoo.cli.main()", source)
+
+    def test_test_py_launches_odoo_through_it_not_usr_bin_odoo(self):
+        with open(_TEST_PY_PATH, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn("odoo_bin = ODOO_LAUNCHER", source)
+        self.assertNotIn('odoo_bin = "/usr/bin/odoo"', source)
+
+
 if __name__ == "__main__":
     unittest.main()

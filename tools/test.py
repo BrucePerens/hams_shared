@@ -1025,6 +1025,8 @@ RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS = 10
 # TMPDIR on the roomy disk passes (night_shift_todo tmp-full-breaks-caching-lru-tour). Bruce approved this change 2026-09-28.
 DEFAULT_TEST_TMPDIR = "/var/lib/odoo/tmp"
 
+ODOO_LAUNCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "odoo_test_launcher.py")
+
 
 def apply_default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR):
     """Point TMPDIR at `directory` unless the caller already chose one or the directory is unusable. Returns the TMPDIR in force
@@ -1038,6 +1040,9 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
     if env is None:
         env = dict(os.environ)
 
+    # This only reaches processes that do not run Odoo's init_logger (daemons the tests spawn): Odoo's own
+    # `simplefilter('default', DeprecationWarning)` outranks it inside the Odoo process, where the same
+    # warning is handled by odoo_warning_policy.py via ODOO_LAUNCHER.
     existing_warnings = env.get("PYTHONWARNINGS", "")
     new_warning = "ignore::DeprecationWarning:pyasn1.codec.ber.encoder"
     env["PYTHONWARNINGS"] = f"{existing_warnings},{new_warning}" if existing_warnings else new_warning
@@ -3214,7 +3219,9 @@ def main():
         os.environ["HAMS_PAUSE_ON_FAIL"] = "1"
 
     python_exec = "/usr/bin/python3"
-    odoo_bin = "/usr/bin/odoo"
+    # Not /usr/bin/odoo directly: the launcher is that same entry point plus the runner's third-party
+    # warning policy, which has to be installed from inside the Odoo process (odoo_warning_policy.py).
+    odoo_bin = ODOO_LAUNCHER
     addons_path = get_addons_path(base_dir)
 
     ignore_filepath = os.path.join(base_dir, args.config)
