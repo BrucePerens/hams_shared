@@ -3779,6 +3779,7 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "adif.ingress.service": "HTTP upload endpoint; only calls the local Odoo and RabbitMQ",
         "adif.processor.service": "RabbitMQ consumer; local Odoo only",
         "backup.worker.service": "runs only backup jobs an operator configured; idle otherwise",
+        "cache-manager.service": "LISTENs on local PostgreSQL and writes the local Redis counter; fetches nothing",
         "callbook.dns.export.service": "reads Odoo, writes the local PowerDNS zone",
         "callbook.dns.export.timer": "activates callbook.dns.export.service (local)",
         "dx.firehose.service": "local websocket server over the local database",
@@ -5660,6 +5661,76 @@ class EventAiEnrichmentTimerUnitTests(unittest.TestCase):
         ]
         self.assertEqual(len(grants), 1)
         self.assertIn("odoo ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-agent-claude.sh", grants[0]["content"])
+
+
+class CacheManagerUnitTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:cache_manager_unit]
+
+    Found on hams1, 2026-10-12: global_cache_invalidation_counter was empty and no cache-manager unit
+    existed, because nothing in the MANIFEST ever installed distributed_redis_cache's daemon, so no Odoo worker
+    ever learned of another worker's cache invalidation. The site monitor skips a unit that is not linked on
+    the host, so the missing unit raised no alarm either."""
+
+    UNIT = "cache-manager.service"
+    DAEMON = "/opt/hams/src/hams_open/distributed_redis_cache/daemons/cache_manager.py"
+
+    def _text(self):
+        matches = [
+            spec["content"]
+            for spec in infra.MANIFEST["static_files"]
+            if spec["path"] == "/opt/hams/systemd/" + self.UNIT
+        ]
+        self.assertEqual(len(matches), 1, "the MANIFEST must carry exactly one cache-manager.service")
+        return matches[0]
+
+    def test_unit_is_enabled_at_boot_and_started_on_a_deploy(self):
+        self.assertIn(self.UNIT, infra.boot_service_unit_names())
+        self.assertIn("WantedBy=multi-user.target", self._text())
+        self.assertIn("Restart=always", self._text())
+
+    def test_unit_loads_the_redis_login_and_runs_the_deployed_module_file(self):
+        text = self._text()
+        # Production Redis refuses unauthenticated clients; without redis.env the daemon would try localhost, no AUTH.
+        self.assertIn("EnvironmentFile=/opt/hams/etc/redis.env\n", text)
+        self.assertIn("ExecStart=/usr/bin/python3 " + self.DAEMON + "\n", text)
+        self.assertNotIn("/opt/odoo/addons", text)
+
+    @staticmethod
+    def _hams_open_dir():
+        """The hams_open checkout this file sits in (hams_shared is its submodule); None for a standalone hams_shared."""
+        here = os.path.dirname(os.path.realpath(infra.__file__))
+        while here != os.path.dirname(here):
+            if os.path.isdir(os.path.join(here, "distributed_redis_cache", "daemons")):
+                return here
+            here = os.path.dirname(here)
+        return None
+
+    def test_the_file_the_unit_runs_exists_in_hams_open(self):
+        hams_open = self._hams_open_dir()
+        if hams_open is None:
+            self.skipTest("hams_shared checked out without hams_open")
+        daemon = os.path.join(hams_open, self.DAEMON.split("/hams_open/", 1)[1])
+        self.assertTrue(os.path.isfile(daemon), daemon)
+
+    def test_unit_is_sandboxed_and_writes_nothing(self):
+        text = self._text()
+        for line in ("ProtectSystem=strict", "PrivateTmp=true", "PrivateDevices=true", "NoNewPrivileges=true",
+                     "CapabilityBoundingSet=", "User=odoo"):
+            self.assertIn(line + "\n", text)
+        self.assertNotIn("ReadWritePaths", text)
+
+    def test_unit_is_classified(self):
+        self.assertIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertNotIn(self.UNIT, infra.external_fetch_unit_names())
+
+    def test_packaging_copy_in_hams_open_matches(self):
+        hams_open = self._hams_open_dir()
+        if hams_open is None:
+            self.skipTest("hams_shared checked out without hams_open")
+        with open(os.path.join(hams_open, "distributed_redis_cache", "daemons", self.UNIT), encoding="utf-8") as f:
+            packaging = "".join(line for line in f if not line.startswith("#"))
+        manifest = "".join(line for line in self._text().splitlines(keepends=True) if not line.startswith("#"))
+        self.assertEqual(packaging, manifest)
 
 
 if __name__ == "__main__":
