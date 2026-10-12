@@ -1433,6 +1433,35 @@ def main():
     elif res.stdout and res.stdout.strip():
         print(res.stdout, end="")
 
+    # 56. check_scss_math_functions -- Odoo compiles .scss with libsass, which EVALUATES min()/max()
+    # and fails on mixed units (`min(12rem, 100%)`: "Incompatible units"); Odoo then swaps the whole
+    # web.assets_frontend bundle for its CSS-error stub, so every page of the site loses its
+    # styling (hams.com, 2026-10-11/12). Scans every .scss in BOTH repos regardless of target
+    # modules, for the same reason as step 55: a stylesheet's compile result is not a property of
+    # any one module (one broken file breaks the shared bundle for all of them).
+    scss_roots = [dir_path]
+    for sibling_name in ("hams_com", "hams_open"):
+        sibling_root = os.path.abspath(os.path.join(main_checkout_root, "..", sibling_name))
+        if os.path.isdir(sibling_root) and os.path.realpath(sibling_root) != os.path.realpath(main_checkout_root):
+            scss_roots.append(sibling_root)
+    res = subprocess.run(
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_scss_math_functions.py"),
+            *scss_roots,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        if res.stdout:
+            print(res.stdout, end="")
+        if res.stderr:
+            print(res.stderr, end="")
+        linters_failed = True
+    elif res.stdout and res.stdout.strip():
+        print(res.stdout, end="")
+
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
         sys.exit(1)
