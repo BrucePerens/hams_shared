@@ -5664,7 +5664,7 @@ class EventAiEnrichmentTimerUnitTests(unittest.TestCase):
 
 
 class CacheManagerUnitTests(unittest.TestCase):
-    """Tests [@ANCHOR: infrastructure:cache_manager_unit]
+    """The cache-manager.service unit in the MANIFEST.
 
     Found on hams1, 2026-10-12: global_cache_invalidation_counter was empty and no cache-manager unit
     existed, because nothing in the MANIFEST ever installed distributed_redis_cache's daemon, so no Odoo worker
