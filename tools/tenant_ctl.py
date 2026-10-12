@@ -8,7 +8,7 @@
     tenant_ctl.py status [NAME|--all] [--json]   unit, database, filestore, backup age, HTTP probes
     tenant_ctl.py health --all                   exit 1 if any tenant is down or answers 5xx
     tenant_ctl.py backup NAME|--all [--apply]    pg_dump + filestore archive with checksums
-    tenant_ctl.py restore-test NAME|--all        restore the newest backup into a scratch database
+    tenant_ctl.py restore-test NAME|--all [--backup-root DIR]  restore the newest backup (of DIR, default the local archives) into a scratch database
     tenant_ctl.py upgrade NAME [--apply]         backup, stop, odoo -u, start (one tenant at a time)
     tenant_ctl.py delete NAME --confirm-delete NAME [--apply]
     tenant_ctl.py cloudflare-plan [--current FILE]   ingress rules and DNS records (prints only)
@@ -19,6 +19,7 @@ or HAMS_HOST_CLASSES=odoo_tenants): a test host never gets tenants. Secrets are 
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import sys
@@ -252,6 +253,10 @@ def build_parser():
             p.add_argument("--json", action="store_true")
         if name == "backup":
             p.add_argument("--apply", action="store_true")
+        if name == "restore-test":
+            p.add_argument("--backup-root", help="test the archives under this directory instead of "
+                           "/opt/hams/backups/tenants (e.g. a copy downloaded from the off-box repository "
+                           "with `b2_backup.py restore-tenant-archives --dest DIR`)")
         p.set_defaults(func=func)
 
     p = sub.add_parser("upgrade")
@@ -277,6 +282,8 @@ def main(argv=None, system=None, paths=None):
     if args.command in ("status", "health", "backup", "restore-test") and not (args.all or args.name):
         raise SystemExit("give a tenant name or --all")
     paths = paths or lib.Paths()
+    if getattr(args, "backup_root", None):
+        paths = dataclasses.replace(paths, backup_root=os.path.abspath(args.backup_root))
     system = system or lib.System()
     return args.func(args, paths, system)
 

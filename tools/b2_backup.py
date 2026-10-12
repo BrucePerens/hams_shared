@@ -29,9 +29,13 @@ What goes up (all of it encrypted on this host before it leaves, so B2 only ever
 Subcommands (every one honours --plan, which prints what it would do and runs nothing):
   gen-password  dev box: create the repository password file (refuses to overwrite one)
   init          once: create the repository, apply retention policy, record the password fingerprint
-  backup        nightly: dump the databases, snapshot every source, apply retention, record status
+  backup        nightly (--only SOURCE: just that source, for a manual refresh): dump the databases, snapshot every source, apply retention, record status
   restore-test  weekly: verify a sample of stored data, restore random files and one database to a
                 scratch location, compare, and drop it again
+  restore-tenant-archives --dest DIR
+                download the newest off-box copy of /opt/hams/backups/tenants into DIR and verify every
+                archive set against its MANIFEST.json sha256 (then `tenant_ctl.py restore-test --all
+                --backup-root DIR` restores the dump into a scratch database)
   check         daily: fail when the last good backup or restore test is too old (catches a timer
                 that never fired, which a failed-unit alert cannot)
 
@@ -68,6 +72,9 @@ S3_SECRETS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
 # Seconds. A nightly job that has not succeeded for 36 hours, or a weekly test for 9 days, has missed a run.
 BACKUP_MAX_AGE = 36 * 3600
 RESTORE_MAX_AGE = 9 * 24 * 3600
+# The per-tenant pg_dump + filestore archives `tenant_ctl.py backup` writes under /opt/hams/backups/tenants/<name>/<stamp>/.
+TENANT_ARCHIVES_SOURCE = "tenant_archives"
+ARCHIVE_SET_RE = re.compile(r"^\d{8}T\d{6}Z$")
 
 
 class ConfigError(ValueError):
@@ -565,8 +572,82 @@ def latest_snapshot(cfg, env, source, runner):
     return sorted(snaps, key=lambda s: s["startTime"])[-1]
 
 
+def newest_archive_set(root):
+    """The newest `<UTC stamp>` directory under root/<tenant>/ , or None when there is none (or no root)."""
+    newest = None
+    try:
+        tenants = sorted(os.listdir(root))
+    except OSError:
+        return None
+    for tenant in tenants:
+        try:
+            names = os.listdir(os.path.join(root, tenant))
+        except OSError:
+            continue
+        for name in names:
+            if ARCHIVE_SET_RE.match(name) and (newest is None or name > newest):
+                newest = name
+    return newest
+
+
+def archive_stamp_age_hours(stamp, now):
+    when = datetime.datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=datetime.timezone.utc)
+    return (now - when).total_seconds() / 3600
+
+
+def verify_archive_sets(root):
+    """Checks every archive set under root against the sha256 values in its own MANIFEST.json (the format
+    tenant_lib.backup_tenant writes). Returns (sets_checked, files_checked, problems)."""
+    sets = files = 0
+    problems = []
+    for tenant in sorted(os.listdir(root)):
+        for stamp in sorted(os.listdir(os.path.join(root, tenant))):
+            directory = os.path.join(root, tenant, stamp)
+            if not ARCHIVE_SET_RE.match(stamp) or not os.path.isdir(directory):
+                continue
+            sets += 1
+            try:
+                with open(os.path.join(directory, "MANIFEST.json"), "r", encoding="utf-8") as f:  # audit-ignore-path
+                    manifest = json.load(f)
+            except (OSError, ValueError) as exc:
+                problems.append(f"{tenant}/{stamp}: MANIFEST.json unreadable ({exc})")
+                continue
+            if not manifest.get("files"):
+                problems.append(f"{tenant}/{stamp}: MANIFEST.json lists no files")
+            for filename, info in manifest.get("files", {}).items():
+                path = os.path.join(directory, filename)
+                if not os.path.isfile(path):
+                    problems.append(f"{tenant}/{stamp}/{filename}: missing")
+                elif sha256_file(path) != info.get("sha256"):
+                    problems.append(f"{tenant}/{stamp}/{filename}: checksum mismatch")
+                else:
+                    files += 1
+    return sets, files, problems
+
+
+def restore_tenant_archives(cfg, env, source, snap, runner, dest):
+    """Restores the whole tenant_archives snapshot from the off-box repository into `dest` (which must
+    not exist) and checks every archive set against its own checksums. This is the download + checksum
+    half of the proof that the off-site copy is usable; `tenant_ctl.py restore-test --backup-root DEST`
+    is the other half (it restores the dump into a scratch database)."""
+    if runner.plan:
+        runner.say(f"PLAN kopia restore <latest {source.name} snapshot> {dest}; check every MANIFEST.json sha256")
+        return {"source": source.name, "sets": 0, "files": 0}
+    if os.path.exists(dest):
+        raise BackupError(f"{dest} already exists; restore into a new directory")
+    os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+    runner.run([cfg.kopia, "restore", snap["rootEntry"]["obj"], dest], env=env, capture=True)
+    sets, files, problems = verify_archive_sets(dest)
+    if sets == 0:
+        problems.append("the snapshot holds no archive set")
+    if problems:
+        raise BackupError(f"{source.name}: restored copy is bad: " + "; ".join(problems[:5]))
+    newest = newest_archive_set(dest)
+    return {"source": source.name, "sets": sets, "files": files, "newest_set": newest}
+
+
 # [@ANCHOR: b2_backup:backup]
-def cmd_backup(cfg, runner):
+def cmd_backup(cfg, runner, only=None):
     ensure_dirs(cfg, runner)
     secrets_map = load_secrets(cfg, runner)
     env = kopia_env(cfg, secrets_map)
@@ -577,9 +658,17 @@ def cmd_backup(cfg, runner):
         connect(cfg, env, runner)
         apply_policies(cfg, env, runner)
         sources = build_sources(cfg)
+        if only:
+            sources = [s for s in sources if s.name in only]
+            if not sources:
+                raise BackupError(f"--only names no configured source: {', '.join(only)}")
         for source in sources:
             entry = {"source": source.name, "ok": False}
             try:
+                if source.name == TENANT_ARCHIVES_SOURCE:
+                    # Recorded BEFORE the snapshot, so the snapshot is guaranteed to hold at least this set:
+                    # `check` and the readiness check compare it with what is on disk now.
+                    entry["newest_archive_set"] = newest_archive_set(source.path)
                 snap = snapshot_source(cfg, env, source, runner)
                 entry["ok"] = True
                 if snap:
@@ -591,6 +680,7 @@ def cmd_backup(cfg, runner):
                         entry["error"] = f"{entry['errors']} file errors in the snapshot"
             except (BackupError, OSError, ConfigError) as exc:
                 entry["error"] = str(exc)
+            entry["finished"] = now_utc().isoformat()
             results.append(entry)
         if runner.plan:
             runner.say(f"PLAN write {cfg.status_path}; exit non-zero if any of {len(sources)} sources failed")
@@ -598,6 +688,20 @@ def cmd_backup(cfg, runner):
     failed = [r for r in results if not r["ok"]]
     status = {"started": started.isoformat(), "finished": now_utc().isoformat(),
               "ok": not failed, "sources": results}
+    if only:
+        # A partial run (e.g. `backup --only tenant_archives` after a manual tenant backup) refreshes just those
+        # sources' entries. It never advances the top-level "finished"/"ok" that `check` trusts for the whole night.
+        try:
+            previous = read_json(cfg.status_path)
+        except (FileNotFoundError, ValueError):
+            previous = None
+        if previous is None:
+            status["ok"] = False
+            status["partial"] = True
+        else:
+            kept = [r for r in previous.get("sources", []) if r["source"] not in only]
+            status = dict(previous, sources=kept + results,
+                          ok=previous.get("ok", False) and not failed)
     write_json(cfg.status_path, status)
     for r in results:
         print(f"{'ok  ' if r['ok'] else 'FAIL'} {r['source']} {r.get('snapshot_id', '')} {r.get('error', '')}".rstrip())
@@ -710,7 +814,7 @@ def cmd_restore_test(cfg, runner, seed=None):
     env = kopia_env(cfg, secrets_map)
     rng = random.Random(seed)  # audit-ignore-weak-random: spot-check sampling
     started = now_utc()
-    problems, report = [], {"samples": [], "database": None}
+    problems, report = [], {"samples": [], "database": None, "tenant_archives": None}
     with _Lock(cfg, runner):
         check_fingerprint(cfg, secrets_map, runner)
         connect(cfg, env, runner)
@@ -743,6 +847,16 @@ def cmd_restore_test(cfg, runner, seed=None):
                             restore_sample(cfg, env, source, snaps[source.name], rng, runner, scratch))
                     except BackupError as exc:
                         problems.append(str(exc))
+            for source in sources:
+                if source.name == TENANT_ARCHIVES_SOURCE and source.name in snaps:
+                    # The whole off-box copy of the tenant archives, downloaded and checked against the
+                    # sha256 values recorded when each archive was made.
+                    try:
+                        report["tenant_archives"] = restore_tenant_archives(
+                            cfg, env, source, snaps[source.name], runner,
+                            os.path.join(scratch, "tenant_archives_restore"))
+                    except BackupError as exc:
+                        problems.append(str(exc))
             db_sources = [s for s in sources if s.kind == "db"]
             if cfg.restore_database and db_sources:
                 # Rotate through the databases by ISO week so each is restored in turn.
@@ -772,6 +886,26 @@ def cmd_restore_test(cfg, runner, seed=None):
     return 0
 
 
+# [@ANCHOR: b2_backup:restore_tenant_archives]
+def cmd_restore_tenant_archives(cfg, runner, dest):
+    ensure_dirs(cfg, runner)
+    secrets_map = load_secrets(cfg, runner)
+    env = kopia_env(cfg, secrets_map)
+    with _Lock(cfg, runner):
+        check_fingerprint(cfg, secrets_map, runner)
+        connect(cfg, env, runner)
+        source = next((s for s in build_sources(cfg) if s.name == TENANT_ARCHIVES_SOURCE), None)
+        if source is None:
+            raise BackupError(f"no {TENANT_ARCHIVES_SOURCE} source is configured or present on this host")
+        snap = None if runner.plan else latest_snapshot(cfg, env, source, runner)
+        result = restore_tenant_archives(cfg, env, source, snap, runner, dest)
+    if not runner.plan:
+        print(f"restored {result['sets']} archive sets ({result['files']} files, all checksums match), "
+              f"newest {result['newest_set']}, into {dest}")
+        print(f"next: tenant_ctl.py restore-test --all --backup-root {dest}")
+    return 0
+
+
 # [@ANCHOR: b2_backup:check]
 def cmd_check(cfg, runner, now=None):
     now = now or now_utc()
@@ -792,9 +926,42 @@ def cmd_check(cfg, runner, now=None):
             problems.append(f"the last {label} failed ({finished.isoformat()})")
         elif age > limit:
             problems.append(f"the last good {label} is {age / 3600:.0f} hours old (limit {limit // 3600})")
+    problems.extend(tenant_archive_problems(cfg, runner, now))
     if problems:
         raise BackupError("; ".join(problems))
     return 0
+
+
+# [@ANCHOR: b2_backup:tenant_archive_freshness]
+def tenant_archive_problems(cfg, runner, now):
+    """Is the newest tenant archive set already off-box? The nightly tenant backup (03:10) writes a set, the
+    nightly kopia run (03:45) uploads it. A set still missing from the repository 36 hours after it was made
+    means the upload did not happen, which a green "last backup" cannot show when the tenant_archives
+    source was skipped or failed."""
+    items = [i for i in cfg.paths if i["name"] == TENANT_ARCHIVES_SOURCE]
+    if not items or runner.plan:
+        return []
+    local = newest_archive_set(items[0]["path"])
+    if local is None:
+        return []  # nothing to protect on this host
+    try:
+        status = read_json(cfg.status_path)
+    except (FileNotFoundError, ValueError):
+        return []  # the "no backup recorded" problem is already reported
+    entry = next((r for r in status.get("sources", []) if r["source"] == TENANT_ARCHIVES_SOURCE), None)
+    if entry is None or not entry.get("ok"):
+        age = archive_stamp_age_hours(local, now)
+        if age > BACKUP_MAX_AGE / 3600:
+            return [f"tenant archive set {local} is {age:.0f} hours old and the last backup holds no good "
+                    f"{TENANT_ARCHIVES_SOURCE} snapshot"]
+        return []
+    uploaded = entry.get("newest_archive_set") or ""
+    if local > uploaded:
+        age = archive_stamp_age_hours(local, now)
+        if age > BACKUP_MAX_AGE / 3600:
+            return [f"tenant archive set {local} is {age:.0f} hours old and not off-box (newest uploaded: "
+                    f"{uploaded or 'unknown'})"]
+    return []
 
 
 def main(argv=None):
@@ -804,8 +971,14 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
     gen = sub.add_parser("gen-password")
     gen.add_argument("--out", required=True)
-    for name in ("init", "backup", "restore-test", "check"):
+    for name in ("init", "restore-test", "check"):
         sub.add_parser(name)
+    backup = sub.add_parser("backup")
+    backup.add_argument("--only", action="append", metavar="SOURCE",
+                        help="snapshot just this source (repeatable); the nightly timer never uses it")
+    rta = sub.add_parser("restore-tenant-archives",
+                         help="download the latest off-box copy of the tenant archives and verify its checksums")
+    rta.add_argument("--dest", required=True, help="a directory that does not exist yet")
     args = parser.parse_args(argv)
     runner = Runner(plan=args.plan)
     try:
@@ -815,7 +988,9 @@ def main(argv=None):
         if args.command == "init":
             return cmd_init(cfg, runner)
         if args.command == "backup":
-            return cmd_backup(cfg, runner)
+            return cmd_backup(cfg, runner, only=args.only)
+        if args.command == "restore-tenant-archives":
+            return cmd_restore_tenant_archives(cfg, runner, args.dest)
         if args.command == "restore-test":
             return cmd_restore_test(cfg, runner)
         return cmd_check(cfg, runner)
