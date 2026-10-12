@@ -303,7 +303,10 @@ live elsewhere.
   owner, e.g. `while pgrep -u odoo -f "^python3 hams_shared/tools/test.py" >/dev/null; do sleep 15;
   done`, or check a lock or PID file. The same trap applies to `pkill -f` and `ps | grep`. Also
   recorded in `~/.claude/CLAUDE.md` (loaded by every session on the dev box, but not persistent) and
-  `hams_com/CLAUDE.md`.
+  `hams_com/CLAUDE.md`. Better still, do not poll at all: `test.py --wait ...` (or `HAMS_TEST_WAIT=1`)
+  queues FIFO behind the lock and starts the moment it is first in line and the lock is free;
+  `test.py --queue-status` shows the holder and the queue. The pgrep form above remains correct for
+  waiting on anything else.
 
 ## Related, more detailed treatments elsewhere
 

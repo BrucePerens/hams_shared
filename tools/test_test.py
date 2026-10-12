@@ -1186,8 +1186,12 @@ class CiLoadGateOrderingTests(unittest.TestCase):
 
     def test_the_gate_call_precedes_the_flock_acquisition(self):
         source = io.open(_TEST_PY_PATH, encoding="utf-8").read()
-        gate_at = source.index("if not wait_for_ci_load_to_subside():")
+        # The fail-fast path gates inline; the --wait path gates through lock_queue.acquire's on_head
+        # callback, which runs only once this invocation is first in line and strictly before
+        # try_lock() (asserted in test_lock_queue.py's gate tests).
+        gate_at = source.index("if not use_queue and not wait_for_ci_load_to_subside():")
         lock_at = source.index("fcntl.flock(_single_instance_lock")
+        self.assertIn("on_head=None if adopted else wait_for_ci_load_to_subside", source)
         self.assertLess(
             gate_at,
             lock_at,
