@@ -5961,6 +5961,73 @@ class ExceptionReportUnitTests(unittest.TestCase):
         self.assertNotIn(self.TEMPLATE, infra._smoketest_candidate_services())
         self.assertIn(self.TEMPLATE, infra.EXCEPTION_REPORT_EXCLUDED_UNITS)
 
+    CRASH_DROPIN = "/etc/systemd/system/{}.d/hams-exception-report-crash.conf"
+
+    def test_every_self_restarting_covered_service_has_the_crash_drop_in_and_no_other_does(self):
+        restarting = 0
+        for spec in infra.MANIFEST["static_files"]:
+            path = spec["path"]
+            if os.path.dirname(path) != "/opt/hams/systemd" or not path.endswith(".service"):
+                continue
+            if "prod" not in spec.get("environments", []):
+                continue
+            name = os.path.basename(path)
+            has = self._entries(self.CRASH_DROPIN.format(name))
+            wanted = name not in infra.EXCEPTION_REPORT_EXCLUDED_UNITS and any(
+                line.startswith("Restart=") and line != "Restart=no" for line in spec["content"].splitlines()
+            )
+            self.assertEqual(len(has), 1 if wanted else 0, name)
+            restarting += wanted
+        self.assertGreater(restarting, 15)
+        for name in ("dx.firehose.service", "aprs.is.sync.service", "hams-turn.service", "adif.ingress.service"):
+            self.assertEqual(len(self._entries(self.CRASH_DROPIN.format(name))), 1, name)
+        for name in ("fcc.uls.sync.service", "club.crawl.service", "ses.inbound.mail.ingest.service",
+                     "hams-tenant@.service", "hams-site-monitor.service", self.TEMPLATE):
+            self.assertEqual(self._entries(self.CRASH_DROPIN.format(name)), [], name)
+
+    def test_crash_drop_in_reports_only_a_failed_stop_as_root_without_failing_the_daemon(self):
+        content = infra.EXCEPTION_REPORT_CRASH_DROPIN_CONTENT
+        lines = [line for line in content.splitlines() if not line.startswith("#")]
+        self.assertEqual(lines[0], "[Service]")
+        self.assertEqual(len(lines), 2)
+        line = lines[1]
+        # "-" keeps a failed report from failing the daemon, "+" gives a hamsd_* unit the right to start a unit.
+        self.assertTrue(line.startswith("ExecStopPost=-+/bin/sh -c '"), line)
+        self.assertIn('[ "$SERVICE_RESULT" = success ] || ', line)
+        self.assertIn("systemctl start --no-block hams-exception-report@%n.service'", line)
+        self.assertNotIn("%N", line)
+        for spec in infra.MANIFEST["static_files"]:
+            if spec["path"].endswith("/hams-exception-report-crash.conf"):
+                self.assertEqual(spec["content"], content)
+                self.assertEqual((spec["owner"], spec["mode"], spec["environments"]), ("root:root", "644", ["prod"]))
+
+    def test_restarts_itself(self):
+        self.assertTrue(infra._restarts_itself("[Service]\nRestart=always\n"))
+        self.assertTrue(infra._restarts_itself("Restart=on-failure"))
+        self.assertFalse(infra._restarts_itself("Restart=no"))
+        self.assertFalse(infra._restarts_itself("Type=oneshot\n"))
+        self.assertFalse(infra._restarts_itself(None))
+
+    def test_crash_drop_in_keeps_the_host_class_and_skips_a_oneshot(self):
+        manifest = {"static_files": [
+            {"path": "/opt/hams/systemd/x.service", "content": "Restart=always\n", "environments": ["prod"],
+             "host_class": "ca_signer"},
+            {"path": "/opt/hams/systemd/y.service", "content": "Type=oneshot\n", "environments": ["prod"]},
+        ]}
+        entries = {e["path"]: e for e in infra.exception_report_dropin_entries(manifest)}
+        self.assertEqual(sorted(entries), [
+            "/etc/systemd/system/x.service.d/hams-exception-report-crash.conf",
+            "/etc/systemd/system/x.service.d/hams-exception-report.conf",
+            "/etc/systemd/system/y.service.d/hams-exception-report.conf",
+        ])
+        self.assertEqual(entries["/etc/systemd/system/x.service.d/hams-exception-report-crash.conf"]["host_class"],
+                         "ca_signer")
+
+    def test_template_start_limit_bounds_a_crash_loop(self):
+        text = self._text()
+        self.assertIn("StartLimitIntervalSec=300\n", text)
+        self.assertIn("StartLimitBurst=5\n", text)
+
     def test_packaging_copies_in_hams_open_match(self):
         hams_open = self._hams_open_dir()
         if hams_open is None:
@@ -5974,6 +6041,8 @@ class ExceptionReportUnitTests(unittest.TestCase):
             self.assertEqual(body(f.read()), body(self._text()))
         with open(os.path.join(daemon, "hams-exception-report.conf"), encoding="utf-8") as f:
             self.assertEqual(body(f.read()), body(infra.EXCEPTION_REPORT_DROPIN_CONTENT))
+        with open(os.path.join(daemon, "hams-exception-report-crash.conf"), encoding="utf-8") as f:
+            self.assertEqual(body(f.read()), body(infra.EXCEPTION_REPORT_CRASH_DROPIN_CONTENT))
         self.assertTrue(os.path.isfile(os.path.join(daemon, "exception_reporter.py")))
 
 
