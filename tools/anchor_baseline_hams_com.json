@@ -1945,7 +1945,6 @@
   "duplicate|ham_repeater_dir:repeater_report_write",
   "duplicate|ham_repeater_dir:repeater_usage_log_infer_candidates",
   "duplicate|ham_repeater_dir:repeater_usage_log_owner_page",
-  "duplicate|ham_repeater_dir:repeater_usage_log_purge_cron",
   "duplicate|ham_repeater_dir:repeater_usage_log_record_attestation",
   "duplicate|ham_repeater_dir:repeater_usage_log_resolve_operator",
   "duplicate|ham_repeater_dir:responsible_fields",
