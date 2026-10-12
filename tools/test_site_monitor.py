@@ -58,6 +58,17 @@ class PostgresqlCheckTests(unittest.TestCase):
     def _run(self, code):
         return lambda *a, **k: SimpleNamespace(returncode=code)
 
+    def test_pg_isready_probes_over_tcp_so_the_server_logs_no_fatal_role_line(self):
+        seen = []
+
+        def run(cmd, **_kw):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        sm.check_postgresql(run=run, find=lambda: "/x/pg_isready")
+        self.assertIn("-h", seen[0])
+        self.assertEqual(seen[0][seen[0].index("-h") + 1], "127.0.0.1")
+
     def test_pg_isready_exit_code_decides(self):
         self.assertTrue(sm.check_postgresql(run=self._run(0), find=lambda: "/x/pg_isready")[0])
         self.assertFalse(sm.check_postgresql(run=self._run(2), find=lambda: "/x/pg_isready")[0])

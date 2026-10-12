@@ -987,6 +987,11 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "it holds only a CONNECT-only PostgreSQL login, but a family account needs that file's ownership changed first "
         "(plan section 13)."
     ),
+    "pager-os-monitor.service": (
+        "Acts as pager_service_internal with the odoo-owned key file keys/pager_duty.env and reads the CONNECT-only PostgreSQL "
+        "login keys/pager_monitor_db.env, both odoo-owned 0600; a family account needs those files' ownership changed first "
+        "(plan section 13). Writes nothing."
+    ),
     "code.review.sweep.service": (
         "Writes into a repository checkout (/opt/hams/hams_com/docs/code_review_reports) that does not exist on hams1; "
         "opt-in, linked but never enabled in production, so there is no live exposure to close first (plan section 13)."
@@ -2290,6 +2295,17 @@ MANIFEST = {
             "provision_mode": "770",
             "runtime_mount": "rw",
             "acl": ["g:hams_traverse:--x"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # pager_duty's exported check list (pager_config.json, written by the "Push to Daemon" button, mode 0600: it can
+            # carry the passwords of checks that have their own). odoo.service may write only /opt/hams/spool, and the
+            # monitor (also odoo) reads it from here: PAGER_CONFIG_PATH in pager-os-monitor.service and the pager_duty.config_dir
+            # system parameter name this directory.
+            "path": "/opt/hams/spool/pager_duty",
+            "owner": "odoo:odoo",
+            "provision_mode": "700",
+            "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
         {
@@ -8536,6 +8552,77 @@ WantedBy=multi-user.target
             "environments": ["prod"],
         },
         {
+            # pager_duty's generalized monitor (hams_open pager_duty/daemon/generalized_monitor.py): runs every active
+            # pager.check row on its interval (system resources, systemd units, PostgreSQL, Redis, RabbitMQ, the Odoo
+            # ping, the root-DNS probes, the credential-expiry scripts), writes each result back to the row, and reports
+            # a check that keeps failing to Odoo as an incident (or by e-mail when Odoo itself is unreachable). Found on
+            # hams1, 2026-10-12: nothing had ever installed it, so all 24 rows said "passing" and none had run -- the
+            # sample unit in pager_duty/daemon points at /opt/odoo/addons and /etc/pager_daemons.env, neither of which
+            # exists here.
+            #
+            # Runs the deployed module file (/opt/hams/src/hams_open, written by devbox_tools/deploy_to_production.py) as
+            # odoo, because the Odoo key it acts with (keys/pager_duty.env: ODOO_RPC_LOGIN/ODOO_RPC_KEY, written by
+            # daemon_key_manager) and the CONNECT-only PostgreSQL login (keys/pager_monitor_db.env, written by
+            # _provision_pager_monitor_role) are odoo-owned 0600 files systemd reads as root. redis.env is the Redis ACL
+            # login (the Redis check and the daemon's own queue connections); site_monitor.env holds only the SMTP settings
+            # of the fallback e-mail used while Odoo is down. Nothing else is loaded: odoo.env and core.env carry the
+            # administrator password and API tokens this daemon must not see.
+            #
+            # PAGER_CONFIG_PATH names the exported check list explicitly. Odoo's "Push to Daemon" writes it under
+            # /opt/hams/spool/pager_duty (the pager_duty.config_dir parameter): odoo.service is ProtectSystem=strict and
+            # may write only /opt/hams/spool among the places the monitor can read. Without the explicit path a missing
+            # file would fall back to the sample list shipped next to the daemon (Docker, /home, /tmp, /var ...); with it
+            # the daemon halts and says so. No writable path of its own: it reads the list and writes to Odoo over HTTP.
+            # It queries root DNS servers every 5 minutes and api.github.com once a day, hence external_fetch (never
+            # started on a test host).
+            "path": "/opt/hams/systemd/pager-os-monitor.service",
+            "content": """\
+[Unit]
+Description=Pager Duty Generalized Monitor (pager.check checks, incident reports)
+After=network.target postgresql.service redis-server.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+Type=simple
+User=odoo
+WorkingDirectory=/opt/hams/src/hams_open/pager_duty/daemon
+
+EnvironmentFile=/opt/hams/etc/redis.env
+EnvironmentFile=/opt/hams/etc/keys/pager_duty.env
+EnvironmentFile=/opt/hams/etc/keys/pager_monitor_db.env
+EnvironmentFile=/opt/hams/etc/site_monitor.env
+Environment=ODOO_URL=http://odoo:8069
+Environment=PAGER_CONFIG_PATH=/opt/hams/spool/pager_duty/pager_config.json
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/pager_duty/daemon/generalized_monitor.py
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pager-os-monitor
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+            "external_fetch": "queries the DNS root servers every 5 minutes and api.github.com once a day (the credential-expiry check)",
+        },
+        {
             # hams_com daemons/auth_cert_renew: renews the auth.hams.com certificate on hams1 itself through
             # hams1's own PowerDNS (DNS-01), replacing the dev-box renewal (Bruce, 2026-10-05; to-do
             # night_shift_todo/medium/auth-hams-com-certificate-renewal-on-hams1-3e8d61b4.md). `_acme-challenge.
@@ -11161,6 +11248,7 @@ def _provision_cache_manager_role(
     db_name,
     role_name="cache_manager_ro",
     env_file="/opt/hams/etc/keys/cache_manager_db.env",
+    purpose="cache_manager.py",
 ):
     """
     Creates (or rotates the password of) a dedicated, minimally-privileged PostgreSQL role for
@@ -11219,7 +11307,7 @@ def _provision_cache_manager_role(
     )
     content = (
         "# Auto-generated by infrastructure.py's own provisioning flow.\n"
-        "# Restricted Postgres role for cache_manager.py: CONNECT-only, no table access.\n"
+        f"# Restricted Postgres role for {purpose}: CONNECT-only, no table access.\n"
         "DB_HOST=localhost\n"
         f"DB_NAME={db_name}\n"
         f"DB_USER={role_name}\n"
@@ -11246,6 +11334,22 @@ def _provision_cache_manager_role(
     # flow), so the file exists as root:root immediately after os.open()
     # above until this chown/chmod actually runs.
     apply_permissions(env_file, "odoo:odoo", 0o600)
+
+
+# [@ANCHOR: infrastructure:_provision_pager_monitor_role]
+def _provision_pager_monitor_role(run_cmd_func, db_name):
+    """The PostgreSQL login of pager_duty's PostgreSQL ping check (generalized_monitor.py): the same CONNECT-only role as
+    cache_manager_ro (it runs `SELECT 1` and nothing else), under its own name so the password is its own, written to
+    keys/pager_monitor_db.env, which pager-os-monitor.service loads. The monitor's check used to log in as `postgres` with no
+    password, which the scram-sha-256 rule refuses on TCP, so the check could never pass (found on hams1, 2026-10-12).
+    Idempotent exactly as _provision_cache_manager_role is."""
+    _provision_cache_manager_role(
+        run_cmd_func,
+        db_name,
+        role_name="pager_monitor_ro",
+        env_file="/opt/hams/etc/keys/pager_monitor_db.env",
+        purpose="pager_duty's PostgreSQL ping check",
+    )
 
 
 # [@ANCHOR: infrastructure:_bridge_api_key_matches_odoo]
@@ -12386,6 +12490,8 @@ def provision_environment(
                     "PostgreSQL role..."
                 )
                 _provision_cache_manager_role(run_cmd_func, db_name)
+                _logger.info("[*] Provisioning pager_duty's PostgreSQL ping login...")
+                _provision_pager_monitor_role(run_cmd_func, db_name)
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("[*] Failed to configure PostgreSQL settings: %s", e)
             record_hook_failure("postgresql_settings", e)
