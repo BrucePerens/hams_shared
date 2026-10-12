@@ -3675,6 +3675,20 @@ class HostClassTests(unittest.TestCase):
         )
 
 
+class TenantUnitExecPathTests(unittest.TestCase):
+    """The tenant backup, restore-test and health services run as root, so they must run the root-owned
+    deployed tree. On hams1 /opt/hams/hams_shared is a stale hams_com-owned copy without tenant_ctl.py,
+    which made all three units fail with "can't open file"."""
+
+    def test_tenant_ctl_services_use_the_deployed_root_owned_tree(self):
+        specs = [s for s in infra.MANIFEST["static_files"]
+                 if s["path"].startswith("/opt/hams/systemd/hams-tenant-") and "tenant_ctl.py" in s["content"]]
+        self.assertEqual(len(specs), 3, [s["path"] for s in specs])
+        for spec in specs:
+            self.assertIn("/opt/hams/src/hams_open/hams_shared/tools/tenant_ctl.py", spec["content"], spec["path"])
+            self.assertNotIn(" /opt/hams/hams_shared/", spec["content"], spec["path"])
+
+
 class B2BackupManifestTests(unittest.TestCase):
     """Tests [@ANCHOR: b2_backup:tool]: the off-site backup is for hams1 only, never a test host,
     never started by provisioning, and quiet during the nightly Odoo window."""
