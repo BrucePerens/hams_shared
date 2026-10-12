@@ -529,6 +529,16 @@ class BackupAndStatusTests(_Base):
         with self.assertRaises(RuntimeError):
             lib.restore_test(self.spec, self.paths, self.system)
 
+    def test_restore_test_can_target_a_downloaded_copy_of_the_archives(self):
+        lib.backup_tenant(self.spec, self.paths, self.system)
+        copy = os.path.join(self.tmp, "downloaded")
+        shutil.copytree(self.paths.backup_root, copy)
+        shutil.rmtree(self.paths.backup_root)  # the local archives are gone; only the off-box copy remains
+        with mock.patch("sys.stdout", io.StringIO()) as out:
+            code = tenant_ctl.main(["restore-test", "--all", "--backup-root", copy], self.system, self.paths)
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("restore ok perens_com", out.getvalue())
+
     def test_status_reports_unit_sizes_backup_age_and_probes(self):
         lib.backup_tenant(self.spec, self.paths, self.system)
         self.system.clock += datetime.timedelta(hours=5)
