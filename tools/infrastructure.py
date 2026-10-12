@@ -8031,8 +8031,10 @@ Type=oneshot
 User=hamsd_club_crawl
 Group=hamsd_club_crawl
 WorkingDirectory=/opt/hams/daemons/club_crawl
-# 30 sites at a few requests each, 6 s apart per host, plus up to 60 model calls of up to 120 s.
-TimeoutStartSec=2h
+# One run a day (club.crawl.timer): up to 300 sites at a few requests each, 6 s apart per host, but a site whose pages
+# are not due costs no request, and a model call is made only for a new or changed page (the page registry,
+# ham_events ham.scanned.page). The run caps below equal the daily caps, so one run may use the whole day's allowance.
+TimeoutStartSec=8h
 
 # main.py and hams_config.py read SYSTEM_USER_AGENT, ODOO_URL and DB_NAME; nothing else of core.env,
 # db.env or odoo.env is used, so none is loaded.
@@ -8040,7 +8042,7 @@ EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=club_crawl_service_internal"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/club_crawl/club_crawl_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
-Environment="DAEMON_ARGS=--max-sites=30 --max-sites-per-day=300 --max-model-calls-per-run=60 --max-model-calls-per-day=400"
+Environment="DAEMON_ARGS=--max-sites=300 --max-sites-per-day=300 --max-model-calls-per-run=400 --max-model-calls-per-day=400"
 
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/club_crawl/main.py --start-test
 # Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
@@ -8059,21 +8061,21 @@ SyslogIdentifier=club.crawl
             "environments": ["prod"],
         },
         {
-            # Cadence: every two hours. A run visits at most 30 due sites, so the registry's 4,693
-            # crawlable rows take about 16 days for the first full pass (the daily cap of 300 sites binds, not the 360 a day the
-            # timer allows),
-            # after which only sites whose 30-day interval has passed come due, and an unchanged site costs
-            # conditional requests and no model call. A run with nothing due spends nothing.
+            # Cadence: once a day. No page is requested more than once a week whatever this timer does: the page
+            # registry (ham_events ham.scanned.page) decides per page, so a firing with nothing due costs one Odoo call.
+            # A run visits at most 300 due sites (the daily cap), so the registry's 4,693 crawlable rows take about 16
+            # days for the first full pass, after which only sites with a due page come due, and an unchanged page
+            # costs a conditional request and no model call.
             # Persistent=false: a missed run is skipped, never replayed as a burst after downtime.
             "path": "/opt/hams/systemd/club.crawl.timer",
             "external_fetch": "activates club.crawl.service",
             "opt_in": "activates club.crawl.service, which fetches third-party sites and spends Claude Code quota",
             "content": """\
 [Unit]
-Description=Hams.com Automatic Club Website Crawl (every two hours; a run with nothing due spends nothing)
+Description=Hams.com Automatic Club Website Crawl (daily; a run with nothing due spends nothing)
 
 [Timer]
-OnCalendar=*-*-* 00/2:15:00
+OnCalendar=*-*-* 03:15:00
 Persistent=false
 RandomizedDelaySec=10m
 
