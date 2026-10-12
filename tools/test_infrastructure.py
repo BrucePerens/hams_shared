@@ -3085,6 +3085,117 @@ class PostgresqlLockdownTests(unittest.TestCase):
         self.assertNotIn("s/peer/trust", source)
 
 
+class PostgresqlArchiveTimeoutTests(unittest.TestCase):
+    """archive_timeout bounds how much WAL a quiet site can lose (hams1 had 0, 2026-10-12)."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+
+    def _conf(self, text):
+        path = os.path.join(self._tmpdir.name, "postgresql.conf")
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def test_setting_is_five_minutes(self):
+        # Tests [@ANCHOR: infrastructure:_apply_postgresql_archive_timeout]
+        self.assertEqual(dict(infra.POSTGRESQL_ARCHIVE_SETTINGS), {"archive_timeout": "300"})
+
+    def test_sets_it_on_an_archiving_cluster_and_asks_only_for_a_reload(self):
+        path = self._conf("archive_mode = on\narchive_command = 'pgbackrest --stanza=x archive-push %p'\n")
+        self.assertTrue(infra._apply_postgresql_archive_timeout([path]))
+        with open(path) as f:
+            text = f.read()
+        self.assertEqual(text.count("archive_timeout = 300\n"), 1)
+        # Idempotent: a second run changes nothing and asks for nothing.
+        self.assertFalse(infra._apply_postgresql_archive_timeout([path]))
+        with open(path) as f:
+            self.assertEqual(f.read(), text)
+
+    def test_replaces_a_zero_and_leaves_one_line(self):
+        path = self._conf("archive_mode = 'on'\narchive_timeout = 0\n#archive_timeout = 9\n")
+        self.assertTrue(infra._apply_postgresql_archive_timeout([path]))
+        with open(path) as f:
+            lines = f.read().splitlines()
+        self.assertEqual([l for l in lines if l.startswith("archive_timeout")], ["archive_timeout = 300"])
+        self.assertIn("#archive_timeout = 9", lines)
+
+    def test_leaves_a_non_archiving_cluster_alone(self):
+        for text in ("port = 5432\n", "archive_mode = off\n", "#archive_mode = on\n"):
+            path = self._conf(text)
+            self.assertFalse(infra._apply_postgresql_archive_timeout([path]))
+            with open(path) as f:
+                self.assertEqual(f.read(), text)
+
+    def test_plan_mode_writes_nothing(self):
+        path = self._conf("archive_mode = on\n")
+        with infra.planning() as plan:
+            self.assertTrue(infra._apply_postgresql_archive_timeout([path]))
+        with open(path) as f:
+            self.assertEqual(f.read(), "archive_mode = on\n")
+        self.assertEqual(plan.actions[0][0], "write")
+
+    def test_provisioning_applies_it_with_a_reload_not_a_restart(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn("_apply_postgresql_archive_timeout()", source)
+        reload_idx = source.index('["systemctl", "reload", "postgresql"]')
+        self.assertIn("postgresql_reload_needed", source[reload_idx - 250:reload_idx])
+
+
+class PgbackrestRepo1RetiredTests(unittest.TestCase):
+    CONF = (
+        "[global]\nrepo1-type=s3\nrepo1-s3-bucket=b\nrepo1-path=/hams_prod\nrepo1-retention-full=30\n"
+        "repo2-type=s3\nrepo2-path=/hams_prod_enc\nrepo2-cipher-type=aes-256-cbc\nprocess-max=2\n"
+        "\n[hams_prod]\npg1-path=/var/lib/postgresql/18/main\n"
+    )
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.path = os.path.join(self._tmpdir.name, "pgbackrest.conf")
+
+    def _write(self, text):
+        with open(self.path, "w") as f:
+            f.write(text)
+        os.chmod(self.path, 0o640)
+
+    def test_removes_only_repo1_lines_and_keeps_the_mode(self):
+        # Tests [@ANCHOR: infrastructure:_retire_pgbackrest_repo1]
+        self._write(self.CONF)
+        self.assertTrue(infra._retire_pgbackrest_repo1(self.path))
+        with open(self.path) as f:
+            text = f.read()
+        self.assertNotIn("repo1", text)
+        self.assertIn("repo2-cipher-type=aes-256-cbc", text)
+        self.assertIn("process-max=2", text)
+        self.assertIn("[hams_prod]\npg1-path=", text)
+        self.assertEqual(os.stat(self.path).st_mode & 0o7777, 0o640)
+        # Idempotent.
+        self.assertFalse(infra._retire_pgbackrest_repo1(self.path))
+
+    def test_leaves_a_host_whose_only_repository_is_repo1(self):
+        text = "[global]\nrepo1-type=s3\nrepo1-path=/x\n"
+        self._write(text)
+        self.assertFalse(infra._retire_pgbackrest_repo1(self.path))
+        with open(self.path) as f:
+            self.assertEqual(f.read(), text)
+
+    def test_missing_file_is_a_no_op(self):
+        self.assertFalse(infra._retire_pgbackrest_repo1(self.path))
+
+    def test_plan_mode_writes_nothing(self):
+        self._write(self.CONF)
+        with infra.planning() as plan:
+            infra._retire_pgbackrest_repo1(self.path)
+        with open(self.path) as f:
+            self.assertEqual(f.read(), self.CONF)
+        self.assertEqual(plan.actions[0][0], "write")
+
+    def test_provisioning_calls_it(self):
+        self.assertIn("_retire_pgbackrest_repo1()", inspect.getsource(infra.provision_environment))
+
+
 class ProvisionEnvironmentHookWiringTests(unittest.TestCase):
     """provision_environment() itself is too host-dependent to execute here
     (see this file's docstring, and PostgresqlLockdownTests'

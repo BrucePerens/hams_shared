@@ -11046,6 +11046,97 @@ def _apply_postgresql_lockdown(conf_paths=None):
     return restart_needed
 
 
+# Bruce's hams1 backup follow-up, 2026-10-12: archive_timeout was 0, so on a quiet site a WAL segment
+# (16 MB) can stay open for hours and everything in it is lost if the disk is. 300 s bounds the loss to
+# five minutes. Cost on B2 is small: at most 288 forced segments a day, and an almost empty segment
+# compresses to a few KB (pgBackRest gzips, then encrypts). PostgreSQL does not switch a segment that
+# saw no WAL activity, so an idle host pays nothing. A change takes effect on a reload; no restart.
+POSTGRESQL_ARCHIVE_SETTINGS = (("archive_timeout", "300"),)
+
+
+# [@ANCHOR: infrastructure:_apply_postgresql_archive_timeout]
+def _apply_postgresql_archive_timeout(conf_paths=None):
+    """
+    Sets archive_timeout in every cluster's postgresql.conf that has WAL archiving switched on
+    (an active `archive_mode = on` or `always`), idempotently, and returns True when a value's
+    effective text changed, i.e. when the server needs a RELOAD (never a restart: archive_timeout
+    is a sighup setting). A cluster that does not archive (every dev and test host) is left alone:
+    forcing segment switches there would only churn WAL for nothing.
+    """
+    if conf_paths is None:
+        conf_paths = sorted(glob.glob("/etc/postgresql/*/main/postgresql.conf"))
+    reload_needed = False
+    for path in conf_paths:
+        with open(path, "r", encoding="utf-8") as f:
+            original = f.read()
+        archive_mode = None
+        for line in original.splitlines():
+            current = _conf_value(line, "archive_mode")
+            if current is not None:
+                archive_mode = current.strip("'\"").lower()
+        if archive_mode not in ("on", "always"):
+            continue
+        text = original
+        effective_changed = False
+        for key, value in POSTGRESQL_ARCHIVE_SETTINGS:
+            text, changed = _set_conf_key(text, key, value)
+            effective_changed = effective_changed or changed
+        reload_needed = reload_needed or effective_changed
+        if text == original:
+            continue
+        if _plan("write", f"{path} (archive settings; reload needed: {effective_changed})"):
+            continue
+        st = os.stat(path)
+        tmp_path = path + ".hams-provision.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chown(tmp_path, st.st_uid, st.st_gid)
+        os.chmod(tmp_path, st.st_mode & 0o7777)
+        os.replace(tmp_path, path)
+    return reload_needed
+
+
+PGBACKREST_CONF_PATH = "/etc/pgbackrest/pgbackrest.conf"
+
+
+# [@ANCHOR: infrastructure:_retire_pgbackrest_repo1]
+def _retire_pgbackrest_repo1(conf_path=None):
+    """
+    Keeps the plaintext pgBackRest repo1 out of pgbackrest.conf on a host whose encrypted repo2 is
+    configured, and returns True when it removed lines.
+
+    hams1's repo1 (B2 path /hams_prod, no cipher) was replaced by the encrypted repo2 on 2026-10-04
+    and its block was removed from the file on 2026-10-12. Left in, it kept receiving WAL in the
+    clear, and because it carried no key in the file, `pgbackrest info` and `check` aborted unless
+    a dummy PGBACKREST_REPO1_S3_KEY was exported. The file is not templated (repo2-cipher-pass is
+    in it), so this edits it in place: only `repo1-*` lines go, only when at least one `repo2-*`
+    line is present (a host whose single repository is repo1 is left alone), and the file's owner
+    and mode (root:postgres 640) are kept. Nothing is deleted from the bucket; that is a separate,
+    manual step (docs/runbooks/CA_AND_BACKUP_CUSTODY_CHECKLIST.md, "Retiring repo1").
+    """
+    path = conf_path or PGBACKREST_CONF_PATH
+    if not os.path.isfile(path):
+        return False
+    with open(path, "r", encoding="utf-8") as f:
+        original = f.read()
+    lines = original.splitlines(keepends=True)
+    if not any(line.lstrip().startswith("repo2-") for line in lines):
+        return False
+    kept = [line for line in lines if not line.lstrip().startswith("repo1-")]
+    if len(kept) == len(lines):
+        return False
+    if _plan("write", f"{path} (remove the retired plaintext repo1-* lines)"):
+        return True
+    st = os.stat(path)
+    tmp_path = path + ".hams-provision.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write("".join(kept))
+    os.chown(tmp_path, st.st_uid, st.st_gid)
+    os.chmod(tmp_path, st.st_mode & 0o7777)
+    os.replace(tmp_path, path)
+    return True
+
+
 # [@ANCHOR: infrastructure:_create_odoo_role_if_missing]
 def _create_odoo_role_if_missing(run_cmd_func, db_pass):
     """
@@ -12358,11 +12449,17 @@ def provision_environment(
             _logger.info("[*] Locking down PostgreSQL to local loopback...")
             postgresql_restart_needed = _apply_postgresql_lockdown()
 
+            postgresql_reload_needed = _apply_postgresql_archive_timeout()
+            _retire_pgbackrest_repo1()
+
             if not is_isolated_ns:
                 # Only when a lockdown setting's effective value changed: restarting PostgreSQL
                 # can crash odoo.service (hams_com CLAUDE.md, 2026-10-01).
                 if postgresql_restart_needed:
                     run_cmd_func(["systemctl", "restart", "postgresql"])
+                elif postgresql_reload_needed:
+                    # archive_timeout is a sighup setting: a reload applies it, no restart.
+                    run_cmd_func(["systemctl", "reload", "postgresql"])
 
                 db_name = env_vars.get("DB_NAME", "hams_test")
                 _logger.info(
