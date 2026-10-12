@@ -1090,6 +1090,11 @@ def tenant_status(spec, paths, system, http_get=None):
     name = spec["name"]
     unit = f"hams-tenant@{name}.service"
     active = system.run(["systemctl", "is-active", unit], check=False).stdout.strip() or "unknown"
+    # A tenant whose own instance was deliberately stopped and disabled (served by the main Odoo since
+    # the "tenants in Odoo" move) is retired, not down: its backup age still counts, its unit does not.
+    retired = active == "inactive" and (
+        system.run(["systemctl", "is-enabled", unit], check=False).stdout.strip() == "disabled"
+    )
     size = pg_scalar(system, f"SELECT pg_database_size('{name}')")
     filestore = os.path.join(paths.data_dir(name), "filestore")
     fs_bytes = 0
@@ -1111,10 +1116,12 @@ def tenant_status(spec, paths, system, http_get=None):
         # A catch-all tenant has no domain of its own: probe with the loopback host an operator uses.
         for domain in spec["domains"] or ["localhost"]:
             probes[domain] = http_get(spec["http_port"], domain)
-    healthy = active == "active" and (not probes or all(code and code < 500 for code in probes.values()))
+    healthy = retired or (
+        active == "active" and (not probes or all(code and code < 500 for code in probes.values()))
+    )
     return {
         "name": name,
-        "unit": active,
+        "unit": "retired" if retired else active,
         "domains": spec["domains"],
         "http_port": spec["http_port"],
         "database_bytes": int(size) if size else None,
