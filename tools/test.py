@@ -49,6 +49,7 @@ if "--mcp" in sys.argv:
     builtins.print = _mcp_print
 
 import infrastructure
+import lock_queue
 import offline_browser_ns
 
 import argparse
@@ -2873,11 +2874,65 @@ def wait_for_ci_load_to_subside(sleep_func=None, now_func=None):
     return False
 
 
+def _try_flock_once(lock_file):
+    """One non-blocking attempt at the single-instance flock; True if taken."""
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except IOError:
+        return False
+
+
+def _record_lock_holder(lock_file_path):
+    """Best effort: note who holds the lock so queue lines and --queue-status can name it.
+    Never allowed to affect the test run."""
+    qdir = lock_queue.queue_dir_for_lock(lock_file_path)
+    name = lock_queue.write_holder(qdir, " ".join(["test.py"] + sys.argv[1:])[:200])
+    if name:
+        atexit.register(lock_queue.release_ticket, qdir, name)
+        ticket = os.environ.get("HAMS_TEST_QUEUE_TICKET")
+        if ticket:
+            atexit.register(lock_queue.release_ticket, qdir, ticket)
+
+
+# [@ANCHOR: test:acquire_lock_via_queue]
+def _acquire_lock_via_queue(lock_file_path, timeout):
+    """--wait / HAMS_TEST_WAIT=1: queue FIFO for the lock instead of failing fast.
+
+    The lock itself is still the same flock on `_single_instance_lock`; the queue only decides who
+    may try for it (see lock_queue.py). A re-exec'd child (sudo -> systemd-run -> unshare) adopts
+    its parent's ticket from HAMS_TEST_QUEUE_TICKET, which the parent's pid keeps live."""
+    qdir = lock_queue.queue_dir_for_lock(lock_file_path)
+    os.environ.setdefault("HAMS_TEST_QUEUE_DIR", qdir)
+    adopted = os.environ.get("HAMS_TEST_QUEUE_TICKET")
+    status, ticket = lock_queue.acquire(
+        qdir,
+        lambda: _try_flock_once(_single_instance_lock),
+        info=" ".join(["test.py"] + sys.argv[1:])[:200],
+        ticket=adopted,
+        timeout=timeout,
+        on_head=None if adopted else wait_for_ci_load_to_subside,
+    )
+    if status == lock_queue.GATE_FAILED:
+        sys.exit(1)
+    if status == lock_queue.TIMEOUT:
+        print("🛑 ERROR: timed out waiting for the test.py lock. Exiting.")
+        sys.exit(lock_queue.EXIT_WAIT_TIMEOUT)
+    os.environ["HAMS_TEST_QUEUE_TICKET"] = ticket
+    atexit.register(lock_queue.release_ticket, qdir, ticket)
+    _record_lock_holder(lock_file_path)
+
+
 def main():
     global _single_instance_lock
     # First thing, before any lock, namespace, daemon or database work. rebuild_db() repeats the check
     # with the database list once PostgreSQL is reachable.
     refuse_to_run_on_production_host()
+    queue_opts = lock_queue.wait_options_from_argv(sys.argv[1:])
+    if queue_opts["status"]:
+        # Read-only: never opens, probes or takes the lock itself.
+        print("\n".join(lock_queue.describe_queue(lock_queue.queue_dir_for_lock(_test_runner_lock_path()))))
+        return
     audio_sink_before = (
         get_default_audio_sink_name()
         if os.environ.get("HAMS_ISOLATED_NS") != "1"
@@ -2904,6 +2959,11 @@ def main():
     # other session's test run instead of containing it to the one that's
     # actually stuck.
     #
+    # Opt-in queueing (--wait / HAMS_TEST_WAIT=1, tools/lock_queue.py): the default stays
+    # fail-fast exactly as described above. Sessions that wanted to wait used to poll pgrep and
+    # race each other for the lock; --wait replaces that with a FIFO ticket queue in front of
+    # this SAME flock, so the reasoning against an unbounded blocking flock still holds (a hung
+    # holder is visible with --queue-status, and --wait-timeout bounds the wait).
     # Second bug-hunt fix (2026-09-10, NOT yet Bruce-signed-off -- see
     # night_shift_todo.md's "the single-instance test.py lock may not
     # actually protect the real isolated-namespace pipeline" entry and this
@@ -2937,7 +2997,14 @@ def main():
         # else-branch: its parent already gated, and re-gating a run that is
         # already under way would be both redundant and, once its own Odoo
         # server is loading the box, self-defeating.
-        if not wait_for_ci_load_to_subside():
+        # With --wait the gate instead runs when this invocation reaches the front of the queue
+        # (on_head below), so a long gate wait does not forfeit the place in line.
+        # A re-exec'd --internal-ns-init child with no ticket to adopt (a layer dropped the
+        # environment) must not queue: its own parent's live ticket would be ahead of it forever.
+        use_queue = queue_opts["wait"] and (
+            "--internal-ns-init" not in sys.argv or bool(os.environ.get("HAMS_TEST_QUEUE_TICKET"))
+        )
+        if not use_queue and not wait_for_ci_load_to_subside():
             sys.exit(1)
         lock_file_path = _test_runner_lock_path()
         os.environ.setdefault("HAMS_TEST_LOCK_PATH", lock_file_path)
@@ -2981,11 +3048,15 @@ def main():
         except OSError:  # audit-ignore-catch-all
             fd = os.open(lock_file_path, os.O_RDONLY | os.O_NOFOLLOW)
             _single_instance_lock = os.fdopen(fd, "r")
-        try:
-            fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except IOError:
-            print("🛑 ERROR: Another instance of test.py is already running. Exiting.")
-            sys.exit(1)
+        if use_queue:
+            _acquire_lock_via_queue(lock_file_path, queue_opts["timeout"])
+        else:
+            try:
+                fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except IOError:
+                print("🛑 ERROR: Another instance of test.py is already running. Exiting.")
+                sys.exit(1)
+            _record_lock_holder(lock_file_path)
 
     cwd = os.getcwd()
     if not is_git_checkout_root(cwd) or not (
@@ -3097,6 +3168,10 @@ def main():
             systemd_run_args.append(
                 f"--setenv=HAMS_TEST_LOCK_PATH={_test_runner_lock_path()}"
             )
+            # Same for the queue ticket: the child adopts it instead of queueing behind its own parent.
+            for queue_var in ("HAMS_TEST_QUEUE_TICKET", "HAMS_TEST_QUEUE_DIR"):
+                if os.environ.get(queue_var):
+                    systemd_run_args.append(f"--setenv={queue_var}={os.environ[queue_var]}")
             # `systemd-run --scope` does not forward the invoking shell's
             # environment into the new scope by itself -- `sudo -E` only
             # preserves env as far as systemd-run's own invocation, not
@@ -3167,6 +3242,24 @@ def main():
     parser.add_argument("-l", "--log-directory", default=os.path.expanduser("~/tmp"))
     parser.add_argument("-c", "--config", default="ignore_list.txt")
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="Queue FIFO for the box-wide test lock instead of failing fast when another run "
+        "holds it (also HAMS_TEST_WAIT=1). Prints a queue-position line periodically.",
+    )
+    parser.add_argument(
+        "--wait-timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="With --wait: give up after this long (exit status 75). Default: wait indefinitely.",
+    )
+    parser.add_argument(
+        "--queue-status",
+        action="store_true",
+        help="Print the current lock holder and the --wait queue, then exit (read-only).",
+    )
     parser.add_argument(
         "--coverage",
         action="store_true",
