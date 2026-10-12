@@ -73,6 +73,7 @@ class FakeSystem(lib.System):
         self.databases = {}  # name -> {"modules": set, "extensions": set, "revoked": bool}
         self.role_limits = {}
         self.active = set()
+        self.enabled = set()
         self.hba_file = os.path.join(root, "pg", "pg_hba.conf")
         self.hba_errors = "0"
         self.clock = datetime.datetime(2026, 10, 4, 3, 0, tzinfo=datetime.timezone.utc)
@@ -98,7 +99,7 @@ class FakeSystem(lib.System):
         found = []
         for command in self.commands:
             text = " ".join(command)
-            if command[0] == "chown" or command[:2] == ["systemctl", "is-active"]:
+            if command[0] == "chown" or command[:2] in (["systemctl", "is-active"], ["systemctl", "is-enabled"]):
                 continue
             if "psql" in command and ("-c" in command) and re.search(r"-c (SELECT [^p]|SHOW)", text):
                 if "pg_reload_conf" not in text:
@@ -155,9 +156,13 @@ class FakeSystem(lib.System):
         unit = argv[-1]
         if argv[1] == "is-active":
             return lib.Result(0 if unit in self.active else 3, "active\n" if unit in self.active else "inactive\n")
+        if argv[1] == "is-enabled":
+            return lib.Result(0 if unit in self.enabled else 1, "enabled\n" if unit in self.enabled else "disabled\n")
         if argv[1] == "enable":
+            self.enabled.add(unit)
             self.active.add(unit)
         if argv[1] == "disable":
+            self.enabled.discard(unit)
             self.active.discard(unit)
         return lib.Result(0)
 
@@ -537,6 +542,16 @@ class BackupAndStatusTests(_Base):
         self.assertFalse(bad["healthy"])
         self.system.active.clear()
         self.assertFalse(lib.tenant_status(self.spec, self.paths, self.system)["healthy"])
+
+    def test_a_stopped_and_disabled_tenant_is_retired_not_unhealthy(self):
+        lib.backup_tenant(self.spec, self.paths, self.system)
+        self.system.active.clear()
+        self.system.enabled.clear()
+        row = lib.tenant_status(self.spec, self.paths, self.system, lambda port, host: 200)
+        self.assertEqual(row["unit"], "retired")
+        self.assertTrue(row["healthy"])
+        self.assertEqual(row["http"], {})
+        self.assertIsNotNone(row["backup_age_hours"])
 
 
 class DeleteTests(_Base):
