@@ -1072,6 +1072,23 @@ EXCEPTION_REPORT_DROPIN_CONTENT = """\
 [Unit]
 OnFailure=hams-exception-report@%n.service
 """
+# A second drop-in for a service that restarts itself (Restart= other than "no"). Such a unit only enters the failed
+# state when its start limit is hit, so OnFailure= alone reports a daemon that has given up, not each crash. This
+# ExecStopPost= starts the same template unit whenever systemd stops the service with a result other than success
+# (exit-code, signal, core-dump, watchdog, timeout, ...; a deploy restart or `systemctl stop` is "success", so it
+# stays quiet). `+` runs it with full privileges, because a hamsd_* account may not start a unit, and `-` keeps a
+# failed start of the reporter from marking the daemon itself failed. --no-block queues the job and returns, so the
+# restart is not delayed. A crash loop is bounded by the template's StartLimitBurst (5 in 300 s), by the helper's
+# one report a minute per name and by Odoo's fingerprint gate (one write a minute per fingerprint, repeats add to
+# the count). $SERVICE_RESULT sits inside single quotes, which systemd leaves alone, so the shell expands it.
+# A oneshot unit without Restart= is not given this: its OnFailure= already fires on every failure.
+EXCEPTION_REPORT_CRASH_DROPIN_NAME = "hams-exception-report-crash.conf"
+EXCEPTION_REPORT_CRASH_DROPIN_CONTENT = """\
+# Written by hams_shared tools/infrastructure.py (MANIFEST). Reports each crash of this self-restarting unit, not
+# only the give-up: see hams_open hams_helpdesk/daemon/README.md.
+[Service]
+ExecStopPost=-+/bin/sh -c '[ "$SERVICE_RESULT" = success ] || /usr/bin/systemctl start --no-block hams-exception-report@%n.service'
+"""
 _TENANT_REASON = (
     "Tenant unit (host class odoo_tenants), owned by the tenant work: a stopped or retired instance is an expected "
     "state and tenant_ctl health already exits non-zero by design for an unhealthy one, which hams-tenant-health and "
@@ -1108,8 +1125,18 @@ EXCEPTION_REPORT_EXCLUDED_UNITS = {
 }
 
 
+def _restarts_itself(content):
+    """True when a unit file sets Restart= to anything but "no" (always, on-failure, on-abnormal, ...)."""
+    for line in (content or "").splitlines():
+        key, _, value = line.strip().partition("=")
+        if key == "Restart" and value.strip() not in ("", "no"):
+            return True
+    return False
+
+
 def exception_report_dropin_entries(manifest):
-    """The MANIFEST static_files entries (one OnFailure drop-in each) for every production service in
+    """The MANIFEST static_files entries (one OnFailure drop-in each, plus an ExecStopPost crash drop-in for a
+    self-restarting one) for every production service in
     `manifest` that EXCEPTION_REPORT_EXCLUDED_UNITS does not exclude."""
     entries = []
     for spec in manifest["static_files"]:
@@ -1132,6 +1159,10 @@ def exception_report_dropin_entries(manifest):
         if spec.get("host_class"):
             entry["host_class"] = spec["host_class"]
         entries.append(entry)
+        if _restarts_itself(spec.get("content")):
+            crash = dict(entry, path=f"/etc/systemd/system/{name}.d/{EXCEPTION_REPORT_CRASH_DROPIN_NAME}",
+                         content=EXCEPTION_REPORT_CRASH_DROPIN_CONTENT)
+            entries.append(crash)
     return entries
 
 
