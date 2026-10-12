@@ -5858,6 +5858,98 @@ class CacheManagerUnitTests(unittest.TestCase):
         self.assertEqual(packaging, manifest)
 
 
+class PagerOsMonitorUnitTests(_SafePatchTestCase):
+    """Tests [@ANCHOR: infrastructure:_provision_pager_monitor_role]
+
+    The pager-os-monitor.service unit in the MANIFEST. Found on hams1, 2026-10-12: pager_duty's generalized monitor was
+    never installed (the sample unit points at /opt/odoo/addons and /etc/pager_daemons.env), so its 24 check rows all said
+    "passing" while none had ever run."""
+
+    UNIT = "pager-os-monitor.service"
+    DAEMON = "/opt/hams/src/hams_open/pager_duty/daemon/generalized_monitor.py"
+
+    def _text(self):
+        matches = [
+            spec["content"]
+            for spec in infra.MANIFEST["static_files"]
+            if spec["path"] == "/opt/hams/systemd/" + self.UNIT
+        ]
+        self.assertEqual(len(matches), 1, "the MANIFEST must carry exactly one pager-os-monitor.service")
+        return matches[0]
+
+    def test_unit_is_enabled_at_boot_and_runs_the_deployed_module_file(self):
+        self.assertIn(self.UNIT, infra.boot_service_unit_names())
+        text = self._text()
+        self.assertIn("ExecStart=/usr/bin/python3 " + self.DAEMON + "\n", text)
+        self.assertIn("Restart=always", text)
+        self.assertNotIn("/opt/odoo/addons", text)
+        self.assertNotIn("/etc/pager_daemons.env", text)
+
+    def test_unit_loads_the_redis_login_the_odoo_key_the_database_login_and_the_smtp_fallback_only(self):
+        files = re.findall(r"^EnvironmentFile=(\S+)$", self._text(), re.M)
+        self.assertEqual(
+            files,
+            [
+                "/opt/hams/etc/redis.env",
+                "/opt/hams/etc/keys/pager_duty.env",
+                "/opt/hams/etc/keys/pager_monitor_db.env",
+                "/opt/hams/etc/site_monitor.env",
+            ],
+        )
+        # odoo.env and core.env carry the administrator password, the Cloudflare tokens and the Gemini key.
+        for secret_file in ("odoo.env", "core.env", "db.env", "db_app.env"):
+            self.assertNotIn("/opt/hams/etc/" + secret_file, self._text())
+
+    def test_unit_names_its_config_file_explicitly_in_a_directory_odoo_can_write(self):
+        text = self._text()
+        self.assertIn("Environment=PAGER_CONFIG_PATH=/opt/hams/spool/pager_duty/pager_config.json\n", text)
+        directory = [d for d in infra.MANIFEST["directories"] if d["path"] == "/opt/hams/spool/pager_duty"]
+        self.assertEqual(len(directory), 1)
+        self.assertEqual(directory[0]["owner"], "odoo:odoo")
+        self.assertEqual(directory[0]["provision_mode"], "700")
+
+    def test_unit_is_sandboxed_and_writes_nothing(self):
+        text = self._text()
+        for line in ("ProtectSystem=strict", "PrivateTmp=true", "PrivateDevices=true", "NoNewPrivileges=true",
+                     "CapabilityBoundingSet=", "User=odoo"):
+            self.assertIn(line + "\n", text)
+        self.assertNotIn("ReadWritePaths", text)
+        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.UNIT), set())
+
+    def test_unit_is_prod_only_external_fetch_and_a_listed_shared_odoo_unit(self):
+        spec = [s for s in infra.MANIFEST["static_files"] if s["path"] == "/opt/hams/systemd/" + self.UNIT][0]
+        self.assertEqual(spec["environments"], ["prod"])
+        self.assertIn(self.UNIT, infra.external_fetch_unit_names())
+        self.assertIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
+
+    def test_the_file_the_unit_runs_exists_in_hams_open(self):
+        here = os.path.dirname(os.path.realpath(infra.__file__))
+        root = None
+        while here != os.path.dirname(here):
+            if os.path.isdir(os.path.join(here, "pager_duty", "daemon")):
+                root = here
+                break
+            here = os.path.dirname(here)
+        if root is None:
+            self.skipTest("hams_shared checked out without hams_open")
+        self.assertTrue(os.path.isfile(os.path.join(root, "pager_duty", "daemon", "generalized_monitor.py")))
+
+    def test_the_database_login_is_its_own_connect_only_role(self):
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra, "_role_exists", return_value=False)
+        self.safe_patch_object(infra, "apply_permissions")
+        written = {}
+        self.safe_patch_object(infra, "_file_state", side_effect=lambda path, content: written.update(p=path, c=content) or "unchanged")
+        infra._provision_pager_monitor_role(run_cmd, "hams_test")
+        role_call, grant_call = run_cmd.call_args_list[0], run_cmd.call_args_list[1]
+        self.assertIn("role_name=pager_monitor_ro", role_call.args[0])
+        self.assertIn("CREATE ROLE", role_call.kwargs["input"])
+        self.assertIn("GRANT CONNECT ON DATABASE", grant_call.kwargs["input"])
+        self.assertEqual(written["p"], "/opt/hams/etc/keys/pager_monitor_db.env")
+        self.assertIn("pager_duty's PostgreSQL ping check", written["c"])
+        self.assertIn("DB_USER=pager_monitor_ro\n", written["c"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

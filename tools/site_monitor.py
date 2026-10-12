@@ -158,7 +158,11 @@ def check_postgresql(run=subprocess.run, find=_find_pg_isready, connect=socket.c
             return False, f"no pg_isready and TCP 127.0.0.1:5432 refused: {exc}"
         return True, "TCP 127.0.0.1:5432 accepts (pg_isready not installed)"
     try:
-        result = run([binary, "-q", "-t", "5"], capture_output=True, text=True, timeout=15)
+        # Over TCP (-h 127.0.0.1), not the default Unix socket: the monitor runs as root, and a socket probe makes the server
+        # log `FATAL: role "root" does not exist` once a minute (2,700 lines a day in the PostgreSQL log on hams1,
+        # 2026-10-12), which would make a log-error alert on FATAL page forever. A TCP probe is answered with the
+        # authentication request, which pg_isready counts as "accepting connections", and logs nothing.
+        result = run([binary, "-q", "-h", "127.0.0.1", "-t", "5"], capture_output=True, text=True, timeout=15)
     except (subprocess.TimeoutExpired, OSError) as exc:
         return False, f"pg_isready: {exc}"
     return (result.returncode == 0), f"pg_isready exit {result.returncode}"
