@@ -26,16 +26,16 @@ The module operates under the `user_daemon_key_manager_service` account and does
 
 ### OS-Level Sandboxing
 * **Strict Permissions:** `.env` files are created with `0600` (read/write only for the Odoo server process user).
-* **Directory Isolation:** Parent directories are created with `0700` to prevent other users on the system from traversing into the key storage area.
+* **Directory Isolation:** Subdirectories are created with `0700` to prevent other users on the system from traversing into the key storage area. The root `/opt/hams/etc/keys` is `0710` (its group may traverse but not list it). A key file may also be handed to one OS group: a registry's optional `os_group` (which must match `hamsd_<family>`, and which only a Daemon Key Manager, an administrator or the superuser may set) makes the file `0640` with that group, kept in its own family directory `/opt/hams/etc/keys/<family>` (`0750`), so that daemon's account, and no other, can read it.
 * **Path Validation:** All paths MUST start with `/opt/hams/etc/keys/`. The module strictly blocks directory traversal (`..`) and symlink attacks by resolving the `os.path.realpath` of the requested path before performing any file operations [@ANCHOR: security_constraints_path].
 
-* **System Directory Protection:** Writing to sensitive system directories (like `/etc`, `/root`, `/boot`, `/home`, `/usr`, `/bin`, `/lib`, `/var/log`) is explicitly forbidden regardless of the prefix check [@ANCHOR: write_secure_env_file_logic].
+* **System Directory Protection:** There is no list of forbidden system directories. The file writer re-checks, on the symlink-resolved path, the same `/opt/hams/etc/keys/` prefix rule, so a path under `/etc`, `/root` or anywhere else outside that tree is refused for that reason alone [@ANCHOR: write_secure_env_file_logic].
 
 ### Automated Key Rotation
-Keys are automatically rotated every 60 days via an `ir.cron` job [@ANCHOR: cron_rotation_trigger].
+An `ir.cron` job runs daily and rotates each registered key that is more than 59 days old, so a key is replaced about every 60 days [@ANCHOR: cron_rotation_trigger]. A registry marked Remote Self-Rotation (a daemon on another machine whose key file Odoo cannot write) is skipped by the cron, by `action_force_provision_all()` and by `action_rotate_key()`; that daemon calls `rotate_own_key(daemon_name, current_key)` itself, in two phases: it is issued a new key once its key is more than 59 days old, and when it presents the new key the old one is revoked.
 
-* **Graceful Failure:** Stateless batching (processing 10 records at a time and re-triggering) ensures that one failed file-write or database error does not block other rotations. Failures are logged, and the system attempts to continue with the next daemon [@ANCHOR: cron_rotation_logic].
-* **Buffer Period:** New keys are generated with a 90-day expiration, providing a 30-day "grace period" for the 60-day rotation cycle to succeed in case of transient server issues.
+* **Graceful Failure:** Stateless batching (the cron processes 10 records at a time and re-triggers itself) ensures that one failed file-write or database error does not block other rotations. Failures are logged, and the system attempts to continue with the next daemon [@ANCHOR: cron_rotation_logic].
+* **Buffer Period:** New keys are generated with a 90-day expiration by default (a registry's `key_lifetime_days` may set 90 to 400 days; rotation is then due 31 days before expiry), providing a margin of about 30 days for the rotation to succeed in case of transient server issues.
 * **Self-Healing Daemons:** Daemons utilizing these keys MUST be designed to catch `AccessError` responses from Odoo, re-read their assigned `.env` file from the disk, and retry the request. This ensures continuous operation across key rotations [@ANCHOR: daemon_self_healing].
 
 ---
@@ -54,7 +54,11 @@ In containerized/orchestrated environments:
 * **`daemon_name`**: A unique string identifier for the external service.
 * **`user_xml_id`**: The XML ID of the service account record (e.g., `pager_duty.user_pager_service_internal`). This account must have `is_service_account` set to `True`.
 * **`env_file_path`**: The absolute path where the `.env` file should be written. It must reside within `/opt/hams/etc/keys/`.
+* **`os_group`** (optional): the `hamsd_<family>` OS group that may read the key file (see Directory Isolation above).
 * **Behavior**: This method is idempotent. If a daemon with the same name exists, its service account and path are updated. It immediately triggers the generation of the first API key and writes the file [@ANCHOR: register_daemon_logic] [@ANCHOR: register_daemon_idempotency].
+
+#### `action_rotate_key()`
+* **Use Case**: Manually rotate one daemon's key from the UI or code. It revokes the existing key and generates a new one at once. Restricted to the `Daemon Key Management / Manager` group.
 
 #### `action_force_provision_all()` [@ANCHOR: action_force_provision_all_api]
 * **Use Case**: Used during system bootstrapping (e.g., via systemd or Kubernetes init containers) to ensure all keys are present on disk before daemons start. Also used for emergency rotation of all keys.
@@ -65,6 +69,7 @@ In containerized/orchestrated environments:
 * **Security**: Only accessible to users in the `Daemon Key Management / Manager` group. Internally, it elevates to the service account to perform the privileged key generation [@ANCHOR: force_provision_logic].
 
 ### 3. File Format (.env) [@ANCHOR: write_secure_env_file_logic]
+The file holds the service account's login and its API key; the daemon reads both at start and again after an `AccessError`.
 ```env
 # Auto-generated by daemon.key.registry
 ODOO_RPC_LOGIN=service_account_login
