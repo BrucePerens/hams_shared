@@ -4550,7 +4550,7 @@ After=postgresql.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/tenant_ctl.py health --all
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_shared/tools/tenant_ctl.py health --all
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams.tenant.health
@@ -4591,7 +4591,7 @@ After=postgresql.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/tenant_ctl.py backup --all --apply
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_shared/tools/tenant_ctl.py backup --all --apply
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams.tenant.backup
@@ -4631,7 +4631,7 @@ After=postgresql.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /opt/hams/hams_shared/tools/tenant_ctl.py restore-test --all
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_shared/tools/tenant_ctl.py restore-test --all
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams.tenant.restore.test
