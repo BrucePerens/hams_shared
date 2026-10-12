@@ -1072,8 +1072,11 @@ EXCEPTION_REPORT_DROPIN_CONTENT = """\
 [Unit]
 OnFailure=hams-exception-report@%n.service
 """
-# A second drop-in for a service that restarts itself (Restart= other than "no"). Such a unit only enters the failed
-# state when its start limit is hit, so OnFailure= alone reports a daemon that has given up, not each crash. This
+# A second drop-in for a service that restarts itself (Restart= other than "no"). Older systemd only enters the failed
+# state of such a unit when its start limit is hit, so OnFailure= alone reports a daemon that has given up, not each
+# crash. (Measured on hams1, 2026-10-12: systemd 257 already triggers OnFailure= on every failed exit of a
+# Restart=always unit, so there this drop-in is a second, merged start of the same job: belt and braces, no extra
+# ticket.) This
 # ExecStopPost= starts the same template unit whenever systemd stops the service with a result other than success
 # (exit-code, signal, core-dump, watchdog, timeout, ...; a deploy restart or `systemctl stop` is "success", so it
 # stays quiet). `+` runs it with full privileges, because a hamsd_* account may not start a unit, and `-` keeps a
