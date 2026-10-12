@@ -1012,6 +1012,11 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "account that owns the key directories and is a member of every family group. Hardened instead: see "
         "SANDBOX_BASELINE_EXEMPTIONS."
     ),
+    "hams-exception-report@.service": (
+        "Reads /opt/hams/etc/keys/exception_reporter.env (odoo-owned, 0600, a fixed path in exception_reporter.py): the one "
+        "credential that may file a daemon failure as a server-exception ticket. A family account would need that file's "
+        "ownership changed first, and the unit must be able to start for a daemon in any family (plan section 13)."
+    ),
     "hams.data.relay.service": (
         "Relay and auth behavior: Bruce reviews and merges changes to the relay units himself (night rules), so it is not "
         "migrated unattended (plan section 13)."
@@ -1047,6 +1052,87 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "NoNewPrivileges; needs its own review (plan section 13)."
     ),
 }
+
+
+# [@ANCHOR: infrastructure:exception_report_dropins]
+# Failure reporting for external daemons (hams_open hams_helpdesk/daemon/README.md). The template unit
+# hams-exception-report@.service reports the unit named by its instance to the Odoo exception tickets; every
+# production service opts in with a drop-in /etc/systemd/system/<unit>.d/hams-exception-report.conf holding
+# OnFailure=hams-exception-report@%n.service. The drop-ins are generated from the MANIFEST's own unit list
+# (exception_report_dropin_entries, called once after the MANIFEST literal), so a new service is covered without
+# a second list to forget, and test_infrastructure.py fails when a service is neither covered nor listed below.
+#
+# A .service only: a timer or path unit starts a service, and that service's own failure is what is reported.
+# Not a top-level service.d/ drop-in, which would also hit the report unit itself and every Debian service.
+EXCEPTION_REPORT_UNIT = "hams-exception-report@.service"
+EXCEPTION_REPORT_DROPIN_NAME = "hams-exception-report.conf"
+EXCEPTION_REPORT_DROPIN_CONTENT = """\
+# Written by hams_shared tools/infrastructure.py (MANIFEST). Reports this unit's failure to the Odoo exception
+# tickets: see hams_open hams_helpdesk/daemon/README.md.
+[Unit]
+OnFailure=hams-exception-report@%n.service
+"""
+_TENANT_REASON = (
+    "Tenant unit (host class odoo_tenants), owned by the tenant work: a stopped or retired instance is an expected "
+    "state and tenant_ctl health already exits non-zero by design for an unhealthy one, which hams-tenant-health and "
+    "the pager report. An instance's name is also a customer's site name."
+)
+_BACKUP_REASON = (
+    "Backup unit, owned by the backup work: a failed run is reported by backup_management and the backup monitoring "
+    "(job state, hams-b2-backup-check, the pager); changing its units is out of scope here."
+)
+EXCEPTION_REPORT_EXCLUDED_UNITS = {
+    EXCEPTION_REPORT_UNIT: (
+        "The reporter itself: OnFailure= on it would start another report when a report fails, a loop. Its own "
+        "StartLimit bounds a storm; a failed report is visible in its journal."
+    ),
+    "hams-site-monitor.service": (
+        "A non-zero exit is its signal (a failed check, or no paging channel: exit 2) and it pages itself; it also "
+        "runs precisely when Odoo may be down, so it could not file a ticket."
+    ),
+    "stray.odoo.shell.detector.service": (
+        "Exits 1 when it finds a stray `odoo shell` process: the exit status is the finding, not a daemon failure, and "
+        "the critical journal line is its report."
+    ),
+    "hams-tenant@.service": _TENANT_REASON,
+    "hams-static@.service": _TENANT_REASON,
+    "hams-tenant-firewall.service": _TENANT_REASON,
+    "hams-tenant-health.service": _TENANT_REASON,
+    "hams-tenant-backup.service": _TENANT_REASON,
+    "hams-tenant-restore-test.service": _TENANT_REASON,
+    "hams-pgbackrest-backup.service": _BACKUP_REASON,
+    "hams.db.local.backup.service": _BACKUP_REASON,
+    "hams-b2-backup.service": _BACKUP_REASON,
+    "hams-b2-restore-test.service": _BACKUP_REASON,
+    "hams-b2-backup-check.service": _BACKUP_REASON,
+}
+
+
+def exception_report_dropin_entries(manifest):
+    """The MANIFEST static_files entries (one OnFailure drop-in each) for every production service in
+    `manifest` that EXCEPTION_REPORT_EXCLUDED_UNITS does not exclude."""
+    entries = []
+    for spec in manifest["static_files"]:
+        path = spec["path"]
+        name = os.path.basename(path)
+        if (
+            os.path.dirname(path) != "/opt/hams/systemd"
+            or not name.endswith(".service")
+            or "prod" not in spec.get("environments", [])
+            or name in EXCEPTION_REPORT_EXCLUDED_UNITS
+        ):
+            continue
+        entry = {
+            "path": f"/etc/systemd/system/{name}.d/{EXCEPTION_REPORT_DROPIN_NAME}",
+            "content": EXCEPTION_REPORT_DROPIN_CONTENT,
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        }
+        if spec.get("host_class"):
+            entry["host_class"] = spec["host_class"]
+        entries.append(entry)
+    return entries
 
 
 def _is_server_unit(entry):
@@ -8623,6 +8709,55 @@ WantedBy=multi-user.target
             "external_fetch": "queries the DNS root servers every 5 minutes and api.github.com once a day (the credential-expiry check)",
         },
         {
+            # Reports a failed daemon to the Odoo exception tickets (Helpdesk > Server Exceptions, source "External
+            # daemon"): hams_open hams_helpdesk/daemon/ (README.md there). Every production service has an
+            # OnFailure=hams-exception-report@%n.service drop-in (exception_report_dropin_entries, appended to this
+            # list after the MANIFEST literal), so when a unit enters the failed state systemd starts this template
+            # with the unit's name as the instance. It runs the deployed helper, which sends the unit name, systemd's
+            # Result word and the last 20 journal lines; Odoo scrubs them, de-duplicates by (unit, kind, result) and
+            # rate limits (50 new tickets an hour). The key is the Daemon Key Manager's exception_reporter service
+            # account key, /opt/hams/etc/keys/exception_reporter.env (odoo 0600, the helper's default path), so the
+            # unit runs as odoo (see SHARED_ODOO_ACCOUNT_UNITS). common.env, which systemd reads as root, gives it
+            # ODOO_URL and DB_NAME. %i and not %I: the drop-in passes the failed unit's name as written, and %I would
+            # turn the dashes of "hams-auth-gateway.service" into slashes.
+            # Same lines as hams_open hams_helpdesk/daemon/hams-exception-report@.service (ExceptionReportUnitTests).
+            "path": "/opt/hams/systemd/hams-exception-report@.service",
+            "content": """\
+[Unit]
+Description=Report the failure of %i to the Odoo exception tickets
+# A report storm is bounded here as well as in Odoo.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+User=odoo
+# Reading another unit's journal needs this group.
+SupplementaryGroups=systemd-journal
+EnvironmentFile=-/opt/hams/etc/common.env
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_helpdesk/daemon/exception_reporter.py report-unit %i
+TimeoutStartSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams-exception-report
+
+# --- Sandboxing ---
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             # hams_com daemons/auth_cert_renew: renews the auth.hams.com certificate on hams1 itself through
             # hams1's own PowerDNS (DNS-01), replacing the dev-box renewal (Bruce, 2026-10-05; to-do
             # night_shift_todo/medium/auth-hams-com-certificate-renewal-on-hams1-3e8d61b4.md). `_acme-challenge.
@@ -9361,6 +9496,9 @@ WantedBy=timers.target
         },
     },
 }
+
+# One OnFailure drop-in per production service (see EXCEPTION_REPORT_EXCLUDED_UNITS).
+MANIFEST["static_files"].extend(exception_report_dropin_entries(MANIFEST))
 
 
 def scaffold_test_environment(args_db, provision_dirs=True):

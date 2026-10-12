@@ -3908,6 +3908,7 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "callbook.dns.export.service": "reads Odoo, writes the local PowerDNS zone",
         "callbook.dns.export.timer": "activates callbook.dns.export.service (local)",
         "dx.firehose.service": "local websocket server over the local database",
+        "hams-exception-report@.service": "posts to the local Odoo (ODOO_URL, loopback on hams1) and reads local journals; fetches nothing",
         "gdpr.csv.export.service": "local HTTP export server",
         "hamcall.idx.sync.service": "reads a licensed file already on disk; no timer",
         "hams-auth-gateway.service": "local server",
@@ -5856,6 +5857,124 @@ class CacheManagerUnitTests(unittest.TestCase):
             packaging = "".join(line for line in f if not line.startswith("#"))
         manifest = "".join(line for line in self._text().splitlines(keepends=True) if not line.startswith("#"))
         self.assertEqual(packaging, manifest)
+
+
+class ExceptionReportUnitTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:exception_report_dropins]
+
+    hams_open's external daemon failure reporting (hams_helpdesk/daemon): the hams-exception-report@.service template
+    and one OnFailure= drop-in per production service. Every service must be covered or excluded with a reason, so a
+    new daemon cannot silently go unreported."""
+
+    TEMPLATE = "hams-exception-report@.service"
+    HELPER = "/opt/hams/src/hams_open/hams_helpdesk/daemon/exception_reporter.py"
+    DROPIN = "/etc/systemd/system/{}.d/hams-exception-report.conf"
+
+    @staticmethod
+    def _entries(path):
+        return [spec for spec in infra.MANIFEST["static_files"] if spec["path"] == path]
+
+    def _text(self):
+        matches = self._entries("/opt/hams/systemd/" + self.TEMPLATE)
+        self.assertEqual(len(matches), 1)
+        return matches[0]["content"]
+
+    @staticmethod
+    def _hams_open_dir():
+        here = os.path.dirname(os.path.realpath(infra.__file__))
+        while here != os.path.dirname(here):
+            if os.path.isdir(os.path.join(here, "hams_helpdesk", "daemon")):
+                return here
+            here = os.path.dirname(here)
+        return None
+
+    @staticmethod
+    def _production_services():
+        return sorted(
+            os.path.basename(spec["path"])
+            for spec in infra.MANIFEST["static_files"]
+            if os.path.dirname(spec["path"]) == "/opt/hams/systemd"
+            and spec["path"].endswith(".service")
+            and "prod" in spec.get("environments", [])
+        )
+
+    def test_every_production_service_is_covered_or_excluded_with_a_reason(self):
+        services = self._production_services()
+        self.assertGreater(len(services), 40)
+        for name in services:
+            covered = self._entries(self.DROPIN.format(name))
+            if name in infra.EXCEPTION_REPORT_EXCLUDED_UNITS:
+                self.assertEqual(covered, [], name + " is excluded and must have no drop-in")
+                self.assertGreater(len(infra.EXCEPTION_REPORT_EXCLUDED_UNITS[name]), 40, name)
+            else:
+                self.assertEqual(len(covered), 1, name + " has no OnFailure drop-in and is not excluded")
+
+    def test_an_exclusion_names_a_real_unit(self):
+        services = set(self._production_services())
+        for name in infra.EXCEPTION_REPORT_EXCLUDED_UNITS:
+            self.assertIn(name, services, name + " is excluded but not in the MANIFEST: remove it")
+
+    def test_no_drop_in_for_a_timer_path_or_unknown_unit(self):
+        services = set(self._production_services())
+        for spec in infra.MANIFEST["static_files"]:
+            if spec["path"].endswith("/hams-exception-report.conf"):
+                unit = spec["path"].split("/")[-2][: -len(".d")]
+                self.assertIn(unit, services, spec["path"])
+                self.assertTrue(unit.endswith(".service"), spec["path"])
+
+    def test_the_drop_in_names_the_template_with_the_units_own_name(self):
+        for spec in infra.MANIFEST["static_files"]:
+            if spec["path"].endswith("/hams-exception-report.conf"):
+                self.assertIn("[Unit]\nOnFailure=hams-exception-report@%n.service\n", spec["content"])
+                self.assertEqual((spec["owner"], spec["mode"], spec["environments"]), ("root:root", "644", ["prod"]))
+
+    def test_tenant_host_class_is_kept_on_the_drop_in(self):
+        manifest = {"static_files": [
+            {"path": "/opt/hams/systemd/x.service", "content": "", "environments": ["prod"], "host_class": "ca_signer"},
+            {"path": "/opt/hams/systemd/y.service", "content": "", "environments": ["test"]},
+        ]}
+        entries = infra.exception_report_dropin_entries(manifest)
+        self.assertEqual([e["path"] for e in entries], ["/etc/systemd/system/x.service.d/hams-exception-report.conf"])
+        self.assertEqual(entries[0]["host_class"], "ca_signer")
+
+    def test_template_reports_the_unit_name_as_written_from_the_deployed_tree(self):
+        text = self._text()
+        self.assertIn("ExecStart=/usr/bin/python3 " + self.HELPER + " report-unit %i\n", text)
+        self.assertNotIn("%I", text.replace("%i", ""), "%I would unescape the dashes of a unit name")
+        self.assertNotIn("/opt/odoo/addons", text)
+        self.assertIn("EnvironmentFile=-/opt/hams/etc/common.env\n", text)
+        self.assertNotIn("ODOO_KEY_FILE", text)
+
+    def test_template_is_sandboxed_and_runs_as_the_key_owner(self):
+        text = self._text()
+        for line in ("User=odoo", "Type=oneshot", "SupplementaryGroups=systemd-journal", "ProtectSystem=strict",
+                     "PrivateTmp=true", "PrivateDevices=true", "NoNewPrivileges=true", "CapabilityBoundingSet="):
+            self.assertIn(line + "\n", text)
+        self.assertNotIn("ReadWritePaths", text)
+        self.assertNotIn("OnFailure", text)
+        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.TEMPLATE), set())
+
+    def test_template_is_classified_and_never_enabled_or_started_by_provisioning(self):
+        self.assertIn(self.TEMPLATE, infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertNotIn(self.TEMPLATE, infra.external_fetch_unit_names())
+        self.assertNotIn(self.TEMPLATE, infra.boot_service_unit_names())
+        self.assertNotIn(self.TEMPLATE, infra._smoketest_candidate_services())
+        self.assertIn(self.TEMPLATE, infra.EXCEPTION_REPORT_EXCLUDED_UNITS)
+
+    def test_packaging_copies_in_hams_open_match(self):
+        hams_open = self._hams_open_dir()
+        if hams_open is None:
+            self.skipTest("hams_shared checked out without hams_open")
+
+        def body(text):
+            return "".join(line for line in text.splitlines(keepends=True) if not line.lstrip().startswith("#"))
+
+        daemon = os.path.join(hams_open, "hams_helpdesk", "daemon")
+        with open(os.path.join(daemon, self.TEMPLATE), encoding="utf-8") as f:
+            self.assertEqual(body(f.read()), body(self._text()))
+        with open(os.path.join(daemon, "hams-exception-report.conf"), encoding="utf-8") as f:
+            self.assertEqual(body(f.read()), body(infra.EXCEPTION_REPORT_DROPIN_CONTENT))
+        self.assertTrue(os.path.isfile(os.path.join(daemon, "exception_reporter.py")))
 
 
 class PagerOsMonitorUnitTests(_SafePatchTestCase):
