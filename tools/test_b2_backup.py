@@ -611,5 +611,74 @@ class QsoRecordingsBackupTests(_Env):
         self.assertEqual(bb.build_sources(self.cfg), [])
 
 
+class SingleFileBackupTests(_Env):
+    """Tests [@ANCHOR: b2_backup:restore_file]: a single-file source (hams1's hams_crypto.secret) is uploaded on stdin,
+    comes back with the same sha256 in the restore test, and is skipped when absent."""
+
+    @classmethod
+    def setUpClass(cls):
+        _require("kopia")
+
+    def setUp(self):
+        super().setUp()
+        self.secret = self.t("hams_crypto.secret")
+        fd = os.open(self.secret, os.O_WRONLY | os.O_CREAT, 0o400)
+        with os.fdopen(fd, "w") as f:
+            f.write("unit-test-key-material-not-a-real-secret==")
+        self.cfg_path = self.config(
+            files=[{"name": "hams_crypto_secret", "path": self.secret, "optional": True}])
+        self.cfg = bb.load_config(self.cfg_path)
+        self.env = bb.kopia_env(self.cfg, {"KOPIA_PASSWORD": PASSWORD})
+        self.assertEqual(self.run_main(self.cfg_path, "init")[0], 0)
+
+    def test_the_file_is_snapshotted_and_no_copy_is_staged_on_disk(self):
+        code, out, err = self.run_main(self.cfg_path, "backup")
+        self.assertEqual(code, 0, out + err)
+        snap = bb.latest_snapshot(self.cfg, self.env, bb.build_sources(self.cfg)[0], bb.Runner(plan=False))
+        listing = subprocess.run(["kopia", "ls", "-r", snap["rootEntry"]["obj"]], env=self.env,
+                                 capture_output=True, text=True, check=True).stdout
+        self.assertIn("hams_crypto.secret", listing)
+        staged = []
+        for root, _dirs, names in os.walk(self.cfg.state_dir):
+            staged += [n for n in names if "crypto" in n]
+        self.assertEqual(staged, [])
+        status = _load(self.cfg.status_path)
+        self.assertTrue(status["ok"])
+        self.assertNotIn("unit-test-key-material", json.dumps(status) + out + err)
+
+    def test_restore_test_compares_the_sha256_with_the_live_file(self):
+        self.assertEqual(self.run_main(self.cfg_path, "backup")[0], 0)
+        code, out, err = self.run_main(self.cfg_path, "restore-test")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(_load(self.cfg.restore_status_path)["files"],
+                         [{"file": "hams_crypto_secret", "compared": True}])
+        self.assertNotIn("unit-test-key-material", out + err)
+
+    def test_a_live_file_that_changed_after_the_snapshot_fails_the_restore_test(self):
+        self.assertEqual(self.run_main(self.cfg_path, "backup")[0], 0)
+        os.chmod(self.secret, 0o600)
+        with open(self.secret, "w") as f:
+            f.write("a-different-key")
+        code, out, err = self.run_main(self.cfg_path, "restore-test")
+        self.assertNotEqual(code, 0, out + err)
+        self.assertFalse(_load(self.cfg.restore_status_path)["ok"])
+
+    def test_absent_optional_file_is_skipped_but_a_required_one_fails(self):
+        os.chmod(self.secret, 0o600)
+        os.remove(self.secret)
+        self.assertEqual(bb.build_sources(self.cfg), [])
+        required = self.config(files=[{"name": "hams_crypto_secret", "path": self.secret}])
+        code, out, err = self.run_main(required, "backup")
+        self.assertNotEqual(code, 0, out + err)
+
+    def test_bad_file_entries_are_refused(self):
+        for bad in ({"name": "Bad Name", "path": self.secret}, {"name": "ok", "path": "relative"}):
+            with self.assertRaises(bb.ConfigError):
+                bb.load_config(self.config(files=[bad]))
+        with self.assertRaises(bb.ConfigError):
+            bb.load_config(self.config(paths=[{"name": "dup", "path": self.tmp}],
+                                       files=[{"name": "dup", "path": self.secret}]))
+
+
 if __name__ == "__main__":
     unittest.main()
