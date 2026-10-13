@@ -68,6 +68,23 @@ class DefaultTestTmpdirTests(unittest.TestCase):
         self.assertEqual(_test_runner.DEFAULT_TEST_TMPDIR, "/var/lib/odoo/tmp")
 
 
+class SkipGoogleFontsDownloadTests(unittest.TestCase):
+    """A test database build does not download Google's fonts (ham_init); production, which never runs test.py, still does."""
+
+    def test_the_switch_is_on_by_default_for_the_processes_the_runner_starts(self):
+        environ = {}
+        self.assertEqual(_test_runner.apply_skip_google_fonts_download(environ), "1")
+        self.assertEqual(environ["HAMS_SKIP_GOOGLE_FONTS_DOWNLOAD"], "1")
+
+    def test_a_value_the_caller_chose_is_kept(self):
+        environ = {"HAMS_SKIP_GOOGLE_FONTS_DOWNLOAD": "0"}
+        self.assertEqual(_test_runner.apply_skip_google_fonts_download(environ), "0")
+
+    def test_main_applies_it_before_anything_is_spawned(self):
+        source = inspect.getsource(_test_runner.main)
+        self.assertIn("apply_skip_google_fonts_download(os.environ)", source)
+
+
 class RunCmdHangRecoveryTests(unittest.TestCase):
     """run_cmd()'s 60-second no-output branch used to kill headless chrome
     and retry FOREVER on every timeout -- `force_killed` was assigned

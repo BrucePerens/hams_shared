@@ -1037,6 +1037,19 @@ def apply_default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR):
     return environ.get("TMPDIR")
 
 
+# Operational switch read by ham_init (Website._hams_serve_google_fonts_at_install): do not download Google's fonts while a module is
+# installed. Every test database build installs ham_init, and that download needs the network. This is a flag the runner sets for the
+# processes it starts, not a probe of Odoo's test_enable (banned): production never has it set, so it downloads there. A caller that
+# has chosen a value (for example "0" to exercise the download) keeps it.
+SKIP_GOOGLE_FONTS_DOWNLOAD_ENV = "HAMS_SKIP_GOOGLE_FONTS_DOWNLOAD"
+
+
+def apply_skip_google_fonts_download(environ):
+    """Default the switch on for the processes the runner starts, unless the caller already chose a value."""
+    environ.setdefault(SKIP_GOOGLE_FONTS_DOWNLOAD_ENV, "1")
+    return environ[SKIP_GOOGLE_FONTS_DOWNLOAD_ENV]
+
+
 def run_cmd(cmd, extractor=None, cwd=None, env=None):
     if env is None:
         env = dict(os.environ)
@@ -3307,6 +3320,7 @@ def main():
 
     # Before anything is spawned, so every child (Odoo, its headless Chrome profiles) inherits it in every mode, namespaced or flat.
     apply_default_test_tmpdir(os.environ)
+    apply_skip_google_fonts_download(os.environ)
 
     if args.pause_on_fail:
         os.environ["HAMS_PAUSE_ON_FAIL"] = "1"
