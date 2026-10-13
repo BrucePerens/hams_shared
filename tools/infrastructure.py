@@ -441,15 +441,38 @@ def hook_clear_pycache(env_vars, dest_dir, path, run_cmd_func):
         compileall.compile_dir(daemons, quiet=1)
 
 
+def _install_apt_keyring(label, url, out, path, run_cmd_func):
+    """Dearmors the downloaded key at `path` into the keyring `out`.
+
+    download_file() leaves an empty file when the key server cannot be reached. Handing that to
+    `gpg --dearmor` died with "gpg: no valid OpenPGP data found" (QA-018, 2026-10-13), even on a host
+    whose keyring was already installed. An empty download therefore keeps an installed keyring
+    untouched, and fails with a message naming the key and the keyring only when there is none."""
+    try:
+        have_download = os.path.getsize(path) > 0
+    except OSError:
+        have_download = False
+    if not have_download:
+        safe_remove(path)
+        if os.path.exists(out) and os.path.getsize(out) > 0:
+            _logger.warning("Could not fetch the %s key from %s; keeping the installed keyring %s", label, url, out)
+            return
+        raise RuntimeError(
+            f"Cannot install the {label} apt key: {url} could not be fetched (network unreachable?) and no "
+            f"keyring exists at {out}. Provision once with network access, or place the key there by hand."
+        )
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    run_cmd_func(["gpg", "--dearmor", "-o", out, "--yes", path])
+    safe_remove(path)
+
+
 def hook_install_odoo_key(env_vars, dest_dir, path, run_cmd_func):
     out = (
         os.path.join(dest_dir, "usr/share/keyrings/odoo-archive-keyring.gpg")
         if dest_dir
         else "/usr/share/keyrings/odoo-archive-keyring.gpg"
     )
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    run_cmd_func(["gpg", "--dearmor", "-o", out, "--yes", path])
-    safe_remove(path)
+    _install_apt_keyring("Odoo", "https://nightly.odoo.com/odoo.key", out, path, run_cmd_func)
 
 
 def hook_install_pg_key(env_vars, dest_dir, path, run_cmd_func):
@@ -458,9 +481,7 @@ def hook_install_pg_key(env_vars, dest_dir, path, run_cmd_func):
         if dest_dir
         else "/usr/share/keyrings/postgresql-keyring.gpg"
     )
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    run_cmd_func(["gpg", "--dearmor", "-o", out, "--yes", path])
-    safe_remove(path)
+    _install_apt_keyring("PostgreSQL", "https://www.postgresql.org/media/keys/ACCC4CF8.asc", out, path, run_cmd_func)
 
 
 # Debian's own dpkg-architecture CPU names -> kopia's own GitHub release
@@ -3340,6 +3361,7 @@ WantedBy=multi-user.target
         {
             "path": "/tmp/odoo.key",
             "url": "https://nightly.odoo.com/odoo.key",
+            "skip_if_installed": "/usr/share/keyrings/odoo-archive-keyring.gpg",
             "owner": "root:root",
             "mode": "644",
             "environments": ["early_prod"],
@@ -3348,6 +3370,7 @@ WantedBy=multi-user.target
         {
             "path": "/tmp/pg.key",
             "url": "https://www.postgresql.org/media/keys/ACCC4CF8.asc",
+            "skip_if_installed": "/usr/share/keyrings/postgresql-keyring.gpg",
             "owner": "root:root",
             "mode": "644",
             "environments": ["early_prod"],
@@ -10020,6 +10043,15 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
         src = file_spec.get("src")
         url = file_spec.get("url")
         hooks = file_spec.get("post_provision_hooks", [])
+
+        # A downloaded file whose hook installs it somewhere else (an apt keyring) is not fetched again once
+        # that result exists: a run needs no network for a key it already has (QA-018).
+        installed = file_spec.get("skip_if_installed")
+        if url and installed:
+            installed_path = os.path.join(dest_dir, installed.lstrip("/")) if dest_dir else installed
+            if os.path.exists(installed_path) and os.path.getsize(installed_path) > 0:
+                _plan("skip", f"download {url} ({installed_path} is already installed)")
+                continue
 
         if src and _skip_deployed_copy(file_spec, path):
             _logger.warning(

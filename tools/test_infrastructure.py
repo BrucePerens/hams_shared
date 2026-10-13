@@ -717,6 +717,44 @@ class HookInstallKeyringTests(_TmpDirTestCase):
         mock_run.assert_called_once_with(["gpg", "--dearmor", "-o", out, "--yes", key_path])
         self.assertFalse(os.path.exists(key_path))
 
+    def test_an_empty_download_keeps_an_installed_keyring_and_never_runs_gpg(self):
+        # QA-018: with the key server unreachable download_file() leaves an empty file; gpg --dearmor on it died.
+        out = os.path.join(self.tmp, "usr/share/keyrings/odoo-archive-keyring.gpg")
+        os.makedirs(os.path.dirname(out))
+        with open(out, "wb") as f:
+            f.write(b"installed keyring")
+        key_path = os.path.join(self.tmp, "downloaded.key")
+        open(key_path, "w").close()
+        mock_run = MagicMock()
+        infra.hook_install_odoo_key({}, self.tmp, key_path, mock_run)
+        mock_run.assert_not_called()
+        with open(out, "rb") as f:
+            self.assertEqual(f.read(), b"installed keyring")
+        self.assertFalse(os.path.exists(key_path))
+
+    def test_an_empty_download_with_no_keyring_fails_with_a_message_naming_the_url_and_the_keyring(self):
+        key_path = os.path.join(self.tmp, "downloaded.key")
+        open(key_path, "w").close()
+        for hook, url in ((infra.hook_install_odoo_key, "nightly.odoo.com/odoo.key"),
+                          (infra.hook_install_pg_key, "postgresql.org/media/keys")):
+            with self.assertRaises(RuntimeError) as ctx:
+                hook({}, self.tmp, key_path, MagicMock())
+            self.assertIn(url, str(ctx.exception))
+            self.assertIn("keyring", str(ctx.exception))
+
+    def test_provisioning_does_not_fetch_a_key_whose_keyring_is_already_installed(self):
+        # QA-018: a run needs no network for a key it already has.
+        out = os.path.join(self.tmp, "usr/share/keyrings/odoo-archive-keyring.gpg")
+        os.makedirs(os.path.dirname(out))
+        with open(out, "wb") as f:
+            f.write(b"installed keyring")
+        spec = next(d for d in infra.MANIFEST["static_files"] if d.get("url") == "https://nightly.odoo.com/odoo.key")
+        self.assertEqual(spec["skip_if_installed"], "/usr/share/keyrings/odoo-archive-keyring.gpg")
+        with patch.dict(infra.MANIFEST, {"static_files": [spec]}), \
+                patch.object(infra, "download_file") as mock_download:
+            infra.provision_static_files(MagicMock(), {}, environment="early_prod", dest_dir=self.tmp)
+        mock_download.assert_not_called()
+
     def test_hook_install_pg_key_dearmors_into_the_postgresql_keyring_path(self):
         key_path = os.path.join(self.tmp, "downloaded.key")
         with open(key_path, "w") as f:
