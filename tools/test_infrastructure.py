@@ -4429,6 +4429,68 @@ class SimulatedBandUnitHardeningTests(unittest.TestCase):
         self.assertEqual(self._values("hams.simulated.band.service", "TasksMax"), [])
 
 
+class SimulatedBandRecordingProvisioningTests(unittest.TestCase):
+    """The Simulated Band's QSO recording directory and the drop-in that turns recording on.
+
+    Found on hams1, 2026-10-12: HAMS_QSO_RECORDING_DIR alone would have panicked the SFU, because the unit is
+    ProtectSystem=strict with an empty ReadWritePaths=; Odoo reads the same path from a system parameter. Recordings are
+    kept forever (Bruce's standing rule), so provisioning creates the directory and nothing ever deletes in it."""
+
+    UNIT = "hams.simulated.band.service"
+    PATH = "/var/lib/hams/qso_recordings"
+    DROPIN = "/etc/systemd/system/hams.simulated.band.service.d/qso-recording.conf"
+
+    def _dropin(self):
+        matches = [e for e in infra.MANIFEST["static_files"] if e["path"] == self.DROPIN]
+        self.assertEqual(len(matches), 1, "the MANIFEST must carry exactly one qso-recording.conf drop-in")
+        return matches[0]
+
+    def _directory(self):
+        matches = [d for d in infra.MANIFEST["directories"] if d["path"] == self.PATH]
+        self.assertEqual(len(matches), 1, "the MANIFEST must carry exactly one recordings directory")
+        return matches[0]
+
+    def test_the_dropin_sets_the_variable_and_opens_the_same_path_for_writing(self):
+        text = self._dropin()["content"]
+        self.assertIn("[Service]\n", text)
+        self.assertIn('Environment="HAMS_QSO_RECORDING_DIR=' + self.PATH + '"\n', text)
+        self.assertIn("ReadWritePaths=" + self.PATH + "\n", text)
+        # One path in both lines, and nothing else writable.
+        self.assertEqual(set(re.findall(r"/var/lib/[\w/]+", text)), {self.PATH})
+
+    def test_the_directory_is_odoo_owned_private_and_production_only(self):
+        spec = self._directory()
+        self.assertEqual(spec["owner"], "odoo:odoo")
+        self.assertEqual(spec["provision_mode"], "750")
+        self.assertEqual(spec["environments"], ["prod"])
+        self.assertNotIn("runtime_mount", spec)
+        self.assertNotIn("preserve_existing", spec)
+
+    def test_the_dropin_is_root_owned_world_readable_and_production_only(self):
+        spec = self._dropin()
+        self.assertEqual(spec["owner"], "root:root")
+        self.assertEqual(spec["mode"], "644")
+        self.assertEqual(spec["environments"], ["prod"])
+
+    def test_the_unit_runs_as_the_directory_owner_and_keeps_an_empty_base_write_list(self):
+        # The base unit stays writable nowhere: a test environment has no recordings directory, and a missing
+        # ReadWritePaths= target fails the unit (226/NAMESPACE). The drop-in adds the path in production only.
+        self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, "User"), [self._directory()["owner"].split(":")[0]])
+        self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, "ReadWritePaths"), [])
+        self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, "ProtectSystem"), ["strict"])
+        content = next(e["content"] for e in infra.MANIFEST["static_files"] if e["path"].endswith("/" + self.UNIT))
+        self.assertNotIn("HAMS_QSO_RECORDING_DIR", content)
+
+    def test_nothing_in_the_provisioning_deletes_recordings(self):
+        # Retained forever: no cron, timer or unit in the MANIFEST may touch the directory except to read it.
+        for spec in infra.MANIFEST["static_files"]:
+            if spec["path"] == self.DROPIN:
+                continue
+            text = spec.get("content") or ""
+            if self.PATH in text:
+                self.assertNotRegex(text, r"(?i)\b(rm|find\b.*-delete|tmpfiles|systemd-tmpfiles)\b", spec["path"])
+
+
 class FamilyAccountUnitTests(_SafePatchTestCase):
     """Tests [@ANCHOR: infrastructure:family_account_units]: a unit that has left the shared `odoo`
     account is held to the account, directory and environment rules of the isolation plan."""

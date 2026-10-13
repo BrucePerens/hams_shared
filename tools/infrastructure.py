@@ -2856,6 +2856,20 @@ MANIFEST = {
         },
 
         {
+            # Simulated Band recordings: the SFU (hams.simulated.band.service, User=odoo) writes one .opus plus .json
+            # sidecar per recorded contact here, and Odoo (same account) reads them: ham_communications_consent's ingest
+            # scan and ham_simulated_band's session log, both through the system parameter
+            # ham_communications_consent.qso_recording_root, which a ham_communications_consent migration sets to this path.
+            # Recordings are retained forever (Bruce's standing rule; the Simulated Band is public like a ham band), so
+            # nothing deletes in here; the pager check on this filesystem is what warns before it fills.
+            # Production only: a test environment never sets HAMS_QSO_RECORDING_DIR, and a set variable with a
+            # missing directory is a startup panic by design. Not mounted into any other runtime.
+            "path": "/var/lib/hams/qso_recordings",
+            "owner": "odoo:odoo",
+            "provision_mode": "750",
+            "environments": ["prod"],
+        },
+        {
             "path": "/var/lib/odoo/backups",
             "owner": "odoo:hams_com",
             "provision_mode": "750",
@@ -7640,6 +7654,24 @@ WantedBy=multi-user.target
             "owner": "root:root",
             "mode": "644",
             "environments": ["prod", "test"],
+        },
+        {
+            # Turns recording on for the SFU (daemons/hams_simulated_band recording.rs reads HAMS_QSO_RECORDING_DIR; unset
+            # means no recorder, no sessions/ log, and no "recorded by the Official Observer" notice). Both lines are
+            # needed: the unit above has ProtectSystem=strict and an empty ReadWritePaths=, so a set but unwritable
+            # directory is a startup panic. A drop-in, not the unit text, because the unit is also installed in a test
+            # environment, where the directory below does not exist and a missing ReadWritePaths= target fails the
+            # unit (226/NAMESPACE). The directory is /var/lib/hams/qso_recordings in the "directories" list, created
+            # before this unit starts. Rollback: remove this file, daemon-reload, restart the unit.
+            "path": "/etc/systemd/system/hams.simulated.band.service.d/qso-recording.conf",
+            "content": """\
+[Service]
+Environment="HAMS_QSO_RECORDING_DIR=/var/lib/hams/qso_recordings"
+ReadWritePaths=/var/lib/hams/qso_recordings
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
         },
         {
             "path": "/opt/hams/systemd/hams.simulated.bots.service",
