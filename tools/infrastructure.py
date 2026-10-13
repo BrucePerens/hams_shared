@@ -35,6 +35,8 @@ import hashlib
 import urllib.parse
 from datetime import datetime
 
+import provision_cache
+
 _logger = logging.getLogger(__name__)
 
 
@@ -366,15 +368,23 @@ def _file_state(path, new_content):
         return "changed"
 
 
-def download_file(url, path, mode, env_vars):
+def download_file(url, path, mode, env_vars, expected_sha256=None):
+    """Fetches `url` to `path` through the provisioning download cache (provision_cache.py).
+
+    A network failure falls back to the cached copy (stale-if-error); with none, an installed `path` is
+    kept, else an empty file is left and the failure is recorded. A file whose hash is not the pinned
+    `expected_sha256`, or an unpinned one whose trust-on-first-use hash has changed, is refused: that
+    raises provision_cache.HashRejected (it must be reviewed; --refresh-cache accepts it)."""
     ua = env_vars.get(
         "SYSTEM_USER_AGENT",
         "HamsComSyncDaemon/1.0 (+https://crawler.hams.com)",
     )
-    req = urllib.request.Request(url, headers={"User-Agent": ua})
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            data = response.read()
+        result = provision_cache.fetch(url, user_agent=ua, expected_sha256=expected_sha256)
+    except provision_cache.HashRejected as e:
+        _logger.error("[!] %s", e)
+        record_hook_failure(f"download_file:{url}", e)
+        raise
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("Network partition fallback safety hit fetching %s: %s", url, e)
         record_hook_failure(f"download_file:{url}", e)
@@ -383,12 +393,10 @@ def download_file(url, path, mode, env_vars):
         # apt step failed until the next run. Keep the existing file and report the failure.
         if os.path.exists(path) and os.path.getsize(path) > 0:
             return
-        data = b""
-
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(path, flags, mode)
-    with open(fd, "wb") as f:
-        f.write(data)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        os.close(fd)
+        return
+    provision_cache.install(result, path, mode)
 
 
 def hook_generate_ssl(env_vars, dest_dir, path, run_cmd_func):
@@ -3101,6 +3109,7 @@ MANIFEST = {
     "static_files": [
         {
             "path": "/etc/apt/sources.list.d/odoo.list",
+            "apt_only": True,
             "content": "deb [signed-by=/usr/share/keyrings/odoo-archive-keyring.gpg] https://nightly.odoo.com/19.0/nightly/deb/ ./\n",
             "owner": "root:root",
             "mode": "644",
@@ -3361,6 +3370,7 @@ WantedBy=multi-user.target
         {
             "path": "/tmp/odoo.key",
             "url": "https://nightly.odoo.com/odoo.key",
+            "apt_only": True,
             "skip_if_installed": "/usr/share/keyrings/odoo-archive-keyring.gpg",
             "owner": "root:root",
             "mode": "644",
@@ -3370,6 +3380,7 @@ WantedBy=multi-user.target
         {
             "path": "/tmp/pg.key",
             "url": "https://www.postgresql.org/media/keys/ACCC4CF8.asc",
+            "apt_only": True,
             "skip_if_installed": "/usr/share/keyrings/postgresql-keyring.gpg",
             "owner": "root:root",
             "mode": "644",
@@ -3378,6 +3389,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/etc/apt/sources.list.d/pgdg.list",
+            "apt_only": True,
             "content": "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] https://apt.postgresql.org/pub/repos/apt/ {DEB_CODENAME}-pgdg main\n",
             "owner": "root:root",
             "mode": "644",
@@ -3386,6 +3398,13 @@ WantedBy=multi-user.target
         {
             "path": "/tmp/kopia.tar.gz",
             "url": "https://github.com/kopia/kopia/releases/download/v0.23.1/kopia-0.23.1-linux-{KOPIA_ARCH}.tar.gz",
+            # From the release's own checksums.txt (v0.23.1). Pinned: a cached copy is used with no network and a
+            # download with another hash is refused.
+            "sha256_by_arch": {
+                "x64": "416d0f84a3dbb321a8b2d8f0997b1a0a6e915babe79ee76fa6e4d2bd1e1c5178",
+                "arm64": "a4ffbc019e0b0f932e2632054e73ec521dc1e80172a00095369c53ecf4e5a6cb",
+                "arm": "3e0d7fa496941204ae3ff4da52eb2688aff05b43549297109b914b072394ec91",
+            },
             "owner": "root:root",
             "mode": "644",
             "environments": ["prod"],
@@ -10022,12 +10041,45 @@ def render_static_content(file_spec, env_vars):
     return rendered
 
 
+_APT_ONLY_PATH_PREFIXES = ("/usr/share/keyrings/", "/etc/apt/")
+
+
+def is_apt_only(file_spec):
+    """True for a static_files entry only the apt phase uses: marked `"apt_only": True`, or whose destination
+    (or `skip_if_installed` target, for a key that a hook dearmors into a keyring) is under
+    /usr/share/keyrings/ or /etc/apt/."""
+    if file_spec.get("apt_only"):
+        return True
+    return any(
+        str(file_spec.get(field) or "").startswith(_APT_ONLY_PATH_PREFIXES)
+        for field in ("path", "skip_if_installed")
+    )
+
+
+def _pinned_sha256(file_spec, env_vars):
+    """The entry's published SHA-256: `sha256` (one value), or `sha256_by_arch` keyed by KOPIA_ARCH /
+    DEB_TARGET_ARCH_CPU. None when upstream publishes none (trust on first use then applies)."""
+    if file_spec.get("sha256"):
+        return file_spec["sha256"]
+    table = file_spec.get("sha256_by_arch")
+    if table:
+        return table.get(env_vars.get("KOPIA_ARCH") or env_vars.get("DEB_TARGET_ARCH_CPU"))
+    return None
+
+
 # [@ANCHOR: infrastructure:provision_static_files]
-def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir="", only_host_class=None):
+def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir="", only_host_class=None,
+                           skip_apt=False):
+    """Writes the MANIFEST static_files for `environment`. skip_apt=True (test.py, provision with no apt phase)
+    leaves out the apt-only entries (is_apt_only): nothing then fetches an apt signing key or writes an
+    apt source list for a run that never calls apt."""
     for file_spec in MANIFEST.get("static_files", []):
         if environment not in file_spec["environments"]:
             continue
         if not _spec_selected(file_spec, only_host_class):
+            continue
+        if skip_apt and is_apt_only(file_spec):
+            _plan("skip", f"{file_spec['path']} (apt-only; the apt phase is skipped)")
             continue
 
         condition_env = file_spec.get("condition_env")
@@ -10117,7 +10169,7 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
                     env_vars["DEB_TARGET_ARCH_CPU"] = res.stdout.strip()
             if "{KOPIA_ARCH}" in url and "KOPIA_ARCH" not in env_vars:
                 env_vars["KOPIA_ARCH"] = _kopia_release_arch(env_vars)
-            download_file(format_env(url, env_vars), path, mode, env_vars)
+            download_file(format_env(url, env_vars), path, mode, env_vars, expected_sha256=_pinned_sha256(file_spec, env_vars))
         else:
             content = render_static_content(file_spec, env_vars)
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
@@ -10169,6 +10221,18 @@ def _fetch_model_to(url, part_path, expected_size):
             out.write(chunk)
 
 
+def _fetch_model_via_cache(spec, part_path):
+    """Places the model file `spec` at `part_path` from the provisioning download cache (provision_cache.py),
+    downloading it into the cache first when it is not there. The SHA-256 pin makes a cached copy valid
+    with no network, so a re-provision after /opt/hams/models is wiped does not download 75 MB again."""
+    def download(url, tmp_path, request_headers):
+        _fetch_model_to(url, tmp_path, spec["size"])
+        return 200, {}
+
+    result = provision_cache.fetch(spec["url"], expected_sha256=spec["sha256"], downloader=download)
+    shutil.copyfile(result.path, part_path)
+
+
 def provision_model_files(environment="prod", dest_dir="", fetch=None):
     """Places the files of MANIFEST["model_files"] under /opt/hams/models, checksum-verified.
 
@@ -10182,7 +10246,7 @@ def provision_model_files(environment="prod", dest_dir="", fetch=None):
     Returns the list of paths that failed. Honours plan mode."""
     if environment != "prod" or dest_dir or os.environ.get("HAMS_ISOLATED_NS") == "1":
         return []
-    fetch = fetch or _fetch_model_to
+    fetch_is_default = fetch is None
     failed = []
     for spec in MANIFEST.get("model_files", []):
         path = spec["path"]
@@ -10193,7 +10257,10 @@ def provision_model_files(environment="prod", dest_dir="", fetch=None):
         part = path + ".part"
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            fetch(spec["url"], part, spec["size"])
+            if fetch_is_default:
+                _fetch_model_via_cache(spec, part)
+            else:
+                fetch(spec["url"], part, spec["size"])
             if not _model_file_verifies(part, spec):
                 raise ValueError(f"{path}: downloaded file does not match the pinned size/SHA-256")
             apply_permissions(part, spec.get("owner"), int(spec.get("mode", "640"), 8))
@@ -12555,7 +12622,7 @@ def provision_environment(
     try:
         provision_system_accounts(run_cmd_func, environment="prod")
         provision_system_accounts(run_cmd_func, environment="test")
-        provision_static_files(run_cmd_func, env_vars, environment="early_prod")
+        provision_static_files(run_cmd_func, env_vars, environment="early_prod", skip_apt=skip_apt)
 
         if not skip_apt:
             _logger.info("[*] Provisioning APT Sources and Packages...")
@@ -12767,8 +12834,8 @@ def provision_environment(
         else:
             _logger.info("[*] Bypassing APT phase (skip_apt=True)...")
 
-        provision_static_files(run_cmd_func, env_vars, environment="prod")
-        provision_static_files(run_cmd_func, env_vars, environment="test")
+        provision_static_files(run_cmd_func, env_vars, environment="prod", skip_apt=skip_apt)
+        provision_static_files(run_cmd_func, env_vars, environment="test", skip_apt=skip_apt)
         # Speech models for the bots: production-class runs only (see provision_model_files).
         provision_model_files(environment="test" if is_test else "prod")
 

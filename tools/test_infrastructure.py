@@ -36,6 +36,7 @@ from unittest.mock import MagicMock, patch
 
 import b2_backup
 import infrastructure as infra
+import provision_cache
 
 _REAL_OPEN = builtins.open
 
@@ -43,7 +44,17 @@ _REAL_OPEN = builtins.open
 class _SafePatchTestCase(unittest.TestCase):
     """Matches test_provision.py's own convention: a self.safe_patch()
     wrapper instead of a bare `with patch(...)` context manager or
-    `@patch` decorator at each call site."""
+    `@patch` decorator at each call site. Every test gets its own empty provisioning download cache
+    (HAMS_PROVISION_CACHE), so none reads or writes the developer's real one."""
+
+    def setUp(self):
+        cache = tempfile.mkdtemp(prefix="hams-test-cache-")
+        self.addCleanup(shutil.rmtree, cache, ignore_errors=True)
+        env = patch.dict(os.environ, {"HAMS_PROVISION_CACHE": cache})
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("HAMS_PROVISION_REFRESH", None)
+        super().setUp()
 
     def safe_patch(self, target, *args, **kwargs):
         patcher = patch(target, *args, **kwargs)
@@ -60,6 +71,7 @@ class _SafePatchTestCase(unittest.TestCase):
 
 class _TmpDirTestCase(_SafePatchTestCase):
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
         # _hook_failures is module-level state shared by every test in this
@@ -229,7 +241,7 @@ class ApplyPermissionsTests(_TmpDirTestCase):
 class DownloadFileTests(_TmpDirTestCase):
     def test_writes_the_real_response_body_to_the_destination_path(self):
         mock_response = MagicMock()
-        mock_response.read.return_value = b"file contents"
+        mock_response.read.side_effect = [b"file contents", b""]
         mock_response.__enter__.return_value = mock_response
         mock_response.__exit__.return_value = False
         self.safe_patch_object(infra.urllib.request, "urlopen", return_value=mock_response)
@@ -5701,13 +5713,14 @@ class TicketTriageTimerUnitTests(unittest.TestCase):
         self.assertNotIn("export HAMS_TRIAGE_ENABLE_PROPOSE_FIX", text)
 
 
-class ModelFilesTests(unittest.TestCase):
+class ModelFilesTests(_SafePatchTestCase):
     """Tests [@ANCHOR: infrastructure:provision_model_files]
 
     The simulated-band bots' Piper voice and faster-whisper model are fetched on a production
     host only, checksum-verified. No test here touches the network: the transport is injected."""
 
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         infra.reset_hook_failures()
@@ -6689,3 +6702,259 @@ class NginxFrontEndManifestTests(_TmpDirTestCase):
         infra.hook_enable_nginx_front_end({}, stage, conf, run)
         run.assert_not_called()
         self.assertTrue(os.path.islink(os.path.join(stage, "etc/nginx/sites-enabled/hams-tunnel-origin.conf")))
+
+
+class ProvisionDownloadCacheTests(_TmpDirTestCase):
+    """Tests provision_cache.py: the provisioning download cache. No test touches the network; the
+    transport is a fake that counts its calls."""
+
+    URL = "https://example.invalid/odoo.key"
+
+    def _transport(self, body=b"KEY-1", etag='"v1"', fail=None, calls=None):
+        calls = calls if calls is not None else []
+
+        def download(url, tmp_path, request_headers):
+            calls.append(dict(request_headers))
+            if fail:
+                raise fail
+            if request_headers.get("If-None-Match") == etag:
+                return 304, {}
+            with open(tmp_path, "wb") as f:
+                f.write(body)
+            return 200, {"ETag": etag}
+        return download, calls
+
+    def _read(self, result):
+        with open(result.path, "rb") as f:
+            return f.read()
+
+    def test_a_cache_hit_makes_no_network_request(self):
+        download, calls = self._transport()
+        first = provision_cache.fetch(self.URL, downloader=download)
+        second = provision_cache.fetch(self.URL, downloader=download)
+        self.assertEqual((first.status, second.status), ("fetched", "hit"))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self._read(second), b"KEY-1")
+
+    def test_an_old_entry_is_revalidated_with_the_etag_and_a_304_renews_it(self):
+        download, calls = self._transport()
+        provision_cache.fetch(self.URL, downloader=download, now=1000)
+        later = 1000 + 8 * 86400
+        result = provision_cache.fetch(self.URL, downloader=download, now=later)
+        self.assertEqual(result.status, "revalidated")
+        self.assertEqual(calls[1].get("If-None-Match"), '"v1"')
+        again = provision_cache.fetch(self.URL, downloader=download, now=later + 60)
+        self.assertEqual(again.status, "hit")
+        self.assertEqual(len(calls), 2)
+
+    def test_the_cache_dir_defaults_and_the_env_override(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HAMS_PROVISION_CACHE", None)
+            with patch.object(provision_cache.os, "geteuid", return_value=0):
+                self.assertEqual(provision_cache.cache_root(), "/var/cache/hams-provision")
+            with patch.object(provision_cache.os, "geteuid", return_value=1000):
+                self.assertTrue(provision_cache.cache_root().endswith("/.cache/hams_provision"))
+        self.assertEqual(provision_cache.cache_root(), os.environ["HAMS_PROVISION_CACHE"])
+
+    def test_a_changed_trust_on_first_use_hash_is_refused_and_the_old_copy_kept(self):
+        download, _ = self._transport()
+        provision_cache.fetch(self.URL, downloader=download, now=0)
+        evil, _ = self._transport(body=b"KEY-2", etag='"v2"')
+        with self.assertRaises(provision_cache.HashRejected) as ctx:
+            provision_cache.fetch(self.URL, downloader=evil, now=10 * 86400)
+        self.assertIn(hashlib.sha256(b"KEY-1").hexdigest(), str(ctx.exception))
+        self.assertIn(hashlib.sha256(b"KEY-2").hexdigest(), str(ctx.exception))
+        # The refused change did not replace the recorded copy.
+        kept = provision_cache.fetch(self.URL, downloader=download, now=1)
+        self.assertEqual(self._read(kept), b"KEY-1")
+
+    def test_refresh_accepts_a_changed_hash(self):
+        download, _ = self._transport()
+        provision_cache.fetch(self.URL, downloader=download, now=0)
+        new, _ = self._transport(body=b"KEY-2", etag='"v2"')
+        with patch.dict(os.environ, {"HAMS_PROVISION_REFRESH": "1"}):
+            result = provision_cache.fetch(self.URL, downloader=new, now=1)
+        self.assertEqual(self._read(result), b"KEY-2")
+
+    def test_the_network_failing_falls_back_to_the_cached_copy_with_a_warning(self):
+        download, _ = self._transport()
+        provision_cache.fetch(self.URL, downloader=download, now=0)
+        down, _ = self._transport(fail=OSError("unreachable"))
+        with self.assertLogs(provision_cache._logger, "WARNING"):
+            result = provision_cache.fetch(self.URL, downloader=down, now=30 * 86400)
+        self.assertEqual((result.status, self._read(result)), ("stale", b"KEY-1"))
+
+    def test_the_network_failing_with_no_cached_copy_is_an_error(self):
+        down, _ = self._transport(fail=OSError("unreachable"))
+        with self.assertRaises(provision_cache.Unavailable):
+            provision_cache.fetch(self.URL, downloader=down)
+
+    def test_a_pinned_hash_is_used_without_network_and_a_wrong_download_is_never_cached(self):
+        good = hashlib.sha256(b"KEY-1").hexdigest()
+        wrong, calls = self._transport(body=b"EVIL")
+        with self.assertRaises(provision_cache.HashRejected):
+            provision_cache.fetch(self.URL, expected_sha256=good, downloader=wrong)
+        download, calls = self._transport()
+        provision_cache.fetch(self.URL, expected_sha256=good, downloader=download, now=0)
+        result = provision_cache.fetch(self.URL, expected_sha256=good, downloader=download, now=999 * 86400)
+        self.assertEqual((result.status, len(calls)), ("hit", 1))
+
+    def test_a_corrupted_blob_is_not_served(self):
+        download, calls = self._transport()
+        result = provision_cache.fetch(self.URL, downloader=download, now=0)
+        with open(result.path, "wb") as f:
+            f.write(b"tampered")
+        with self.assertRaises(provision_cache.HashRejected):
+            provision_cache.fetch(self.URL, downloader=self._transport(body=b"other")[0], now=1)
+
+    def test_credentialed_and_non_https_urls_are_never_stored(self):
+        for url in ("https://user:pw@example.invalid/f", "https://example.invalid/f?token=abc",
+                    "https://example.invalid/f?X-Amz-Signature=1", "http://example.invalid/f"):
+            self.assertFalse(provision_cache.is_cacheable(url), url)
+            download, _ = self._transport()
+            result = provision_cache.fetch(url, downloader=download)
+            self.assertFalse(result.cached)
+            os.unlink(result.path)
+        self.assertEqual(os.listdir(provision_cache.cache_root()), [])
+
+    def test_writes_are_atomic_a_failed_download_leaves_no_entry_or_partial_file(self):
+        def partial(url, tmp_path, request_headers):
+            with open(tmp_path, "wb") as f:
+                f.write(b"half")
+            raise OSError("connection reset")
+        with self.assertRaises(provision_cache.Unavailable):
+            provision_cache.fetch(self.URL, downloader=partial)
+        entry = provision_cache._entry_dir(self.URL)
+        self.assertEqual(os.listdir(entry), [])
+
+    def test_a_crash_while_swapping_in_the_blob_keeps_the_previous_entry_intact(self):
+        download, _ = self._transport()
+        provision_cache.fetch(self.URL, downloader=download, now=0)
+        new, _ = self._transport(body=b"KEY-2", etag='"v2"')
+        with patch.dict(os.environ, {"HAMS_PROVISION_REFRESH": "1"}), \
+                patch.object(provision_cache, "_write_meta", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                provision_cache.fetch(self.URL, downloader=new, now=1)
+        # meta (the index) still names KEY-1, whose blob is intact.
+        result = provision_cache.fetch(self.URL, downloader=download, now=2)
+        self.assertEqual(self._read(result), b"KEY-1")
+
+    def test_install_is_atomic_and_leaves_an_existing_file_on_failure(self):
+        dest = os.path.join(self.tmp, "out.bin")
+        with open(dest, "wb") as f:
+            f.write(b"old")
+        missing = provision_cache.Result(os.path.join(self.tmp, "nope"), "hit", "0" * 64)
+        with self.assertRaises(OSError):
+            provision_cache.install(missing, dest, 0o644)
+        with open(dest, "rb") as f:
+            self.assertEqual(f.read(), b"old")
+        self.assertEqual(sorted(os.listdir(self.tmp)), ["out.bin"])
+
+
+class DownloadFileCacheIntegrationTests(_TmpDirTestCase):
+    def _urlopen(self, body, calls):
+        def fake(req, timeout=5):
+            calls.append(req.full_url)
+            m = MagicMock()
+            m.read.side_effect = [body, b""]
+            m.__enter__.return_value = m
+            m.__exit__.return_value = False
+            return m
+        return fake
+
+    def test_a_second_download_of_the_same_url_does_not_use_the_network(self):
+        calls = []
+        self.safe_patch_object(infra.urllib.request, "urlopen", side_effect=self._urlopen(b"key", calls))
+        for name in ("a", "b"):
+            infra.download_file("https://example.invalid/k", os.path.join(self.tmp, name), 0o644, {})
+        self.assertEqual(len(calls), 1)
+        with open(os.path.join(self.tmp, "b"), "rb") as f:
+            self.assertEqual(f.read(), b"key")
+
+    def test_a_changed_key_raises_instead_of_being_installed(self):
+        calls = []
+        self.safe_patch_object(infra.urllib.request, "urlopen", side_effect=self._urlopen(b"key", calls))
+        dest = os.path.join(self.tmp, "k")
+        infra.download_file("https://example.invalid/k", dest, 0o644, {})
+        self.safe_patch_object(infra.urllib.request, "urlopen", side_effect=self._urlopen(b"other", calls))
+        with patch.dict(os.environ, {"HAMS_PROVISION_CACHE_MAX_AGE_DAYS": "0"}):
+            with self.assertRaises(provision_cache.HashRejected):
+                infra.download_file("https://example.invalid/k", dest, 0o644, {})
+        with open(dest, "rb") as f:
+            self.assertEqual(f.read(), b"key")
+
+    def test_offline_with_a_cached_copy_still_installs_it(self):
+        calls = []
+        self.safe_patch_object(infra.urllib.request, "urlopen", side_effect=self._urlopen(b"key", calls))
+        infra.download_file("https://example.invalid/k", os.path.join(self.tmp, "a"), 0o644, {})
+        self.safe_patch_object(infra.urllib.request, "urlopen", side_effect=OSError("down"))
+        with patch.dict(os.environ, {"HAMS_PROVISION_CACHE_MAX_AGE_DAYS": "0"}):
+            infra.download_file("https://example.invalid/k", os.path.join(self.tmp, "b"), 0o644, {})
+        with open(os.path.join(self.tmp, "b"), "rb") as f:
+            self.assertEqual(f.read(), b"key")
+
+
+class AptOnlyStaticFilesTests(_TmpDirTestCase):
+    def _apt_specs(self):
+        return [s for s in infra.MANIFEST["static_files"] if infra.is_apt_only(s)]
+
+    def test_the_apt_keys_and_source_lists_are_apt_only_and_other_downloads_are_not(self):
+        paths = {s["path"] for s in self._apt_specs()}
+        self.assertTrue({"/etc/apt/sources.list.d/odoo.list", "/etc/apt/sources.list.d/pgdg.list",
+                         "/tmp/odoo.key", "/tmp/pg.key"} <= paths)
+        for s in infra.MANIFEST["static_files"]:
+            if s.get("url") and "kopia" in s["url"]:
+                self.assertFalse(infra.is_apt_only(s))
+                self.assertEqual(set(s["sha256_by_arch"]), {"x64", "arm64", "arm"})
+
+    def test_apt_only_is_derived_from_the_destination(self):
+        self.assertTrue(infra.is_apt_only({"path": "/usr/share/keyrings/x.gpg"}))
+        self.assertTrue(infra.is_apt_only({"path": "/etc/apt/preferences.d/x"}))
+        self.assertFalse(infra.is_apt_only({"path": "/etc/hams/x"}))
+
+    def test_skip_apt_fetches_and_writes_nothing_apt_related(self):
+        specs = self._apt_specs()
+        with patch.dict(infra.MANIFEST, {"static_files": specs}), \
+                patch.object(infra, "download_file") as dl, \
+                patch.object(infra, "apply_permissions"):
+            infra.provision_static_files(MagicMock(), {"DEB_CODENAME": "trixie"}, environment="early_prod",
+                                         dest_dir=self.tmp, skip_apt=True)
+        dl.assert_not_called()
+        self.assertEqual(os.listdir(self.tmp), [])
+
+    def test_without_skip_apt_the_apt_key_is_still_downloaded(self):
+        spec = next(s for s in self._apt_specs() if s.get("url", "").endswith("odoo.key"))
+        spec = dict(spec, post_provision_hooks=[])
+        with patch.dict(infra.MANIFEST, {"static_files": [spec]}), \
+                patch.object(infra, "download_file") as dl, patch.object(infra, "apply_permissions"):
+            infra.provision_static_files(MagicMock(), {}, environment="early_prod", dest_dir=self.tmp)
+        dl.assert_called_once()
+
+    def test_test_py_style_provisioning_passes_skip_apt_to_every_static_files_call(self):
+        src = inspect.getsource(infra.provision_environment)
+        for env in ("early_prod", "prod", "test"):
+            self.assertRegex(src, r'provision_static_files\(run_cmd_func, env_vars, environment="%s", skip_apt=skip_apt\)' % env)
+
+
+class ModelFilesCacheTests(_SafePatchTestCase):
+    def test_models_go_through_the_cache_so_a_wiped_models_dir_is_not_redownloaded(self):
+        data = b"model" * 50
+        spec = {"path": None, "url": "https://example.invalid/m.bin", "sha256": hashlib.sha256(data).hexdigest(),
+                "size": len(data), "owner": "x:x", "mode": "640"}
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        spec["path"] = os.path.join(tmp, "m.bin")
+        calls = []
+
+        def fake_fetch(url, part, size):
+            calls.append(url)
+            with open(part, "wb") as f:
+                f.write(data)
+        with patch.dict(infra.MANIFEST, {"model_files": [spec]}), patch.object(infra, "apply_permissions"), \
+                patch.object(infra, "_fetch_model_to", side_effect=fake_fetch):
+            self.assertEqual(infra.provision_model_files(environment="prod"), [])
+            os.unlink(spec["path"])
+            self.assertEqual(infra.provision_model_files(environment="prod"), [])
+        self.assertEqual(len(calls), 1)
+        with open(spec["path"], "rb") as f:
+            self.assertEqual(f.read(), data)

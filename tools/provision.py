@@ -229,7 +229,16 @@ def provision():
         "/opt/hams/models, each verified against its pinned size and SHA-256, and exit. Production "
         "hosts only: refused with --test. Honours --plan",
     )
+    parser.add_argument(
+        "--refresh-cache",
+        action="store_true",
+        help="Re-download every cached provisioning download (apt keys, kopia, wkhtmltopdf) and accept a "
+        "changed trust-on-first-use hash (a changed signing key is otherwise refused). Same as "
+        "HAMS_PROVISION_REFRESH=1. Review the logged old and new hash first",
+    )
     args, _ = parser.parse_known_args()
+    if args.refresh_cache:
+        os.environ["HAMS_PROVISION_REFRESH"] = "1"
 
     if args.fetch_models:
         if args.test:
