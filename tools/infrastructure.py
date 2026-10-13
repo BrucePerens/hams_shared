@@ -4048,13 +4048,15 @@ WantedBy=timers.target
      "content_addressed": true}},
     {{"name": "etc", "path": "/opt/hams/etc", "exclude": ["b2_backup/b2_backup.env"]}},
     {{"name": "tenant_archives", "path": "/opt/hams/backups/tenants", "optional": true}},
-    {{"name": "static_perens_com", "path": "/var/lib/hams-static/perens_com/static", "optional": true}}
+    {{"name": "static_perens_com", "path": "/var/lib/hams-static/perens_com/static", "optional": true}},
+    {{"name": "qso_recordings", "path": "/var/lib/hams/qso_recordings", "optional": true, "exclude": ["*.tmp"],
+     "keep_forever": true}}
   ],
   "tenant_spec_dir": "/opt/hams/etc/tenants.d",
   "tenant_data_root": "/var/lib/hams-tenants",
   "databases": ["hams_prod"],
   "pg_prefix": ["runuser", "-u", "postgres", "--"],
-  "restore_test": {{"sample_files": 20, "verify_percent": 1, "database": true}}
+  "restore_test": {{"sample_files": 20, "verify_percent": 1, "database": true, "recordings_files": 6}}
 }}
 """,
             "owner": "root:root",
@@ -4075,6 +4077,9 @@ ConditionPathExists=/opt/hams/etc/b2_backup/config.json
 [Service]
 Type=oneshot
 # Runs as root: it reads the odoo and tenant filestores and /opt/hams/etc, and runuser's to postgres for pg_dump.
+# The QSO recordings directory (/var/lib/hams/qso_recordings, odoo:odoo 0750) is readable the same way: root's
+# CAP_DAC_OVERRIDE (this unit keeps its capabilities) and ProtectSystem=strict leaves it readable, only not writable. It
+# needs no ReadOnlyPaths and the directory's mode is not widened.
 # A nonzero exit (any source failed, password fingerprint changed, repository unreachable) fails this unit,
 # which the pager_duty "Systemd Failed Services Tracker" check turns into an operator alert.
 ProtectSystem=strict

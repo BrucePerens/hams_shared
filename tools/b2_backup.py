@@ -23,6 +23,10 @@ What goes up (all of it encrypted on this host before it leaves, so B2 only ever
   * the static file tree of perens.com (optional path source), the origin of https://perens.com/static/;
   * a logical dump of hams_prod (pgBackRest and hams.db.local.backup remain the primary database
     backups; this one is the extra copy that lives outside the PostgreSQL cluster format);
+  * /var/lib/hams/qso_recordings (optional path source, hams1 only): the Simulated Band QSO recordings
+    (Ogg/Opus plus a .json sidecar each). Bruce's rule: data kept forever is backed up. Only finalised files go up
+    (*.tmp in-progress files are ignored), and this source alone is kept FOREVER: its kopia policy keeps every
+    snapshot, so nothing in the repository's history of the recordings ever expires;
   * /opt/hams/etc (daemon keys, signer public material, host configuration), with the repository
     password and B2 key file itself excluded: backing up the key to the lock it opens protects nothing.
 
@@ -30,8 +34,8 @@ Subcommands (every one honours --plan, which prints what it would do and runs no
   gen-password  dev box: create the repository password file (refuses to overwrite one)
   init          once: create the repository, apply retention policy, record the password fingerprint
   backup        nightly (--only SOURCE: just that source, for a manual refresh): dump the databases, snapshot every source, apply retention, record status
-  restore-test  weekly: verify a sample of stored data, restore random files and one database to a
-                scratch location, compare, and drop it again
+  restore-test  weekly: verify a sample of stored data, restore random files, the newest few QSO recordings and
+                one database to a scratch location, compare (recordings: sha256 against the live file), and drop it again
   restore-tenant-archives --dest DIR
                 download the newest off-box copy of /opt/hams/backups/tenants into DIR and verify every
                 archive set against its MANIFEST.json sha256 (then `tenant_ctl.py restore-test --all
@@ -75,6 +79,12 @@ RESTORE_MAX_AGE = 9 * 24 * 3600
 # The per-tenant pg_dump + filestore archives `tenant_ctl.py backup` writes under /opt/hams/backups/tenants/<name>/<stamp>/.
 TENANT_ARCHIVES_SOURCE = "tenant_archives"
 ARCHIVE_SET_RE = re.compile(r"^\d{8}T\d{6}Z$")
+# The Simulated Band QSO recordings (hams_shared MANIFEST creates /var/lib/hams/qso_recordings, odoo:odoo 0750). Retained
+# forever, written once and renamed from *.tmp when finished, so a finalised file never changes.
+RECORDINGS_SOURCE = "qso_recordings"
+# kopia's "keep" counts are numbers of snapshots; this is far more snapshots than there will ever be nights.
+KEEP_EVERYTHING = 100000
+DEFAULT_RECORDINGS_SAMPLE_FILES = 6
 
 
 class ConfigError(ValueError):
@@ -106,6 +116,7 @@ class Config:
     restore_sample_files: int
     restore_verify_percent: int
     restore_database: bool
+    restore_recordings_files: int
 
     @property
     def lock_path(self):
@@ -177,7 +188,8 @@ def load_config(path):
         paths.append({"name": item["name"], "path": item["path"],
                       "exclude": list(item.get("exclude", [])),
                       "content_addressed": bool(item.get("content_addressed", False)),
-                      "optional": bool(item.get("optional", False))})
+                      "optional": bool(item.get("optional", False)),
+                      "keep_forever": bool(item.get("keep_forever", False))})
     restore = raw.get("restore_test", {})
     return Config(
         backend=backend,
@@ -195,6 +207,7 @@ def load_config(path):
         restore_sample_files=int(restore.get("sample_files", 20)),
         restore_verify_percent=int(restore.get("verify_percent", 1)),
         restore_database=bool(restore.get("database", True)),
+        restore_recordings_files=int(restore.get("recordings_files", DEFAULT_RECORDINGS_SAMPLE_FILES)),
     )
 
 
@@ -377,6 +390,17 @@ def global_policy_argv(cfg):
             "--compression=zstd"]
 
 
+def keep_forever_policy_argv(cfg, path):
+    """A per-source policy that expires nothing. The global policy (14 daily, 8 weekly, 12 monthly) would drop old
+    snapshots, which for a source that is never deleted from disk loses nothing UNLESS a file is later removed or
+    damaged on the host: then its only surviving copy would age out of history. A source kept forever sets every keep
+    count so high that no snapshot is ever a candidate for expiry. Nothing here deletes anything."""
+    n = str(KEEP_EVERYTHING)
+    return [cfg.kopia, "policy", "set", path,
+            f"--keep-latest={n}", f"--keep-hourly={n}", f"--keep-daily={n}",
+            f"--keep-weekly={n}", f"--keep-monthly={n}", f"--keep-annual={n}"]
+
+
 def snapshot_argv(cfg, source, stdin_file=None):
     args = [cfg.kopia, "snapshot", "create", "--parallel=1", "--no-send-snapshot-report"]
     if stdin_file:
@@ -458,6 +482,8 @@ def connect(cfg, env, runner):
 def apply_policies(cfg, env, runner):
     runner.run(global_policy_argv(cfg), env=env, capture=True)
     for item in cfg.paths:
+        if item["keep_forever"]:
+            runner.run(keep_forever_policy_argv(cfg, item["path"]), env=env, capture=True)
         for pattern in item["exclude"]:
             runner.run([cfg.kopia, "policy", "set", item["path"], f"--add-ignore={pattern}"], env=env, capture=True)
 
@@ -673,6 +699,7 @@ def cmd_backup(cfg, runner, only=None):
                 entry["ok"] = True
                 if snap:
                     entry["snapshot_id"] = snap["id"]
+                    entry["snapshot_time"] = snap.get("startTime")
                     entry["bytes"] = snap.get("stats", {}).get("totalSize", 0)
                     entry["errors"] = snap.get("stats", {}).get("errorCount", 0)
                     if entry["errors"]:
@@ -783,6 +810,49 @@ def restore_sample(cfg, env, source, snap, rng, runner, scratch):
     return {"source": source.name, "sampled": len(picks), "verified": checked, "changed_since": changed}
 
 
+# [@ANCHOR: b2_backup:restore_recordings]
+def restore_recordings(cfg, env, source, snap, runner, scratch):
+    """Restores the NEWEST few finalised recordings of the latest snapshot into scratch and compares their sha256 with
+    the live files. Recordings are written once and never change, so a differing checksum is a real failure, not drift.
+    A file removed from the live directory since the snapshot is counted (the backup is the surviving copy) and one
+    modified after the snapshot started is counted too. Only checksums are compared and reported: no recording is
+    opened, decoded or played, and no content or name beyond a count reaches the output. An empty recordings directory
+    is not a failure (recording may not have produced a file yet)."""
+    root = snap["rootEntry"]["obj"]
+    files = [f for f in _relative_files(cfg, env, root, runner) if not f.endswith(".tmp")]
+    if not files:
+        return {"source": source.name, "sampled": 0, "verified": 0, "missing_live": 0, "changed_since": 0}
+
+    def live_mtime(rel):
+        try:
+            return os.path.getmtime(os.path.join(source.path, rel))
+        except OSError:
+            return float("inf")  # gone from the live directory: always sampled, so it is counted
+    newest = sorted(files, key=live_mtime, reverse=True)[:max(cfg.restore_recordings_files, 0)]
+    started = datetime.datetime.fromisoformat(snap["startTime"].replace("Z", "+00:00")).timestamp()
+    verified = missing = changed = 0
+    for index, rel in enumerate(newest):
+        live = os.path.join(source.path, rel)
+        if not os.path.isfile(live):
+            missing += 1
+            continue
+        target = os.path.join(scratch, f"{source.name}-{index}")
+        runner.run([cfg.kopia, "restore", f"{root}/{rel}", target], env=env, capture=True)
+        if not os.path.isfile(target):
+            raise BackupError(f"{source.name}: a sampled recording did not restore as a file")
+        if os.path.getmtime(live) > started:
+            changed += 1
+        elif sha256_file(live) != sha256_file(target):
+            raise BackupError(f"{source.name}: a restored recording differs from the live file (sha256 mismatch)")
+        else:
+            verified += 1
+        os.unlink(target)
+    if verified == 0 and missing + changed < len(newest):
+        raise BackupError(f"{source.name}: none of {len(newest)} sampled recordings could be verified")
+    return {"source": source.name, "sampled": len(newest), "verified": verified,
+            "missing_live": missing, "changed_since": changed}
+
+
 def restore_database_test(cfg, env, source, snap, runner, scratch):
     """Restores the newest dump of one database into a scratch database, counts its tables, drops it."""
     root = snap["rootEntry"]["obj"]
@@ -814,7 +884,7 @@ def cmd_restore_test(cfg, runner, seed=None):
     env = kopia_env(cfg, secrets_map)
     rng = random.Random(seed)  # audit-ignore-weak-random: spot-check sampling
     started = now_utc()
-    problems, report = [], {"samples": [], "database": None, "tenant_archives": None}
+    problems, report = [], {"samples": [], "database": None, "tenant_archives": None, "recordings": None}
     with _Lock(cfg, runner):
         check_fingerprint(cfg, secrets_map, runner)
         connect(cfg, env, runner)
@@ -841,7 +911,12 @@ def cmd_restore_test(cfg, runner, seed=None):
                 except BackupError as exc:
                     problems.append(str(exc))
             for source in sources:
-                if source.kind == "path" and source.name in snaps and cfg.restore_sample_files > 0:
+                if source.name == RECORDINGS_SOURCE and source.name in snaps:
+                    try:
+                        report["recordings"] = restore_recordings(cfg, env, source, snaps[source.name], runner, scratch)
+                    except BackupError as exc:
+                        problems.append(str(exc))
+                elif source.kind == "path" and source.name in snaps and cfg.restore_sample_files > 0:
                     try:
                         report["samples"].append(
                             restore_sample(cfg, env, source, snaps[source.name], rng, runner, scratch))
@@ -882,7 +957,8 @@ def cmd_restore_test(cfg, runner, seed=None):
     write_json(cfg.restore_status_path, report)
     if problems:
         raise BackupError("restore test failed: " + "; ".join(problems))
-    print(f"restore test ok: {json.dumps(report['samples'])} database={json.dumps(report['database'])}")
+    print(f"restore test ok: {json.dumps(report['samples'])} database={json.dumps(report['database'])} "
+          f"recordings={json.dumps(report['recordings'])}")
     return 0
 
 
