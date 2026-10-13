@@ -3941,6 +3941,8 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams.simulated.band.service": "local server; STUN only while negotiating with a peer",
         "hams.simulated.bots.service": "local band client; speech model fetched once into a cache",
         "hams.simulated.observer.service": "local band client, same as the bots",
+        "callbook.delta.export.service": "reads the local Odoo and signs through a local socket; no outside server",
+        "callbook.delta.export.timer": "activates callbook.delta.export.service (local)",
         "pdns.sync.service": "RabbitMQ consumer writing to the local PowerDNS API",
         "hams-site-monitor.service": "probes local ports, our own site and units; posts only to the operator's own webhook or SMTP",
         "hams-site-monitor.timer": "activates hams-site-monitor.service (local)",
@@ -4519,7 +4521,7 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 with self.subTest(unit=unit, path=path):
                     entry = [d for d in infra.MANIFEST["directories"] if d["path"] == path][0]
                     self.assertEqual(entry["owner"], f"{rules['user']}:{rules['user']}")
-                    self.assertEqual(entry["provision_mode"], "750")
+                    self.assertEqual(entry["provision_mode"], "755" if path in rules.get("public_dirs", []) else "750")
                     self.assertTrue(entry["recursive_owner"])
                     self.assertEqual(entry["environments"], ["prod", "test"])
 
@@ -4557,7 +4559,7 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
             with self.subTest(unit=unit):
                 self.assertEqual(
                     infra.systemd_unit_directive_values(infra.MANIFEST, unit, "SupplementaryGroups"),
-                    sorted(set(rules.get("group_write", {}).values())),
+                    sorted(set(rules.get("group_write", {}).values()) | set(rules.get("socket_groups", []))),
                 )
 
     def test_a_migrated_unit_loads_only_the_environment_files_it_uses(self):
