@@ -1401,6 +1401,24 @@ FAMILY_ACCOUNT_UNITS = {
         # `public_dirs`: written paths whose content is public and read by another account (nginx) by path: 755, not the family's 750.
         "public_dirs": ["/var/lib/hams/callbook_releases"],
     },
+    # The two publishers of the signed downloads a relay fetches from hams.com (docs/design/RELAY_MANUALS_DOWNLOAD.md,
+    # docs/design/RELAY_SATELLITES.md). Both read the deployed repository (/opt/hams/src/hams_com, readable by path), ask daemons/relay_signer
+    # for a signature through its socket (`socket_groups`, held by the unit alone) and write the one directory nginx serves.
+    # relay.satellites.publish runs in the account of amsat_tle_sync because it reads the same `ham.satellite.tle` rows with the same key.
+    "relay.satellites.publish.service": {
+        "user": "hamsd_satellite_sync",
+        "environment_files": frozenset({"common.env"}),
+        "socket_groups": ["hams_relay_signer"],
+        "public_dirs": ["/var/lib/hams/relay_satellites"],
+    },
+    # relay.manuals.publish reads no Odoo row at all (the pages are files in the deployed repository), so its account holds no key.
+    "relay.manuals.publish.service": {
+        "user": "hamsd_relay_manuals",
+        "environment_files": frozenset(),
+        "no_key": True,
+        "socket_groups": ["hams_relay_signer"],
+        "public_dirs": ["/var/lib/hams/relay_manuals"],
+    },
     "dx.firehose.service": {
         "user": "hamsd_dx_firehose",
         "environment_files": frozenset({"common.env", "db_app.env"}),
@@ -1659,6 +1677,18 @@ MANIFEST = {
             "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/relay_manuals: the publisher of the signed manuals a relay downloads (docs/design/RELAY_MANUALS_DOWNLOAD.md). It reads files of
+            # the deployed repository and writes /var/lib/hams/relay_manuals; it holds no Odoo key, so odoo is not in its group. Not in hams_com:
+            # the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_relay_manuals",
+            "group": "hamsd_relay_manuals",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
             "member_of": ["hams_traverse"],
             "not_member_of": ["hams_com"],
             "environments": ["prod", "test"],
@@ -2019,6 +2049,26 @@ MANIFEST = {
             # (www-data) reads it by path. state.json beside v1/ is the job's own bookkeeping (0640) and is not served.
             "path": "/var/lib/hams/callbook_releases",
             "owner": "hamsd_dns_export:hamsd_dns_export",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # The relay's signed manuals (docs/design/RELAY_MANUALS_DOWNLOAD.md): written by relay.manuals.publish.service, served by nginx
+            # (nginx/prod/hams-tunnel-origin.conf, /relay/manuals/v1/). World-readable on purpose: the content is public and nginx reads it by path.
+            "path": "/var/lib/hams/relay_manuals",
+            "owner": "hamsd_relay_manuals:hamsd_relay_manuals",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # The relay's signed satellite element sets (docs/design/RELAY_SATELLITES.md): written by relay.satellites.publish.service, served by nginx
+            # (/relay/satellites/v1/). World-readable on purpose, like the manuals above.
+            "path": "/var/lib/hams/relay_satellites",
+            "owner": "hamsd_satellite_sync:hamsd_satellite_sync",
             "provision_mode": "755",
             "recursive_owner": True,
             "runtime_mount": "rw",
@@ -3990,6 +4040,9 @@ WantedBy=multi-user.target
 [Unit]
 Description=Ham Radio AMSAT TLE Sync Service
 After=network.target
+# The signed element sets a relay downloads are built from the rows this run just stored (docs/design/RELAY_SATELLITES.md). A separate unit, so
+# a publishing failure is its own exception report and never marks the sync failed.
+OnSuccess=relay.satellites.publish.service
 
 [Service]
 # ADR-0070 OS-Level Daemon Restriction
@@ -6691,6 +6744,155 @@ Description=Ham Radio Relay Callbook Delta Files, Daily
 # callbook.dns.export.service starts this with OnSuccess= after each of its runs (nightly, 08:00 America/New_York, and after the CA and
 # AU syncs); this timer is the floor under that, so a day is never missed because a country sync did not run.
 OnCalendar=*-*-* 09:30:00 America/New_York
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/relay.satellites.publish.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Relay Satellite Element Sets, Signed Download (One-Shot)
+After=network.target amsat.tle.sync.service hams-relay-signer.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ProtectProc=invisible
+ProcSubset=pid
+# 0022: the files are public and nginx (another account) reads them by path.
+UMask=0022
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/hams/relay_satellites
+Type=oneshot
+User=hamsd_satellite_sync
+Group=hamsd_satellite_sync
+# The signer's socket (/run/hams_relay_signer/signer.sock, group hams_relay_signer, 0770): held for this run only.
+SupplementaryGroups=hams_relay_signer
+WorkingDirectory=/opt/hams/src/hams_com/daemons/relay_satellites
+
+# Reads ham.satellite.tle through hams_config (ODOO_URL, DB_NAME, the key file): common.env and the key amsat.tle.sync.service uses. The script finds the
+# catalogue (ham_satellite/data) and hams_config from its own place in the deployed repository, so it runs from there and not from the
+# /opt/hams/daemons copy. It fetches nothing from a third party, and writes nothing when the element sets are the published ones.
+EnvironmentFile=/opt/hams/etc/common.env
+Environment="ODOO_USER=satellite_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/satellite_sync/satellite_sync_service_internal.key"
+Environment="RELAY_SATELLITES_RELEASE_DIR=/var/lib/hams/relay_satellites"
+
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_com/daemons/relay_satellites/publish.py
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=relay.satellites.publish
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/relay.satellites.publish.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio Relay Satellite Element Sets, Signed Download, Daily
+
+[Timer]
+# amsat.tle.sync.service starts the service with OnSuccess= after each sync (daily, midnight UTC plus up to 15 minutes); this timer is the
+# floor under that, so the signed set is never more than a day behind because one sync did not finish. A run that finds the element
+# sets unchanged writes nothing.
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/relay.manuals.publish.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Relay Manuals, Signed Download (One-Shot)
+After=network.target hams-relay-signer.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ProtectProc=invisible
+ProcSubset=pid
+# 0022: the files are public and nginx (another account) reads them by path.
+UMask=0022
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/hams/relay_manuals
+Type=oneshot
+User=hamsd_relay_manuals
+Group=hamsd_relay_manuals
+# The signer's socket (/run/hams_relay_signer/signer.sock, group hams_relay_signer, 0770): held for this run only.
+SupplementaryGroups=hams_relay_signer
+WorkingDirectory=/opt/hams/src/hams_com/daemons/relay_manuals
+
+# Reads the manual pages as files of the deployed repository (its place in that repository is how it finds them, so it runs from there and not
+# from the /opt/hams/daemons copy). No Odoo, database, Redis or RabbitMQ credential and no environment file. It does nothing when no page changed.
+Environment="RELAY_MANUALS_RELEASE_DIR=/var/lib/hams/relay_manuals"
+
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_com/daemons/relay_manuals/publish.py
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=relay.manuals.publish
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/relay.manuals.publish.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio Relay Manuals, Signed Download, Daily
+
+[Timer]
+# The pages change only when hams_com is deployed (the deployer also runs the service by hand); this is the floor under that. A run that
+# finds every page unchanged writes nothing.
+OnCalendar=*-*-* 04:00:00
 Persistent=true
 RandomizedDelaySec=15m
 

@@ -4000,6 +4000,10 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams.simulated.observer.service": "local band client, same as the bots",
         "callbook.delta.export.service": "reads the local Odoo and signs through a local socket; no outside server",
         "callbook.delta.export.timer": "activates callbook.delta.export.service (local)",
+        "relay.satellites.publish.service": "reads the local Odoo and signs through a local socket; no outside server",
+        "relay.satellites.publish.timer": "activates relay.satellites.publish.service (local)",
+        "relay.manuals.publish.service": "reads files of the deployed repository and signs through a local socket; no outside server",
+        "relay.manuals.publish.timer": "activates relay.manuals.publish.service (local)",
         "pdns.sync.service": "RabbitMQ consumer writing to the local PowerDNS API",
         "hams-site-monitor.service": "probes local ports, our own site and units; posts only to the operator's own webhook or SMTP",
         "hams-site-monitor.timer": "activates hams-site-monitor.service (local)",
@@ -7030,3 +7034,72 @@ class LlamaServerUnitTests(unittest.TestCase):
         self.assertTrue(spec["url"].startswith("https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/"))
         self.assertEqual((spec["owner"], spec["mode"]), ("root:root", "644"))
         self.assertIn(f"-m {spec['path']}", self._exec_start())
+
+
+class RelayPublisherUnitTests(unittest.TestCase):
+    """The two publishers of the signed downloads a relay fetches (hams_com docs/design/RELAY_MANUALS_DOWNLOAD.md, RELAY_SATELLITES.md)."""
+
+    UNITS = {
+        "relay.satellites.publish": ("hamsd_satellite_sync", "/var/lib/hams/relay_satellites", "relay_satellites"),
+        "relay.manuals.publish": ("hamsd_relay_manuals", "/var/lib/hams/relay_manuals", "relay_manuals"),
+    }
+
+    def _content(self, name):
+        return [e for e in infra.MANIFEST["static_files"] if e["path"] == f"/opt/hams/systemd/{name}"][0]["content"]
+
+    def test_each_publisher_has_a_service_and_a_daily_timer_that_activates_it(self):
+        for stem, (_user, _dir, daemon) in self.UNITS.items():
+            with self.subTest(unit=stem):
+                self.assertIn("Type=oneshot", self._content(f"{stem}.service"))
+                timer = self._content(f"{stem}.timer")
+                self.assertIn("OnCalendar=*-*-*", timer)
+                self.assertIn("Persistent=true", timer)
+                self.assertIn("WantedBy=timers.target", timer)
+                self.assertNotIn("opt_in", [e for e in infra.MANIFEST["static_files"] if e["path"].endswith(f"{stem}.timer")][0])
+
+    def test_each_publisher_runs_from_the_deployed_repository_because_it_finds_its_inputs_from_its_own_place_in_it(self):
+        # The /opt/hams/daemons/<name> copy is two levels below /opt/hams, where there is no ham_satellite or ham_shack directory.
+        for stem, (_user, _dir, daemon) in self.UNITS.items():
+            with self.subTest(unit=stem):
+                self.assertEqual(
+                    infra.systemd_unit_directive_values(infra.MANIFEST, f"{stem}.service", "ExecStart"),
+                    ["/usr/bin/python3", f"/opt/hams/src/hams_com/daemons/{daemon}/publish.py"],
+                )
+
+    def test_each_publisher_writes_only_its_own_public_directory_and_reaches_the_signer_by_the_unit_alone(self):
+        for stem, (user, directory, _daemon) in self.UNITS.items():
+            with self.subTest(unit=stem):
+                unit = f"{stem}.service"
+                self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "ReadWritePaths"), [directory])
+                self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "SupplementaryGroups"), ["hams_relay_signer"])
+                self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "UMask"), ["0022"])
+                entry = [d for d in infra.MANIFEST["directories"] if d["path"] == directory][0]
+                self.assertEqual((entry["owner"], entry["provision_mode"]), (f"{user}:{user}", "755"))
+                account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == user][0]
+                self.assertNotIn("hams_relay_signer", account.get("member_of", []))
+
+    def test_the_manuals_publisher_holds_no_odoo_key_and_loads_no_environment_file(self):
+        unit = "relay.manuals.publish.service"
+        self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "EnvironmentFile"), [])
+        self.assertNotIn("ODOO_KEY_FILE", self._content(unit))
+        account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == "hamsd_relay_manuals"][0]
+        self.assertNotIn("odoo", account.get("add_to_users", []))
+
+    def test_the_satellites_publisher_uses_the_key_of_the_sync_that_feeds_it_and_follows_each_sync_by_on_success(self):
+        publish = self._content("relay.satellites.publish.service")
+        sync = self._content("amsat.tle.sync.service")
+        key = "ODOO_KEY_FILE=/opt/hams/etc/keys/satellite_sync/satellite_sync_service_internal.key"
+        self.assertIn(key, publish)
+        self.assertIn(key, sync)
+        # OnSuccess= and not ExecStartPost=: a publishing failure must not mark the sync failed, and the publisher needs the signer's group.
+        self.assertIn("OnSuccess=relay.satellites.publish.service", sync.split("[Service]")[0])
+        self.assertNotIn("relay_satellites", sync)
+
+    def test_a_publisher_unit_is_part_of_its_family_provisioning_and_neither_fetches_from_outside(self):
+        paths = infra.daemon_family_unit_paths({"hamsd_relay_manuals"})
+        self.assertEqual(paths, ["/opt/hams/systemd/relay.manuals.publish.service", "/opt/hams/systemd/relay.manuals.publish.timer"])
+        self.assertIn("/opt/hams/systemd/relay.satellites.publish.timer", infra.daemon_family_unit_paths({"hamsd_satellite_sync"}))
+        external = infra.external_fetch_unit_names()
+        for stem in self.UNITS:
+            self.assertNotIn(f"{stem}.service", external)
+            self.assertNotIn(f"{stem}.timer", external)
