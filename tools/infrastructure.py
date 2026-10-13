@@ -1361,6 +1361,17 @@ FAMILY_ACCOUNT_UNITS = {
         "environment_files": frozenset({"common.env", "pdns.env"}),
         "group_write": {"/var/lib/powerdns/callbook": "pdns"},
     },
+    # callbook.delta.export is the same program family as callbook.dns.export (daemons/callbook_dns_export, delta_main.py): same account
+    # and view-reader key. It writes /var/lib/hams/callbook_releases (its own), and reaches daemons/relay_signer through the socket by
+    # SupplementaryGroups=hams_relay_signer on the unit alone (never by account membership).
+    "callbook.delta.export.service": {
+        "user": "hamsd_dns_export",
+        "environment_files": frozenset({"common.env"}),
+        # `socket_groups`: groups the unit holds (SupplementaryGroups=, never account membership) only to reach a daemon's Unix socket.
+        "socket_groups": ["hams_relay_signer"],
+        # `public_dirs`: written paths whose content is public and read by another account (nginx) by path: 755, not the family's 750.
+        "public_dirs": ["/var/lib/hams/callbook_releases"],
+    },
     "dx.firehose.service": {
         "user": "hamsd_dx_firehose",
         "environment_files": frozenset({"common.env", "db_app.env"}),
@@ -1957,6 +1968,17 @@ MANIFEST = {
             "daemon_family_shared": True,
             "runtime_mount": "rw",
             "acl": ["g:hams_traverse:--x"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # The relay callbook files (docs/design/CALLBOOK_DELTAS.md): written by callbook.delta.export.service, served by nginx
+            # (nginx/prod/hams-tunnel-origin.conf, /relay/callbook/v1/). World-readable on purpose: the content is public and nginx
+            # (www-data) reads it by path. state.json beside v1/ is the job's own bookkeeping (0640) and is not served.
+            "path": "/var/lib/hams/callbook_releases",
+            "owner": "hamsd_dns_export:hamsd_dns_export",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
         {
@@ -6417,6 +6439,8 @@ WantedBy=timers.target
 [Unit]
 Description=Ham Radio Callbook DNS Zone Exporter (One-Shot)
 After=network.target pdns.service
+# The relay callbook delta files are built from the same data right after it (docs/design/CALLBOOK_DELTAS.md).
+OnSuccess=callbook.delta.export.service
 
 [Service]
 # ADR-0070 OS-Level Daemon Restriction
@@ -6484,6 +6508,82 @@ OnCalendar=daily
 OnCalendar=*-*-* 08:00:00 America/New_York
 Persistent=true
 RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/callbook.delta.export.service",
+            "content": """\
+[Unit]
+Description=Ham Radio Relay Callbook Delta Files (One-Shot)
+After=network.target callbook.dns.export.service hams-relay-signer.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ProtectProc=invisible
+ProcSubset=pid
+# 0022: the files are public and nginx (another account) reads them by path.
+UMask=0022
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/hams/callbook_releases
+Type=oneshot
+User=hamsd_dns_export
+Group=hamsd_dns_export
+# The signer's socket (/run/hams_relay_signer/signer.sock, group hams_relay_signer, 0770): held for this run only.
+SupplementaryGroups=hams_relay_signer
+WorkingDirectory=/opt/hams/daemons/callbook_dns_export
+
+# Reads the masked ham.callbook.dns.view through hams_config (ODOO_URL, DB_NAME, the key file, SYSTEM_USER_AGENT): common.env. No database,
+# Redis or RabbitMQ credential. The same view-reader key as callbook.dns.export.
+EnvironmentFile=/opt/hams/etc/common.env
+Environment="ODOO_USER=callbook_dns_export_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/dns_export/callbook_dns_export_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="CALLBOOK_RELEASE_DIR=/var/lib/hams/callbook_releases"
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/callbook_dns_export/delta_main.py
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=callbook.delta.export
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/callbook.delta.export.timer",
+            "content": """\
+[Unit]
+Description=Ham Radio Relay Callbook Delta Files, Daily
+
+[Timer]
+# callbook.dns.export.service starts this with OnSuccess= after each of its runs (nightly, 08:00 America/New_York, and after the CA and
+# AU syncs); this timer is the floor under that, so a day is never missed because a country sync did not run.
+OnCalendar=*-*-* 09:30:00 America/New_York
+Persistent=true
+RandomizedDelaySec=15m
 
 [Install]
 WantedBy=timers.target
