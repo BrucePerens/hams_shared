@@ -3824,6 +3824,12 @@ class B2BackupManifestTests(unittest.TestCase):
         backend = json.loads(spec["content"].replace("{{", "{").replace("}}", "}"))["backend"]
         self.assertEqual((backend["bucket"], backend["prefix"]), ("hams-com-prod-backups", "files/"))
 
+    def test_config_backs_up_the_crypto_secret_as_a_file_source_not_its_directory(self):
+        spec = [s for s in self._specs() if s["path"].endswith("b2_backup/config.json")][0]
+        config = json.loads(spec["content"].replace("{{", "{").replace("}}", "}"))
+        self.assertEqual([f["path"] for f in config["files"]], ["/var/lib/odoo/hams_crypto.secret"])
+        self.assertNotIn("/var/lib/odoo", [p["path"] for p in config["paths"]])
+
     def test_services_run_the_root_owned_deployed_tool(self):
         services = [s for s in self._specs() if s["path"].endswith(".service")]
         self.assertEqual(len(services), 3)

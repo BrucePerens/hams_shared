@@ -4052,6 +4052,9 @@ WantedBy=timers.target
     {{"name": "qso_recordings", "path": "/var/lib/hams/qso_recordings", "optional": true, "exclude": ["*.tmp"],
      "keep_forever": true}}
   ],
+  "files": [
+    {{"name": "hams_crypto_secret", "path": "/var/lib/odoo/hams_crypto.secret", "optional": true}}
+  ],
   "tenant_spec_dir": "/opt/hams/etc/tenants.d",
   "tenant_data_root": "/var/lib/hams-tenants",
   "databases": ["hams_prod"],

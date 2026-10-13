@@ -27,6 +27,10 @@ What goes up (all of it encrypted on this host before it leaves, so B2 only ever
     (Ogg/Opus plus a .json sidecar each). Bruce's rule: data kept forever is backed up. Only finalised files go up
     (*.tmp in-progress files are ignored), and this source alone is kept FOREVER: its kopia policy keeps every
     snapshot, so nothing in the repository's history of the recordings ever expires;
+  * /var/lib/odoo/hams_crypto.secret (a "files" source, hams1 only): the key zero_sudo uses for encrypted fields in
+    hams_prod. Without it a restored database has unreadable encrypted fields. It is read by root and uploaded
+    on stdin like a database dump (no copy is staged on disk); `restore-test` brings it back and compares
+    its sha256 with the live file. The directory around it (the Odoo home, with the filestore) is NOT a source;
   * /opt/hams/etc (daemon keys, signer public material, host configuration), with the repository
     password and B2 key file itself excluded: backing up the key to the lock it opens protects nothing.
 
@@ -109,6 +113,7 @@ class Config:
     max_download_bytes_per_sec: int
     retention: dict
     paths: list            # [{"name":..., "path":..., "exclude":[...], "content_addressed": bool, "optional": bool}]
+    files: list            # [{"name":..., "path":..., "optional": bool}]: single files, snapshotted from stdin
     tenant_spec_dir: str
     tenant_data_root: str
     databases: list        # ["hams_prod"]
@@ -190,6 +195,14 @@ def load_config(path):
                       "content_addressed": bool(item.get("content_addressed", False)),
                       "optional": bool(item.get("optional", False)),
                       "keep_forever": bool(item.get("keep_forever", False))})
+    files = []
+    for item in raw.get("files", []):
+        if not NAME_RE.match(item.get("name", "")) or not os.path.isabs(item.get("path", "")):
+            raise ConfigError(f"file source needs a lower-case name and an absolute path: {item!r}")
+        if item["name"] in seen:
+            raise ConfigError(f"duplicate source name {item['name']}")
+        seen.add(item["name"])
+        files.append({"name": item["name"], "path": item["path"], "optional": bool(item.get("optional", False))})
     restore = raw.get("restore_test", {})
     return Config(
         backend=backend,
@@ -200,6 +213,7 @@ def load_config(path):
         max_download_bytes_per_sec=int(raw.get("max_download_bytes_per_sec", 10_000_000)),
         retention=retention,
         paths=paths,
+        files=files,
         tenant_spec_dir=raw.get("tenant_spec_dir", "/opt/hams/etc/tenants.d"),
         tenant_data_root=raw.get("tenant_data_root", "/var/lib/hams-tenants"),
         databases=databases,
@@ -242,8 +256,8 @@ def fingerprint(password):
 @dataclasses.dataclass(frozen=True)
 class Source:
     name: str          # stable key; the snapshot's virtual path derives from it
-    kind: str          # "path" or "db"
-    path: str = ""     # for "path"
+    kind: str          # "path", "file" or "db"
+    path: str = ""     # for "path" and "file"
     database: str = ""  # for "db"
     exclude: tuple = ()
     content_addressed: bool = False
@@ -252,7 +266,11 @@ class Source:
     def snapshot_path(self):
         """Where kopia records this source. A database dump has no real directory, so it gets a
         stable virtual one; the same name every night is what makes it a versioned series."""
-        return self.path if self.kind == "path" else f"/hams-b2-virtual/db/{self.database}"
+        if self.kind == "path":
+            return self.path
+        if self.kind == "file":
+            return f"/hams-b2-virtual/file/{self.name}"
+        return f"/hams-b2-virtual/db/{self.database}"
 
 
 def discover_tenants(cfg):
@@ -287,6 +305,11 @@ def build_sources(cfg):
         sources.append(Source(name=item["name"], kind="path", path=item["path"],
                               exclude=tuple(item["exclude"]),
                               content_addressed=item["content_addressed"]))
+    for item in cfg.files:
+        if item["optional"] and not os.path.isfile(item["path"]):
+            print(f"note: optional source {item['name']} skipped, {item['path']} does not exist", file=sys.stderr)
+            continue
+        sources.append(Source(name=item["name"], kind="file", path=item["path"]))
     for name in discover_tenants(cfg):
         sources.append(Source(
             name=f"tenant_{name}_filestore", kind="path",
@@ -567,6 +590,18 @@ def snapshot_source(cfg, env, source, runner):
         if not runner.plan and not os.path.isdir(source.path):
             raise BackupError(f"source directory {source.path} does not exist")
         runner.run(snapshot_argv(cfg, source), env=env, capture=True)
+    elif source.kind == "file":
+        # The file goes to kopia on stdin: no copy of a secret is ever staged on disk.
+        name = os.path.basename(source.path)
+        if runner.plan:
+            runner.say(f"PLAN {' '.join(snapshot_argv(cfg, source, stdin_file=name))} < {source.path}")
+        else:
+            try:
+                handle = open(source.path, "rb")  # audit-ignore-path
+            except OSError as exc:
+                raise BackupError(f"source file {source.path} cannot be read: {exc}") from None
+            with handle as f:
+                runner.run(snapshot_argv(cfg, source, stdin_file=name), env=env, stdin=f, capture=True)
     else:
         directory = dump_database(cfg, source, runner)
         try:
@@ -877,6 +912,34 @@ def restore_database_test(cfg, env, source, snap, runner, scratch):
         runner.run(pg + ["dropdb", "--if-exists", scratch_db], check=False)
 
 
+# [@ANCHOR: b2_backup:restore_file]
+def restore_file_test(cfg, env, source, snap, runner, scratch):
+    """Restores the newest copy of a single-file source and compares its sha256 with the live file. The file
+    is deleted with the scratch directory; its content never reaches a log or the status file (only the name)."""
+    name = os.path.basename(source.path)
+    target = os.path.join(scratch, f"file_{source.name}")
+    runner.run([cfg.kopia, "restore", f"{snap['rootEntry']['obj']}/{name}", target], env=env, capture=True)
+
+    def digest(path):
+        h = hashlib.sha256()
+        with open(path, "rb") as f:  # audit-ignore-path
+            for block in iter(lambda: f.read(1 << 16), b""):
+                h.update(block)
+        return h.hexdigest()
+
+    try:
+        restored = digest(target)
+    except OSError:
+        raise BackupError(f"{source.name}: the restore did not produce the file") from None
+    try:
+        live = digest(source.path)
+    except OSError:
+        return {"file": source.name, "compared": False}
+    if restored != live:
+        raise BackupError(f"{source.name}: the restored copy differs from the live file")
+    return {"file": source.name, "compared": True}
+
+
 # [@ANCHOR: b2_backup:restore_test]
 def cmd_restore_test(cfg, runner, seed=None):
     ensure_dirs(cfg, runner)
@@ -884,7 +947,8 @@ def cmd_restore_test(cfg, runner, seed=None):
     env = kopia_env(cfg, secrets_map)
     rng = random.Random(seed)  # audit-ignore-weak-random: spot-check sampling
     started = now_utc()
-    problems, report = [], {"samples": [], "database": None, "tenant_archives": None, "recordings": None}
+    problems, report = [], {"samples": [], "database": None, "tenant_archives": None, "recordings": None,
+                            "files": []}
     with _Lock(cfg, runner):
         check_fingerprint(cfg, secrets_map, runner)
         connect(cfg, env, runner)
@@ -930,6 +994,12 @@ def cmd_restore_test(cfg, runner, seed=None):
                         report["tenant_archives"] = restore_tenant_archives(
                             cfg, env, source, snaps[source.name], runner,
                             os.path.join(scratch, "tenant_archives_restore"))
+                    except BackupError as exc:
+                        problems.append(str(exc))
+            for source in sources:
+                if source.kind == "file" and source.name in snaps:
+                    try:
+                        report["files"].append(restore_file_test(cfg, env, source, snaps[source.name], runner, scratch))
                     except BackupError as exc:
                         problems.append(str(exc))
             db_sources = [s for s in sources if s.kind == "db"]
