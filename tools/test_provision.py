@@ -25,10 +25,27 @@ argparse.parse_known_args() with no way to inject them otherwise.
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
 import provision
+
+# provision.repo_root is None when this checkout is a standalone hams_shared clone or worktree (no hams_open above it).
+# provision() refuses to run then, so the tests that drive it with every side effect mocked are given a stand-in root;
+# the tests of the root discovery itself read the real value from here.
+REAL_REPO_ROOT = provision.repo_root
+_root_patcher = patch.object(provision, "repo_root", "/nonexistent/hams_open") if REAL_REPO_ROOT is None else None
+
+
+def setUpModule():
+    if _root_patcher:
+        _root_patcher.start()
+
+
+def tearDownModule():
+    if _root_patcher:
+        _root_patcher.stop()
 
 
 class ProvisionTestCase(unittest.TestCase):
@@ -319,7 +336,27 @@ class RepoRootAndImportInAFreshProcessTests(unittest.TestCase):
     this file imports `provision` the same masked way pytest always does, so
     none of them could have caught this -- only a genuinely fresh subprocess,
     with no pytest-inserted sys.path entries at all, actually exercises the
-    real invocation path."""
+    real invocation path.
+
+    2026-10-12: inside a git worktree of hams_shared itself (no hams_open above it) the old
+    "first ancestor that has a hams_shared entry" walk found an unrelated stale copy in the
+    home directory, and the fresh-subprocess test ran THAT copy through sudo -- a real
+    provisioning run of the dev box. provision._find_repo_root now requires the ancestor's
+    hams_shared/tools/provision.py to be this very file, and these tests build a throwaway
+    hams_open layout when there is none."""
+
+    def setUp(self):
+        self._layout = None
+        self.root = REAL_REPO_ROOT
+        if self.root is None:
+            # A standalone hams_shared clone or worktree: make <tmp>/hams_open/hams_shared point at this checkout so
+            # the module is exercised in the layout it is deployed in, whatever directory this checkout lives in.
+            self._layout = tempfile.TemporaryDirectory()
+            self.addCleanup(self._layout.cleanup)
+            self.root = os.path.join(self._layout.name, "hams_open")
+            os.makedirs(self.root)
+            checkout = os.path.dirname(os.path.dirname(os.path.realpath(provision.__file__)))
+            os.symlink(checkout, os.path.join(self.root, "hams_shared"))
 
     def test_provision_py_help_runs_in_a_fresh_subprocess_with_no_import_error(self):
         # Bug-hunt fix (2026-10-01): this test file is deployed as an identical copy at two
@@ -334,7 +371,7 @@ class RepoRootAndImportInAFreshProcessTests(unittest.TestCase):
         # hams_open copy, a symlink into hams_open from the hams_com copy).
         result = subprocess.run(
             [sys.executable, "hams_shared/tools/provision.py", "--help"],
-            cwd=provision.repo_root,
+            cwd=self.root,
             capture_output=True,
             text=True,
             timeout=30,
@@ -352,11 +389,39 @@ class RepoRootAndImportInAFreshProcessTests(unittest.TestCase):
         # (infrastructure.py's own primary, non-fallback check) -- which is only
         # true when repo_root IS hams_open's own root.
         self.assertTrue(
-            os.path.isdir(os.path.join(provision.repo_root, "hams_shared")),
-            f"provision.repo_root ({provision.repo_root!r}) is not hams_open's "
+            os.path.isdir(os.path.join(self.root, "hams_shared")),
+            f"provision.repo_root ({self.root!r}) is not hams_open's "
             "own root -- infrastructure.provision_environment's primary "
             "hams_community_dir check would miss it.",
         )
+
+    def test_find_repo_root_ignores_an_unrelated_hams_shared_copy(self):
+        # The 2026-10-12 incident: an unrelated hams_shared higher up (a stale copy in the home
+        # directory) must never be taken for this checkout's root.
+        with tempfile.TemporaryDirectory() as tmp:
+            stale = os.path.join(tmp, "hams_shared", "tools")
+            os.makedirs(stale)
+            with open(os.path.join(stale, "provision.py"), "w", encoding="utf-8") as handle:  # audit-ignore-path
+                handle.write("# an unrelated, older copy\n")
+            mine = os.path.join(tmp, "work", "standalone", "tools")
+            os.makedirs(mine)
+            with open(os.path.join(mine, "provision.py"), "w", encoding="utf-8") as handle:  # audit-ignore-path
+                handle.write("# this checkout\n")
+            self.assertIsNone(provision._find_repo_root(mine))
+
+    def test_find_repo_root_accepts_a_symlinked_hams_shared(self):
+        # hams_com's layout: <hams_com>/hams_shared is a symlink into hams_open, <hams_com>/tools -> hams_shared/tools.
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = os.path.join(tmp, "hams_open", "hams_shared", "tools")
+            os.makedirs(tools)
+            with open(os.path.join(tools, "provision.py"), "w", encoding="utf-8") as handle:  # audit-ignore-path
+                handle.write("# real\n")
+            com = os.path.join(tmp, "hams_com")
+            os.makedirs(com)
+            os.symlink(os.path.join(tmp, "hams_open", "hams_shared"), os.path.join(com, "hams_shared"))
+            os.symlink(os.path.join("hams_shared", "tools"), os.path.join(com, "tools"))
+            self.assertEqual(provision._find_repo_root(os.path.join(com, "tools")), com)
+            self.assertEqual(provision._find_repo_root(tools), os.path.join(tmp, "hams_open"))
 
 
 if __name__ == "__main__":

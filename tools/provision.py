@@ -52,19 +52,28 @@ import infrastructure  # noqa: E402
 # ancestor directory whose own `hams_shared` subdirectory exists (real directory or symlink,
 # `os.path.exists` follows both) -- the one property both deployed copies actually share.
 def _find_repo_root(start_dir):
+    """The nearest ancestor whose `hams_shared` is THIS checkout of hams_shared, or None.
+
+    Finding any ancestor with a `hams_shared` entry is not enough. 2026-10-12: a test run inside a git worktree of
+    hams_shared itself (no hams_open above it) walked up to /home/bruce, found an unrelated, months-old
+    /home/bruce/hams_shared copy there, and `test_provision_py_help_runs_in_a_fresh_subprocess...` then executed THAT
+    copy's provision.py through sudo, which provisioned the dev box (apt, usermod) before the test timed out. So an
+    ancestor only counts when its hams_shared/tools/provision.py is this very file once symlinks are resolved: the
+    main checkout (hams_open/hams_shared, a real directory), a hams_open worktree whose hams_shared symlink points
+    here, and hams_com (whose hams_shared and tools are symlinks into hams_open) all satisfy that, an unrelated copy
+    does not. None means this file is not inside a hams_open layout at all (a standalone hams_shared clone or
+    worktree); provision() refuses to run then, and the tests build a throwaway layout instead."""
+    this_file = os.path.realpath(os.path.join(start_dir, os.path.basename(__file__)))
     current = start_dir
     for _ in range(5):  # five levels is already far more than either real layout ever needs
-        if os.path.exists(os.path.join(current, "hams_shared")):
+        candidate = os.path.join(current, "hams_shared", "tools", os.path.basename(__file__))
+        if os.path.exists(candidate) and os.path.realpath(candidate) == this_file:
             return current
         parent = os.path.dirname(current)
         if parent == current:
             break
         current = parent
-    raise RuntimeError(
-        f"Could not find a repo root containing 'hams_shared' above {start_dir!r} -- "
-        "this script must live under either <hams_com>/tools/ or "
-        "<hams_open>/hams_shared/tools/."
-    )
+    return None
 
 
 repo_root = _find_repo_root(_provision_tools_dir)
@@ -122,6 +131,12 @@ def _provision_only_daemon_families(accounts, plan, env_vars):
 
 
 def provision():
+    if repo_root is None:
+        _logger.error(
+            "[!] %s is not inside a hams_open checkout (no ancestor directory has this file as its hams_shared/tools/"
+            "provision.py). Run it from <hams_open>/hams_shared/tools/ or <hams_com>/tools/; refusing to guess a root.",
+            os.path.abspath(__file__))
+        sys.exit(1)
     os.chdir(repo_root)
 
     if os.geteuid() != 0:
