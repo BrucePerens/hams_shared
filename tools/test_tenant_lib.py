@@ -539,6 +539,17 @@ class BackupAndStatusTests(_Base):
         self.assertEqual(code, 0, out.getvalue())
         self.assertIn("restore ok perens_com", out.getvalue())
 
+    def test_restore_test_of_a_downloaded_copy_covers_retired_tenants_too(self):
+        lib.backup_tenant(self.spec, self.paths, self.system)
+        copy = os.path.join(self.tmp, "downloaded")
+        shutil.copytree(self.paths.backup_root, copy)
+        self.system.active.clear()
+        self.system.enabled.clear()
+        with mock.patch("sys.stdout", io.StringIO()) as out:
+            code = tenant_ctl.main(["restore-test", "--all", "--backup-root", copy], self.system, self.paths)
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("restore ok perens_com", out.getvalue())
+
     def test_status_reports_unit_sizes_backup_age_and_probes(self):
         lib.backup_tenant(self.spec, self.paths, self.system)
         self.system.clock += datetime.timedelta(hours=5)
@@ -681,17 +692,6 @@ class CtlTests(_Base):
                 self.assertEqual(tenant_ctl.main(command, self.system, self.paths), 0, command)
             self.assertIn("no active tenants (1 retired: perens_com)", stdout.getvalue())
         self.assertFalse(os.path.exists(self.paths.backup_dir("perens_com")) and os.listdir(self.paths.backup_dir("perens_com")))
-
-    def test_restore_test_of_a_downloaded_copy_covers_retired_tenants_too(self):
-        lib.backup_tenant(self.spec, self.paths, self.system)
-        copy = os.path.join(self.tmp, "downloaded")
-        shutil.copytree(self.paths.backup_root, copy)
-        self.system.active.clear()
-        self.system.enabled.clear()
-        with mock.patch("sys.stdout", io.StringIO()) as out:
-            code = tenant_ctl.main(["restore-test", "--all", "--backup-root", copy], self.system, self.paths)
-        self.assertEqual(code, 0, out.getvalue())
-        self.assertIn("restore ok perens_com", out.getvalue())
 
     def test_a_retired_tenant_can_still_be_backed_up_by_name(self):
         self.run_steps(self.spec)
