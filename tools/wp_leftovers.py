@@ -207,12 +207,38 @@ def _unwrap_wordpress_anchor(match, stats):
     return match.group(0)
 
 
+_INLINE_BLANK = frozenset(("span", "strong", "em", "b", "i", "u"))
+_BLOCK_TAG = re.compile(r"</?(?:p|div|br|li|ul|ol|h[1-6]|tr|td|th|table|section|article|figure|figcaption|blockquote|hr)\b[^>]*>", re.I)
+_ANY_TAG = re.compile(r"<[^>]*>")
+_WHITESPACE_IN_BLANK = re.compile(r"\s|<br|&nbsp;|&#160;|&#[xX][aA]0;|\u00a0", re.I)
+_CONTEXT_CHARS = 400
+
+
+def _visible_edge(fragment, last):
+    """The last (or first) character a reader would see in `fragment` of markup; a block boundary counts as a space."""
+    text = _ANY_TAG.sub("", _BLOCK_TAG.sub(" ", fragment)).replace("&nbsp;", " ").replace("&#160;", " ").replace("\u00a0", " ")
+    return (text[-1:] if last else text[:1])
+
+
+def _replace_blank_element(match):
+    """"" for a block that shows nothing. For an empty INLINE element (`liable<em> </em>for`) the space it held is a
+    word separator: when real characters sit on both sides it becomes a single space, never nothing, or the words
+    glue together ("liablefor", "sharingrules")."""
+    if match.group(1).lower() not in _INLINE_BLANK or not _WHITESPACE_IN_BLANK.search(match.group(0)):
+        return ""
+    string = match.string
+    before = _visible_edge(string[max(0, match.start() - _CONTEXT_CHARS):match.start()], True)
+    after = _visible_edge(string[match.end():match.end() + _CONTEXT_CHARS], False)
+    return " " if before and after and not before.isspace() and not after.isspace() else ""
+
+
 def prune_blank_elements(markup, stats=None):
     """Removes paragraphs and wrappers that show nothing (`<p></p>`, `<p>&nbsp;</p>`, `<p><br /></p>`,
-    `<p><span> </span></p>`), nested ones included."""
+    `<p><span> </span></p>`), nested ones included. A blank inline element between two words leaves one space
+    in its place (`liable<em> </em>for` -> `liable for`), so the words are not joined."""
     stats = stats if stats is not None else collections.Counter()
     while True:
-        markup, number = _BLANK_ELEMENT.subn("", markup)
+        markup, number = _BLANK_ELEMENT.subn(_replace_blank_element, markup)
         if not number:
             return markup
         stats["empty_elements_removed"] += number

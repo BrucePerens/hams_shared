@@ -323,6 +323,31 @@ class LeftoverTests(unittest.TestCase):
                     "event_handlers_removed", "empty_elements_removed", "wordpress_classes_removed"):
             self.assertGreater(stats[key], 0, key)
 
+    def test_a_blank_inline_element_between_words_leaves_one_space_not_glued_words(self):
+        # Found live 2026-10-13 on perens.com: "sharing<em> </em>rules" became "sharingrules" and "liable<i>&nbsp;</i>for"
+        # became "liablefor" because the whitespace-only inline element was deleted outright.
+        for before, after in (
+            ("<p>sharing<em> </em>rules</p>", "<p>sharing rules</p>"),
+            ("<p>liable<i>&nbsp;</i>for</p>", "<p>liable for</p>"),
+            ("<p>liable<i> </i>for</p>", "<p>liable for</p>"),
+            ("<p>one<span>\u00a0</span>two<b> </b>three<u><br /></u>four</p>", "<p>one two three four</p>"),
+            ("<p><b>bold</b><i> </i><b>more</b></p>", "<p><b>bold</b> <b>more</b></p>"),
+        ):
+            self.assertEqual(wp.strip_wordpress_leftovers(before), after, before)
+            self.assertEqual(wp.strip_wordpress_leftovers(after), after, "idempotent")
+
+    def test_a_blank_inline_element_with_whitespace_already_around_it_or_at_an_edge_is_just_removed(self):
+        for before, after in (
+            ("<p>sharing <em> </em>rules</p>", "<p>sharing rules</p>"),
+            ("<p>sharing<em> </em> rules</p>", "<p>sharing rules</p>"),
+            ("<p>sharing<em> </em></p>", "<p>sharing</p>"),
+            ("<p><em> </em>rules</p>", "<p>rules</p>"),
+            ("<p>one</p><em> </em><p>two</p>", "<p>one</p><p>two</p>"),
+            ("<p>ab<em></em>cd</p>", "<p>abcd</p>"),  # nothing was between them to begin with
+            ("<p><span><em> </em></span></p><p>kept</p>", "<p>kept</p>"),
+        ):
+            self.assertEqual(wp.strip_wordpress_leftovers(before), after, before)
+
     def test_sweeping_twice_changes_nothing(self):
         once = wp.strip_wordpress_leftovers(LEFTOVERS)
         stats = collections.Counter()
