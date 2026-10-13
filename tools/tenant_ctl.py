@@ -15,7 +15,8 @@
 
 `--all` of health, backup and restore-test covers the active tenants only: a retired one (its unit stopped and disabled, its
 site served inside hams_prod since ADR 0106) keeps its database and archives but is skipped, and with none active they print
-that and exit 0. Name a retired tenant to back it up or test it anyway.
+that and exit 0. Name a retired tenant to back it up or test it anyway;
+`restore-test --all --backup-root DIR` tests every tenant with an archive in DIR.
 
 `create`, `backup` and `delete` print what they would do unless `--apply` is given. Applying needs
 root and a host designated the `odoo_tenants` host class (`provision.py --host-class odoo_tenants`,
@@ -192,7 +193,9 @@ def cmd_backup(args, paths, system):
 
 def cmd_restore_test(args, paths, system):
     failures = 0
-    for spec in _specs_for(args, paths, system, True):
+    # Pointed at a copy of the archives (--backup-root, e.g. the one downloaded from B2) it tests every tenant that has
+    # an archive there, retired or not: the point is that the archives restore.
+    for spec in _specs_for(args, paths, system, not getattr(args, "backup_root", None)):
         try:
             result = lib.restore_test(spec, paths, system)
             _out(f"restore ok {spec['name']}: {json.dumps(result, sort_keys=True)}")
