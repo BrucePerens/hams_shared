@@ -98,6 +98,20 @@ ANCHOR_SCAN_EXCLUDE_DIRS = {
     "target",
 }
 
+# Any directory whose name starts with one of these is pruned as well: sibling-named worktree
+# directories (".claude-wt-shared-caproot" in the hams_open checkout) are full copies of the tree and
+# are not matched by the exact ".claude" name above.
+ANCHOR_SCAN_EXCLUDE_DIR_PREFIXES = (".claude",)
+
+
+def _is_excluded_dir(name, extra=()):
+    return (
+        name in ANCHOR_SCAN_EXCLUDE_DIRS
+        or name in extra
+        or name.startswith(ANCHOR_SCAN_EXCLUDE_DIR_PREFIXES)
+    )
+
+
 # Ratchet (baseline) for the pre-existing backlog. Every per-finding check has a kind: ADR-0055
 # documentation coverage ("doc_gap"), source-without-test-link ("no_test_link"), duplicate base
 # anchors ("duplicate"), a doc pointing at code that no longer exists ("missing_target"),
@@ -153,6 +167,23 @@ def _baseline_repo_name(primary_dirs, enclosing_repo_dir):
                 break
             cur = parent
     return os.path.basename(enclosing_repo_dir)
+
+
+def _baseline_repo_names(primary_dirs, enclosing_repo_dir):
+    """Every distinct hams_com / hams_open name among the scan targets, in order.
+
+    test.py scans BOTH repos as primary targets (hams_com plus its hams_open sibling, or the
+    reverse), so a finding in either repo must be checked against that repo's own baseline. Taking
+    only the first target's name checked every hams_open finding against hams_com's baseline (and
+    never loaded anchor_baseline_hams_open.json at all), so hundreds of grandfathered hams_open
+    findings failed the run as if they were new. A target that is neither repo falls back to the
+    enclosing checkout, as _baseline_repo_name does."""
+    names = []
+    for d in primary_dirs:
+        name = _baseline_repo_name([d], enclosing_repo_dir)
+        if name not in names:
+            names.append(name)
+    return names or [os.path.basename(enclosing_repo_dir)]
 
 
 def _default_baseline_path(repo_name):
@@ -310,7 +341,7 @@ def find_anchors_in_docs(root_dir, repo_root):
 
     for root, dirs, files in os.walk(root_dir):
         if "radae" in dirs: dirs.remove("radae")
-        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+        dirs[:] = [d for d in dirs if not _is_excluded_dir(d, exclude_dirs)]
         is_docs_dir = "docs" in root.split(os.sep)
         # A code island's own .py files are real code (scanned separately,
         # as code, by find_anchors_in_code) -- only its README.md (if any)
@@ -511,7 +542,7 @@ def find_anchors_in_code(root_dir, repo_root):
 
     for root, dirs, files in os.walk(root_dir):
         if "radae" in dirs: dirs.remove("radae")
-        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+        dirs[:] = [d for d in dirs if not _is_excluded_dir(d, exclude_dirs)]
 
         for file in files:
             if file == "LLM_LINTER_GUIDE.md" or file == "documentation.html":
@@ -1270,10 +1301,22 @@ def main():
     # exist. `os.path.dirname(repo_root)` is the actual enclosing hams_com/hams_open checkout
     # that `_add_sibling_repo_target` needs.
     enclosing_repo_dir = os.path.dirname(repo_root)
-    baseline_path = baseline_override or _default_baseline_path(
-        _baseline_repo_name(primary_dirs, enclosing_repo_dir)
+    baseline_paths = (
+        [baseline_override]
+        if baseline_override
+        else [
+            _default_baseline_path(name)
+            for name in _baseline_repo_names(primary_dirs, enclosing_repo_dir)
+        ]
     )
-    _BASELINE = None if generate_baseline else load_baseline(baseline_path)
+    # --generate-baseline writes the first target's own file only, exactly as before; a run that
+    # reads is checked against the union of every scanned repo's baseline.
+    baseline_path = baseline_paths[0]
+    if generate_baseline:
+        _BASELINE = None
+    else:
+        loaded = [b for b in (load_baseline(path) for path in baseline_paths) if b is not None]
+        _BASELINE = set().union(*loaded) if loaded else None
     _CURRENT_FINDINGS.clear()
     target_dirs, sibling_warning = _add_sibling_repo_target(enclosing_repo_dir, target_dirs)
     if sibling_warning:
@@ -1368,7 +1411,7 @@ def main():
             dirs[:] = [
                 d
                 for d in dirs
-                if d not in ANCHOR_SCAN_EXCLUDE_DIRS | {"tools", "scripts", "hams_community", "hams_com"}
+                if not _is_excluded_dir(d, ("tools", "scripts", "hams_community", "hams_com"))
             ]
             if "documentation.html" in files:
                 full_doc_path = os.path.join(root, "documentation.html")
@@ -1468,7 +1511,7 @@ def main():
         if _BASELINE is not None:
             print(
                 f"\n[*] Ratchet: {len(_CURRENT_FINDINGS & _BASELINE)} pre-existing findings "
-                f"grandfathered by {os.path.basename(baseline_path)}; "
+                f"grandfathered by {', '.join(os.path.basename(path) for path in baseline_paths)}; "
                 f"{len(_BASELINE - _CURRENT_FINDINGS)} baseline entries no longer occur "
                 "(regenerate with --generate-baseline to shrink the floor)."
             )
