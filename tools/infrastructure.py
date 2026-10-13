@@ -1958,6 +1958,20 @@ MANIFEST = {
             "not_member_of": ["hams_com"],
             "environments": ["prod"],
         },
+        {
+            # hams_com docs/design/HAMS1_LLM_SERVER.md: the local llama.cpp llama-server (Llama 3.2 3B Instruct, CPU only) that
+            # answers the simulated-band bots' chat requests on 127.0.0.1:8179. Its own unprivileged account: it holds no Odoo key,
+            # no database or Redis login and writes no file (the model is mapped read-only), so it is deliberately not a
+            # hamsd_* family account (those exist to receive an Odoo key through the daemon key flow). member_of hams_traverse is
+            # what lets it reach /opt/hams/llm through the 0750 /opt/hams. Prod-only.
+            "user": "hams-llm",
+            "group": "hams-llm",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod"],
+        },
     ],
     "directories": [
         {
@@ -2880,6 +2894,37 @@ MANIFEST = {
         {
             "path": "/etc/hams/turn",
             "owner": "root:hams-turn",
+            "provision_mode": "750",
+            "environments": ["prod"],
+        },
+
+        # hams_com docs/design/HAMS1_LLM_SERVER.md: the local LLM server's tree. Root owns every file (the service account only
+        # reads it, and the unit adds ReadOnlyPaths=/opt/hams/llm): bin/llama-server is the pinned llama.cpp build placed by the
+        # install steps in that document (it is compiled, not downloaded, so no MANIFEST entry can fetch it), models/ is
+        # filled by provision_model_files() from MANIFEST["model_files"]. /etc/hams-llm holds server.env (LLAMA_API_KEY, root 0600,
+        # generated on the host by the install steps, never in this repository); systemd reads it as root, so the service account
+        # cannot read it. Never mounted into any other runtime (no "runtime_mount" key).
+        {
+            "path": "/opt/hams/llm",
+            "owner": "root:root",
+            "provision_mode": "755",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/llm/bin",
+            "owner": "root:root",
+            "provision_mode": "755",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/llm/models",
+            "owner": "root:root",
+            "provision_mode": "755",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/etc/hams-llm",
+            "owner": "root:root",
             "provision_mode": "750",
             "environments": ["prod"],
         },
@@ -9148,6 +9193,75 @@ WantedBy=multi-user.target
             "environments": ["prod"],
         },
         {
+            # hams_com docs/design/HAMS1_LLM_SERVER.md: llama.cpp's llama-server answering the simulated-band bots' chat requests with
+            # Llama 3.2 3B Instruct (CPU only, 127.0.0.1:8179, never a public address). Runs as its own account hams-llm; the
+            # API key is the LLAMA_API_KEY in /etc/hams-llm/server.env (root 0600, generated on the host by the install steps; a
+            # client without it gets 401). The binary is the pinned source build recorded in that document and installed by its
+            # steps; the model is MANIFEST["model_files"]. OPT-IN: provisioning links it and never enables or starts it, because
+            # starting it takes ~3 GB of RAM on the production host and needs the binary and the key file first.
+            # Measured on hams1 (2026-10-13): resident ~3.8 GB of which ~2 GB is the mapped model file, ~10 tokens/s for one
+            # request, ~8.5 each for two at once.
+            "path": "/opt/hams/systemd/hams-llama-server.service",
+            "opt_in": "needs the compiled binary and /etc/hams-llm/server.env first; see hams_com docs/design/HAMS1_LLM_SERVER.md",
+            "content": """\
+[Unit]
+Description=Hams.com local LLM server (llama.cpp llama-server, Llama 3.2 3B Instruct Q4_K_M), loopback only
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+Type=simple
+User=hams-llm
+Group=hams-llm
+# LLAMA_API_KEY (read by llama-server itself, so the key is never on the command line / in ps). root:root 0600.
+EnvironmentFile=/etc/hams-llm/server.env
+WorkingDirectory=/
+ExecStart=/opt/hams/llm/bin/llama-server \\
+  --host 127.0.0.1 --port 8179 \\
+  -m /opt/hams/llm/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf \\
+  -t 6 -c 4096 -np 2 -cram 64 --no-webui --jinja --reasoning off
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams-llama-server
+# Do not starve Odoo: lowest scheduling weight, nice 10, hard memory cap (measured working set ~3 GB).
+Nice=10
+CPUWeight=20
+MemoryHigh=5G
+MemoryMax=6G
+TasksMax=64
+OOMScoreAdjust=300
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictSUIDSGID=true
+ProtectProc=invisible
+ProcSubset=pid
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+ReadOnlyPaths=/opt/hams/llm
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             # hams_com daemons/auth_cert_renew, `--profile turn`: renews the turn.hams.com certificate on hams1 through its own
             # PowerDNS, exactly as hams-auth-cert-renew.service does for auth.hams.com (read that unit's comment): the
             # CNAME `_acme-challenge.turn.hams.com` (entered through Odoo's Cloudflare panel) points into acme.hams.com,
@@ -9281,6 +9395,19 @@ WantedBy=timers.target
             "size": 422309,
             "owner": "hams_com:hams_com",
             "mode": "640",
+        },
+        {
+            # Llama 3.2 3B Instruct, Q4_K_M, for hams-llama-server.service (hams_com docs/design/HAMS1_LLM_SERVER.md). Meta's model
+            # under the Llama 3.2 Community License (hams_com docs/compliance/THIRD_PARTY_MODELS.md). The file is bartowski's
+            # GGUF conversion; its SHA-256 equals the Hugging Face LFS object id published by that repository's API (checked
+            # 2026-10-13) and equals the copy the Jetson demo server runs. The URL is pinned to `main`, which is safe because the
+            # content is checksum-pinned. Root-owned and world-readable: the service account only reads it.
+            "path": "/opt/hams/llm/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+            "url": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+            "sha256": "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff",
+            "size": 2019377696,
+            "owner": "root:root",
+            "mode": "644",
         },
     ],
     "apt_packages": [

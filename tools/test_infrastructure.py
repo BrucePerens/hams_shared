@@ -3969,6 +3969,7 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hamcall.idx.sync.service": "reads a licensed file already on disk; no timer",
         "hams-auth-gateway.service": "local server",
         "hams-turn.service": "coturn relays only what a credentialed client sends it; fetches nothing from a third party",
+        "hams-llama-server.service": "llama.cpp serves a model file already on disk to loopback clients; it opens no outgoing connection (IPAddressDeny=any in the unit; built without libcurl)",
         "shack-console.service": "local static server on 127.0.0.1; serves embedded files, fetches nothing",
         "hams-pgbackrest-backup.path": "fires only on a spool file a configured backup job writes",
         "hams-pgbackrest-backup.service": "runs only for a configured backup job",
@@ -5754,7 +5755,7 @@ class ModelFilesTests(_SafePatchTestCase):
             self.assertRegex(spec["sha256"], r"^[0-9a-f]{64}$")
             self.assertGreater(spec["size"], 0)
             self.assertTrue(spec["url"].startswith("https://"))
-            self.assertTrue(spec["path"].startswith("/opt/hams/models/"))
+            self.assertTrue(spec["path"].startswith(("/opt/hams/models/", "/opt/hams/llm/models/")))
             self.assertNotIn(spec["path"], seen)
             seen.add(spec["path"])
             self.assertIn(os.path.dirname(spec["path"]), directories)
@@ -6958,3 +6959,74 @@ class ModelFilesCacheTests(_SafePatchTestCase):
         self.assertEqual(len(calls), 1)
         with open(spec["path"], "rb") as f:
             self.assertEqual(f.read(), data)
+
+
+class LlamaServerUnitTests(unittest.TestCase):
+    """The local LLM server (hams_com docs/design/HAMS1_LLM_SERVER.md): loopback only, its own account, capped
+    so that Odoo is not starved, and a checksum-pinned model."""
+
+    UNIT = "hams-llama-server.service"
+
+    def _values(self, directive):
+        return infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, directive)
+
+    def _spec(self):
+        return [s for s in infra.MANIFEST["static_files"] if s["path"] == f"/opt/hams/systemd/{self.UNIT}"][0]
+
+    def _exec_start(self):
+        """ExecStart= with its backslash line continuations joined (the directive reader returns only the first line)."""
+        text = self._spec()["content"].replace("\\\n", " ")
+        return " ".join(" ".join(l.split("=", 1)[1] for l in text.splitlines() if l.startswith("ExecStart=")).split())
+
+    def test_the_unit_is_prod_only_opt_in_and_never_enabled_or_started_by_provisioning(self):
+        self.assertEqual(self._spec()["environments"], ["prod"])
+        self.assertIn(self.UNIT, infra.opt_in_unit_names())
+        self.assertNotIn(self.UNIT, infra.boot_service_unit_names())
+        self.assertNotIn(self.UNIT, infra._smoketest_candidate_services(True, False))
+        self.assertNotIn(self.UNIT, infra.external_fetch_unit_names())
+
+    def test_the_server_listens_on_loopback_only_and_the_key_is_not_on_the_command_line(self):
+        exec_start = self._exec_start()
+        self.assertIn("--host 127.0.0.1 --port 8179", exec_start)
+        self.assertNotIn("0.0.0.0", exec_start)
+        self.assertNotIn("--api-key", exec_start, "the key comes from LLAMA_API_KEY in the environment file, not from ps")
+        self.assertEqual(self._values("EnvironmentFile"), ["/etc/hams-llm/server.env"])
+        self.assertEqual(self._values("IPAddressDeny"), ["any"])
+        self.assertEqual(self._values("IPAddressAllow"), ["localhost"])
+        self.assertIn("--no-webui", exec_start)
+
+    def test_the_unit_runs_as_its_own_account_with_the_baseline_sandbox_and_no_writable_path(self):
+        self.assertEqual(self._values("User"), ["hams-llm"])
+        self.assertEqual(self._values("Group"), ["hams-llm"])
+        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.UNIT), set())
+        self.assertEqual(self._values("ReadWritePaths"), [])
+        self.assertEqual(self._values("ReadOnlyPaths"), ["/opt/hams/llm"])
+        self.assertEqual(self._values("MemoryDenyWriteExecute"), ["true"])
+        accounts = {a["user"]: a for a in infra.MANIFEST["system_accounts"]}
+        account = accounts["hams-llm"]
+        self.assertEqual((account["shell"], account["home"], account["environments"]), ("/usr/sbin/nologin", "/nonexistent", ["prod"]))
+        self.assertEqual(account["member_of"], ["hams_traverse"])
+        self.assertEqual(account["not_member_of"], ["hams_com"])
+        self.assertNotIn("odoo", account.get("add_to_users", []))
+
+    def test_the_unit_is_capped_and_deprioritised_so_odoo_keeps_the_machine(self):
+        self.assertEqual(self._values("Nice"), ["10"])
+        self.assertEqual(self._values("CPUWeight"), ["20"])
+        self.assertEqual(self._values("MemoryMax"), ["6G"])
+        self.assertEqual(self._values("TasksMax"), ["64"])
+        self.assertIn("-t 6", self._exec_start())
+
+    def test_the_tree_is_root_owned_and_the_key_directory_is_not_readable_by_the_service_account(self):
+        dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
+        for path in ("/opt/hams/llm", "/opt/hams/llm/bin", "/opt/hams/llm/models"):
+            self.assertEqual((dirs[path]["owner"], dirs[path]["provision_mode"]), ("root:root", "755"))
+            self.assertNotIn("runtime_mount", dirs[path])
+        self.assertEqual((dirs["/etc/hams-llm"]["owner"], dirs["/etc/hams-llm"]["provision_mode"]), ("root:root", "750"))
+
+    def test_the_model_is_checksum_pinned_to_the_published_upstream_file_and_lands_where_the_unit_reads_it(self):
+        spec = [m for m in infra.MANIFEST["model_files"] if m["path"].endswith("Llama-3.2-3B-Instruct-Q4_K_M.gguf")][0]
+        self.assertEqual(spec["sha256"], "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff")
+        self.assertEqual(spec["size"], 2019377696)
+        self.assertTrue(spec["url"].startswith("https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/"))
+        self.assertEqual((spec["owner"], spec["mode"]), ("root:root", "644"))
+        self.assertIn(f"-m {spec['path']}", self._exec_start())
