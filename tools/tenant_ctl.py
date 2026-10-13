@@ -6,12 +6,16 @@
     tenant_ctl.py list                           tenants that exist, with unit state
     tenant_ctl.py create SPEC [--apply]          print the plan (default) or apply it; idempotent
     tenant_ctl.py status [NAME|--all] [--json]   unit, database, filestore, backup age, HTTP probes
-    tenant_ctl.py health --all                   exit 1 if any tenant is down or answers 5xx
+    tenant_ctl.py health --all                   exit 1 if any active tenant is down or answers 5xx
     tenant_ctl.py backup NAME|--all [--apply]    pg_dump + filestore archive with checksums
     tenant_ctl.py restore-test NAME|--all [--backup-root DIR]  restore the newest backup (of DIR, default the local archives) into a scratch database
     tenant_ctl.py upgrade NAME [--apply]         backup, stop, odoo -u, start (one tenant at a time)
     tenant_ctl.py delete NAME --confirm-delete NAME [--apply]
     tenant_ctl.py cloudflare-plan [--current FILE]   ingress rules and DNS records (prints only)
+
+`--all` of health, backup and restore-test covers the active tenants only: a retired one (its unit stopped and disabled, its
+site served inside hams_prod since ADR 0106) keeps its database and archives but is skipped, and with none active they print
+that and exit 0. Name a retired tenant to back it up or test it anyway.
 
 `create`, `backup` and `delete` print what they would do unless `--apply` is given. Applying needs
 root and a host designated the `odoo_tenants` host class (`provision.py --host-class odoo_tenants`,
@@ -74,9 +78,20 @@ def _require_apply_allowed(system):
         )
 
 
-def _specs_for(args, paths):
+def _specs_for(args, paths, system=None, active_only=False):
+    """The tenants a command acts on: the named one, or with --all every tenant. `active_only` (health, backup and
+    restore-test, which the timers run with --all) leaves out retired tenants (their instance is stopped and disabled;
+    ADR 0106), so a fleet with none left is a clean no-op instead of a stale-backup alarm. Naming a tenant still works."""
     existing = lib.load_specs(paths.spec_dir) if os.path.isdir(paths.spec_dir) else []
     if getattr(args, "all", False):
+        if active_only and system is not None:
+            retired = [spec["name"] for spec in existing if lib.is_retired(spec, system)]
+            existing = [spec for spec in existing if spec["name"] not in retired]
+            if not existing:
+                _out(
+                    f"no active tenants ({len(retired)} retired: {', '.join(retired) or 'none exist'}); "
+                    "their sites are served inside hams_prod (ADR 0106). Nothing to do."
+                )
         return existing
     chosen = [spec for spec in existing if spec["name"] == args.name]
     if not chosen:
@@ -142,7 +157,7 @@ def _mb(value):
 
 
 def cmd_health(args, paths, system):
-    rows = [lib.tenant_status(spec, paths, system, http_probe) for spec in _specs_for(args, paths)]
+    rows = [lib.tenant_status(spec, paths, system, http_probe) for spec in _specs_for(args, paths, system, True)]
     bad = [row for row in rows if not row["healthy"]]
     stale = [row for row in rows if row["backup_age_hours"] is None or row["backup_age_hours"] > 36]
     for row in bad:
@@ -153,7 +168,9 @@ def cmd_health(args, paths, system):
 
 
 def cmd_backup(args, paths, system):
-    specs = _specs_for(args, paths)
+    specs = _specs_for(args, paths, system, True)
+    if not specs:
+        return 0
     if not args.apply:
         for spec in specs:
             _out(f"would back up {spec['name']} to {paths.backup_dir(spec['name'])}/<UTC stamp>/")
@@ -175,7 +192,7 @@ def cmd_backup(args, paths, system):
 
 def cmd_restore_test(args, paths, system):
     failures = 0
-    for spec in _specs_for(args, paths):
+    for spec in _specs_for(args, paths, system, True):
         try:
             result = lib.restore_test(spec, paths, system)
             _out(f"restore ok {spec['name']}: {json.dumps(result, sort_keys=True)}")

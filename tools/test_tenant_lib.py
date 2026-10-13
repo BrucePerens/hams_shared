@@ -671,6 +671,41 @@ class CtlTests(_Base):
                 tenant_ctl.main(["backup", "--all", "--apply"], self.system, self.paths)
             self.assertEqual(tenant_ctl.main(["health", "--all"], self.system, self.paths), 0)
 
+    def test_with_every_tenant_retired_the_all_jobs_do_nothing_and_succeed(self):
+        self.run_steps(self.spec)
+        self.system.active.clear()
+        self.system.enabled.clear()  # retired: stopped and disabled, as on hams1 since 2026-10-04
+        for command in (["health", "--all"], ["backup", "--all", "--apply"], ["restore-test", "--all"]):
+            stdout = io.StringIO()
+            with mock.patch("sys.stdout", stdout), mock.patch("os.geteuid", return_value=1000):
+                self.assertEqual(tenant_ctl.main(command, self.system, self.paths), 0, command)
+            self.assertIn("no active tenants (1 retired: perens_com)", stdout.getvalue())
+        self.assertFalse(os.path.exists(self.paths.backup_dir("perens_com")) and os.listdir(self.paths.backup_dir("perens_com")))
+
+    def test_a_retired_tenant_can_still_be_backed_up_by_name(self):
+        self.run_steps(self.spec)
+        self.system.active.clear()
+        self.system.enabled.clear()
+        with mock.patch("sys.stdout", io.StringIO()) as out, mock.patch("os.geteuid", return_value=0), \
+                mock.patch.object(infra, "host_classes", return_value={"odoo_tenants"}):
+            self.assertEqual(tenant_ctl.main(["backup", "perens_com", "--apply"], self.system, self.paths), 0, out.getvalue())
+        self.assertEqual(len(os.listdir(self.paths.backup_dir("perens_com"))), 1)
+
+    def test_no_tenant_specs_at_all_is_a_clean_no_op(self):
+        stdout = io.StringIO()
+        with mock.patch("sys.stdout", stdout):
+            self.assertEqual(tenant_ctl.main(["health", "--all"], self.system, self.paths), 0)
+        self.assertIn("no active tenants (0 retired: none exist)", stdout.getvalue())
+
+    def test_retired_means_stopped_and_disabled_and_nothing_less(self):
+        self.run_steps(self.spec)
+        unit = "hams-tenant@perens_com.service"
+        self.assertFalse(lib.is_retired(self.spec, self.system))  # running
+        self.system.active.discard(unit)
+        self.assertFalse(lib.is_retired(self.spec, self.system))  # stopped but still enabled: that is an outage
+        self.system.enabled.discard(unit)
+        self.assertTrue(lib.is_retired(self.spec, self.system))
+
     def test_validate_command(self):
         stdout = io.StringIO()
         with mock.patch("sys.stdout", stdout):
@@ -980,6 +1015,19 @@ class ManifestTests(unittest.TestCase):
             if os.path.basename(spec["path"]).startswith("hams-tenant"):
                 self.assertEqual(spec["host_class"], "odoo_tenants")
                 self.assertNotIn("external_fetch", spec)
+
+    def test_the_three_tenant_timers_are_retired_so_provisioning_links_but_never_enables_them(self):
+        timers = {"hams-tenant-health.timer", "hams-tenant-backup.timer", "hams-tenant-restore-test.timer"}
+        entries = {os.path.basename(s["path"]): s for s in infra.MANIFEST["static_files"]
+                   if os.path.basename(s["path"]) in timers}
+        self.assertEqual(set(entries), timers)
+        for name, entry in entries.items():
+            self.assertIn("ADR 0106", entry["opt_in"], name)
+        self.assertLessEqual(timers, infra.opt_in_unit_names())
+        linked = sorted(timers | {"hams-static@.service"})
+        self.assertEqual(infra._activation_units_to_enable(linked, False), ["hams-static@.service"])
+        # ...but the static file server of perens.com's /static/ is not retired and is not opt_in.
+        self.assertNotIn("hams-static@.service", infra.opt_in_unit_names())
 
     def test_the_health_unit_is_a_root_oneshot_that_fails_when_a_tenant_is_unhealthy(self):
         unit = next(s for s in infra.MANIFEST["static_files"] if s["path"].endswith("hams-tenant-health.service"))

@@ -1513,6 +1513,14 @@ def systemd_unit_directive_values(manifest, unit_name, directive):
     raise KeyError(unit_name)
 
 
+# Retired 2026-10-12 (ADR 0106): perens.com, postopen.org and the parking site are websites inside hams_prod; the three
+# separate Odoo instances are stopped and disabled and their databases are kept as they are. The timers below ran
+# `tenant_ctl.py ... --all` over those retired tenants, so provisioning links them and never enables them
+# (opt_in); provision.py --enable-opt-in brings one back if an instance is ever started again.
+TENANT_TIMER_RETIRED = (
+    "the separate tenant instances are retired (ADR 0106): their sites live inside hams_prod, their databases are "
+    "kept and a final verified dump of each is in /opt/hams/backups/tenants; tenant_ctl skips retired tenants"
+)
 MANIFEST = {
     "system_accounts": [
         {
@@ -4712,6 +4720,7 @@ WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
+            "opt_in": TENANT_TIMER_RETIRED,
             "host_class": "odoo_tenants",
             "environments": ["prod", "test"],
         },
@@ -4753,6 +4762,7 @@ WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
+            "opt_in": TENANT_TIMER_RETIRED,
             "host_class": "odoo_tenants",
             "environments": ["prod", "test"],
         },
@@ -4793,6 +4803,7 @@ WantedBy=timers.target
 """,
             "owner": "root:root",
             "mode": "644",
+            "opt_in": TENANT_TIMER_RETIRED,
             "host_class": "odoo_tenants",
             "environments": ["prod", "test"],
         },
