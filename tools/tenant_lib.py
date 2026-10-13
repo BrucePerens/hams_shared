@@ -1083,6 +1083,18 @@ def restore_test(spec, paths, system):
             "filestore_members": members}
 
 
+def _unit_disabled(system, unit):
+    return system.run(["systemctl", "is-enabled", unit], check=False).stdout.strip() == "disabled"
+
+
+def is_retired(spec, system):
+    """True for a tenant whose own instance is stopped and disabled (ADR 0106: its site is served inside hams_prod).
+    A retired tenant keeps its database and its archives; the `--all` jobs (health, backup, restore-test) skip it."""
+    unit = f"hams-tenant@{spec['name']}.service"
+    active = system.run(["systemctl", "is-active", unit], check=False).stdout.strip() or "unknown"
+    return active == "inactive" and _unit_disabled(system, unit)
+
+
 # [@ANCHOR: tenant_lib:status]
 # Verified by [@ANCHOR: test_tenant_lib:status]
 def tenant_status(spec, paths, system, http_get=None):
@@ -1092,9 +1104,7 @@ def tenant_status(spec, paths, system, http_get=None):
     active = system.run(["systemctl", "is-active", unit], check=False).stdout.strip() or "unknown"
     # A tenant whose own instance was deliberately stopped and disabled (served by the main Odoo since
     # the "tenants in Odoo" move) is retired, not down: its backup age still counts, its unit does not.
-    retired = active == "inactive" and (
-        system.run(["systemctl", "is-enabled", unit], check=False).stdout.strip() == "disabled"
-    )
+    retired = active == "inactive" and _unit_disabled(system, unit)
     size = pg_scalar(system, f"SELECT pg_database_size('{name}')")
     filestore = os.path.join(paths.data_dir(name), "filestore")
     fs_bytes = 0

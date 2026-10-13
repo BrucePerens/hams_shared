@@ -10,6 +10,17 @@ was built and three such instances (perens_com, postopen_org, parking) were run 
 that design before it was written down as an ADR; this ADR is the architecture decision itself. The
 instance tooling it replaced (`tenant_ctl.py`, `tenant_lib.py`, the `hams-tenant@` units) is retired.
 
+### Where the old instances stand (2026-10-12)
+
+The sites live inside `hams_prod`; nothing is served from the three old databases. On hams1 the `hams-tenant@` instances
+are stopped and disabled and the `perens_com`, `postopen_org` and `parking` databases are **kept, not dropped**, each with a
+verified final archive under `/opt/hams/backups/tenants/<name>/`. A comparison of the old databases with `hams_prod`
+(pages, posts, redirects, attachments, menus, SEO fields) found everything already in `hams_prod`, plus the three
+small gaps copied by hams_com's `devbox_tools/tenants_in_odoo_fill_gaps.py`. The three `hams-tenant-*` timers (backup, health,
+restore test) are marked `opt_in` in the provisioning MANIFEST (linked, never enabled), and `tenant_ctl.py` skips retired
+tenants with `--all` and succeeds when none is active. `hams-static@perens_com`, which serves `/static/` for perens.com, is not
+retired. Dropping the databases is a separate, deliberate step (`tenants_in_odoo_remove_instances.sh`).
+
 ## Context
 
 hams.com's own Odoo already has the parts of a multi-site server: Odoo's `website` model (many websites in
