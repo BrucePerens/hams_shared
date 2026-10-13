@@ -487,6 +487,18 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         self.assertEqual(duplicates, [])
         self.assertEqual(len(anchor_locations["mod_a:COMM_x"]), 1)
 
+    def test_a_claude_prefixed_sibling_worktree_directory_is_never_scanned(self):
+        """hams_open keeps a worktree at .claude-wt-<name>/ (a full copy of the tree); the exact
+        '.claude' name does not match it, so its anchors were reported as duplicates."""
+        _write(os.path.join(self.tmp, "mod_a", "models", "foo.py"), "# [@ANCHOR: COMM_x]\n")
+        _write(
+            os.path.join(self.tmp, ".claude-wt-shared", "mod_a", "models", "foo.py"),
+            "# [@ANCHOR: COMM_x]\n",
+        )
+        _ca, anchor_locations, _tl, _tls, _vbl, _aig, _crefs, duplicates, _lines = self._scan()
+        self.assertEqual(duplicates, [])
+        self.assertEqual(len(anchor_locations["mod_a:COMM_x"]), 1)
+
 
 class ReportDuplicatesTests(unittest.TestCase):
     def setUp(self):
@@ -1098,6 +1110,19 @@ class BaselineRatchetTests(unittest.TestCase):
             va._CURRENT_FINDINGS,
             {"doc_gap|m:old", "doc_gap|m:new", "no_test_link|m:old"},
         )
+
+    def test_baseline_names_cover_every_scanned_repo_not_just_the_first(self):
+        """test.py scans hams_com AND hams_open as primary targets; each repo's findings belong to
+        its own baseline, so both files must be loaded."""
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        com, opn = os.path.join(root, "hams_com"), os.path.join(root, "hams_open")
+        os.makedirs(com)
+        os.makedirs(opn)
+        self.assertEqual(va._baseline_repo_names([com, opn], com), ["hams_com", "hams_open"])
+        self.assertEqual(va._baseline_repo_names([opn, com], com), ["hams_open", "hams_com"])
+        self.assertEqual(va._baseline_repo_names([com, com], com), ["hams_com"])
+        self.assertEqual(va._baseline_repo_names([os.path.join(com, "mod")], com), ["hams_com"])
 
     def test_no_baseline_grandfathers_nothing(self):
         va._BASELINE = None
