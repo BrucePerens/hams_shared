@@ -92,6 +92,11 @@ health check, neither of which touches a table.
 | `hams_helpdesk.user_helpdesk_service` | Helpdesk Service Account | Routes incoming tickets and handles SLA alerts. |
 | `hams_helpdesk.user_helpdesk_service_privileged` | Privileged Helpdesk Admin | Escalates unresolved threads and manages core SLA configurations. |
 
+### Form Shield (`form_shield`)
+| XML ID | Description | Privileges |
+|--------|-------------|------------|
+| `form_shield.user_form_shield_service` | Form shield counters | Writes and purges the daily refusal counters (`form.shield.rejection`) from public request handlers (on a cursor of their own) and from the purge cron. No other model. |
+
 ### Knowledge (`knowledge`)
 | XML ID | Description | Privileges |
 |--------|-------------|------------|
