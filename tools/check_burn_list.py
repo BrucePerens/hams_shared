@@ -2676,8 +2676,12 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 ):
                     if not (
                         node.lineno <= len(self.lines)
-                        and "burn-ignore-test-daemon-thread"
-                        in self.lines[node.lineno - 1]
+                        and (
+                            "burn-ignore-test-daemon-thread"
+                            in self.lines[node.lineno - 1]
+                            or "burn-ignore-bounded-daemon-thread"
+                            in self.lines[node.lineno - 1]
+                        )
                     ):
                         self.add_error(
                             node.lineno, "CRITICAL DOS VECTOR: Unbounded Thread."
@@ -5130,6 +5134,17 @@ def scan_file(filepath, is_odoo_module=False):
                 # pager_duty/tests/test_pager_log_analyzer.py's own
                 # tail_file() coverage.
                 "burn-ignore-test-daemon-thread",
+                # PRODUCTION code that starts ONE long-lived daemon thread whose
+                # lifecycle is bounded in the code itself: at most one per
+                # process (or per registry class), started lazily, stopped by
+                # an Event, and ended by the thread itself when its work is
+                # gone. The "Unbounded Thread" rule's DOS concern is a thread
+                # per request or per record; this is the shape of a keepalive
+                # or flusher. The comment after the tag must say what bounds
+                # it. First used by hams_rabbitmq/models/rabbitmq_pool.py's
+                # keepalive thread (pika's BlockingConnection answers
+                # heartbeats only inside a pika call).
+                "burn-ignore-bounded-daemon-thread",
                 # A test spins up its OWN real HTTPServer bound to
                 # 127.0.0.1 as a hermetic stand-in for a real device that
                 # only ever exists on the operator's own LAN or loopback
