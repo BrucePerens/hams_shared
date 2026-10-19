@@ -7,7 +7,9 @@ Runs from `hams-site-monitor.timer` every minute on the production host. It is d
 that works and it does not depend on Odoo, so it still pages when Odoo is the thing that is down:
 
   * Checks: Odoo's `/web/health`, PostgreSQL (`pg_isready`), the Cloudflare tunnel's own readiness endpoint,
-    the public site through the tunnel, every unit the MANIFEST says is a long-running production daemon (the
+    the public site (https://hams.com/ through Cloudflare and the tunnel, as an outside visitor sees it: it must
+    answer HTTP 200 itself, not a redirect, and the body must be the real page, not the nginx restart page or an
+    error page that happens to say 200), every unit the MANIFEST says is a long-running production daemon (the
     signers included), and disk space.
   * Paging path, with no Odoo in it. Primary: EMAIL by direct SMTP (`PAGER_FALLBACK_EMAIL` is the recipient, with
     `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`; the same variables as pager_duty's fallback).
@@ -25,6 +27,10 @@ by `pagerduty-maintenance start`, root only) is active, every check still runs a
 "recovered" notice is sent, failures do not count toward FAILS_BEFORE_PAGE, and check state is reset on each pass so
 paging restarts from zero afterwards. The flag expires by itself, is capped at 2 hours, and a malformed one is ignored
 (paging stays on). The monitor only reads it. The dead-man heartbeat is still sent during maintenance.
+
+Logging: quiet on success. A check's "ok" is logged once when it first appears and again when it recovers; a failing check
+is logged at ERROR on every pass. The missing-heartbeat warning is logged once per boot of the host, not every minute.
+State for this (`status.json`) sits beside `state.json` in the state directory.
 
 Configuration is read from the environment (the unit loads `/opt/hams/etc/site_monitor.env`, root only, optional).
 With no paging channel configured the monitor says so loudly on every run and exits 2, so the unit shows as failed
@@ -57,6 +63,13 @@ SYSTEMD_DIR = "/etc/systemd/system"
 DEFAULT_ODOO_URL = "http://127.0.0.1:8069/web/health"
 DEFAULT_TUNNEL_READY_URL = "http://127.0.0.1:20241/ready"
 DEFAULT_PUBLIC_URL = "https://hams.com/"
+# What marks the real front page: the stylesheet link Odoo's website puts in every page's head (production_readiness_check.py
+# relies on the same one). Override with HAMS_MONITOR_PUBLIC_MARKER.
+DEFAULT_PUBLIC_MARKER = "web.assets_frontend"
+# The sentence in nginx's restart page (nginx/prod/hams-tunnel-origin.conf, location @hams_restarting in hams_com). A 200 that
+# carries it is still a failure. hams_com devbox_tools/test_nginx_tunnel_origin.py and this repository's tests keep the two equal.
+MAINTENANCE_PAGE_MARKER = "is restarting with a bug fix"
+BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 DEFAULT_STATE_DIR = "/var/lib/hams-monitor"
 USER_AGENT = "hams-site-monitor/1.0 (self-check; +https://hams.com)"
 
@@ -117,12 +130,44 @@ def check_odoo(url, http_get=_http_get):
     return True, "health endpoint passes"
 
 
-def check_public_site(url, http_get=_http_get):
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Hand a 3xx back as an answer instead of following it: a front page that redirects is not the front page."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _public_get(url, timeout=15, opener=None):
+    """GET as an outside visitor's first request: no cookies, no redirects followed. Returns (status, body) for EVERY status
+    (a 503 or a 301 included) so the caller can look at the body; only transport failures raise."""
+    opener = opener or urllib.request.build_opener(_NoRedirects)
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"})
     try:
-        status, _body = http_get(url, timeout=15)
+        with opener.open(request, timeout=timeout) as response:
+            return response.status, response.read(65536).decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, exc.read(65536).decode("utf-8", "replace")
+        finally:
+            exc.close()
+
+
+def check_public_site(url, http_get=_public_get, marker=DEFAULT_PUBLIC_MARKER):
+    """The public front page must answer 200 itself and be the real page. Fails on: any status but 200 (a 502, the nginx
+    restart page's 503, and a redirect, which is not followed), a 200 that carries the restart page's sentence, and a 200
+    without `marker` (an error page that says 200, or Cloudflare's own page)."""
+    try:
+        status, body = http_get(url, timeout=15)
     except (OSError, urllib.error.URLError, ValueError) as exc:
         return False, f"{url}: {exc}"
-    return (status == 200), f"{url}: HTTP {status}"
+    if MAINTENANCE_PAGE_MARKER in body:
+        return False, f"{url}: HTTP {status}, the restart page (Odoo is unreachable or restarting)"
+    if status != 200:
+        extra = " (a redirect is not followed: the front page itself must answer)" if 300 <= status < 400 else ""
+        return False, f"{url}: HTTP {status}{extra}"
+    if marker and marker not in body:
+        return False, f"{url}: HTTP 200 but the body is not the real page (no {marker!r})"
+    return True, f"{url}: HTTP {status}"
 
 
 def check_tunnel(url, http_get=_http_get, minimum=1):
@@ -231,7 +276,8 @@ def run_checks(env, deps=None):
     }
     public = env.get("HAMS_MONITOR_PUBLIC_URL", DEFAULT_PUBLIC_URL)
     if public:
-        plan["public site"] = lambda: check_public_site(public, **deps.get("http", {}))
+        marker = env.get("HAMS_MONITOR_PUBLIC_MARKER", DEFAULT_PUBLIC_MARKER)
+        plan["public site"] = lambda: check_public_site(public, marker=marker, **deps.get("http", {}))
     results = {}
     for name, fn in plan.items():
         try:
@@ -289,6 +335,40 @@ def save_state(path, state):
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(state, handle)
     os.replace(tmp, path)
+
+
+# ---- what to log (quiet on success) -----------------------------------------------------------------------------
+
+def current_boot_id(path=BOOT_ID_PATH):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read().strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
+def load_status(path):
+    """{"ok": {check: bool}, "heartbeat_warned_boot": id}; an unreadable file is an empty status (everything is logged once)."""
+    data = load_state(path)
+    return {"ok": dict(data.get("ok", {})) if isinstance(data.get("ok"), dict) else {},
+            "heartbeat_warned_boot": data.get("heartbeat_warned_boot", "")}
+
+
+def log_results(results, status):
+    """Log a failing check on every pass, and an ok check only when it is new or has just recovered. Updates status["ok"]."""
+    for name, (ok, detail) in results.items():
+        previous = status["ok"].get(name)
+        if not ok:
+            logger.error("%s: FAIL (%s)", name, detail)
+        elif previous is False:
+            logger.info("%s: ok again, recovered (%s)", name, detail)
+        elif previous is None:
+            logger.info("%s: ok (%s)", name, detail)
+        else:
+            logger.debug("%s: ok (%s)", name, detail)
+        status["ok"][name] = ok
+    for gone in [name for name in status["ok"] if name not in results]:
+        del status["ok"][gone]
 
 
 # ---- delivery ---------------------------------------------------------------------------------------------------
@@ -391,8 +471,9 @@ def main(env=None, now=None, deps=None, host=None):
     state_path = os.path.join(env.get("STATE_DIRECTORY", DEFAULT_STATE_DIR).split(":")[0], "state.json")
 
     results = run_checks(env, deps)
-    for name, (ok, detail) in results.items():
-        (logger.info if ok else logger.error)("%s: %s (%s)", name, "ok" if ok else "FAIL", detail)
+    status_path = os.path.join(os.path.dirname(state_path), "status.json")
+    run_status = load_status(status_path)
+    log_results(results, run_status)
 
     flag = read_maintenance(maintenance_flag_path(env), now)
     if flag["state"] == "malformed":
@@ -432,8 +513,19 @@ def main(env=None, now=None, deps=None, host=None):
     # off-host dead-man page, and the monitor having run proves the host and timer are alive. It is capped by the flag.
     if heartbeat and (status == 0 or (in_maintenance and status == 1)):
         ping_heartbeat(heartbeat, **deps.get("heartbeat", {}))
-    elif not heartbeat:
-        logger.warning("HAMS_MONITOR_HEARTBEAT_URL is not set: nothing outside this host notices if the host dies")
+    if heartbeat:
+        run_status["heartbeat_warned_boot"] = ""
+    else:
+        # This runs once a minute from a timer, so "once at startup" is "once per boot of the host".
+        boot_id = deps.get("boot_id", current_boot_id)()
+        if run_status["heartbeat_warned_boot"] != boot_id:
+            logger.warning("HAMS_MONITOR_HEARTBEAT_URL is not set: nothing outside this host notices if the host dies "
+                           "(logged once per boot; see docs/runbooks/SITE_MONITORING.md in hams_com)")
+            run_status["heartbeat_warned_boot"] = boot_id
+    try:
+        save_state(status_path, run_status)
+    except OSError as exc:
+        logger.error("Could not save status %s: %s", status_path, exc)
     return status
 
 

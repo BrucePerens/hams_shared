@@ -48,10 +48,97 @@ class TunnelAndPublicTests(unittest.TestCase):
         self.assertFalse(sm.check_tunnel("u", http_get=fake_get({"u": (200, "[]")}))[0])
         self.assertFalse(sm.check_tunnel("u", http_get=fake_get({"u": OSError("refused")}))[0])
 
-    def test_public_site_must_answer_200(self):
-        self.assertTrue(sm.check_public_site("u", http_get=fake_get({"u": (200, "")}))[0])
-        self.assertFalse(sm.check_public_site("u", http_get=fake_get({"u": (502, "")}))[0])
+    REAL_PAGE = '<html><head><link rel="stylesheet" href="/web/assets/1/abc/web.assets_frontend.min.css"></head></html>'
+    RESTART_PAGE = "<p>hams.com is restarting with a bug fix; this takes about two minutes. Please reload shortly.</p>"
+
+    def _public(self, status, body):
+        return sm.check_public_site("u", http_get=fake_get({"u": (status, body)}))
+
+    def test_public_site_must_answer_200_with_the_real_page(self):
+        self.assertTrue(self._public(200, self.REAL_PAGE)[0])
         self.assertFalse(sm.check_public_site("u", http_get=fake_get({"u": OSError("tls")}))[0])
+
+    def test_a_502_the_restart_page_a_redirect_and_an_error_page_are_all_failures(self):
+        self.assertFalse(self._public(502, "")[0])
+        self.assertFalse(self._public(502, "<html>Bad gateway</html>")[0])
+        ok, detail = self._public(503, self.RESTART_PAGE)  # the nginx catcher
+        self.assertFalse(ok)
+        self.assertIn("restart page", detail)
+        self.assertFalse(self._public(503, "")[0])
+        self.assertFalse(self._public(500, self.REAL_PAGE)[0])
+        ok, detail = self._public(301, "")
+        self.assertFalse(ok)
+        self.assertIn("redirect", detail)
+        self.assertFalse(self._public(302, self.REAL_PAGE)[0])
+
+    def test_a_200_that_is_the_restart_page_or_not_the_real_page_is_a_failure(self):
+        self.assertFalse(self._public(200, self.RESTART_PAGE)[0])
+        self.assertFalse(self._public(200, self.RESTART_PAGE + self.REAL_PAGE)[0])
+        ok, detail = self._public(200, "<html>Cloudflare error</html>")
+        self.assertFalse(ok)
+        self.assertIn("not the real page", detail)
+        self.assertFalse(self._public(200, "")[0])
+
+    def test_the_marker_can_be_overridden_for_another_site(self):
+        self.assertTrue(sm.check_public_site("u", http_get=fake_get({"u": (200, "<b>Welcome</b>")}), marker="Welcome")[0])
+        results = sm.run_checks({"HAMS_MONITOR_PUBLIC_URL": "u", "HAMS_MONITOR_PUBLIC_MARKER": "Welcome"},
+                                {"http": {"http_get": fake_get({"u": (200, "<b>Welcome</b>")})},
+                                 "pg": {"run": lambda *a, **k: SimpleNamespace(returncode=0), "find": lambda: "/x"},
+                                 "units_list": {"manifest_units": ()},
+                                 "units": {"run": lambda cmd, **k: SimpleNamespace(stdout="active\n" * (len(cmd) - 2), returncode=0)},
+                                 "disk": {"usage": lambda p: (100, 10, 90)}})
+        self.assertTrue(results["public site"][0])
+
+    def test_the_real_probe_returns_every_status_and_never_follows_a_redirect(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        class Site(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/redirect":
+                    self.send_response(301)
+                    self.send_header("Location", "/real")
+                    body = b""
+                elif self.path == "/down":
+                    self.send_response(503)
+                    body = TunnelAndPublicTests.RESTART_PAGE.encode()
+                else:
+                    self.send_response(200)
+                    body = TunnelAndPublicTests.REAL_PAGE.encode()
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Site)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = "http://127.0.0.1:%d" % server.server_port
+        self.assertEqual(sm._public_get(base + "/redirect")[0], 301)  # not followed to /real (which would be 200)
+        self.assertEqual(sm._public_get(base + "/down")[0], 503)
+        self.assertEqual(sm.check_public_site(base + "/")[0], True)
+        self.assertEqual(sm.check_public_site(base + "/redirect")[0], False)
+        ok, detail = sm.check_public_site(base + "/down")
+        self.assertFalse(ok)
+        self.assertIn("restart page", detail)
+
+    def test_the_restart_page_sentence_is_the_one_nginx_serves(self):
+        # The sentence lives in hams_com nginx/prod/hams-tunnel-origin.conf (location @hams_restarting). Skipped only where
+        # no hams_com checkout that has that location is beside this one (this repository is also used on its own).
+        here = os.path.dirname(os.path.abspath(__file__))
+        candidates = [os.environ.get("HAMS_COM_DIR", "")] + [os.path.join(here, *([".."] * depth), "hams_com") for depth in (2, 3, 4)]
+        for root in candidates:
+            conf = os.path.join(root, "nginx", "prod", "hams-tunnel-origin.conf") if root else ""
+            if conf and os.path.exists(conf):
+                with open(conf, encoding="utf-8") as handle:
+                    text = handle.read()
+                if "location @hams_restarting" in text:
+                    self.assertIn("hams.com " + sm.MAINTENANCE_PAGE_MARKER + ";", text)
+                    return
+        self.skipTest("no hams_com checkout with the restart page beside this one")
 
 
 class PostgresqlCheckTests(unittest.TestCase):
@@ -339,6 +426,49 @@ class MainTests(unittest.TestCase):
             sm.main(env=self._env(), now=now, deps=down, host="h")
         self.assertEqual(sm.main(env=self._env(), now=1120, deps=up, host="h"), 0)
         self.assertEqual(self.sent, ["[hams.com DOWN] odoo", "[hams.com RECOVERED] odoo"])
+
+    def _run_logged(self, env, deps, now, host="h"):
+        with self.assertLogs("site_monitor", level="DEBUG") as logs:
+            sm.main(env=env, now=now, deps=deps, host=host)
+        return [(r.levelname, r.getMessage()) for r in logs.records]
+
+    def test_a_healthy_pass_is_quiet_after_the_first_one_and_a_recovery_is_logged(self):
+        up, down = self._deps(ok=True), self._deps(ok=False)
+        first = self._run_logged(self._env(), up, 1000)
+        self.assertTrue(any(m.startswith("odoo: ok") for lvl, m in first if lvl == "INFO"), first)
+        second = self._run_logged(self._env(), up, 1060)
+        self.assertEqual([m for lvl, m in second if lvl != "DEBUG"], [], "a pass where nothing changed logs nothing above debug")
+        failing = self._run_logged(self._env(), down, 1120)
+        self.assertIn(("ERROR", "odoo: FAIL (http://127.0.0.1:8069/web/health: refused)"), failing)
+        still = self._run_logged(self._env(), down, 1180)
+        self.assertEqual([lvl for lvl, m in still if m.startswith("odoo")], ["ERROR"], "a failing check is logged on every pass")
+        back = self._run_logged(self._env(), up, 1240)
+        self.assertTrue(any(lvl == "INFO" and m.startswith("odoo: ok again, recovered") for lvl, m in back), back)
+        self.assertEqual([m for lvl, m in self._run_logged(self._env(), up, 1300) if lvl != "DEBUG"], [])
+
+    def test_the_missing_heartbeat_warning_is_logged_once_per_boot_not_every_minute(self):
+        env = self._env()
+        del env["HAMS_MONITOR_HEARTBEAT_URL"]
+        deps = dict(self._deps(), boot_id=lambda: "boot-a")
+        first = self._run_logged(env, deps, 1000)
+        warnings = [m for lvl, m in first if lvl == "WARNING"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("HAMS_MONITOR_HEARTBEAT_URL is not set", warnings[0])
+        for now in (1060, 1120):
+            self.assertEqual([m for lvl, m in self._run_logged(env, deps, now) if lvl == "WARNING"], [])
+        rebooted = dict(deps, boot_id=lambda: "boot-b")
+        self.assertEqual(len([m for lvl, m in self._run_logged(env, rebooted, 1180) if lvl == "WARNING"]), 1)
+        self.assertEqual(self.pings, [])  # nothing to ping
+
+    def test_setting_the_heartbeat_later_ends_the_warning_and_pings(self):
+        env = self._env()
+        no_beat = dict(env)
+        del no_beat["HAMS_MONITOR_HEARTBEAT_URL"]
+        deps = dict(self._deps(), boot_id=lambda: "boot-a")
+        self._run_logged(no_beat, deps, 1000)
+        quiet = self._run_logged(env, deps, 1060)
+        self.assertEqual([m for lvl, m in quiet if lvl == "WARNING"], [])
+        self.assertEqual(self.pings, ["https://beat/ping"])
 
     def test_no_channel_configured_is_loud(self):
         env = self._env()
