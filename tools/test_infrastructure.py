@@ -4465,6 +4465,15 @@ class SimulatedBandUnitHardeningTests(unittest.TestCase):
         self.assertRegex(content, r"(?m)^RestrictAddressFamilies=.*\bAF_NETLINK\b")
         self.assertNotIn("\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n", content)
 
+    def test_the_bots_and_the_observer_can_file_safety_tickets(self):
+        # main.create_safety_ticket() loads hams_config.load_credentials(), which exits the process without ODOO_KEY_FILE:
+        # the Observer's flag of 2026-10-17 never became a ticket because its unit had no key file.
+        for unit in ("hams.simulated.bots.service", "hams.simulated.observer.service"):
+            with self.subTest(unit=unit):
+                key_files = [v.strip('"') for v in self._values(unit, "Environment") if v.strip('"').startswith("ODOO_KEY_FILE=")]
+                self.assertEqual(key_files, ["ODOO_KEY_FILE=/opt/hams/etc/keys/ai_safety_reporting_service_internal.env"])
+                self.assertIn("/opt/hams/etc/common.env", self._values(unit, "EnvironmentFile"))  # DB_NAME, which hams_config needs
+
     def test_the_rest_of_the_sandbox_is_still_whole(self):
         for unit in self.SERVICES:
             with self.subTest(unit=unit):
