@@ -8917,6 +8917,9 @@ export PYTHONPATH=/opt/hams/daemons
 export ODOO_URL=http://127.0.0.1:8069
 export ODOO_DB=hams_prod
 export ODOO_KEY_FILE=/opt/hams/etc/keys/event_ai_correction_service_internal.key
+# Web Bot Auth: fetch_page_text signs its page and robots.txt requests with the odoo account's key (this script runs as odoo;
+# the key is created by odoo.service and event.ai.enrichment.service). Unreadable or absent: the request goes out unsigned.
+export HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/odoo/odoo.key
 exec /usr/bin/python3 /opt/hams/daemons/hams_event_enrichment_mcp/main.py
 """,
             "owner": "root:root",
@@ -10045,6 +10048,23 @@ WantedBy=timers.target
             "RestartSec": "5",
         },
     },
+    # Production only (provision_systemd_override merges it into systemd_odoo_override when environment is "prod"; a test
+    # host gets no key, so nothing it fetches is signed). Bruce, 2026-10-19: every crawler and web search signs with Web
+    # Bot Auth; the Odoo-side fetchers (OSM geocoding and Overpass, the FCC and POTA public APIs, the repeater-site import,
+    # ham_base/outbound_signing.py) run inside odoo.service, so the process needs the `odoo` account's key, the same one
+    # event.ai.enrichment.service already uses (one key per signing account; its public half odoo.jwk is listed by
+    # web.bot.auth.directory.service). ExecStartPre runs as User=odoo and is "-" prefixed on purpose: signing is best
+    # effort, a failure to create the key must never keep Odoo from starting (the helper then sends the request unsigned and
+    # logs it). The /opt/hams/spool read-write grant above already covers the key directory.
+    "systemd_odoo_override_prod_only": {
+        "Service": {
+            "Environment": ["HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/odoo/odoo.key"],
+            "ExecStartPre": [
+                "-/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/odoo/odoo.key"
+                " --jwk-file /opt/hams/spool/web_bot_auth_keys/odoo/odoo.jwk"
+            ],
+        },
+    },
     # Bug found live on hams1, 2026-09-22: pdns.service ships as a plain OS
     # package unit with no override, so it always ran with the package's own
     # default /etc/powerdns/pdns.conf (an unconfigured stock template --
@@ -10696,6 +10716,16 @@ def provision_systemd_override(
     override_data = MANIFEST.get(manifest_key)
     if not override_data:
         return
+    prod_only = MANIFEST.get(manifest_key + "_prod_only") if environment == "prod" else None
+    if prod_only:
+        merged = {section: dict(items) for section, items in override_data.items()}
+        for section, items in prod_only.items():
+            target = merged.setdefault(section, {})
+            for k, v in items.items():
+                existing = target.get(k, [])
+                existing = existing if isinstance(existing, list) else [existing]
+                target[k] = existing + (v if isinstance(v, list) else [v])
+        override_data = merged
 
     override_dir = (
         os.path.join(dest_dir, f"etc/systemd/system/{unit_name}.service.d".lstrip("/"))
