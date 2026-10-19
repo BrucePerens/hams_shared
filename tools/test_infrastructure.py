@@ -1339,6 +1339,37 @@ class ProvisionSystemdOverrideTests(_TmpDirTestCase):
         self.assertIn("Restart=on-failure", lines)
         self.assertIn("RestartSec=5", lines)
 
+    # Bruce, 2026-10-19: the Odoo-side fetchers (ham_base/outbound_signing.py) sign with the odoo account's key.
+    KEY = "/opt/hams/spool/web_bot_auth_keys/odoo/odoo.key"
+
+    def _override_lines(self, environment):
+        infra.provision_systemd_override(MagicMock(), {}, environment=environment, dest_dir=self.tmp)
+        with open(os.path.join(self.override_dir, "override.conf")) as f:
+            return f.read().splitlines()
+
+    def test_the_production_odoo_override_carries_the_web_bot_auth_key_and_creates_it_without_blocking_start(self):
+        lines = self._override_lines("prod")
+        self.assertIn(f"Environment=HAMS_WEB_BOT_AUTH_KEY_FILE={self.KEY}", lines)
+        pre = [ln for ln in lines if ln.startswith("ExecStartPre=")]
+        # the existing root env validator is kept, and the key creation comes after it with "-": a failure never stops Odoo
+        self.assertTrue(pre[0].startswith("ExecStartPre=+") and "env_validator.py" in pre[0], pre)
+        ensure = [ln for ln in pre if "web_bot_auth.py ensure-key" in ln]
+        self.assertEqual(len(ensure), 1, pre)
+        self.assertTrue(ensure[0].startswith("ExecStartPre=-/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key"), ensure)
+        self.assertIn(f"--key-file {self.KEY}", ensure[0])
+        self.assertIn("--jwk-file /opt/hams/spool/web_bot_auth_keys/odoo/odoo.jwk", ensure[0])
+        # the other Environment lines survive the merge
+        self.assertIn("Environment=ODOO_RC=/etc/odoo/odoo.conf", lines)
+
+    def test_a_test_host_odoo_override_has_no_web_bot_auth_key(self):
+        lines = self._override_lines("test")
+        self.assertFalse([ln for ln in lines if "WEB_BOT_AUTH" in ln or "web_bot_auth" in ln], lines)
+
+    def test_the_odoo_key_directory_is_inside_the_read_write_grant_the_override_gives_odoo(self):
+        lines = self._override_lines("prod")
+        self.assertIn("ReadWritePaths=/opt/hams/spool", lines)
+        self.assertTrue(self.KEY.startswith("/opt/hams/spool/"))
+
 
 class ProvisionModeEnvFileTests(_TmpDirTestCase):
     """load_and_prompt_env() must not carry saved *.env values across test-mode and production
@@ -5086,6 +5117,51 @@ class WebBotAuthSigningUnitTests(_SafePatchTestCase):
                 continue
             if "HAMS_WEB_BOT_AUTH_KEY_FILE" in entry["content"]:
                 self.assertIn(os.path.basename(path), signing, f"{path} signs but is not listed here")
+
+    # Every external_fetch service unit that is not a crawler of public third-party web content, and why it needs no signature
+    # (it speaks another protocol, calls an authenticated API, or is the signer itself). A new external_fetch unit that is in
+    # neither this table nor SIGNING_UNITS fails the test below: add it to SIGNING_UNITS with its key, or here with the reason.
+    NOT_CRAWLERS = {
+        "system-startup.service": "starts amsat.tle.sync.service, which signs",
+        "ham.dx.daemon.service": "telnet to a DX cluster, not HTTP",
+        "aprs.is.sync.service": "APRS-IS TCP feed, not HTTP",
+        "ses.inbound.mail.ingest.service": "AWS SQS/S3 API with credentials",
+        "hams-relay-signer.service": "Google Cloud KMS API, authenticated",
+        "hams-relay-ca.service": "Google Cloud KMS API, authenticated",
+        "hams-identity-ca.service": "Google Cloud KMS API, authenticated",
+        "code.review.sweep.service": "LLM API with an API key",
+        "au.pii.sync.service": "stub: fetches nothing yet (no HTTP client in daemons/au_pii_sync)",
+        "credential.touch.timer.service": "refreshes our own OAuth session",
+        "ticket.triage.service": "Anthropic through the Claude Code CLI",
+        "ticket.triage.event.service": "Anthropic through the Claude Code CLI",
+        "pager-os-monitor.service": "monitoring probes of our own sites and the DNS roots",
+        "hams-auth-cert-renew.service": "ACME to Let's Encrypt, authenticated by the account key",
+        "hams-turn-cert-renew.service": "ACME to Let's Encrypt, authenticated by the account key",
+    }
+
+    def test_every_external_fetch_service_unit_is_either_a_signing_unit_or_a_listed_non_crawler(self):
+        seen = set()
+        for entry in infra.MANIFEST["static_files"]:
+            path = entry["path"]
+            if not entry.get("external_fetch") or not path.endswith(".service"):
+                continue
+            name = os.path.basename(path)
+            if "pi500-1" in entry.get("environments", []):
+                continue  # the pi500-1 variant of fcc.uls.sync: another host, its key is the open item in night_shift_todo web-bot-auth-every-source-signs
+            if name == "fcc.uls.sync.service" and "User=odoo" in entry["content"]:
+                continue
+            seen.add(name)
+            with self.subTest(unit=name):
+                self.assertTrue(name in self.SIGNING_UNITS or name in self.NOT_CRAWLERS, f"{name} fetches externally: sign it or list it")
+                if name in self.SIGNING_UNITS:
+                    self.assertIn("HAMS_WEB_BOT_AUTH_KEY_FILE", entry["content"], name)
+        self.assertTrue(set(self.SIGNING_UNITS) <= seen, set(self.SIGNING_UNITS) - seen)
+        self.assertTrue(set(self.NOT_CRAWLERS) <= seen, set(self.NOT_CRAWLERS) - seen)
+
+    def test_the_event_enrichment_mcp_wrapper_gives_fetch_page_text_the_odoo_key(self):
+        wrapper = [e for e in infra.MANIFEST["static_files"] if e["path"] == "/usr/local/sbin/run-event-enrichment-mcp.sh"][0]["content"]
+        self.assertIn("export HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/odoo/odoo.key\n", wrapper)
+        self.assertLess(wrapper.index("HAMS_WEB_BOT_AUTH_KEY_FILE"), wrapper.index("exec /usr/bin/python3"))
 
 
 class TraversalGrantTests(_SafePatchTestCase):
