@@ -3,6 +3,11 @@
 ## Status
 Accepted
 
+**Note, 2026-10-19:** the QRZ bio-edit challenge named below was removed (QRZ.com answered every automated fetch
+with "403 Robot Denied", so it never verified anyone; Bruce: "Remove the QRZ validation"). It had been one of the
+independent paths this ADR counts; LoTW mTLS, the official-email OTP and license review remain. The text below is kept
+as the historical record.
+
 ## Scope
 This ADR governs how this codebase (`hams_com`, `hams_open`, `hams_shared`) treats its dependence
 on **non-government, commercial third parties** for data or verification capability this platform

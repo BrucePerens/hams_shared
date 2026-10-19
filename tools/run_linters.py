@@ -736,7 +736,7 @@ def main():
     daemon_env = dict(os.environ)
     daemon_env.setdefault("ODOO_URL", "http://test-odoo.invalid:8069")
     daemon_env.setdefault("DB_NAME", "hams_test")
-    # pdns_sync and qrz_scraper's own main.py read these at import time with
+    # pdns_sync's own main.py reads these at import time with
     # no fallback -- the exact same dummy defaults provision_environment()
     # already sets via env_vars.setdefault() elsewhere in this file, so this
     # step is self-sufficient rather than depending on inheriting them from

@@ -118,7 +118,6 @@
   "doc_gap|ham_logbook:release_idempotency_claim",
   "doc_gap|ham_logbook:sked_caller_is_target",
   "doc_gap|ham_onboarding:action_send_official_otp",
-  "doc_gap|ham_onboarding:action_verify_qrz_bio",
   "doc_gap|ham_onboarding:apply_callsign_upgrade",
   "doc_gap|ham_onboarding:canonicalize_first_name",
   "doc_gap|ham_onboarding:confirm_callsign_upgrade_otp",
