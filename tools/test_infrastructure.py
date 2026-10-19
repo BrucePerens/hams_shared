@@ -4472,6 +4472,7 @@ class SimulatedBandUnitHardeningTests(unittest.TestCase):
             with self.subTest(unit=unit):
                 key_files = [v.strip('"') for v in self._values(unit, "Environment") if v.strip('"').startswith("ODOO_KEY_FILE=")]
                 self.assertEqual(key_files, ["ODOO_KEY_FILE=/opt/hams/etc/keys/ai_safety_reporting_service_internal.env"])
+                self.assertIn("/opt/hams/etc/common.env", self._values(unit, "EnvironmentFile"))  # DB_NAME, which hams_config needs
 
     def test_the_rest_of_the_sandbox_is_still_whole(self):
         for unit in self.SERVICES:
