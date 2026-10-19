@@ -8023,6 +8023,11 @@ Environment="HAMS_SIMULATED_BAND_KEY_FILE=/etc/hams-bots/band.key"
 Environment="HAMS_SIMULATED_BOT_HOST_NAME=hams1-local-bots"
 Environment="HAMS_SIMULATED_BOT_COORDINATOR_TOKEN_FILE=/etc/hams-bots/coordinator.key"
 Environment="ODOO_URL=https://hams.com"
+# Added 2026-10-19: the key file of the create-only `ai_safety_reporting_service_internal` account (hams_ai_safety_reporting),
+# which main.create_safety_ticket() loads through hams_config.load_credentials(). Without it that call sys.exit(1)'d and a
+# flagged QSO never became a hams_helpdesk ticket (observer, 2026-10-17). A path, not a secret; the file is odoo:odoo 0600
+# and these units run as odoo. The key itself is written by the daemon key registry.
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/ai_safety_reporting_service_internal.env"
 
 ExecStart=/usr/bin/python3 /opt/hams/daemons/hams_simulated_bots/main.py $DAEMON_ARGS
 
@@ -8092,6 +8097,11 @@ Environment="DAEMON_ARGS="
 Environment="HAMS_SIMULATED_BAND_WS_URL=ws://localhost:3000/ws"
 Environment="HAMS_SIMULATED_BAND_KEY_FILE=/etc/hams-bots/band.key"
 Environment="ODOO_URL=https://hams.com"
+# Added 2026-10-19: the key file of the create-only `ai_safety_reporting_service_internal` account (hams_ai_safety_reporting),
+# which main.create_safety_ticket() loads through hams_config.load_credentials(). Without it that call sys.exit(1)'d and a
+# flagged QSO never became a hams_helpdesk ticket (observer, 2026-10-17). A path, not a secret; the file is odoo:odoo 0600
+# and these units run as odoo. The key itself is written by the daemon key registry.
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/ai_safety_reporting_service_internal.env"
 
 ExecStart=/usr/bin/python3 /opt/hams/daemons/hams_simulated_bots/observer.py $DAEMON_ARGS
 
