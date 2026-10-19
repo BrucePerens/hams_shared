@@ -4025,7 +4025,6 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "sota.sync.timer",
         "wa7bnm.contest.sync.timer",
         "arrl.hamfests.sync.timer",
-        "qrz.scraper.service",
     )
 
     def _unit_specs(self):
@@ -4109,7 +4108,6 @@ class BootServiceUnitTests(unittest.TestCase):
             "hams.simulated.band.service",
             "hams.simulated.bots.service",
             "hams.relay.bridge.service",
-            "qrz.scraper.service",
         ):
             self.assertIn(expected, names)
 
@@ -4256,7 +4254,7 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
 
     def test_smoketest_still_starts_external_fetch_services_in_production(self):
         candidates = infra._smoketest_candidate_services(True, is_test_env=False)
-        self.assertIn("qrz.scraper.service", candidates)
+        self.assertNotIn("qrz.scraper.service", candidates)
         self.assertIn("fcc.uls.sync.service", candidates)
         self.assertNotIn("system-startup.service", candidates)
 
@@ -4325,7 +4323,7 @@ class SmoketestTestModeTests(_SafePatchTestCase):
     def test_production_starts_external_fetch_services_and_leaves_them_running(self):
         calls, exited = self._run(is_test_env=False)
         self.assertFalse(exited)
-        self.assertIn("qrz.scraper.service", self._started(calls))
+        self.assertIn("fcc.uls.sync.service", self._started(calls))
         self.assertEqual(self._stopped(calls), [])
 
 
@@ -5028,7 +5026,7 @@ class WebBotAuthSigningUnitTests(_SafePatchTestCase):
     # The units whose daemon sends requests to third-party web servers (daemons/web_bot_auth.py signed_headers / smart_download).
     SIGNING_UNITS = {
         "noaa-swpc-sync.service": "hamsd_space_weather", "amsat.tle.sync.service": "hamsd_satellite_sync",
-        "qrz.scraper.service": "hamsd_qrz_scraper", "au.acma.sync.service": "hamsd_country_sync",
+        "au.acma.sync.service": "hamsd_country_sync",
         "au.callsign.sync.service": "hamsd_country_sync", "br.anatel.sync.service": "hamsd_country_sync",
         "de.bnetza.sync.service": "hamsd_country_sync", "nz.rsm.sync.service": "hamsd_country_sync",
         "uk.ofcom.sync.service": "hamsd_country_sync", "fcc.uls.sync.service": "hamsd_country_sync",

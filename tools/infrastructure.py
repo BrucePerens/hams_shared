@@ -1367,11 +1367,6 @@ FAMILY_ACCOUNT_UNITS = {
         "environment_files": frozenset({"common.env"}),
         "no_state": True,
     },
-    "qrz.scraper.service": {
-        "user": "hamsd_qrz_scraper",
-        "environment_files": frozenset({"common.env", "rabbitmq.env"}),
-        "no_state": True,
-    },
     "gdpr.csv.export.service": {
         "user": "hamsd_gdpr_export",
         "environment_files": frozenset({"common.env", "redis.env"}),
@@ -2659,17 +2654,6 @@ MANIFEST = {
             # itself is unreadable to every other account.
             "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_ncvec_sync",
             "owner": "hamsd_ncvec_sync:hamsd_ncvec_sync",
-            "provision_mode": "755",
-            "recursive_owner": True,
-            "runtime_mount": "rw",
-            "environments": ["prod", "test"],
-        },
-        {
-            # Web Bot Auth key of the hamsd_qrz_scraper account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
-            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
-            # itself is unreadable to every other account.
-            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper",
-            "owner": "hamsd_qrz_scraper:hamsd_qrz_scraper",
             "provision_mode": "755",
             "recursive_owner": True,
             "runtime_mount": "rw",
@@ -5057,76 +5041,6 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
-            "path": "/opt/hams/systemd/qrz.scraper.service",
-            "external_fetch": "scrapes a third-party callbook website",
-            "content": """\
-[Unit]
-Description=Ham Radio QRZ Scraper Daemon
-After=network.target rabbitmq-server.service
-Requires=rabbitmq-server.service
-
-[Service]
-# ADR-0070 OS-Level Daemon Restriction
-ProtectSystem=strict
-ProtectHome=read-only
-PrivateTmp=true
-PrivateDevices=true
-NoNewPrivileges=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-CapabilityBoundingSet=
-# Its own account (hamsd_qrz_scraper), Phase 4 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). It consumes RabbitMQ jobs and writes no file, so the unit has no writable path.
-ProtectProc=invisible
-ProcSubset=pid
-# Group-readable output (0640): odoo is in the account's group and may read, never write.
-UMask=0027
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-ProtectClock=true
-RestrictNamespaces=true
-RestrictRealtime=true
-RestrictSUIDSGID=true
-LockPersonality=true
-SystemCallArchitectures=native
-Type=simple
-User=hamsd_qrz_scraper
-Group=hamsd_qrz_scraper
-WorkingDirectory=/opt/hams/daemons/qrz_scraper
-
-# Code audit, 2026-10-04: qrz_scraper/main.py reads SYSTEM_USER_AGENT and the RabbitMQ settings RABBITMQ_HOST, RMQ_PORT, RMQ_USER and RMQ_PASS and it reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). rabbitmq.env is therefore loaded; no database, Redis or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
-EnvironmentFile=/opt/hams/etc/common.env
-EnvironmentFile=/opt/hams/etc/rabbitmq.env
-Environment="ODOO_USER=onboarding_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/qrz_scraper/onboarding_service_internal.key"
-Environment="PYTHONPATH=/opt/hams/daemons"
-Environment="DAEMON_ARGS="
-
-# Smoketest Resource Verification
-ExecStartPre=/usr/bin/python3 /opt/hams/daemons/qrz_scraper/main.py --start-test
-
-# Execution via system Python
-# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
-# public half, hamsd_qrz_scraper.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
-ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper
-Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper/hamsd_qrz_scraper.key"
-ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper/hamsd_qrz_scraper.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper/hamsd_qrz_scraper.jwk
-ExecStart=/usr/bin/python3 /opt/hams/daemons/qrz_scraper/main.py $DAEMON_ARGS
-
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=qrz.scraper
-
-[Install]
-WantedBy=multi-user.target
-""",
-            "owner": "root:root",
-            "mode": "644",
-            "environments": ["prod", "test"],
-        },
-        {
             "path": "/opt/hams/systemd/au.acma.sync.service",
             "external_fetch": "downloads a national licensing regulator's amateur register",
             "content": """\
@@ -7102,7 +7016,6 @@ ExecStart=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py refresh --key-file 
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_ncvec_sync/hamsd_ncvec_sync.jwk \\
-    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_qrz_scraper/hamsd_qrz_scraper.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync/hamsd_satellite_sync.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_space_weather/hamsd_space_weather.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/odoo/odoo.jwk \\
