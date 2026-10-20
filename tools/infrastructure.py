@@ -9146,7 +9146,8 @@ User=odoo
 SupplementaryGroups=systemd-journal
 EnvironmentFile=-/opt/hams/etc/common.env
 ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_helpdesk/daemon/exception_reporter.py report-unit %i
-TimeoutStartSec=60
+# Long enough for the helper to wait out an Odoo restart (REPORT_ODOO_WAIT_SECONDS, ten minutes) and still post.
+TimeoutStartSec=900
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hams-exception-report
