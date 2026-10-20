@@ -2698,6 +2698,12 @@ def test_threading_thread_with_test_daemon_thread_tag_is_allowed():
     assert not any("Unbounded Thread" in e for e in errors)
 
 
+def test_threading_thread_with_bounded_daemon_thread_tag_is_allowed():
+    source = "t = threading.Thread(target=loop, daemon=True)  # burn-ignore-bounded-daemon-thread: one per process, ends with its work\n"
+    errors, _warnings = _dict_findings(source)
+    assert not any("Unbounded Thread" in e for e in errors)
+
+
 def test_time_sleep_in_a_normal_module_file_gets_a_thread_blocking_warning():
     source = "time.sleep(5)\n"
     errors, warnings = _dict_findings(source)
