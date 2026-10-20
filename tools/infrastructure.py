@@ -9054,7 +9054,12 @@ WantedBy=multi-user.target
             # odoo, because the Odoo key it acts with (keys/pager_duty.env: ODOO_RPC_LOGIN/ODOO_RPC_KEY, written by
             # daemon_key_manager) and the CONNECT-only PostgreSQL login (keys/pager_monitor_db.env, written by
             # _provision_pager_monitor_role) are odoo-owned 0600 files systemd reads as root. redis.env is the Redis ACL
-            # login (the Redis check and the daemon's own queue connections); site_monitor.env holds only the SMTP settings
+            # login (the Redis check and the daemon's own queue connections); rabbitmq.env gives the RabbitMQ check its
+            # RMQ_USER / RMQ_PASS (hams_open PR #790: the check completes a real AMQP login; there is no guest fallback, so
+            # without this file it fails with "no credentials" and pages; the vhost is "/", so no RMQ_VHOST). rabbitmq.env
+            # is root-owned 0400 and systemd reads EnvironmentFile as root before dropping to odoo, so odoo needs no read
+            # access to it (that is why the file stays unreadable to the daemon itself). "-": a missing file leaves the
+            # check to report "no credentials" rather than keeping the whole monitor from starting. site_monitor.env holds only the SMTP settings
             # of the fallback e-mail used while Odoo is down. Nothing else is loaded: odoo.env and core.env carry the
             # administrator password and API tokens this daemon must not see.
             #
@@ -9088,6 +9093,7 @@ User=odoo
 WorkingDirectory=/opt/hams/src/hams_open/pager_duty/daemon
 
 EnvironmentFile=/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/rabbitmq.env
 EnvironmentFile=/opt/hams/etc/keys/pager_duty.env
 EnvironmentFile=/opt/hams/etc/keys/pager_monitor_db.env
 EnvironmentFile=/opt/hams/etc/site_monitor.env
@@ -10680,6 +10686,16 @@ def provision_systemd_override(
             run_cmd_func(["systemctl", "daemon-reload"])
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("Failed to reload systemd daemons: %s", e)
+
+
+def provision_odoo_systemd_override(run_cmd_func, env_vars, is_test, dest_dir=""):
+    """Writes odoo.service's drop-in once, for the environment this host is. provision_environment used to call
+    provision_systemd_override for "prod" and then for "test" with the same unit, so on a production host the test
+    version (no prod-only lines) was written last and silently dropped the Odoo Web Bot Auth key lines
+    (hams_shared #233). Both environments write the same file, so exactly one call may be made per run."""
+    provision_systemd_override(
+        run_cmd_func, env_vars, environment="test" if is_test else "prod", dest_dir=dest_dir
+    )
 
 
 # Memory limits for Odoo's single gevent (websocket/bus) worker, written into
@@ -13153,8 +13169,7 @@ def provision_environment(
             )
             sys.exit(3)
 
-        provision_systemd_override(run_cmd_func, env_vars, environment="prod")
-        provision_systemd_override(run_cmd_func, env_vars, environment="test")
+        provision_odoo_systemd_override(run_cmd_func, env_vars, is_test)
         provision_firewall_rules(run_cmd_func, environment="test" if is_test else "prod")
         provision_systemd_override(
             run_cmd_func, env_vars, environment="prod",
