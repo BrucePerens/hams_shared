@@ -1269,6 +1269,42 @@ class ProvisionStaticFilesPermissionTests(_TmpDirTestCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "broken.conf")))
 
 
+class UnitEnvironmentFilesExistTests(unittest.TestCase):
+    """Every EnvironmentFile= of every MANIFEST unit names a file this project creates, so a unit cannot load a file
+    nothing writes (the failure is silent for a "-" file, and a startup failure for the others)."""
+
+    # Written by a provisioning hook at run time and not in env_groups or static_files.
+    # Operator-supplied or written by a provisioning hook / the signer setup; listed so a NEW unreferenced file fails here.
+    HOOK_WRITTEN = {
+        "/opt/hams/etc/aws.env",
+        "/opt/hams/etc/ticket_triage.env",
+        "/opt/hams/etc/site_monitor.env",
+        "/opt/hams/etc/relay_signer/signer.env",
+        "/opt/hams/etc/relay_ca/signer.env",
+        "/opt/hams/etc/identity_ca/signer.env",
+        "/etc/hams-llm/server.env",
+    }
+    # Per-service login files minted by the Daemon Key Manager / provisioning hooks, not by static MANIFEST entries.
+    KEY_DIR = "/opt/hams/etc/keys/"
+
+    def test_every_environment_file_is_created_by_the_manifest(self):
+        written = {"/opt/hams/etc/" + name for name in infra.MANIFEST["env_groups"]}
+        written |= {entry["path"] for entry in infra.MANIFEST["static_files"]}
+        missing = []
+        for entry in infra.MANIFEST["static_files"]:
+            if not entry["path"].endswith((".service", ".timer")):
+                continue
+            for line in (entry.get("content") or "").splitlines():
+                if line.startswith("EnvironmentFile="):
+                    for path in line.split("=", 1)[1].split():
+                        path = path.lstrip("-")
+                        if path.startswith(self.KEY_DIR):
+                            continue
+                        if path not in written and path not in self.HOOK_WRITTEN:
+                            missing.append((os.path.basename(entry["path"]), path))
+        self.assertEqual(missing, [])
+
+
 class ProvisionSystemdOverrideTests(_TmpDirTestCase):
     def setUp(self):
         super().setUp()
@@ -1346,6 +1382,31 @@ class ProvisionSystemdOverrideTests(_TmpDirTestCase):
         infra.provision_systemd_override(MagicMock(), {}, environment=environment, dest_dir=self.tmp)
         with open(os.path.join(self.override_dir, "override.conf")) as f:
             return f.read().splitlines()
+
+    def _provision_like_provision_environment(self, is_test):
+        infra.provision_odoo_systemd_override(MagicMock(), {}, is_test, dest_dir=self.tmp)
+        with open(os.path.join(self.override_dir, "override.conf")) as f:
+            return f.read().splitlines()
+
+    def test_the_old_prod_then_test_sequence_dropped_the_key_lines_hams_shared_233(self):
+        # Reproduces the order bug: both calls write the same drop-in, so the one made last wins.
+        infra.provision_systemd_override(MagicMock(), {}, environment="prod", dest_dir=self.tmp)
+        infra.provision_systemd_override(MagicMock(), {}, environment="test", dest_dir=self.tmp)
+        with open(os.path.join(self.override_dir, "override.conf")) as f:
+            self.assertNotIn("web_bot_auth", f.read())
+
+    def test_a_production_run_keeps_the_key_lines_and_a_test_run_has_none(self):
+        prod = self._provision_like_provision_environment(is_test=False)
+        self.assertIn(f"Environment=HAMS_WEB_BOT_AUTH_KEY_FILE={self.KEY}", prod)
+        self.assertEqual(len([ln for ln in prod if "web_bot_auth.py ensure-key" in ln]), 1)
+        test = self._provision_like_provision_environment(is_test=True)
+        self.assertFalse([ln for ln in test if "web_bot_auth" in ln.lower()], test)
+
+    def test_provision_environment_writes_the_odoo_override_exactly_once(self):
+        import inspect
+        source = inspect.getsource(infra.provision_environment)
+        self.assertEqual(source.count("provision_odoo_systemd_override("), 1)
+        self.assertNotRegex(source, r'provision_systemd_override\(\s*run_cmd_func,\s*env_vars,\s*environment="(prod|test)"\s*\)')
 
     def test_the_production_odoo_override_carries_the_web_bot_auth_key_and_creates_it_without_blocking_start(self):
         lines = self._override_lines("prod")
@@ -6283,11 +6344,12 @@ class PagerOsMonitorUnitTests(_SafePatchTestCase):
         self.assertNotIn("/etc/pager_daemons.env", text)
 
     def test_unit_loads_the_redis_login_the_odoo_key_the_database_login_and_the_smtp_fallback_only(self):
-        files = re.findall(r"^EnvironmentFile=(\S+)$", self._text(), re.M)
+        files = re.findall(r"^EnvironmentFile=(\S+)$", self._text(), re.M)  # includes the "-" prefix
         self.assertEqual(
             files,
             [
                 "/opt/hams/etc/redis.env",
+                "-/opt/hams/etc/rabbitmq.env",
                 "/opt/hams/etc/keys/pager_duty.env",
                 "/opt/hams/etc/keys/pager_monitor_db.env",
                 "/opt/hams/etc/site_monitor.env",
@@ -6296,6 +6358,14 @@ class PagerOsMonitorUnitTests(_SafePatchTestCase):
         # odoo.env and core.env carry the administrator password, the Cloudflare tokens and the Gemini key.
         for secret_file in ("odoo.env", "core.env", "db.env", "db_app.env"):
             self.assertNotIn("/opt/hams/etc/" + secret_file, self._text())
+
+    def test_unit_loads_the_rabbitmq_login_the_amqp_check_reads_by_name(self):
+        # hams_open PR #790: the RabbitMQ check logs in with RMQ_USER / RMQ_PASS from the environment (RMQ_VHOST optional,
+        # default "/"), with no guest fallback. Without rabbitmq.env the check fails "no credentials" and pages.
+        self.assertIn("EnvironmentFile=-/opt/hams/etc/rabbitmq.env\n", self._text())
+        self.assertLessEqual({"RMQ_USER", "RMQ_PASS"}, set(infra.MANIFEST["env_groups"]["rabbitmq.env"]))
+        # systemd reads EnvironmentFile as root, so the file stays root-only and odoo is given no group access to it
+        self.assertNotIn("rabbitmq.env", " ".join(infra.FAMILY_ACCOUNT_UNITS.get(self.UNIT, {}).get("environment_files", ())))
 
     def test_unit_names_its_config_file_explicitly_in_a_directory_odoo_can_write(self):
         text = self._text()
