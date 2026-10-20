@@ -6207,6 +6207,13 @@ class ExceptionReportUnitTests(unittest.TestCase):
         self.assertEqual([e["path"] for e in entries], ["/etc/systemd/system/x.service.d/hams-exception-report.conf"])
         self.assertEqual(entries[0]["host_class"], "ca_signer")
 
+    def test_template_allows_the_helper_to_wait_out_an_odoo_restart(self):
+        """The helper retries while Odoo is down (ten minutes); a start timeout shorter than that kills the report and leaves
+        a failed hams-exception-report@ instance that the systemd failed-services check then pages for."""
+        match = re.search(r"^TimeoutStartSec=(\d+)$", self._text(), re.M)
+        self.assertIsNotNone(match)
+        self.assertGreaterEqual(int(match.group(1)), 600 + 120)
+
     def test_template_reports_the_unit_name_as_written_from_the_deployed_tree(self):
         text = self._text()
         self.assertIn("ExecStart=/usr/bin/python3 " + self.HELPER + " report-unit %i\n", text)
