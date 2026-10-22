@@ -1250,15 +1250,16 @@ Odoo run in the background, then work items that never need the lock. On 2026-09
   `pdns_sync` also needs dummy `PDNS_API_URL`/`PDNS_API_KEY`, which it reads at import.
 - Lint: `check_burn_list.py --scan-daemons-and-tools <dir>`.
 
-**Before queueing the Odoo run, expect two pre-flight halts that have nothing to do with your
-change** (2026-09-15, workspace-dc). The Semantic Anchor scan fails every run on repo-wide
-violations: the ADR-0054 / ADR-0055 coverage ratchets and missing targets under `docs/patent_disclosures/` (until
-2026-09-28 it also failed on about 170 "stacked anchors"; that rule was removed, see below).
-The burn list fails on hams_open's backlog. Either one aborts the run before a single test starts,
-after you've waited out the lock. Pass `HAMS_SKIP_ANCHOR_SCAN=1 HAMS_SKIP_BURN_LIST=1`, and cover
-what they skip yourself: `check_burn_list.py <module dir>` on each touched module, and a grep of the
-aborted log for your own anchor names. The log does list violations per file, so a new unlinked function you
-added shows up there.
+**Before queueing the Odoo run, expect one pre-flight halt that has nothing to do with your
+change.** The burn list fails on hams_open's backlog. It aborts the run before a single test starts,
+after you've waited out the lock. Pass `HAMS_SKIP_BURN_LIST=1`, and cover what it skips yourself:
+`check_burn_list.py <module dir>` on each touched module. Do NOT pass `HAMS_SKIP_ANCHOR_SCAN=1`:
+the Semantic Anchor scan has a baseline (`tools/anchor_baseline_<repo>.json`) and fails only on a
+finding that is not in it, so a failure there is a gap YOUR change introduced (a function without a
+doc citation or a `Tests` anchor, a test without a feature reference, a dead anchor reference).
+Fix it. The scan finds its baseline by the repository, not the directory name; see "Running the
+anchor scan from a worktree" in `hams_com/CLAUDE.md`. `HAMS_SKIP_ANCHOR_SCAN=1` is an emergency
+switch for a broken scanner only; say so in the PR if you ever use it.
 
 ### A load gate now runs BEFORE the lock, so a busy box delays you instead of failing you
 
