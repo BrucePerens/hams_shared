@@ -72,6 +72,7 @@ ANCHOR_PATTERN = re.compile(r"\[@ANCHOR(?:-BEGIN|-END)?:\s*([a-zA-Z0-9_:]+)\s*\]
 # walk (see its `exclude_dirs`) so it's scanned exactly once, as code, not
 # double-counted as both code and doc content.
 CODE_ISLANDS_UNDER_DOCS = [
+    "docs/patent_disclosures/filed_applications/_pipeline",
     "docs/proposals/patent_disclosures/filed_applications/_pipeline",
 ]
 
