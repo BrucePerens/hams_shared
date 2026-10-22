@@ -92,6 +92,12 @@ import multiprocessing
 import psutil
 
 
+
+# Headless Chrome in the test runs must never leave an HTTP, media or code cache on disk: a profile that is not
+# deleted (or a headless run with no profile, whose cache lands in ~/.cache/google-chrome-headless) once held about
+# 100,000 useless files. Pointing the disk cache at /dev/null makes Chrome fall back to its in-memory cache.
+CHROME_NO_CACHE_ARGS = "--disk-cache-dir=/dev/null --disk-cache-size=1 --media-cache-size=1 --disable-gpu-shader-disk-cache"
+
 def measure_process_tree_memory(runner_pid, exclude_pid):
     """Sums resident memory across every descendant of runner_pid, except
     exclude_pid (the watchdog itself, when called from OOMWatchdog.run()).
@@ -1079,7 +1085,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
             _logger.debug("Ignored OSError: %s", e)
     env.setdefault(
         "ODOO_TEST_CHROME_ARGS",
-        "--headless=new --ignore-certificate-errors --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --use-fake-device-for-media-stream --use-fake-ui-for-media-stream --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
+        "--headless=new --ignore-certificate-errors --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --use-fake-device-for-media-stream --use-fake-ui-for-media-stream --no-first-run " + CHROME_NO_CACHE_ARGS + " --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
     )
     env.setdefault("DBUS_SESSION_BUS_ADDRESS", "autolaunch:")
 
@@ -2313,7 +2319,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     # Inside the namespace, host tmp dir is perfectly bound to the real log dir.
     host_tmp_dir = os.path.expanduser("~/tmp")
     os.environ["ODOO_TEST_CHROME_ARGS"] = (
-        "--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --use-fake-device-for-media-stream --use-fake-ui-for-media-stream --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,dbus,OptimizationGuideModelDownloading"
+        "--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --use-fake-device-for-media-stream --use-fake-ui-for-media-stream --no-first-run " + CHROME_NO_CACHE_ARGS + " --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,dbus,OptimizationGuideModelDownloading"
     )
     os.environ["HAMS_REAL_LOG_DIRECTORY"] = real_log_dir
     os.environ["HOME"] = "/var/lib/odoo"
@@ -3237,7 +3243,7 @@ def main():
             _logger.debug("Ignored OSError: %s", e)
     os.environ.setdefault(
         "ODOO_TEST_CHROME_ARGS",
-        "--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --use-fake-device-for-media-stream --use-fake-ui-for-media-stream --no-first-run --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
+        "--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disable-default-apps --disable-sync --disable-translate --mute-audio --use-fake-device-for-media-stream --use-fake-ui-for-media-stream --no-first-run " + CHROME_NO_CACHE_ARGS + " --hide-scrollbars --metrics-recording-only --safebrowsing-disable-auto-update --disable-features=ServiceWorker,SharedWorker,DialMediaRouteProvider,dbus,OptimizationGuideModelDownloading",
     )
     os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", "autolaunch:")
 

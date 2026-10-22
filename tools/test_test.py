@@ -68,6 +68,16 @@ class DefaultTestTmpdirTests(unittest.TestCase):
         self.assertEqual(_test_runner.DEFAULT_TEST_TMPDIR, "/var/lib/odoo/tmp")
 
 
+class ChromeNoDiskCacheTests(unittest.TestCase):
+    """Headless Chrome in the test runs never writes an HTTP, media or code cache to disk."""
+
+    def test_every_chrome_args_default_carries_the_no_cache_flags(self):
+        source = open(_TEST_PY_PATH, encoding="utf-8").read()
+        self.assertGreaterEqual(source.count("CHROME_NO_CACHE_ARGS +"), 3)
+        for flag in ("--disk-cache-dir=/dev/null", "--disk-cache-size=1", "--media-cache-size=1"):
+            self.assertIn(flag, _test_runner.CHROME_NO_CACHE_ARGS)
+
+
 class SkipGoogleFontsDownloadTests(unittest.TestCase):
     """A test database build does not download Google's fonts (ham_init); production, which never runs test.py, still does."""
 
