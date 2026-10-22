@@ -40,6 +40,7 @@ import ast
 import json
 import os
 import re
+import subprocess
 import sys
 
 # Recognizes the plain `[@ANCHOR: name]` form and both halves of the
@@ -117,15 +118,19 @@ def _is_excluded_dir(name, extra=()):
 # anchors ("duplicate"), a doc pointing at code that no longer exists ("missing_target"),
 # "orphan_test", "audit_ignore", "ux_doc", "dummy_test" (keyed by file and function; there used to be a "stacked" kind, see
 # `_report_dummy_test_bodies`), "cross_ref" and
-# "broken_test_binding". The first several had large pre-existing backlogs, so the scan failed on every run and callers had to set HAMS_SKIP_ANCHOR_SCAN=1, which
-# also hid NEW gaps. A baseline file (`anchor_baseline_<repo>.json` beside this script, same
-# convention as `js_function_test_anchor_baseline_<repo>.json`) records the findings that existed
-# when it was generated ("<kind>|<anchor>" keys); only findings NOT in it fail. With no baseline
-# loaded (the default for a scratch fixture) nothing is grandfathered, so behavior is unchanged.
-# Regenerate with `--generate-baseline` (only ever to record a genuine shrink; never to hide a
-# new gap). Findings stay grandfathered per anchor name, so a baselined anchor that gets a second
-# definition is still a duplicate of a *baselined* name; fixing an anchor and re-running with
-# `--generate-baseline` shrinks the floor.
+# "broken_test_binding". The first several had large pre-existing backlogs. A baseline file
+# (`anchor_baseline_<repo>.json` beside this script, same convention as
+# `js_function_test_anchor_baseline_<repo>.json`) records the findings that existed when it was
+# generated ("<kind>|<anchor>" keys, sorted, one per line); only findings NOT in it fail. With no
+# baseline loaded (the default for a scratch fixture) nothing is grandfathered.
+#
+# The baseline is a temporary bridge, not an allowance. The target is ZERO findings, kept at zero
+# (Bruce, 2026-10-21). It may only ever SHRINK: `--check-baseline-shrink <git-ref>` fails if any key
+# was added relative to the ref (the merge gate runs it against origin/main). Never regenerate it to
+# hide a new gap; fix the finding. Regenerate (`--generate-baseline`) only to record a genuine
+# shrink. When the findings reach 0, delete both baseline files: an absent file is empty, so any
+# finding fails and re-creating a baseline with a key counts as growth.
+# Do NOT set HAMS_SKIP_ANCHOR_SCAN=1 (test.py's emergency-only switch) to get past the scan.
 _BASELINE = None  # set of "<kind>|<anchor>" keys, or None when no ratchet is active
 _CURRENT_FINDINGS = set()  # every primary finding seen this run, grandfathered or not
 
@@ -154,19 +159,59 @@ def save_baseline(path, keys):
         f.write("\n")
 
 
+_KNOWN_REPO_NAMES = ("hams_com", "hams_open")
+
+
+def repo_identity(path):
+    """hams_com or hams_open for a checkout or worktree, whatever its directory is called; None when
+    it cannot be told.
+
+    The baseline files are named after the repository (`anchor_baseline_hams_com.json`), so the scan
+    must know which repository a directory is. The directory name is only right for the two standard
+    checkouts. A worktree called anything else used to fall back to its own basename, find no
+    baseline file, and fail every grandfathered finding. In order: (1) a directory named hams_com or
+    hams_open at or above `path`; (2) the `HAMS_ANCHOR_REPO` environment variable, which must be one
+    of the two names; (3) the basename of `git remote get-url origin` run in `path`."""
+    cur = os.path.abspath(path)
+    while True:
+        if os.path.basename(cur) in _KNOWN_REPO_NAMES:
+            return os.path.basename(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    override = os.environ.get("HAMS_ANCHOR_REPO", "").strip()
+    if override in _KNOWN_REPO_NAMES:
+        return override
+    start = os.path.abspath(path)
+    if os.path.isfile(start):
+        start = os.path.dirname(start)
+    if os.path.isdir(start):
+        try:
+            url = subprocess.run(
+                ["git", "-C", start, "remote", "get-url", "origin"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            url = ""
+        name = os.path.basename(url.rstrip("/"))
+        if name.endswith(".git"):
+            name = name[: -len(".git")]
+        if name in _KNOWN_REPO_NAMES:
+            return name
+    return None
+
+
 def _baseline_repo_name(primary_dirs, enclosing_repo_dir):
-    """hams_com or hams_open: first ancestor (or self) of a scan target with that name, else the
-    enclosing checkout's basename."""
+    """hams_com or hams_open for the first scan target that can be identified (see repo_identity),
+    else the enclosing checkout's identity, else its basename."""
     for d in primary_dirs:
-        cur = os.path.abspath(d)
-        while True:
-            if os.path.basename(cur) in ("hams_com", "hams_open"):
-                return os.path.basename(cur)
-            parent = os.path.dirname(cur)
-            if parent == cur:
-                break
-            cur = parent
-    return os.path.basename(enclosing_repo_dir)
+        name = repo_identity(d)
+        if name:
+            return name
+    return repo_identity(enclosing_repo_dir) or os.path.basename(enclosing_repo_dir)
 
 
 def _baseline_repo_names(primary_dirs, enclosing_repo_dir):
@@ -190,6 +235,49 @@ def _default_baseline_path(repo_name):
     return os.path.join(
         os.path.dirname(os.path.abspath(__file__)), f"anchor_baseline_{repo_name}.json"
     )
+
+
+def baseline_growth(ref, tools_dir=None):
+    """The shrink-only rule: {baseline file name: sorted keys} that the working copy of an
+    `anchor_baseline_<repo>.json` has and the same file at git ref `ref` did not.
+
+    The baseline is a temporary bridge while the anchor debt is paid down; it may only ever lose
+    entries. A file that does not exist at `ref` counts as empty, so once the baselines are deleted
+    (zero findings: the end state) re-creating one with any key is growth. A file that is gone from
+    the working copy is a full shrink, not growth. Raises RuntimeError when `ref` cannot be read.
+
+    Merge conflicts: the files are sorted JSON, one key per line, so two PRs that each delete
+    different entries merge cleanly except near the last line. On a conflict take main's file and
+    re-run `--generate-baseline` for the repo, then commit the result."""
+    tools_dir = tools_dir or os.path.dirname(os.path.abspath(__file__))
+    top = subprocess.run(
+        ["git", "-C", tools_dir, "rev-parse", "--show-toplevel"], capture_output=True, text=True
+    )
+    if top.returncode != 0:
+        raise RuntimeError(f"{tools_dir} is not in a git checkout: {top.stderr.strip()}")
+    top = top.stdout.strip()
+    growth = {}
+    for name in _KNOWN_REPO_NAMES:
+        fname = f"anchor_baseline_{name}.json"
+        path = os.path.join(tools_dir, fname)
+        new = load_baseline(path) or set()
+        rel = os.path.relpath(path, top)
+        old_raw = subprocess.run(
+            ["git", "-C", top, "show", f"{ref}:{rel}"], capture_output=True, text=True
+        )
+        if old_raw.returncode != 0:
+            exists = subprocess.run(
+                ["git", "-C", top, "cat-file", "-e", f"{ref}^{{commit}}"], capture_output=True
+            )
+            if exists.returncode != 0:
+                raise RuntimeError(f"git ref {ref!r} cannot be read in {top}")
+            old = set()  # file not present at ref
+        else:
+            old = set(json.loads(old_raw.stdout))
+        added = sorted(new - old)
+        if added:
+            growth[fname] = added
+    return growth
 
 
 def _clean(name):
@@ -1216,13 +1304,14 @@ def _add_sibling_repo_target(repo_root, target_dirs):
     # touched by this fix). Checking "do we already have hams_com" when repo_root ITSELF already
     # IS hams_com is the wrong question -- of course it's already there -- the real question is
     # always about the OTHER repo.
-    own_name = os.path.basename(repo_root)
+    own_name = repo_identity(repo_root) or os.path.basename(repo_root)
     other_names = [n for n in _REAL_SIBLING_REPO_NAMES if n != own_name] or list(
         _REAL_SIBLING_REPO_NAMES
     )
 
     has_sibling = any(
-        os.path.basename(os.path.normpath(d)) in other_names for d in target_dirs
+        os.path.basename(os.path.normpath(d)) in other_names or repo_identity(d) in other_names
+        for d in target_dirs
     )
     if has_sibling:
         return list(target_dirs), None
@@ -1260,6 +1349,7 @@ def main():
     argv = sys.argv[1:]
     generate_baseline = "--generate-baseline" in argv
     baseline_override = None
+    shrink_ref = None
     args = []
     i = 0
     while i < len(argv):
@@ -1270,9 +1360,30 @@ def main():
             i += 1
         elif argv[i].startswith("--baseline="):
             baseline_override = argv[i].split("=", 1)[1]
+        elif argv[i] == "--check-baseline-shrink" and i + 1 < len(argv):
+            shrink_ref = argv[i + 1]
+            i += 1
         else:
             args.append(argv[i])
         i += 1
+    if shrink_ref is not None:
+        # Gate for PRs that touch the baseline files: no key may be added relative to `shrink_ref`.
+        try:
+            growth = baseline_growth(shrink_ref)
+        except RuntimeError as exc:
+            print(f"[!] {exc}")
+            sys.exit(2)
+        if growth:
+            print("[!] The anchor baseline grew. It is a debt record that may only shrink:")
+            for fname, keys in growth.items():
+                print(f"    {fname}: {len(keys)} new entries")
+                for key in keys[:50]:
+                    print(f"      + {key}")
+            print("    Fix the finding (cite the feature in docs, add a real Tests anchor, remove dead")
+            print("    references) instead of recording it.")
+            sys.exit(1)
+        print(f"[+] Anchor baselines do not grow relative to {shrink_ref}.")
+        sys.exit(0)
     if not args:
         args = ["."]
 

@@ -1,0 +1,35 @@
+# NOT ACTIVE until installed: copy this file to .github/workflows/anchor-baseline.yml. It lives here
+# because the automation that wrote it has no GitHub `workflow` scope (a push that touches
+# .github/workflows is refused), so a human with that scope installs it:
+#   git mv tools/ci_workflows/anchor-baseline.yml .github/workflows/anchor-baseline.yml
+name: Anchor Baseline Shrink-Only
+
+# The Semantic Anchor baselines (tools/anchor_baseline_hams_com.json and _hams_open.json) record
+# the findings that existed when they were generated. They are a temporary bridge while the debt is
+# paid to ZERO findings; they may only shrink (Bruce, 2026-10-21). A PR that adds a key relative to
+# the base branch fails here. When the findings reach 0 the files are deleted, an absent file counts
+# as empty, and re-creating one with any key fails the same check.
+on:
+  pull_request:
+    paths:
+      - 'tools/anchor_baseline_*.json'
+      - 'tools/verify_anchors.py'
+      - 'tools/test_verify_anchors.py'
+      - '.github/workflows/anchor-baseline.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  shrink-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Baselines do not grow relative to the base branch
+        run: python3 tools/verify_anchors.py --check-baseline-shrink "origin/${{ github.base_ref || 'main' }}"
+      - name: verify_anchors unit tests
+        run: python3 -m unittest test_verify_anchors
+        working-directory: tools

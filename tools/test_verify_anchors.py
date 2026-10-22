@@ -1169,3 +1169,139 @@ class BaselineRatchetTests(unittest.TestCase):
         code, out = self._run(target)
         self.assertEqual(code, 0, out)
         self.assertIn("1 baseline entries no longer occur", out)
+
+
+def _git(cwd, *args):
+    return subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@example.invalid", "-c", "user.name=t", *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+class RepoIdentityTests(unittest.TestCase):
+    """The baseline file is chosen by repository, not by what the checkout directory is called, so
+    a worktree with any name still finds `anchor_baseline_<repo>.json`."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.saved_env = os.environ.pop("HAMS_ANCHOR_REPO", None)
+
+    def tearDown(self):
+        os.environ.pop("HAMS_ANCHOR_REPO", None)
+        if self.saved_env is not None:
+            os.environ["HAMS_ANCHOR_REPO"] = self.saved_env
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _odd_dir(self):
+        d = os.path.join(self.tmp, "wt-foo")
+        os.makedirs(d)
+        return d
+
+    def test_standard_names_win_with_no_git_and_no_env(self):
+        d = os.path.join(self.tmp, "hams_open", "mod")
+        os.makedirs(d)
+        self.assertEqual(va.repo_identity(d), "hams_open")
+
+    def test_unknown_directory_is_none(self):
+        self.assertIsNone(va.repo_identity(self._odd_dir()))
+
+    def test_env_var_names_the_repo_for_a_nonstandard_directory(self):
+        d = self._odd_dir()
+        os.environ["HAMS_ANCHOR_REPO"] = "hams_com"
+        self.assertEqual(va.repo_identity(d), "hams_com")
+        self.assertEqual(va._baseline_repo_names([d], d), ["hams_com"])
+
+    def test_env_var_with_an_unknown_name_is_ignored(self):
+        d = self._odd_dir()
+        os.environ["HAMS_ANCHOR_REPO"] = "something_else"
+        self.assertIsNone(va.repo_identity(d))
+        self.assertEqual(va._baseline_repo_name([d], d), "wt-foo")
+
+    def test_git_origin_names_the_repo_for_a_nonstandard_worktree(self):
+        d = self._odd_dir()
+        _git(d, "init", "-q")
+        _git(d, "remote", "add", "origin", "https://github.com/BrucePerens/hams_open.git")
+        self.assertEqual(va.repo_identity(d), "hams_open")
+        self.assertEqual(va._baseline_repo_names([d], d), ["hams_open"])
+
+    def test_an_unrelated_git_origin_is_not_a_known_repo(self):
+        d = self._odd_dir()
+        _git(d, "init", "-q")
+        _git(d, "remote", "add", "origin", "https://github.com/someone/else.git")
+        self.assertIsNone(va.repo_identity(d))
+
+    def test_sibling_lookup_treats_an_oddly_named_checkout_by_its_identity(self):
+        os.makedirs(os.path.join(self.tmp, "hams_open"))
+        d = self._odd_dir()
+        os.environ["HAMS_ANCHOR_REPO"] = "hams_com"
+        targets, warning = va._add_sibling_repo_target(d, [d])
+        self.assertIsNone(warning)
+        self.assertIn(os.path.join(self.tmp, "hams_open"), targets)
+
+
+class BaselineShrinkOnlyTests(unittest.TestCase):
+    """`baseline_growth`: the baseline may lose entries, never gain one. A file absent at the ref is
+    empty, which is the end state (zero findings, baselines deleted)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.tools = os.path.join(self.tmp, "tools")
+        os.makedirs(self.tools)
+        _git(self.tmp, "init", "-q", "-b", "main")
+        self.path = os.path.join(self.tools, "anchor_baseline_hams_com.json")
+        va.save_baseline(self.path, {"doc_gap|a:one", "doc_gap|a:two", "duplicate|a:three"})
+        _git(self.tmp, "add", "-A")
+        _git(self.tmp, "commit", "-q", "-m", "base")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_unchanged_baseline_is_not_growth(self):
+        self.assertEqual(va.baseline_growth("HEAD", self.tools), {})
+
+    def test_removing_entries_is_not_growth(self):
+        va.save_baseline(self.path, {"doc_gap|a:one"})
+        self.assertEqual(va.baseline_growth("HEAD", self.tools), {})
+
+    def test_deleting_the_file_is_not_growth(self):
+        os.remove(self.path)
+        self.assertEqual(va.baseline_growth("HEAD", self.tools), {})
+
+    def test_an_added_entry_is_growth_and_swapping_one_in_is_growth(self):
+        va.save_baseline(self.path, {"doc_gap|a:one", "doc_gap|a:new"})
+        self.assertEqual(
+            va.baseline_growth("HEAD", self.tools),
+            {"anchor_baseline_hams_com.json": ["doc_gap|a:new"]},
+        )
+
+    def test_a_baseline_recreated_after_it_was_deleted_is_growth(self):
+        os.remove(self.path)
+        _git(self.tmp, "add", "-A")
+        _git(self.tmp, "commit", "-q", "-m", "zero findings")
+        va.save_baseline(self.path, {"doc_gap|a:one"})
+        self.assertEqual(
+            va.baseline_growth("HEAD", self.tools),
+            {"anchor_baseline_hams_com.json": ["doc_gap|a:one"]},
+        )
+
+    def test_a_new_file_for_the_other_repo_is_growth(self):
+        va.save_baseline(os.path.join(self.tools, "anchor_baseline_hams_open.json"), {"doc_gap|b:x"})
+        self.assertEqual(
+            va.baseline_growth("HEAD", self.tools),
+            {"anchor_baseline_hams_open.json": ["doc_gap|b:x"]},
+        )
+
+    def test_unreadable_ref_raises(self):
+        with self.assertRaises(RuntimeError):
+            va.baseline_growth("no-such-ref", self.tools)
+
+    def test_saved_baseline_is_sorted_one_key_per_line_so_shrink_prs_merge(self):
+        with open(self.path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        self.assertEqual(lines[0], "[")
+        self.assertEqual(lines[-1], "]")
+        keys = [ln.strip().rstrip(",").strip('"') for ln in lines[1:-1]]
+        self.assertEqual(keys, sorted(keys))
+        self.assertEqual(len(keys), 3)
