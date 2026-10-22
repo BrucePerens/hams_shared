@@ -1267,6 +1267,11 @@ FAMILY_ACCOUNT_UNITS = {
         "environment_files": frozenset({"common.env"}),
         "no_state": True,
     },
+    "hamstudy.sessions.sync.service": {
+        "user": "hamsd_event_sync",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+    },
     "monthly.events.recheck.service": {
         "user": "hamsd_event_sync",
         "environment_files": frozenset({"common.env"}),
@@ -5547,7 +5552,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
 ProtectProc=invisible
 ProcSubset=pid
 # Group-readable output (0640): odoo is in the account's group and may read, never write.
@@ -5626,7 +5631,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
 ProtectProc=invisible
 ProcSubset=pid
 # Group-readable output (0640): odoo is in the account's group and may read, never write.
@@ -5785,7 +5790,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
 ProtectProc=invisible
 ProcSubset=pid
 # Group-readable output (0640): odoo is in the account's group and may read, never write.
@@ -5864,7 +5869,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
 ProtectProc=invisible
 ProcSubset=pid
 # Group-readable output (0640): odoo is in the account's group and may read, never write.
@@ -5947,7 +5952,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
 ProtectProc=invisible
 ProcSubset=pid
 # Group-readable output (0640): odoo is in the account's group and may read, never write.
@@ -6010,6 +6015,89 @@ WantedBy=timers.target
             "environments": ["prod", "test"],
         },
         {
+            # Amateur radio license exam sessions (VE sessions) from HamStudy.org's public session list, as events
+            # of the license exam kind -- same shape as electronicsfleamarket.sync above. Daily: seat counts change
+            # and a session list covers two months; two list pages and a few session pages per run, paced by the polite
+            # fetcher. hams_com daemons/event_sync/hamstudy_sessions_sync.py.
+            "path": "/opt/hams/systemd/hamstudy.sessions.sync.service",
+            "external_fetch": "reads a third-party website's public exam session list",
+            "content": """\
+[Unit]
+Description=Ham Radio License Exam Sessions (HamStudy.org) Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+Type=oneshot
+User=hamsd_event_sync
+Group=hamsd_event_sync
+WorkingDirectory=/opt/hams/daemons/event_sync
+
+# Code audit, 2026-10-04: the scripts in daemons/event_sync read SYSTEM_USER_AGENT for their request headers and reach Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+Environment="ODOO_USER=event_sync_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_event_sync.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk
+ExecStart=/usr/bin/python3 /opt/hams/daemons/event_sync/hamstudy_sessions_sync.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hamstudy.sessions.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/hamstudy.sessions.sync.timer",
+            "external_fetch": "activates hamstudy.sessions.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio License Exam Sessions (HamStudy.org) Sync Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             # Historic radio societies and museums as event sources (the California Historical
             # Radio Society's iCalendar feed, the Museum Ships Weekend rule) and the registration
             # of each one as a "historic_radio_society" club. Same shape as the sibling event
@@ -6030,7 +6118,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
 ProtectProc=invisible
 ProcSubset=pid
 # Group-readable output (0640): odoo is in the account's group and may read, never write.
@@ -6113,7 +6201,7 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The five scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
+# Its own account (hamsd_event_sync), Phase 2 of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md (hams_com). The scripts write no file (they fetch a page or feed and push to Odoo), so the unit has no writable path.
 ProtectProc=invisible
 ProcSubset=pid
 # Group-readable output (0640): odoo is in the account's group and may read, never write.
