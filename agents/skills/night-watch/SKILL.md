@@ -1253,13 +1253,11 @@ Odoo run in the background, then work items that never need the lock. On 2026-09
 **Before queueing the Odoo run, expect one pre-flight halt that has nothing to do with your
 change.** The burn list fails on hams_open's backlog. It aborts the run before a single test starts,
 after you've waited out the lock. Pass `HAMS_SKIP_BURN_LIST=1`, and cover what it skips yourself:
-`check_burn_list.py <module dir>` on each touched module. Do NOT pass `HAMS_SKIP_ANCHOR_SCAN=1`:
-the Semantic Anchor scan has a baseline (`tools/anchor_baseline_<repo>.json`) and fails only on a
-finding that is not in it, so a failure there is a gap YOUR change introduced (a function without a
-doc citation or a `Tests` anchor, a test without a feature reference, a dead anchor reference).
-Fix it. The scan finds its baseline by the repository, not the directory name; see "Running the
-anchor scan from a worktree" in `hams_com/CLAUDE.md`. `HAMS_SKIP_ANCHOR_SCAN=1` is an emergency
-switch for a broken scanner only; say so in the PR if you ever use it.
+`check_burn_list.py <module dir>` on each touched module. The Semantic Anchor scan has no baseline and
+no skip switch (both were removed on 2026-10-22, when the findings reached zero): any finding fails the run, so a failure
+there is a gap YOUR change introduced (a function without a doc citation or a `Tests` anchor, a test without a feature
+reference, a dead anchor reference). Fix it. The scan finds the repository by identity, not the directory name; see
+"Running the anchor scan from a worktree" in `hams_com/CLAUDE.md`.
 
 ### A load gate now runs BEFORE the lock, so a busy box delays you instead of failing you
 
