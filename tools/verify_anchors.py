@@ -125,13 +125,10 @@ def _is_excluded_dir(name, extra=()):
 # generated ("<kind>|<anchor>" keys, sorted, one per line); only findings NOT in it fail. With no
 # baseline loaded (the default for a scratch fixture) nothing is grandfathered.
 #
-# The baseline is a temporary bridge, not an allowance. The target is ZERO findings, kept at zero
-# (Bruce, 2026-10-21). It may only ever SHRINK: `--check-baseline-shrink <git-ref>` fails if any key
-# was added relative to the ref (the merge gate runs it against origin/main). Never regenerate it to
-# hide a new gap; fix the finding. Regenerate (`--generate-baseline`) only to record a genuine
-# shrink. When the findings reach 0, delete both baseline files: an absent file is empty, so any
-# finding fails and re-creating a baseline with a key counts as growth.
-# Do NOT set HAMS_SKIP_ANCHOR_SCAN=1 (test.py's emergency-only switch) to get past the scan.
+# The baseline was a temporary bridge, not an allowance. The target was ZERO findings, kept at zero (Bruce,
+# 2026-10-21), and it was reached on 2026-10-22: both baseline files were deleted. An absent file is empty, so any
+# finding fails, and re-creating a baseline with a key counts as growth (`--check-baseline-shrink <git-ref>`). Never
+# regenerate one to hide a new gap; fix the finding. test.py has no switch to skip the scan.
 _BASELINE = None  # set of "<kind>|<anchor>" keys, or None when no ratchet is active
 _CURRENT_FINDINGS = set()  # every primary finding seen this run, grandfathered or not
 

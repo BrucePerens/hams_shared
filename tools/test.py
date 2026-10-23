@@ -1574,8 +1574,7 @@ def check_linters(
         print(res_burn.stdout)
         print(res_burn.stderr)
         if os.environ.get("HAMS_SKIP_BURN_LIST") == "1":
-            # Narrow, explicit escape hatch, mirroring HAMS_SKIP_ANCHOR_SCAN
-            # below: this linter's own enforcement had been silently
+            # Narrow, explicit escape hatch: this linter's own enforcement had been silently
             # commented out here for an unknown period (found 2026-09-10 --
             # see night_shift_todo.md), letting a real, dangerous bug
             # (a _sql_constraints usage that is silently non-functional in
@@ -1633,55 +1632,43 @@ def check_linters(
     else:
         print(res_init.stdout)
 
-    if os.environ.get("HAMS_SKIP_ANCHOR_SCAN") == "1":
-        # Narrow, explicit escape hatch. verify_anchors.py now has its own
-        # baseline ratchet (anchor_baseline_<repo>.json beside it: only
-        # findings NOT already recorded there fail), so a routine run no
-        # longer needs this switch and setting it also hides NEW gaps. It
-        # remains only for an emergency where the scan itself is broken; it
-        # must never be set by default in CI.
-        print(
-            "[*] Skipping Semantic Anchor scan (HAMS_SKIP_ANCHOR_SCAN=1 -- "
-            "explicit opt-out, not a default; see this block's own comment)."
-        )
-    else:
-        print("[*] Scanning for Semantic Anchors...")
-        # Which repository this is comes from verify_anchors.repo_identity (directory name, then
-        # HAMS_ANCHOR_REPO, then the git origin), so a worktree with any name still gets its
-        # sibling scanned and its baseline found. The sibling is looked up as ../hams_com or
-        # ../hams_open next to the checkout, or at HAMS_OPEN_TREE when that is set.
-        import importlib.util
+    print("[*] Scanning for Semantic Anchors...")
+    # Which repository this is comes from verify_anchors.repo_identity (directory name, then
+    # HAMS_ANCHOR_REPO, then the git origin), so a worktree with any name still gets its
+    # sibling scanned. The sibling is looked up as ../hams_com or
+    # ../hams_open next to the checkout, or at HAMS_OPEN_TREE when that is set.
+    import importlib.util
 
-        _va_spec = importlib.util.spec_from_file_location(
-            "verify_anchors_identity", os.path.join(shared_dir, "tools", "verify_anchors.py")
-        )
-        _va = importlib.util.module_from_spec(_va_spec)
-        _va_spec.loader.exec_module(_va)
-        other_repo_name = {"hams_open": "hams_com", "hams_com": "hams_open"}.get(
-            _va.repo_identity(base_dir) or ""
-        )
-        anchor_scan_dirs = [base_dir]
-        if other_repo_name:
-            sibling_dir = os.path.abspath(os.path.join(base_dir, "..", other_repo_name))
-            open_tree = os.environ.get("HAMS_OPEN_TREE", "").strip()
-            if other_repo_name == "hams_open" and open_tree and os.path.isdir(open_tree):
-                sibling_dir = os.path.abspath(open_tree)
-            if os.path.isdir(sibling_dir):
-                anchor_scan_dirs.append(sibling_dir)
-        res_anchor = subprocess.run(
-            [python_exec, os.path.join(shared_dir, "tools", "verify_anchors.py")] + anchor_scan_dirs,
-            capture_output=True,
-            text=True,
-        )
-        if res_anchor.returncode != 0:
-            print(res_anchor.stdout)
-            print(res_anchor.stderr)
-            print("🛑 Halting due to anchor violations.")
-            if extractor:
-                extractor.aborted = True
-            sys.exit(1)
-        else:
-            print(res_anchor.stdout)
+    _va_spec = importlib.util.spec_from_file_location(
+        "verify_anchors_identity", os.path.join(shared_dir, "tools", "verify_anchors.py")
+    )
+    _va = importlib.util.module_from_spec(_va_spec)
+    _va_spec.loader.exec_module(_va)
+    other_repo_name = {"hams_open": "hams_com", "hams_com": "hams_open"}.get(
+        _va.repo_identity(base_dir) or ""
+    )
+    anchor_scan_dirs = [base_dir]
+    if other_repo_name:
+        sibling_dir = os.path.abspath(os.path.join(base_dir, "..", other_repo_name))
+        open_tree = os.environ.get("HAMS_OPEN_TREE", "").strip()
+        if other_repo_name == "hams_open" and open_tree and os.path.isdir(open_tree):
+            sibling_dir = os.path.abspath(open_tree)
+        if os.path.isdir(sibling_dir):
+            anchor_scan_dirs.append(sibling_dir)
+    res_anchor = subprocess.run(
+        [python_exec, os.path.join(shared_dir, "tools", "verify_anchors.py")] + anchor_scan_dirs,
+        capture_output=True,
+        text=True,
+    )
+    if res_anchor.returncode != 0:
+        print(res_anchor.stdout)
+        print(res_anchor.stderr)
+        print("🛑 Halting due to anchor violations.")
+        if extractor:
+            extractor.aborted = True
+        sys.exit(1)
+    else:
+        print(res_anchor.stdout)
 
     print("[*] Running JavaScript Syntax Linter...")
     js_linter = os.path.join(shared_dir, "tools", "check_js_syntax.py")
