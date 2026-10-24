@@ -1228,7 +1228,8 @@ def systemd_units_running_as(manifest, user):
 # only the environment files its daemon uses (every other file carries secrets the daemon never needed).
 #
 # `agent_sudo` names the one documented exception to those rules: a unit whose job is to reach the Claude
-# Code CLI through `sudo -u <that account> run-hams-ai-agent-claude.sh`. `NoNewPrivileges=true` makes the
+# Code CLI through `sudo -u <that account> run-hams-crawl-claude.sh` (the wrapper that pins the no-tools sandbox
+# itself, review M6 2026-10-24). `NoNewPrivileges=true` makes the
 # kernel refuse sudo's uid switch (the reason credential.touch.timer and ticket.triage keep it off), so
 # such a unit omits NoNewPrivileges, narrows CapabilityBoundingSet to CAP_SETUID/CAP_SETGID, and has the
 # agent's home as its only ReadWritePaths= (the CLI, running as the agent, writes its session state
@@ -1642,7 +1643,7 @@ MANIFEST = {
             # all (the crawl ledger and every per-site state are in Odoo). odoo joins this group for the
             # key hand-off (chgrp, never chown); member_of hams_com is what lets the account reach /opt/hams.
             # No home directory is created. Its one reach into another account is the sudoers.d grant to
-            # run-hams-ai-agent-claude.sh as hams_ai_agent (club-crawl-claude-sandbox below); see
+            # run-hams-crawl-claude.sh as hams_ai_agent (club-crawl-claude-sandbox below); see
             # FAMILY_ACCOUNT_UNITS for why that makes it the one unit with an `agent_sudo` exception.
             "user": "hamsd_club_crawl",
             "group": "hamsd_club_crawl",
@@ -8185,6 +8186,97 @@ exec /home/hams_ai_agent/.local/bin/claude "$@"
             "environments": ["prod"],
         },
         {
+            # [@ANCHOR: infrastructure:crawl_claude_wrapper_pins_sandbox]
+            # Verified by [@ANCHOR: infrastructure:test_crawl_claude_wrapper_pins_sandbox]
+            # The club crawl's ONLY reach into another account (club-crawl-claude-sandbox below). Review M6
+            # (2026-10-24): that grant named run-hams-ai-agent-claude.sh, which execs `claude "$@"`, so the
+            # "no tools, no MCP" sandbox lived only in the CALLER's argv; a compromised crawl process could run
+            # the agent account's CLI with any tools and its credentials. This wrapper pins the sandbox itself:
+            # it always runs `claude -p --output-format json --tools "" --strict-mcp-config --model M` and
+            # accepts from the caller only `--version` (alone), `--model sonnet|haiku|opus`,
+            # `--effort low|medium|high|xhigh|max`, and the pinned flags themselves (ignored, already set).
+            # `--permission-mode bypassPermissions` is tolerated and DROPPED (never passed on), so a crawl daemon
+            # deployed before its own change still works; anything else is refused (exit 64) before the CLI starts.
+            # Same HOME/CWD and ci_oauth_token handling as run-hams-ai-agent-claude.sh. The odoo account keeps
+            # that general wrapper (its own callers need tools); this one is for the crawl account only.
+            "path": "/usr/local/sbin/run-hams-crawl-claude.sh",
+            "content": """\
+#!/bin/bash
+# The Claude Code CLI as hams_ai_agent for the club crawl, with the sandbox pinned HERE rather than in
+# the caller's argv: no tools, no MCP servers, print mode, JSON output. The caller may choose only the
+# model and the effort (from fixed lists) or ask for --version; any other argument is refused before
+# the CLI starts. See hams_shared/tools/infrastructure.py (crawl_claude_wrapper_pins_sandbox).
+set -u
+model=sonnet
+effort=
+version=no
+refused=
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+    version=yes
+    shift
+fi
+while [ "$#" -gt 0 ]; do
+    arg=$1
+    value=
+    if [ "$#" -ge 2 ]; then
+        value=$2
+    fi
+    case "$arg" in
+        -p|--print|--strict-mcp-config)
+            shift ;;
+        --output-format)
+            [ "$#" -ge 2 ] && [ "$value" = "json" ] || refused=1
+            shift 2 2>/dev/null || shift ;;
+        --tools)
+            [ "$#" -ge 2 ] && [ -z "$value" ] || refused=1
+            shift 2 2>/dev/null || shift ;;
+        --permission-mode)
+            # Tolerated for a daemon that still sends it, and never passed on.
+            [ "$#" -ge 2 ] && [ "$value" = "bypassPermissions" ] || refused=1
+            shift 2 2>/dev/null || shift ;;
+        --model)
+            case "$value" in
+                sonnet|haiku|opus) model=$value ;;
+                *) refused=1 ;;
+            esac
+            shift 2 2>/dev/null || shift ;;
+        --effort)
+            case "$value" in
+                low|medium|high|xhigh|max) effort=$value ;;
+                *) refused=1 ;;
+            esac
+            shift 2 2>/dev/null || shift ;;
+        *)
+            refused=1
+            shift ;;
+    esac
+    if [ -n "$refused" ]; then
+        echo "run-hams-crawl-claude.sh: argument not allowed: $arg" >&2
+        exit 64
+    fi
+done
+
+cd /home/hams_ai_agent || exit 1
+export HOME=/home/hams_ai_agent
+CI_OAUTH_TOKEN_FILE=/home/hams_ai_agent/.claude/ci_oauth_token
+if [ -s "$CI_OAUTH_TOKEN_FILE" ]; then
+    export CLAUDE_CODE_OAUTH_TOKEN
+    CLAUDE_CODE_OAUTH_TOKEN="$(cat "$CI_OAUTH_TOKEN_FILE")"
+fi
+
+if [ "$version" = "yes" ]; then
+    exec /home/hams_ai_agent/.local/bin/claude --version
+fi
+if [ -n "$effort" ]; then
+    exec /home/hams_ai_agent/.local/bin/claude -p --output-format json --tools "" --strict-mcp-config --model "$model" --effort "$effort"
+fi
+exec /home/hams_ai_agent/.local/bin/claude -p --output-format json --tools "" --strict-mcp-config --model "$model"
+""",
+            "owner": "root:root",
+            "mode": "755",
+            "environments": ["prod"],
+        },
+        {
             # Same gap, same fix, sibling account -- see the run-hams-ai-agent-claude.sh entry
             # above for the full reasoning (including its 2026-10-02 ci_oauth_token re-sync
             # anchor). Content likewise copied verbatim from hams1.
@@ -8804,14 +8896,15 @@ WantedBy=timers.target
         },
         {
             # Lets the club crawl's own account run the real Claude Code CLI as `hams_ai_agent`, the one
-            # reach it has into another account -- the same single wrapper the odoo grant above names, and
-            # nothing else. The CLI is started with --tools "" and --strict-mcp-config (see
-            # daemons/club_registry_recrawl/repeater_recrawl.py's CLAUDE_COMMAND): no tool and no MCP
-            # server, a bounded text completion over untrusted club pages. Prod-only, like the account.
+            # reach it has into another account -- run-hams-crawl-claude.sh only, which pins --tools "" and
+            # --strict-mcp-config itself and refuses any other flag (review M6, 2026-10-24; it used to name the
+            # general run-hams-ai-agent-claude.sh, whose `claude "$@"` left the sandbox to the caller's argv):
+            # no tool and no MCP server, a bounded text completion over untrusted club pages. Prod-only, like
+            # the account.
             "path": "/etc/sudoers.d/club-crawl-claude-sandbox",
             "content": (
                 "hamsd_club_crawl ALL=(hams_ai_agent) NOPASSWD: "
-                "/usr/local/sbin/run-hams-ai-agent-claude.sh\n"
+                "/usr/local/sbin/run-hams-crawl-claude.sh\n"
             ),
             "owner": "root:root",
             "mode": "440",
