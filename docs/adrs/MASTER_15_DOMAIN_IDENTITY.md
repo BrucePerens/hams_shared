@@ -3,6 +3,8 @@
 ## Status
 Accepted (Consolidates ADRs 0019, 0064)
 
+**Superseded in part 2026-10-23:** hams.com no longer uses ARRL Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
+
 ## Context & Philosophy
 Domain-specific rules for verifying Amateur Radio operator identities securely without exposing internal ERP models.
 

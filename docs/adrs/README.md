@@ -87,10 +87,10 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   our control -- splits these dependencies into data-source (ingest and persist locally, don't just
   proxy live) and capability/verification (diversify across independent paths, never single-source a
   trust decision) shapes, each needing a different defense. `ham_onboarding`'s existing multi-method
-  identity verification (LoTW, official-email OTP, AI/admin license review; the QRZ bio challenge and the Morse challenge were later removed) is
+  identity verification (official-email OTP, AI/admin license review; the LoTW certificate path, the QRZ bio challenge and the Morse challenge were later removed) is
   a real, already-built instance of the capability-diversification half of this decision.
 * [ADR 0095: Third-Party Credentials Stay on the User's Own System](0095_third_party_credential_locality.md)
-  A third-party credential a user entrusts to this platform (LoTW/eQSL/AllStar/EchoLink/ClubLog
+  A third-party credential a user entrusts to this platform (eQSL/AllStar/EchoLink/ClubLog
   passwords, and any future one) is held on the user's behalf, not this platform's to use freely --
   prefer local use (the user's own hardware) over central decryption where the real functional need
   allows it; where central decryption is genuinely necessary, scope it to one specific, confirmed

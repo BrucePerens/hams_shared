@@ -3,6 +3,8 @@
 ## Status
 Accepted
 
+**Superseded in part 2026-10-23:** hams.com no longer uses ARRL Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
+
 ## Context
 `ham_logbook/models/res_users.py` stores six Fernet-encrypted credential fields on `res.users` --
 `lotw_password`, `eqsl_password`, `allstar_password`, `echolink_password`, `clublog_password`,

@@ -4,7 +4,7 @@
   "legs": [
     "Log in (or sign up if needed) and go find the Propagation / band-conditions page. Try to understand today's HF band conditions from it -- is 'good' vs 'bad' propagation conveyed by anything other than a red/green color coding? Note anything you can't tell apart.",
     "Find the Satellite Tracker and look at the list of satellites/passes. Is a satellite being 'currently visible/active' right now conveyed by anything besides a colored badge or dot?",
-    "Find your own logbook or a public logbook example, and look at how confirmed vs. unconfirmed QSOs (LoTW, eQSL, physical QSL, direct confirmation) are shown. Can you tell confirmed from pending-sent from not-sent-at-all without relying on the color of an icon?",
+    "Find your own logbook or a public logbook example, and look at how confirmed vs. unconfirmed QSOs (eQSL, physical QSL, direct confirmation) are shown. Can you tell confirmed from pending-sent from not-sent-at-all without relying on the color of an icon?",
     "Explore any dashboards, maps, or status widgets elsewhere on the site (DX cluster spots, club dashboards, event/net rosters, DNS record status, classifieds listings) and flag anywhere else color alone seems to be doing the work -- this is a general color-accessibility sweep, not a specific task."
   ]
 }
