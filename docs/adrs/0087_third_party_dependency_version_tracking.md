@@ -3,6 +3,8 @@
 ## Status
 Accepted
 
+**Superseded in part 2026-10-23:** hams.com no longer uses ARRL Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
+
 ## Scope
 This ADR governs how this codebase (`hams_com`, `hams_open`, `hams_shared`) tracks its exposure
 to code it does not control the version of: anything vendored by a framework we depend on

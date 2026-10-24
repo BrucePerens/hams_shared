@@ -3,6 +3,8 @@
 ## Status
 Accepted
 
+**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL Logbook of the World (LoTW) and TQSL use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
+
 ## Context
 Bruce's direction of 2026-09-21: the browser goes to an AllStar repeater's own gateway directly, with no
 local relay and no hams.com relaying in the audio or signalling path ("It should not go through our server
