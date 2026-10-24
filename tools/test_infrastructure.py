@@ -6559,15 +6559,19 @@ class ShackConsoleUnitTests(unittest.TestCase):
 
 class AuthGatewayDirectoriesTests(unittest.TestCase):
     """The auth.hams.com gateway (hams_com daemons/hams_auth_gateway) reads its pinned trust anchors from one
-    directory per anchor under /etc/hams/auth/anchors. Its config pins files in `hams_member` only;
-    a directory missing here makes install_config.py (hams_com) fail at release time, so it is ratcheted."""
+    directory per anchor under /etc/hams/auth/anchors. Its config pins files in `arrl_lotw` (licence verification
+    only) and `hams_member` (sign-in); a directory missing here makes install_config.py (hams_com) fail at release
+    time, so both are ratcheted."""
 
-    ANCHOR_DIRECTORIES = ("/etc/hams/auth/anchors/hams_member",)
+    ANCHOR_DIRECTORIES = (
+        "/etc/hams/auth/anchors/arrl_lotw",
+        "/etc/hams/auth/anchors/hams_member",
+    )
 
     def _directories(self):
         return {d["path"]: d for d in infra.MANIFEST["directories"]}
 
-    def test_the_configuration_and_the_anchor_directory_exist(self):
+    def test_the_configuration_and_both_anchor_directories_exist(self):
         directories = self._directories()
         for path in ("/etc/hams/auth",) + self.ANCHOR_DIRECTORIES:
             self.assertIn(path, directories)

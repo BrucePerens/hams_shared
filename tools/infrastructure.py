@@ -711,8 +711,10 @@ RUST_DAEMON_CRATES = [
     "hams_data_relay",
     "hams_relay_bridge",
     "hams_simulated_band",
-    # hams_com daemons/hams_auth_gateway: the auth.hams.com certificate login gateway
-    # (hams.com member client certificates, TCP 443). See its README.
+    # hams_com daemons/hams_auth_gateway: the auth.hams.com client-certificate gateway (TCP 443,
+    # TLS 1.3 with a TLS 1.2 fallback): hams.com member certificates for sign-in, and ARRL LoTW
+    # certificates for licence verification only (never sign-in). See its README and hams_com
+    # docs/deploy/LOTW_CA_CHAIN.md section 7.
     "hams_auth_gateway",
     # hams_com daemons/shack_console: builds the library and `shack_console_server`, the loopback static server
     # for https://hams.com/console (unit shack-console.service).
@@ -2899,6 +2901,15 @@ MANIFEST = {
         # mounted into any other runtime.
         {
             "path": "/etc/hams/auth",
+            "owner": "root:hams-auth",
+            "provision_mode": "750",
+            "environments": ["prod"],
+        },
+        {
+            # The pinned ARRL LoTW trust anchors (gateway.toml's arrl_lotw [[anchor.certificate]] files,
+            # copied from hams_com nginx/prod/lotw_ca/ by its install_config.py). The anchor is for
+            # licence verification only (the gateway's /onboarding/licence_verify route), never sign-in.
+            "path": "/etc/hams/auth/anchors/arrl_lotw",
             "owner": "root:hams-auth",
             "provision_mode": "750",
             "environments": ["prod"],
