@@ -22,6 +22,8 @@ import inspect
 import itertools
 import os
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -66,6 +68,38 @@ class DefaultTestTmpdirTests(unittest.TestCase):
 
     def test_the_default_is_the_odoo_account_temporary_directory(self):
         self.assertEqual(_test_runner.DEFAULT_TEST_TMPDIR, "/var/lib/odoo/tmp")
+
+
+class RabbitMqWrapperTrapTests(unittest.TestCase):
+    """The shell that runs RabbitMQ stops its process group on SIGTERM and exits cleanly. Its trap used to re-enter itself
+    (its own `kill -TERM 0` reached it) until bash segfaulted on a stack overflow at the end of every test run."""
+
+    def _run_and_terminate(self, script):
+        proc = subprocess.Popen(["bash", "-c", script], start_new_session=True)
+        try:
+            time.sleep(0.5)
+            proc.send_signal(signal.SIGTERM)
+            return proc.wait(timeout=15), proc.pid
+        finally:
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+
+    def test_sigterm_stops_the_server_and_the_shell_exits_zero_without_a_segfault(self):
+        returncode, pgid = self._run_and_terminate(_test_runner.rabbitmq_wrapper_script("sleep 30"))
+        self.assertEqual(returncode, 0, "the wrapper must exit 0 on SIGTERM, not die of a signal (-11 was the segfault)")
+        left = subprocess.run(["pgrep", "-g", str(pgid)], capture_output=True, text=True).stdout.split()
+        self.assertEqual(left, [], "the server in the wrapper's process group must be gone too")
+
+    def test_the_old_self_reentering_trap_did_segfault(self):
+        # The control: the previous script dies of SIGSEGV here, so the test above is not vacuous.
+        returncode, _ = self._run_and_terminate("trap 'kill -TERM 0 2>/dev/null; exit 0' TERM; sleep 30 & wait $!")
+        self.assertEqual(returncode, -signal.SIGSEGV)
+
+    def test_rabbitmq_is_started_through_the_wrapper(self):
+        source = open(_TEST_PY_PATH, encoding="utf-8").read()
+        self.assertIn('rabbitmq_wrapper_script("rabbitmq-server")', source)
+        self.assertNotIn("trap 'kill -TERM 0", source.replace("RABBITMQ_WRAPPER_SCRIPT", ""))
 
 
 class ChromeNoDiskCacheTests(unittest.TestCase):
