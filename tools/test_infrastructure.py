@@ -5043,6 +5043,44 @@ class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
         self.assertIn("/etc/sudoers.d/club-crawl-claude-sandbox", details)
         self.assertIn("/opt/hams/etc/keys (odoo:hams_com, 710)", details)
 
+    def test_the_wrapper_a_familys_grant_names_is_installed_before_the_grant(self):
+        # hams1, 2026-10-25: the crawl grant named run-hams-crawl-claude.sh (#252) but the family run
+        # wrote only the grant, which would have left the account's one sudo permission on a missing file.
+        actions, _commands = self._plan(["hamsd_club_crawl"])
+        writes = [detail for kind, detail in actions if kind == "write"]
+        wrapper = next(i for i, d in enumerate(writes) if d.startswith("/usr/local/sbin/run-hams-crawl-claude.sh "))
+        grant = next(i for i, d in enumerate(writes) if d.startswith("/etc/sudoers.d/club-crawl-claude-sandbox "))
+        self.assertIn("owner root:root, mode 755", writes[wrapper])
+        self.assertLess(wrapper, grant)
+        self.assertEqual([d for kind, d in actions if kind == "missing"], [])
+
+    def test_a_wrapper_only_another_accounts_grant_names_is_never_written(self):
+        actions, _commands = self._plan(["hamsd_club_crawl"])
+        sbin = [d.split()[0] for kind, d in actions if kind == "write" and d.startswith("/usr/local/sbin/")]
+        self.assertEqual(sbin, ["/usr/local/sbin/run-hams-crawl-claude.sh"])
+        actions, _commands = self._plan(["hamsd_ncvec_sync"])
+        self.assertEqual([d for _kind, d in actions if "/usr/local/sbin/" in d or "sudoers" in d], [])
+
+    def test_the_commands_of_a_grant_are_read_exactly(self):
+        text = ("# comment\nodoo ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/a.sh, /usr/local/sbin/b.sh --x\n"
+                "hamsd_x ALL=(root) NOPASSWD:SETENV: /usr/local/sbin/c.sh\nai ALL=(ALL) NOPASSWD:ALL\n")
+        self.assertEqual(infra._sudoers_commands(text),
+                         ["/usr/local/sbin/a.sh", "/usr/local/sbin/b.sh", "/usr/local/sbin/c.sh"])
+        self.assertEqual(infra._sudoers_commands(text, {"hamsd_x"}), ["/usr/local/sbin/c.sh"])
+        self.assertEqual(infra.daemon_family_sudo_commands({"hamsd_club_crawl"}),
+                         {"/usr/local/sbin/run-hams-crawl-claude.sh"})
+
+    def test_every_command_a_sudoers_grant_names_is_a_manifest_file_for_the_same_hosts(self):
+        files = {spec["path"]: spec for spec in infra.MANIFEST["static_files"]}
+        for spec in infra.MANIFEST["static_files"]:
+            if not spec["path"].startswith("/etc/sudoers.d/"):
+                continue
+            for command in infra._sudoers_commands(spec["content"]):
+                with self.subTest(grant=spec["path"], command=command):
+                    self.assertIn(command, files)
+                    self.assertTrue(set(spec["environments"]) <= set(files[command]["environments"]))
+                    self.assertEqual(files[command].get("owner"), "root:root")
+
     def test_nothing_is_enabled_started_or_restarted(self):
         actions, commands = self._plan(["hamsd_ncvec_sync"])
         for command in commands:
@@ -5079,6 +5117,104 @@ class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
         found = infra.daemon_family_unit_paths(accounts)
         for unit in infra.FAMILY_ACCOUNT_UNITS:
             self.assertIn(f"/opt/hams/systemd/{unit}", found)
+
+
+class SudoersInstallTests(_TmpDirTestCase):
+    """Tests [@ANCHOR: infrastructure:sudoers_file_checked_before_install]: a sudoers.d file is checked with
+    visudo under a name sudo skips, renamed into place only then (the old one kept as .previous), and never
+    written when it would grant a command that does not exist."""
+
+    GRANT = "hamsd_x ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/run-x.sh\n"
+
+    def setUp(self):
+        super().setUp()
+        self.safe_patch_object(infra, "apply_permissions")
+        self.checked = []
+        self.verdict = (0, "parsed OK")
+        self.safe_patch_object(infra, "_visudo_check", side_effect=self._check)
+        os.makedirs(os.path.join(self.tmp, "etc/sudoers.d"))
+        os.makedirs(os.path.join(self.tmp, "usr/local/sbin"))
+        self.path = os.path.join(self.tmp, "etc/sudoers.d/x-sandbox")
+
+    def _check(self, path):
+        with open(path, encoding="utf-8") as f:
+            self.checked.append((os.path.basename(path), f.read(), stat_mode(path)))
+        return self.verdict
+
+    def _wrapper(self):
+        with open(os.path.join(self.tmp, "usr/local/sbin/run-x.sh"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+
+    def _old(self, text="hamsd_x ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/old.sh\n"):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return text
+
+    def _read(self, path):
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+    # [@ANCHOR: infrastructure:test_sudoers_file_checked_before_install]
+    def test_the_new_file_is_checked_under_a_name_sudo_skips_then_replaces_the_old_one(self):
+        self._wrapper()
+        old = self._old()
+        infra._install_sudoers_file(self.path, self.GRANT, "root:root", 0o440, self.tmp)
+        self.assertEqual(len(self.checked), 1)
+        name, text, mode = self.checked[0]
+        self.assertTrue(name.startswith(".") and "." in name[1:], name)
+        self.assertEqual((text, mode), (self.GRANT, 0o440))
+        self.assertEqual(self._read(self.path), self.GRANT)
+        self.assertEqual(stat_mode(self.path), 0o440)
+        self.assertEqual(self._read(self.path + ".previous"), old)
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.path))), ["x-sandbox", "x-sandbox.previous"])
+
+    def test_a_file_visudo_refuses_leaves_the_old_one_untouched(self):
+        self._wrapper()
+        old = self._old()
+        self.verdict = (1, "syntax error")
+        with self.assertRaisesRegex(RuntimeError, "visudo -cf refused"):
+            infra._install_sudoers_file(self.path, self.GRANT, "root:root", 0o440, self.tmp)
+        self.assertEqual(self._read(self.path), old)
+        self.assertEqual(os.listdir(os.path.dirname(self.path)), ["x-sandbox"])
+
+    def test_a_grant_of_a_missing_command_is_refused_before_anything_is_written(self):
+        old = self._old()
+        with self.assertRaisesRegex(RuntimeError, "run-x.sh, which does not exist"):
+            infra._install_sudoers_file(self.path, self.GRANT, "root:root", 0o440, self.tmp)
+        self.assertEqual((self._read(self.path), self.checked), (old, []))
+
+    def test_an_unchanged_file_is_not_rewritten(self):
+        self._wrapper()
+        self._old(self.GRANT)
+        infra._install_sudoers_file(self.path, self.GRANT, "root:root", 0o440, self.tmp)
+        self.assertEqual((self.checked, os.listdir(os.path.dirname(self.path))), ([], ["x-sandbox"]))
+
+    @unittest.skipUnless(os.path.exists("/usr/sbin/visudo"), "visudo is not installed")
+    def test_the_real_visudo_refuses_a_broken_line(self):
+        bad = os.path.join(self.tmp, "bad")
+        with open(bad, "w", encoding="utf-8") as f:
+            f.write("hamsd_x ALL=(hams_ai_agent NOPASSWD: /usr/local/sbin/run-x.sh\n")
+        good = os.path.join(self.tmp, "good")
+        with open(good, "w", encoding="utf-8") as f:
+            f.write(self.GRANT)
+        self.assertNotEqual(_REAL_VISUDO_CHECK(bad)[0], 0)
+        self.assertEqual(_REAL_VISUDO_CHECK(good)[0], 0)
+
+    def test_a_crawl_family_run_installs_the_wrapper_before_its_grant_is_checked(self):
+        seen = []
+        self.safe_patch_object(infra, "_visudo_check", side_effect=lambda path: seen.append(
+            os.path.exists(os.path.join(self.tmp, "usr/local/sbin/run-hams-crawl-claude.sh"))) or (0, "parsed OK"))
+        with infra.only_daemon_families({"hamsd_club_crawl"}):
+            infra.provision_static_files(lambda cmd, **kw: None, {"DOMAIN": "example.test"}, "prod", dest_dir=self.tmp)
+        self.assertEqual(seen, [True])
+        grant = self._read(os.path.join(self.tmp, "etc/sudoers.d/club-crawl-claude-sandbox"))
+        self.assertIn("/usr/local/sbin/run-hams-crawl-claude.sh", grant)
+        wrapper = self._read(os.path.join(self.tmp, "usr/local/sbin/run-hams-crawl-claude.sh"))
+        self.assertIn('--tools "" --strict-mcp-config', wrapper)
+
+
+# Taken before any test patches it.
+_REAL_VISUDO_CHECK = getattr(infra, "_visudo_check", None)
 
 
 class DerivedEnvFileTests(_TmpDirTestCase):

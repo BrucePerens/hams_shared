@@ -10530,12 +10530,86 @@ def _pinned_sha256(file_spec, env_vars):
 
 
 # [@ANCHOR: infrastructure:provision_static_files]
+SUDOERS_DIR = "/etc/sudoers.d"
+VISUDO = "/usr/sbin/visudo"
+
+
+def _is_sudoers_file(file_spec):
+    return (file_spec["path"].startswith(SUDOERS_DIR + "/") and not file_spec.get("src")
+            and not file_spec.get("url"))
+
+
+def _missing_sudo_commands(content, dest_dir, provided=()):
+    """The commands the sudoers `content` grants that exist neither on disk (under `dest_dir`) nor in
+    `provided` (MANIFEST paths this run has already written or planned)."""
+    return [
+        command for command in _sudoers_commands(content)
+        if command not in provided
+        and not os.path.exists(os.path.join(dest_dir, command.lstrip("/")) if dest_dir else command)
+    ]
+
+
+def _visudo_check(path):
+    """(returncode, output) of `visudo -cf path`, or None when visudo is not installed (no sudo on the
+    host, so nothing reads /etc/sudoers.d)."""
+    if not os.path.exists(VISUDO):
+        return None
+    done = subprocess.run([VISUDO, "-cf", path], capture_output=True, text=True)
+    return done.returncode, (done.stdout + done.stderr).strip()
+
+
+# [@ANCHOR: infrastructure:sudoers_file_checked_before_install]
+# Verified by [@ANCHOR: infrastructure:test_sudoers_file_checked_before_install]
+def _install_sudoers_file(path, content, owner, mode, dest_dir=""):
+    """Installs one sudoers.d drop-in so that a mistake can never take sudo away from the host: a sudoers
+    file sudo cannot parse disables sudo for every account, and one that grants a missing wrapper leaves
+    its account's only sudo permission pointing at nothing. So the file is refused, and the old one left
+    as it is, when a command it grants does not exist; otherwise it is written to a temporary name in the
+    same directory (sudo skips names containing "."), given its owner and mode, checked with
+    `visudo -cf`, and only then renamed over the old file, which is first kept as <path>.previous (also
+    skipped by sudo) for rollback. Raises RuntimeError, having changed nothing, when either check fails."""
+    missing = _missing_sudo_commands(content, dest_dir)
+    if missing:
+        raise RuntimeError(
+            f"{path} NOT written (the old file is unchanged): it grants {', '.join(missing)}, which does not exist"
+        )
+    if _file_state(path, content) == "unchanged":
+        apply_permissions(path, owner, mode)
+        return
+    directory = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=f".{os.path.basename(path)}.", suffix=".tmp")
+    try:
+        os.fchmod(fd, mode)
+        with open(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        apply_permissions(tmp, owner, mode)
+        checked = _visudo_check(tmp)
+        if checked is None:
+            _logger.warning("[!] %s: visudo is not installed, so the file is installed unchecked", path)
+        elif checked[0] != 0:
+            raise RuntimeError(f"{path} NOT written (the old file is unchanged): visudo -cf refused it: {checked[1]}")
+        if os.path.exists(path):
+            shutil.copy2(path, path + ".previous")
+        os.replace(tmp, path)
+        tmp = None
+    finally:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+
+
 def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir="", only_host_class=None,
                            skip_apt=False):
     """Writes the MANIFEST static_files for `environment`. skip_apt=True (test.py, provision with no apt phase)
     leaves out the apt-only entries (is_apt_only): nothing then fetches an apt signing key or writes an
-    apt source list for a run that never calls apt."""
-    for file_spec in MANIFEST.get("static_files", []):
+    apt source list for a run that never calls apt.
+
+    sudoers.d files come last, after the wrapper scripts they grant, and go through
+    _install_sudoers_file() (see [@ANCHOR: infrastructure:sudoers_file_checked_before_install])."""
+    # Stable: every other file keeps its MANIFEST order.
+    ordered = sorted(MANIFEST.get("static_files", []), key=lambda spec: spec["path"].startswith(SUDOERS_DIR + "/"))
+    provided = set()
+    for file_spec in ordered:
         if environment not in file_spec["environments"]:
             continue
         if not _spec_selected(file_spec, only_host_class):
@@ -10589,13 +10663,27 @@ def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir=
             else:
                 content = render_static_content(file_spec, env_vars)
                 state = _file_state(path, content)
-                if state != "unchanged":
+                if _is_sudoers_file(file_spec):
+                    for command in _missing_sudo_commands(content, dest_dir, provided):
+                        _plan("missing", f"{command} (granted by {path}, which would then NOT be written)")
+                    if state != "unchanged":
+                        _plan("write", f"{path} ({state}, owner {file_spec.get('owner')}, mode {mode:o}; "
+                                       f"checked with visudo -cf first, the old file kept as {path}.previous)")
+                elif state != "unchanged":
                     _plan("write", f"{path} ({state}, owner {file_spec.get('owner')}, mode {mode:o})")
+            provided.add(file_spec["path"])
             for hook in hooks:
                 _plan("hook", f"{hook.__name__} on {path}")
             continue
 
         os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        if _is_sudoers_file(file_spec):
+            _install_sudoers_file(path, render_static_content(file_spec, env_vars), file_spec.get("owner"), mode,
+                                  dest_dir)
+            for hook in hooks:
+                hook(env_vars or {}, dest_dir, path, run_cmd_func)
+            continue
 
         if src:
             src = format_env(src, env_vars)
@@ -11162,8 +11250,46 @@ def _in_host_class(spec, classes=None):
 #   * a directory owned by one of them (user or group part), or one every family needs in a known state
 #     (marked "daemon_family_shared": True, or carrying the traversal "acl" grant);
 #   * a unit file whose [Service] says User=<account>, the .timer / .path of the same name, and a
-#     sudoers.d file whose lines start with the account.
+#     sudoers.d file whose lines start with the account;
+#   * every static file such a sudoers.d grant names as its command (the wrapper script the account
+#     may run). Found on hams1 2026-10-25: #252 moved the crawl account's grant to the new
+#     run-hams-crawl-claude.sh, but the family selection wrote only the grant, so applying it would have
+#     pointed the account's one sudo permission at a file that does not exist. The match is on the exact
+#     path, so a wrapper another account's grant names (odoo's run-hams-ai-agent-claude.sh) is never
+#     rewritten by a family run. provision_static_files() writes sudoers.d files after every other file.
 _DAEMON_FAMILY_ACCOUNTS = None
+
+
+def _sudoers_commands(content, accounts=None):
+    """The absolute command paths the sudoers lines in `content` grant, in order; with `accounts`, only
+    from lines whose user (first token) is one of them. `ALL` and other non-path commands are left out."""
+    commands = []
+    for raw in (content or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if accounts is not None and line.split(None, 1)[0] not in accounts:
+            continue
+        rest = line.split("=", 1)[1].strip()
+        if rest.startswith("("):
+            rest = rest.split(")", 1)[1] if ")" in rest else ""
+        for part in rest.split(","):
+            part = re.sub(r"^(\s*[A-Z_]+:)+", "", part).strip()
+            command = part.split(None, 1)[0] if part else ""
+            if command.startswith("/"):
+                commands.append(command)
+    return commands
+
+
+def daemon_family_sudo_commands(accounts, manifest=None):
+    """The command paths the sudoers.d grants of the daemon accounts `accounts` name."""
+    manifest = MANIFEST if manifest is None else manifest
+    accounts = frozenset(accounts)
+    found = set()
+    for spec in manifest["static_files"]:
+        if spec["path"].startswith("/etc/sudoers.d/"):
+            found.update(_sudoers_commands(spec.get("content"), accounts))
+    return found
 
 
 @contextlib.contextmanager
@@ -11222,6 +11348,8 @@ def _spec_in_daemon_family(spec):
         return bool(set((spec.get("owner") or ":").split(":")) & accounts)
     path = spec.get("path", "")
     if path in daemon_family_unit_paths(accounts):
+        return True
+    if path in daemon_family_sudo_commands(accounts):
         return True
     if path.startswith("/etc/sudoers.d/"):
         return any(
