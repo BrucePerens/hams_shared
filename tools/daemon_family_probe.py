@@ -72,8 +72,9 @@ def service_section(text):
 
 
 def properties(text):
-    """(directive, value) pairs to pass to systemd-run as -p, from a unit file's text. Environment values keep
-    their quotes removed; an optional EnvironmentFile (-) stays optional."""
+    """(directive, value) pairs to pass to systemd-run as -p, from a unit file's text. An Environment assignment
+    is quoted again for systemd whenever it holds whitespace or a quote, so the transient unit sees the one
+    assignment the unit file has; an optional EnvironmentFile (-) stays optional."""
     pairs = []
     for line in service_section(text):
         key, sep, value = line.partition("=")
@@ -81,27 +82,52 @@ def properties(text):
             continue
         if key == "Environment":
             for assignment in _split_environment(value):
-                pairs.append(("Environment", assignment))
+                pairs.append(("Environment", _quote_assignment(assignment)))
         elif key in COPIED:
             pairs.append((key, value))
     return pairs
 
 
+_ESCAPES = {"n": "\n", "t": "\t", "s": " ", "\\": "\\", '"': '"', "'": "'"}
+
+
 def _split_environment(value):
-    """`Environment="A=1" "B=2 3"` or `Environment=A=1`: the assignments."""
-    value = value.strip()
-    if not value.startswith('"'):
-        return [value]
-    parts, current, quoted = [], "", False
-    for char in value:
-        if char == '"':
-            if quoted:
-                parts.append(current)
-                current = ""
-            quoted = not quoted
-        elif quoted:
+    """The assignments of one Environment= line, split as systemd does: on whitespace, with "..." or '...'
+    grouping a word and a backslash escaping the next character. `A=1 "B=2 3"` is ["A=1", "B=2 3"]."""
+    words, current, quote, started, index = [], "", None, False, 0
+    while index < len(value):
+        char = value[index]
+        index += 1
+        if char == "\\" and index < len(value):
+            following = value[index]
+            index += 1
+            current += _ESCAPES.get(following, char + following)
+            started = True
+        elif quote:
+            if char == quote:
+                quote = None
+            else:
+                current += char
+        elif char in "\"'":
+            quote, started = char, True
+        elif char.isspace():
+            if started:
+                words.append(current)
+            current, started = "", False
+        else:
             current += char
-    return parts
+            started = True
+    if started:
+        words.append(current)
+    return words
+
+
+def _quote_assignment(assignment):
+    """One assignment as a systemd-run -p Environment= value: bare when it has no whitespace or quote,
+    else inside double quotes with backslashes and double quotes escaped."""
+    if not any(char.isspace() or char in "\"'\\" for char in assignment):
+        return assignment
+    return '"' + assignment.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def command(unit_text):
