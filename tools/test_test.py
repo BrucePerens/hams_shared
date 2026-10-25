@@ -174,6 +174,22 @@ class SkipGoogleFontsDownloadTests(unittest.TestCase):
         self.assertIn("apply_skip_google_fonts_download(os.environ)", source)
 
 
+class BlockPskTransportTests(unittest.TestCase):
+    """The runner blocks the real PSK Reporter transports in every process it starts; production never sets the switch."""
+
+    def test_the_switch_is_on_by_default(self):
+        environ = {}
+        self.assertEqual(_test_runner.apply_block_psk_transport(environ), "1")
+        self.assertEqual(environ["HAMS_PSK_BLOCK_TRANSPORT"], "1")
+
+    def test_a_value_the_caller_chose_is_kept(self):
+        environ = {"HAMS_PSK_BLOCK_TRANSPORT": "0"}
+        self.assertEqual(_test_runner.apply_block_psk_transport(environ), "0")
+
+    def test_main_applies_it_before_anything_is_spawned(self):
+        self.assertIn("apply_block_psk_transport(os.environ)", inspect.getsource(_test_runner.main))
+
+
 class RunCmdHangRecoveryTests(unittest.TestCase):
     """run_cmd()'s 60-second no-output branch used to kill headless chrome
     and retry FOREVER on every timeout -- `force_killed` was assigned
