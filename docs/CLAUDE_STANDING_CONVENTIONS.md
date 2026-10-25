@@ -173,7 +173,7 @@ live elsewhere.
 - **Fail fast: never let an error path silently substitute a default that can mask a real bug.**
   Stated after a concrete case: a service-account whitelist check in `get_param()` silently returned
   the caller-supplied `default` instead of raising when a non-whitelisted parameter was blocked — one
-  call site crashed downstream, another (LoTW transfer-token signing) silently signed every auth
+  call site crashed downstream, another (a since-removed sign-in transfer-token signer) silently signed every auth
   token with an empty key, a full auth-bypass that shipped with a passing test suite because nothing
   ever surfaced the substitution. Prefer raising an explicit exception over returning a default,
   `None`, `False`, or an empty collection — especially in access control, credential/secret handling,

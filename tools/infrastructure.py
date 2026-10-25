@@ -404,7 +404,6 @@ def hook_generate_ssl(env_vars, dest_dir, path, run_cmd_func):
     ssl_dir = path
     fullchain = os.path.join(ssl_dir, "fullchain.pem")
     privkey = os.path.join(ssl_dir, "privkey.pem")
-    lotw = os.path.join(ssl_dir, "lotw_root.pem")
     if not os.path.exists(fullchain):
         try:
             run_cmd_func(
@@ -428,8 +427,6 @@ def hook_generate_ssl(env_vars, dest_dir, path, run_cmd_func):
         except Exception as e:  # audit-ignore-catch-all
             _logger.warning("Failed to generate SSL certs: %s", e)
             record_hook_failure("hook_generate_ssl", e)
-        if os.path.exists(fullchain):
-            shutil.copy2(fullchain, lotw)
 
 
 def hook_clear_pycache(env_vars, dest_dir, path, run_cmd_func):
@@ -714,8 +711,9 @@ RUST_DAEMON_CRATES = [
     "hams_data_relay",
     "hams_relay_bridge",
     "hams_simulated_band",
-    # hams_com daemons/hams_auth_gateway: the auth.hams.com certificate login gateway (LoTW
-    # client certificates over TLS 1.2, TCP 443). See its README and hams_com
+    # hams_com daemons/hams_auth_gateway: the auth.hams.com client-certificate gateway (TCP 443,
+    # TLS 1.3 with a TLS 1.2 fallback): hams.com member certificates for sign-in, and ARRL LoTW
+    # certificates for licence verification only (never sign-in). See its README and hams_com
     # docs/deploy/LOTW_CA_CHAIN.md section 7.
     "hams_auth_gateway",
     # hams_com daemons/shack_console: builds the library and `shack_console_server`, the loopback static server
@@ -2909,8 +2907,9 @@ MANIFEST = {
             "environments": ["prod"],
         },
         {
-            # The pinned ARRL LoTW trust anchors (gateway.toml's [[anchor.certificate]] files,
-            # copied from hams_com nginx/prod/lotw_ca/ at release time).
+            # The pinned ARRL LoTW trust anchors (gateway.toml's arrl_lotw [[anchor.certificate]] files,
+            # copied from hams_com nginx/prod/lotw_ca/ by its install_config.py). The anchor is for
+            # licence verification only (the gateway's /onboarding/licence_verify route), never sign-in.
             "path": "/etc/hams/auth/anchors/arrl_lotw",
             "owner": "root:hams-auth",
             "provision_mode": "750",
@@ -3616,8 +3615,7 @@ EnvironmentFile=-/opt/hams/etc/pdns.env
 EnvironmentFile=-/opt/hams/etc/odoo.env
 # Found live on hams1, 2026-09-23: this unit was reading logbook_api_service_internal, the
 # read-only public-API proxy account (ham_logbook.user_logbook_api_service) -- the same
-# wrong-account mistake documented in ham_init/hooks.py's own comment on the retired
-# lotw_eqsl_sync daemon. process_job() here writes ham.adif.queue.state and creates
+# wrong-account mistake made earlier by a since-retired QSL sync daemon. process_job() here writes ham.adif.queue.state and creates
 # ham.qso records, both of which are hardcoded to require
 # ham_logbook.user_logbook_sync_service specifically; every job failed with "You are not
 # allowed to modify 'ADIF Processing Queue' records" and stayed pending forever.

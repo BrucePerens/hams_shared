@@ -3,6 +3,8 @@
 ## Status
 Accepted (Consolidates ADRs 0019, 0064)
 
+**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL Logbook of the World (LoTW) and TQSL use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
+
 ## Context & Philosophy
 Domain-specific rules for verifying Amateur Radio operator identities securely without exposing internal ERP models.
 

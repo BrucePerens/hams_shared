@@ -333,8 +333,7 @@ class HookGenerateSslTests(_TmpDirTestCase):
         cmd = mock_run.call_args[0][0]
         self.assertIn("openssl", cmd)
         self.assertIn("CN=hams.com", cmd[-1])
-        # The LoTW copy only happens once a real fullchain.pem exists.
-        self.assertTrue(os.path.exists(os.path.join(self.tmp, "lotw_root.pem")))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "fullchain.pem")))
 
     def test_does_nothing_when_a_fullchain_already_exists(self):
         with open(os.path.join(self.tmp, "fullchain.pem"), "w") as f:
@@ -343,10 +342,10 @@ class HookGenerateSslTests(_TmpDirTestCase):
         infra.hook_generate_ssl({}, "", self.tmp, mock_run)
         mock_run.assert_not_called()
 
-    def test_a_run_cmd_failure_is_swallowed_and_no_lotw_copy_happens(self):
+    def test_a_run_cmd_failure_is_swallowed(self):
         mock_run = MagicMock(side_effect=RuntimeError("simulated openssl failure"))
         infra.hook_generate_ssl({}, "", self.tmp, mock_run)  # must not raise
-        self.assertFalse(os.path.exists(os.path.join(self.tmp, "lotw_root.pem")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "fullchain.pem")))
 
 
 class HookCreatePdnsSqliteSchemaTests(_TmpDirTestCase):
@@ -979,7 +978,7 @@ class ExecuteHooksTests(_TmpDirTestCase):
         # dest_dir-joined MANIFEST directory path.
         openssl_calls = [c for c in mock_run.call_args_list if c.args[0][:1] == ["openssl"]]
         self.assertEqual(len(openssl_calls), 1)
-        self.assertTrue(os.path.exists(os.path.join(ssl_dir, "lotw_root.pem")))
+        self.assertTrue(os.path.exists(os.path.join(ssl_dir, "fullchain.pem")))
 
         # hook_clear_pycache really ran too.
         self.assertEqual(os.listdir(pycache_dir), [])
@@ -6627,8 +6626,9 @@ class ShackConsoleUnitTests(unittest.TestCase):
 
 class AuthGatewayDirectoriesTests(unittest.TestCase):
     """The auth.hams.com gateway (hams_com daemons/hams_auth_gateway) reads its pinned trust anchors from one
-    directory per anchor under /etc/hams/auth/anchors. Its config pins files in `arrl_lotw` and `hams_member`;
-    a directory missing here makes install_config.py (hams_com) fail at release time, so both are ratcheted."""
+    directory per anchor under /etc/hams/auth/anchors. Its config pins files in `arrl_lotw` (licence verification
+    only) and `hams_member` (sign-in); a directory missing here makes install_config.py (hams_com) fail at release
+    time, so both are ratcheted."""
 
     ANCHOR_DIRECTORIES = (
         "/etc/hams/auth/anchors/arrl_lotw",
