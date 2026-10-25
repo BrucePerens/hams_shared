@@ -487,6 +487,9 @@ class FailureExtractor:
     State machine that processes log lines in real-time, buffering and extracting
     Tracebacks and error blocks for writing to a filtered log file.
     """
+    # Set by run_cmd when the Odoo process died of the CPU-time limit: the run is then not a test verdict.
+    cpu_limit_line = None
+
 
     def __init__(self, log_dir, disable_atexit=False, mcp_mode=False):
         base_dir = os.environ.get("HAMS_REAL_LOG_DIRECTORY") or os.path.abspath(
@@ -898,6 +901,9 @@ class FailureExtractor:
                 "are the only copy)"
             )
 
+        if self.cpu_limit_line:
+            print(self.cpu_limit_line)
+            print("🛑 TEST RUN INCOMPLETE: the Odoo process hit the CPU-time limit; the counts below cover only the tests that ran.")
         if a:
             print(
                 "🛑 TEST RUN ABORTED: Did not complete due to pre-flight linter errors."
@@ -1033,6 +1039,31 @@ RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS = 10
 DEFAULT_TEST_TMPDIR = "/var/lib/odoo/tmp"
 
 
+# The CPU-time backstop for the Odoo test process (RLIMIT_CPU, whole process, all threads; Chrome is separate processes).
+# It was (1200, 1200): 20 CPU-minutes with soft == hard, so a full combined run was SIGKILLed by the kernel mid-module after
+# 1.5-2.5 h of wall time (found 2026-10-24 with bpftrace: SIGKILL code SI_KERNEL in Odoo's own thread) and the remaining
+# tests silently gave no verdict. Now a backstop no real suite reaches, with the soft limit first so SIGXCPU (which
+# test.py recognises and reports) precedes the hard SIGKILL. Hung runs are still caught by run_cmd's hang recovery.
+ODOO_CPU_LIMIT_SOFT_SECONDS = 6 * 3600
+ODOO_CPU_LIMIT_HARD_SECONDS = ODOO_CPU_LIMIT_SOFT_SECONDS + 300
+
+
+def children_cpu_seconds(before, after):
+    """CPU seconds (user + system) of the children reaped between two resource.getrusage(RUSAGE_CHILDREN) readings."""
+    return (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
+
+
+def cpu_limit_verdict(returncode, cpu_seconds, soft_limit=ODOO_CPU_LIMIT_SOFT_SECONDS):
+    """The line test.py prints when the Odoo process died of the CPU-time limit rather than of a test outcome, or None.
+    SIGXCPU is the soft limit itself; a SIGKILL counts when the consumed CPU is at (95% of) the soft limit or beyond."""
+    if returncode == -signal.SIGXCPU or (returncode == -signal.SIGKILL and cpu_seconds >= 0.95 * soft_limit):
+        return (
+            f"🛑 CPU-time limit reached after {cpu_seconds:.0f} s of CPU (limit {soft_limit} s, "
+            f"signal {-returncode}): this run is NOT a test verdict -- the tests after that point never ran."
+        )
+    return None
+
+
 # The shell that runs RabbitMQ in its own process group and stops the group on SIGTERM (PDEATHSIG or clean-up). The trap
 # first IGNORES TERM in this shell, then signals the group and exits 0: `kill -TERM 0` also reaches this shell, and with
 # the trap still set it re-entered itself until bash overflowed its stack and segfaulted, at the end of every run (found
@@ -1113,6 +1144,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
             # _PostForkSafeLog's own docstring) -- use the fork-safe stand-in.
             _postfork_log.warning(f"preexec_child: could not set PR_SET_PDEATHSIG: {e}")
 
+    rusage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -1321,6 +1353,14 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
     print(
         f"[*] [DEBUG-RUNNER] Process {process.pid} terminated with return code {process.returncode}."
     )
+    cpu_limit_line = cpu_limit_verdict(
+        process.returncode, children_cpu_seconds(rusage_before, resource.getrusage(resource.RUSAGE_CHILDREN))
+    )
+    if cpu_limit_line:
+        print(cpu_limit_line, flush=True)
+        _logger.error(cpu_limit_line)
+        if extractor is not None:
+            extractor.cpu_limit_line = cpu_limit_line
 
     # Reap the OOMWatchdog process to prevent orphan leak
     try:
@@ -2329,8 +2369,8 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
     def preexec_odoo():
         try:
-            # 1200 seconds (20 minutes) of ACTIVE CPU TIME. Safe for tests, deadly for infinite loops.
-            resource.setrlimit(resource.RLIMIT_CPU, (1200, 1200))
+            # A backstop only (see ODOO_CPU_LIMIT_SOFT_SECONDS): SIGXCPU at the soft limit, SIGKILL at the hard one.
+            resource.setrlimit(resource.RLIMIT_CPU, (ODOO_CPU_LIMIT_SOFT_SECONDS, ODOO_CPU_LIMIT_HARD_SECONDS))
         except OSError as e:
             # Post-fork in preexec_fn -- same logging-deadlock hazard noted at
             # preexec_redis()/preexec_rmq() above; use the fork-safe stand-in.

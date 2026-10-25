@@ -21,6 +21,7 @@ import io
 import inspect
 import itertools
 import os
+import resource
 import shutil
 import signal
 import subprocess
@@ -68,6 +69,50 @@ class DefaultTestTmpdirTests(unittest.TestCase):
 
     def test_the_default_is_the_odoo_account_temporary_directory(self):
         self.assertEqual(_test_runner.DEFAULT_TEST_TMPDIR, "/var/lib/odoo/tmp")
+
+
+class OdooCpuLimitTests(unittest.TestCase):
+    """The Odoo test process's CPU-time limit is a backstop a full suite cannot reach, and a death by it is reported as
+    such, never as a test outcome. It was 20 CPU-minutes with soft == hard: combined runs were SIGKILLed mid-module."""
+
+    def test_the_backstop_is_hours_and_the_soft_limit_comes_first(self):
+        self.assertGreaterEqual(_test_runner.ODOO_CPU_LIMIT_SOFT_SECONDS, 6 * 3600)
+        self.assertGreater(_test_runner.ODOO_CPU_LIMIT_HARD_SECONDS, _test_runner.ODOO_CPU_LIMIT_SOFT_SECONDS)
+        source = open(_TEST_PY_PATH, encoding="utf-8").read()
+        self.assertIn("(ODOO_CPU_LIMIT_SOFT_SECONDS, ODOO_CPU_LIMIT_HARD_SECONDS)", source)
+        self.assertNotIn("RLIMIT_CPU, (1200, 1200)", source)
+
+    def test_a_child_that_burns_past_a_tiny_limit_is_reported_as_the_cpu_limit(self):
+        def tiny_limit():
+            resource.setrlimit(resource.RLIMIT_CPU, (1, 3))
+
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        proc = subprocess.Popen([sys.executable, "-I", "-c", "while True: pass"], preexec_fn=tiny_limit)
+        try:
+            returncode = proc.wait(timeout=60)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        cpu = _test_runner.children_cpu_seconds(before, resource.getrusage(resource.RUSAGE_CHILDREN))
+        self.assertEqual(returncode, -signal.SIGXCPU, "the soft limit must arrive first, as SIGXCPU")
+        self.assertGreaterEqual(cpu, 0.9)
+        line = _test_runner.cpu_limit_verdict(returncode, cpu, soft_limit=1)
+        self.assertIsNotNone(line)
+        self.assertIn("CPU-time limit reached after", line)
+        self.assertIn("NOT a test verdict", line)
+
+    def test_a_sigkill_counts_only_near_the_limit_and_an_ordinary_exit_never(self):
+        verdict = _test_runner.cpu_limit_verdict
+        self.assertIsNotNone(verdict(-signal.SIGKILL, 990, soft_limit=1000))
+        self.assertIsNone(verdict(-signal.SIGKILL, 10, soft_limit=1000), "an ordinary kill is not the CPU limit")
+        self.assertIsNone(verdict(0, 5000, soft_limit=1000))
+        self.assertIsNone(verdict(1, 5000, soft_limit=1000))
+
+    def test_the_run_summary_says_incomplete(self):
+        source = open(_TEST_PY_PATH, encoding="utf-8").read()
+        self.assertIn("extractor.cpu_limit_line = cpu_limit_line", source)
+        self.assertIn("TEST RUN INCOMPLETE", source)
 
 
 class RabbitMqWrapperTrapTests(unittest.TestCase):
