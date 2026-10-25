@@ -333,8 +333,7 @@ class HookGenerateSslTests(_TmpDirTestCase):
         cmd = mock_run.call_args[0][0]
         self.assertIn("openssl", cmd)
         self.assertIn("CN=hams.com", cmd[-1])
-        # The LoTW copy only happens once a real fullchain.pem exists.
-        self.assertTrue(os.path.exists(os.path.join(self.tmp, "lotw_root.pem")))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "fullchain.pem")))
 
     def test_does_nothing_when_a_fullchain_already_exists(self):
         with open(os.path.join(self.tmp, "fullchain.pem"), "w") as f:
@@ -343,10 +342,10 @@ class HookGenerateSslTests(_TmpDirTestCase):
         infra.hook_generate_ssl({}, "", self.tmp, mock_run)
         mock_run.assert_not_called()
 
-    def test_a_run_cmd_failure_is_swallowed_and_no_lotw_copy_happens(self):
+    def test_a_run_cmd_failure_is_swallowed(self):
         mock_run = MagicMock(side_effect=RuntimeError("simulated openssl failure"))
         infra.hook_generate_ssl({}, "", self.tmp, mock_run)  # must not raise
-        self.assertFalse(os.path.exists(os.path.join(self.tmp, "lotw_root.pem")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "fullchain.pem")))
 
 
 class HookCreatePdnsSqliteSchemaTests(_TmpDirTestCase):
@@ -979,7 +978,7 @@ class ExecuteHooksTests(_TmpDirTestCase):
         # dest_dir-joined MANIFEST directory path.
         openssl_calls = [c for c in mock_run.call_args_list if c.args[0][:1] == ["openssl"]]
         self.assertEqual(len(openssl_calls), 1)
-        self.assertTrue(os.path.exists(os.path.join(ssl_dir, "lotw_root.pem")))
+        self.assertTrue(os.path.exists(os.path.join(ssl_dir, "fullchain.pem")))
 
         # hook_clear_pycache really ran too.
         self.assertEqual(os.listdir(pycache_dir), [])
@@ -3111,6 +3110,73 @@ class ClaudeWrapperCiOauthTokenTests(unittest.TestCase):
                     self.assertEqual((seen["cwd"], seen["home"]), (home, home))
 
 
+class CrawlClaudeWrapperTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:crawl_claude_wrapper_pins_sandbox]
+
+    Review M6 (2026-10-24): the club crawl account's sudo grant ran a wrapper that execs `claude "$@"`, so the
+    no-tools sandbox was only the caller's argv. The crawl's wrapper pins it. Runs the rendered MANIFEST content under
+    bash with the account home redirected to a temp dir and a stand-in `claude` that reports its arguments."""
+
+    PATH = "/usr/local/sbin/run-hams-crawl-claude.sh"
+    # What the deployed crawl daemons send today (daemons/club_registry_recrawl/repeater_recrawl.py CLAUDE_COMMAND, plus
+    # club_crawl's --effort).
+    DAEMON_ARGV = ["-p", "--output-format", "json", "--tools", "", "--strict-mcp-config",
+                   "--permission-mode", "bypassPermissions", "--model", "sonnet", "--effort", "low"]
+    PINNED = '-p --output-format json --tools  --strict-mcp-config --model sonnet'
+
+    def _rendered(self):
+        entry = next(e for e in infra.MANIFEST["static_files"] if e["path"] == self.PATH)
+        self.assertEqual((entry["owner"], entry["mode"], entry["environments"]), ("root:root", "755", ["prod"]))
+        return infra.format_env(entry["content"], {})
+
+    def _run(self, argv):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, "hams_ai_agent")
+            os.makedirs(os.path.join(home, ".claude"))
+            os.makedirs(os.path.join(home, ".local", "bin"))
+            fake = os.path.join(home, ".local", "bin", "claude")
+            with open(fake, "w") as f:
+                f.write('#!/bin/bash\necho "args=$*"\necho "count=$#"\n')
+            os.chmod(fake, 0o755)
+            script = self._rendered().replace("/home/hams_ai_agent", home)
+            return subprocess.run(["bash", "-c", script, "wrapper", *argv], capture_output=True, text=True, cwd=tmp)
+
+    # [@ANCHOR: infrastructure:test_crawl_claude_wrapper_pins_sandbox]
+    def test_the_daemons_argv_runs_the_pinned_sandbox_without_bypass_permissions(self):
+        done = self._run(self.DAEMON_ARGV)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn(f"args={self.PINNED} --effort low", done.stdout)
+        self.assertNotIn("bypassPermissions", done.stdout)
+        self.assertNotIn("--permission-mode", done.stdout)
+        # The daemon's argv after its own change (no --permission-mode) runs the same command.
+        without = [a for a in self.DAEMON_ARGV if a not in ("--permission-mode", "bypassPermissions")]
+        self.assertEqual(self._run(without).stdout, done.stdout)
+
+    def test_version_alone_is_allowed(self):
+        done = self._run(["--version"])
+        self.assertEqual((done.returncode, done.stdout.splitlines()[0]), (0, "args=--version"))
+
+    def test_any_other_argument_is_refused_before_the_cli_starts(self):
+        for extra in (["--dangerously-skip-permissions"], ["--tools", "Bash"], ["--mcp-config", "/tmp/x.json"],
+                      ["--permission-mode", "acceptEdits"], ["--model", "../../bin/sh"], ["--effort", "ultra"],
+                      ["--output-format", "stream-json"], ["write a file"], ["--allowedTools", "Bash"],
+                      ["--settings", "/tmp/s.json"], ["--model"], ["--add-dir", "/"]):
+            with self.subTest(extra=extra):
+                done = self._run(self.DAEMON_ARGV + extra)
+                self.assertEqual(done.returncode, 64, done.stdout)
+                self.assertNotIn("args=", done.stdout)
+                self.assertIn("argument not allowed", done.stderr)
+        done = self._run(["--version", "--tools", "Bash"])
+        self.assertEqual(done.returncode, 64)
+
+    def test_the_crawl_account_may_run_only_this_wrapper(self):
+        grant = next(e for e in infra.MANIFEST["static_files"] if e["path"] == "/etc/sudoers.d/club-crawl-claude-sandbox")
+        self.assertEqual(grant["content"], "hamsd_club_crawl ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/run-hams-crawl-claude.sh\n")
+        for entry in infra.MANIFEST["static_files"]:
+            if entry["path"].startswith("/etc/sudoers.d/") and entry["path"] != grant["path"]:
+                self.assertNotIn("hamsd_club_crawl", entry.get("content") or "", entry["path"])
+
+
 class SystemdUnitPathTests(unittest.TestCase):
     """A path in ReadWritePaths= that does not exist stops the service before it starts (systemd
     status 226/NAMESPACE) unless it has a leading "-". The first production release hit this on
@@ -4851,10 +4917,10 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 grant = lines[0]
                 self.assertEqual(
                     grant["content"],
-                    f"{rules['user']} ALL=({agent}) NOPASSWD: /usr/local/sbin/run-hams-ai-agent-claude.sh\n",
+                    f"{rules['user']} ALL=({agent}) NOPASSWD: /usr/local/sbin/run-hams-crawl-claude.sh\n",
                 )
                 self.assertEqual((grant["owner"], grant["mode"], grant["environments"]), ("root:root", "440", ["prod"]))
-                self.assertIn("run-hams-ai-agent-claude.sh", [
+                self.assertIn("run-hams-crawl-claude.sh", [
                     e["path"].rsplit("/", 1)[-1] for e in infra.MANIFEST["static_files"]
                 ])
                 # The account is not in the sudo group and gets no blanket grant anywhere.
@@ -6560,8 +6626,9 @@ class ShackConsoleUnitTests(unittest.TestCase):
 
 class AuthGatewayDirectoriesTests(unittest.TestCase):
     """The auth.hams.com gateway (hams_com daemons/hams_auth_gateway) reads its pinned trust anchors from one
-    directory per anchor under /etc/hams/auth/anchors. Its config pins files in `arrl_lotw` and `hams_member`;
-    a directory missing here makes install_config.py (hams_com) fail at release time, so both are ratcheted."""
+    directory per anchor under /etc/hams/auth/anchors. Its config pins files in `arrl_lotw` (licence verification
+    only) and `hams_member` (sign-in); a directory missing here makes install_config.py (hams_com) fail at release
+    time, so both are ratcheted."""
 
     ANCHOR_DIRECTORIES = (
         "/etc/hams/auth/anchors/arrl_lotw",

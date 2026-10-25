@@ -1063,6 +1063,19 @@ def cpu_limit_verdict(returncode, cpu_seconds, soft_limit=ODOO_CPU_LIMIT_SOFT_SE
         )
     return None
 
+
+# The shell that runs RabbitMQ in its own process group and stops the group on SIGTERM (PDEATHSIG or clean-up). The trap
+# first IGNORES TERM in this shell, then signals the group and exits 0: `kill -TERM 0` also reaches this shell, and with
+# the trap still set it re-entered itself until bash overflowed its stack and segfaulted, at the end of every run (found
+# 2026-10-24 from the kernel log: `bash[...]: segfault ... error 6` about 1 s after each run's Odoo exited). Resetting
+# the trap to the default instead would kill the shell with TERM before `exit 0`.
+RABBITMQ_WRAPPER_SCRIPT = "trap \"trap '' TERM; kill -TERM 0 2>/dev/null; exit 0\" TERM; {server} & wait $!"
+
+
+def rabbitmq_wrapper_script(server):
+    """The `bash -c` script that runs `server` (rabbitmq-server; tests pass a stand-in) under the TERM trap above."""
+    return RABBITMQ_WRAPPER_SCRIPT.format(server=server)
+
 ODOO_LAUNCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "odoo_test_launcher.py")
 
 
@@ -2313,7 +2326,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
             [
                 "bash",
                 "-c",
-                "trap 'kill -TERM 0 2>/dev/null; exit 0' TERM; rabbitmq-server & wait $!",
+                rabbitmq_wrapper_script("rabbitmq-server"),
             ],
             preexec_fn=preexec_rmq,
             stdout=subprocess.DEVNULL,

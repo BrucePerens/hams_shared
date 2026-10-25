@@ -3,6 +3,8 @@
 ## Status
 Accepted
 
+**Superseded in part 2026-10-23:** hams.com no longer uses ARRL Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
+
 ## Context
 Bruce's own words, verbatim, stated as a requirement to make true, not just an aspiration: "no ham
 radio function is dependent on our server if you have installed the local relay and your remote

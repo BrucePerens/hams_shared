@@ -1754,6 +1754,8 @@ the real index entirely correctly. The shared resource that collided was time.
 A deletion that "has a replacement" needs one more question than it looks like, and the cost of
 skipping it is silent. Found 2026-09-15, while scoping the eQSL half of the central-credential
 retirement -- the item was about to repeat a mistake already shipped for LoTW two weeks earlier.
+(The LoTW integration in this example was later removed from hams.com entirely, 2026-10-23; the lesson
+stands, the example is history.)
 
 `ham.qso.sync_qsl_batch()` is the only code in hams_com that marks a QSO confirmed. hams_com
 `8fb785bc` retired the LoTW sync daemon, which contained its only `"lotw"` caller. The replacement
