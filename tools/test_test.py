@@ -1460,5 +1460,89 @@ class OdooLauncherTests(unittest.TestCase):
         self.assertNotIn('odoo_bin = "/usr/bin/odoo"', source)
 
 
+class RunnerCommandLineTests(unittest.TestCase):
+    """The command line is checked in the first second, and a refusal ends with the cause and the fix."""
+
+    def _parse_error(self, argv):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+            _test_runner.parse_runner_args(argv)
+        self.assertEqual(caught.exception.code, 2)
+        return err.getvalue()
+
+    def test_an_unknown_option_is_refused_with_the_next_action_as_the_last_line(self):
+        text = self._parse_error(["-u", "pager_duty", "--bogus"])
+        self.assertIn("unrecognized arguments: --bogus", text)
+        self.assertIn("NEXT:", text.strip().splitlines()[-1])
+
+    def test_test_tags_pass_through_and_name_the_module_without_dash_u(self):
+        args = _test_runner.parse_runner_args(["--test-tags", "/pager_duty:TestPagerIncidentStandard.test_01"])
+        self.assertEqual(_test_runner.module_arg_for(args), "pager_duty")
+
+    def test_test_tags_with_dash_u_keep_the_named_module(self):
+        args = _test_runner.parse_runner_args(["-u", "a,b", "--test-tags", ":TestX"])
+        self.assertEqual(_test_runner.module_arg_for(args), "a,b")
+
+    def test_a_tag_selector_naming_no_module_needs_dash_u(self):
+        self.assertIn("names no module", self._parse_error(["--test-tags", ":TestX.test_y"]))
+
+    def test_test_tags_are_refused_outside_standard_mode_and_with_offline_isolation(self):
+        self.assertIn("--mode standard", self._parse_error(["-m", "individual", "-u", "a", "--test-tags", "/a"]))
+        self.assertIn("offline-isolation", self._parse_error(["-u", "a", "--offline-isolation", "--test-tags", "/a"]))
+
+    def test_the_default_run_is_unchanged(self):
+        args = _test_runner.parse_runner_args(["-u", "pager_duty"])
+        self.assertIsNone(args.test_tags)
+        self.assertFalse(args.build_daemons)
+
+    def test_tag_spec_modules_skips_exclusions_and_deduplicates(self):
+        self.assertEqual(
+            _test_runner.tag_spec_modules("/a:T.t,-slow/b,/a:U,standard"), ["a"]
+        )
+
+
+class RustDaemonBuildNeededTests(unittest.TestCase):
+    """A run of named modules that never mention a daemon crate skips the cargo build."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        for name, body in (("quiet", "x = 1\n"), ("loud", "BIN = 'hams_data_relay'\n")):
+            os.makedirs(os.path.join(self.tmp, name, "tests"))
+            with open(os.path.join(self.tmp, name, "tests", "test_a.py"), "w", encoding="utf-8") as f:
+                f.write(body)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _needed(self, argv, modules):
+        args = _test_runner.parse_runner_args(argv)
+        return _test_runner.rust_daemon_build_needed(args, self.tmp, modules)
+
+    def test_a_module_that_never_mentions_a_daemon_skips_the_build(self):
+        self.assertFalse(self._needed(["-u", "quiet"], ["quiet"]))
+
+    def test_a_module_that_mentions_a_daemon_builds(self):
+        self.assertTrue(self._needed(["-u", "loud"], ["loud"]))
+
+    def test_a_full_run_and_the_force_flag_build(self):
+        self.assertTrue(self._needed([], ["quiet"]))
+        self.assertTrue(self._needed(["-u", "quiet", "--build-daemons"], ["quiet"]))
+
+    def test_an_unknown_module_directory_builds_to_be_safe(self):
+        self.assertTrue(self._needed(["-u", "elsewhere"], ["elsewhere"]))
+
+
+class HaltPreflightTests(unittest.TestCase):
+    def test_the_cause_and_next_action_are_the_last_lines_and_the_extractor_is_marked(self):
+        extractor = MagicMock(aborted=False)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as caught:
+            _test_runner.halt_preflight(extractor, "lint findings.", "fix them.")
+        self.assertEqual(caught.exception.code, 1)
+        self.assertTrue(extractor.aborted)
+        last_two = out.getvalue().strip().splitlines()[-2:]
+        self.assertEqual(last_two, ["❌ PRE-FLIGHT FAILED: lint findings.", "   NEXT: fix them."])
+
+
 if __name__ == "__main__":
     unittest.main()

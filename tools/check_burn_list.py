@@ -3872,7 +3872,9 @@ def scan_file(filepath, is_odoo_module=False):
 
     errors_found, warnings_found = [], []
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        # errors="replace": a .csv test fixture in Latin-1 (daemons/uk_ofcom_sync/testdata) crashed the
+        # whole scan with UnicodeDecodeError; the rules read text, so an undecodable byte is just noise.
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
             lines = content.splitlines()
     except OSError as e:

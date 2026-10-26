@@ -723,6 +723,11 @@ RUST_DAEMON_CRATES = [
 
 
 def hook_build_rust_daemons(env_vars, dest_dir, path, run_cmd_func):
+    if env_vars.get("HAMS_SKIP_RUST_DAEMON_BUILD") == "1":
+        # test.py sets this for a run whose modules never reference a daemon crate (see its
+        # rust_daemon_build_needed): the build is minutes and its output dies with the run's overlay.
+        print("[*] Skipping the Rust daemon build: the selected modules do not use a daemon (test.py --build-daemons forces it).")
+        return
     for crate in RUST_DAEMON_CRATES:
         manifest_path = os.path.join(path, crate, "Cargo.toml")
         if os.path.exists(manifest_path):
