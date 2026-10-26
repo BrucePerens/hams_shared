@@ -1,20 +1,40 @@
 #!/usr/bin/env bash
-# Anti-summation-bias check: refuses a commit that shrinks a .md, .py or .json file by more than 5 percent, because that is
-# what an edit that silently dropped rules or nuance looks like. Only the staged changes are judged, so another session's
-# unrelated edit in a shared working tree cannot block this commit.
+# Pre-commit checks, run on the staged changes only (another session's unrelated edit in a shared working tree cannot block
+# this commit):
+#   check_summation_bias.py  refuses a .md, .py or .json file that shrinks by more than 5 percent, because that is what an
+#                            edit that silently dropped rules or nuance looks like.
+#   check_staged_files.py    refuses a file over 5 MB and any file under a target/ directory (cargo build output).
 #
-# A shrink that is a real refactor or deliberate deletion: commit with `git commit --no-verify` and say in the commit message
-# and in your report why the file got smaller.
+# A shrink that is a real refactor or deliberate deletion, or a deliberate large file: commit with `git commit --no-verify`
+# and say in the commit message and in your report why.
+#
+# Fails closed: a checkout where the checkers cannot be found refuses the commit. It used to print "size check skipped"
+# and allow it, which let about 1.5 GB of cargo `target/` output into a commit made in a worktree. A worktree's own
+# `hams_shared` is an empty directory until fix_worktree_symlinks.py has been run, so the main checkout of the repository
+# (the parent of the common .git directory) is searched too.
 #
 # Installed by ../install_git_hooks.sh into .git/hooks/pre-commit, which every worktree of a repo shares.
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
-for candidate in "$root/hams_shared/tools/check_summation_bias.py" "$root/tools/check_summation_bias.py"; do
-    if [ -f "$candidate" ]; then
-        exec python3 "$candidate" --staged
-    fi
+common=$(cd "$root" && cd "$(git rev-parse --git-common-dir)" && pwd)
+main_root=$(dirname "$common")
+
+tools=""
+for base in "$root" "$main_root"; do
+    for sub in hams_shared/tools tools; do
+        if [ -f "$base/$sub/check_summation_bias.py" ] && [ -f "$base/$sub/check_staged_files.py" ]; then
+            tools="$base/$sub"
+            break 2
+        fi
+    done
 done
-# A worktree whose hams_shared submodule or symlink is not populated: nothing to run, and a hook must not block on that.
-echo "pre-commit: check_summation_bias.py not found, size check skipped" >&2
-exit 0
+
+if [ -z "$tools" ]; then
+    echo "pre-commit: check_summation_bias.py / check_staged_files.py not found under $root or $main_root; refusing the commit." >&2
+    echo "pre-commit: in a worktree run: python3 fix_worktree_symlinks.py (from the worktree). To commit anyway: git commit --no-verify" >&2
+    exit 1
+fi
+
+python3 "$tools/check_summation_bias.py" --staged
+python3 "$tools/check_staged_files.py"
