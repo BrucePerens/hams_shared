@@ -1241,6 +1241,64 @@ class RepoIdentityTests(unittest.TestCase):
         self.assertIn(os.path.join(self.tmp, "hams_open"), targets)
 
 
+class WorktreeLayoutTests(unittest.TestCase):
+    """A hams_open worktree has `hams_shared` as a symlink (fix_worktree_symlinks.py) and may sit
+    anywhere, not next to the hams_com checkout."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.saved_env = {k: os.environ.pop(k, None) for k in ("HAMS_COM_TREE", "HAMS_OPEN_TREE")}
+
+    def tearDown(self):
+        for k, v in self.saved_env.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_symlinked_hams_shared_is_walked_like_a_directory(self):
+        real = os.path.join(self.tmp, "real_shared")
+        _write(os.path.join(real, "modules", "x.md"), "# [@ANCHOR: x:feat]\n")
+        tree = os.path.join(self.tmp, "wt")
+        os.makedirs(tree)
+        os.symlink(real, os.path.join(tree, "hams_shared"))
+        walked = [root for root, _dirs, _files in va._walk_with_shared(tree)]
+        self.assertIn(os.path.join(tree, "hams_shared", "modules"), walked)
+
+    def test_a_real_hams_shared_directory_is_walked_once(self):
+        tree = os.path.join(self.tmp, "wt")
+        _write(os.path.join(tree, "hams_shared", "modules", "x.md"), "x\n")
+        walked = [root for root, _dirs, _files in va._walk_with_shared(tree)]
+        self.assertEqual(walked.count(os.path.join(tree, "hams_shared", "modules")), 1)
+
+    def test_tree_env_var_names_the_sibling_for_a_worktree_anywhere(self):
+        d = os.path.join(self.tmp, "wt-foo")
+        com = os.path.join(self.tmp, "elsewhere", "my_com_checkout")
+        os.makedirs(d)
+        os.makedirs(com)
+        os.environ["HAMS_ANCHOR_REPO"] = "hams_open"
+        os.environ["HAMS_COM_TREE"] = com
+        try:
+            targets, _warning = va._add_sibling_repo_target(d, [d])
+        finally:
+            os.environ.pop("HAMS_ANCHOR_REPO", None)
+        self.assertIn(com, targets)
+
+    def test_missing_sibling_hint_names_the_exact_fix(self):
+        d = os.path.join(self.tmp, "hams_open")
+        os.makedirs(d)
+        hint = va._missing_sibling_hint(d, [d])
+        self.assertIn("HAMS_COM_TREE=", hint)
+        self.assertIn("hams_com was NOT scanned", hint)
+
+    def test_no_hint_once_the_sibling_was_scanned(self):
+        d = os.path.join(self.tmp, "hams_open")
+        com = os.path.join(self.tmp, "hams_com")
+        os.makedirs(d)
+        os.makedirs(com)
+        self.assertIsNone(va._missing_sibling_hint(d, [d, com]))
+
+
 class BaselineShrinkOnlyTests(unittest.TestCase):
     """`baseline_growth`: the baseline may lose entries, never gain one. A file absent at the ref is
     empty, which is the end state (zero findings, baselines deleted)."""

@@ -339,6 +339,20 @@ def _ends_with_marker(prefix, marker):
     return not (prev_char.isalnum() or prev_char == "_")
 
 
+def _walk_with_shared(root_dir):
+    """os.walk(root_dir), plus a symlinked top-level `hams_shared` walked as if it were a directory.
+
+    A git worktree of hams_open has `hams_shared` as a symlink to the main checkout's copy
+    (fix_worktree_symlinks.py): os.walk never descends symlinks, so the scan silently lost every
+    doc and test under hams_shared and reported dozens of false "missing" findings. The walk keeps
+    the lexical path (<worktree>/hams_shared/...), so locations match a real checkout's. The
+    caller's in-place pruning of `dirs` applies to both walks."""
+    yield from os.walk(root_dir)
+    shared = os.path.join(root_dir, "hams_shared")
+    if os.path.islink(shared) and os.path.isdir(shared):
+        yield from os.walk(shared)
+
+
 def get_module(path):
     """Resolves the Odoo module boundary for a given file path to enforce cross-module strictness."""
     abs_path = os.path.abspath(path)
@@ -425,7 +439,7 @@ def find_anchors_in_docs(root_dir, repo_root):
     }
     code_island_paths = {os.path.join(root_dir, island) for island in CODE_ISLANDS_UNDER_DOCS}
 
-    for root, dirs, files in os.walk(root_dir):
+    for root, dirs, files in _walk_with_shared(root_dir):
         if "radae" in dirs: dirs.remove("radae")
         dirs[:] = [d for d in dirs if not _is_excluded_dir(d, exclude_dirs)]
         is_docs_dir = "docs" in root.split(os.sep)
@@ -626,7 +640,7 @@ def find_anchors_in_code(root_dir, repo_root):
         "hams_com",
     }
 
-    for root, dirs, files in os.walk(root_dir):
+    for root, dirs, files in _walk_with_shared(root_dir):
         if "radae" in dirs: dirs.remove("radae")
         dirs[:] = [d for d in dirs if not _is_excluded_dir(d, exclude_dirs)]
 
@@ -1314,7 +1328,12 @@ def _add_sibling_repo_target(repo_root, target_dirs):
     if has_sibling:
         return list(target_dirs), None
 
+    # An explicit tree wins, so a worktree placed anywhere can name the sibling checkout it needs.
     candidates = [
+        os.path.abspath(os.environ[env_name].strip())
+        for env_name in (f"{n.upper()}_TREE" for n in other_names)
+        if os.environ.get(env_name, "").strip()
+    ] + [
         os.path.abspath(os.path.join(repo_root, "..", sibling_name))
         for sibling_name in other_names
     ] + [
@@ -1337,6 +1356,29 @@ def _add_sibling_repo_target(repo_root, target_dirs):
             return new_target_dirs, warning
         return new_target_dirs, None
     return new_target_dirs, None
+
+
+def _missing_sibling_hint(enclosing_repo_dir, scanned_dirs):
+    """The exact fix, when findings were reported and the other repo was never scanned.
+
+    Anchors in hams_open and hams_com cite each other's docs and tests, so a scan of one repo alone
+    reports dozens of false "missing" findings. That is what a worktree outside the usual
+    ~/workspace layout produces, because the sibling is looked up at ../hams_com or ../hams_open.
+    Returns None when the sibling was scanned or the repository is not one of the two."""
+    own_name = repo_identity(enclosing_repo_dir)
+    if own_name not in _REAL_SIBLING_REPO_NAMES:
+        return None
+    other = "hams_com" if own_name == "hams_open" else "hams_open"
+    if any(repo_identity(d) == other for d in scanned_dirs):
+        return None
+    return (
+        f"\n[!] NOTE: {other} was NOT scanned (no {other} directory next to "
+        f"{enclosing_repo_dir}), and its docs and tests are cited by this repository, so "
+        "the findings above may be false.\n"
+        f"    FIX: HAMS_{other.removeprefix('hams_').upper()}_TREE=<path to your {other} checkout> "
+        f"{sys.executable} hams_shared/tools/verify_anchors.py   (or put the worktree next to the "
+        f"{other} checkout)."
+    )
 
 
 def main():
@@ -1515,7 +1557,7 @@ def main():
             cross_references.setdefault(k, []).extend(v)
         duplicates.extend(dups)
 
-        for root, dirs, files in os.walk(target_dir):
+        for root, dirs, files in _walk_with_shared(target_dir):
             if "radae" in dirs: dirs.remove("radae")
             dirs[:] = [
                 d
@@ -1615,6 +1657,9 @@ def main():
         sys.exit(0)
 
     if any(errs):
+        hint = _missing_sibling_hint(enclosing_repo_dir, final_targets)
+        if hint:
+            print(hint)
         sys.exit(1)
     else:
         if _BASELINE is not None:

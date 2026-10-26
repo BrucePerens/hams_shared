@@ -208,6 +208,30 @@ The `mcp-test-runner` skill explains how to use the MCP test server to rapidly i
 ## Fast Test Iteration
 When debugging tests, especially UI tours, you can use the MCP test server instead of running `test.py` normally. This saves significant time (avoids the 60+ second boot time). See `hams_shared/agents/skills/mcp-test-runner/SKILL.md` for instructions.
 
+### Iterating with `test.py` (one test in seconds; worktrees)
+* **One test or class:** `python3 hams_shared/tools/test.py --wait -u MODULE --test-tags /MODULE:TestClass.test_method`
+  (Odoo's tag syntax; `-u` may be left out when the tag names the module). A bad option fails in
+  under a second with the cause and next action as the last two lines, before the queue, the
+  namespace or any build. Standard mode only.
+* **A tag-selected run is NOT the pre-merge run.** It proves the one test you named. Before merging,
+  run the whole module without tags: `test.py --wait -u MODULE` (and the module's dependents when you
+  changed shared code). Say in the PR which run you did.
+* **Pre-flight first:** the manifest, burn-list, init-import, anchor and JavaScript checks now run in
+  the first seconds, before the lock queue and the provisioning, so a finding ends the run at once.
+  The last two lines of such a failure are `❌ PRE-FLIGHT FAILED: <cause>` and `NEXT: <action>`.
+* **Rust daemon build:** a run of named modules whose files never mention a daemon crate
+  (`infrastructure.RUST_DAEMON_CRATES`) skips the `cargo build`. The namespace mounts tmpfs over
+  `/home`, so a build in the repository is written to RAM and discarded: it cannot be cached there, and
+  every run that builds starts cold. `--build-daemons` forces the build; a run with no `-u` always builds.
+* **Worktrees:** put them NEXT TO the main checkouts, directly under `~/workspace/` (for example
+  `~/workspace/wt-topic`), not under the repository or in `~/workspace/tmp`. A hams_open worktree has an
+  empty `hams_shared` submodule directory: run `python3 fix_worktree_symlinks.py` in it once (it links
+  the main checkout's `hams_shared`; to test a `hams_shared` change, relink it to your own
+  `hams_shared` worktree). The anchor scan and the addon path need the OTHER repo: it is found as
+  `../hams_com` or `../hams_open`; a worktree anywhere else sets `HAMS_COM_TREE=<hams_com checkout>`
+  or `HAMS_OPEN_TREE=<hams_open checkout>`. Without it the anchor scan prints dozens of false
+  findings and ends with `NOTE: hams_com was NOT scanned ... FIX: HAMS_COM_TREE=...`.
+
 ## Standing Conventions & Institutional Knowledge
 Durable, project-specific conventions, standing authorizations, and architectural philosophy
 (legal/licensing calls, repository/persistence conventions, autonomy and night-shift session

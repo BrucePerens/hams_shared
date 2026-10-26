@@ -1546,6 +1546,17 @@ def get_addons_path(base_dir):
     return ",".join(paths)
 
 
+def halt_preflight(extractor, summary, next_action):
+    """End a run that failed a pre-flight check, with the cause and the next action as the LAST lines.
+
+    The findings print above, often hundreds of lines; a reader (or an agent) that only looks at the
+    end of the output must still learn what stopped the run and what to do about it."""
+    if extractor:
+        extractor.aborted = True
+    print(f"\n❌ PRE-FLIGHT FAILED: {summary}\n   NEXT: {next_action}", flush=True)
+    sys.exit(1)
+
+
 def check_linters(
     python_exec, base_dir, ignore_filepath, extractor=None, target_modules=None
 ):
@@ -1560,9 +1571,11 @@ def check_linters(
     )
     if res_manifest.returncode != 0:
         print("🛑 Halting due to manifest load-order violations.")
-        if extractor:
-            extractor.aborted = True
-        sys.exit(1)
+        halt_preflight(
+            extractor,
+            "manifest dependency / load-order violations (listed above).",
+            "fix the manifest `depends`/`data` order named above, then rerun.",
+        )
 
     print("[*] Running AST Burn List Linter...")
     burn_script = os.path.join(shared_dir, "tools", "check_burn_list.py")
@@ -1651,9 +1664,12 @@ def check_linters(
             )
         else:
             print("🛑 Halting due to burn list violations.")
-            if extractor:
-                extractor.aborted = True
-            sys.exit(1)
+            halt_preflight(
+                extractor,
+                "burn-list (AST lint) violations (listed above).",
+                "fix each file:line named above and rerun. To check something unrelated to "
+                "the lint, `HAMS_SKIP_BURN_LIST=1` skips only this check.",
+            )
     else:
         print(res_burn.stdout)
 
@@ -1685,9 +1701,11 @@ def check_linters(
         # into, and none currently exists (confirmed clean on both real
         # repos before this fix landed).
         print("🛑 Halting due to init-imports violations.")
-        if extractor:
-            extractor.aborted = True
-        sys.exit(1)
+        halt_preflight(
+            extractor,
+            "a test_*.py file is missing from its package __init__.py (listed above).",
+            "add the import named above to that package's tests/__init__.py, then rerun.",
+        )
     else:
         print(res_init.stdout)
 
@@ -1695,11 +1713,12 @@ def check_linters(
     # Which repository this is comes from verify_anchors.repo_identity (directory name, then
     # HAMS_ANCHOR_REPO, then the git origin), so a worktree with any name still gets its
     # sibling scanned. The sibling is looked up as ../hams_com or
-    # ../hams_open next to the checkout, or at HAMS_OPEN_TREE when that is set.
+    # ../hams_open next to the checkout, or at HAMS_OPEN_TREE / HAMS_COM_TREE when set (a worktree
+    # placed anywhere needs that).
     import importlib.util
 
     _va_spec = importlib.util.spec_from_file_location(
-        "verify_anchors_identity", os.path.join(shared_dir, "tools", "verify_anchors.py")
+        "verify_anchors_identity", os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify_anchors.py")
     )
     _va = importlib.util.module_from_spec(_va_spec)
     _va_spec.loader.exec_module(_va)
@@ -1709,9 +1728,9 @@ def check_linters(
     anchor_scan_dirs = [base_dir]
     if other_repo_name:
         sibling_dir = os.path.abspath(os.path.join(base_dir, "..", other_repo_name))
-        open_tree = os.environ.get("HAMS_OPEN_TREE", "").strip()
-        if other_repo_name == "hams_open" and open_tree and os.path.isdir(open_tree):
-            sibling_dir = os.path.abspath(open_tree)
+        sibling_tree = os.environ.get(f"{other_repo_name.upper()}_TREE", "").strip()
+        if sibling_tree and os.path.isdir(sibling_tree):
+            sibling_dir = os.path.abspath(sibling_tree)
         if os.path.isdir(sibling_dir):
             anchor_scan_dirs.append(sibling_dir)
     res_anchor = subprocess.run(
@@ -1723,9 +1742,13 @@ def check_linters(
         print(res_anchor.stdout)
         print(res_anchor.stderr)
         print("🛑 Halting due to anchor violations.")
-        if extractor:
-            extractor.aborted = True
-        sys.exit(1)
+        halt_preflight(
+            extractor,
+            "semantic-anchor violations (listed above).",
+            "fix the anchors named above (add the missing Tests/doc link). In a git worktree whose "
+            "findings look false, see the NOTE above about the sibling repo: set "
+            "HAMS_COM_TREE=<hams_com checkout> (or HAMS_OPEN_TREE=<hams_open checkout>) and rerun.",
+        )
     else:
         print(res_anchor.stdout)
 
@@ -1745,9 +1768,11 @@ def check_linters(
         print(res_js.stdout)
         print(res_js.stderr)
         print("🛑 Halting due to JavaScript syntax errors.")
-        if extractor:
-            extractor.aborted = True
-        sys.exit(1)
+        halt_preflight(
+            extractor,
+            "JavaScript syntax errors (listed above).",
+            "fix the syntax errors named above, then rerun.",
+        )
     else:
         print(res_js.stdout)
 
@@ -2093,6 +2118,12 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     os.environ["GNUPGHOME"] = f"{os.path.expanduser('~/tmp')}/.gnupg"
     env_vars = dict(os.environ)
     env_vars["REPO_ROOT"] = base_dir
+    run_args = parse_runner_args(sys_args)
+    _targets, run_install_modules = select_modules(
+        run_args, base_dir, load_ignore_file(os.path.join(base_dir, run_args.config))
+    )
+    if not rust_daemon_build_needed(run_args, base_dir, run_install_modules):
+        env_vars["HAMS_SKIP_RUST_DAEMON_BUILD"] = "1"
 
     infrastructure.provision_environment(_safe_run, env_vars, orig_user, skip_apt=True, is_test=True)
 
@@ -2996,16 +3027,238 @@ def _acquire_lock_via_queue(lock_file_path, timeout):
     _record_lock_holder(lock_file_path)
 
 
+def module_arg_for(args):
+    """The comma-separated module list a run covers: -u, else the modules a --test-tags selector names."""
+    if args.module:
+        return args.module
+    if args.test_tags:
+        return ",".join(tag_spec_modules(args.test_tags))
+    return None
+
+
+def select_modules(args, base_dir, ignore_patterns):
+    """(target_modules, install_modules) for a run: what is tested, and what is installed."""
+    module_arg = module_arg_for(args)
+    target_modules = [m.strip().replace("hams_open/", "") for m in module_arg.split(",")] if module_arg else []
+    install_modules = (
+        [m.split(":")[0] for m in target_modules]
+        if module_arg
+        else get_local_modules(base_dir, ignore_patterns)
+    )
+    if not target_modules:
+        target_modules = list(install_modules)
+    if not module_arg and "caching" in target_modules:
+        target_modules.remove("caching")
+    return target_modules, install_modules
+
+
+def rust_daemon_build_needed(args, base_dir, install_modules):
+    """Whether this run must build the Rust daemons before Odoo starts.
+
+    The build is minutes of cargo output, and it lands in the run's RAM overlay (the namespace
+    mounts tmpfs over /home), so every run starts cold and the result is thrown away. A run of
+    named modules whose files never mention a daemon crate does not use one: skip. A full run (no
+    -u, no --test-tags) and --build-daemons always build."""
+    if args.build_daemons or not module_arg_for(args):
+        return True
+    crates = tuple(infrastructure.RUST_DAEMON_CRATES)
+    for module in install_modules:
+        module_dir = os.path.join(base_dir, module)
+        if not os.path.isdir(module_dir):
+            return True  # not a module directory of this repo: cannot tell, so build
+        for root, dirs, files in os.walk(module_dir):
+            dirs[:] = [d for d in dirs if d not in ("target", "node_modules", "__pycache__", ".git")]
+            for name in files:
+                if not name.endswith((".py", ".js", ".xml", ".rs", ".toml", ".service", ".md", ".sh")):
+                    continue
+                try:
+                    with open(os.path.join(root, name), encoding="utf-8", errors="ignore") as f:
+                        text = f.read()
+                except OSError:
+                    continue
+                if any(crate in text for crate in crates):
+                    return True
+    return False
+
+
+def require_repo_root_cwd():
+    """Exit 1 with the fix unless the current directory is a repository root that has the runner."""
+    cwd = os.getcwd()
+    if is_git_checkout_root(cwd) and (
+        os.path.isfile(os.path.join(cwd, "hams_shared", "tools", "test.py"))
+        or os.path.isfile(os.path.join(cwd, "tools", "test.py"))
+    ):
+        return
+    print(f"❌ test.py: the current directory {cwd} is not a repository root with hams_shared/tools/test.py.")
+    print("   NEXT: `cd` to the root of hams_open, hams_com or hams_shared (in a git worktree of hams_open, run "
+          "`python3 fix_worktree_symlinks.py` there first) and rerun.")
+    sys.exit(1)
+
+
+def run_preflight(args):
+    """The lint, init-import, anchor and JavaScript pre-flight, run from the repository root. Runs in
+    the first seconds of the host process, before the lock queue, the namespace and the daemon
+    builds, so a finding is reported at once instead of after a long provisioning phase."""
+    base_dir = os.getcwd()
+    ignore_filepath = os.path.join(base_dir, args.config)
+    target_modules, _install = select_modules(args, base_dir, load_ignore_file(ignore_filepath))
+    if not target_modules:
+        print("❌ test.py: no modules found in this directory.\n   NEXT: run it from a repository root that contains Odoo modules.")
+        sys.exit(1)
+    check_linters("/usr/bin/python3", base_dir, ignore_filepath, None, target_modules)
+
+
+class _RunnerArgumentParser(argparse.ArgumentParser):
+    """argparse's default error is a usage block and exit 2; in a long run's output that is lost.
+    End with the cause and the next action as the last lines."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(
+            f"\n❌ test.py: {message}\n"
+            "   NEXT: fix the command line (nothing was started). `test.py --help` lists the options; "
+            "to run one test: `test.py -u MODULE --test-tags /MODULE:Class.test_method`.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+def build_arg_parser():
+    """The runner's command line. Built once, outside main(), so main() can reject an unknown or
+    malformed option in the first second, before the lock queue, the namespace, the daemon builds
+    or the database."""
+    parser = _RunnerArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument(
+        "-m",
+        "--mode",
+        choices=["standard", "individual", "xml", "downloads"],
+        default="standard",
+    )
+    parser.add_argument("-d", "--db", default="hams_test")
+    parser.add_argument("-u", "--module")
+    parser.add_argument("-l", "--log-directory", default=os.path.expanduser("~/tmp"))
+    parser.add_argument("-c", "--config", default="ignore_list.txt")
+    parser.add_argument("--profile", action="store_true")
+    parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="Queue FIFO for the box-wide test lock instead of failing fast when another run "
+        "holds it (also HAMS_TEST_WAIT=1). Prints a queue-position line periodically.",
+    )
+    parser.add_argument(
+        "--wait-timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="With --wait: give up after this long (exit status 75). Default: wait indefinitely.",
+    )
+    parser.add_argument(
+        "--queue-status",
+        action="store_true",
+        help="Print the current lock holder and the --wait queue, then exit (read-only).",
+    )
+    parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help="Wrap the odoo test process(es) in coverage.py (ADR 0090 / "
+        "ANCHOR_COVERAGE_AND_REMEDIATION_PLAN.md Stage 2, Python sub-track). "
+        "Writes coverage_report/coverage.json (repo-relative file paths, "
+        "matching check_function_test_anchors.py's own keying) after the run.",
+    )
+    parser.add_argument(
+        "--mcp",
+        action="store_true",
+        help="Launch the MCP server instead of running tests and shutting down.",
+    )
+    parser.add_argument(
+        "--pause-on-fail",
+        action="store_true",
+        help="Pause the browser indefinitely on tour failure (exposes port 9222).",
+    )
+    parser.add_argument(
+        "--offline-isolation",
+        action="store_true",
+        help=(
+            "Run the browser in a nested network namespace whose route to the Odoo test "
+            "server can be cut mid-test, and run ONLY the tests tagged 'offline_isolation'. "
+            "Lets a tour express a real offline operator's situation: hams.com unreachable, "
+            "the local relay on loopback still reachable. Opt-in; ordinary runs are "
+            "unaffected. See hams_shared/docs/OFFLINE_BROWSER_NAMESPACE_TESTING.md."
+        ),
+    )
+    parser.add_argument(
+        "--test-tags",
+        default=None,
+        metavar="TAGS",
+        help="Pass Odoo's --test-tags selector through, e.g. /my_module:TestClass.test_method, "
+        "for a run of one test or class (seconds, not the 15-25 minutes of a module run). With -u, "
+        "TAGS replaces the default '/<module>' selector; without -u, the modules named after the '/' "
+        "in TAGS are installed and tested. Standard mode only. A run selected this way is for "
+        "iterating and is NOT the pre-merge run: that is the whole module, `-u MODULE` with no tags.",
+    )
+    parser.add_argument(
+        "--build-daemons",
+        action="store_true",
+        help="Build the Rust daemons even when the selected modules do not mention them. By default a "
+        "run of named modules that never reference a daemon skips the cargo build (minutes, in RAM "
+        "overlay, discarded after every run). A full run (no -u) always builds them.",
+    )
+    parser.add_argument("--internal-ns-init", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--preflight-done", action="store_true", help=argparse.SUPPRESS)
+    return parser
+
+
+def parse_runner_args(argv=None):
+    """Parse and cross-check the command line; exits 2 with the cause as the last line."""
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    if args.test_tags is not None:
+        if args.mode != "standard":
+            parser.error(f"--test-tags needs --mode standard (got {args.mode}); the other modes pick tests themselves.")
+        if args.offline_isolation:
+            parser.error("--test-tags cannot be combined with --offline-isolation (that run selects its own tags).")
+        if not args.test_tags.strip():
+            parser.error("--test-tags is empty; give an Odoo tag spec such as /my_module:TestClass.test_method.")
+        if not args.module and not tag_spec_modules(args.test_tags):
+            parser.error(
+                f"--test-tags {args.test_tags!r} names no module; add -u MODULE or write the spec as "
+                "/my_module:TestClass.test_method."
+            )
+    return args
+
+
+def tag_spec_modules(test_tags):
+    """The modules an Odoo --test-tags selector names: the part after '/' in each comma-separated
+    spec ('[-][tag][/module][:Class][.method]'). Exclusions ('-...') name nothing to install."""
+    modules = []
+    for spec in test_tags.split(","):
+        spec = spec.strip()
+        if spec.startswith("-") or "/" not in spec:
+            continue
+        module = spec.split("/", 1)[1].split(":", 1)[0].strip()
+        if module and module not in modules:
+            modules.append(module)
+    return modules
+
+
 def main():
     global _single_instance_lock
     # First thing, before any lock, namespace, daemon or database work. rebuild_db() repeats the check
     # with the database list once PostgreSQL is reachable.
     refuse_to_run_on_production_host()
+    # Reject a bad command line before anything else: not after the lock queue or a long build.
+    early_args = parse_runner_args()
     queue_opts = lock_queue.wait_options_from_argv(sys.argv[1:])
     if queue_opts["status"]:
         # Read-only: never opens, probes or takes the lock itself.
         print("\n".join(lock_queue.describe_queue(lock_queue.queue_dir_for_lock(_test_runner_lock_path()))))
         return
+    # Pre-flight in the first seconds, once per run (the re-exec'd phases carry --preflight-done).
+    preflight_done = early_args.preflight_done
+    if not early_args.internal_ns_init and not preflight_done and not early_args.queue_status:
+        require_repo_root_cwd()
+        run_preflight(early_args)
+        preflight_done = True
     audio_sink_before = (
         get_default_audio_sink_name()
         if os.environ.get("HAMS_ISOLATED_NS") != "1"
@@ -3174,13 +3427,7 @@ def main():
             setup_namespace_and_run_tests(real_log_dir, sys_args)
             return
 
-        parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
-        parser.add_argument(
-            "-l", "--log-directory", default=os.path.expanduser("~/tmp")
-        )
-        args, _ = parser.parse_known_args()
-
-        real_log_dir = os.path.abspath(os.path.expanduser(args.log_directory))
+        real_log_dir = os.path.abspath(os.path.expanduser(early_args.log_directory))
         os.makedirs(real_log_dir, exist_ok=True)
         user_tmp = os.path.expanduser("~/tmp")
         os.makedirs(user_tmp, exist_ok=True)
@@ -3214,7 +3461,7 @@ def main():
             sys.executable,
             os.path.abspath(__file__),
             "--internal-ns-init",
-        ] + sys.argv[1:]
+        ] + sys.argv[1:] + ["--preflight-done"]
 
         if os.geteuid() != 0:
             print(
@@ -3303,66 +3550,7 @@ def main():
     os.environ.setdefault("RABBITMQ_HOST", "localhost")
     os.environ.setdefault("REDIS_HOST", "localhost")
 
-    parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument(
-        "-m",
-        "--mode",
-        choices=["standard", "individual", "xml", "downloads"],
-        default="standard",
-    )
-    parser.add_argument("-d", "--db", default="hams_test")
-    parser.add_argument("-u", "--module")
-    parser.add_argument("-l", "--log-directory", default=os.path.expanduser("~/tmp"))
-    parser.add_argument("-c", "--config", default="ignore_list.txt")
-    parser.add_argument("--profile", action="store_true")
-    parser.add_argument(
-        "--wait",
-        action="store_true",
-        help="Queue FIFO for the box-wide test lock instead of failing fast when another run "
-        "holds it (also HAMS_TEST_WAIT=1). Prints a queue-position line periodically.",
-    )
-    parser.add_argument(
-        "--wait-timeout",
-        type=float,
-        default=None,
-        metavar="SECONDS",
-        help="With --wait: give up after this long (exit status 75). Default: wait indefinitely.",
-    )
-    parser.add_argument(
-        "--queue-status",
-        action="store_true",
-        help="Print the current lock holder and the --wait queue, then exit (read-only).",
-    )
-    parser.add_argument(
-        "--coverage",
-        action="store_true",
-        help="Wrap the odoo test process(es) in coverage.py (ADR 0090 / "
-        "ANCHOR_COVERAGE_AND_REMEDIATION_PLAN.md Stage 2, Python sub-track). "
-        "Writes coverage_report/coverage.json (repo-relative file paths, "
-        "matching check_function_test_anchors.py's own keying) after the run.",
-    )
-    parser.add_argument(
-        "--mcp",
-        action="store_true",
-        help="Launch the MCP server instead of running tests and shutting down.",
-    )
-    parser.add_argument(
-        "--pause-on-fail",
-        action="store_true",
-        help="Pause the browser indefinitely on tour failure (exposes port 9222).",
-    )
-    parser.add_argument(
-        "--offline-isolation",
-        action="store_true",
-        help=(
-            "Run the browser in a nested network namespace whose route to the Odoo test "
-            "server can be cut mid-test, and run ONLY the tests tagged 'offline_isolation'. "
-            "Lets a tour express a real offline operator's situation: hams.com unreachable, "
-            "the local relay on loopback still reachable. Opt-in; ordinary runs are "
-            "unaffected. See hams_shared/docs/OFFLINE_BROWSER_NAMESPACE_TESTING.md."
-        ),
-    )
-    args = parser.parse_args()
+    args = parse_runner_args()
 
     # Fail fast, before any module install/DB rebuild, rather than letting a
     # direct `HAMS_ISOLATED_NS=1 --offline-isolation` invocation burn real
@@ -3394,29 +3582,19 @@ def main():
     ignore_filepath = os.path.join(base_dir, args.config)
     ignore_patterns = load_ignore_file(ignore_filepath)
 
-    target_modules = [m.strip().replace("hams_open/", "") for m in args.module.split(",")] if args.module else []
-    install_modules = (
-        [m.split(":")[0] for m in target_modules]
-        if args.module
-        else get_local_modules(base_dir, ignore_patterns)
-    )
-    if not target_modules:
-        target_modules = list(install_modules)
+    target_modules, install_modules = select_modules(args, base_dir, ignore_patterns)
 
     ffi_problem = check_cloudflared_ffi_library(addons_path, install_modules)
     if ffi_problem:
         print(f"❌ ERROR: {ffi_problem}")
         sys.exit(1)
 
-    if not args.module and "caching" in target_modules:
-        target_modules.remove("caching")
-
     if not target_modules:
         print("❌ ERROR: No modules found.")
         sys.exit(1)
 
     mod_string = "base," + ",".join(install_modules)
-    test_tags = ",".join([f"/{m}" for m in target_modules])
+    test_tags = args.test_tags or ",".join([f"/{m}" for m in target_modules])
 
     # Odoo's own tag selector treats a spec with no tag part ("/ham_shack") as
     # implicitly requiring the 'standard' tag (odoo/tests/tag_selector.py:
@@ -3514,7 +3692,8 @@ def main():
         f"==========================================================\n 🧪 ODOO TEST RUNNER [{args.mode.upper()} MODE]\n=========================================================="
     )
 
-    check_linters(python_exec, base_dir, ignore_filepath, extractor, target_modules)
+    if not preflight_done:
+        check_linters(python_exec, base_dir, ignore_filepath, extractor, target_modules)
 
     final_rc = 0
 
