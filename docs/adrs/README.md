@@ -145,6 +145,9 @@ This directory contains the Architecture Decision Records (ADRs) that define the
 * [ADR 0110: A Self-Hosted Form Shield Instead of a Third-Party Captcha](0110_self_hosted_form_shield_instead_of_a_third_party_captcha.md)
   Bruce's 2026-10-14 decision after spam reports got through the report form's honeypot: the `form_shield` module (signed proof-of-work challenge solved in a Web Worker, plain-text question fallback, honeypots, minimum time-to-submit, Redis rate limits, daily refusal counters) replaces Google reCAPTCHA and Cloudflare Turnstile for every public form, with no third-party script.
 
+* [ADR 0111: Tests Run As the Personas of Production](0111_tests_run_as_the_personas_of_production.md)
+  Bruce's 2026-10-26 decision after two incidents a green suite missed (an event cron whose service account could not write its action's model; a pager record rule that hid every website's incidents from admins, who have no website): `zero_sudo/tests/personas.py` holds a catalogue of production users, `@personas` runs a test once per persona chosen from the cron, route or model under test, two sweeps check every cron's gate and every record rule against an empty user attribute, and the pre-commit hook fails closed and refuses files over 5 MB and `target/` directories.
+
 ## Further Standard ADRs (listed by title only)
 
 These ADRs are in this directory and are cited by other documents; they have no summary above yet.
