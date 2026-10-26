@@ -232,6 +232,16 @@ When debugging tests, especially UI tours, you can use the MCP test server inste
   or `HAMS_OPEN_TREE=<hams_open checkout>`. Without it the anchor scan prints dozens of false
   findings and ends with `NOTE: hams_com was NOT scanned ... FIX: HAMS_COM_TREE=...`.
 
+## Worktrees and branches: merge early, remove at once (rule of 2026-10-26)
+
+Half-finished worktrees and branches were found by the hundred (about 300 local branches in hams_open and hams_com, most already squash-merged, the rest integration copies, "WIP salvage" dumps and parallel re-implementations of the same task). Work that lives only in a worktree is wasted work. The rules:
+
+* **Merge to `main` at least every 30 minutes of work, finished or not.** Commit the named paths, open a PR, merge it (`gh pr merge N --squash --admin`). Unfinished is no reason to hold it back: say what is unverified in the PR body and in the docs, keep behaviour that is not ready behind a flag or leave it out, but the code, tests, notes and patches go in. A worktree with uncommitted changes or unmerged commits that has not been touched for 30 minutes is stale.
+* **Remove the worktree and delete the branch as soon as the PR is merged** (`git worktree remove`, `git branch -D`, and the remote branch). Squash merging leaves the branch tip different from `main`, so nothing else will ever do it.
+* **One branch per task.** Before starting, look for an existing branch or open PR for the same task and continue it; do not start a parallel copy. Integration branches that combine several PRs for a test are deleted when the test ends; they are never the place where the only copy of work lives.
+* **Cleanup scripts must merge, not salvage.** Anything that finds uncommitted work in a worktree it is about to remove opens and merges a PR for it; it does not park it on a `salvage/` branch.
+* **`hams_shared/tools/worktree_hygiene.py REPO...`** lists stale worktrees and branches and, with `--apply`, removes the ones that are provably merged (clean tree, no commits beyond `origin/main` or tip equal to a merged PR head). It never touches dirty or unmerged work. It runs from a user timer every 30 minutes on the development machine (`tools/install_worktree_hygiene_timer.sh`); run it yourself at the start and the end of a session, and act on every STALE line it prints.
+
 ## Standing Conventions & Institutional Knowledge
 Durable, project-specific conventions, standing authorizations, and architectural philosophy
 (legal/licensing calls, repository/persistence conventions, autonomy and night-shift session
