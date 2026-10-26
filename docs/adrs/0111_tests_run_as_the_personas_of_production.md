@@ -18,7 +18,7 @@ Odoo's `res.users.website_id` is empty for all 279 active users of production (t
 
 ## Decision
 
-**1. A catalogue of personas modelled on production**, in `zero_sudo/tests/personas.py` beside `HamsTransactionCase`, with the counts it was read from:
+**1. A catalogue of personas modelled on production**, in `zero_sudo/tests/test_persona_support.py` beside `HamsTransactionCase`, with the counts it was read from:
 public visitor, portal member, internal staff, administrator, pager admin, helpdesk staff, each with `user.website_id` empty as on hams.com; the portal member is also bound to a website (`portal_member_with_website`; Odoo refuses to bind an internal user), because these modules are open source and meant for multi-tenant installs that bind logins to a website. A service account is
 the data record its module installs (`service(env, xmlid)`), and a cron is its own `user_id` (`cron(env, ref)`), never a copy. `HamsTransactionCase` and
 `HamsHttpCase` carry the helpers (`assert_persona_access`, `authenticate_as`).
@@ -46,3 +46,10 @@ empty directory searches the main checkout too) and adds `check_staged_files.py`
 - The sweeps run over the modules installed in the run. A module run covers the crons and rules of that module only when `zero_sudo` (or `ham_base` in
   hams_com) runs in the same invocation; a full run covers everything.
 - GitHub CI still runs no tests (Bruce, 2026-10-02); the sweeps run in the sessions that run the suites.
+
+## Working in a Worktree
+
+- Make it under the repository it belongs to: `<repo>/.claude/worktrees/<name>` (git-ignored, and the place `test.py`'s `resolve_repo_layout` and `fix_worktree_symlinks.py` expect). A worktree anywhere else is not found as a sibling checkout and `verify_anchors.py` reports false findings for it.
+- Run `python3 fix_worktree_symlinks.py` from the new worktree before anything else: its `hams_shared` is otherwise an empty directory (hams_open) or a dangling relative link (hams_com).
+- A hams_com worktree finds hams_open as a sibling checkout of the main tree. To test it against a hams_open branch that is not the main checkout's, set `HAMS_OPEN_TREE=<that hams_open worktree>` for `test.py`.
+- `HamsHttpCase` starts headless Chrome in every test and the test is skipped, not failed, when Chrome does not start. Check the log for `skipped` after a run of an HTTP test.
