@@ -49,7 +49,7 @@ empty directory searches the main checkout too) and adds `check_staged_files.py`
 
 ## Working in a Worktree
 
-- Make it under the repository it belongs to: `<repo>/.claude/worktrees/<name>` (git-ignored, and the place `test.py`'s `resolve_repo_layout` and `fix_worktree_symlinks.py` expect). A worktree anywhere else is not found as a sibling checkout and `verify_anchors.py` reports false findings for it.
-- Run `python3 fix_worktree_symlinks.py` from the new worktree before anything else: its `hams_shared` is otherwise an empty directory (hams_open) or a dangling relative link (hams_com).
-- A hams_com worktree finds hams_open as a sibling checkout of the main tree. To test it against a hams_open branch that is not the main checkout's, set `HAMS_OPEN_TREE=<that hams_open worktree>` for `test.py`.
-- `HamsHttpCase` starts headless Chrome in every test and the test is skipped, not failed, when Chrome does not start. Check the log for `skipped` after a run of an HTTP test.
+- Make it under the repository it belongs to: `<repo>/.claude/worktrees/<name>` (git-ignored, and the place `test.py`'s `resolve_repo_layout` and `fix_worktree_symlinks.py` expect).
+- Run `python3 fix_worktree_symlinks.py` from the new worktree before anything else: its `hams_shared` is otherwise an empty directory (hams_open) or a dangling relative link (hams_com). To test against a `hams_shared` branch, make a worktree of `hams_shared` and point the link at it by hand; `git rebase` refuses while `hams_shared` is a symlink, so replace it by an empty directory and run `git update-index --no-skip-worktree hams_shared` first, then link it again.
+- The anchor scan and the Odoo addons path need the other repository: a hams_open worktree has no `hams_com` sibling, so the scan reports about 1,700 false findings. Set `HAMS_COM_TREE=<a hams_com checkout or worktree>` (and `HAMS_OPEN_TREE=<a hams_open checkout or worktree>` from a hams_com worktree) for `verify_anchors.py` and `test.py`.
+- `HamsHttpCase` starts headless Chrome in every test and the test is skipped, not failed, when Chrome does not start. A test that only makes HTTP requests uses `HttpCase` with `PersonaMixin`. Check the log for `skipped` after a run of an HTTP test.
