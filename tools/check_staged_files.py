@@ -20,14 +20,24 @@ BUILD_DIRECTORIES = ("target",)
 
 
 def staged_entries():
-    """(path, size) of every added, copied, modified or renamed file in the index."""
-    names = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"],
+    """(path, size) of every added, copied, modified or renamed file in the index. A submodule pointer (mode 160000) is a commit,
+    not a file: it has no size and is skipped, so a bump of hams_shared is not refused."""
+    raw = subprocess.run(
+        ["git", "diff", "--cached", "--raw", "--no-abbrev", "--diff-filter=ACMR", "-z"],
         capture_output=True,
         check=True,
     ).stdout.decode("utf-8", "surrogateescape")
+    fields = raw.split("\0")
     entries = []
-    for path in [name for name in names.split("\0") if name]:
+    i = 0
+    while i + 1 < len(fields) and fields[i].startswith(":"):
+        meta = fields[i].split()  # :old_mode new_mode old_sha new_sha status
+        status = meta[4] if len(meta) > 4 else ""
+        paths = 2 if status[:1] in ("R", "C") else 1
+        path = fields[i + paths]
+        i += 1 + paths
+        if meta[1] == "160000":
+            continue
         size = subprocess.run(
             ["git", "cat-file", "-s", f":{path}"], capture_output=True, text=True, check=True
         ).stdout.strip()
