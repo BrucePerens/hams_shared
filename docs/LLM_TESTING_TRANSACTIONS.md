@@ -8,7 +8,7 @@ When writing tests in this environment, it is critical to understand the distinc
 Use `HamsHttpCase` for **all standard HTTP controllers, website routes, and APIs** that do not explicitly require testing database locking, concurrent deadlocks, or headless Chrome UI tours.
 
 **How it works:**
-`HamsHttpCase` (which extends Odoo's standard `HttpCase`) hacks the Werkzeug server thread to share the exact same `TestCursor` as the testing thread. 
+`HamsHttpCase` (which extends Odoo's standard `HttpCase`) shares one `TestCursor` between the testing thread and the Werkzeug server thread: Odoo's `HttpCase` test mode (`registry_enter_test_mode_cls`) replaces `Registry.cursor` so that every cursor, including the ones opened inside a request the test drives, is a `TestCursor` on the class's own savepoint-based transaction. (Werkzeug is the Python web server library Odoo's HTTP layer is built on.) 
 - You **do not** and **must not** call `self.env.cr.commit()`.
 - Data is safely rolled back when the test completes.
 
@@ -29,7 +29,7 @@ class TestMyFeature(HamsHttpCase):
 
     def test_my_route(self):
         # Werkzeug shares the TestCursor, so it can see the uncommitted self.user
-        response = self.url_open(f"/{self.user.website_slug}/home")
+        response = self.url_open(f"/{self.user.website_slug}")
         self.assertEqual(response.status_code, 200)
 ```
 

@@ -46,7 +46,7 @@ test.py's own network namespace ("parent")          nested namespace ("child")
 +-------------------------------------------+       +-----------------------------+
 ```
 
-(CDP is the Chrome DevTools Protocol, the channel the test framework uses to control the browser.) The browser's only route to anything outside its namespace is the veth pair. Chrome must see the
+(CDP is the Chrome DevTools Protocol, the channel the test framework uses to control the browser.) The browser's only route to anything outside its namespace is the veth pair (a virtual Ethernet cable whose two ends sit in different network namespaces). Chrome must see the
 Odoo server at exactly `127.0.0.1:8075`, because that is what `HttpCase.base_url()` says and what the
 session cookie's domain is, so a **gateway** forwarder inside the child namespace listens there and
 carries the traffic across.
@@ -77,7 +77,7 @@ state itself. Instead:
   process can drive the broker with no privilege at all;
 * Odoo launches the browser through `ODOO_BROWSER_BIN` (Odoo's own documented override, see
   `odoo/tests/common.py:_find_executable`) pointed at a **shim**, which hands the argv to the broker
-  and holds the connection open. When Odoo terminates its "Chrome" (the shim), the broker sees EOF
+  and holds the connection open. When Odoo terminates its "Chrome" (the shim), the broker sees end-of-file
   and kills the real browser.
 
 The broker never runs a binary the caller names -- it always runs the Chrome path it was configured
@@ -102,8 +102,8 @@ tools/test.py --offline-isolation -u ham_shack
 ```
 
 This is **opt-in and additive**. Without the flag, nothing above runs and the test process sees
-exactly the environment it always has. With it, `test.py` also narrows `--test-tags` to
-`offline_isolation/<module>` -- running unrelated tours through the forwarders would put them at the
+exactly the environment it always has. With it, `test.py` selects its own tags, `offline_isolation/<module>` for each module you name, and refuses a `--test-tags` of your own
+with it -- running unrelated tours through the forwarders would put them at the
 mercy of this mechanism for no gain.
 
 Tours cannot run in parallel on this box; `--offline-isolation` uses the same systemwide `test.py`
@@ -113,10 +113,10 @@ lock as every other run, and makes no attempt to work around it.
 
 `offline_browser_ns.setup()` (the function above) must run from a **root** process that is already
 inside `test.py`'s own unshared network namespace -- it unshares a further *nested* network
-namespace and moves a veth end into it, both of which genuinely need `CAP_NET_ADMIN`, not just a
+namespace and moves a veth end into it, both of which genuinely need `CAP_NET_ADMIN` (the Linux capability for network administration), not just a
 process running as the unprivileged `odoo` user. The only place in `test.py` that is ever true is
 inside `setup_namespace_and_run_tests()`, which the project's own `HAMS_ISOLATED_NS=1` shortcut
-convention (`hams-odoo-test-runner-sudo-and-polkit` memory; used for *ordinary* runs to skip polkit
+convention (used for *ordinary* runs on the development machine to skip polkit
 prompts and sudo friction) skips entirely. So:
 
 ```bash
@@ -135,7 +135,7 @@ python3 hams_shared/tools/test.py --offline-isolation -u ham_shack
 
 This used to fail a different way even invoked correctly: `check_host_apt_packages()` required
 `nginx`, which this dev box did not have before 2026-10-01 (it was installed then for an unrelated
-reason -- a reverse proxy in front of Odoo's bus/websocket worker, see `CLAUDE.md`). `nginx` is
+reason -- a reverse proxy in front of Odoo's bus/websocket worker). `nginx` is
 installed now, so the real escalation path's own host-prerequisite check passes and
 `--offline-isolation` reaches `offline_browser_ns.setup()` as designed.
 
@@ -209,7 +209,7 @@ see `_OFFLINE_NOISE` in the ham_shack test. Every failure the tour itself report
 
 `127.0.0.1:38911` inside the child namespace, mirroring the real `hams_local_relay` endpoints
 `shack_sw.js` talks to (`daemons/hams_local_relay/src/local_distribution.rs`'s `DOC_MANIFEST`), with
-real CORS headers because the browser really does treat it as a different origin:
+real CORS (cross-origin resource sharing) headers because the browser really does treat it as a different origin:
 
 * `GET /__offline_probe` -> `OFFLINE_NS_LOCAL_RELAY_REACHABLE`
 * `GET /api/local_content` -> a manifest holding one item, `web_shack_manual`
