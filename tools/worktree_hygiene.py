@@ -10,9 +10,10 @@ already squash-merged). This tool finds them and removes the ones that are prova
   worktree_hygiene.py [--apply] [--stale-minutes N] [--no-fetch] REPO...
 
 For every REPO (the main working tree of a repository):
-  * A linked worktree whose branch is merged (no commits beyond origin/main, or its tip is the head of a merged pull request)
-    and whose tree is clean is MERGED: with --apply it is removed, then its branch is deleted.
-  * A local branch with no worktree that is merged is deleted with --apply.
+  * A linked worktree whose branch is merged (no commits beyond origin/main, or its tip is the head of a merged pull request),
+    whose tree is clean and that has seen no git activity for N minutes is MERGED: with --apply it is removed, then its branch
+    is deleted. A worktree made a minute ago has no commits either, so only its idleness says it is not about to be used.
+  * A local branch with no worktree that is merged and was last updated more than N minutes ago is deleted with --apply.
   * A worktree that has uncommitted changes, or commits not in origin/main, and has not been touched for N minutes (default 30)
     is STALE: it is only reported, never removed. The fix is to commit the named paths, open a pull request and merge it, even
     if the work is unfinished (say so in the pull request), then run this tool again.
@@ -86,6 +87,26 @@ def last_touched(path):
     return newest
 
 
+def worktree_activity(path):
+    """Seconds since the epoch of the newest git activity in a worktree (its creation, checkouts, commits), from the files git keeps
+    in the worktree's own admin directory. A worktree created a minute ago on origin/main has no commits and a clean tree, which
+    is also what a finished one looks like, so age alone must tell them apart."""
+    gitdir = git(path, "rev-parse", "--absolute-git-dir", check=False)
+    newest = 0
+    for name in ("HEAD", "index", "logs/HEAD", "ORIG_HEAD"):
+        try:
+            newest = max(newest, int(os.stat(os.path.join(gitdir, name)).st_mtime))
+        except OSError:
+            pass
+    return max(newest, last_touched(path))
+
+
+def branch_activity(repo, branch):
+    """Seconds since the epoch of the branch's newest reflog entry (its creation or last update), or its tip's commit time."""
+    reflog = git(repo, "log", "-g", "-1", "--format=%ct", branch, check=False)
+    return int(reflog) if reflog.isdigit() else int(git(repo, "log", "-1", "--format=%ct", branch, check=False) or 0)
+
+
 def run(repo, apply, stale_seconds, merged_heads, now=None):
     now = now or time.time()
     report = {"removed": [], "deleted": [], "stale": [], "kept": []}
@@ -93,7 +114,7 @@ def run(repo, apply, stale_seconds, merged_heads, now=None):
     for path, branch in worktrees(repo):
         checked_out.add(branch)
         dirty = bool(git(path, "status", "--porcelain", check=False))
-        if branch and not dirty and is_merged(repo, branch, merged_heads):
+        if branch and not dirty and is_merged(repo, branch, merged_heads) and now - worktree_activity(path) >= stale_seconds:
             if apply:
                 git(repo, "worktree", "remove", "--force", path)
                 git(repo, "branch", "-D", branch)
@@ -108,7 +129,7 @@ def run(repo, apply, stale_seconds, merged_heads, now=None):
     for branch in git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads").splitlines():
         if branch == default or branch in checked_out:
             continue
-        if is_merged(repo, branch, merged_heads):
+        if is_merged(repo, branch, merged_heads) and now - branch_activity(repo, branch) >= stale_seconds:
             if apply:
                 git(repo, "branch", "-D", branch)
             report["deleted"].append(branch)
