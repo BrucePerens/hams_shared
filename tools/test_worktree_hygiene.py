@@ -52,16 +52,26 @@ class WorktreeHygieneTest(unittest.TestCase):
 
     def test_merged_clean_worktree_and_its_branch_are_removed_only_with_apply(self):
         path = self.worktree("done")
-        self.assertEqual(wh.run(self.repo, False, 1800, {})["removed"], [(path, "done")])
+        self.assertEqual(wh.run(self.repo, False, 1800, {}, now=time.time() + 3600)["removed"], [(path, "done")])
         self.assertTrue(os.path.isdir(path))
-        wh.run(self.repo, True, 1800, {})
+        wh.run(self.repo, True, 1800, {}, now=time.time() + 3600)
         self.assertFalse(os.path.isdir(path))
         self.assertNotIn("done", _git(self.repo, "branch", "--format=%(refname:short)"))
+
+    def test_a_worktree_or_branch_made_a_moment_ago_is_not_removed_as_merged(self):
+        path = self.worktree("just-made")
+        _git(self.repo, "branch", "also-new")
+        report = wh.run(self.repo, True, 1800, {})
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual(report["removed"], [])
+        self.assertEqual(report["deleted"], [])
+        self.assertEqual({branch for _, branch in report["kept"]}, {"just-made"})
+        self.assertIn("also-new", _git(self.repo, "branch", "--format=%(refname:short)"))
 
     def test_a_squash_merged_branch_is_recognised_by_its_pull_request_head(self):
         path = self.worktree("squashed", commits=2)
         tip = _git(path, "rev-parse", "HEAD")
-        report = wh.run(self.repo, True, 1800, {"squashed": {tip}})
+        report = wh.run(self.repo, True, 1800, {"squashed": {tip}}, now=time.time() + 3600)
         self.assertEqual(report["removed"], [(path, "squashed")])
         self.assertEqual(report["stale"], [])
 
@@ -82,7 +92,7 @@ class WorktreeHygieneTest(unittest.TestCase):
         _git(self.repo, "checkout", "-q", "unmerged-old")
         _commit(self.repo, "u")
         _git(self.repo, "checkout", "-q", "main")
-        report = wh.run(self.repo, True, 1800, {})
+        report = wh.run(self.repo, True, 1800, {}, now=time.time() + 3600)
         self.assertEqual(report["deleted"], ["merged-old"])
         self.assertEqual([branch for _, branch, _ in report["stale"]], ["unmerged-old"])
         self.assertIn("unmerged-old", _git(self.repo, "branch", "--format=%(refname:short)"))
