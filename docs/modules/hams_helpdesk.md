@@ -21,7 +21,7 @@ The module implements a reactive ticketing system where assignment is driven by 
     - `POST /webhook/github` accepts GitHub `dependabot_alert` (created or reopened) and `workflow_run` (completed with a failure) events whose `X-Hub-Signature-256` HMAC matches the `hams_helpdesk.github_webhook_secret` system parameter, and opens one ticket per alert or run URL. A repeat delivery for a URL whose ticket is still open adds nothing; once that ticket is Resolved or Closed, a new delivery opens a new ticket. With no secret configured, every request is refused with 403.
     - The `pager_duty` module opens tickets for its incidents (see documentation.html).
 - **Child-safety mandatory reports**: the ticket type `csam_enticement_trafficking` drives the NCMEC CyberTipline reporting workflow (18 U.S.C. Sec. 2258A). Such a ticket is forced to Critical priority, every Helpdesk Manager is notified, and a report packet is assembled on the ticket. Portal users cannot choose this type, and the external AI triage account's record rule does not include it, so that account cannot read it. See documentation.html.
-- **External AI triage**: the `ai_triage_service_internal` account has read-only access to tickets of type `general` and `hams_local_relay` only, and posts its analysis through `mcp_post_internal_note()` as an internal note the customer does not see.
+- **External AI triage**: the `ai_triage_service_internal` account has read-only access to tickets of type `general` and `hams_local_relay` only (and never to one the untrusted-text filter marked suspicious), and posts its analysis through `mcp_post_internal_note()` as an internal note the customer does not see.
 - **Security**: Strict record rules (Odoo `ir.rule`) enforce that portal users only see their own tickets, helpdesk users see tickets assigned to them or unassigned, and helpdesk managers see every ticket. All three are limited to the user's own companies.
 - **Multi-Website**: Supports multiple websites by segregating tickets via `website_id`.
 - **Multi-Company**: Full multi-company support with strict record rules and automatic company inference: a ticket created with a website but no explicit company takes that website's company.
@@ -154,8 +154,11 @@ Unhandled exceptions from pages, RPC/ORM calls and scheduled jobs become tickets
 category "Automatic: server exception", one per fingerprint (exception type, innermost addon frame,
 module, normalized route), counted on `hams_helpdesk.exception.fingerprint` and listed under
 Helpdesk > Server Exceptions. See `docs/stories/server_exception_tickets.md`.
-When the person was signed in, the ticket lists the member (name, callsign if any, email, computed live from their account;
-staff only) so the site team can write to them: a link to the account, never a copy (section 17 of that story).
+For page, RPC and browser reports where the person was signed in, the ticket lists the member (name, callsign if any, email,
+computed live from their account; staff only, at most 25 members per failure, the rest only counted) so the site team can write
+to them: a link to the account, never a copy (section 17 of that story). A module that knows about guardianship can
+substitute the supervising guardian, or no one; this module alone always lists the member. Scheduled jobs, mail and
+external daemons have no member.
 
 ### Browser JavaScript errors
 
