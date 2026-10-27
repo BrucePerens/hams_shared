@@ -130,6 +130,24 @@ def _provision_only_daemon_families(accounts, plan, env_vars):
         sys.exit(1)
 
 
+def _provision_only_units(plan, env_vars):
+    """`--units`: the unit files, drop-ins and sbin wrappers and nothing else (see infrastructure.provision_units)."""
+
+    def run_only(cmd, **kw):
+        printable = " ".join(infrastructure.redact_command(cmd))
+        if plan:
+            print(f"PLAN run: {printable}", flush=True)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        _logger.info(f"[*] Running: {printable}")
+        return subprocess.run(cmd, check=True, **kw)
+
+    if plan:
+        with infrastructure.planning():
+            infrastructure.provision_units(run_only, env_vars)
+    else:
+        infrastructure.provision_units(run_only, env_vars)
+
+
 def provision():
     if repo_root is None:
         _logger.error(
@@ -215,6 +233,13 @@ def provision():
         "started or restarted. Repeatable. Honours --plan. docs/proposals/DAEMON_OS_ISOLATION_PLAN.md",
     )
     parser.add_argument(
+        "--units",
+        action="store_true",
+        help="Provision ONLY the systemd unit files, their drop-ins and the /usr/local/sbin wrappers (write, link, "
+        "daemon-reload). Nothing is enabled, started or restarted; no account, directory, package or database is "
+        "touched. Honours --plan. Set DB_NAME in the environment (hams.daemon.keys.service uses it).",
+    )
+    parser.add_argument(
         "--host-class",
         action="append",
         default=[],
@@ -281,6 +306,10 @@ def provision():
 
     if args.daemon_family:
         _provision_only_daemon_families(args.daemon_family, args.plan, env_vars)
+        return
+
+    if args.units:
+        _provision_only_units(args.plan, env_vars)
         return
 
     infrastructure.load_and_prompt_env(env_vars, args.test)

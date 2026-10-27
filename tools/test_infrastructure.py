@@ -7467,3 +7467,27 @@ class RelayPublisherUnitTests(unittest.TestCase):
         for stem in self.UNITS:
             self.assertNotIn(f"{stem}.service", external)
             self.assertNotIn(f"{stem}.timer", external)
+
+
+class ProvisionUnitsTests(_SafePatchTestCase):
+    """Tests [@ANCHOR: infrastructure:provision_units]: `provision.py --units` touches unit files, drop-ins and sbin wrappers only."""
+
+    def test_only_unit_files_dropins_and_wrappers_are_selected(self):
+        with infra.only_units():
+            chosen = [spec["path"] for spec in infra.MANIFEST["static_files"] if infra._spec_selected(spec)]
+        self.assertTrue(chosen)
+        for path in chosen:
+            with self.subTest(path=path):
+                self.assertTrue(path.startswith(infra._UNIT_PATH_PREFIXES))
+        self.assertNotIn("/etc/hosts", chosen)
+        self.assertFalse(any(path.startswith("/etc/sudoers.d/") for path in chosen))
+        self.assertFalse(infra._UNITS_ONLY)
+
+    def test_plan_lists_writes_links_and_one_reload_and_runs_nothing_else(self):
+        commands = []
+        with infra.planning() as plan:
+            infra.provision_units(lambda cmd, **kw: commands.append(list(cmd)), {"DOMAIN": "example.test", "DB_NAME": "x"})
+        kinds = {action[0] for action in plan.actions}
+        self.assertTrue(kinds <= {"write", "link", "run", "skip", "copy"}, kinds)
+        self.assertEqual(commands, [])
+        self.assertEqual(sum(1 for a in plan.actions if a[0] == "run" and "daemon-reload" in a[1]), 1)

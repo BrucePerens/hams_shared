@@ -11363,12 +11363,30 @@ def _spec_in_daemon_family(spec):
     return False
 
 
+_UNITS_ONLY = False
+_UNIT_PATH_PREFIXES = ("/opt/hams/systemd/", "/etc/systemd/system/", "/usr/local/sbin/")
+
+
+@contextlib.contextmanager
+def only_units():
+    """Restricts provision_static_files() to the systemd unit files, their drop-ins and the /usr/local/sbin wrappers."""
+    global _UNITS_ONLY
+    previous = _UNITS_ONLY
+    _UNITS_ONLY = True
+    try:
+        yield
+    finally:
+        _UNITS_ONLY = previous
+
+
 def _spec_selected(spec, only_host_class=None):
     """With `only_host_class` (provision_host_class), exactly that class's entries; with
     only_daemon_families(), exactly those families' entries; otherwise every entry that is for all
     hosts or for a class this host has."""
     if _DAEMON_FAMILY_ACCOUNTS is not None:
         return _spec_in_daemon_family(spec)
+    if _UNITS_ONLY:
+        return spec.get("path", "").startswith(_UNIT_PATH_PREFIXES) and _in_host_class(spec)
     if only_host_class:
         return spec.get("host_class") == only_host_class
     return _in_host_class(spec)
@@ -11516,6 +11534,37 @@ def provision_daemon_families(accounts, run_cmd_func, env_vars=None, environment
     if not _plan("run", "systemctl daemon-reload"):
         run_cmd_func(["systemctl", "daemon-reload"])
     _logger.info("[*] Daemon families %s provisioned. Nothing was enabled, started or restarted.", ", ".join(accounts))
+
+
+# [@ANCHOR: infrastructure:provision_units]
+def provision_units(run_cmd_func, env_vars=None, environment="prod"):
+    """Brings ONLY the systemd units, their drop-ins and the /usr/local/sbin wrappers in line with the MANIFEST: writes each
+    changed or missing file, links every unit not yet linked into /etc/systemd/system, then `systemctl daemon-reload`. It
+    enables, starts and restarts nothing, and touches no account, directory, package, database or other file. What a unit
+    needs (its account, key directory, EnvironmentFile) is not created here: provision the family first
+    (`--daemon-family`), and a unit that cannot start then fails when it is started, in the open. This is the step that
+    `deploy_to_production.py --sync-static-files` does not take (it replaces only files that already exist); found
+    2026-10-27 when hams1 lacked 28 tracked unit and drop-in files because provisioning had run only once. Honours plan
+    mode. `provision.py --units` runs this."""
+    env_vars = dict(os.environ) if env_vars is None else env_vars
+    # The tree this file is in is hams_open's hams_shared/tools; hams_com sits beside hams_open (/opt/hams/src on hams1).
+    open_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    env_vars.setdefault("HAMS_COMMUNITY_DIR", open_dir)
+    env_vars.setdefault("HAMS_COM_DIR", os.path.join(os.path.dirname(open_dir), "hams_com"))
+    env_vars.setdefault("DOMAIN", "hams.com")
+    with only_units():
+        provision_static_files(run_cmd_func, env_vars, environment)
+        for spec in MANIFEST["static_files"]:
+            path = spec["path"]
+            if (environment not in spec["environments"] or os.path.dirname(path) != "/opt/hams/systemd"
+                    or not path.endswith((".service", ".timer", ".path")) or not _spec_selected(spec)):
+                continue
+            dst = os.path.join("/etc/systemd/system", os.path.basename(path))
+            if not os.path.lexists(dst) and not _plan("link", f"{dst} -> {path}"):
+                os.symlink(path, dst)
+    if not _plan("run", "systemctl daemon-reload"):
+        run_cmd_func(["systemctl", "daemon-reload"])
+    _logger.info("[*] Units provisioned. Nothing was enabled, started or restarted.")
 
 
 # [@ANCHOR: infrastructure:opt_in_unit_names]
