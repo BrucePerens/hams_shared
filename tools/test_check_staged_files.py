@@ -78,6 +78,21 @@ class StagedFilesTests(unittest.TestCase):
         _git(self.repo, "rm", "-q", "big.bin")
         self.assertEqual(self._check().returncode, 0)
 
+    def test_a_submodule_pointer_bump_is_allowed(self):
+        # A staged gitlink is a commit with no size; asking git for its size used to crash the check and block every bump.
+        sub = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, sub, True)
+        _init(sub)
+        _write(os.path.join(sub, "s.txt"), b"s")
+        _git(sub, "add", "s.txt")
+        _git(sub, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "s")
+        sha = _git(sub, "rev-parse", "HEAD").stdout.strip()
+        _git(self.repo, "update-index", "--add", "--cacheinfo", f"160000,{sha},sub")
+        self.assertEqual(self._check().returncode, 0)
+        _write(os.path.join(self.repo, "target", "x.o"), b"x")
+        _git(self.repo, "add", "target/x.o")
+        self.assertNotEqual(self._check().returncode, 0)  # the checks still apply to ordinary files beside it
+
 
 class HookFailsClosedTests(unittest.TestCase):
     def setUp(self):
