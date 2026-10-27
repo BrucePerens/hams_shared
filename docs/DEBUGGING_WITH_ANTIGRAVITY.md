@@ -1,8 +1,8 @@
 # Debugging Odoo UI Tours with Antigravity
 
-Because Javascript UI Tours in Odoo are notoriously brittle and difficult to debug through static screenshots, you can leverage the **Antigravity** AI assistant to interactively debug failing tours in real-time. 
+A UI tour is an Odoo browser test that replays a user's clicks and checks what the page shows. Tours are brittle and hard to debug from static screenshots, so you can use the **Antigravity** AI assistant (Google's AI coding assistant) to debug a failing tour interactively, while the browser is still open.
 
-Unlike Jules (which operates autonomously and often in a CI/batch context), Antigravity is a highly interactive pair-programming partner equipped with the `chrome-devtools` MCP integration. This allows Antigravity to attach directly to a frozen, headless Chrome instance and inspect it exactly as you would with normal Chrome Developer Tools.
+Unlike Jules (Google's coding agent, which works autonomously in the background), Antigravity is an interactive pair-programming partner. With the `chrome-devtools` MCP (Model Context Protocol) integration it can attach to a frozen Chrome instance and inspect it as you would with Chrome Developer Tools.
 
 ## Step 1: Run the Test with `--pause-on-fail`
 
@@ -13,10 +13,10 @@ python3 hams_shared/tools/test.py -u <your_module> --pause-on-fail
 ```
 
 **What this does:**
-1. It exposes Chrome's remote debugging port on `9222`.
+1. It starts Chrome with a window instead of headless (so the machine needs a display) and exposes Chrome's remote debugging port on `9222`.
 2. If the tour runner catches a Javascript exception or fails to find a DOM element, the framework will catch the exception, print a `🛑 TOUR FAILED!` warning, and freeze the browser completely (instead of killing the environment).
 
-*(Tip: You can combine this with `--mcp` to keep the Python test server alive too).*
+*(Tip: `--mcp` launches the MCP test server instead of running the tests and shutting down; see `agents/skills/mcp-test-runner/SKILL.md`.)*
 
 ## Step 2: Ask Antigravity to Investigate
 

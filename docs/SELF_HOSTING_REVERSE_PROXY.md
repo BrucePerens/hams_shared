@@ -77,7 +77,7 @@ server {
         proxy_pass http://odoo_http;
     }
 
-    # Odoo's back office (signed-in staff). Odoo's own file cap is 128 MB (web.max_file_upload_size);
+    # Odoo's back office (signed-in staff). Odoo's default upload cap is 128 MiB (system parameter web.max_file_upload_size);
     # base64 makes that about 171 MB on the wire.
     location ~ ^/(?:web/dataset/call_kw|web/binary/upload_attachment|mail/attachment/upload|base_import/set_file)(?:/|$) {
         client_max_body_size 192m;
@@ -107,9 +107,7 @@ server {
 }
 ```
 
-hams.com's own file (`nginx/prod/hams-tunnel-origin.conf` in the private repository) adds a few narrower
-upload locations for its modules: an 8m limit for classified-ad photos, 52m for the logbook's ADIF web upload,
-160m for the relay build publish routes. Add a location with its own `client_max_body_size` for any route
+The hams.com installation adds a few narrower upload locations for its own modules, each with its own size limit. Add a location with its own `client_max_body_size` for any route
 of yours that takes bigger bodies than 16m. The limit is checked against `Content-Length` before the body
 is read, so an oversized upload is refused with 413 at once; a chunked body is refused when it passes the
 limit. A body past `client_body_buffer_size` is spooled to nginx's `client_temp` directory, so keep disk free
@@ -121,5 +119,4 @@ loopback (`http_interface = 127.0.0.1` in `odoo.conf`). If you use the Cloudflar
 tunnel's "Catch-all Service" to this proxy (`http://localhost:8085`), not `http://localhost:8069`; the
 module's default is still 8069, so change it on every tunnel you create.
 
-`tools/provision.py` installs and enables this proxy on a production host (the `hams-tunnel-origin.conf`
-entry in `tools/infrastructure.py`).
+hams.com's own provisioning (`tools/provision.py`, the `hook_enable_nginx_front_end` step in `tools/infrastructure.py`) links a site file like this one into `sites-enabled`, removes Debian's `default` and `acme-only.conf` sites, then runs `nginx -t` and enables and reloads nginx only if that passes. The site file it links comes from the private hams.com deployment repository, so a self-hoster writes theirs from the sample above.

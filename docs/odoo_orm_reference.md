@@ -1,20 +1,13 @@
-# Odoo ORM internals reference, for bug-hunt passes
+# Odoo ORM internals reference, for code reviews
 
-Built from real findings during the 2026-09-09 `user_websites` bug-hunt pilot
-(`hams_com/agents/skills/bug-hunt/SKILL.md` -- the review method itself lives in `hams_com`, a
-private repo, since it's a competitive/trade-secret asset; this reference doc stays here in the
-public `hams_shared` because it's just generic, publicly-derivable facts about the third-party
-Odoo framework, not the method), after a process retrospective found the single
-biggest source of wasted tool calls in a per-function review was re-discovering the same handful
-of Odoo core facts from scratch each time (roughly 15-20% of one pass's own tool calls, per that
-retrospective). Every fact below was independently verified by reading the real source at the
-cited path -- not assumed from documentation or a name -- before being recorded here. When a
-bug-hunt pass touches multi-company access, record rules, or mail sending, check here first
-instead of re-deriving these facts by trial-and-error search.
+Facts about Odoo 19 core that code reviews of the `user_websites` module kept having to look up again.
+They are generic facts about the third-party Odoo framework, not about this project. Each was checked by
+reading the real source at the cited path, not assumed from documentation or from a name. The line numbers
+are approximate (the file moves between Odoo releases); the function names are what to search for. When a
+review touches multi-company access, record rules, or mail sending, check here first.
 
-**Odoo location on this box** (the project's dev box; adjust the path for another installation): `/usr/lib/python3/dist-packages/odoo/`. Scope `find`/`grep` to this
-path (or the target repo itself) rather than searching from `/` -- a full-filesystem search with
-`-prune` was one of the concrete waste patterns the retrospective found.
+**Odoo location on the development machine** (a Debian package install; adjust the path for another installation): `/usr/lib/python3/dist-packages/odoo/`. Scope `find`/`grep` to this
+path (or the target repository itself) rather than searching from `/`, which is slow.
 
 ## Multi-company access: `Environment.company` / `.companies`
 
@@ -31,7 +24,7 @@ File: `odoo/orm/environments.py`, `Environment.company` (~line 216) and `.compan
   crashes hard, not silently skips.
 - **Sudo mode is explicitly unchecked**: the docstring's own words, "No sanity checks applied in
   sudo mode! When in sudo mode, a user can access any company, even if not in his allowed
-  companies." A `.sudo()` call anywhere in a chain bypasses this whole mechanism -- if a bug-hunt
+  companies." A `.sudo()` call anywhere in a chain bypasses this whole mechanism -- if a review
   claim needs to state whether a multi-company operation is actually access-controlled, check for
   `.sudo()` on the same chain, since its presence makes the `company_ids` restriction moot.
 - `res.users._get_company_ids()` (referenced from `environments.py` line 239) is the real source
@@ -81,8 +74,7 @@ File: `odoo/addons/mail/models/mail_template.py`.
 
 ## Adding to this file
 
-When a bug-hunt pass independently verifies a new Odoo-core fact worth not re-deriving next time
-(the same discipline as the skill's own "Growing this list" and "Friction log"), add it here
-directly, in the same format: the exact file path and line/function, what was verified (quote the
+When a code review independently verifies a new Odoo-core fact worth not re-deriving next time,
+add it here directly, in the same format: the exact file path and line/function, what was verified (quote the
 source if it's a subtle behavior, like the sudo-mode warning above), and why it matters for a
 review. Don't let a second pass re-discover the same fact from scratch.
