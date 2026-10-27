@@ -49,3 +49,7 @@ Users can navigate easily between their submitted issues and detailed updates.
 If a problem resolves itself, users can close their own tickets.
 [@ANCHOR: hams_helpdesk:COMM_helpdesk_portal_close]
 This empowers customers to manage their own support requests efficiently.
+
+### Support Menu Entry
+Signed-in members (portal and internal users) see a "Support" item in the website menu that opens `/my/tickets`, their own help-desk tickets, where they can start a new one. The item is restricted by group, so visitors who are not signed in do not see it.
+[@ANCHOR: hams_helpdesk:member_menu_item]

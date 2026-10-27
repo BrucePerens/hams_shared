@@ -2,100 +2,126 @@
 
 *Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).*
 
-This is a free, open-source replacement for Odoo's Enterprise Knowledge app. It lets you write, organize, and publish documentation and user manuals directly inside Odoo Community.
+The **Knowledge** is a powerful, free, and open-source replacement for Odoo's Enterprise Knowledge app (its Odoo menu and its website section are both called **Manuals**). It provides a complete documentation system that allows you to write, organize, and publish user manuals, standard operating procedures (SOPs), and help guides directly inside Odoo Community.
 
-Because it uses the exact same database structure (`knowledge.article`) as the Enterprise version, other modules can easily install their own instruction manuals here without breaking.
-
-**Open Source Rule:** We built this for the open-source community. It runs perfectly on its own and does not rely on any proprietary code.
+This module was designed with **API Interoperability** in mind. It uses the exact same database structure (`knowledge.article`) as the Enterprise version, meaning other modules can install their own instruction manuals here without any modifications, and you can upgrade to Enterprise later without losing your data.
 
 ## 🌟 Key Features
 
-* **Nested Folders:** Organize your articles in a tree (parent/child) so they are easy to navigate.
-* **Enterprise Compatible:** You can load XML data files meant for the Enterprise Knowledge app, and they will work perfectly here.
-* **Rich Text Editor:** Use Odoo's standard editor to write guides, insert images, and format text.
-* **Public Web Portal:** Click "Publish" to instantly push your manuals to the public website (`/manual`). The system automatically builds a handy sidebar menu for visitors.
-* **Access Control:** Keep private admin notes hidden, share drafts with logged-in coworkers or portal customers, or publish finalized guides to the public.
-* **Multi-Website Support:** Restrict articles to specific websites or share them across all websites in a multi-website Odoo instance.
-* **Smart Navigation:** Recursive breadcrumbs and a dynamic Table of Contents (TOC) help users navigate deep documentation structures effortlessly.
+*   **Hierarchical Organization:** Organize your articles into a tree structure with parent and child articles, making it easy to navigate complex documentation.
+*   **Enterprise Compatibility:** Fully supports XML data files meant for the Enterprise Knowledge app.
+*   **Powerful Rich Text Editor:** Leverage Odoo's native editor to create beautiful guides with images, tables, and advanced formatting.
+*   **Instant Public Publishing:** One-click publishing pushes your manuals to the public website at `/manual`. The system automatically builds a recursive sidebar and breadcrumbs for visitors.
+*   **Granular Access Control:** Keep your internal notes private, share drafts with specific team members, or share guides with customers via the portal.
+*   **Dynamic Table of Contents (TOC):** Automatically generates a sticky TOC on the frontend based on your article's headings (H2 and H3).
+*   **Multi-Tenant Isolation:** Respects Odoo's multi-website and multi-company architectures. Company assignment is enforced by record rules on every read; website assignment filters the sidebar, search results and by-name links (see Security below).
+*   **Zero-Sudo Security:** Built on a secure "Zero-Sudo" foundation, using micro-privilege service accounts for automated tasks. "Zero-Sudo" refers to the `zero_sudo` module's rule that code never calls Odoo's `.sudo()` superuser escalation; work that needs more privilege than the visitor has runs as a dedicated service-account user that holds only the narrow rights that task needs (here, the "Knowledge System" user).
 
 ## 🛠️ Installation
 
-1. Drop the `knowledge` folder into your Odoo `addons` directory.
-2. Restart your Odoo server.
-3. Turn on Developer Mode, go to **Apps**, and click **Update Apps List**.
-4. Search for `Knowledge` and click **Install**.
+1.  Place the `knowledge` folder into your Odoo `addons` directory.
+2.  Restart your Odoo service.
+3.  In Odoo, activate **Developer Mode**, navigate to **Apps**, and click **Update Apps List**.
+4.  Search for **Knowledge** and click **Install**.
 
 ## 📖 How to Use It
 
-### Writing Articles
-1. Click the **Manuals** app in the main Odoo menu.
-2. Click **New**.
-3. If you want this article to sit inside a folder, pick a **Parent Article**.
-4. When you're ready to share it with the world, hit the **Is Published** button at the top.
+### Creating and Managing Articles
+1.  Open the **Manuals** app from the main Odoo menu.
+2.  Click **New** to create a new article. Creating, editing and deleting articles requires the **Manual Administrator** group; other staff and portal users have read-only access.
+3.  **Hierarchy:** Use the **Parent Article** field to nest your article inside a folder or under another guide.
+4.  **Permissions:** Set the **Internal Permission** to control who can see it:
+    *   **Read Only:** Visible to all staff. Portal users see it on the website only once it is published, or if they are a Shared Member.
+    *   **Read & Write:** Intended as a collaborative mode where all staff can edit. In this release ordinary staff have read-only access to articles, so it currently behaves like Read Only for everyone except Manual Administrators.
+    *   **No Access:** Private—only visible to you, to Manual Administrators, and to people you explicitly add in the **Shared Members** field (shown on the form only when this permission is selected).
+5.  **Multi-Tenant:** Select a specific **Website** or **Company** to limit the article's visibility to that context.
+6.  **Publishing:** When ready, click the **Is Published** button in the top right to make the guide visible to the general public at `/manual`.
 
-### Reading Articles on the Web
-* Go to `/manual` on your website to see the public knowledge base.
-* We included a search bar and an automatically generated Table of Contents that reads your headers so users can jump around long documents easily.
+### Reading on the Web
+*   Navigate to `/manual` on your website.
+*   Use the **Sidebar** to browse the hierarchy.
+*   Use the **Search Bar** to find specific topics across all accessible articles.
+*   Use the **Table of Contents** on the right side of articles to jump between sections (shown on wide screens, for articles that contain H2 or H3 headings).
 
 ## ⚖️ Legal Note
 
-We built this from scratch. We did not copy any code, logic, or proprietary designs from Odoo Enterprise. We just matched the database field names so the two systems are perfectly compatible (known legally as API Interoperability).
+This module is a clean-room implementation. No code, logic, or proprietary designs from Odoo Enterprise were used. We have matched the database schema solely for API Interoperability and data portability.
 
 ---
 
 # Technical Documentation
 
 <system_role>
-**Context:** Technical documentation strictly for LLMs and Integrators.
+**Context:** Technical documentation for LLMs, Developers, and Integrators.
 This module provides a hierarchical documentation system. It is designed to be fully compatible with the `knowledge.article` model from Odoo Enterprise.
 </system_role>
 
 <architecture>
 ## 1. Architecture
 A clean-room, 100% drop-in API replacement for the proprietary Odoo Enterprise Knowledge module (`knowledge.article`).
-Uses a standard parent-child relationship for hierarchy. Inherits from `mail.thread`, `mail.activity.mixin`, and `website.published.mixin`.
+Inherits from `mail.thread`, `mail.activity.mixin`, `website.published.mixin`, `website.multi.mixin`, and `website.searchable.mixin` (the last one lets the website's own site-wide search return articles).
 
 ## 2. Interoperability
-* Dependent modules inject documentation using standard XML records targeting `model="knowledge.article"`.
-* **Fields Supported:** `name`, `body` (HTML), `parent_id`, `sequence`, `is_published`, `icon`, `active`, `internal_permission`, `member_ids`.
-* If the system is upgraded to Enterprise, the table structure allows perfect data retention.
+*   **Fields Supported:** `name`, `body` (HTML), `parent_id`, `sequence`, `is_published`, `icon`, `active`, `internal_permission`, `member_ids`.
+*   Supports automated doc installation via the `knowledge_docs` manifest key and the `zero_sudo` bootstrap facility (`ir.module.module._bootstrap_knowledge_docs()`, which creates or updates one article per manifest entry when the file's content changes). An installed doc is unpublished and readable only by Manual Administrators (`internal_permission = 'none'`) unless its manifest entry sets `"public": True` (or `"audience": "member"`) and a `"help_topic"`, the Help index heading; stories, journeys and runbooks directories, README files and "Story:"/"Journey:" titles are never member manuals even then.
 </architecture>
 
 <features>
 ## 3. Core Features & Logic
-* **User Feedback:** Handles user submissions of helpful/not-helpful article ratings via the feedback controller `[@ANCHOR: controller_manual_feedback]`.
+*   **Article Feedback:** Atomic helpfulness increments: a single SQL `UPDATE ... SET helpful_count = COALESCE(helpful_count, 0) + 1` (or `unhelpful_count`) executed on the request's database cursor after a read-access check on the article, so concurrent votes cannot overwrite each other. The controller also resolves the Knowledge service account's environment, but the SQL statement itself is not subject to Odoo access rules. (`data/procedures.xml` also installs a `knowledge_increment_helpful()` Postgres function, but the controller does not call it.) `[@ANCHOR: controller_manual_feedback]`.
 
-* **Search Integration:** Supports live querying of article contents via the search controller `[@ANCHOR: controller_manual_search]`.
+*   **Search Engine:** Case-insensitive substring (`ilike`) search over title and body, with multi-tenant filtering `[@ANCHOR: controller_manual_search]`.
 
-* **URL Resolution:** Computes the public website URL path for articles dynamically based on their hierarchy `[@ANCHOR: manual_compute_website_url]`.
+*   **URL Resolution:** Dynamic slug generation including ID prefix `[@ANCHOR: manual_compute_website_url]`.
 
-* **Structural Integrity:** Strictly enforces parent-child hierarchy checks to prevent recursive or invalid tree structures using `_has_cycle()` `[@ANCHOR: manual_check_hierarchy]`.
+*   **Hierarchy Integrity:** Recursive cycle detection using `_has_cycle()` `[@ANCHOR: manual_check_hierarchy]`.
 
-* **Dynamic TOC:** Automatically parses article HTML on the frontend to generate a dynamic Table of Contents `[@ANCHOR: manual_toc_logic]`.
+*   **Recursive Breadcrumbs:** Path computation from root to current node; archived ancestors and ancestors the viewer cannot read are left out `[@ANCHOR: manual_compute_breadcrumbs]`.
 
-* **Automated Documentation Installation:** Utilizes the central `_bootstrap_knowledge_docs` facility from the `zero_sudo` module to automatically discover and install documentation for all installed modules via the `knowledge_docs` manifest key. This supports a soft dependency on whichever provider of `knowledge.article` is installed: this open-source `knowledge` module or Odoo Enterprise's Knowledge app `[@ANCHOR: manual_doc_auto_install]`. `[@ANCHOR: manual_doc_injection]`
-* **Zero-Sudo Execution:** All automated operations and frontend feedback increments are performed using the `knowledge.user_knowledge_service_account` micro-privilege account.
-* **Multi-Website Isolation:** Articles are isolated by `website_id`. Controllers and sidebar logic strictly filter content to the current website context.
-* **Hierarchical Breadcrumbs:** Provides a recursive breadcrumb trail in the frontend view to maintain user context within deep folder structures.
+*   **Reading Time Calculation:** Automatic estimation of reading time based on word count `[@ANCHOR: manual_compute_reading_time]`.
+*   **Author Attribution:** Automatically identifies and displays the article author based on the last editor.
+*   **Dynamic Table of Contents:** The page script `manual_toc.js` builds the table of contents in the browser from the article's headings `[@ANCHOR: manual_toc_logic]`.
+*   **Automated Documentation Installation:** `_bootstrap_knowledge_docs` (from `zero_sudo`) installs each installed module's `knowledge_docs` manifest entries as articles `[@ANCHOR: manual_doc_auto_install]` `[@ANCHOR: manual_doc_injection]`. It does nothing when no provider of `knowledge.article` is installed, so the dependency is soft: either this module or Odoo Enterprise's Knowledge app can provide the model.
+*   **Optimized Sidebar Search:** Combined ORM domain to fetch all root articles in a single database round-trip `[@ANCHOR: manual_sidebar_search_optimization]`.
+
+## 4. Detailed Method Reference
+
+**`models/knowledge_article.py`**
+*   `_compute_author_id()`: Determines the author based on `write_uid` or `create_uid`.
+*   `_compute_breadcrumb_article_ids()`: Uses a recursive CTE (SQL common table expression) to compute the path from root to current node, then re-reads the ancestor ids through an ORM `search()` so archived or unreadable ancestors are dropped instead of displayed or raising an access error.
+*   `_compute_body_snippet()`: Converts the HTML body to plaintext and truncates it for use in list views and search previews.
+*   `_compute_reading_time()`: Estimates reading time based on a 200 words-per-minute average.
+*   `_check_hierarchy()`: Constrains the `parent_id` to prevent circular references by calling `_has_cycle()`.
+*   `copy(default=None)`: Overrides the built-in copy method to append "(copy)" to the duplicated article's name.
+*   `_compute_website_url()`: Generates an SEO-friendly URL slug using the article ID and a sanitized title.
+
+**`controllers/main.py`**
+*   `_compile_markdown(html_body, article_id, write_date)` `[@ANCHOR: manual_compile_markdown]`: Heuristically detects markdown signatures in the text. If found, compiles it to HTML. Results are cached in an LRU cache. Compilation is skipped when the body already contains structural HTML (headings, lists, tables, images, `div`s and similar), because that body is already real HTML; the compiled output is passed through Odoo's HTML sanitizer; if the markdown parser fails, the original HTML body is served.
+*   `_get_sidebar_articles()`: Fetches root articles for the sidebar, optimized to run in a single combined domain query.
+*   `manual_article_view(article_slug, **kwargs)`: Primary frontend controller. Enforces read access, performs canonical redirects, compiles markdown, and renders the view.
+*   `manual_search(search, **kwargs)`: Controller for case-insensitive substring search on title and body across accessible articles.
+*   `manual_article_by_name(name, **kwargs)`: Convenience route (`/manual/by_name/<string:name>`) to find an article by exact name and redirect to it.
+*   `manual_feedback(article_id, is_helpful, website_feedback_honeypot, **kwargs)`: Handles helpful/unhelpful votes. Implements honeypots, one vote per article per browser session, a read-access check on the article, and zero-sudo atomic increments.
 </features>
 
 <security>
-## 4. Security and Access Rights
-* **Public Users:** Can only read articles where `is_published` is True AND (`website_id` is False OR matches current website).
-* **Internal Users (`base.group_user`) and Portal Users (`base.group_portal`):**
-    - Can read articles if `internal_permission` is not 'none' OR `is_published` is True.
-    - Can read their own articles or those shared with them via `member_ids`.
-    - Access is further restricted by `website_id` (must be False or match current website).
-* **Internal Users (`base.group_user`) Only:**
-    - Can edit articles if `internal_permission` is 'write' or if they are the owner/member.
-* **Manual Administrators (`group_manual_manager`):** Full CRUD access to all articles.
-* **Service Account:** used for atomic feedback increments and automated doc installation.
+## 5. Security and Access Rights
+Every record rule below is also limited to the user's allowed companies.
+*   **Public:** `is_published=True` (record rule). The website match (`website_id` empty or equal to the current website) is applied by the sidebar, search and by-name queries in `controllers/main.py`, not by a record rule, so a direct `/manual/<id>-<slug>` URL is not website-filtered.
+*   **Portal/Internal:** read only: `internal_permission != 'none'`, or `is_published=True`, or member of `member_ids`, or `create_uid`. On the website, users outside `base.group_user` additionally need `is_published=True` or membership.
+*   **Admin:** Full CRUD. `knowledge.group_manual_manager` (Manual Administrator) is the only interactive group whose access rights allow create, write or delete.
+*   **Service Account:** `knowledge.user_knowledge_service_account` for background operations: installing `knowledge_docs` articles (the feedback controller also resolves this account before its SQL increment).
 </security>
+
+<dependencies>
+## 6. External Dependencies
+*   `markdown`
+</dependencies>
 
 ---
 
 <stories_and_journeys>
-## 5. Architectural Stories & Journeys
+## 7. Architectural Stories & Journeys
 
 For detailed narratives and end-to-end workflows, refer to the following:
 
