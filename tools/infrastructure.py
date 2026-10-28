@@ -1252,6 +1252,10 @@ FAMILY_ACCOUNT_UNITS = {
         "user": "hamsd_activator_sync",
         "environment_files": frozenset({"common.env"}),
     },
+    "skimmer.list.sync.service": {
+        "user": "hamsd_dx_daemon",
+        "environment_files": frozenset({"common.env"}),
+    },
     "amsat.tle.sync.service": {
         "user": "hamsd_satellite_sync",
         "environment_files": frozenset({"common.env"}),
@@ -2603,6 +2607,17 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # Web Bot Auth key of the hamsd_dx_daemon account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
+            # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
+            # itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_dx_daemon",
+            "owner": "hamsd_dx_daemon:hamsd_dx_daemon",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
             # Web Bot Auth key of the hamsd_callbook_geo account: <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so
             # the publisher (hamsd_web_bot_auth, through the traversal parent above) can read the .jwk by its exact path; the key file
             # itself is unreadable to every other account.
@@ -2767,6 +2782,22 @@ MANIFEST = {
         {
             "path": "/opt/hams/downloads/sota_sync",
             "owner": "hamsd_activator_sync:hamsd_activator_sync",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/spool/skimmer_list_sync",
+            "owner": "hamsd_dx_daemon:hamsd_dx_daemon",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/downloads/skimmer_list_sync",
+            "owner": "hamsd_dx_daemon:hamsd_dx_daemon",
             "provision_mode": "750",
             "recursive_owner": True,
             "runtime_mount": "rw",
@@ -7106,6 +7137,7 @@ ExecStart=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py refresh --key-file 
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_club_crawl/hamsd_club_crawl.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_club_search/hamsd_club_search.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_dx_daemon/hamsd_dx_daemon.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_ncvec_sync/hamsd_ncvec_sync.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync/hamsd_satellite_sync.jwk \\
@@ -7309,6 +7341,86 @@ Description=Ham Radio SOTA Summit Reference Data Sync Weekly
 
 [Timer]
 OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/skimmer.list.sync.service",
+            "external_fetch": "reads the Reverse Beacon Network node list from a third-party site",
+            "content": """\
+[Unit]
+Description=Ham Radio DX Skimmer List Sync (One-Shot)
+After=network.target
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# Runs as the DX daemon account (hamsd_dx_daemon) and its Odoo user dx_daemon_service, which is in ham_dx_cluster.group_dx_service and so may call ham.dx.spot.store_known_skimmers. Writes only its own spool and downloads directories (smart_download()).
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable output (0640): odoo is in the account's group and may read, never write.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/hams/spool/skimmer_list_sync /opt/hams/downloads/skimmer_list_sync
+Type=oneshot
+User=hamsd_dx_daemon
+Group=hamsd_dx_daemon
+WorkingDirectory=/opt/hams/daemons/skimmer_list_sync
+
+# Reads SYSTEM_USER_AGENT and RBN_NODES_URL (a public default) and reaches Odoo through hams_config (ODOO_URL, DB_NAME and the key file); no other secret is loaded.
+EnvironmentFile=/opt/hams/etc/common.env
+Environment="ODOO_USER=dx_daemon_service"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/dx_daemon/dx_daemon_service.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+Environment="DAEMON_ARGS="
+
+# Execution via system Python
+# Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
+# public half, hamsd_dx_daemon.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_dx_daemon
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_dx_daemon/hamsd_dx_daemon.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_dx_daemon/hamsd_dx_daemon.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_dx_daemon/hamsd_dx_daemon.jwk
+ExecStart=/usr/bin/python3 /opt/hams/daemons/skimmer_list_sync/main.py $DAEMON_ARGS
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=skimmer.list.sync
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/skimmer.list.sync.timer",
+            "external_fetch": "activates skimmer.list.sync.service",
+            "content": """\
+[Unit]
+Description=Ham Radio DX Skimmer List Sync Daily
+
+[Timer]
+OnCalendar=daily
 Persistent=true
 RandomizedDelaySec=15m
 
