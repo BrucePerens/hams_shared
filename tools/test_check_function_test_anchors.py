@@ -266,6 +266,12 @@ class ScanTreeAndBaselineTests(unittest.TestCase):
         gaps = cfta.scan_tree(self.tmp)
         self.assertEqual(gaps, {})
 
+    def test_a_devbox_tools_directory_is_not_scanned(self):
+        _write(os.path.join(self.tmp, "devbox_tools", "helper.py"), "def helper():\n    pass\n")
+        _init_git_repo(self.tmp)
+        gaps = cfta.scan_tree(self.tmp)
+        self.assertEqual(gaps, {})
+
     def test_baseline_round_trips_through_save_and_load(self):
         gaps = {"foo.py::bar": True, "baz.py::qux": True}
         path = os.path.join(self.tmp, "baseline.json")
