@@ -50,6 +50,11 @@ EXCLUDE_DIRS = {
     "__pycache__",
     "tools",
     "scripts",
+    # devbox_tools: hams_com's developer-box helper scripts (PR merge, worktree and
+    # test-queue tooling). Same category as tools/ and scripts/ above -- not product code
+    # shipped to users -- and 1000+ of the repo's gaps were there, which made the ratchet
+    # unmaintainable. Decided 2026-10-28 while re-baselining (the checkers had been red on main).
+    "devbox_tools",
     "migrations",
     "node_modules",
     "hams_community",
