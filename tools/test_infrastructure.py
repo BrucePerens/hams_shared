@@ -5331,7 +5331,8 @@ class WebBotAuthSigningUnitTests(_SafePatchTestCase):
         "hamstudy.sessions.sync.service": "hamsd_event_sync",
         "monthly.events.recheck.service": "hamsd_event_sync", "callbook.geo.enrich.service": "hamsd_callbook_geo",
         "ncvec.sync.service": "hamsd_ncvec_sync", "pota.sync.service": "hamsd_activator_sync",
-        "sota.sync.service": "hamsd_activator_sync", "club.web.search.discovery.service": "hamsd_club_search",
+        "sota.sync.service": "hamsd_activator_sync", "skimmer.list.sync.service": "hamsd_dx_daemon",
+        "club.web.search.discovery.service": "hamsd_club_search",
         "club.crawl.service": "hamsd_club_crawl", "event.ai.enrichment.service": "odoo",
     }
 
