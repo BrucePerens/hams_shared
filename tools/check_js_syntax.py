@@ -96,6 +96,11 @@ def check_file(file_path):
             re.search(r"\b(document|window)\.location\b", line) for _, line in code_lines
         )
 
+        # A test that imports its `expect` from a sibling `./harness.js` runs on that project's own
+        # runner (daemons/shack_console/console/tests/harness.js, which provides toContain), not on
+        # @odoo/hoot, so the hoot matcher list does not describe it.
+        uses_hoot_expect = not re.search(r"""from\s+['"]\./harness\.js['"]""", code)
+
         for lineno, line in enumerate(code.splitlines(), start=1):
             # Skip full-line comments -- this codebase's block comments are
             # consistently written as consecutive `// ...` lines (not
@@ -107,6 +112,8 @@ def check_file(file_path):
                 continue
 
             for bad_name, real_equivalent in _INVALID_HOOT_MATCHERS.items():
+                if not uses_hoot_expect:
+                    break
                 if f".{bad_name}(" in line:
                     err_msg = (
                         f"🚨 [AUDIT] INVALID HOOT MATCHER: `.{bad_name}(` (line {lineno}) is not "

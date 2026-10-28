@@ -88,6 +88,14 @@ class CheckAbsolutePathsTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "archive", "run_1", "meta.json"), f'"{_HOME}"')
         self.assertEqual(chk.check_absolute_paths(self.tmp), [])
 
+    def test_the_night_shift_history_log_and_its_archive_are_excluded(self):
+        # Append-only logs of past runs record real paths; rewriting them would make them inaccurate.
+        _write(os.path.join(self.tmp, "night_shift_history.md"), f"ran in {_HOME}/x\n")
+        _write(os.path.join(self.tmp, "night_shift_history_archive", "part_01", "night_shift_history.md"), f"{_HOME}/y\n")
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+        _write(os.path.join(self.tmp, "night_shift_todo", "x.md"), f"{_HOME}/z\n")
+        self.assertEqual(len(chk.check_absolute_paths(self.tmp)), 1)
+
     def test_claude_directory_is_specifically_excluded(self):
         # Documented rationale: .claude/ is this tool's own local
         # configuration (skills, agent definitions), not shipped

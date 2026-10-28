@@ -134,6 +134,14 @@ class MainIntegrationTests(unittest.TestCase):
         )
         return result.returncode, result.stdout + result.stderr
 
+    def test_a_shebang_inside_a_shell_here_document_is_not_flagged(self):
+        _write(os.path.join(self.tmp, "gen.sh"), "#!/bin/bash\ncat > out.sh <<'EOS'\n#!/bin/sh\necho hi\nEOS\ncat <<EOF2\n#!/bin/bash\nEOF2\n")
+        self.assertEqual(chk.check_shebang(self.tmp), [])
+
+    def test_a_shebang_after_a_here_document_has_ended_is_still_flagged(self):
+        _write(os.path.join(self.tmp, "gen.sh"), "#!/bin/bash\ncat <<EOS\nx\nEOS\n#!/bin/sh\n")
+        self.assertEqual(len(chk.check_shebang(self.tmp)), 1)
+
     def test_a_clean_repo_passes(self):
         _write(os.path.join(self.tmp, "script.py"), "#!/usr/bin/env python3\nprint(1)\n")
         code, out = self._run()

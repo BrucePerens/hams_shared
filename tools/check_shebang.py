@@ -7,7 +7,11 @@ is only on the very first line of the file.
 """
 
 import os
+import re
 import sys
+
+_HEREDOC_OPEN = re.compile(r"<<-?\s*(?:'([^']+)'|\"([^\"]+)\"|\\?([A-Za-z_][A-Za-z0-9_]*))")
+
 
 def check_shebang(repo_dir):
     violations = []
@@ -54,7 +58,19 @@ def check_shebang(repo_dir):
             file_path = os.path.join(root, file)
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
+                    heredoc_end = None
                     for i, line in enumerate(f, 1):
+                        # A shell script that writes another script out with a here-document carries that
+                        # script's own `#!` line inside the body; that is data, not a misplaced shebang.
+                        if heredoc_end is not None:
+                            if line.strip() == heredoc_end:
+                                heredoc_end = None
+                            continue
+                        if ext != ".py" and not line.lstrip().startswith("#"):
+                            opener = _HEREDOC_OPEN.search(line)
+                            if opener:
+                                heredoc_end = next(g for g in opener.groups() if g)
+                                continue
                         if line.startswith("#!") and i != 1:
                             violations.append(
                                 f"{os.path.relpath(file_path, repo_dir)}:{i} Contains shebang `#!` on a line other than line 1"
