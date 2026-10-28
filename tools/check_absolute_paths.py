@@ -76,6 +76,8 @@ def check_absolute_paths(repo_dir):
         ".claude",
         "ics_training",
         "ham_auxcomm_training",
+        # Frozen night-shift logs: a historical record of what ran where, rewriting it would make it inaccurate.
+        "night_shift_history_archive",
         # Matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/site-packages/
         # subdirectory regardless of the venv's own outer directory name -- "venv"/".venv" alone
         # missed a real stray "whisper_venv/" (see check_float_isfinite.py's own comment/test).
@@ -120,6 +122,11 @@ def check_absolute_paths(repo_dir):
             # the archive/ directory above, just filename-scoped since night_shift_todo/ is a
             # real doc directory whose other files should still be checked normally.
             if file.startswith("orphaned-worktree-") and file.endswith(".md"):
+                continue
+
+            # night_shift_history.md is the append-only log of past runs (same reasoning as
+            # night_shift_history_archive/ above): it records real paths and is not edited afterwards.
+            if file == "night_shift_history.md":
                 continue
 
             # This checker's own source and test necessarily embed the literal string

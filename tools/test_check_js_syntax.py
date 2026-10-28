@@ -138,6 +138,11 @@ class CheckFileTests(unittest.TestCase):
         self.assertIn("toBeUndefined", err_msg)
         self.assertIn("toBe(undefined)", err_msg)
 
+    def test_a_test_on_the_projects_own_harness_is_not_held_to_the_hoot_matcher_list(self):
+        # daemons/shack_console's tests import expect from ./harness.js, which has toContain.
+        p = self._test_js_path("import { test, expect } from './harness.js';\ntest('x', () => {\n    expect('abc').toContain('b');\n});\n")
+        self.assertIsNone(chk.check_file(p))
+
     def test_a_real_hoot_matcher_is_not_flagged(self):
         p = self._test_js_path("test('x', () => {\n    expect(foo).toBe(undefined);\n});\n")
         self.assertIsNone(chk.check_file(p))
