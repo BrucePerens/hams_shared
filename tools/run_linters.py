@@ -8,10 +8,14 @@ Replaces the legacy bash script to enforce the structural integrity
 of the repository, including child-directory detection and anti-symlink rules.
 """
 
+import argparse
 import glob
 import os
 import sys
 import subprocess
+import time
+
+import lint_exec
 
 
 def _resolve_repo_root(given_path):
@@ -72,6 +76,25 @@ def _resolve_main_checkout_root(repo_root):
     return os.path.dirname(os.path.normpath(git_common_dir))
 
 
+def _sibling_checkout(repo_root, main_checkout_root, name):
+    """Directory of the sibling repo `name` (hams_com / hams_open). A checkout or worktree that
+    sits in a workspace directory next to a `name` directory uses THAT one (so a worktree set
+    `<ws>/hams_open` + `<ws>/hams_com` is linted against itself, not against whatever the main
+    checkouts happen to be at); otherwise the sibling of the real main checkout, as before."""
+    beside = os.path.join(os.path.dirname(repo_root), name)
+    if os.path.isdir(beside) and os.path.realpath(beside) != os.path.realpath(repo_root):
+        return os.path.abspath(beside)
+    return os.path.abspath(os.path.join(main_checkout_root, "..", name))
+
+
+def _default_inputs(dir_path, sibling_dir):
+    """Roots and suffixes a step reads when it declares nothing narrower: both repos, any file."""
+    roots = [os.path.realpath(dir_path)]
+    if sibling_dir and os.path.isdir(sibling_dir):
+        roots.append(os.path.realpath(sibling_dir))
+    return tuple(roots), None
+
+
 def _resolve_module_path(mod, repo_root, community_dir):
     """Resolve a named module to its real manifest directory: `repo_root` first, falling back to
     `community_dir` (the sibling repo) if the module has no `__manifest__.py` there. Returns the
@@ -87,6 +110,265 @@ def _resolve_module_path(mod, repo_root, community_dir):
         if os.path.isfile(os.path.join(comm_mod_path, "__manifest__.py")):
             return comm_mod_path
     return None
+
+
+# Per-step scheduling metadata, keyed by the step-name prefix before any "[...]" suffix.
+#   lock       steps with the same lock never overlap (one cargo target dir, one clippy cache).
+#   suffixes   the file types the checker reads (None = any file); decides what `--changed`
+#              runs and what invalidates a cached pass. Kept to the types read in the
+#              checker's own source; a checker that reads anything unusual stays at None.
+#   cacheable  False when the verdict depends on more than repository files (network
+#              advisory databases, the toolchain's own state).
+_PY = frozenset({".py"})
+_JS = frozenset({".js", ".mjs", ".cjs"})
+_XML = frozenset({".xml"})
+_RS = frozenset({".rs", ".toml", ".lock"})
+STEP_META = {
+    "flake8": {"suffixes": frozenset({".py", ".cfg", ".ini", ".toml"})},
+    "check_js_syntax": {"suffixes": _JS},
+    "check_test_tags": {"suffixes": _PY},
+    "check_rabbitmq_pool": {"suffixes": _PY},
+    "check_init_imports": {"suffixes": _PY},
+    "check_model_extension_collisions": {"suffixes": _PY},
+    "check_self_writeable_field_tests": {"suffixes": _PY},
+    "check_registry_test_cr_usage": {"suffixes": _PY},
+    "check_gdpr_erasure_uses_service_utility": {"suffixes": _PY},
+    "check_int_float_overflow": {"suffixes": _PY},
+    "check_float_isfinite": {"suffixes": _PY},
+    "check_untyped_utility_files": {
+        "suffixes": frozenset({".py", ".ini", ".cfg", ".toml", ".pyi"})
+    },
+    "check_access_csv_group_order": {"suffixes": frozenset({".csv", ".xml", ".py"})},
+    "check_xml_comment_double_hyphen": {"suffixes": _XML},
+    "check_xml_attribute_position_comment": {"suffixes": _XML},
+    "check_owl_templates": {"suffixes": frozenset({".xml", ".js"})},
+    "check_scss_math_functions": {"suffixes": frozenset({".scss"})},
+    "check_window_fetch_reassignment": {"suffixes": _JS},
+    "check_js_test_hook_gating": {"suffixes": _JS},
+    "check_minified_js_nested_templates": {"suffixes": frozenset({".js", ".py"})},
+    "check_minified_js_syntax_errors": {"suffixes": frozenset({".js", ".py"})},
+    "check_hoot_runner_coverage": {"suffixes": frozenset({".js", ".py"})},
+    "check_async_lock_scope": {"suffixes": frozenset({".rs"})},
+    "check_fake_network_listener": {"suffixes": frozenset({".rs", ".py"})},
+    "check_function_test_anchors": {"suffixes": _PY},
+    "check_js_function_test_anchors": {"suffixes": frozenset({".js", ".py"})},
+    "check_rust_function_test_anchors": {
+        "suffixes": frozenset({".rs", ".py", ".toml"}),
+        "lock": "cargo",
+    },
+    "check_cargo_deny": {"suffixes": _RS, "lock": "cargo", "cacheable": False},
+    "check_cargo_clippy": {"suffixes": _RS, "lock": "cargo"},
+    "check_cargo_fmt": {"suffixes": _RS, "lock": "cargo"},
+    "check_pip_audit": {
+        "suffixes": frozenset({".txt"}),
+        "cacheable": False,
+    },
+}
+
+
+def _parse_args(argv):
+    """`run_linters.py [MODULES] [options]`: MODULES is the old comma-separated module list."""
+    parser = argparse.ArgumentParser(
+        prog="run_linters.py",
+        description=(
+            "Run every repository linter. Steps run in parallel (-j), their output is "
+            "printed in a fixed order, and a timing table shows where the time went."
+        ),
+    )
+    parser.add_argument(
+        "modules",
+        nargs="?",
+        default="",
+        help="comma-separated modules to scope the per-module checkers to (default: all)",
+    )
+    default_jobs = int(os.environ.get("HAMS_LINT_JOBS", "0")) or max(1, (os.cpu_count() or 2) // 2)
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=default_jobs,
+        help="parallel steps (default: half the cores, or $HAMS_LINT_JOBS); 1 = sequential",
+    )
+    parser.add_argument(
+        "--only",
+        default="",
+        help="comma-separated step names (or name prefixes) to run; see --list",
+    )
+    parser.add_argument("--skip", default="", help="comma-separated step names to leave out")
+    parser.add_argument("--list", dest="list_steps", action="store_true", help="print step names")
+    parser.add_argument(
+        "--changed",
+        nargs="?",
+        const="origin/main",
+        default=None,
+        metavar="BASE",
+        help=(
+            "pre-merge mode: run only the steps whose inputs differ from BASE (default "
+            "origin/main), scoped to the changed modules and the modules that depend on them"
+        ),
+    )
+    parser.add_argument(
+        "--cache",
+        dest="cache",
+        action="store_true",
+        default=None,
+        help="skip steps whose inputs are unchanged since their last passing run "
+        "(default with --changed)",
+    )
+    parser.add_argument("--no-cache", dest="cache", action="store_false")
+    parser.add_argument(
+        "--timing-top",
+        type=int,
+        default=0,
+        help="print only the N slowest steps in the timing table (default: all)",
+    )
+    parser.add_argument("--no-timing", dest="timing", action="store_false", default=True)
+    options = parser.parse_args(argv)
+    options.timing_to_stderr = False
+    if options.cache is None:
+        options.cache = options.changed is not None
+    options.jobs = max(1, options.jobs)
+    return options
+
+
+def pass_stamp_dir():
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "hams-lint", "passed")
+
+
+def _write_pass_stamps(repos, mode):
+    """Record "run_linters.py passed (mode) with a clean tree at commit <sha>" for each repo
+    involved. devbox_tools/prmerge.sh refuses to merge a branch whose tip has no stamp, so a
+    PR cannot land without the full or `--changed` run having passed on exactly that code.
+    Nothing is stamped when the tree has uncommitted changes (the sha would not describe what
+    was linted) or when the run was scoped by --only/--skip/module names."""
+    for repo in repos:
+        head = _git_lines(repo, "rev-parse", "HEAD")
+        dirty = _git_lines(repo, "status", "--porcelain")
+        if not head or dirty is None or dirty:
+            continue
+        try:
+            os.makedirs(pass_stamp_dir(), exist_ok=True)
+            with open(os.path.join(pass_stamp_dir(), head[0]), "w", encoding="utf-8") as handle:
+                handle.write(f"{mode} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
+        except OSError as error:
+            print(f"(pass stamp not written: {error})", file=sys.stderr)
+
+
+def _cache_path(dir_path):
+    key = os.path.realpath(dir_path).replace(os.sep, "_")
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "hams-lint", f"{key}.json")
+
+
+def _finalise_steps(steps):
+    """Apply STEP_META (lock, suffixes, cacheability) by step name, keeping declared order."""
+    for step in steps:
+        meta = STEP_META.get(step.name.split("[")[0])
+        if not meta:
+            continue
+        if "suffixes" in meta and step.suffixes is None:
+            step.suffixes = meta["suffixes"]
+        if "lock" in meta:
+            step.lock = meta["lock"]
+        if "cacheable" in meta:
+            step.cacheable = meta["cacheable"]
+    return steps
+
+
+def _filter_by_name(steps, only, skip):
+    wanted = [n.strip() for n in only.split(",") if n.strip()]
+    dropped = [n.strip() for n in skip.split(",") if n.strip()]
+
+    def matches(step, names):
+        return any(step.name == n or step.name.startswith(n + "[") or step.name.startswith(n) for n in names)
+
+    if wanted:
+        steps = [s for s in steps if matches(s, wanted)]
+    if dropped:
+        steps = [s for s in steps if not matches(s, dropped)]
+    return steps
+
+
+def _git_lines(repo, *args):
+    try:
+        res = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    except OSError:
+        return None
+    if res.returncode != 0:
+        return None
+    return [line for line in res.stdout.split("\n") if line]
+
+
+def changed_files(repo, base):
+    """Absolute real paths of files differing from `merge-base(base, HEAD)` in the work tree
+    (committed on the branch, staged, unstaged, and untracked). None if `repo` has no `base`."""
+    mb = _git_lines(repo, "merge-base", base, "HEAD")
+    if not mb:
+        return None
+    top = _git_lines(repo, "rev-parse", "--show-toplevel")
+    root = os.path.realpath(top[0] if top else repo)
+    diff = _git_lines(repo, "diff", "--name-only", "--no-renames", mb[0]) or []
+    untracked = _git_lines(repo, "ls-files", "--others", "--exclude-standard") or []
+    return {os.path.join(root, name) for name in diff + untracked}
+
+
+def manifest_depends(module_dir):
+    import ast
+
+    try:
+        with open(os.path.join(module_dir, "__manifest__.py"), encoding="utf-8") as handle:
+            data = ast.literal_eval(handle.read())
+    except (OSError, ValueError, SyntaxError):
+        return []
+    return list(data.get("depends", [])) if isinstance(data, dict) else []
+
+
+def dependents_closure(changed_modules, module_dirs):
+    """Modules that (transitively) depend on any of `changed_modules`, plus those modules."""
+    reverse = {}
+    for name, path in module_dirs.items():
+        for dep in manifest_depends(path):
+            reverse.setdefault(dep, set()).add(name)
+    result = set(changed_modules)
+    frontier = list(changed_modules)
+    while frontier:
+        for dependent in reverse.get(frontier.pop(), ()):
+            if dependent not in result:
+                result.add(dependent)
+                frontier.append(dependent)
+    return result
+
+
+def _collect_changed(base, repo_root, sibling_dir, tools_dir):
+    """(set of changed absolute real paths in all three repos, whether the checker tooling
+    itself changed)."""
+    repos = [repo_root, sibling_dir, os.path.dirname(os.path.realpath(tools_dir))]
+    changed = set()
+    for repo in repos:
+        if repo and os.path.isdir(repo):
+            changed |= changed_files(repo, base) or set()
+    tools_real = os.path.realpath(tools_dir) + os.sep
+    return changed, any(path.startswith(tools_real) for path in changed)
+
+
+def _changed_modules(changed, repo_root, community_dir):
+    """Names of the modules (in `repo_root`, falling back to the sibling) that contain a changed
+    file, plus every module that depends on one of them."""
+    module_dirs = {}
+    for base in (community_dir, repo_root):
+        if not base:
+            continue
+        for item in os.listdir(base):
+            if os.path.isfile(os.path.join(base, item, "__manifest__.py")):
+                module_dirs[item] = os.path.realpath(os.path.join(base, item))
+    touched = set()
+    for name, path in module_dirs.items():
+        prefix = path + os.sep
+        if any(changed_path.startswith(prefix) for changed_path in changed):
+            touched.add(name)
+    closure = dependents_closure(touched, module_dirs)
+    return sorted(name for name in closure if _resolve_module_path(name, repo_root, community_dir))
 
 
 def _run_per_target_checker(python_exec, dir_path, script_name, targets):
@@ -128,6 +410,20 @@ def _run_per_target_checker(python_exec, dir_path, script_name, targets):
         elif res.stdout and res.stdout.strip():
             print(res.stdout, end="")
     return any_failed
+
+
+def _per_target_steps(add, python_exec, dir_path, script_name, targets, **options):
+    """The parallel-runner form of `_run_per_target_checker` (same contract, same argv): one
+    Step per entry in `targets`, so a scoped multi-module run still checks every module and a
+    unscoped run (`targets == [repo_root]`) is exactly one step with the same argv as before."""
+    stem = script_name[: -len(".py")]
+    for target in targets:
+        suffix = "" if len(targets) == 1 else f"[{os.path.basename(target)}]"
+        add(
+            stem + suffix,
+            [python_exec, os.path.join(dir_path, "tools", script_name), target],
+            **options,
+        )
 
 
 def main():
@@ -191,14 +487,15 @@ def main():
     main_checkout_root = _resolve_main_checkout_root(repo_root)
     community_dir = None
     if not os.path.exists(os.path.join(repo_root, "zero_sudo", "__manifest__.py")):
-        sibling_community = os.path.abspath(os.path.join(main_checkout_root, "..", "hams_open"))
+        sibling_community = _sibling_checkout(repo_root, main_checkout_root, "hams_open")
         if os.path.isdir(sibling_community):
             community_dir = sibling_community
+    sibling_dir = community_dir or _sibling_checkout(repo_root, main_checkout_root, "hams_com")
 
     addons_paths = [
         "/usr/lib/python3/dist-packages/odoo/addons",
         repo_root,
-        os.path.abspath(os.path.join(main_checkout_root, "..", "hams_com")),
+        _sibling_checkout(repo_root, main_checkout_root, "hams_com"),
     ]
     if community_dir:
         addons_paths.append(community_dir)
@@ -207,10 +504,43 @@ def main():
     python_exec = "/usr/bin/python3"
     linters_failed = False
 
+    options = _parse_args(sys.argv[1:])
+    wall_start = time.monotonic()
+    tools_dir = os.path.join(dir_path, "tools")
+    steps = []
+
+    def _add(name, argv, **step_options):
+        """Declare one step. `inputs=` names the files the step reads (see lint_inputs());
+        it defaults to the whole repo pair with every file suffix, which is always safe."""
+        inputs = step_options.pop("inputs", None)
+        roots, suffixes = inputs if inputs else _default_inputs(dir_path, sibling_dir)
+        steps.append(
+            lint_exec.Step(
+                name=name,
+                argv=argv,
+                roots=roots,
+                suffixes=suffixes,
+                **step_options,
+            )
+        )
+
+    def _fail_now(name, message):
+        steps.append(lint_exec.Step(name=name, static_output=message, always=True))
+
     # 5. Modules Discovery
-    target_modules_str = sys.argv[1] if len(sys.argv) > 1 else ""
+    target_modules_str = options.modules
+    changed_set = None
+    run_all = False
+    if options.changed is not None:
+        changed_set, run_all = _collect_changed(
+            options.changed, repo_root, sibling_dir, tools_dir
+        )
     mod_array = []
-    if not target_modules_str:
+    scoped = bool(target_modules_str)
+    if changed_set is not None and not target_modules_str:
+        scoped = True
+        mod_array = _changed_modules(changed_set, repo_root, community_dir)
+    elif not target_modules_str:
         for item in os.listdir(repo_root):
             mod_path = os.path.join(repo_root, item)
             if os.path.isdir(mod_path) and os.path.isfile(
@@ -244,8 +574,10 @@ def main():
         mod_path = _resolve_module_path(mod, repo_root, community_dir)
         if mod_path is None:
             where = f"{repo_root} or {community_dir}" if community_dir else repo_root
-            print(f"❌ Module '{mod}' not found under {where}.")
-            linters_failed = True
+            _fail_now(
+                f"module-not-found[{mod}]",
+                f"❌ Module '{mod}' not found under {where}.",
+            )
             continue
         resolved_mod_paths.append(mod_path)
 
@@ -257,141 +589,118 @@ def main():
             "--addons-path",
             addons_path_str,
         ]
-        res = subprocess.run(pre_flight_cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
-        elif res.stdout and res.stdout.strip():
-            # Real bug found 2026-09-12: every other step in this file prints a checker's
-            # stdout even on a clean (returncode == 0) pass when it's non-empty -- this one was
-            # the sole exception, silently dropping any diagnostic pre_flight_check.py prints on
-            # success. Confirmed live, not hypothetical: pre_flight_check.py's own module-tier
-            # dormancy notice ("[*] Module-tier architecture check skipped: ... not found") is
-            # unconditionally printed to stdout with returncode 0 whenever tier_config.json is
-            # absent -- true for every real invocation today, since no tier_config.json exists
-            # anywhere in either repo -- and this branch's absence meant that notice never
-            # reached a live CI/terminal output, only the module's own capture_output buffer.
-            # Already flagged as a known, not-yet-fixed gap in night_shift_todo.md ("pre_flight_
-            # check.py's new tier-config dormancy notice doesn't surface through its real, live
-            # caller"); fixed here by matching this file's own established convention instead of
-            # the "broader design decision" that earlier note assumed was required.
-            print(res.stdout, end="")
+        # The pre-flight step prints a passing run's stdout too (same as every other step):
+        # Real bug found 2026-09-12: every other step in this file prints a checker's
+        # stdout even on a clean (returncode == 0) pass when it's non-empty -- this one was
+        # the sole exception, silently dropping any diagnostic pre_flight_check.py prints on
+        # success. Confirmed live, not hypothetical: pre_flight_check.py's own module-tier
+        # dormancy notice ("[*] Module-tier architecture check skipped: ... not found") is
+        # unconditionally printed to stdout with returncode 0 whenever tier_config.json is
+        # absent -- true for every real invocation today, since no tier_config.json exists
+        # anywhere in either repo -- and this branch's absence meant that notice never
+        # reached a live CI/terminal output, only the module's own capture_output buffer.
+        # Already flagged as a known, not-yet-fixed gap in night_shift_todo.md ("pre_flight_
+        # check.py's new tier-config dormancy notice doesn't surface through its real, live
+        # caller"); fixed here by matching this file's own established convention instead of
+        # the "broader design decision" that earlier note assumed was required.
+        _add(
+            f"pre_flight_check[{os.path.basename(mod_path)}]",
+            pre_flight_cmd,
+            inputs=((mod_path, community_dir or repo_root), None),
+        )
 
     # 7. Flake8
     flake8_cmd = "/usr/bin/flake8"
 
-    targets = resolved_mod_paths if target_modules_str else [repo_root]
+    targets = resolved_mod_paths if scoped else [repo_root]
 
-    try:
-        res = subprocess.run(
-            [
-                flake8_cmd,
-                *targets,
-                # archive/: frozen, historical snapshots of past pipeline runs, not live
-                # source (same exclusion, same reasoning, already established in
-                # check_absolute_paths.py's own docstring) -- rewriting a real developer's
-                # already-committed one-shot script to satisfy a linter would make the
-                # archive inaccurate, not correct.
-                #
-                # .claude: real bug found 2026-09-12 reviewing this file. Passing a custom
-                # --exclude replaces flake8's own default exclude list entirely (flake8 does
-                # NOT append to its defaults unless --extend-exclude is used instead), so
-                # without an explicit entry here flake8 descends into
-                # ".claude/worktrees/<session>/" -- this project's own standing, documented
-                # convention (see check_dependency_cycles.py's identical fix, and the "Batch A"
-                # entry in docs/BUG_HUNT_PROGRESS.md fixing the same gap in 5 sibling checker
-                # scripts) for running concurrent bug-hunt dispatches in isolated git worktrees
-                # INSIDE the repo root. Confirmed empirically: a fake .claude/worktrees/<sess>/
-                # tree with one file containing a real, unambiguous F401 violation was scanned
-                # and reported by flake8 with this exact --exclude value before this fix.
-                # Before this fix, a lint run started while another session's worktree existed
-                # could fail (or, depending on E9/F/E402 content, spuriously pass) based on that
-                # OTHER session's own in-progress, uncommitted code -- not the real repo state
-                # this invocation was actually scoped to check.
-                "--exclude=venv,env,.venv,__pycache__,node_modules,target,daemons,archive,.claude",
-                "--select=E9,F,E402",
-                "--per-file-ignores=__init__.py:F401",
-            ],
-            capture_output=True,
-            text=True,
+    # archive/: frozen, historical snapshots of past pipeline runs, not live
+    # source (same exclusion, same reasoning, already established in
+    # check_absolute_paths.py's own docstring) -- rewriting a real developer's
+    # already-committed one-shot script to satisfy a linter would make the
+    # archive inaccurate, not correct.
+    #
+    # .claude: real bug found 2026-09-12 reviewing this file. Passing a custom
+    # --exclude replaces flake8's own default exclude list entirely (flake8 does
+    # NOT append to its defaults unless --extend-exclude is used instead), so
+    # without an explicit entry here flake8 descends into
+    # ".claude/worktrees/<session>/" -- this project's own standing, documented
+    # convention (see check_dependency_cycles.py's identical fix, and the "Batch A"
+    # entry in docs/BUG_HUNT_PROGRESS.md fixing the same gap in 5 sibling checker
+    # scripts) for running concurrent bug-hunt dispatches in isolated git worktrees
+    # INSIDE the repo root. Confirmed empirically: a fake .claude/worktrees/<sess>/
+    # tree with one file containing a real, unambiguous F401 violation was scanned
+    # and reported by flake8 with this exact --exclude value before this fix.
+    # Before this fix, a lint run started while another session's worktree existed
+    # could fail (or, depending on E9/F/E402 content, spuriously pass) based on that
+    # OTHER session's own in-progress, uncommitted code -- not the real repo state
+    # this invocation was actually scoped to check.
+    flake8_targets = targets
+    if changed_set is not None and not target_modules_str:
+        # Changed mode: the changed Python files themselves (flake8 applies --exclude to
+        # explicitly named files too), instead of every module directory.
+        flake8_targets = sorted(
+            path
+            for path in changed_set
+            if path.endswith(".py") and os.path.isfile(path) and path.startswith(os.path.realpath(repo_root) + os.sep)
         )
-
-        if res.returncode != 0:
-            print("❌ Flake8 Violations:")
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
-    except FileNotFoundError:
-        print("❌ Flake8 executable not found.")
-        linters_failed = True
+    flake8_argv = [
+        flake8_cmd,
+        *flake8_targets,
+        "--exclude=venv,env,.venv,__pycache__,node_modules,target,daemons,archive,.claude",
+        "--select=E9,F,E402",
+        "--per-file-ignores=__init__.py:F401",
+    ]
+    if flake8_targets:
+        _add(
+            "flake8",
+            flake8_argv,
+            fail_header="❌ Flake8 Violations:",
+            print_ok=False,
+            missing_msg="❌ Flake8 executable not found.",
+            inputs=(tuple(os.path.realpath(t) for t in flake8_targets), frozenset({".py", ".cfg", ".ini", ".toml"})),
+        )
 
     # 8. check_burn_list -- one subprocess call per target, not one batched call with all of
     # `targets` appended (see `_run_per_target_checker`'s own docstring): `check_burn_list.py`'s
     # `directory` argument is `nargs="?"`, which argparse rejects outright given 2+ positional
     # values, so a multi-module scoped run used to crash this step entirely.
-    if _run_per_target_checker(python_exec, dir_path, "check_burn_list.py", targets):
-        linters_failed = True
+    _per_target_steps(_add, python_exec, dir_path, "check_burn_list.py", targets)
 
     # 9. verify_anchors
-    res = subprocess.run(
-        [python_exec, os.path.join(dir_path, "tools", "verify_anchors.py")] + targets,
-        capture_output=True,
-        text=True,
-    )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
+    if targets:
+        _add(
+            "verify_anchors",
+            [python_exec, os.path.join(dir_path, "tools", "verify_anchors.py")] + targets,
+        )
 
     # 10. check_manifest_dependencies -- one call per target, not batched: this script reads
     # only `sys.argv[1]` (see `_run_per_target_checker`'s own docstring) and silently ignores
     # any additional targets appended after it.
-    if _run_per_target_checker(python_exec, dir_path, "check_manifest_dependencies.py", targets):
-        linters_failed = True
+    _per_target_steps(_add, python_exec, dir_path, "check_manifest_dependencies.py", targets)
 
     # 11. check_js_syntax
-    res = subprocess.run(
-        [python_exec, os.path.join(dir_path, "tools", "check_js_syntax.py")] + targets,
-        capture_output=True,
-        text=True,
-    )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
+    if targets:
+        _add(
+            "check_js_syntax",
+            [python_exec, os.path.join(dir_path, "tools", "check_js_syntax.py")] + targets,
+        )
 
     # 12. check_test_tags -- one call per target, not batched (sys.argv[1]-only, see
     # `_run_per_target_checker`'s own docstring).
-    if _run_per_target_checker(python_exec, dir_path, "check_test_tags.py", targets):
-        linters_failed = True
+    _per_target_steps(_add, python_exec, dir_path, "check_test_tags.py", targets)
 
     # 13. check_absolute_paths -- one call per target, not batched (sys.argv[1]-only, see
     # `_run_per_target_checker`'s own docstring).
-    if _run_per_target_checker(python_exec, dir_path, "check_absolute_paths.py", targets):
-        linters_failed = True
+    _per_target_steps(_add, python_exec, dir_path, "check_absolute_paths.py", targets)
 
     # 14. check_rabbitmq_pool -- one call per target, not batched (sys.argv[1]-only, see
     # `_run_per_target_checker`'s own docstring).
-    if _run_per_target_checker(python_exec, dir_path, "check_rabbitmq_pool.py", targets):
-        linters_failed = True
+    _per_target_steps(_add, python_exec, dir_path, "check_rabbitmq_pool.py", targets)
 
     # 15. check_shebang -- one call per target, not batched (sys.argv[1]-only, see
     # `_run_per_target_checker`'s own docstring).
-    if _run_per_target_checker(python_exec, dir_path, "check_shebang.py", targets):
-        linters_failed = True
+    _per_target_steps(_add, python_exec, dir_path, "check_shebang.py", targets)
 
     # 16. check_summation_bias
     # Hardening, 2026-09-10: pin `cwd` to `repo_root` explicitly rather than inheriting
@@ -404,84 +713,47 @@ def main():
     # `cwd=`, e.g. step 21's ESLint) rather than trusting whatever cwd happened to be ambient
     # when this process started -- this was the one silent exception. Pinning it here removes
     # that latent inconsistency at zero behavioral cost for every invocation seen in practice.
-    res = subprocess.run(
+    _add(
+        "check_summation_bias",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_summation_bias.py"),
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_summation_bias.py"),
+    ],
         cwd=repo_root,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 17. check_skill_integrity
-    res = subprocess.run(
+    _add(
+        "check_skill_integrity",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_skill_integrity.py"),
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_skill_integrity.py"),
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 18. check_init_imports -- one call per target, not batched (sys.argv[1]-only, see
     # `_run_per_target_checker`'s own docstring).
-    if _run_per_target_checker(python_exec, dir_path, "check_init_imports.py", targets):
-        linters_failed = True
+    _per_target_steps(_add, python_exec, dir_path, "check_init_imports.py", targets)
 
     # 19. check_dependency_cycles
     # Always scans the full repo (not the possibly-scoped `targets`) --
     # a cycle is a property of the whole manifest graph, not any single
     # module, and staying scoped could hide a cycle introduced by a
     # module outside the current target list.
-    res = subprocess.run(
+    _add(
+        "check_dependency_cycles",
         [python_exec, os.path.join(dir_path, "tools", "check_dependency_cycles.py"), dir_path],
-        capture_output=True,
-        text=True,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 20. check_self_writeable_field_tests
     # Same reasoning as step 19: this is a property of the whole repo's
     # anchor graph (a SELF_WRITEABLE_FIELDS override in one module can be
     # tested from that module's own tests/ dir only), not the possibly-
     # scoped `targets`.
-    res = subprocess.run(
+    _add(
+        "check_self_writeable_field_tests",
         [python_exec, os.path.join(dir_path, "tools", "check_self_writeable_field_tests.py"), dir_path],
-        capture_output=True,
-        text=True,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 21. ESLint (JS-side analogue of flake8, config shared from hams_shared/)
     # Flat config restricts scanning to the config's own directory tree, so
@@ -504,83 +776,67 @@ def main():
     eslint_bin = os.path.join(hams_shared_dir, "node_modules", ".bin", "eslint")
     eslint_config = os.path.join(hams_shared_dir, "eslint.config.js")
     workspace_root = os.path.dirname(os.path.dirname(hams_shared_dir))
-    if os.path.isfile(eslint_bin):
-        res = subprocess.run(
+    if sibling_dir and os.path.isdir(sibling_dir):
+        # A worktree set (`<ws>/hams_open` + `<ws>/hams_com`) keeps both repos under one
+        # directory that is not the real hams_shared's grandparent; the common parent of the
+        # two repos is the same directory the old formula gave in the normal layout.
+        workspace_root = os.path.commonpath([os.path.realpath(repo_root), os.path.realpath(sibling_dir)])
+    if not os.path.isfile(eslint_bin):
+        _fail_now(
+            "eslint",
+            f"❌ ESLint executable not found at {eslint_bin} (run `npm install` in hams_shared/).",
+        )
+    elif targets:
+        _add(
+            "eslint",
             [
                 eslint_bin,
                 "--config",
                 eslint_config,
                 "--no-error-on-unmatched-pattern",
             ] + targets,
-            capture_output=True,
-            text=True,
             cwd=workspace_root,
+            fail_header="❌ ESLint Violations:",
+            print_ok=False,
+            inputs=(
+                tuple(os.path.realpath(t) for t in targets),
+                frozenset({".js", ".mjs", ".cjs", ".json"}),
+            ),
         )
-        if res.returncode != 0:
-            print("❌ ESLint Violations:")
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
-    else:
-        print(f"❌ ESLint executable not found at {eslint_bin} (run `npm install` in hams_shared/).")
-        linters_failed = True
 
     # 22. check_model_extension_collisions
     # Same reasoning as step 19: a same-_name collision or a cross-module
     # _auto=False extension can be introduced by a module outside the
     # possibly-scoped `targets`, so this always scans the full repo.
-    res = subprocess.run(
+    _add(
+        "check_model_extension_collisions",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_model_extension_collisions.py"),
-            dir_path,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_model_extension_collisions.py"),
+        dir_path,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 23. check_untyped_utility_files (ODOO_AWARE_TYPE_CHECKING.md Phase 1)
     # Same reasoning as step 19/20/22: a plain-utility-file call-signature
     # bug can be introduced anywhere in daemons/ or ingest/, not just the
     # possibly-scoped `targets`, so this always scans the full repo's own
     # curated file set rather than `targets`.
-    res = subprocess.run(
+    _add(
+        "check_untyped_utility_files",
         [python_exec, os.path.join(dir_path, "tools", "check_untyped_utility_files.py"), dir_path],
-        capture_output=True,
-        text=True,
+        print_ok=False,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
 
     # 24. check_pip_audit (CODE_REVIEW_PROCESS.md's Python supply-chain scan,
     # the direct parallel to cargo-deny/cargo-audit on the Rust side).
     # Same reasoning as step 19/20/22/23: a vulnerable dependency can be
     # introduced by any requirements.txt in the repo, not just `targets`.
-    res = subprocess.run(
+    _add(
+        "check_pip_audit",
         [python_exec, os.path.join(dir_path, "tools", "check_pip_audit.py"), dir_path],
-        capture_output=True,
-        text=True,
+        print_ok=False,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
 
     # 25. check_minified_js_nested_templates (rjsmin compatibility -- see
     # hams_com commit f1f00511 for the real bug this class of check was
@@ -590,47 +846,28 @@ def main():
     # vendored/sibling-repo asset it references may live outside
     # `dir_path` entirely, so this always scans the full repo and also
     # searches the sibling repo root for cross-repo asset references.
-    sibling_dir = community_dir or os.path.abspath(os.path.join(main_checkout_root, "..", "hams_com"))
-    res = subprocess.run(
+    _add(
+        "check_minified_js_nested_templates",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_minified_js_nested_templates.py"),
-            dir_path,
-            sibling_dir,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_minified_js_nested_templates.py"),
+        dir_path,
+        sibling_dir,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 26. check_external_library_locality -- same reasoning as step 25: a
     # module vendoring its own copy of a library instead of using
     # "external" can be introduced anywhere in the repo, not just the
     # possibly-scoped `targets`, so this always scans the full repo.
-    res = subprocess.run(
+    _add(
+        "check_external_library_locality",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_external_library_locality.py"),
-            dir_path,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_external_library_locality.py"),
+        dir_path,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 27. hams_shared/tools/ unit test suites -- the test_check_*.py files
     # verifying the checker scripts' OWN logic (test_check_burn_list.py,
@@ -658,21 +895,13 @@ def main():
         if os.path.basename(f) not in _RUNNER_SCRIPTS_NOT_SUITES
     )
     if tool_test_files:
-        res = subprocess.run(
+        _add(
+            "pytest tools/",
             [python_exec, "-m", "pytest", "-q"] + tool_test_files,
-            capture_output=True,
-            text=True,
             cwd=os.path.join(dir_path, "tools"),
+            fail_header="❌ hams_shared/tools/ unit test failures:",
+            inputs=((os.path.realpath(os.path.join(dir_path, "tools")),), None),
         )
-        if res.returncode != 0:
-            print("❌ hams_shared/tools/ unit test failures:")
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
-        elif res.stdout and res.stdout.strip():
-            print(res.stdout, end="")
 
     # 28. hams_shared/scripts/ unit test suites -- same reasoning as step 27
     # above, for the one other directory of standalone dev-tooling scripts
@@ -682,21 +911,13 @@ def main():
     # tools/.
     scripts_test_files = sorted(glob.glob(os.path.join(dir_path, "scripts", "test_*.py")))
     if scripts_test_files:
-        res = subprocess.run(
+        _add(
+            "pytest scripts/",
             [python_exec, "-m", "pytest", "-q"] + scripts_test_files,
-            capture_output=True,
-            text=True,
             cwd=os.path.join(dir_path, "scripts"),
+            fail_header="❌ hams_shared/scripts/ unit test failures:",
+            inputs=((os.path.realpath(os.path.join(dir_path, "scripts")),), None),
         )
-        if res.returncode != 0:
-            print("❌ hams_shared/scripts/ unit test failures:")
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
-        elif res.stdout and res.stdout.strip():
-            print(res.stdout, end="")
 
     # 29. daemons/ standalone-daemon unit test suites -- same reasoning as
     # steps 27/28, for the one other class of directory this repo has full
@@ -774,22 +995,21 @@ def main():
         # just daemons_root.
         this_env = dict(daemon_env)
         this_env["PYTHONPATH"] = os.path.dirname(test_dir) + os.pathsep + this_env["PYTHONPATH"]
-        res = subprocess.run(
+        rel_dir = os.path.relpath(test_dir, daemons_root)
+        daemon_dir = os.path.join(daemons_root, rel_dir.split(os.sep)[0])
+        loose_daemon_files = tuple(
+            os.path.join(daemons_root, name)
+            for name in sorted(os.listdir(daemons_root))
+            if os.path.isfile(os.path.join(daemons_root, name))
+        )
+        _add(
+            f"pytest {os.path.relpath(test_dir, dir_path)}",
             [_venv_python_for(test_dir), "-m", "pytest", "-q"] + files_here,
-            capture_output=True,
-            text=True,
             cwd=test_dir,
             env=this_env,
+            fail_header=f"❌ {os.path.relpath(test_dir, dir_path)} unit test failures:",
+            inputs=((os.path.realpath(daemon_dir),) + loose_daemon_files, None),
         )
-        if res.returncode != 0:
-            print(f"❌ {os.path.relpath(test_dir, dir_path)} unit test failures:")
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
-        elif res.stdout and res.stdout.strip():
-            print(res.stdout, end="")
 
     # 30. check_access_csv_group_order -- catches the exact bug class that
     # silently broke the ENTIRE test suite tonight (not just one module's
@@ -799,23 +1019,14 @@ def main():
     # ever running. Same reasoning as step 19/20/22/23: a module's own
     # data-list ordering bug can be introduced anywhere, not just the
     # possibly-scoped `targets`, so this always scans the full repo.
-    res = subprocess.run(
+    _add(
+        "check_access_csv_group_order",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_access_csv_group_order.py"),
-            dir_path,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_access_csv_group_order.py"),
+        dir_path,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 31. check_module_subpackage_imports -- catches a second, real bug found tonight, the same
     # shape as step 30's: a new ham_propagation/models/ subpackage was added (a real, correct
@@ -825,23 +1036,14 @@ def main():
     # failure mode (a view validation error naming the method as "not a valid action") gave no
     # hint the actual cause was a missing top-level import. Same reasoning as step 19/20/22/23/30:
     # always scans the full repo.
-    res = subprocess.run(
+    _add(
+        "check_module_subpackage_imports",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_module_subpackage_imports.py"),
-            dir_path,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_module_subpackage_imports.py"),
+        dir_path,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 32. check_registry_test_cr_usage -- catches a real, repeatedly-found bug: an
     # `is_test = vars(self.env.registry).get("test_cr") is not None` guard around
@@ -850,46 +1052,28 @@ def main():
     # had literally never been exercised end-to-end by any test) and as the same latent,
     # not-yet-triggered bug in 10 places across user_websites. Same reasoning as
     # step 19/20/22/23/30/31: always scans the full repo.
-    res = subprocess.run(
+    _add(
+        "check_registry_test_cr_usage",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_registry_test_cr_usage.py"),
-            dir_path,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_registry_test_cr_usage.py"),
+        dir_path,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 33. check_xml_comment_double_hyphen -- catches a hard XML syntax error (a literal `--`
     # inside a <!-- --> comment) hit twice in one night writing explanatory security-rule
     # comments in an em-dash-style " -- " aside, both times only caught by a live module-load
     # crash during a real test run. Same reasoning as step 19/20/22/23/30/31/32: always scans
     # the full repo.
-    res = subprocess.run(
+    _add(
+        "check_xml_comment_double_hyphen",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_xml_comment_double_hyphen.py"),
-            dir_path,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_xml_comment_double_hyphen.py"),
+        dir_path,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 34. check_gdpr_erasure_uses_service_utility -- enforces that every _execute_gdpr_erasure()
     # override deletes records via zero_sudo.security.utils._erase_via_service_account() instead
@@ -899,23 +1083,14 @@ def main():
     # permanent no-op with no error anywhere) -- the utility verifies visibility against ground
     # truth and raises loudly instead of ever repeating that silent failure. Same reasoning as
     # step 19/20/22/23/30/31/32/33: always scans the full repo.
-    res = subprocess.run(
+    _add(
+        "check_gdpr_erasure_uses_service_utility",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_gdpr_erasure_uses_service_utility.py"),
-            dir_path,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_gdpr_erasure_uses_service_utility.py"),
+        dir_path,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 35. check_cargo_deny -- the Rust supply-chain/license/advisory scan
     # check_pip_audit.py's own docstring already describes as its "direct
@@ -926,19 +1101,10 @@ def main():
     # alone (an HTTP/2 unbounded-DATA-frame DoS vector among them). Same
     # reasoning as step 19/20/22/23/24/30/31/32/33/34: always scans the full
     # repo, not a possibly-scoped `targets` list.
-    res = subprocess.run(
+    _add(
+        "check_cargo_deny",
         [python_exec, os.path.join(dir_path, "tools", "check_cargo_deny.py"), dir_path],
-        capture_output=True,
-        text=True,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 36. check_cargo_clippy -- the Rust code-quality scan that is
     # flake8/ESLint's direct parallel on the Rust side, but -- like
@@ -946,19 +1112,10 @@ def main():
     # gap found 2026-08-26 running `cargo clippy` by hand for the first time
     # in this codebase's history. Same reasoning as step 35: always scans
     # the full repo, not a possibly-scoped `targets` list.
-    res = subprocess.run(
+    _add(
+        "check_cargo_clippy",
         [python_exec, os.path.join(dir_path, "tools", "check_cargo_clippy.py"), dir_path],
-        capture_output=True,
-        text=True,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 37. check_binary_manifest_consistency -- catches a real drift class found 2026-08-27
     # bumping kopia/etcd/cloudflared: hams_shared/tools/binary_manifest.json (what
@@ -969,19 +1126,10 @@ def main():
     # that updates only the tracked JSON copy leaves production silently downloading the old
     # binary forever. Always scans the full repo, not a possibly-scoped `targets` list, for
     # the same reason as step 19/etc: the two files' relationship is a repo-wide property.
-    res = subprocess.run(
+    _add(
+        "check_binary_manifest_consistency",
         [python_exec, os.path.join(dir_path, "tools", "check_binary_manifest_consistency.py"), dir_path],
-        capture_output=True,
-        text=True,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 38. check_function_test_anchors -- ADR 0090's ratchet: Bruce's own
     # direct decision, 2026-09-04, "institute the CI requirement for new
@@ -990,86 +1138,59 @@ def main():
     # baseline is repo-wide, keyed by `repo_root`'s own basename, matching
     # the `function_test_anchor_baseline_<repo>.json` files this session
     # generated for both real repos.
-    res = subprocess.run(
+    _add(
+        "check_function_test_anchors",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_function_test_anchors.py"),
-            repo_root,
-            "--baseline",
-            os.path.join(
-                dir_path,
-                "tools",
-                f"function_test_anchor_baseline_{os.path.basename(main_checkout_root)}.json",
-            ),
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_function_test_anchors.py"),
+        repo_root,
+        "--baseline",
+        os.path.join(
+            dir_path,
+            "tools",
+            f"function_test_anchor_baseline_{os.path.basename(main_checkout_root)}.json",
+        ),
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 39. check_js_function_test_anchors -- ADR 0090 decision 2's JS
     # sub-track: the same ratchet as step 38, extended to JS via a real
     # acorn AST parse (js_function_scan.cjs), not a regex approximation.
     # Same repo-wide, `targets`-independent baseline convention as step 38.
-    res = subprocess.run(
+    _add(
+        "check_js_function_test_anchors",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_js_function_test_anchors.py"),
-            repo_root,
-            "--baseline",
-            os.path.join(
-                dir_path,
-                "tools",
-                f"js_function_test_anchor_baseline_{os.path.basename(main_checkout_root)}.json",
-            ),
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_js_function_test_anchors.py"),
+        repo_root,
+        "--baseline",
+        os.path.join(
+            dir_path,
+            "tools",
+            f"js_function_test_anchor_baseline_{os.path.basename(main_checkout_root)}.json",
+        ),
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 40. check_rust_function_test_anchors -- ADR 0090 decision 2's Rust
     # sub-track: the same ratchet as steps 38/39, extended to Rust via a
     # real `syn` AST parse (rust_function_scan), not a regex
     # approximation. Same repo-wide, `targets`-independent baseline
     # convention as steps 38/39.
-    res = subprocess.run(
+    _add(
+        "check_rust_function_test_anchors",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_rust_function_test_anchors.py"),
-            repo_root,
-            "--baseline",
-            os.path.join(
-                dir_path,
-                "tools",
-                f"rust_function_test_anchor_baseline_{os.path.basename(main_checkout_root)}.json",
-            ),
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_rust_function_test_anchors.py"),
+        repo_root,
+        "--baseline",
+        os.path.join(
+            dir_path,
+            "tools",
+            f"rust_function_test_anchor_baseline_{os.path.basename(main_checkout_root)}.json",
+        ),
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 41. hams_com/ingest/ standalone-script unit test suites -- same
     # reasoning as steps 27/28/29 for the one other directory of test_*.py
@@ -1083,21 +1204,13 @@ def main():
     ingest_dir = os.path.join(repo_root, "ingest")
     ingest_test_files = sorted(glob.glob(os.path.join(ingest_dir, "test_*.py")))
     if ingest_test_files:
-        res = subprocess.run(
+        _add(
+            "pytest ingest/",
             [python_exec, "-m", "pytest", "-q"] + ingest_test_files,
-            capture_output=True,
-            text=True,
             cwd=ingest_dir,
+            fail_header="❌ ingest/ unit test failures:",
+            inputs=((os.path.realpath(ingest_dir),), None),
         )
-        if res.returncode != 0:
-            print("❌ ingest/ unit test failures:")
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
-        elif res.stdout and res.stdout.strip():
-            print(res.stdout, end="")
 
     # 42. check_owl_templates -- real, standalone Owl QWeb template compile verification via a
     # real headless Chrome. Built 2026-09-07 after a live-instrumented investigation
@@ -1106,19 +1219,10 @@ def main():
     # real time to root-cause, precisely because Odoo's own runtime error for this failure mode
     # is real but practically undiagnosable (a truncation-prone message with no line/column info).
     # Always scans the full repo, same reasoning as steps 19/20/22/23/30-34/etc.
-    res = subprocess.run(
+    _add(
+        "check_owl_templates",
         [python_exec, os.path.join(dir_path, "tools", "check_owl_templates.py"), repo_root],
-        capture_output=True,
-        text=True,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 43. check_minified_js_syntax_errors -- general backstop for the whole open-ended defect
     # class check_minified_js_nested_templates.py's step 25 only partially covers: rather than
@@ -1127,24 +1231,15 @@ def main():
     # real `node --check`, so any future rjsmin miscompilation (not just nested template
     # literals) fails loudly here instead of shipping silently to production. Same reasoning as
     # step 25 for scope: always scans the full repo and the sibling repo root.
-    res = subprocess.run(
+    _add(
+        "check_minified_js_syntax_errors",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_minified_js_syntax_errors.py"),
-            dir_path,
-            sibling_dir,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_minified_js_syntax_errors.py"),
+        dir_path,
+        sibling_dir,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 44. check_hoot_runner_coverage -- a module can register a *.test.js
     # file in web.assets_unit_tests (syntactically valid, bundled, loadable
@@ -1153,24 +1248,15 @@ def main():
     # hoot bug (window.fetch reassignment throwing before any assertion
     # ran) sit unnoticed across 4 modules until 2026-09-09. Always scans
     # the full repo and the sibling repo root, same reasoning as step 25.
-    res = subprocess.run(
+    _add(
+        "check_hoot_runner_coverage",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_hoot_runner_coverage.py"),
-            dir_path,
-            sibling_dir,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_hoot_runner_coverage.py"),
+        dir_path,
+        sibling_dir,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 45. check_window_fetch_reassignment -- direct `window.fetch = ...`/
     # `window['fetch'] = ...` reassignment in a *.test.js file throws under
@@ -1182,17 +1268,11 @@ def main():
     # before any assertion runs. Takes a single repo_dir argument, so run
     # once per repo rather than once for both like step 44.
     for _repo in (dir_path, sibling_dir):
-        res = subprocess.run(
+        _add(
+            f"check_window_fetch_reassignment[{os.path.basename(_repo)}]",
             [python_exec, os.path.join(dir_path, "tools", "check_window_fetch_reassignment.py"), _repo],
-            capture_output=True,
-            text=True,
+            print_ok=False,
         )
-        if res.returncode != 0:
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
 
     # 46. check_js_test_hook_gating -- ADR 0094: a client-shipped JS file's TEST_*-prefixed
     # postMessage/event branches must be gated behind a real, server-substituted
@@ -1204,19 +1284,10 @@ def main():
     # (js_test_hook_gating_scan.cjs), same split-responsibility pattern as steps 39/40. No
     # baseline/ratchet: a brand-new rule with exactly two known real instances at introduction,
     # both already fixed -- any violation found is real and new, not grandfathered.
-    res = subprocess.run(
+    _add(
+        "check_js_test_hook_gating",
         [python_exec, os.path.join(dir_path, "tools", "check_js_test_hook_gating.py"), repo_root],
-        capture_output=True,
-        text=True,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 47. check_async_lock_scope -- Rust daemon gate born 2026-09-11 from a real bug found by
     # adversarial review in hams_relay_bridge's telemetry_loop: a tokio::sync::RwLock read
@@ -1230,17 +1301,11 @@ def main():
     # exactly that shape. Same two-repo sweep as step 45 -- daemons live under hams_com, but
     # ham_digital_modes (a real Rust crate) lives under hams_open.
     for _repo in (dir_path, sibling_dir):
-        res = subprocess.run(
+        _add(
+            f"check_async_lock_scope[{os.path.basename(_repo)}]",
             [python_exec, os.path.join(dir_path, "tools", "check_async_lock_scope.py"), _repo],
-            capture_output=True,
-            text=True,
+            print_ok=False,
         )
-        if res.returncode != 0:
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
 
     # 48. check_fake_network_listener -- born the same night as step 47, from the same
     # real-network-integration-test work that found hams_relay_bridge and dx_firehose had zero
@@ -1252,17 +1317,11 @@ def main():
     # for a network primitive (Socket/Listener/Stream/Connection/WebSocket/Channel/Transport)
     # in a file with no real bound listener anywhere in it. Same two-repo sweep as step 47.
     for _repo in (dir_path, sibling_dir):
-        res = subprocess.run(
+        _add(
+            f"check_fake_network_listener[{os.path.basename(_repo)}]",
             [python_exec, os.path.join(dir_path, "tools", "check_fake_network_listener.py"), _repo],
-            capture_output=True,
-            text=True,
+            print_ok=False,
         )
-        if res.returncode != 0:
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
 
     # 49. check_int_float_overflow -- born 2026-09-11 from a real bug found by adversarial
     # review in sota_sync.process_sota_csv()'s own _int() helper: int(float(val)) wrapped in
@@ -1275,17 +1334,11 @@ def main():
     # a float(...) call>) not guarded by a try/except that would catch OverflowError. Same
     # two-repo sweep as steps 47/48.
     for _repo in (dir_path, sibling_dir):
-        res = subprocess.run(
+        _add(
+            f"check_int_float_overflow[{os.path.basename(_repo)}]",
             [python_exec, os.path.join(dir_path, "tools", "check_int_float_overflow.py"), _repo],
-            capture_output=True,
-            text=True,
+            print_ok=False,
         )
-        if res.returncode != 0:
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
 
     # 50. check_float_isfinite -- born 2026-09-11/12 from a single night's bug-hunt sweep that
     # found and fixed roughly fifteen separate real instances of the same bug class: float(x)
@@ -1296,17 +1349,11 @@ def main():
     # sweep as steps 47/48/49; validated silent on every site fixed that night after adding
     # float-isfinite-ignore escape hatches to the confirmed-safe remainder.
     for _repo in (dir_path, sibling_dir):
-        res = subprocess.run(
+        _add(
+            f"check_float_isfinite[{os.path.basename(_repo)}]",
             [python_exec, os.path.join(dir_path, "tools", "check_float_isfinite.py"), _repo],
-            capture_output=True,
-            text=True,
+            print_ok=False,
         )
-        if res.returncode != 0:
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
-            linters_failed = True
 
     # 51. check_res_config_settings_access -- ADR-0096, born from the real
     # night_shift_todo.md "saving ANY Settings page can crash with an
@@ -1320,42 +1367,24 @@ def main():
     # concretely: distributed_redis_cache's redis_password, cloudflare's
     # cloudflare_api_token). Same reasoning as step 30: always scans the
     # full repo, since a module adding this kind of row can happen anywhere.
-    res = subprocess.run(
+    _add(
+        "check_res_config_settings_access",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_res_config_settings_access.py"),
-            dir_path,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_res_config_settings_access.py"),
+        dir_path,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 52. check_cargo_fmt -- `cargo fmt -- --check` over the same crates step 36 lints. CI runs
     # this check on only one relay leg, which can start hours after a push; on 2026-09-15 three
     # rustfmt-only fix commits followed tested, clippy-clean relay feature commits. Check only,
     # never a rewrite, since this runs in the shared working tree. Same reasoning as step 35:
     # always scans the full repo, not a possibly-scoped `targets` list.
-    res = subprocess.run(
+    _add(
+        "check_cargo_fmt",
         [python_exec, os.path.join(dir_path, "tools", "check_cargo_fmt.py"), dir_path],
-        capture_output=True,
-        text=True,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 53. check_claims_freshness -- ADR 0091's own real, named follow-on ("not yet wired into
     # run_linters.py as of this ADR... a real, named follow-on, not forgotten"), finally wired in
@@ -1369,19 +1398,10 @@ def main():
     # session has real, active, in-progress work landing throughout them this same night. Always
     # scans `repo_root` (not the possibly-scoped `targets`), same reasoning as step 38: a claim
     # documents one function anywhere in the repo, not a property of any single target module.
-    res = subprocess.run(
+    _add(
+        "check_claims_freshness",
         [python_exec, os.path.join(dir_path, "tools", "check_claims_freshness.py"), repo_root],
-        capture_output=True,
-        text=True,
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 54. check_xml_attribute_position_comment -- a defensive, STYLE-ONLY convention: flags an
     # XML comment placed as a direct sibling of <attribute> elements inside an
@@ -1393,45 +1413,27 @@ def main():
     # before the <xpath>. Always scans the full repo, same reasoning as
     # check_xml_comment_double_hyphen.py immediately above: a view's own structural shape is
     # not a property of any single lint target module.
-    res = subprocess.run(
+    _add(
+        "check_xml_attribute_position_comment",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_xml_attribute_position_comment.py"),
-            dir_path,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_xml_attribute_position_comment.py"),
+        dir_path,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 55. check_doc_images -- no documentation page may show a fake, blank or copied placeholder
     # "screenshot" (the AI-generated 'Nexus ERP' New Sales Order form that ~40 manuals carried until
     # 2026-10-11), and every image a manual references must exist. Always scans both repos, same
     # reasoning as check_xml_comment_double_hyphen.py: not a property of any one target module.
-    res = subprocess.run(
+    _add(
+        "check_doc_images",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_doc_images.py"),
-            dir_path,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_doc_images.py"),
+        dir_path,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
 
     # 56. check_scss_math_functions -- Odoo compiles .scss with libsass, which EVALUATES min()/max()
     # and fails on mixed units (`min(12rem, 100%)`: "Incompatible units"); Odoo then swaps the whole
@@ -1441,26 +1443,52 @@ def main():
     # any one module (one broken file breaks the shared bundle for all of them).
     scss_roots = [dir_path]
     for sibling_name in ("hams_com", "hams_open"):
-        sibling_root = os.path.abspath(os.path.join(main_checkout_root, "..", sibling_name))
+        sibling_root = _sibling_checkout(repo_root, main_checkout_root, sibling_name)
         if os.path.isdir(sibling_root) and os.path.realpath(sibling_root) != os.path.realpath(main_checkout_root):
             scss_roots.append(sibling_root)
-    res = subprocess.run(
+    _add(
+        "check_scss_math_functions",
         [
-            python_exec,
-            os.path.join(dir_path, "tools", "check_scss_math_functions.py"),
-            *scss_roots,
-        ],
-        capture_output=True,
-        text=True,
+        python_exec,
+        os.path.join(dir_path, "tools", "check_scss_math_functions.py"),
+        *scss_roots,
+    ],
     )
-    if res.returncode != 0:
-        if res.stdout:
-            print(res.stdout, end="")
-        if res.stderr:
-            print(res.stderr, end="")
-        linters_failed = True
-    elif res.stdout and res.stdout.strip():
-        print(res.stdout, end="")
+
+    steps = _finalise_steps(steps)
+    skipped = []
+    if options.only or options.skip:
+        steps = _filter_by_name(steps, options.only, options.skip)
+    if options.list_steps:
+        for step in steps:
+            print(step.name)
+        sys.exit(0)
+    if changed_set is not None:
+        steps, skipped = lint_exec.select_for_changed(steps, changed_set, run_all)
+        print(
+            f"--changed {options.changed}: {len(changed_set)} changed files; running "
+            f"{len(steps)} steps, skipping {len(skipped)} whose inputs are unchanged"
+            + (" (checker tooling changed: running every step)" if run_all else "")
+        )
+
+    cache = None
+    fingerprints = None
+    if options.cache:
+        cache = lint_exec.Cache(_cache_path(dir_path))
+        fingerprints = lint_exec.InputFingerprints(os.path.realpath(tools_dir))
+
+    results = lint_exec.execute(steps, options.jobs, cache=cache, fingerprints=fingerprints)
+    wall = time.monotonic() - wall_start
+    linters_failed = any(r.returncode != 0 for r in results)
+    if options.timing or options.timing_top:
+        table = lint_exec.timing_table(results, skipped, wall, top=options.timing_top or None)
+        print("\n" + table, file=sys.stderr if options.timing_to_stderr else sys.stdout)
+
+    if not linters_failed and not (options.only or options.skip or target_modules_str):
+        _write_pass_stamps(
+            [repo_root, os.path.dirname(os.path.realpath(tools_dir))],
+            "changed" if changed_set is not None else "full",
+        )
 
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")
