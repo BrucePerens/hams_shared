@@ -409,7 +409,10 @@ class TestTestPyWiring(_TmpDirCase):
                   "HAMS_TEST_LOCK_HELD"):
             env.pop(k, None)
         env.update(extra_env or {})
-        return subprocess.run([sys.executable, _TEST_PY, "-u", "nonexistent_module", *args], env=env,
+        # --preflight-done: these tests are about the single-instance lock, which test.py takes after its pre-flight lint
+        # pass; without the flag a lint finding anywhere in the surrounding repo (or a worktree without the sibling repo) stops
+        # test.py before the lock and fails the tests for a reason that has nothing to do with the lock.
+        return subprocess.run([sys.executable, _TEST_PY, "--preflight-done", "-u", "nonexistent_module", *args], env=env,
                               capture_output=True, text=True, timeout=timeout, cwd=os.path.dirname(_HERE))
 
     def hold(self):
@@ -442,7 +445,7 @@ class TestTestPyWiring(_TmpDirCase):
 
     def test_waiter_takes_over_when_the_holder_releases(self):
         holder = self.hold()
-        p = subprocess.Popen([sys.executable, _TEST_PY, "-u", "nonexistent_module", "--wait"],
+        p = subprocess.Popen([sys.executable, _TEST_PY, "--preflight-done", "-u", "nonexistent_module", "--wait"],
                              env=dict(os.environ, HAMS_TEST_LOCK_PATH=self.lock_path,
                                       HAMS_SKIP_CI_LOAD_GATE="1", HAMS_ISOLATED_NS="1"),
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,

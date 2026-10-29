@@ -435,9 +435,46 @@ def _per_target_steps(add, python_exec, dir_path, script_name, targets, **option
         )
 
 
+# [@ANCHOR: run_linters:shared_checkout_staleness]
+def shared_checkout_staleness(shared_root):
+    """(commits_behind, is_main_checkout, error) for the hams_shared checkout at `shared_root` against origin/main.
+
+    Worktrees of hams_open and hams_com link their `hams_shared` to the MAIN hams_shared checkout
+    (fix_worktree_symlinks.py), so a main checkout that has fallen behind makes every worktree lint
+    and test against stale tools: on 2026-10-29 one that was 18 commits behind made `--changed` run
+    the whole tools suite for 12 minutes, fail 5 tests that pass on origin/main, and never write a
+    pass stamp. `git fetch` is tried first (20 s limit) so the comparison is not itself stale."""
+    try:
+        subprocess.run(["git", "-C", shared_root, "fetch", "-q", "origin"], capture_output=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    behind = _git_lines(shared_root, "rev-list", "--count", "HEAD..origin/main")
+    if not behind:
+        return None, False, "no origin/main to compare with"
+    git_dir = _git_lines(shared_root, "rev-parse", "--absolute-git-dir")
+    common = _git_lines(shared_root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    is_main = bool(git_dir and common and os.path.realpath(git_dir[0]) == os.path.realpath(common[0]))
+    return int(behind[0]), is_main, None
+
+
 def main():
     dir_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     repo_root = _resolve_repo_root(dir_path)
+
+    # 0. A stale main hams_shared checkout gives wrong results to every worktree that links to it.
+    if not os.environ.get("HAMS_ALLOW_STALE_SHARED"):
+        behind, is_main, _error = shared_checkout_staleness(os.path.realpath(dir_path))
+        if behind and is_main:
+            print(
+                f"🛑 The hams_shared checkout at {os.path.realpath(dir_path)} is {behind} commit(s) behind origin/main, so these "
+                "linters and their tests are not the current ones and the results (and the pass stamp) cannot be trusted.\n"
+                f"   Fix: git -C {os.path.realpath(dir_path)} merge --ff-only origin/main   "
+                "(or `git checkout --detach origin/main` if it is a detached submodule checkout),\n"
+                "   or set HAMS_ALLOW_STALE_SHARED=1 to run anyway."
+            )
+            sys.exit(2)
+        if behind:
+            print(f"⚠ This hams_shared worktree is {behind} commit(s) behind origin/main; rebase it to lint with the current tools.", file=sys.stderr)
 
     # 1. Anti-Symlink Mandate
     allowed_symlinks = {
