@@ -357,3 +357,11 @@ loopback. Also, `turnutils_uclient` sends no TLS server name, so it cannot reach
 **The Solution:** (a) Judge a handshake by what was negotiated: count the `New, TLSv1.2, Cipher is <name>` line, not the verify code. (b) Run two coturn instances
 from one policy (UDP on the public address with `no-tcp no-tls`; TLS on loopback with `no-udp` and `relay-ip=<public address>`), and test the TLS one from
 inside the host, or with a client that sends a server name (a browser, or a native probe that sets SNI).
+
+## 51. USB Hub Traps: uhubctl 2.6.0 and SuperSpeed Hubs, Port Directories in sysfs, Read-Only Does Not Mean Harmless (2026-10-29)
+**The Trap:** (a) `uhubctl -l 2-3` answers "No compatible devices detected at location 2-3!" for a SuperSpeed hub that plain `uhubctl` lists; `-e` (exact location, no USB 3 duality handling) is needed
+(`uhubctl -l 2-3 -e -p 4 -a off`). (b) A hub's per-port attributes (`state`, `over_current_count`, `disable`, `peer`) are in `<hub>/<hub>:1.0/<hub>-portN` (root hubs: `usbN/N-0:1.0/usbN-portM`), not in the hub's own
+directory. (c) `lsusb -v` and `uhubctl` print the hub class descriptor and the raw port status words only as root; `journalctl -k` and `dmesg` need the `systemd-journal`/`adm` group. (d) A test that "only"
+resets a device is not harmless on a shared bench: a test run with no protection config soft-reset a measurement unit's USB audio codec while another session was measuring.
+**The Solution:** (a) Pass `-e` for hubs whose sysfs `speed` is 5000 or more. (b) Read the port directories from the hub's interface directory. (c) Run those reads through `sudo -n` and report the failure as a declared field, never silently
+omit it. (d) Test mutating USB tools on a recorded copy of sysfs with a scripted `uhubctl`, or on a device nobody uses, and make the tool refuse the unit under measurement by default (the bench_mcp `usb_hub` module protects a configured VNA's hub port).
