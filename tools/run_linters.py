@@ -904,13 +904,19 @@ def main():
         if os.path.basename(f) not in _RUNNER_SCRIPTS_NOT_SUITES
     )
     if tool_test_files:
-        _add(
-            "pytest tools/",
-            [python_exec, "-m", "pytest", "-q"] + tool_test_files,
-            cwd=os.path.join(dir_path, "tools"),
-            fail_header="❌ hams_shared/tools/ unit test failures:",
-            inputs=((os.path.realpath(os.path.join(dir_path, "tools")),), None),
-        )
+        # The suites are independent files: four pytest processes (sized by file length so
+        # they finish together) instead of one that takes four minutes on its own.
+        sized = sorted(tool_test_files, key=lambda f: -os.path.getsize(f))
+        chunk_count = min(4, len(sized))
+        for chunk_index in range(chunk_count):
+            chunk = sorted(sized[chunk_index::chunk_count])
+            _add(
+                f"pytest tools/[{chunk_index + 1}of{chunk_count}]",
+                [python_exec, "-m", "pytest", "-q"] + chunk,
+                cwd=os.path.join(dir_path, "tools"),
+                fail_header="❌ hams_shared/tools/ unit test failures:",
+                inputs=((os.path.realpath(os.path.join(dir_path, "tools")),), None),
+            )
 
     # 28. hams_shared/scripts/ unit test suites -- same reasoning as step 27
     # above, for the one other directory of standalone dev-tooling scripts
