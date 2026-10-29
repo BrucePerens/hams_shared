@@ -4654,6 +4654,18 @@ def test_redundant_sys_path_append_of_file_dunder_is_a_hallucination():
     assert any("Redundant sys.path manipulation" in e for e in errors)
 
 
+def test_sys_path_insert_of_a_subdirectory_built_with_join_is_not_redundant():
+    content = (
+        "import sys, os\n"
+        "sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'relay_gate'))\n"
+    )
+    errors, _warnings = _scan_file(content, "some_module.py")
+    assert not any("Redundant sys.path manipulation" in e for e in errors)
+    own = "import sys, os\nsys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n"
+    errors, _warnings = _scan_file(own, "some_module.py")
+    assert any("Redundant sys.path manipulation" in e for e in errors)
+
+
 def test_a_daemon_file_importing_odoo_is_forbidden_daemon_decoupling():
     content = "import odoo\n"
     errors, _warnings = _scan_file(content, "daemons/some_daemon.py")

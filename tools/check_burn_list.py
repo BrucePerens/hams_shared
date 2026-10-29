@@ -220,7 +220,10 @@ GENERAL_ERROR_RULES = [
         # here made the same false claim for the same reason and has been
         # folded into this one instead of duplicated.
         r"^(?!.*daemons?/|.*parcel_extract\.py).*\.py$",
-        re.compile(r"sys\.path\.(append|insert)\((?!.*\.\.)[^)]*__file__[^)]*\)"),
+        # A path built with join() from the script's directory names a SUBDIRECTORY (os.path.join(
+        # dirname(__file__), "relay_gate")), which Python does not add on its own, so that is not the
+        # redundant "re-add my own directory" shape either.
+        re.compile(r"sys\.path\.(append|insert)\((?!.*\.\.)(?![^)]*\bjoin\()[^)]*__file__[^)]*\)"),
         "CRITICAL HALLUCINATION: Redundant sys.path manipulation. Python automatically resolves imports from the script's directory.",
     ),
     (
