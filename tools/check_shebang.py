@@ -56,6 +56,10 @@ def check_shebang(repo_dir):
                 continue
 
             file_path = os.path.join(root, file)
+            # A dangling symlink (recorded sysfs trees such as bench_mcp's usb_fixtures hold
+            # `driver` links into the machine they were recorded on) has no content to scan.
+            if os.path.islink(file_path) and not os.path.exists(file_path):
+                continue
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     heredoc_end = None
@@ -75,7 +79,11 @@ def check_shebang(repo_dir):
                             violations.append(
                                 f"{os.path.relpath(file_path, repo_dir)}:{i} Contains shebang `#!` on a line other than line 1"
                             )
-            except (UnicodeDecodeError, OSError) as e:
+            except UnicodeDecodeError:
+                # Binary content (a recorded USB `descriptors` blob): not a script, so it
+                # cannot carry a misplaced shebang. Not a warning.
+                continue
+            except OSError as e:
                 # Skip binary files or files with weird encodings (UnicodeDecodeError), AND any
                 # other realistic filesystem condition open() can raise for a name os.walk()
                 # already handed us as a "file" -- most concretely a broken symlink
