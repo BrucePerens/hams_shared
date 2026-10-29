@@ -242,6 +242,24 @@ Half-finished worktrees and branches were found by the hundred (about 300 local 
 * **Cleanup scripts must merge, not salvage.** Anything that finds uncommitted work in a worktree it is about to remove opens and merges a PR for it; it does not park it on a `salvage/` branch.
 * **`hams_shared/tools/worktree_hygiene.py REPO...`** lists stale worktrees and branches and, with `--apply`, removes the ones that are provably merged (clean tree, no commits beyond `origin/main` or tip equal to a merged PR head). It never touches dirty or unmerged work. It runs from a user timer every 30 minutes on the development machine (`tools/install_worktree_hygiene_timer.sh`); run it yourself at the start and the end of a session, and act on every STALE line it prints.
 
+## Linters: the pre-merge command (rule of 2026-10-29)
+
+The full `tools/run_linters.py` used to run its ~60 checks one after another (about 17 minutes on the
+shared dev box), so agents ran it scoped or not at all and new findings reached `main` unnoticed. It
+now runs steps in parallel (`-j`, default half the cores; `HAMS_LINT_JOBS`), prints each step's output
+in a fixed order, and ends with a per-step timing table.
+
+* **Before every merge run `nice -n 10 python3 tools/run_linters.py --changed`** from your worktree
+  root, with the work committed. It runs only the steps whose inputs differ from `origin/main`, scoped
+  to the changed modules and the modules that depend on them, and skips steps whose inputs are
+  byte-identical to their last passing run. A change under `hams_shared/tools/` runs every step.
+  On a clean pass it records a stamp for the commit; `devbox_tools/prmerge.sh` refuses to merge a
+  branch tip that has no stamp. A full `run_linters.py` (no options) also stamps.
+* `--list` names the steps; `--only a,b` / `--skip a,b` select steps (a selected run never stamps);
+  `-j 1` is the old sequential order; `--no-cache` ignores cached passes.
+* Never leave a finding for "someone else's PR". A finding in a file you did not touch is still a
+  failure of `main`: fix it in a small PR, never with an ignore tag or a wider baseline.
+
 ## Standing Conventions & Institutional Knowledge
 Durable, project-specific conventions, standing authorizations, and architectural philosophy
 (legal/licensing calls, repository/persistence conventions, autonomy and night-shift session

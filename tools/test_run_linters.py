@@ -19,9 +19,7 @@ tries to collect test.py/test_mcp_server.py and executes their
 module-level Odoo-launching code instead of running unit tests.
 """
 
-import contextlib
 import glob
-import io
 import os
 import re
 import shutil
@@ -29,7 +27,6 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import types
 import unittest
 from unittest import mock
 
@@ -360,62 +357,31 @@ class PreFlightCheckStepPrintsOnSuccessTests(unittest.TestCase):
     # tier_config.json exists anywhere in either repo -- so that notice never reached a live
     # CI/terminal output before this fix. Already flagged as a known, not-yet-fixed gap in
     # night_shift_todo.md.
-    def _extract_snippet(self):
-        source = _read_source()
-        match = re.search(
-            r"([ \t]*res = subprocess\.run\(pre_flight_cmd,.*?)\n\n    # 7\. Flake8",
-            source,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(
-            match,
-            "Could not locate the pre-flight-check step's source block in run_linters.py -- "
-            "its shape changed; update this test's extraction regex.",
-        )
-        return textwrap.dedent(match.group(1))
+    def _render(self, returncode, stdout, stderr):
+        import lint_exec
 
-    def _run_snippet(self, res):
-        # The extracted snippet's first statement is the real `subprocess.run(pre_flight_cmd,
-        # ...)` call this step actually makes -- stub both `subprocess.run` (to return the
-        # caller-supplied fake `res` instead of really invoking pre_flight_check.py) and
-        # `pre_flight_cmd` (never dereferenced by the stub, but referenced by the snippet's own
-        # source text) rather than trimming that line out of the extracted snippet, so the
-        # exact real source is exercised unmodified.
-        fake_subprocess = types.SimpleNamespace(run=lambda *args, **kwargs: res)
-        namespace = {
-            "subprocess": fake_subprocess,
-            "pre_flight_cmd": None,
-            "linters_failed": False,
-        }
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            exec(self._extract_snippet(), namespace)  # burn-ignore-exec-own-source: real source, not input
-        return buf.getvalue(), namespace["linters_failed"]
+        step = lint_exec.Step(name="pre_flight_check[m]", argv=["x"])
+        return lint_exec.render_output(step, returncode, stdout, stderr)
+
+    def test_the_pre_flight_step_is_declared_to_print_a_passing_runs_stdout(self):
+        source = _read_source()
+        block = source[source.index("pre_flight_cmd,"):]
+        block = block[: block.index("# 7. Flake8")]
+        self.assertNotIn("print_ok=False", block)
 
     def test_a_clean_pass_with_diagnostic_stdout_still_prints_it(self):
-        res = types.SimpleNamespace(
-            returncode=0,
-            stdout="[*] Module-tier architecture check skipped: tier_config.json not found.\n",
-            stderr="",
+        printed = self._render(
+            0, "[*] Module-tier architecture check skipped: tier_config.json not found.\n", ""
         )
-        printed, failed = self._run_snippet(res)
         self.assertIn("Module-tier architecture check skipped", printed)
-        self.assertFalse(failed)
 
     def test_a_clean_pass_with_no_stdout_prints_nothing(self):
-        res = types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        printed, failed = self._run_snippet(res)
-        self.assertEqual(printed, "")
-        self.assertFalse(failed)
+        self.assertEqual(self._render(0, "", ""), "")
 
-    def test_a_real_failure_still_sets_linters_failed_and_prints(self):
-        res = types.SimpleNamespace(
-            returncode=1, stdout="some violation\n", stderr="traceback\n"
-        )
-        printed, failed = self._run_snippet(res)
+    def test_a_real_failure_prints_stdout_and_stderr(self):
+        printed = self._render(1, "some violation\n", "traceback\n")
         self.assertIn("some violation", printed)
         self.assertIn("traceback", printed)
-        self.assertTrue(failed)
 
 
 if __name__ == "__main__":
