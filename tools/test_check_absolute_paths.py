@@ -85,6 +85,13 @@ class CheckAbsolutePathsTests(unittest.TestCase):
             [f"{os.path.join('daemons', 'other', 'vendor', 'Makefile')}:1 Contains hardcoded home path"],
         )
 
+    def test_the_frozen_handoff_and_proof_evidence_records_are_excluded_by_repo_relative_path(self):
+        for rel in ("docs/handoff/2026-10-x/scripts", "docs/reviews/relay_self_update_proof_evidence"):
+            _write(os.path.join(self.tmp, *rel.split("/"), "record.json"), f'{{"path": "{_HOME}/x"}}')
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+        _write(os.path.join(self.tmp, "docs", "other", "record.json"), f'{{"path": "{_HOME}/x"}}')
+        self.assertEqual(len(chk.check_absolute_paths(self.tmp)), 1)
+
     def test_mypy_cache_is_specifically_excluded(self):
         # Documented rationale: .mypy_cache's own .json files legitimately
         # embed real absolute paths as cached type-check data, not source.
