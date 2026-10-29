@@ -40,6 +40,27 @@ class CheckShebangTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "real_dir", "x.py"), "print('hi')\n")
         self.assertEqual(chk.check_shebang(self.tmp), [])
 
+    def test_binary_and_dangling_symlink_fixture_files_print_no_warning(self):
+        """A recorded sysfs fixture tree holds extensionless binary files (`descriptors`) and
+        symlinks into the recording machine (`driver`): neither is a script, neither may warn."""
+        import contextlib
+        import io
+
+        fixture = os.path.join(self.tmp, "usb_fixtures", "sys", "devices", "usb1")
+        os.makedirs(fixture)
+        with open(os.path.join(fixture, "descriptors"), "wb") as f:
+            f.write(bytes([0x12, 0x01, 0x00, 0x02, 0xE0, 0xFF, 0xFE, 0x80]))
+        os.symlink("../../../bus/usb/drivers/hub", os.path.join(fixture, "driver"))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            violations = chk.check_shebang(self.tmp)
+        self.assertEqual(violations, [])
+        self.assertNotIn("could not read", buf.getvalue())
+
+    def test_a_shebang_in_an_extensionless_text_file_is_still_flagged(self):
+        _write(os.path.join(self.tmp, "usb_fixtures", "notes"), "x\n#!/bin/sh\n")
+        self.assertEqual(len(chk.check_shebang(self.tmp)), 1)
+
     def test_a_shebang_on_line_one_is_never_a_violation(self):
         _write(os.path.join(self.tmp, "script.py"), "#!/usr/bin/env python3\nprint('hi')\n")
         self.assertEqual(chk.check_shebang(self.tmp), [])
