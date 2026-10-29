@@ -272,6 +272,25 @@ class ScanTreeAndBaselineTests(unittest.TestCase):
         gaps = cfta.scan_tree(self.tmp)
         self.assertEqual(gaps, {})
 
+    def test_a_fixture_recording_script_under_tests_is_not_scanned(self):
+        _write(
+            os.path.join(self.tmp, "daemons", "x", "tests", "usb_fixtures", "capture.py"),
+            "def capture():\n    pass\n",
+        )
+        _write(
+            os.path.join(self.tmp, "daemons", "x", "tests", "fixtures", "make_vectors.py"),
+            "def make():\n    pass\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = cfta.scan_tree(self.tmp)
+        self.assertEqual(gaps, {})
+
+    def test_a_fixtures_directory_outside_tests_is_still_scanned(self):
+        _write(os.path.join(self.tmp, "pkg", "fixtures", "loader.py"), "def load():\n    pass\n")
+        _init_git_repo(self.tmp)
+        gaps = cfta.scan_tree(self.tmp)
+        self.assertIn("pkg/fixtures/loader.py::load", gaps)
+
     def test_baseline_round_trips_through_save_and_load(self):
         gaps = {"foo.py::bar": True, "baz.py::qux": True}
         path = os.path.join(self.tmp, "baseline.json")

@@ -170,11 +170,26 @@ def _git_tracked_python_files(repo_root):
         parts = rel.split("/")
         if any(p in EXCLUDE_DIRS for p in parts):
             continue
+        if _is_test_fixture_script(parts):
+            continue
         basename = os.path.basename(rel)
         if basename.startswith("test_") or basename == "__init__.py":
             continue
         files.append(os.path.join(repo_root, rel))
     return files
+
+
+def _is_test_fixture_script(parts):
+    """True for a script that records or generates test fixtures: a `.py` file inside a
+    `fixtures` / `*_fixtures` directory that sits under a `tests` directory (for example
+    `daemons/bench_mcp/tests/usb_fixtures/capture.py`, which records /sys and `lsusb` output
+    once, by hand, as root-capable tooling). Such a script is neither product code nor a test: it
+    ships to no user and no test runs it, the same category `tools/` and `scripts/` already are
+    for this ratchet (and `tests/` is for the Rust one)."""
+    if "tests" not in parts[:-1]:
+        return False
+    below_tests = parts[parts.index("tests") + 1 : -1]
+    return any(p == "fixtures" or p.endswith("_fixtures") for p in below_tests)
 
 
 def _direct_functions(body, class_stack):
