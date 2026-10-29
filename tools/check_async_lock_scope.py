@@ -137,6 +137,10 @@ def check_file(path):
             tracked = [t for t in tracked if t["name"] not in explicit_drop_names]
 
             m = _BINDING_RE.match(line)
+            # `let x = *cell.lock().await;` copies the value out: the guard is a temporary that
+            # dies at the end of this statement, and `x` holds no lock.
+            if m and re.search(r"=\s*\*", line):
+                m = None
             # An underscore-prefixed name (`_guard`, `_session_write_guard`) is Rust's own
             # idiom for "this binding exists only to be held, not to access data through it" --
             # confirmed as the real, intentional pattern behind every such name this checker
@@ -149,9 +153,17 @@ def check_file(path):
             elif ".await" in line:
                 # A guard bound OUTSIDE a currently-open spawn boundary can never actually be
                 # held at this .await -- see _SPAWN_BOUNDARY_RE's own comment.
+                # An await that is a call of the guarded value's own async method
+                # (`manager.stop().await`) is the use the lock exists for -- exclusive access to
+                # that value across its async API -- not an unrelated slow call made while the
+                # lock sits idle.
                 reachable = [
                     t for t in tracked
                     if not any(barrier > t["depth"] for barrier in spawn_barriers)
+                    and not re.match(
+                        r"^\s*(?:let\s+(?:mut\s+)?\w+\s*=\s*|return\s+)?" + re.escape(t["name"]) + r"\.\w+\(",
+                        line,
+                    )
                 ]
                 for t in reachable:
                     findings.append((
