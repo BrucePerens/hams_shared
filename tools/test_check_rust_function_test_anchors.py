@@ -133,6 +133,49 @@ class ScanTreeTests(unittest.TestCase):
         self.assertIn("foo.rs::real", gaps)
         self.assertNotIn("foo.rs::tests::it_works", gaps)
 
+    def test_a_file_pulled_in_only_by_a_cfg_test_path_module_is_excluded(self):
+        _write(
+            os.path.join(self.tmp, "src", "foo.rs"),
+            f"fn real(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n"
+            '#[cfg(test)]\n#[path = "foo_tests.rs"]\nmod tests;\n',
+        )
+        _write(
+            os.path.join(self.tmp, "src", "foo_tests.rs"),
+            f"fn helper(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = crfta.scan_tree(self.tmp)
+        self.assertIn("src/foo.rs::real", gaps)
+        self.assertNotIn("src/foo_tests.rs::helper", gaps)
+
+    def test_a_cfg_test_module_file_found_by_name_next_to_lib_rs_is_excluded(self):
+        _write(
+            os.path.join(self.tmp, "src", "lib.rs"),
+            "pub mod real;\n#[cfg(test)]\nmod checks;\n",
+        )
+        _write(
+            os.path.join(self.tmp, "src", "checks.rs"),
+            f"fn helper(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
+        )
+        _write(
+            os.path.join(self.tmp, "src", "real.rs"),
+            f"fn used(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = crfta.scan_tree(self.tmp)
+        self.assertIn("src/real.rs::used", gaps)
+        self.assertNotIn("src/checks.rs::helper", gaps)
+
+    def test_a_module_file_without_cfg_test_is_still_scanned(self):
+        _write(os.path.join(self.tmp, "src", "lib.rs"), "mod prod;\n")
+        _write(
+            os.path.join(self.tmp, "src", "prod.rs"),
+            f"fn used(x: i32) -> i32 {{\n    {self._NONTRIVIAL_BODY}\n}}\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = crfta.scan_tree(self.tmp)
+        self.assertIn("src/prod.rs::used", gaps)
+
     def test_a_top_level_tests_directory_is_excluded_by_directory_name(self):
         _write(
             os.path.join(self.tmp, "tests", "integration.rs"),

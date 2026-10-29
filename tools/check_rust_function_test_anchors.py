@@ -45,6 +45,7 @@ by adding `fuzz` to `EXCLUDE_DIRS` and a `build.rs`-basename check alongside it.
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -98,6 +99,31 @@ def _git_tracked_rust_files(repo_root):
             continue
         files.append(os.path.join(repo_root, rel))
     return files
+
+
+# `#[cfg(test)]` (optionally with `#[path = "..."]`) on an out-of-line `mod name;` declaration.
+_CFG_TEST_FILE_MODULE = re.compile(
+    r'#\[cfg\(test\)\]\s*(?:#\[path\s*=\s*"([^"]+)"\]\s*)?(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;'
+)
+
+
+def _cfg_test_module_files(path, content):
+    """The files that `path`'s `#[cfg(test)] mod name;` declarations pull in (via `#[path]`, or
+    `name.rs` / `name/mod.rs` next to a crate-root, `mod.rs` or `lib.rs`/`main.rs`, or in a `stem/`
+    directory next to any other file). A file reached only that way is compiled for tests alone:
+    its functions are test helpers, exactly like the functions inside an in-file `#[cfg(test)]
+    mod tests { ... }`, which the scanner already skips."""
+    here = os.path.dirname(path)
+    stem = os.path.splitext(os.path.basename(path))[0]
+    base = here if stem in ("lib", "main", "mod") else os.path.join(here, stem)
+    found = []
+    for explicit, name in _CFG_TEST_FILE_MODULE.findall(content):
+        if explicit:
+            found.append(os.path.normpath(os.path.join(here, explicit)))
+        else:
+            found.append(os.path.normpath(os.path.join(base, name + ".rs")))
+            found.append(os.path.normpath(os.path.join(base, name, "mod.rs")))
+    return found
 
 
 def _ensure_scan_binary_built():
@@ -175,6 +201,13 @@ def scan_tree(repo_root):
             continue
         file_contents[filepath] = content
         candidate_files.append(filepath)
+
+    test_only_files = {
+        os.path.normpath(test_file)
+        for filepath, content in file_contents.items()
+        for test_file in _cfg_test_module_files(filepath, content)
+    }
+    candidate_files = [f for f in candidate_files if os.path.normpath(f) not in test_only_files]
 
     scanned = _run_rust_scan(candidate_files)
 
