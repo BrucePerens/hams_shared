@@ -87,8 +87,15 @@ def check_absolute_paths(repo_dir):
     # an upstream Makefile naming a developer's home directory is upstream's content, not a path in
     # our code. Matched by exact repo-relative path (not by directory name) so a directory that merely
     # happens to be called "vendor" elsewhere in the repo is still checked.
+    # Also here, as frozen records in the manner of archive/ above: docs/handoff/ holds verbatim snapshots of
+    # an earlier agent session's working files (its briefs, memory notes and driver scripts), and
+    # docs/reviews/relay_self_update_proof_evidence/ holds the captured JSON output of the self-update proof
+    # runs, whose recorded paths (the proof user's home inside the test container) are the evidence.
+    # Rewriting a path in either would make the record inaccurate, not correct.
     ignore_rel_dirs = {
         "daemons/cloudflared/vendor",
+        "docs/handoff",
+        "docs/reviews/relay_self_update_proof_evidence",
     }
     # Only check text-based files
     valid_exts = {
