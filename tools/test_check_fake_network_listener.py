@@ -190,6 +190,37 @@ class FindCandidateFilesTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_mock_implementing_a_usb_documented_trait_is_not_a_network_fake(self):
+        """rsp_open's MockTransport implements a trait documented as a USB connection: no
+        socket wire traffic exists to bind a listener for."""
+        usb = _write(
+            os.path.join(self.tmp, "usb.rs"),
+            "/// What the driver needs from a USB connection to the receiver.\n"
+            "pub trait Transport: Send {}\n"
+            "pub struct MockTransport;\n"
+            "impl Transport for MockTransport {}\n",
+        )
+        self.assertEqual(chk.check_file(usb), [])
+
+    def test_mock_transport_for_an_undocumented_or_non_usb_trait_still_flags(self):
+        net = _write(
+            os.path.join(self.tmp, "net.rs"),
+            "/// Framed byte stream to the cloud.\n"
+            "pub trait Transport: Send {}\n"
+            "pub struct MockTransport;\n"
+            "impl Transport for MockTransport {}\n",
+        )
+        self.assertEqual([ln for ln, _ in chk.check_file(net)], [3])
+        usb_other = _write(
+            os.path.join(self.tmp, "usb_other.rs"),
+            "/// USB device.\n"
+            "pub trait Device: Send {}\n"
+            "pub trait Transport: Send {}\n"
+            "pub struct MockTransport;\n"
+            "impl Transport for MockTransport {}\n",
+        )
+        self.assertEqual([ln for ln, _ in chk.check_file(usb_other)], [4])
+
     def test_rust_files_are_always_candidates(self):
         _write(os.path.join(self.tmp, "src", "main.rs"), "// x\n")
         found = chk.find_candidate_files(self.tmp)
