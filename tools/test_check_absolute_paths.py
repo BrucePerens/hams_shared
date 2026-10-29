@@ -74,6 +74,17 @@ class CheckAbsolutePathsTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "node_modules", "pkg", "index.js"), f"'{_HOME}'")
         self.assertEqual(chk.check_absolute_paths(self.tmp), [])
 
+    def test_the_vendored_cloudflared_tree_is_excluded_by_repo_relative_path_only(self):
+        # daemons/cloudflared/vendor is upstream's source (an upstream Makefile names a developer's
+        # home directory); a directory that is merely called "vendor" elsewhere is still checked.
+        _write(os.path.join(self.tmp, "daemons", "cloudflared", "vendor", "otel", "Makefile"), f"cd {_HOME}\n")
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+        _write(os.path.join(self.tmp, "daemons", "other", "vendor", "Makefile"), f"cd {_HOME}\n")
+        self.assertEqual(
+            chk.check_absolute_paths(self.tmp),
+            [f"{os.path.join('daemons', 'other', 'vendor', 'Makefile')}:1 Contains hardcoded home path"],
+        )
+
     def test_mypy_cache_is_specifically_excluded(self):
         # Documented rationale: .mypy_cache's own .json files legitimately
         # embed real absolute paths as cached type-check data, not source.

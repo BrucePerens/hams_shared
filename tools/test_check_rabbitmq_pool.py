@@ -50,6 +50,25 @@ class CheckRabbitmqTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "foo.py"), "conn = pika.SelectConnection(params)\n")
         self.assertEqual(len(chk.check_rabbitmq(self.tmp)), 1)
 
+    def test_the_names_in_a_comment_or_a_string_literal_are_not_instantiations(self):
+        _write(
+            os.path.join(self.tmp, "foo.py"),
+            "# a mocked pika.BlockingConnection\n"
+            "target = 'daemon.generalized_monitor.pika.BlockingConnection'\n"
+            "doc = \"\"\"pika.SelectConnection\n\"\"\"\n",
+        )
+        self.assertEqual(chk.check_rabbitmq(self.tmp), [])
+
+    def test_a_multiline_call_is_flagged_on_the_line_of_the_name(self):
+        _write(os.path.join(self.tmp, "foo.py"), "x = 1\nconn = (\n    pika.BlockingConnection(params)\n)\n")
+        violations = chk.check_rabbitmq(self.tmp)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("foo.py:3", violations[0])
+
+    def test_an_untokenizable_file_falls_back_to_the_line_regex(self):
+        _write(os.path.join(self.tmp, "foo.py"), "conn = pika.BlockingConnection(\n\"\"\"unterminated\n")
+        self.assertEqual(len(chk.check_rabbitmq(self.tmp)), 1)
+
     def test_the_bypass_comment_exempts_that_line(self):
         _write(
             os.path.join(self.tmp, "foo.py"),
