@@ -83,6 +83,7 @@ reflexively just because a new file trips this check.
 """
 
 import ast
+from concurrent.futures import ThreadPoolExecutor
 import os
 import subprocess
 import sys
@@ -251,22 +252,30 @@ def main():
     # mypy's default module-name inference collides same-basename files
     # across different directories ("Duplicate module named main") when
     # given as a single batch with no __init__.py markers to disambiguate.
-    any_failed = False
-    for repo_root, candidate in candidates:
-        res = subprocess.run(
+    # The files are independent, so the mypy runs overlap (a whole-repo scan of hundreds of
+    # files took five minutes one after another). Output is printed in candidate order, so the
+    # text is the same as the sequential run's. $HAMS_LINT_JOBS bounds the workers.
+    def run_one(item):
+        repo_root, candidate = item
+        return subprocess.run(
             ["mypy", "--check-untyped-defs", "--ignore-missing-imports", candidate],
             capture_output=True,
             text=True,
             cwd=repo_root,
         )
-        if res.returncode != 0:
-            if not any_failed:
-                print("❌ mypy findings in non-Odoo-model utility files:")
-            any_failed = True
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
+
+    workers = max(1, int(os.environ.get("HAMS_LINT_JOBS", "0")) or (os.cpu_count() or 2) // 2)
+    any_failed = False
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for res in pool.map(run_one, candidates):
+            if res.returncode != 0:
+                if not any_failed:
+                    print("❌ mypy findings in non-Odoo-model utility files:")
+                any_failed = True
+                if res.stdout:
+                    print(res.stdout, end="")
+                if res.stderr:
+                    print(res.stderr, end="")
 
     sys.exit(1 if any_failed else 0)
 

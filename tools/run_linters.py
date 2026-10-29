@@ -271,6 +271,15 @@ def _finalise_steps(steps):
             step.suffixes = meta["suffixes"]
         if "lock" in meta:
             step.lock = meta["lock"]
+            if meta["lock"] == "cargo" and not os.environ.get("CARGO_TARGET_DIR"):
+                # One build directory outside every worktree (AGENTS.md: never a per-worktree
+                # target/): warm after the first run, and the "cargo" lock keeps the steps that
+                # share it from overlapping.
+                env = dict(step.env if step.env is not None else os.environ)
+                env["CARGO_TARGET_DIR"] = os.path.join(
+                    os.path.expanduser("~"), ".cache", "hams-cargo-target-lint"
+                )
+                step.env = env
         if "cacheable" in meta:
             step.cacheable = meta["cacheable"]
     return steps
