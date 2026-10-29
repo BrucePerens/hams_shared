@@ -307,6 +307,7 @@ it describes. These tags cover that, and nothing else.
 | `burn-ignore-noqa-example` | A fixture string containing `# noqa`, in a test of the noqa ban itself. |
 | `burn-ignore-vendor-patch-text` | A string literal used as search-and-replace data for patching a vendored third-party file, or a linter fixture containing forbidden text. |
 | `# burn-ignore-test-daemon-thread` | `threading.Thread(..., daemon=True)` in a test that drives a real infinite-loop daemon function end to end. |
+| `# burn-ignore-bounded-daemon-thread: <what bounds it>` | `threading.Thread(..., daemon=True)` in production code whose lifecycle is bounded in the code itself: at most one per process (or per registry class), started lazily, stopped by an Event, and ended by the thread itself when its work is gone (a keepalive or flusher, not a thread per request or per record). The comment must say what bounds it. First use: the hams_rabbitmq pool keepalive thread. |
 | `# burn-ignore-test-tags` | `check_test_tags.py`'s required-tags check, for a test file that deliberately carries none. |
 
 ### Odoo structure exceptions

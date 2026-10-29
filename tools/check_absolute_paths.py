@@ -83,6 +83,13 @@ def check_absolute_paths(repo_dir):
         # missed a real stray "whisper_venv/" (see check_float_isfinite.py's own comment/test).
         "site-packages",
     }
+    # Vendored third-party source trees (repo-relative paths): their files are not ours to edit, and
+    # an upstream Makefile naming a developer's home directory is upstream's content, not a path in
+    # our code. Matched by exact repo-relative path (not by directory name) so a directory that merely
+    # happens to be called "vendor" elsewhere in the repo is still checked.
+    ignore_rel_dirs = {
+        "daemons/cloudflared/vendor",
+    }
     # Only check text-based files
     valid_exts = {
         ".py",
@@ -99,7 +106,12 @@ def check_absolute_paths(repo_dir):
 
     for root, dirs, files in os.walk(repo_dir):
         # Modify dirs in-place to ignore specified directories
-        dirs[:] = [d for d in dirs if d not in ignore_dirs]
+        dirs[:] = [
+            d
+            for d in dirs
+            if d not in ignore_dirs
+            and os.path.relpath(os.path.join(root, d), repo_dir) not in ignore_rel_dirs
+        ]
 
         for file in files:
             ext = os.path.splitext(file)[1]

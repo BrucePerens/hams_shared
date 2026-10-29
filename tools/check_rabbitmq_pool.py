@@ -9,6 +9,31 @@ but instead use the hams_rabbitmq.pool global connection.
 import os
 import sys
 import re
+import io
+import tokenize
+
+def _code_hits(text, pattern):
+    """1-based line numbers where `pika.BlockingConnection` / `pika.SelectConnection` appears in CODE.
+
+    Only NAME/OP tokens count, so the same text inside a comment or a string literal (for example a
+    mock.patch("...generalized_monitor.pika.BlockingConnection") target, or a sentence in a comment)
+    is not an instantiation and is not reported. A file that cannot be tokenized falls back to the
+    plain per-line regex, so a broken file is never silently skipped.
+    """
+    try:
+        toks = [
+            t
+            for t in tokenize.generate_tokens(io.StringIO(text).readline)
+            if t.type in (tokenize.NAME, tokenize.OP)
+        ]
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return [i for i, line in enumerate(text.splitlines(), 1) if pattern.search(line)]
+    hits = []
+    for a, b, c in zip(toks, toks[1:], toks[2:]):
+        if a.string == "pika" and b.string == "." and c.string in ("BlockingConnection", "SelectConnection"):
+            hits.append(a.start[0])
+    return hits
+
 
 def check_rabbitmq(repo_dir):
     violations = []
@@ -55,11 +80,13 @@ def check_rabbitmq(repo_dir):
 
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
-                    for i, line in enumerate(f, 1):
-                        if pattern.search(line) and "# burn-ignore-pika" not in line:
-                            violations.append(
-                                f"{os.path.relpath(file_path, repo_dir)}:{i} Instantiates pika connection directly. Use env['hams_rabbitmq.pool'] instead."
-                            )
+                    text = f.read()
+                lines = text.splitlines()
+                for i in _code_hits(text, pattern):
+                    if "# burn-ignore-pika" not in lines[i - 1]:
+                        violations.append(
+                            f"{os.path.relpath(file_path, repo_dir)}:{i} Instantiates pika connection directly. Use env['hams_rabbitmq.pool'] instead."
+                        )
             except (UnicodeDecodeError, OSError) as e:
                 # OSError added 2026-09-10: a broken symlink (target doesn't exist) with a
                 # .py extension makes open() raise FileNotFoundError, not caught before this
