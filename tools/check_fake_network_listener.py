@@ -58,6 +58,14 @@ _REAL_BIND_RE = re.compile(
     r"TcpListener::bind|axum::serve|\.bind\(\s*[\"'(]|HTTPServer\(|socketserver\.|"
     r"websockets\.serve\(|serve_forever\("
 )
+# A Rust trait whose own doc comment says it models a USB (or other local-bus) connection, e.g.
+# rsp_open's `Transport` ("What the driver needs from a USB connection to the receiver"). A
+# `MockTransport` implementing such a trait stands in for a hardware bus, not for socket wire
+# traffic, so there is no listener a real client could connect to -- the "Transport" suffix is a
+# name collision, not a network primitive.
+_USB_TRAIT_RE = re.compile(
+    r"((?:[ \t]*///[^\n]*\n|[ \t]*#\[[^\n]*\]\n)+)[ \t]*(?:pub(?:\([^)]*\))?\s+)?trait\s+(\w+)"
+)
 _IGNORE_RE = re.compile(r"fake-network-ignore\s*:\s*\S")
 _TEST_PATH_RE = re.compile(r"(?:^|/)tests?/|(?:^|/)test_[^/]*\.py$|_test\.py$")
 
@@ -79,6 +87,15 @@ def find_candidate_files(repo_root):
     return sorted(found)
 
 
+def _usb_traits(content):
+    """Names of traits in `content` whose doc comment mentions USB."""
+    return {
+        m.group(2)
+        for m in _USB_TRAIT_RE.finditer(content)
+        if re.search(r"\bUSB\b", m.group(1))
+    }
+
+
 def check_file(path):
     """Returns a list of (line_num, message) findings for one file."""
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -88,11 +105,17 @@ def check_file(path):
         return []
 
     findings = []
+    usb_traits = _usb_traits(content)
     for i, line in enumerate(content.splitlines()):
         if _IGNORE_RE.search(line):
             continue
         m = _FAKE_TYPE_RE.search(line)
         if m:
+            if any(
+                re.search(rf"\bimpl\s+{re.escape(t)}\s+for\s+{re.escape(m.group(1))}\b", content)
+                for t in usb_traits
+            ):
+                continue
             findings.append((
                 i + 1,
                 f"`{m.group(1)}` looks like a hand-rolled fake standing in for a network "
