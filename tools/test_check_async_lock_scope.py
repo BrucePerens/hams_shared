@@ -151,6 +151,39 @@ class CheckFileTests(unittest.TestCase):
         )
         self.assertEqual(chk.check_file(path), [])
 
+    def test_a_value_copied_out_of_the_guard_holds_no_lock(self):
+        """`let t = *cell.lock().await;` -- the guard is a temporary, `t` is a plain copy."""
+        path = _write_rs(
+            self.tmp,
+            "async fn f(c: &Mutex<u32>, s: &Sock) {\n"
+            "    let t = *c.lock().await;\n"
+            "    s.send(t).await;\n"
+            "}\n",
+        )
+        self.assertEqual(chk.check_file(path), [])
+
+    def test_an_await_on_the_guards_own_async_method_is_not_flagged(self):
+        """A method of the guarded value is the use the lock is for."""
+        path = _write_rs(
+            self.tmp,
+            "async fn f(m: &Mutex<Manager>) {\n"
+            "    let mut manager = m.lock().await;\n"
+            "    manager.stop().await;\n"
+            "    let r = manager.restart().await;\n"
+            "}\n",
+        )
+        self.assertEqual(chk.check_file(path), [])
+
+    def test_a_slow_call_that_merely_reads_the_guard_is_still_flagged(self):
+        path = _write_rs(
+            self.tmp,
+            "async fn f(m: &Mutex<State>) {\n"
+            "    let st = m.lock().await;\n"
+            "    st.client.post(url).send().await;\n"
+            "}\n",
+        )
+        self.assertEqual(len(chk.check_file(path)), 1)
+
     def test_an_underscore_prefixed_name_is_never_flagged(self):
         # Rust's own idiom for "deliberately held for the whole scope" -- confirmed as the
         # real, intentional pattern behind every such name found in this codebase's own test
