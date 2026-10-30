@@ -1225,6 +1225,70 @@ def exception_report_dropin_entries(manifest):
     return entries
 
 
+# [@ANCHOR: infrastructure:oneshot_run_timeout]
+# A Type=oneshot service has no start timeout by default (systemd: TimeoutStartSec=infinity for oneshot). The timer-driven syncs,
+# exports and enrichers are all oneshots, so a hung fetch or RPC ran forever: the timer skipped every later fire, the unit
+# never failed, and OnFailure= (the exception report) never fired. Measured on hams1 2026-10-30: 45 oneshots with
+# TimeoutStartUSec=infinity. Every prod/test oneshot that sets no TimeoutStartSec of its own gets a generated drop-in with a bound,
+# so a hang ends in Result=timeout, a failed unit and a ticket (daemon error-handling audit, hams_com
+# docs/reviews/DAEMON_ERROR_HANDLING_AUDIT.md, F4). The default is about four times the longest run seen in 21 days of hams1's
+# journal (callbook.geo.enrich at 31 minutes; everything else under 14); the two overrides are for the unit that runs every two
+# minutes (a hung run must not block the next dozens of fires) and for the one whose `--full` repair pass is much longer.
+# Units in EXCEPTION_REPORT_EXCLUDED_UNITS stay with the work that owns them (tenant, backup) and are left alone.
+ONESHOT_RUN_TIMEOUT_DROPIN_NAME = "hams-run-timeout.conf"
+ONESHOT_RUN_TIMEOUT_DEFAULT = "2h"
+ONESHOT_RUN_TIMEOUT_OVERRIDES = {
+    "ses.inbound.mail.ingest.service": "30min",
+    "callbook.geo.enrich.service": "6h",
+}
+
+
+def _unit_directives(content):
+    """The unit text without comment lines, as {key: value} (first occurrence wins; enough for Type= and TimeoutStartSec=)."""
+    found = {}
+    for line in (content or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        key, sep, value = line.partition("=")
+        if sep:
+            found.setdefault(key.strip(), value.strip())
+    return found
+
+
+def oneshot_run_timeout_dropin_entries(manifest):
+    """The MANIFEST static_files entries (one drop-in each) bounding every Type=oneshot service that sets no TimeoutStartSec."""
+    entries = []
+    for spec in manifest["static_files"]:
+        path = spec["path"]
+        name = os.path.basename(path)
+        if (
+            os.path.dirname(path) != "/opt/hams/systemd"
+            or not name.endswith(".service")
+            or name in EXCEPTION_REPORT_EXCLUDED_UNITS
+        ):
+            continue
+        directives = _unit_directives(spec.get("content"))
+        if directives.get("Type") != "oneshot" or "TimeoutStartSec" in directives:
+            continue
+        timeout = ONESHOT_RUN_TIMEOUT_OVERRIDES.get(name, ONESHOT_RUN_TIMEOUT_DEFAULT)
+        entry = {
+            "path": f"/etc/systemd/system/{name}.d/{ONESHOT_RUN_TIMEOUT_DROPIN_NAME}",
+            "content": (
+                "# Written by hams_shared tools/infrastructure.py (MANIFEST). A hung run ends as a failed unit (Result=timeout)\n"
+                "# and is reported by OnFailure=, instead of running forever and silencing its timer.\n"
+                f"[Service]\nTimeoutStartSec={timeout}\n"
+            ),
+            "owner": "root:root",
+            "mode": "644",
+            "environments": list(spec.get("environments", ["prod", "test"])),
+        }
+        if spec.get("host_class"):
+            entry["host_class"] = spec["host_class"]
+        entries.append(entry)
+    return entries
+
+
 def _is_server_unit(entry):
     """True for a unit file of the hams.com server (the prod or test environment). A unit of another host,
     such as the FCC sync on pi500-1, which has its own User=, is not part of the account ratchets."""
@@ -10373,6 +10437,8 @@ expand_manifest_tokens(MANIFEST)
 
 # One OnFailure drop-in per production service (see EXCEPTION_REPORT_EXCLUDED_UNITS).
 MANIFEST["static_files"].extend(exception_report_dropin_entries(MANIFEST))
+# One start-timeout drop-in per oneshot service that has none of its own (see oneshot_run_timeout_dropin_entries).
+MANIFEST["static_files"].extend(oneshot_run_timeout_dropin_entries(MANIFEST))
 
 
 def scaffold_test_environment(args_db, provision_dirs=True):
