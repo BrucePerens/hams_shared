@@ -45,7 +45,7 @@ live elsewhere.
 
 - **`~bruce` (the dev box home directory) does not persist.** Bruce's own words: "~bruce won't
   migrate with the server. Anything we want to be persistent should be in one of our three
-  repositories." Every file, script, cron job, or config created under `/home/bruce/` on the current
+  repositories." Every file, script, cron job, or config created under `~bruce/` on the current
   dev box is ephemeral relative to the real hams.com deployment. When building a tool or piece of
   automation for a real, ongoing operational need, commit it into the appropriate repository (e.g.
   `hams_shared/tools/` for a general-purpose script) rather than leaving it to live only under

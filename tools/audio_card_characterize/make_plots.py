@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Plot the JSON/CSV results written by characterize.py into PNG files.  usage: make_plots.py <data dir> <out dir>
 
 matplotlib only; every plot is skipped (with a message) when its data file is missing.
