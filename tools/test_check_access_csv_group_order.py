@@ -287,16 +287,24 @@ def _write_group_xml(path, group_ids):
     )
 
 
+_CROSS_MODULE = "base"
+
+
 def _write_access_csv(path, module_name, referenced_groups, include_cross_module_ref):
     rows = ["id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink"]
     for i, g in enumerate(referenced_groups):
         rows.append(f"access_{i},thing_{i},model_thing,{module_name}.{g},1,1,1,1")
     if include_cross_module_ref:
-        rows.append("access_cross,thing_cross,model_thing,base.group_system,1,1,1,1")
+        rows.append(f"access_cross,thing_cross,model_thing,{_CROSS_MODULE}.group_system,1,1,1,1")
     _write(path, "\n".join(rows) + "\n")
 
 
-_SAFE_NAME = st.text(alphabet="abcdefghijklmnopqrstuvwxyz", min_size=3, max_size=8)
+# A generated module must not be named like the module the cross-module reference points at: hypothesis
+# draws string constants it finds in this file, found "base" (2026-10-30), and the "cross-module" reference
+# was then a same-module reference to a group the module does not define, which the checker rightly flags.
+_SAFE_NAME = st.text(alphabet="abcdefghijklmnopqrstuvwxyz", min_size=3, max_size=8).filter(
+    lambda name: name != _CROSS_MODULE
+)
 
 
 @st.composite
