@@ -272,6 +272,27 @@ class DaemonChangeSelectionTests(SelectionFixture):
 
 
 class ModuleChangeSelectionTests(SelectionFixture):
+    def burn_list_targets(self, *changes):
+        """The scan roots `check_burn_list` is started with for these changes: whole repository, or the changed modules."""
+        for relative, text in changes:
+            _write(os.path.join(self.ws, relative), text)
+        result = self.run_script("--changed", "--list")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return sorted(line for line in result.stdout.splitlines() if line.startswith("check_burn_list"))
+
+    def test_a_rust_change_beside_a_module_change_leaves_the_checkers_on_the_changed_modules(self):
+        only_module = self.burn_list_targets(("hams_open/zero_sudo/static/src/js/a.js", "export const a = 2;\n"))
+        with_rust = self.burn_list_targets(("hams_open/daemons/bench/src/main.rs", "fn main() { }\n"))
+        self.assertEqual(only_module, ["check_burn_list[hams_helpdesk]", "check_burn_list[zero_sudo]"])
+        self.assertEqual(with_rust, only_module, "a Rust file cannot change what the burn list reports")
+
+    def test_a_python_change_beside_a_module_change_still_widens_the_checkers_to_the_whole_repository(self):
+        names = self.burn_list_targets(
+            ("hams_open/zero_sudo/static/src/js/a.js", "export const a = 2;\n"),
+            ("hams_open/daemons/bench/tools/helper.py", "VALUE = 2\n"),
+        )
+        self.assertEqual(names, ["check_burn_list"])
+
     def test_a_python_change_in_a_module_runs_that_module_and_its_dependents(self):
         chosen = self.selected(("hams_open/zero_sudo/models/model.py", "X = 2\n"))
         self.assertIn("pre_flight_check[zero_sudo]", chosen)

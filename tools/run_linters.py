@@ -476,6 +476,22 @@ def changed_outside_modules(changed, repo_root, community_dir):
     return outside
 
 
+# Rust sources and cargo manifests: none of the per-module checkers (burn list, JS syntax, test tags, shebang, absolute paths,
+# manifest dependencies, flake8, ...) reads them, and the Rust steps take their own whole-repository arguments.
+_RUST_ONLY_NAMES = frozenset({"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "deny.toml", "clippy.toml", "rustfmt.toml"})
+
+
+def widens_module_scope(path):
+    """Whether a changed file outside every module hands the per-module checkers the whole repository.
+
+    It did for any file, so a Rust change in daemons/ made the burn list scan every Python, XML and JavaScript file in the
+    repository: a change to one JavaScript file and one Rust test link could not pass while an unrelated Python file elsewhere
+    had a finding (2026-10-30, the circular red main). A Rust file cannot change what those checkers report, so it leaves the
+    scope alone; every other file type still widens it."""
+    name = os.path.basename(path)
+    return not (name.endswith(".rs") or name in _RUST_ONLY_NAMES)
+
+
 def find_eslint_toolchain(hams_shared_dir):
     """{"eslint_bin", "node_modules"} for the first hams_shared checkout that has ESLint installed,
     or None: `hams_shared_dir` itself, then the main worktree of its git repository (a worktree
@@ -821,7 +837,7 @@ def main():
     outside_modules = []
     if changed_set is not None and not target_modules_str and not run_all:
         outside_modules = changed_outside_modules(changed_set, repo_root, community_dir)
-        if outside_modules:
+        if any(widens_module_scope(path) for path in outside_modules):
             # Files outside every module (daemons/, ingest/, scripts) changed: the per-module
             # checkers scan those trees in a full run, so they get the whole repository here too.
             targets = [repo_root]
