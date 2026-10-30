@@ -55,8 +55,8 @@ def _find_repo_root(start_dir):
     """The nearest ancestor whose `hams_shared` is THIS checkout of hams_shared, or None.
 
     Finding any ancestor with a `hams_shared` entry is not enough. 2026-10-12: a test run inside a git worktree of
-    hams_shared itself (no hams_open above it) walked up to /home/bruce, found an unrelated, months-old
-    /home/bruce/hams_shared copy there, and `test_provision_py_help_runs_in_a_fresh_subprocess...` then executed THAT
+    hams_shared itself (no hams_open above it) walked up to the user's home directory, found an unrelated, months-old
+    ~/hams_shared copy there, and `test_provision_py_help_runs_in_a_fresh_subprocess...` then executed THAT
     copy's provision.py through sudo, which provisioned the dev box (apt, usermod) before the test timed out. So an
     ancestor only counts when its hams_shared/tools/provision.py is this very file once symlinks are resolved: the
     main checkout (hams_open/hams_shared, a real directory), a hams_open worktree whose hams_shared symlink points

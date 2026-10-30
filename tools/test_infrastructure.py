@@ -3081,7 +3081,7 @@ class ClaudeWrapperCiOauthTokenTests(unittest.TestCase):
             if token_text is not None:
                 with open(os.path.join(home, ".claude", "ci_oauth_token"), "w") as f:
                     f.write(token_text)
-            script = self._rendered(account).replace(f"/home/{account}", home)
+            script = self._rendered(account).replace(f"{infra.ACCOUNT_HOME_PARENT}/{account}", home)
             env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
             out = subprocess.run(
                 ["bash", "-c", script, "wrapper", "-p", "hi"],
@@ -3138,7 +3138,7 @@ class CrawlClaudeWrapperTests(unittest.TestCase):
             with open(fake, "w") as f:
                 f.write('#!/bin/bash\necho "args=$*"\necho "count=$#"\n')
             os.chmod(fake, 0o755)
-            script = self._rendered().replace("/home/hams_ai_agent", home)
+            script = self._rendered().replace(f"{infra.ACCOUNT_HOME_PARENT}/hams_ai_agent", home)
             return subprocess.run(["bash", "-c", script, "wrapper", *argv], capture_output=True, text=True, cwd=tmp)
 
     # [@ANCHOR: infrastructure:test_crawl_claude_wrapper_pins_sandbox]
@@ -4818,8 +4818,8 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     # The documented exception: the agent's own home and nothing else (the CLI, running
                     # as the agent, writes its session state there; the daemon's account never does).
                     agent = rules["agent_sudo"]
-                    self.assertEqual(writable, [f"/home/{agent}"])
-                    self.assertIn(f"/home/{agent}", self._directories_owned_by(agent))
+                    self.assertEqual(writable, [f"{infra.ACCOUNT_HOME_PARENT}/{agent}"])
+                    self.assertIn(f"{infra.ACCOUNT_HOME_PARENT}/{agent}", self._directories_owned_by(agent))
                     continue
                 # `group_write`: a path owned by another account's group that the unit writes through SupplementaryGroups=
                 # (checked in its own test below); every other writable path is the account's own.
@@ -6019,7 +6019,9 @@ class TicketTriageTimerUnitTests(unittest.TestCase):
         # until its trigger limit: the kill switch lives in main.py, which deletes the files first.
         self.assertNotIn("ConditionPathExists", text)
         self.assertNotIn("ExecStartPre", text)
-        self.assertIn("ReadWritePaths=/home/hams_ai_agent -/opt/hams/ai_triage_repo /opt/hams/spool/ticket_triage", text)
+        self.assertIn(
+            f"ReadWritePaths={infra.ACCOUNT_HOME_PARENT}/hams_ai_agent -/opt/hams/ai_triage_repo /opt/hams/spool/ticket_triage", text
+        )
         self.assertIn("HAMS_TRIAGE_SPOOL_DIR=/opt/hams/spool/ticket_triage", text)
         self.assertIn("StateDirectory=hams-ticket-triage", text)  # the same lock and counters as the timer path
         self.assertIn("Type=oneshot", text)
@@ -6281,7 +6283,7 @@ class EventAiEnrichmentTimerUnitTests(unittest.TestCase):
         text = self._spec("event.ai.enrichment.service")["content"]
         self.assertNotRegex(text, r"(?m)^NoNewPrivileges=")  # the sudo hop to hams_event_agent needs a setuid binary
         self.assertIn("CapabilityBoundingSet=CAP_SETUID CAP_SETGID", text)
-        self.assertIn("ReadWritePaths=/home/hams_event_agent\n", text)
+        self.assertIn(f"ReadWritePaths={infra.ACCOUNT_HOME_PARENT}/hams_event_agent\n", text)
         env_files = re.findall(r"^EnvironmentFile=-?(\S+)$", text, re.M)
         self.assertEqual(env_files, ["/opt/hams/etc/common.env"])
         self.assertIn("event.ai.enrichment.service", infra.SHARED_ODOO_ACCOUNT_UNITS)
