@@ -846,7 +846,13 @@ def cffi_find_go(ffi_dir):
     return None
 
 
-def cffi_build_env(base_env, cache_dir):
+def cffi_build_env(base_env, cache_dir, tmp_dir):
+    """Environment for `go build`. Everything the build writes goes below the caller's directories:
+    GOCACHE and GOPATH under `cache_dir`, and the go command's and the C compiler's scratch files in
+    `tmp_dir`. Without GOTMPDIR and TMPDIR go uses /tmp, while the caller's tempfile.TemporaryDirectory
+    may have fallen back to /var/tmp because /tmp was unusable: on 2026-10-30 a full /tmp failed the
+    build with "go: creating work dir: mkdir /tmp/go-build...: no space left on device" although the
+    caller's own directory was on a disk with room."""
     env = dict(base_env)
     env.update({
         "GOTOOLCHAIN": "local",
@@ -855,6 +861,8 @@ def cffi_build_env(base_env, cache_dir):
         "CGO_ENABLED": "1",
         "GOCACHE": cache_dir,
         "GOPATH": os.path.join(cache_dir, "gopath"),
+        "GOTMPDIR": tmp_dir,
+        "TMPDIR": tmp_dir,
     })
     return env
 
@@ -874,8 +882,10 @@ def cffi_build(ffi_dir, run=subprocess.run):
         raise RuntimeError("no C compiler (cgo needs one); run: sudo apt-get install -y build-essential")
     with tempfile.TemporaryDirectory(prefix="cloudflared-ffi-build-") as work:
         out = os.path.join(work, CFFI_LIB_NAME)
+        tmp_dir = os.path.join(work, "tmp")
+        os.mkdir(tmp_dir)  # GOTMPDIR must exist
         cmd = [go, "build", "-trimpath", "-buildvcs=false", "-buildmode=c-shared", "-o", out, "."]
-        res = run(cmd, cwd=ffi_dir, env=cffi_build_env(os.environ, os.path.join(work, "cache")),
+        res = run(cmd, cwd=ffi_dir, env=cffi_build_env(os.environ, os.path.join(work, "cache"), tmp_dir),
                   capture_output=True, text=True, check=False)
         if res.returncode != 0:
             raise RuntimeError(f"{' '.join(cmd)} failed:\n{res.stdout}{res.stderr}")
