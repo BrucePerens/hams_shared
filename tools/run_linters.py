@@ -475,11 +475,17 @@ def write_eslint_project(hams_shared_dir, repos):
 
     directory = tempfile.mkdtemp(prefix="hams-eslint-project-")
     atexit.register(shutil.rmtree, directory, True)
-    includes = [
-        os.path.join(os.path.realpath(repo), "*", "static", "**", "*.js")
-        for repo in repos
-        if repo and os.path.isdir(repo)
-    ]
+    # Every JavaScript file eslint.config.js's type-aware block (files: **/*.js) can be handed must be in the project, or the
+    # parser fails with "file not found in the provided project(s)": module static sources, and the daemons' own JavaScript
+    # (the relay's trust pages, the shack console, test scripts). 2026-10-29: only */static/** was listed, so any run that
+    # linted daemons/ failed on files that had nothing wrong with them.
+    includes = []
+    for repo in repos:
+        if repo and os.path.isdir(repo):
+            real = os.path.realpath(repo)
+            includes.append(os.path.join(real, "*", "static", "**", "*.js"))
+            includes.append(os.path.join(real, "daemons", "**", "*.js"))
+            includes.append(os.path.join(real, "daemons", "**", "*.mjs"))
     path = os.path.join(directory, "tsconfig.json")
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(
