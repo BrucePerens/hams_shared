@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 import check_js_function_test_anchors as cjfta  # noqa: E402
 
@@ -211,6 +212,64 @@ class ScanTreeTests(unittest.TestCase):
         _init_git_repo(self.tmp)
         gaps = cjfta.scan_tree(self.tmp)
         self.assertNotIn("foo.js::bar", gaps)
+
+
+class FailedScanTests(unittest.TestCase):
+    """A scan that cannot run must stop the gate. On 2026-10-28 it read as "no functions found",
+    both JS baselines were emptied on that, and the gate then passed without reading a file."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.real_script = cjfta._JS_SCAN_SCRIPT
+
+    def tearDown(self):
+        cjfta._JS_SCAN_SCRIPT = self.real_script
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _repo_with_a_gap(self):
+        repo = os.path.join(self.tmp, "repo")
+        _write(os.path.join(repo, "foo.js"), "function bar() {\n    return 1;\n}\n")
+        _init_git_repo(repo)
+        return repo
+
+    def test_a_scanner_that_exits_nonzero_is_a_failure_not_zero_functions(self):
+        broken = os.path.join(self.tmp, "broken_scan.cjs")
+        _write(broken, "require('acorn-that-is-not-installed');\n")
+        cjfta._JS_SCAN_SCRIPT = broken
+        with self.assertRaises(SystemExit) as caught:
+            cjfta.scan_tree(self._repo_with_a_gap())
+        self.assertIn("JS function scan failed", str(caught.exception))
+
+    def test_a_scanner_that_prints_nothing_is_a_failure(self):
+        silent = os.path.join(self.tmp, "silent_scan.cjs")
+        _write(silent, "process.exit(0);\n")
+        cjfta._JS_SCAN_SCRIPT = silent
+        with self.assertRaises(SystemExit):
+            cjfta.scan_tree(self._repo_with_a_gap())
+
+    def test_a_scanner_that_prints_garbage_is_a_failure(self):
+        garbage = os.path.join(self.tmp, "garbage_scan.cjs")
+        _write(garbage, "console.log('not json');\n")
+        cjfta._JS_SCAN_SCRIPT = garbage
+        with self.assertRaises(SystemExit) as caught:
+            cjfta.scan_tree(self._repo_with_a_gap())
+        self.assertIn("not JSON", str(caught.exception))
+
+    def test_the_gate_does_not_pass_when_the_scan_fails(self):
+        broken = os.path.join(self.tmp, "broken_scan.cjs")
+        _write(broken, "process.exit(3);\n")
+        cjfta._JS_SCAN_SCRIPT = broken
+        repo = self._repo_with_a_gap()
+        baseline = os.path.join(self.tmp, "baseline.json")
+        _write(baseline, "[]\n")
+        argv = ["check_js_function_test_anchors.py", repo, "--baseline", baseline]
+        with unittest.mock.patch("sys.argv", argv):
+            with self.assertRaises(SystemExit) as caught:
+                cjfta.main()
+        self.assertNotEqual(caught.exception.code, 0)
+
+    def test_no_files_to_scan_is_the_only_empty_result(self):
+        self.assertEqual(cjfta._run_js_scan([]), {})
 
 
 class BaselineRatchetTests(unittest.TestCase):
