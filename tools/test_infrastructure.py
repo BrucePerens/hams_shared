@@ -3509,6 +3509,76 @@ class LocalDatabaseBackupUnitTests(_TmpDirTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([n for n in os.listdir(backup_dir) if n.endswith(".dump")], [])
 
+class OneshotRunTimeoutTests(unittest.TestCase):
+    """A Type=oneshot service has no start timeout by default, so a hung timer-driven sync ran forever, silenced its timer and
+    never failed (hams1, 2026-10-30: 45 oneshots with TimeoutStartUSec=infinity). Every oneshot either sets TimeoutStartSec
+    itself, gets the generated drop-in, or is excluded with the owner's reason."""
+
+    DROPIN = "/etc/systemd/system/{}.d/hams-run-timeout.conf"
+
+    def _services(self):
+        for spec in infra.MANIFEST["static_files"]:
+            path = spec["path"]
+            if os.path.dirname(path) == "/opt/hams/systemd" and path.endswith(".service"):
+                yield os.path.basename(path), spec
+
+    def _dropins(self, name):
+        return [s for s in infra.MANIFEST["static_files"] if s["path"] == self.DROPIN.format(name)]
+
+    # Tests [@ANCHOR: infrastructure:oneshot_run_timeout]
+    def test_every_oneshot_is_bounded_or_excluded_and_nothing_else_is_given_a_drop_in(self):
+        bounded = 0
+        for name, spec in self._services():
+            directives = infra._unit_directives(spec["content"])
+            oneshot = directives.get("Type") == "oneshot"
+            own = "TimeoutStartSec" in directives
+            drop = self._dropins(name)
+            if name in infra.EXCEPTION_REPORT_EXCLUDED_UNITS or not oneshot or own:
+                self.assertEqual(drop, [], f"{name} must not get a generated start timeout")
+            else:
+                self.assertEqual(len(drop), 1, f"{name} is a oneshot with no TimeoutStartSec and no drop-in")
+                bounded += 1
+        self.assertGreater(bounded, 30)
+
+    def test_the_drop_in_is_a_service_section_with_one_timeout(self):
+        for name in ("fcc.uls.sync.service", "uk.ofcom.sync.service", "pota.sync.service"):
+            (spec,) = self._dropins(name)
+            lines = [line for line in spec["content"].splitlines() if not line.startswith("#")]
+            self.assertEqual(lines, ["[Service]", f"TimeoutStartSec={infra.ONESHOT_RUN_TIMEOUT_DEFAULT}"], name)
+            self.assertEqual((spec["owner"], spec["mode"]), ("root:root", "644"))
+
+    def test_the_overrides_apply_and_name_real_units(self):
+        names = {name for name, _ in self._services()}
+        for name, value in infra.ONESHOT_RUN_TIMEOUT_OVERRIDES.items():
+            self.assertIn(name, names)
+            (spec,) = self._dropins(name)
+            self.assertIn(f"TimeoutStartSec={value}\n", spec["content"])
+
+    def test_a_unit_that_sets_its_own_timeout_keeps_it_and_a_comment_does_not_count(self):
+        manifest = {"static_files": [
+            {"path": "/opt/hams/systemd/own.service", "content": "Type=oneshot\nTimeoutStartSec=8h\n", "environments": ["prod"]},
+            {"path": "/opt/hams/systemd/talks.service",
+             "content": "# a longer TimeoutStartSec: debounce\nType=oneshot\n", "environments": ["prod", "test"],
+             "host_class": "ca_signer"},
+            {"path": "/opt/hams/systemd/daemon.service", "content": "Type=simple\nRestart=always\n", "environments": ["prod"]},
+            {"path": "/opt/hams/systemd/hams-tenant-health.service", "content": "Type=oneshot\n", "environments": ["prod"]},
+        ]}
+        entries = infra.oneshot_run_timeout_dropin_entries(manifest)
+        self.assertEqual([e["path"] for e in entries], ["/etc/systemd/system/talks.service.d/hams-run-timeout.conf"])
+        self.assertEqual(entries[0]["environments"], ["prod", "test"])
+        self.assertEqual(entries[0]["host_class"], "ca_signer")
+
+    def test_the_timeout_ends_a_hung_run_as_a_failed_unit(self):
+        """Behaviour, not text: a real transient oneshot that hangs, under the generated bound, ends as Result=timeout."""
+        if shutil.which("systemd-run") is None or not os.path.isdir("/run/systemd/system"):
+            self.skipTest("no systemd on this host")
+        probe = subprocess.run(["systemd-run", "--user", "--wait", "--collect", "-p", "Type=oneshot", "-p", "TimeoutStartSec=1",
+                                "/bin/sleep", "30"], capture_output=True, text=True, timeout=60, check=False)
+        if "Failed to connect" in probe.stderr or "No such file" in probe.stderr:
+            self.skipTest("no user systemd session: " + probe.stderr.strip()[:80])
+        self.assertIn("timeout", (probe.stdout + probe.stderr).lower())
+
+
 class TimerDrivenUnitTests(unittest.TestCase):
     """A sync that has a timer runs once and exits, so its service must be Type=oneshot and must not carry
     Restart=always. ncvec.sync and au.pii.sync were Type=simple with Restart=always and RestartSec=60 while their main
