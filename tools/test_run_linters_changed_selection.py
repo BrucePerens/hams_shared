@@ -286,6 +286,23 @@ class ModuleChangeSelectionTests(SelectionFixture):
         self.assertEqual(only_module, ["check_burn_list[hams_helpdesk]", "check_burn_list[zero_sudo]"])
         self.assertEqual(with_rust, only_module, "a Rust file cannot change what the burn list reports")
 
+    def test_a_story_and_a_shell_script_beside_a_module_change_do_not_widen_the_burn_list(self):
+        names = self.burn_list_targets(
+            ("hams_open/zero_sudo/static/src/js/a.js", "export const a = 2;\n"),
+            ("hams_open/daemons/bench/README.md", "bench 3\n"),
+            ("hams_open/scripts_top/run.sh", "#!/bin/sh\necho 3\n"),
+        )
+        self.assertEqual(names, ["check_burn_list[hams_helpdesk]", "check_burn_list[zero_sudo]"])
+
+    def test_a_shell_script_outside_every_module_still_widens_the_checkers_that_read_it(self):
+        result = self.run_script("--changed", "--list")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        _write(os.path.join(self.ws, "hams_open/scripts_top/run.sh"), "#!/bin/sh\necho 4\n")
+        _write(os.path.join(self.ws, "hams_open/zero_sudo/static/src/js/a.js"), "export const a = 4;\n")
+        result = self.run_script("--changed", "--list")
+        names = [n for n in result.stdout.splitlines() if n.startswith("check_shebang")]
+        self.assertEqual(names, ["check_shebang"], "the shebang checker reads shell scripts: whole repository")
+
     def test_a_python_change_beside_a_module_change_still_widens_the_checkers_to_the_whole_repository(self):
         names = self.burn_list_targets(
             ("hams_open/zero_sudo/static/src/js/a.js", "export const a = 2;\n"),

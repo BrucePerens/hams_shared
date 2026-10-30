@@ -837,10 +837,21 @@ def main():
     outside_modules = []
     if changed_set is not None and not target_modules_str and not run_all:
         outside_modules = changed_outside_modules(changed_set, repo_root, community_dir)
-        if any(widens_module_scope(path) for path in outside_modules):
-            # Files outside every module (daemons/, ingest/, scripts) changed: the per-module
-            # checkers scan those trees in a full run, so they get the whole repository here too.
-            targets = [repo_root]
+
+    def scope_for(step_stem, extra_suffixes=None):
+        """The scan roots for a per-module checker: the changed modules, or the whole repository when a changed file
+        outside every module is one this checker reads (daemons/, ingest/, scripts: a full run scans those trees too).
+        A checker that reads only some file types is not widened by a change to another type (a story or a Rust file
+        beside a JavaScript fix must not hand the burn list the whole repository)."""
+        if not outside_modules:
+            return targets
+        suffixes = STEP_META.get(step_stem, {}).get("suffixes") or extra_suffixes
+        for path in outside_modules:
+            if not widens_module_scope(path):
+                continue
+            if suffixes is None or os.path.splitext(path)[1].lower() in suffixes:
+                return [repo_root]
+        return targets
 
     # archive/: frozen, historical snapshots of past pipeline runs, not live
     # source (same exclusion, same reasoning, already established in
@@ -893,7 +904,7 @@ def main():
     # `targets` appended (see `_run_per_target_checker`'s own docstring): `check_burn_list.py`'s
     # `directory` argument is `nargs="?"`, which argparse rejects outright given 2+ positional
     # values, so a multi-module scoped run used to crash this step entirely.
-    _per_target_steps(_add, python_exec, dir_path, "check_burn_list.py", targets)
+    _per_target_steps(_add, python_exec, dir_path, "check_burn_list.py", scope_for("check_burn_list"))
 
     # 9. verify_anchors -- anchor documentation, tests and cross-references are looked up across
     # the whole repository pair, so in `--changed` mode it always scans the whole repository
@@ -925,30 +936,31 @@ def main():
     # 10. check_manifest_dependencies -- one call per target, not batched: this script reads
     # only `sys.argv[1]` (see `_run_per_target_checker`'s own docstring) and silently ignores
     # any additional targets appended after it.
-    _per_target_steps(_add, python_exec, dir_path, "check_manifest_dependencies.py", targets)
+    _per_target_steps(_add, python_exec, dir_path, "check_manifest_dependencies.py", scope_for("check_manifest_dependencies"))
 
     # 11. check_js_syntax
-    if targets:
+    js_syntax_targets = scope_for("check_js_syntax")
+    if js_syntax_targets:
         _add(
             "check_js_syntax",
-            [python_exec, os.path.join(dir_path, "tools", "check_js_syntax.py")] + targets,
+            [python_exec, os.path.join(dir_path, "tools", "check_js_syntax.py")] + js_syntax_targets,
         )
 
     # 12. check_test_tags -- one call per target, not batched (sys.argv[1]-only, see
     # `_run_per_target_checker`'s own docstring).
-    _per_target_steps(_add, python_exec, dir_path, "check_test_tags.py", targets)
+    _per_target_steps(_add, python_exec, dir_path, "check_test_tags.py", scope_for("check_test_tags"))
 
     # 13. check_absolute_paths -- one call per target, not batched (sys.argv[1]-only, see
     # `_run_per_target_checker`'s own docstring).
-    _per_target_steps(_add, python_exec, dir_path, "check_absolute_paths.py", targets)
+    _per_target_steps(_add, python_exec, dir_path, "check_absolute_paths.py", scope_for("check_absolute_paths"))
 
     # 14. check_rabbitmq_pool -- one call per target, not batched (sys.argv[1]-only, see
     # `_run_per_target_checker`'s own docstring).
-    _per_target_steps(_add, python_exec, dir_path, "check_rabbitmq_pool.py", targets)
+    _per_target_steps(_add, python_exec, dir_path, "check_rabbitmq_pool.py", scope_for("check_rabbitmq_pool"))
 
     # 15. check_shebang -- one call per target, not batched (sys.argv[1]-only, see
     # `_run_per_target_checker`'s own docstring).
-    _per_target_steps(_add, python_exec, dir_path, "check_shebang.py", targets)
+    _per_target_steps(_add, python_exec, dir_path, "check_shebang.py", scope_for("check_shebang"))
 
     # 16. check_summation_bias
     # Hardening, 2026-09-10: pin `cwd` to `repo_root` explicitly rather than inheriting
@@ -981,7 +993,7 @@ def main():
 
     # 18. check_init_imports -- one call per target, not batched (sys.argv[1]-only, see
     # `_run_per_target_checker`'s own docstring).
-    _per_target_steps(_add, python_exec, dir_path, "check_init_imports.py", targets)
+    _per_target_steps(_add, python_exec, dir_path, "check_init_imports.py", scope_for("check_init_imports"))
 
     # 19. check_dependency_cycles
     # Always scans the full repo (not the possibly-scoped `targets`) --
@@ -1031,8 +1043,9 @@ def main():
     # The toolchain (node_modules) belongs to the main hams_shared checkout; a worktree of
     # hams_shared has none of its own.
     toolchain = find_eslint_toolchain(hams_shared_dir)
+    eslint_targets = scope_for("eslint", frozenset({".js", ".mjs", ".cjs", ".json"}))
     js_inputs = (
-        tuple(os.path.realpath(t) for t in targets)
+        tuple(os.path.realpath(t) for t in eslint_targets)
         + tuple(
             os.path.join(hams_shared_dir, name)
             for name in ("eslint.config.js", "tsconfig.json", "package.json")
@@ -1056,7 +1069,7 @@ def main():
                 gated=True,
             )
         )
-    elif targets:
+    elif eslint_targets:
         # The type-aware rules read a TypeScript project listing the JavaScript files. Its
         # `include` was relative to hams_shared (`../*/static/**`), which is right only when the
         # repositories sit beside the main hams_shared checkout; in a worktree it listed another
@@ -1075,7 +1088,7 @@ def main():
                 "--config",
                 eslint_config,
                 "--no-error-on-unmatched-pattern",
-            ] + targets,
+            ] + eslint_targets,
             cwd=workspace_root,
             env=eslint_env,
             fail_header="❌ ESLint Violations:",
