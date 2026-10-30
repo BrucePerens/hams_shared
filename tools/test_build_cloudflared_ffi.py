@@ -117,10 +117,31 @@ class FfiSourceIsOfflineBuildableTests(unittest.TestCase):
             self.assertEqual(f.read(), "", "a dependency would need a module download")
 
     def test_build_environment_cannot_reach_a_network(self):
-        env = infra.cffi_build_env({"PATH": "/usr/bin", "GOFLAGS": "-mod=mod", "GOPROXY": "https://x"}, "/c")
+        env = infra.cffi_build_env({"PATH": "/usr/bin", "GOFLAGS": "-mod=mod", "GOPROXY": "https://x"}, "/c", "/t")
         self.assertEqual(env["GOTOOLCHAIN"], "local")
         self.assertEqual(env["GOPROXY"], "off")
         self.assertEqual(env["GOFLAGS"], "-mod=readonly")
+
+    def test_build_scratch_files_go_where_the_caller_chose_not_to_slash_tmp(self):
+        env = infra.cffi_build_env({"PATH": "/usr/bin", "TMPDIR": "/tmp"}, "/c", "/t")
+        self.assertEqual((env["GOTMPDIR"], env["TMPDIR"]), ("/t", "/t"))
+
+    def test_build_runs_with_its_scratch_directory_inside_the_work_directory(self):
+        seen = {}
+
+        def fake_run(cmd, cwd, env, **kwargs):
+            seen["tmp_exists"] = os.path.isdir(env["GOTMPDIR"])
+            seen["tmp"] = env["GOTMPDIR"]
+            seen["out"] = cmd[cmd.index("-o") + 1]
+            raise RuntimeError("stop after inspecting the environment")
+
+        with tempfile.TemporaryDirectory() as ffi:
+            shutil.copy(os.path.join(self.FFI_DIR, "main.go"), ffi)
+            shutil.copy(os.path.join(self.FFI_DIR, "go.mod"), ffi)
+            with self.assertRaises(RuntimeError):
+                infra.cffi_build(ffi, run=fake_run)
+        self.assertTrue(seen["tmp_exists"])
+        self.assertEqual(os.path.dirname(seen["tmp"]), os.path.dirname(seen["out"]))
 
     def test_library_is_not_tracked_in_git(self):
         # An x86-64 binary in git is what broke arm64 test hosts. The directory's .gitignore line
