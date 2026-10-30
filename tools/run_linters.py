@@ -37,6 +37,17 @@ def _resolve_repo_root(given_path):
     given_path = os.path.abspath(given_path)
     if os.path.basename(given_path) == "hams_shared":
         return os.path.dirname(given_path)
+    # A worktree of hams_shared has any name. It is recognised by its layout: hams_shared's `tools`
+    # is a real directory next to eslint.config.js (the other two repositories link `tools` to it).
+    if (
+        os.path.isdir(os.path.join(given_path, "tools"))
+        and not os.path.islink(os.path.join(given_path, "tools"))
+        and os.path.isfile(os.path.join(given_path, "eslint.config.js"))
+        and not os.path.isfile(os.path.join(given_path, "zero_sudo", "__manifest__.py"))
+    ):
+        main_checkout = lint_exec.main_worktree_of(given_path)
+        if main_checkout:
+            return os.path.dirname(main_checkout)
     return given_path
 
 
@@ -87,11 +98,21 @@ def _sibling_checkout(repo_root, main_checkout_root, name):
     return os.path.abspath(os.path.join(main_checkout_root, "..", name))
 
 
-def _default_inputs(dir_path, sibling_dir):
-    """Roots and suffixes a step reads when it declares nothing narrower: both repos, any file."""
+def _default_inputs(dir_path, sibling_dir, shared_dir=None):
+    """Roots and suffixes a step reads when it declares nothing narrower: both repos and the real
+    hams_shared directory, any file.
+
+    hams_shared is a root of its own because the repositories reach it through symlinks (`docs`,
+    `agents`, `tools`, `AGENTS.md`): `git diff` reports a change to a skill or a guide under the
+    hams_shared path, which is not below either repository root, so a step rooted only at the two
+    repositories never saw it and a change there was reported as touching nothing."""
     roots = [os.path.realpath(dir_path)]
     if sibling_dir and os.path.isdir(sibling_dir):
         roots.append(os.path.realpath(sibling_dir))
+    if shared_dir and os.path.isdir(shared_dir):
+        shared_real = os.path.realpath(shared_dir)
+        if not any(shared_real == root or shared_real.startswith(root + os.sep) for root in roots):
+            roots.append(shared_real)
     return tuple(roots), None
 
 
@@ -125,6 +146,13 @@ _XML = frozenset({".xml"})
 _RS = frozenset({".rs", ".toml", ".lock"})
 STEP_META = {
     "flake8": {"suffixes": frozenset({".py", ".cfg", ".ini", ".toml"})},
+    # Read from each checker's own file filter (os.walk plus endswith); a checker whose filter is
+    # not one short list (manifest dependencies, shebang, absolute paths) stays at None so any
+    # changed file runs it.
+    "check_burn_list": {"suffixes": frozenset({".py", ".xml", ".js", ".csv", ".html"})},
+    "verify_anchors": {
+        "suffixes": frozenset({".py", ".js", ".xml", ".html", ".rs", ".md", ".test"})
+    },
     "check_js_syntax": {"suffixes": _JS},
     "check_test_tags": {"suffixes": _PY},
     "check_rabbitmq_pool": {"suffixes": _PY},
@@ -356,14 +384,23 @@ def _collect_changed(base, repo_root, sibling_dir, tools_dir):
     changed = set()
     for repo in repos:
         if repo and os.path.isdir(repo):
-            changed |= changed_files(repo, base) or set()
+            found = changed_files(repo, base)
+            if found is None:
+                # An unreadable base used to count as "nothing changed", which skipped every
+                # step and still wrote a pass stamp.
+                print(
+                    f"🛑 --changed {base}: cannot compare {repo} with {base} (no such ref, or not a "
+                    f"git checkout). Run `git -C {repo} fetch origin`, or pass the base to compare with.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            changed |= found
     tools_real = os.path.realpath(tools_dir) + os.sep
     return changed, any(path.startswith(tools_real) for path in changed)
 
 
-def _changed_modules(changed, repo_root, community_dir):
-    """Names of the modules (in `repo_root`, falling back to the sibling) that contain a changed
-    file, plus every module that depends on one of them."""
+def _module_dirs(repo_root, community_dir):
+    """{module name: real directory} for every Odoo module in `repo_root` and the sibling repo."""
     module_dirs = {}
     for base in (community_dir, repo_root):
         if not base:
@@ -371,6 +408,13 @@ def _changed_modules(changed, repo_root, community_dir):
         for item in os.listdir(base):
             if os.path.isfile(os.path.join(base, item, "__manifest__.py")):
                 module_dirs[item] = os.path.realpath(os.path.join(base, item))
+    return module_dirs
+
+
+def _changed_modules(changed, repo_root, community_dir):
+    """Names of the modules (in `repo_root`, falling back to the sibling) that contain a changed
+    file, plus every module that depends on one of them."""
+    module_dirs = _module_dirs(repo_root, community_dir)
     touched = set()
     for name, path in module_dirs.items():
         prefix = path + os.sep
@@ -378,6 +422,71 @@ def _changed_modules(changed, repo_root, community_dir):
             touched.add(name)
     closure = dependents_closure(touched, module_dirs)
     return sorted(name for name in closure if _resolve_module_path(name, repo_root, community_dir))
+
+
+def changed_outside_modules(changed, repo_root, community_dir):
+    """Changed files in `repo_root` that belong to no Odoo module: daemons/, ingest/, devbox_tools/,
+    hardware/, top-level files and the like.
+
+    The per-module checkers (burn list, JS syntax, test tags, shebang, ...) used to be handed only
+    the changed modules, so a change that touched none of them (a Rust or Python daemon, a script)
+    gave them an empty target list and they were not run at all, although a full run scans those
+    directories. Whenever this is non-empty `--changed` hands them the whole repository, exactly
+    as a full run does; the per-step suffix tables then keep a step from running on a file type it
+    cannot read."""
+    root = os.path.realpath(repo_root) + os.sep
+    module_prefixes = tuple(
+        path + os.sep for path in _module_dirs(repo_root, community_dir).values()
+    )
+    outside = []
+    for path in sorted(changed):
+        if not path.startswith(root) or path.startswith(module_prefixes):
+            continue
+        parts = path[len(root):].split(os.sep)
+        if any(part in lint_exec.PRUNE_DIRS or part.startswith(".claude") for part in parts):
+            continue
+        outside.append(path)
+    return outside
+
+
+def find_eslint_toolchain(hams_shared_dir):
+    """{"eslint_bin", "node_modules"} for the first hams_shared checkout that has ESLint installed,
+    or None: `hams_shared_dir` itself, then the main worktree of its git repository (a worktree
+    of hams_shared has no node_modules)."""
+    candidates = [hams_shared_dir, lint_exec.main_worktree_of(hams_shared_dir)]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        modules = os.path.join(candidate, "node_modules")
+        binary = os.path.join(modules, ".bin", "eslint")
+        if os.path.isfile(binary):
+            return {"eslint_bin": binary, "node_modules": modules}
+    return None
+
+
+def write_eslint_project(hams_shared_dir, repos):
+    """Write a TypeScript project file for the type-aware ESLint rules that lists the JavaScript
+    of `repos` (the checkouts being linted), extending hams_shared's tsconfig.json for its
+    compiler options. Returns its path; the directory is removed when the process exits."""
+    import atexit
+    import json
+    import shutil
+    import tempfile
+
+    directory = tempfile.mkdtemp(prefix="hams-eslint-project-")
+    atexit.register(shutil.rmtree, directory, True)
+    includes = [
+        os.path.join(os.path.realpath(repo), "*", "static", "**", "*.js")
+        for repo in repos
+        if repo and os.path.isdir(repo)
+    ]
+    path = os.path.join(directory, "tsconfig.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(
+            {"extends": os.path.join(hams_shared_dir, "tsconfig.json"), "include": includes},
+            handle,
+        )
+    return path
 
 
 def _run_per_target_checker(python_exec, dir_path, script_name, targets):
@@ -553,13 +662,14 @@ def main():
     options = _parse_args(sys.argv[1:])
     wall_start = time.monotonic()
     tools_dir = os.path.join(dir_path, "tools")
+    real_shared_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     steps = []
 
     def _add(name, argv, **step_options):
         """Declare one step. `inputs=` names the files the step reads (see lint_inputs());
         it defaults to the whole repo pair with every file suffix, which is always safe."""
         inputs = step_options.pop("inputs", None)
-        roots, suffixes = inputs if inputs else _default_inputs(dir_path, sibling_dir)
+        roots, suffixes = inputs if inputs else _default_inputs(dir_path, sibling_dir, real_shared_dir)
         steps.append(
             lint_exec.Step(
                 name=name,
@@ -583,7 +693,7 @@ def main():
         )
     mod_array = []
     scoped = bool(target_modules_str)
-    if changed_set is not None and not target_modules_str:
+    if changed_set is not None and not target_modules_str and not run_all:
         scoped = True
         mod_array = _changed_modules(changed_set, repo_root, community_dir)
     elif not target_modules_str:
@@ -659,6 +769,13 @@ def main():
     flake8_cmd = "/usr/bin/flake8"
 
     targets = resolved_mod_paths if scoped else [repo_root]
+    outside_modules = []
+    if changed_set is not None and not target_modules_str and not run_all:
+        outside_modules = changed_outside_modules(changed_set, repo_root, community_dir)
+        if outside_modules:
+            # Files outside every module (daemons/, ingest/, scripts) changed: the per-module
+            # checkers scan those trees in a full run, so they get the whole repository here too.
+            targets = [repo_root]
 
     # archive/: frozen, historical snapshots of past pipeline runs, not live
     # source (same exclusion, same reasoning, already established in
@@ -682,7 +799,7 @@ def main():
     # OTHER session's own in-progress, uncommitted code -- not the real repo state
     # this invocation was actually scoped to check.
     flake8_targets = targets
-    if changed_set is not None and not target_modules_str:
+    if changed_set is not None and not target_modules_str and not run_all:
         # Changed mode: the changed Python files themselves (flake8 applies --exclude to
         # explicitly named files too), instead of every module directory.
         flake8_targets = sorted(
@@ -713,11 +830,23 @@ def main():
     # values, so a multi-module scoped run used to crash this step entirely.
     _per_target_steps(_add, python_exec, dir_path, "check_burn_list.py", targets)
 
-    # 9. verify_anchors
-    if targets:
+    # 9. verify_anchors -- anchor documentation, tests and cross-references are looked up across
+    # the whole repository pair, so in `--changed` mode it always scans the whole repository
+    # (about 5 s) and never just the changed modules. Scoped to hams_helpdesk it reported
+    # `zero_sudo:persona_login` as undocumented, because the story citing it lives in
+    # zero_sudo/docs/stories, outside the scope (2026-10-29, #957, merged with PRMERGE_SKIP_LINT).
+    # The sibling repository is named explicitly: verify_anchors would otherwise look for it
+    # beside the directory it was started from, and a worktree has no sibling there.
+    anchor_targets = [repo_root] if (changed_set is not None and not target_modules_str) else targets
+    if anchor_targets:
+        anchor_env = dict(os.environ)
+        if sibling_dir and os.path.isdir(sibling_dir):
+            sibling_label = "HAMS_OPEN_TREE" if community_dir else "HAMS_COM_TREE"
+            anchor_env[sibling_label] = os.path.realpath(sibling_dir)
         _add(
             "verify_anchors",
-            [python_exec, os.path.join(dir_path, "tools", "verify_anchors.py")] + targets,
+            [python_exec, os.path.join(dir_path, "tools", "verify_anchors.py")] + anchor_targets,
+            env=anchor_env,
         )
 
     # 10. check_manifest_dependencies -- one call per target, not batched: this script reads
@@ -819,7 +948,6 @@ def main():
     # three valid roots this script was invoked from.
     _real_tools_dir = os.path.dirname(os.path.realpath(__file__))
     hams_shared_dir = os.path.dirname(_real_tools_dir)
-    eslint_bin = os.path.join(hams_shared_dir, "node_modules", ".bin", "eslint")
     eslint_config = os.path.join(hams_shared_dir, "eslint.config.js")
     workspace_root = os.path.dirname(os.path.dirname(hams_shared_dir))
     if sibling_dir and os.path.isdir(sibling_dir):
@@ -827,27 +955,59 @@ def main():
         # directory that is not the real hams_shared's grandparent; the common parent of the
         # two repos is the same directory the old formula gave in the normal layout.
         workspace_root = os.path.commonpath([os.path.realpath(repo_root), os.path.realpath(sibling_dir)])
-    if not os.path.isfile(eslint_bin):
-        _fail_now(
-            "eslint",
-            f"❌ ESLint executable not found at {eslint_bin} (run `npm install` in hams_shared/).",
+    # The toolchain (node_modules) belongs to the main hams_shared checkout; a worktree of
+    # hams_shared has none of its own.
+    toolchain = find_eslint_toolchain(hams_shared_dir)
+    js_inputs = (
+        tuple(os.path.realpath(t) for t in targets)
+        + tuple(
+            os.path.join(hams_shared_dir, name)
+            for name in ("eslint.config.js", "tsconfig.json", "package.json")
+        ),
+        frozenset({".js", ".mjs", ".cjs", ".json"}),
+    )
+    if toolchain is None:
+        # Not a skip: a JavaScript change cannot be called clean without the linter. The step
+        # fails only when JavaScript is in scope (always in a full run, only when a JavaScript or
+        # ESLint-config file changed in `--changed` mode), with the message that says why.
+        steps.append(
+            lint_exec.Step(
+                name="eslint",
+                static_output=(
+                    f"❌ ESLint toolchain not found: no node_modules/.bin/eslint under {hams_shared_dir} "
+                    "or the main hams_shared checkout. Run `npm install` in the main hams_shared "
+                    "checkout; JavaScript cannot be called clean without it."
+                ),
+                roots=js_inputs[0],
+                suffixes=js_inputs[1],
+                gated=True,
+            )
         )
     elif targets:
+        # The type-aware rules read a TypeScript project listing the JavaScript files. Its
+        # `include` was relative to hams_shared (`../*/static/**`), which is right only when the
+        # repositories sit beside the main hams_shared checkout; in a worktree it listed another
+        # tree's files and ESLint reported every file as "not found in the provided project".
+        # The project is generated per run from the repositories being linted.
+        eslint_project = write_eslint_project(hams_shared_dir, [repo_root, sibling_dir])
+        eslint_env = dict(os.environ)
+        eslint_env["HAMS_ESLINT_TSCONFIG"] = eslint_project
+        eslint_env["NODE_PATH"] = os.pathsep.join(
+            [toolchain["node_modules"]] + ([eslint_env["NODE_PATH"]] if eslint_env.get("NODE_PATH") else [])
+        )
         _add(
             "eslint",
             [
-                eslint_bin,
+                toolchain["eslint_bin"],
                 "--config",
                 eslint_config,
                 "--no-error-on-unmatched-pattern",
             ] + targets,
             cwd=workspace_root,
+            env=eslint_env,
             fail_header="❌ ESLint Violations:",
             print_ok=False,
-            inputs=(
-                tuple(os.path.realpath(t) for t in targets),
-                frozenset({".js", ".mjs", ".cjs", ".json"}),
-            ),
+            inputs=js_inputs,
         )
 
     # 22. check_model_extension_collisions
@@ -1511,17 +1671,20 @@ def main():
     skipped = []
     if options.only or options.skip:
         steps = _filter_by_name(steps, options.only, options.skip)
+    if changed_set is not None:
+        steps, skipped = lint_exec.select_for_changed(steps, changed_set, run_all)
+        if not options.list_steps:
+            print(
+                f"--changed {options.changed}: {len(changed_set)} changed files; running "
+                f"{len(steps)} steps, skipping {len(skipped)} whose inputs are unchanged"
+                + (" (checker tooling changed: running every step)" if run_all else "")
+            )
+            if skipped:
+                print("   skipped: " + ", ".join(step.name for step, _reason in skipped))
     if options.list_steps:
         for step in steps:
             print(step.name)
         sys.exit(0)
-    if changed_set is not None:
-        steps, skipped = lint_exec.select_for_changed(steps, changed_set, run_all)
-        print(
-            f"--changed {options.changed}: {len(changed_set)} changed files; running "
-            f"{len(steps)} steps, skipping {len(skipped)} whose inputs are unchanged"
-            + (" (checker tooling changed: running every step)" if run_all else "")
-        )
 
     cache = None
     fingerprints = None

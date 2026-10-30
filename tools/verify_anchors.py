@@ -43,6 +43,8 @@ import re
 import subprocess
 import sys
 
+from lint_exec import main_worktree_of
+
 # Recognizes the plain `[@ANCHOR: name]` form and both halves of the
 # multi-line `[@ANCHOR-BEGIN: name]` / `[@ANCHOR-END: name]` pair
 # (check_burn_list.py's sibling tool -- see ADR 0089 -- added BEGIN/END
@@ -1341,6 +1343,16 @@ def _add_sibling_repo_target(repo_root, target_dirs):
         for sibling_name in other_names
     ]
 
+    # A git worktree placed anywhere (~/workspace/tmp/<name>) has no sibling beside it; the sibling
+    # of the MAIN checkout it was made from is the right one then (a worktree set names its own
+    # through the *_TREE variables above).
+    main_checkout = main_worktree_of(repo_root)
+    if main_checkout and os.path.realpath(main_checkout) != os.path.realpath(repo_root):
+        candidates += [
+            os.path.abspath(os.path.join(main_checkout, "..", sibling_name))
+            for sibling_name in other_names
+        ]
+
     new_target_dirs = list(target_dirs)
     for possible_path in candidates:
         if not os.path.isdir(possible_path):
@@ -1383,7 +1395,11 @@ def _missing_sibling_hint(enclosing_repo_dir, scanned_dirs):
 
 def main():
     print("[*] Scanning documentation and codebase for Semantic Anchors...")
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    # The REAL hams_shared directory: started as `<repo>/tools/verify_anchors.py` (the symlink every
+    # repository has, which is how run_linters.py starts it), `__file__` names the repository, and
+    # its parent is then not the checkout that holds the sibling repository, so the sibling was
+    # never found and every anchor tested only from the other repository was reported untested.
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
 
     global _BASELINE
     argv = sys.argv[1:]
@@ -1452,6 +1468,13 @@ def main():
     # exist. `os.path.dirname(repo_root)` is the actual enclosing hams_com/hams_open checkout
     # that `_add_sibling_repo_target` needs.
     enclosing_repo_dir = os.path.dirname(repo_root)
+    if repo_identity(enclosing_repo_dir) is None:
+        # A worktree of hams_shared sits anywhere, so its parent says nothing about which
+        # repository is being scanned: take the identity from a scanned directory instead.
+        for scanned in primary_dirs:
+            if repo_identity(scanned):
+                enclosing_repo_dir = scanned
+                break
     baseline_paths = (
         [baseline_override]
         if baseline_override

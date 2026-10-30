@@ -206,12 +206,22 @@ def _launch_headless_chrome(port, user_data_dir, log_file):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", nargs="?", default=".")
-    parser.add_argument("--port", type=int, default=9333)
+    # No fixed default: two lint runs at once (two sessions, or the step and its own test suite)
+    # shared port 9333, the second Chrome never got its devtools port, and the checker reported
+    # a template failure or an empty result that had nothing to do with the templates.
+    parser.add_argument("--port", type=int, default=None)
     args = parser.parse_args()
 
     if not os.path.exists(_OWL_JS_PATH):
         print(f"[!] SKIPPED: Owl bundle not found at {_OWL_JS_PATH} (not an Odoo box?)")
         return 0
+
+    if args.port is None:
+        import socket
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            args.port = probe.getsockname()[1]
 
     target_dir = os.path.abspath(args.directory)
     xml_files = sorted(find_owl_template_files(target_dir))

@@ -253,6 +253,14 @@ in a fixed order, and ends with a per-step timing table.
   root, with the work committed. It runs only the steps whose inputs differ from `origin/main`, scoped
   to the changed modules and the modules that depend on them, and skips steps whose inputs are
   byte-identical to their last passing run. A change under `hams_shared/tools/` runs every step.
+  A step is left out only when no changed file has a type it reads (the suffix table `STEP_META` in
+  `run_linters.py`; `tools/test_run_linters_changed_selection.py` pins which steps each kind of
+  changed file selects). A change outside every Odoo module (`daemons/`, `scripts`, `ingest/`) hands
+  the per-module checkers the whole repository, as a full run does; `verify_anchors` always scans
+  the whole repository, because an anchor's documentation and tests live in other modules and in the
+  sibling repository; a base that cannot be read is an error, never "nothing changed"; and a missing
+  ESLint toolchain fails the `eslint` step whenever JavaScript is in scope instead of skipping it.
+  `--changed --list` prints the selected steps without running them.
   On a clean pass it records a stamp for the commit; `devbox_tools/prmerge.sh` refuses to merge a
   branch tip that has no stamp. A full `run_linters.py` (no options) also stamps.
 * `--list` names the steps; `--only a,b` / `--skip a,b` select steps (a selected run never stamps);

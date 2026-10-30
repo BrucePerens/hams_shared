@@ -21,7 +21,14 @@
 // check_function_test_anchors.py's own module docstring gives for excluding Python's nested
 // closures, since a JS inline callback is architecturally the same thing.
 
-const acorn = require(require("path").join(__dirname, "..", "node_modules", "acorn"));
+// Own node_modules first; a worktree of hams_shared has none, and its caller then points NODE_PATH
+// at the main checkout's (check_js_function_test_anchors.py).
+let acorn;
+try {
+  acorn = require(require("path").join(__dirname, "..", "node_modules", "acorn"));
+} catch (error) {
+  acorn = require("acorn");
+}
 const fs = require("fs");
 
 function functionName(node, fallback) {
