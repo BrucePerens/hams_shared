@@ -22,6 +22,7 @@ import hashlib
 import inspect
 import json
 import os
+import pwd
 import re
 import shlex
 import shutil
@@ -5726,6 +5727,37 @@ class AptInstallSafetyTests(_TmpDirTestCase):
         source = inspect.getsource(infra.provision_environment)
         self.assertNotIn('["apt-get", "install", "-y"]', source)
         self.assertEqual(source.count("_apt_install_missing("), 3)
+
+
+class PlaywrightTestBrowserTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:playwright_test_browser_commands]"""
+
+    def test_browser_goes_into_the_invoking_users_own_cache(self):
+        me = pwd.getpwuid(os.getuid())
+        if me.pw_name == "root":
+            self.skipTest("needs a non-root invoking user")
+        deps, browser = infra.playwright_test_browser_commands(me.pw_name)
+        self.assertEqual(deps[-3:], ["playwright", "install-deps", "chromium-headless-shell"])
+        self.assertEqual(
+            browser,
+            ["runuser", "-u", me.pw_name, "--", "env", "-u", "PLAYWRIGHT_BROWSERS_PATH", f"HOME={me.pw_dir}",
+             "python3", "-m", "playwright", "install", "chromium-headless-shell"],
+        )
+
+    def test_provisioning_as_root_installs_into_roots_cache(self):
+        for user in (None, "", "root"):
+            with self.subTest(user=user):
+                _deps, browser = infra.playwright_test_browser_commands(user)
+                self.assertEqual(browser, ["python3", "-m", "playwright", "install", "chromium-headless-shell"])
+
+    def test_provision_environment_installs_it_only_for_a_test_host(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn("playwright_test_browser_commands(orig_user)", source)
+        # It sits after the test-only apt install, inside the same `if is_test:` block.
+        self.assertGreater(
+            source.index("playwright_test_browser_commands(orig_user)"),
+            source.index('"test-only",'),
+        )
 
 
 class DeployedDaemonsCopyTests(_TmpDirTestCase):

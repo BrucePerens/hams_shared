@@ -13278,6 +13278,23 @@ def _is_apt_protected(pkg):
     return pkg.startswith(APT_PROTECTED_PREFIXES)
 
 
+# [@ANCHOR: infrastructure:playwright_test_browser_commands]
+def playwright_test_browser_commands(orig_user):
+    """The commands that give a test host a Playwright headless Chromium: the shared libraries as root
+    (`install-deps` uses apt), then the browser itself into orig_user's own cache (~/.cache/ms-playwright),
+    where the tests, which run as that user, look for it. Without an orig_user (provisioning run as root)
+    the browser goes into root's cache. PLAYWRIGHT_BROWSERS_PATH is dropped for the user install, see below."""
+    commands = [["python3", "-m", "playwright", "install-deps", "chromium-headless-shell"]]
+    browser = ["python3", "-m", "playwright", "install", "chromium-headless-shell"]
+    if orig_user and orig_user != "root":
+        home = pwd.getpwnam(orig_user).pw_dir  # burn-ignore-os-account-probe
+        # provision.py hands every command env_vars, which carries PLAYWRIGHT_BROWSERS_PATH (the service cache,
+        # /opt/hams/...), where the invoking user's tests never look. Unset it so the browser lands in ~/.cache.
+        browser = ["runuser", "-u", orig_user, "--", "env", "-u", "PLAYWRIGHT_BROWSERS_PATH", f"HOME={home}"] + browser
+    commands.append(browser)
+    return commands
+
+
 # [@ANCHOR: infrastructure:_apt_install_missing]
 def _apt_install_missing(run_cmd_func, packages, apt_opts, label):
     """Installs the packages from `packages` that are missing, never upgrading or removing anything
@@ -13675,6 +13692,15 @@ def provision_environment(
                     apt_opts,
                     "test-only",
                 )
+
+                # The Playwright browser for the test suites that drive a real Chromium (uk_ofcom_sync's
+                # 7 browser tests among them). The `playwright` pip package above carries no browser, so
+                # a fresh test host failed those tests with "Executable doesn't exist". The tests run as
+                # the invoking user and look in that user's own cache, so the browser goes there, not
+                # into the service cache at /opt/hams/cache/ms-playwright.
+                _logger.info("[*] Installing the Playwright headless Chromium for the test suites...")
+                for playwright_cmd in playwright_test_browser_commands(orig_user):
+                    run_cmd_func(playwright_cmd)
         else:
             _logger.info("[*] Bypassing APT phase (skip_apt=True)...")
 
