@@ -309,7 +309,7 @@ class ModuleChangeSelectionTests(SelectionFixture):
         # Started through the repository's `tools` symlink, verify_anchors used to look for the
         # sibling beside the repository instead of beside hams_shared and never found hams_com.
         _write(os.path.join(self.open_repo, "hams_helpdesk", "models", "only_com_tests.py"),
-               "# [@ANCHOR: hams_helpdesk:com_tested]\n# Verified by [@ANCHOR: test_com_tested]\n"
+               "# [@ANCHOR: hams_helpdesk:com_tested]\n# Verified by [@ANCHOR: ham_x:test_com_tested]\n"
                "def com_tested():\n    return 1\n")
         _write(os.path.join(self.open_repo, "hams_helpdesk", "docs", "stories", "c.md"),
                "# C\n\n[@ANCHOR: com_tested]\n")
