@@ -137,6 +137,56 @@ module.exports = tseslint.config(
     },
   },
   {
+    // The shack console's AudioWorklet processors (daemons/shack_console/console/src/worklet/) run in the
+    // AudioWorkletGlobalScope, like rx_noise_gate_processor.js above: same primitives, same reasoning.
+    files: ["**/daemons/shack_console/console/src/worklet/*.js"],
+    languageOptions: {
+      globals: {
+        AudioWorkletProcessor: "readonly",
+        registerProcessor: "readonly",
+        sampleRate: "readonly",
+      },
+    },
+  },
+  {
+    // daemons/shack_console/console/sw.template.js: build.rs replaces __PRECACHE__ with the console's file list
+    // before the service worker is served (pipeline.rs), so it is a literal-substitution placeholder, the same
+    // category as the caching/static/src/sw/sw.js entry above.
+    files: ["**/daemons/shack_console/console/sw.template.js"],
+    languageOptions: {
+      globals: {
+        __PRECACHE__: "readonly",
+      },
+    },
+  },
+  {
+    // The daemons' Node test scripts run under `node`, not in a browser, so `process`, `require`, `Buffer` and
+    // `setImmediate` are real globals there: the console's `*.node.test.js` files and `run_node.mjs`, the relay's
+    // trust wizard logic test, and the simulated bots' `.mjs` helpers the Python tests start with node.
+    files: [
+      "**/daemons/shack_console/console/tests/*.node.test.js",
+      "**/daemons/shack_console/console/tests/run_node.mjs",
+      "**/daemons/hams_local_relay/tests/trust_wizard_logic.js",
+      "**/daemons/hams_simulated_bots/tests/*.mjs",
+    ],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
+    // The relay's trust wizard page script is one file for two environments: a browser loads it with a script tag
+    // and it starts the wizard; node loads it with require() for tests/trust_wizard_logic.js, and `module.exports`
+    // (guarded by `typeof module`) hands the pure functions over.
+    files: ["**/daemons/hams_local_relay/src/trust/trust.js"],
+    languageOptions: {
+      globals: {
+        module: "readonly",
+      },
+    },
+  },
+  {
     // Type-aware layer: only the two rules that actually justify the
     // extra weight of type-checking plain JS, not the full
     // recommendedTypeChecked preset (which assumes a codebase designed
@@ -209,14 +259,10 @@ module.exports = tseslint.config(
       // uncommitted worktree. Confirmed empirically: a fixture
       // `.claude/worktrees/<session>/bad.js` file was scanned and reported before this fix.
       "**/.claude/**",
-      // The daemons' own JavaScript (the relay's trust pages, the shack console, test scripts) was never linted: the project
-      // file listed only */static/**, so every daemons file raised "file not found in the provided project(s)" and those
-      // errors were dismissed as a layout artifact. With the project fixed (run_linters.py write_eslint_project lists
-      // daemons/**) the real findings show: about 250 in 2026-10-29's tree (floating promises, undefined Node globals in
-      // tests, nested promises). Fixing them touches live code (shack_console, the relay's trust wizard) and needs the Hoot
-      // and Node tests run for each, so they are ignored here until night_shift_todo/high/eslint-daemons-javascript-findings-*
-      // is done; REMOVE this entry then, so the gate covers daemons/.
-      "**/daemons/**",
+      // Third-party libraries copied verbatim into the shack console, each with a recorded checksum
+      // (daemons/shack_console/third_party/*/SHA256SUMS, checked by tests/vendored_tests.rs): editing them to
+      // satisfy this linter would break that record. Same category as static/lib/ and *.min.js above.
+      "**/daemons/shack_console/console/src/vendor/**",
     ],
   }
 );
