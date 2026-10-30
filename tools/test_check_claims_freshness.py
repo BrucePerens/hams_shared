@@ -51,7 +51,6 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
 
     def test_a_claim_with_a_matching_hash_is_fresh(self):
         _write(os.path.join(self.tmp, "mod.py"), self._function_source())
-        span = "# [@ANCHOR: my_module:foo]\ndef foo(x):\n    # [@ANCHOR: my_module:foo]\n    return x + 1"
         # Recompute the real span the same way the tool does, rather than hand-deriving it,
         # so this test doesn't silently depend on guessing _function_span's own exact behavior.
         real_hash = ccf.compute_function_hash(os.path.join(self.tmp, "mod.py"))["my_module:foo"]

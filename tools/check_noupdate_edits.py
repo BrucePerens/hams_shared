@@ -37,7 +37,6 @@ review is the commit in `/opt/hams/src/DEPLOYED_COMMITS` instead of origin/main.
 """
 
 import argparse
-import os
 import re
 import subprocess
 import sys
