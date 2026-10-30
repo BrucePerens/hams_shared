@@ -1095,6 +1095,11 @@ SHARED_ODOO_ACCOUNT_UNITS = {
 }
 
 
+# The two units that stay on `odoo` for good (the final state's whole list). test_infrastructure.py pins this set and the
+# complete set of odoo units to literal names, so adding a unit to SHARED_ODOO_ACCOUNT_UNITS needs a visible edit of that test too.
+PERMANENT_ODOO_ACCOUNT_UNITS = frozenset({"hams.daemon.keys.service", "stray.odoo.shell.detector.service"})
+
+
 # [@ANCHOR: infrastructure:exception_report_dropins]
 # Failure reporting for external daemons (hams_open hams_helpdesk/daemon/README.md). The template unit
 # hams-exception-report@.service reports the unit named by its instance to the Odoo exception tickets; every
@@ -1480,9 +1485,10 @@ _ROOT_HOST_UNIT = (
     "access the sandbox removes. Not a daemon family: it holds no per-daemon key, and the isolation plan does not apply to it."
 )
 _B2_UNIT = (
-    "A root unit that %s. It already has ProtectSystem=strict and ProtectHome, and a narrow ReadWritePaths; which of "
-    "NoNewPrivileges, PrivateDevices, RestrictAddressFamilies and an empty CapabilityBoundingSet the kopia and database tooling "
-    "tolerates has not been measured, so they stay exempt until the backup rehearsal measures them (docs/proposals/DAEMON_OS_ISOLATION_PLAN.md, Phase 5)."
+    "A root unit that %s. It carries ProtectSystem=strict, ProtectHome, a narrow ReadWritePaths, NoNewPrivileges, PrivateDevices and "
+    "RestrictAddressFamilies (2026-10-30, derived from b2_backup.py). Its capability set stays open because root needs CAP_DAC_READ_SEARCH "
+    "for other accounts' files, CAP_SETUID/CAP_SETGID for runuser to postgres and CAP_CHOWN/CAP_FOWNER for kopia restore; the explicit "
+    "CapabilityBoundingSet list is the next measurement (docs/proposals/DAEMON_HARDENING_PRIVILEGE_DROP_AND_CHROOT.md, 5.1)."
 )
 _AGENT_UNIT = (
     "The agent-account shape: it reaches the Claude Code CLI through `sudo -u <agent> run-hams-ai-agent-claude.sh`, and "
@@ -1523,16 +1529,12 @@ SANDBOX_BASELINE_EXEMPTIONS = {
         _ROOT_HOST_UNIT % "tenant_ctl.py restore-test restores into a scratch database as root",
     ),
     "hams-b2-backup.service": (
-        frozenset({"NoNewPrivileges", "PrivateDevices", "RestrictAddressFamilies", "CapabilityBoundingSet"}),
+        frozenset({"CapabilityBoundingSet"}),
         _B2_UNIT % "backs up files that belong to other accounts and database dumps to Backblaze B2",
     ),
     "hams-b2-restore-test.service": (
-        frozenset({"NoNewPrivileges", "PrivateDevices", "RestrictAddressFamilies", "CapabilityBoundingSet"}),
+        frozenset({"CapabilityBoundingSet"}),
         _B2_UNIT % "restores sampled files and one database",
-    ),
-    "hams-b2-backup-check.service": (
-        frozenset({"NoNewPrivileges", "PrivateDevices", "RestrictAddressFamilies", "CapabilityBoundingSet"}),
-        _B2_UNIT % "checks the age of the last good backup and restore test",
     ),
     "hams.daemon.keys.service": (
         frozenset({"ProtectSystem"}),
@@ -4262,6 +4264,12 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/hams-b2-backup
 ProtectHome=true
 PrivateTmp=true
+# Measured/derived 2026-10-30 (DAEMON_HARDENING_PRIVILEGE_DROP_AND_CHROOT.md 5.1): kopia and the postgres tools exec no setuid helper (runuser is root
+# calling setuid, which NoNewPrivileges permits), touch no device, and talk HTTPS and loopback/unix Postgres. CapabilityBoundingSet stays
+# open: DAC_READ_SEARCH, SETUID/SETGID and CHOWN/FOWNER are needed until a measured list exists.
+NoNewPrivileges=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 Nice=19
 IOSchedulingClass=idle
 IOSchedulingPriority=7
@@ -4319,6 +4327,12 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/hams-b2-backup
 ProtectHome=true
 PrivateTmp=true
+# Measured/derived 2026-10-30 (DAEMON_HARDENING_PRIVILEGE_DROP_AND_CHROOT.md 5.1): kopia and the postgres tools exec no setuid helper (runuser is root
+# calling setuid, which NoNewPrivileges permits), touch no device, and talk HTTPS and loopback/unix Postgres. CapabilityBoundingSet stays
+# open: DAC_READ_SEARCH, SETUID/SETGID and CHOWN/FOWNER are needed until a measured list exists.
+NoNewPrivileges=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 Nice=19
 IOSchedulingClass=idle
 IOSchedulingPriority=7
@@ -4370,6 +4384,11 @@ Type=oneshot
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+# Reads only root-owned 0600 status files and the root 0700 tenant archive directory; no network, no other account: the full baseline.
+NoNewPrivileges=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
 ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_shared/tools/b2_backup.py check
 StandardOutput=journal
 StandardError=journal
