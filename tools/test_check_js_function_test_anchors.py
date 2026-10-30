@@ -272,6 +272,13 @@ class FailedScanTests(unittest.TestCase):
         self.assertEqual(cjfta._run_js_scan([]), {})
 
 
+class VendorExclusionTests(unittest.TestCase):
+    """Third-party libraries under a `vendor` directory are not scanned (Bruce, 2026-10-30)."""
+
+    def test_vendor_directory_is_excluded_from_the_scan(self):
+        self.assertIn("vendor", cjfta.EXCLUDE_DIRS)
+
+
 class BaselineRatchetTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

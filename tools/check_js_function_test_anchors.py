@@ -56,6 +56,7 @@ EXCLUDE_DIRS = {
     "tools",
     "scripts",
     "migrations",
+    "vendor",  # third-party libraries copied into the tree (lit-html, satellite-js); Bruce, 2026-10-30
     "lib",  # vendored third-party JS, matching eslint.config.js's own static/lib/ ignore
     "hams_community",
     "hams_com",
