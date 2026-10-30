@@ -447,10 +447,12 @@ class EslintFromAnyLayoutTests(unittest.TestCase):
             data = json.load(handle)
         self.assertEqual(data["extends"], os.path.join(SHARED, "tsconfig.json"))
         self.assertIn(os.path.join(os.path.realpath(self.repo), "*", "static", "**", "*.js"), data["include"])
+        self.assertIn(os.path.join(os.path.realpath(self.repo), "daemons", "**", "*.js"), data["include"])
+        self.assertIn(os.path.join(os.path.realpath(self.repo), "daemons", "**", "*.mjs"), data["include"])
         absent = os.path.join(self.ws, "elsewhere", "not_there")
         again = run_linters.write_eslint_project(SHARED, [self.repo, absent])
         with open(again, encoding="utf-8") as handle:
-            self.assertEqual(len(json.load(handle)["include"]), 1, "a missing directory is not listed")
+            self.assertEqual(len(json.load(handle)["include"]), 3, "a missing directory is not listed (three globs for the one real repository)")
 
 
 class JavascriptAnchorScanFailureTests(unittest.TestCase):
