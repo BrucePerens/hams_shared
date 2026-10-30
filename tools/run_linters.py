@@ -98,7 +98,7 @@ def _sibling_checkout(repo_root, main_checkout_root, name):
     return os.path.abspath(os.path.join(main_checkout_root, "..", name))
 
 
-def _default_inputs(dir_path, sibling_dir, shared_dir=None):
+def _default_inputs(dir_path, sibling_dir, shared_dir=None, repo_root=None):
     """Roots and suffixes a step reads when it declares nothing narrower: both repos and the real
     hams_shared directory, any file.
 
@@ -107,6 +107,8 @@ def _default_inputs(dir_path, sibling_dir, shared_dir=None):
     hams_shared path, which is not below either repository root, so a step rooted only at the two
     repositories never saw it and a change there was reported as touching nothing."""
     roots = [os.path.realpath(dir_path)]
+    if repo_root and os.path.isdir(repo_root) and os.path.realpath(repo_root) not in roots:
+        roots.append(os.path.realpath(repo_root))
     if sibling_dir and os.path.isdir(sibling_dir):
         roots.append(os.path.realpath(sibling_dir))
     if shared_dir and os.path.isdir(shared_dir):
@@ -264,7 +266,32 @@ def pass_stamp_dir():
     return os.path.join(base, "hams-lint", "passed")
 
 
-def _write_pass_stamps(repos, mode):
+def stamp_repos(repo_root, tools_dir, dir_path):
+    """Repositories a pass may stamp. The real hams_shared checkout is stamped only when this run
+    scanned it: started from it, or reachable below `repo_root` without crossing a symlink. A
+    repository's `hams_shared` link to the main checkout is not followed by the checkers' directory
+    walks, so a run from a worktree that links it covers none of its files and must not vouch for
+    its commit (found 2026-10-30: Rust and tool PRs carried stamps that checked nothing)."""
+    shared_repo = os.path.dirname(os.path.realpath(tools_dir))
+    repos = [repo_root]
+    if os.path.realpath(dir_path) == shared_repo:
+        repos.append(shared_repo)
+        return repos
+    inside = os.path.join(os.path.realpath(repo_root), "hams_shared")
+    if os.path.realpath(inside) == inside and shared_repo == inside:
+        repos.append(shared_repo)
+    return repos
+
+
+def stamp_text(mode, step_names):
+    """One line: mode, time, how many steps were selected and their names (the part of a name
+    before `[`). prmerge.sh reads it to refuse a stamp that selected nothing for a code change."""
+    bases = sorted({name.split("[")[0].split(" ")[0] for name in step_names})
+    stamp_time = time.strftime("%Y-%m-%dT%H:%M:%S")
+    return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}\n"
+
+
+def _write_pass_stamps(repos, mode, step_names=()):
     """Record "run_linters.py passed (mode) with a clean tree at commit <sha>" for each repo
     involved. devbox_tools/prmerge.sh refuses to merge a branch whose tip has no stamp, so a
     PR cannot land without the full or `--changed` run having passed on exactly that code.
@@ -278,7 +305,7 @@ def _write_pass_stamps(repos, mode):
         try:
             os.makedirs(pass_stamp_dir(), exist_ok=True)
             with open(os.path.join(pass_stamp_dir(), head[0]), "w", encoding="utf-8") as handle:
-                handle.write(f"{mode} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
+                handle.write(stamp_text(mode, step_names))
         except OSError as error:
             print(f"(pass stamp not written: {error})", file=sys.stderr)
 
@@ -572,8 +599,24 @@ def shared_checkout_staleness(shared_root):
     return int(behind[0]), is_main, None
 
 
+def invocation_root(script_path):
+    """The directory the script was started from: the repository for `tools/run_linters.py` and
+    for `hams_shared/tools/run_linters.py` alike.
+
+    Started through a repository's `hams_shared` symlink (a worktree whose `fix_worktree_symlinks`
+    linked it to the main checkout), `dirname(dirname(script))` is that symlink. Every step
+    root, daemon directory and test directory derived from it then pointed into the real
+    hams_shared checkout instead of the worktree, so a Rust change in the worktree lay under no
+    step's root and `--changed` selected zero steps (found 2026-10-30). The worktree itself is the
+    root in that case, exactly as when the script is started through the `tools` link."""
+    given = os.path.dirname(os.path.dirname(os.path.abspath(script_path)))
+    if os.path.basename(given) == "hams_shared" and os.path.islink(given):
+        return os.path.dirname(given)
+    return given
+
+
 def main():
-    dir_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    dir_path = invocation_root(__file__)
     repo_root = _resolve_repo_root(dir_path)
 
     # 0. A stale main hams_shared checkout gives wrong results to every worktree that links to it.
@@ -675,7 +718,7 @@ def main():
         """Declare one step. `inputs=` names the files the step reads (see lint_inputs());
         it defaults to the whole repo pair with every file suffix, which is always safe."""
         inputs = step_options.pop("inputs", None)
-        roots, suffixes = inputs if inputs else _default_inputs(dir_path, sibling_dir, real_shared_dir)
+        roots, suffixes = inputs if inputs else _default_inputs(dir_path, sibling_dir, real_shared_dir, repo_root)
         steps.append(
             lint_exec.Step(
                 name=name,
@@ -1707,8 +1750,9 @@ def main():
 
     if not linters_failed and not (options.only or options.skip or target_modules_str):
         _write_pass_stamps(
-            [repo_root, os.path.dirname(os.path.realpath(tools_dir))],
+            stamp_repos(repo_root, tools_dir, dir_path),
             "changed" if changed_set is not None else "full",
+            [step.name for step in steps],
         )
 
     if linters_failed:
