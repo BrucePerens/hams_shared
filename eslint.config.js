@@ -126,6 +126,17 @@ module.exports = tseslint.config(
     },
   },
   {
+    // form_shield/static/src/pow/pow_worker.js is a Web Worker entry script. importScripts is the
+    // dedicated worker scope's loader, a standard global there and not in globals.browser's window
+    // scope (same category as the AudioWorklet and service-worker entries above).
+    files: ["**/form_shield/static/src/pow/pow_worker.js"],
+    languageOptions: {
+      globals: {
+        importScripts: "readonly",
+      },
+    },
+  },
+  {
     // Type-aware layer: only the two rules that actually justify the
     // extra weight of type-checking plain JS, not the full
     // recommendedTypeChecked preset (which assumes a codebase designed
@@ -139,11 +150,19 @@ module.exports = tseslint.config(
     // anyway, which then failed outright ("file not found in any of the
     // provided project(s)") instead of just skipping them -- real files,
     // real (if narrow) fix, not files that needed fixing themselves.
-    ignores: ["**/ham_training/data/**/*.js"],
+    ignores: [
+      "**/ham_training/data/**/*.js",
+      // GNOME Shell extensions are GJS modules (`gi://` and `resource:///` imports), not browser
+      // source and not in the tsconfig project; they have no promises for these rules to type.
+      "**/hardware/**/gnome-shell/**/*.js",
+    ],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
-        project: "./tsconfig.json",
+        // run_linters.py generates a project listing the JavaScript of the checkouts being
+        // linted and passes it here; the checked-in tsconfig.json lists the layout of the main
+        // checkout (`../*/static/**`) and is the default for a direct `npx eslint` run.
+        project: process.env.HAMS_ESLINT_TSCONFIG || "./tsconfig.json",
         tsconfigRootDir: __dirname,
       },
     },

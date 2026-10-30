@@ -1383,7 +1383,11 @@ def _missing_sibling_hint(enclosing_repo_dir, scanned_dirs):
 
 def main():
     print("[*] Scanning documentation and codebase for Semantic Anchors...")
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    # The REAL hams_shared directory: started as `<repo>/tools/verify_anchors.py` (the symlink every
+    # repository has, which is how run_linters.py starts it), `__file__` names the repository, and
+    # its parent is then not the checkout that holds the sibling repository, so the sibling was
+    # never found and every anchor tested only from the other repository was reported untested.
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
 
     global _BASELINE
     argv = sys.argv[1:]
@@ -1452,6 +1456,13 @@ def main():
     # exist. `os.path.dirname(repo_root)` is the actual enclosing hams_com/hams_open checkout
     # that `_add_sibling_repo_target` needs.
     enclosing_repo_dir = os.path.dirname(repo_root)
+    if repo_identity(enclosing_repo_dir) is None:
+        # A worktree of hams_shared sits anywhere, so its parent says nothing about which
+        # repository is being scanned: take the identity from a scanned directory instead.
+        for scanned in primary_dirs:
+            if repo_identity(scanned):
+                enclosing_repo_dir = scanned
+                break
     baseline_paths = (
         [baseline_override]
         if baseline_override

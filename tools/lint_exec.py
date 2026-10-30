@@ -66,6 +66,9 @@ class Step:
     uses_tools  the checker script's own code is an input (always true in practice).
     cacheable   False for steps that read the network or the toolchain's state.
     always      run in `--changed` mode regardless of which files changed.
+    gated       a step with no argv (`static_output`, always a failure) that `--changed` runs only
+                when one of its inputs changed, instead of always: a missing toolchain fails the
+                step only when there is something for it to check.
     """
 
     name: str
@@ -81,6 +84,7 @@ class Step:
     suffixes: frozenset = None
     cacheable: bool = True
     always: bool = False
+    gated: bool = False
 
 
 @dataclasses.dataclass
@@ -91,6 +95,30 @@ class Result:
     seconds: float
     cached: bool = False
     skipped: str = None
+
+
+def main_worktree_of(path):
+    """Working-tree directory of the MAIN checkout of the git repository that contains `path`, or
+    None. For a worktree of hams_shared that is the checkout holding node_modules; hams_shared is a
+    submodule of hams_open, so its git directory sits under hams_open/.git/modules and
+    `git worktree list` names that directory, not the working tree: the working tree is the
+    `core.worktree` setting of the common git directory."""
+    def git(*args):
+        try:
+            res = subprocess.run(["git", *args], capture_output=True, text=True)
+        except OSError:
+            return None
+        return res.stdout.strip() if res.returncode == 0 else None
+
+    common = git("-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if not common:
+        return None
+    configured = git("--git-dir", common, "config", "core.worktree")
+    if configured:
+        return os.path.realpath(os.path.join(common, configured))
+    if os.path.basename(common) == ".git":
+        return os.path.dirname(common)
+    return None
 
 
 def render_output(step, returncode, stdout, stderr):
@@ -284,7 +312,7 @@ def select_for_changed(steps, changed_paths, run_all):
     to_run = []
     skipped = []
     for step in steps:
-        if run_all or step.always or step.argv is None:
+        if run_all or step.always or (step.argv is None and not step.gated):
             to_run.append(step)
             continue
         if _touches(step, changed_paths):

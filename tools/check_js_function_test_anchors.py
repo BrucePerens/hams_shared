@@ -46,6 +46,7 @@ import re
 import subprocess
 import sys
 
+import lint_exec  # noqa: E402
 import verify_anchors as va  # noqa: E402
 from check_function_test_anchors import _is_base_anchor_declaration  # noqa: E402
 
@@ -174,6 +175,20 @@ def _extend_span_backward_over_comments(start, lines):
     return start
 
 
+def _node_environment():
+    """The environment for node: NODE_PATH names the main hams_shared checkout's node_modules when
+    this checkout (a git worktree of hams_shared) has none of its own."""
+    env = dict(os.environ)
+    here = os.path.dirname(os.path.abspath(__file__))
+    if os.path.isdir(os.path.join(here, "..", "node_modules", "acorn")):
+        return env
+    main_checkout = lint_exec.main_worktree_of(here)
+    modules = os.path.join(main_checkout, "node_modules") if main_checkout else ""
+    if os.path.isdir(modules):
+        env["NODE_PATH"] = modules + (os.pathsep + env["NODE_PATH"] if env.get("NODE_PATH") else "")
+    return env
+
+
 def _run_js_scan(filepaths):
     """Batches every file into one real Node/acorn invocation (not one
     process per file) -- confirmed directly this handles 155 real files
@@ -182,18 +197,28 @@ def _run_js_scan(filepaths):
     scan_file's own SyntaxError-skip behavior on the Python side)."""
     if not filepaths:
         return {}
-    proc = subprocess.run(
-        ["node", _JS_SCAN_SCRIPT],
-        input=json.dumps(filepaths),
-        capture_output=True,
-        text=True,
-    )
+    # A scan that cannot run is a failure, never "no functions found": that read as "JS is at
+    # zero" on 2026-10-28, the JS baselines were emptied on it (#269), and the gate then passed
+    # without having looked at a single file.
+    try:
+        proc = subprocess.run(
+            ["node", _JS_SCAN_SCRIPT],
+            input=json.dumps(filepaths),
+            capture_output=True,
+            text=True,
+            env=_node_environment(),
+        )
+    except OSError as error:
+        raise SystemExit(f"[!] JS function scan could not start node: {error}")
     if proc.returncode != 0 or not proc.stdout:
-        return {}
+        raise SystemExit(
+            f"[!] JS function scan failed (node exit {proc.returncode}); the acorn parser comes "
+            f"from hams_shared/node_modules (npm install). {proc.stderr.strip()[:500]}"
+        )
     try:
         results = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"[!] JS function scan printed output that is not JSON: {error}")
     return {
         entry["file"]: [(f["name"], f["start"], f["end"]) for f in entry["functions"]]
         for entry in results
