@@ -32,7 +32,7 @@ import tempfile
 import shutil
 import unittest
 from unittest.mock import MagicMock, patch
-from urllib.error import HTTPError, URLError
+from urllib.error import URLError
 
 import env_validator as ev  # noqa: E402
 

@@ -387,7 +387,7 @@ def long_run(rig: Rig, seconds: float, play_dbfs: float, freq: float = 1000.0, w
     res = rig.backend.duplex(src, total_frames=int(seconds * r), tail_frames=0, keep=False, on_chunk=on_chunk,
                              period=kw.get("period", rig.period), nperiods=kw.get("nperiods", rig.nperiods))
     x = np.concatenate(store).astype(np.float64)
-    del store
+    store.clear()
     windows, wlen = [], int(window_s * r)
     for s in range(0, len(x) - wlen + 1, wlen):
         m = dsp.tone_metrics(x[s:s + wlen], r, freq)

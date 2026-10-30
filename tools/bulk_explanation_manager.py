@@ -2,11 +2,12 @@
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-import os
-import sys
 import argparse
+import importlib
 import json
 import logging
+import os
+import sys
 
 # This tool administers the NCVEC exam question pool, a hams_com-specific
 # concern -- it has no purpose in a hams_open-only checkout, which won't
@@ -14,7 +15,7 @@ import logging
 # import is unguarded, so running (or importing) this tool without hams_com
 # stops with the interpreter's own ImportError.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../hams_com/daemons")))
-from hams_config import get_odoo_client
+get_odoo_client = importlib.import_module("hams_config").get_odoo_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("bulk_explanation_manager")

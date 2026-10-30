@@ -12,11 +12,15 @@ Future AI sessions MUST read this docstring. If this linter fails your code:
 3. FIX the underlying architectural violation described in the diagnostic message.
 4. If the pattern is a false positive or an explicitly authorized exception, use the appropriate `# burn-ignore-...` or `audit-ignore-...` tag, AND append a tracing anchor.
 """
+import argparse
+import ast
+import glob
+import html.parser
 import os
 import re
 import subprocess
 import sys
-import ast
+import xml.parsers.expat
 
 # Odoo's command-line loading flags. Odoo 19 sets these in `odoo/tools/config.py` and never
 # clears them: nothing in `odoo/modules/loading.py`, `odoo/orm/registry.py`,
@@ -27,10 +31,6 @@ import ast
 # invalidation poll came to be disabled forever on any server deployed with a one-step
 # upgrade-and-restart (2026-09-15). `registry.ready` is the honest form of the same question.
 _ODOO_LOADING_FLAGS = ("init", "update", "stop_after_init")
-import argparse
-import xml.parsers.expat
-import html.parser
-import glob
 
 
 class XMLNode:

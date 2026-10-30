@@ -5,16 +5,17 @@ Regression coverage for usability_audit_daemon.py's own IPC client, found live
 (2026-08-28) while running this daemon for real against a running hams.com.
 """
 import asyncio
+import importlib
 import io
 import sys
 import threading
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, __import__("os").path.dirname(__file__))
-import usability_audit_daemon as uad
+uad = importlib.import_module("usability_audit_daemon")
 
 
 def _fake_sse_client(url):

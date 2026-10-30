@@ -5,12 +5,13 @@ action-grounded dialogue using Windows Media OCR and Pillow.
 Preserves original graphic novel artwork, character staging, and zero-pointing postures.
 """
 
-import os
-import sys
-import re
-import json
 import argparse
+import importlib
+import json
 import logging
+import os
+import re
+import sys
 from PIL import Image, ImageDraw, ImageFont
 
 # Set up logging
@@ -22,8 +23,8 @@ SCRATCH_DIR = r"C:\Users\bruce\.gemini\antigravity\brain\80b1316e-857f-4c8d-93d7
 if SCRATCH_DIR not in sys.path:
     sys.path.append(SCRATCH_DIR)
 
-from ocr_utils import extract_ocr_lines
-from test_clean_box import cluster_lines
+extract_ocr_lines = importlib.import_module("ocr_utils").extract_ocr_lines
+cluster_lines = importlib.import_module("test_clean_box").cluster_lines
 
 REPO_ROOT = r"c:\Users\ai\workspace\hams_com"
 PROPOSALS_MD = os.path.join(REPO_ROOT, "docs", "speech_bubble_dialogue_proposals.md")
