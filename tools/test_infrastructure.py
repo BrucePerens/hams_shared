@@ -4518,6 +4518,38 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
             with self.subTest(unit=unit):
                 self.assertIn("permanent", infra.SHARED_ODOO_ACCOUNT_UNITS[unit])
 
+    # The pinned final list. Deliberately a literal in the test as well as the map in infrastructure.py: a unit cannot join the
+    # shared odoo account by editing one place. When a unit moves to its own account, delete it here in the same change.
+    PINNED_ODOO_UNITS = (
+        "adif.ingress.service", "adif.processor.service", "backup.worker.service", "cache-manager.service",
+        "code.review.sweep.service", "credential.touch.timer.service", "event.ai.enrichment.service",
+        "hams-exception-report@.service", "hams.daemon.keys.service", "hams.data.relay.service",
+        "hams.relay.bridge.service", "hams.simulated.band.service", "hams.simulated.bots.service",
+        "hams.simulated.observer.service", "pager-os-monitor.service", "stray.odoo.shell.detector.service",
+        "ticket.triage.event.service", "ticket.triage.service",
+    )
+
+    def test_exactly_the_pinned_units_run_as_odoo(self):
+        self.assertEqual(tuple(sorted(infra.systemd_units_running_as(infra.MANIFEST, "odoo"))), self.PINNED_ODOO_UNITS)
+        self.assertEqual(tuple(sorted(infra.SHARED_ODOO_ACCOUNT_UNITS)), self.PINNED_ODOO_UNITS)
+
+    def test_the_permanent_odoo_units_are_exactly_the_two_privileged_ones(self):
+        self.assertEqual(
+            infra.PERMANENT_ODOO_ACCOUNT_UNITS,
+            {"hams.daemon.keys.service", "stray.odoo.shell.detector.service"},
+        )
+        self.assertLessEqual(infra.PERMANENT_ODOO_ACCOUNT_UNITS, set(self.PINNED_ODOO_UNITS))
+
+    def test_the_b2_units_carry_what_was_derived_safe(self):
+        values = lambda u, d: infra.systemd_unit_directive_values(infra.MANIFEST, u, d)
+        for unit in ("hams-b2-backup.service", "hams-b2-restore-test.service"):
+            with self.subTest(unit=unit):
+                self.assertEqual(infra.SANDBOX_BASELINE_EXEMPTIONS[unit][0], {"CapabilityBoundingSet"})
+                self.assertEqual(values(unit, "NoNewPrivileges"), ["true"])
+                self.assertEqual(values(unit, "RestrictAddressFamilies"), ["AF_INET", "AF_INET6", "AF_UNIX"])
+        self.assertNotIn("hams-b2-backup-check.service", infra.SANDBOX_BASELINE_EXEMPTIONS)
+        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, "hams-b2-backup-check.service"), set())
+
     def test_the_units_with_their_own_account_are_found_under_that_account(self):
         # The same parser must see the existing dedicated-account units, or the two checks
         # above could pass on a parser that finds nothing.
