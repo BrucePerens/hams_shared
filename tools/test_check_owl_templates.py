@@ -12,10 +12,14 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from check_owl_templates import find_owl_template_files  # noqa: E402
+import requests
+
+from check_owl_templates import _check_with_chrome, find_owl_template_files  # noqa: E402
 
 _SCRIPT = str(Path(__file__).parent / "check_owl_templates.py")
 
@@ -92,6 +96,35 @@ def _run_checker(tmpdir):
         timeout=30,
     )
     return result.returncode, result.stdout
+
+
+class ChromeStartupPollTests(unittest.TestCase):
+    """The poll that waits for headless Chrome's devtools port must treat a slow answer like a refused
+    connection: on a loaded host Chrome accepts the connection and answers after the poll's 0.2 s."""
+
+    def _run(self, get_side_effect):
+        proc = types.SimpleNamespace(terminate=lambda: None, wait=lambda timeout=None: 0, kill=lambda: None)
+        args = types.SimpleNamespace(port=1)
+        with tempfile.TemporaryDirectory() as user_data_dir:
+            with mock.patch("check_owl_templates._launch_headless_chrome", return_value=proc), \
+                    mock.patch("check_owl_templates.requests.get", side_effect=get_side_effect) as get, \
+                    mock.patch("check_owl_templates.time.sleep"), \
+                    mock.patch("check_owl_templates.check_templates_via_cdp", new=mock.Mock()), \
+                    mock.patch("check_owl_templates.asyncio.run", return_value=[]):
+                return _check_with_chrome(args, user_data_dir, [], {}), get.call_count
+
+    def test_read_timeouts_and_refused_connections_are_retried_until_chrome_answers(self):
+        returncode, calls = self._run([
+            requests.exceptions.ReadTimeout("slow"),
+            requests.exceptions.ConnectionError("refused"),
+            requests.exceptions.ReadTimeout("slow"),
+            mock.Mock(),
+        ])
+        self.assertEqual((returncode, calls), (0, 4))
+
+    def test_a_port_that_never_answers_is_reported_not_raised(self):
+        returncode, calls = self._run(requests.exceptions.ReadTimeout("slow"))
+        self.assertEqual((returncode, calls), (1, 50))
 
 
 @unittest.skipUnless(

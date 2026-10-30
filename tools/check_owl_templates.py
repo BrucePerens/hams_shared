@@ -260,7 +260,10 @@ def _check_with_chrome(args, user_data_dir, xml_files, xml_file_contents):
             try:
                 requests.get(f"http://localhost:{args.port}/json", timeout=0.2)
                 break
-            except requests.exceptions.ConnectionError:
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                # Chrome is still starting: the port refuses connections, or (on a loaded host) accepts
+                # one and answers later than this poll's 0.2 s. A read timeout used to escape here and
+                # fail the run with a traceback although Chrome was about to be ready.
                 time.sleep(0.1)
         else:
             log_file.flush()
