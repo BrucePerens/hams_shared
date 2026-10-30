@@ -168,6 +168,8 @@ module.exports = tseslint.config(
       "**/daemons/shack_console/console/tests/run_node.mjs",
       "**/daemons/hams_local_relay/tests/trust_wizard_logic.js",
       "**/daemons/hams_simulated_bots/tests/*.mjs",
+      // The module Node checks next to the Hoot tests (static/tests/node_*_check.mjs): started with node by Python tests.
+      "**/static/tests/*.mjs",
     ],
     languageOptions: {
       globals: {
@@ -263,6 +265,10 @@ module.exports = tseslint.config(
       // (daemons/shack_console/third_party/*/SHA256SUMS, checked by tests/vendored_tests.rs): editing them to
       // satisfy this linter would break that record. Same category as static/lib/ and *.min.js above.
       "**/daemons/shack_console/console/src/vendor/**",
+      // hams_com docs/Clubs/clubs_data.js is a generated data file (an array literal of club records for the Clubs
+      // documentation), not product code, and sits outside the TypeScript project that lists the modules' static
+      // sources, so the type-aware parser cannot open it.
+      "**/docs/Clubs/clubs_data.js",
     ],
   }
 );
