@@ -28,7 +28,7 @@ import sys
 import tempfile
 import unittest
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.realpath(__file__))  # hams_shared/tools, also when run through a repository's `tools` symlink
 SHARED = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 

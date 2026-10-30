@@ -775,7 +775,16 @@ def cloudflared_ffi_default_dir():
     """hams_open/daemons/cloudflared-ffi, found from this file's real location
     (hams_open/hams_shared/tools/)."""
     here = os.path.dirname(os.path.realpath(__file__))
-    return os.path.normpath(os.path.join(here, "..", "..", "daemons", "cloudflared-ffi"))
+    found = os.path.normpath(os.path.join(here, "..", "..", "daemons", "cloudflared-ffi"))
+    if not os.path.isdir(found):
+        # A worktree of hams_shared sits anywhere (~/workspace/tmp/<name>), not inside hams_open:
+        # the tree to build is the one beside the main hams_shared checkout it was made from.
+        import lint_exec
+
+        main_checkout = lint_exec.main_worktree_of(here)
+        if main_checkout:
+            found = os.path.normpath(os.path.join(main_checkout, "..", "daemons", "cloudflared-ffi"))
+    return found
 
 
 def cffi_host_machine():
