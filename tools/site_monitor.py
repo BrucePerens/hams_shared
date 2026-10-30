@@ -41,6 +41,7 @@ delivered on any channel.
 """
 import json
 import logging
+import math
 import os
 import shutil
 import smtplib
@@ -98,7 +99,7 @@ def read_maintenance(path, now):
         return {"state": "malformed", "error": f"{path}: {exc}"}
     try:
         set_at, until = float(data["set_at"]), float(data["until"])
-        if abs(set_at) == float("inf") or abs(until) == float("inf") or set_at != set_at or until != until:
+        if not (math.isfinite(set_at) and math.isfinite(until)):
             raise ValueError("not finite")
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         return {"state": "malformed", "error": f"{path}: needs numeric set_at and until ({exc!r})"}
