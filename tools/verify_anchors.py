@@ -43,6 +43,8 @@ import re
 import subprocess
 import sys
 
+from lint_exec import main_worktree_of
+
 # Recognizes the plain `[@ANCHOR: name]` form and both halves of the
 # multi-line `[@ANCHOR-BEGIN: name]` / `[@ANCHOR-END: name]` pair
 # (check_burn_list.py's sibling tool -- see ADR 0089 -- added BEGIN/END
@@ -1340,6 +1342,16 @@ def _add_sibling_repo_target(repo_root, target_dirs):
         os.path.abspath(os.path.join(repo_root, sibling_name))
         for sibling_name in other_names
     ]
+
+    # A git worktree placed anywhere (~/workspace/tmp/<name>) has no sibling beside it; the sibling
+    # of the MAIN checkout it was made from is the right one then (a worktree set names its own
+    # through the *_TREE variables above).
+    main_checkout = main_worktree_of(repo_root)
+    if main_checkout and os.path.realpath(main_checkout) != os.path.realpath(repo_root):
+        candidates += [
+            os.path.abspath(os.path.join(main_checkout, "..", sibling_name))
+            for sibling_name in other_names
+        ]
 
     new_target_dirs = list(target_dirs)
     for possible_path in candidates:

@@ -325,6 +325,32 @@ class ModuleChangeSelectionTests(SelectionFixture):
         self.assertIn("com_tested", result.stdout)
 
 
+    def test_verify_anchors_in_a_worktree_elsewhere_uses_the_main_checkouts_sibling(self):
+        _write(os.path.join(self.open_repo, "hams_helpdesk", "models", "only_com_tests.py"),
+               "# [@ANCHOR: hams_helpdesk:com_tested]\n# Verified by [@ANCHOR: test_com_tested]\n"
+               "def com_tested():\n    return 1\n")
+        _write(os.path.join(self.open_repo, "hams_helpdesk", "docs", "stories", "c.md"),
+               "# C\n\n[@ANCHOR: com_tested]\n")
+        _write(os.path.join(self.com_repo, "ham_x", "tests", "test_c.py"),
+               "# [@ANCHOR: test_com_tested]\n# Tests [@ANCHOR: hams_helpdesk:com_tested]\n"
+               "def test_com_tested():\n    from hams_helpdesk.models.only_com_tests import com_tested\n"
+               "    assert com_tested() == 1\n")
+        for repo in (self.open_repo, self.com_repo):
+            _git(repo, "add", "-A")
+            _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "x")
+        elsewhere = tempfile.mkdtemp(prefix="lint-wt-elsewhere-")
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        worktree = os.path.join(elsewhere, "branch_checkout")
+        _git(self.open_repo, "worktree", "add", "-q", "-b", "side", worktree)
+        self.addCleanup(_git, self.open_repo, "worktree", "remove", "--force", worktree)
+        os.symlink(os.path.join(self.shared), os.path.join(worktree, "hams_shared"))
+        result = subprocess.run(
+            [sys.executable, os.path.join(self.shared, "tools", "verify_anchors.py"), worktree],
+            cwd=worktree, capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 class HamsSharedChangeSelectionTests(SelectionFixture):
     def test_a_guide_under_hams_shared_docs_runs_the_documentation_checkers(self):
         chosen = {_base(n) for n in self.selected(("hams_open/hams_shared/docs/guide.md", "guide 2\n"))}
