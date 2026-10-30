@@ -7295,6 +7295,14 @@ class DownloadFileCacheIntegrationTests(_TmpDirTestCase):
         with open(os.path.join(self.tmp, "b"), "rb") as f:
             self.assertEqual(f.read(), b"key")
 
+    def test_a_non_finite_max_age_is_the_default_not_an_endless_or_undefined_age(self):
+        default = provision_cache.DEFAULT_MAX_AGE_DAYS * 86400
+        for text in ("nan", "inf", "-inf", "Infinity", "x"):
+            with patch.dict(os.environ, {provision_cache.MAX_AGE_ENV: text}):
+                self.assertEqual(provision_cache.max_age_seconds(), default, text)
+        with patch.dict(os.environ, {provision_cache.MAX_AGE_ENV: "2"}):
+            self.assertEqual(provision_cache.max_age_seconds(), 2 * 86400)
+
 
 class AptOnlyStaticFilesTests(_TmpDirTestCase):
     def _apt_specs(self):

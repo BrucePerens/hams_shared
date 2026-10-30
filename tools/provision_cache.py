@@ -28,6 +28,7 @@ Policy (docs: hams_shared/tools/README.md, "Provisioning download cache"):
 import hashlib
 import json
 import logging
+import math
 import os
 import tempfile
 import time
@@ -88,6 +89,8 @@ def refresh_requested():
 def max_age_seconds():
     try:
         days = float(os.environ.get(MAX_AGE_ENV, DEFAULT_MAX_AGE_DAYS))
+        if not math.isfinite(days):
+            raise ValueError(f"{MAX_AGE_ENV} is not a finite number of days")
     except ValueError:
         days = DEFAULT_MAX_AGE_DAYS
     return max(days, 0.0) * 86400

@@ -35,6 +35,7 @@ queue lines and ``--queue-status`` can say who holds the lock and what it is run
 """
 
 import json
+import math
 import os
 import signal
 import sys
@@ -368,16 +369,25 @@ def wait_options_from_argv(argv, environ=None):
     (or HAMS_TEST_WAIT_TIMEOUT) bounds the wait; --queue-status prints holder and queue."""
     import argparse
     environ = os.environ if environ is None else environ
+
+    def finite_seconds(text):
+        # float() parses "nan" and "inf" without an exception; a wait that never ends (or compares
+        # false against every deadline) is not a timeout.
+        value = float(text)
+        if not math.isfinite(value):
+            raise ValueError(f"{text!r} is not a finite number of seconds")
+        return value
+
     p = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     p.add_argument("--wait", action="store_true")
-    p.add_argument("--wait-timeout", type=float, default=None)
+    p.add_argument("--wait-timeout", type=finite_seconds, default=None)
     p.add_argument("--queue-status", action="store_true")
     ns, _ = p.parse_known_args(argv)
     wait = ns.wait or environ.get("HAMS_TEST_WAIT") == "1"
     timeout = ns.wait_timeout
     if timeout is None and environ.get("HAMS_TEST_WAIT_TIMEOUT"):
         try:
-            timeout = float(environ["HAMS_TEST_WAIT_TIMEOUT"])
+            timeout = finite_seconds(environ["HAMS_TEST_WAIT_TIMEOUT"])
         except ValueError:
             timeout = None
     return {"wait": wait or timeout is not None, "timeout": timeout, "status": ns.queue_status}

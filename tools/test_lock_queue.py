@@ -392,6 +392,10 @@ class TestOptions(unittest.TestCase):
         o = lq.wait_options_from_argv([], environ={"HAMS_TEST_WAIT_TIMEOUT": "5"})
         self.assertEqual((o["wait"], o["timeout"]), (True, 5.0))
         self.assertEqual(lq.wait_options_from_argv([], environ={"HAMS_TEST_WAIT_TIMEOUT": "x"})["timeout"], None)
+        for text in ("nan", "inf", "-Infinity"):
+            self.assertIsNone(lq.wait_options_from_argv([], environ={"HAMS_TEST_WAIT_TIMEOUT": text})["timeout"], text)
+            with self.assertRaises(SystemExit, msg=text):
+                lq.wait_options_from_argv(["--wait-timeout", text], environ={})
         self.assertTrue(lq.wait_options_from_argv(["--queue-status"], environ={})["status"])
 
     def test_abbreviations_and_other_flags_are_not_swallowed(self):
