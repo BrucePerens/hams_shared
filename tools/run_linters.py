@@ -887,6 +887,14 @@ def main():
     # The sibling repository is named explicitly: verify_anchors would otherwise look for it
     # beside the directory it was started from, and a worktree has no sibling there.
     anchor_targets = [repo_root] if (changed_set is not None and not target_modules_str) else targets
+    if anchor_targets == [repo_root] and sibling_dir and os.path.isdir(sibling_dir):
+        # Both repositories are scanned as primary, as `verify_anchors.py . ../hams_open` does. Handed one
+        # root, the other repository counts as non-primary and its documentation is not credited: a
+        # hams_com test that cites a hams_open feature (`# Tests [@ANCHOR: zero_sudo:get_trusted_client_ip]`)
+        # was reported as a feature "missing from documentation manuals" although the story is in
+        # zero_sudo/docs/stories, and 211 cross-repository references as missing from source (2026-10-30:
+        # eleven false findings on a clean main, so no hams_com branch could pass the pre-merge run).
+        anchor_targets = [repo_root, os.path.realpath(sibling_dir)]
     if anchor_targets:
         anchor_env = dict(os.environ)
         if sibling_dir and os.path.isdir(sibling_dir):
