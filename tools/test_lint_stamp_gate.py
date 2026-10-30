@@ -182,5 +182,32 @@ class WorktreeWithLinkedHamsSharedTests(SelectionFixture):
         self.assertIn("eslint", picked)
 
 
+class CrossRepositoryAnchorTests(SelectionFixture):
+    """The pre-merge run started from hams_com must credit documentation that lives in hams_open."""
+
+    def test_a_hams_com_test_that_cites_a_hams_open_feature_does_not_make_it_undocumented(self):
+        os.symlink(os.path.join(self.shared, "tools"), os.path.join(self.com_repo, "tools"))
+        _write(
+            os.path.join(self.com_repo, "ham_x", "tests", "test_cites_open.py"),
+            "# Tests [@ANCHOR: zero_sudo:persona_login]\n"
+            "def test_login_from_hams_com():\n"
+            "    from zero_sudo.models.model import persona_login\n"
+            "    assert persona_login() == 1\n",
+        )
+        env = dict(os.environ)
+        env["HAMS_ALLOW_STALE_SHARED"] = "1"
+        result = subprocess.run(
+            [sys.executable, os.path.join(self.com_repo, "tools", "run_linters.py"), "--only", "verify_anchors"],
+            cwd=self.com_repo,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=300,
+        )
+        text = result.stdout + result.stderr
+        self.assertNotIn("completely missing from documentation", text)
+        self.assertEqual(result.returncode, 0, text)
+
+
 if __name__ == "__main__":
     unittest.main()
