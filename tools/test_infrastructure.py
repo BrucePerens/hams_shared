@@ -4517,6 +4517,30 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
         )
         self.assertIn("--max-requests-per-day=", service["content"])
 
+    def test_smoketest_candidates_skip_units_the_environment_does_not_install(self):
+        """A prod-only unit (hams_prod pg_dump, the site monitor) is not started by a --test smoketest."""
+        for name in ("hams.db.local.backup.service", "hams-site-monitor.service"):
+            self.assertNotIn(name, infra._smoketest_candidate_services(True, is_test_env=True))
+            self.assertIn(name, infra._smoketest_candidate_services(True, is_test_env=False))
+
+    def test_smoketest_skips_units_that_cannot_run_on_a_test_host_only_there(self):
+        skipped = {
+            os.path.basename(sf["path"]): sf["smoketest_skip_in_test"]
+            for sf in infra.MANIFEST["static_files"] if sf.get("smoketest_skip_in_test")
+        }
+        for name in ("hamcall.idx.sync.service", "callbook.delta.export.service", "hams.simulated.observer.service"):
+            self.assertIn(name, skipped)
+            self.assertNotIn(name, infra._smoketest_candidate_services(True, is_test_env=True))
+            self.assertIn(name, infra._smoketest_candidate_services(True, is_test_env=False))
+        for reason in skipped.values():
+            self.assertGreater(len(reason), 20)
+
+    def test_hams_open_shared_daemon_modules_are_installed_flat(self):
+        """backup.worker imports exception_reporter from PYTHONPATH=/opt/hams/daemons; provisioning must put it there."""
+        paths = {sf["path"] for sf in infra.MANIFEST["static_files"]}
+        for name in ("exception_reporter.py", "glyph_normalizer.py", "ssrf_safe_fetch.py", "club_spam.py"):
+            self.assertIn("/opt/hams/daemons/" + name, paths)
+
     def test_smoketest_never_starts_an_opt_in_service_unless_named(self):
         self.assertNotIn(
             "code.review.sweep.service", infra._smoketest_candidate_services(True, is_test_env=False)
@@ -5950,7 +5974,10 @@ class DeployedDaemonsCopyTests(_TmpDirTestCase):
 
     def test_both_daemon_trees_are_flagged_in_the_manifest(self):
         flagged = {s["path"] for s in infra.MANIFEST["static_files"] if s.get("deployed_by_sync_daemons")}
-        self.assertEqual(flagged, {"/opt/hams/daemons", "/opt/hams/daemons/backup_worker"})
+        self.assertEqual(flagged, {"/opt/hams/daemons", "/opt/hams/daemons/backup_worker"} | {
+            "/opt/hams/daemons/" + n for n in (
+                "robots_txt_policy.py", "ssrf_safe_fetch.py", "glyph_normalizer.py", "repeater_page_text.py", "club_spam.py",
+                "exception_reporter.py")})
 
 
 class PreserveExistingDirectoryTests(_TmpDirTestCase):
