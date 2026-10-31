@@ -36,6 +36,7 @@ import urllib.parse
 from datetime import datetime
 
 import provision_cache
+import smoketest_fixtures
 
 _logger = logging.getLogger(__name__)
 
@@ -6672,7 +6673,9 @@ WantedBy=timers.target
             # SHA-256 short-circuit makes an unchanged day cheap. Read-only on purpose:
             # the daemon only reads the file and talks to Odoo.
             "path": "/opt/hams/systemd/hamcall.idx.sync.service",
-            "smoketest_skip_in_test": "needs K6BP's licensed hamcall.idx, an operator-placed file a test host never has",
+            # The licensed index is never in git or on a test host by default: the smoketest runs this unit only when the file is
+            # there (an operator's own, or the ephemeral copy smoketest_fixtures.stage_hamcall_index installs for one run).
+            "smoketest_requires_file": "/opt/hams/hamcall/hamcall.idx",
             "content": """\
 [Unit]
 Description=HamCall Licensed Index Presence Sync (One-Shot, manual start)
@@ -6820,7 +6823,6 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/callbook.dns.export.service",
-            "smoketest_skip_in_test": "flushes the PowerDNS API on 127.0.0.1:8081, and pdns cannot bind port 53 on a host whose systemd-resolved holds it",
             "content": """\
 [Unit]
 Description=Ham Radio Callbook DNS Zone Exporter (One-Shot)
@@ -6904,7 +6906,6 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/callbook.delta.export.service",
-            "smoketest_skip_in_test": "publishes the callbook view, which is empty in a test database (the exporter refuses to publish nothing)",
             "content": """\
 [Unit]
 Description=Ham Radio Relay Callbook Delta Files (One-Shot)
@@ -6981,7 +6982,6 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/relay.satellites.publish.service",
-            "smoketest_skip_in_test": "runs code from /opt/hams/src, which only deploy_to_production.py populates",
             "content": """\
 [Unit]
 Description=Ham Radio Relay Satellite Element Sets, Signed Download (One-Shot)
@@ -7059,7 +7059,6 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/relay.manuals.publish.service",
-            "smoketest_skip_in_test": "runs code from /opt/hams/src, which only deploy_to_production.py populates",
             "content": """\
 [Unit]
 Description=Ham Radio Relay Manuals, Signed Download (One-Shot)
@@ -8205,7 +8204,6 @@ WantedBy=multi-user.target
         },
         {
             "path": "/opt/hams/systemd/hams.simulated.band.service",
-            "smoketest_skip_in_test": "needs the hand-placed /etc/hams-band/band_bot_keys",
             "content": """\
 [Unit]
 Description=Hams.com Simulated Band WebRTC SFU
@@ -8367,7 +8365,6 @@ WantedBy=multi-user.target
             # hams.simulated.bots.service, since the Observer is architecturally independent of the
             # conversational bot fleet, not a client of it.
             "path": "/opt/hams/systemd/hams.simulated.observer.service",
-            "smoketest_skip_in_test": "requires hams.simulated.band, and imports aiortc/av, which Debian does not package and a test host does not install",
             "content": """\
 [Unit]
 Description=Hams.com Simulated Band Official Observer (silent safety monitor)
@@ -11971,7 +11968,8 @@ def _smoketest_candidate_services(has_hams_com=True, is_test_env=False, opt_in_u
         "system-startup.service",
         "hams-pycache.service"
     }
-    external = external_fetch_unit_names() if is_test_env else set()
+    # A unit with a test-host stand-in (the KMS signer, given a throwaway key) is not left out.
+    external = (external_fetch_unit_names() - smoketest_fixtures.TEST_SUBSTITUTED_UNITS) if is_test_env else set()
     # Never started by the smoketest unless the operator opted in (a start of
     # code.review.sweep.service runs a whole paid review).
     external |= opt_in_unit_names() - set(opt_in_units)
@@ -11986,9 +11984,12 @@ def _smoketest_candidate_services(has_hams_com=True, is_test_env=False, opt_in_u
                 continue
             if svc_name in external:
                 continue
-            # A unit whose entry says it cannot run on a test host (it needs an operator-placed
-            # secret, a deployed tree or production data) is left out of the test smoketest only.
-            if is_test_env and sf.get("smoketest_skip_in_test"):
+            # A unit that needs an operator-placed file runs only on a test host that has it.
+            if is_test_env and sf.get("smoketest_requires_file") and not os.path.exists(sf["smoketest_requires_file"]):
+                _logger.warning(
+                    "    [~] %s is not started: %s is not on this test host (stage it with %s).",
+                    svc_name, sf["smoketest_requires_file"], smoketest_fixtures.HAMCALL_STAGED_ENV,
+                )
                 continue
             # A unit this environment does not install is never a candidate: a stale copy
             # left by an earlier run, or one a prod-only entry names, is not this host's to start.
@@ -12001,7 +12002,70 @@ def _smoketest_candidate_services(has_hams_com=True, is_test_env=False, opt_in_u
     return potential_services
 
 
-def run_post_provision_smoketest(has_hams_com=True, is_test_env=False, opt_in_units=()):
+# [@ANCHOR: infrastructure:prepare_test_host_for_smoketest]
+# Verified by [@ANCHOR: infrastructure:test_smoketest_fixtures]
+def prepare_test_host_for_smoketest(run_cmd_func, env_vars, hams_com_dir, hams_open_dir):
+    """Gives a --test host what the units the smoketest starts need and a test host does not have (see smoketest_fixtures.py).
+
+    Returns the HamCall index copy it installed (or None), which cleanup_test_host_after_smoketest removes."""
+    sf = smoketest_fixtures
+    pdns_exec = MANIFEST["systemd_pdns_override"]["Service"]["ExecStart"][-1]
+    sf.install_pdns_test_dropin(pdns_exec)
+    sf.install_observer_test_dropin()
+    sf.install_relay_signer_test_dropin()
+    sf.install_callbook_fixture(run_cmd_func, env_vars.get("DB_NAME", "hams_test"))
+    sf.mirror_deployed_sources(
+        MANIFEST["static_files"],
+        {"hams_com": hams_com_dir, "hams_open": hams_open_dir},
+        chown=lambda path, owner: shutil.chown(path, owner, owner),
+    )
+    sf.generate_band_keys(chown=lambda path, owner: shutil.chown(path, owner, owner))
+    try:
+        sf.install_observer_dependencies(run_cmd_func)
+    except (subprocess.CalledProcessError, OSError) as e:
+        record_hook_failure("test_observer_dependencies", e)
+    installed = sf.stage_hamcall_index(
+        chown=lambda path, owner: shutil.chown(path, owner, owner),
+    )
+    subprocess.run(["systemctl", "daemon-reload"], check=False)
+    return installed
+
+
+def cleanup_test_host_after_smoketest(installed_hamcall_index):
+    """Removes the ephemeral HamCall copy (and the staged file it came from); nothing licensed stays on a test host."""
+    smoketest_fixtures.remove_hamcall_index(installed_hamcall_index)
+
+
+# Units whose smoketest means more than "systemctl start returned": what each must be doing once the smoketest has run.
+def _test_fixture_unit_problems(started, domain):
+    """Problems (strings) found in the units the smoketest started that have a stronger check than not failing."""
+    sf = smoketest_fixtures
+    problems = []
+
+    def active(unit):
+        return subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True).stdout.strip()
+
+    for unit in ("hams.simulated.band.service", "hams.simulated.observer.service"):
+        if unit in started and active(unit) != "active":
+            problems.append(f"{unit} is {active(unit) or 'not loaded'}, not active")
+    for unit in ("hamcall.idx.sync.service", "relay.satellites.publish.service", "relay.manuals.publish.service",
+                 "callbook.dns.export.service", "callbook.delta.export.service"):
+        if unit in started:
+            result = subprocess.run(["systemctl", "show", "-p", "Result", "--value", unit], capture_output=True, text=True)
+            if result.stdout.strip() != "success":
+                problems.append(f"{unit} Result={result.stdout.strip()}")
+    if "callbook.dns.export.service" in started:
+        answer = sf.dig_txt(f"{sf.TEST_CALLBOOK_PROBE.lower()}.callbook.{domain}")
+        if not answer:
+            problems.append(
+                f"PowerDNS on {sf.PDNS_TEST_ADDRESS}:{sf.PDNS_TEST_PORT} gave no answer for the fixture callsign {sf.TEST_CALLBOOK_PROBE}"
+            )
+    if "callbook.delta.export.service" in started and not glob.glob("/var/lib/hams/callbook_releases/*"):
+        problems.append("callbook.delta.export.service published nothing to /var/lib/hams/callbook_releases")
+    return problems
+
+
+def run_post_provision_smoketest(has_hams_com=True, is_test_env=False, opt_in_units=(), domain="localhost"):
     _logger.info("[*] Running post-provisioning smoketest on all services...")
 
     try:
@@ -12030,6 +12094,10 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False, opt_in_un
     started_services = []
     already_active_services = []
     start_failures = []
+    active_at_start = {
+        svc for svc in services_to_test
+        if subprocess.run(["systemctl", "is-active", svc], capture_output=True, text=True).stdout.strip() == "active"
+    }
     # A --test run must never leave a service it started running, however
     # the smoketest ends: both failure paths below sys.exit(1), and before
     # 2026-10-02 they exited before the stop loop, so a test host kept
@@ -12114,6 +12182,11 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False, opt_in_un
                 )
                 failed = True
 
+        if is_test_env:
+            for problem in _test_fixture_unit_problems(set(started_services) | set(already_active_services), domain):
+                _logger.error("[!] %s", problem)
+                failed = True
+
         if failed:
             _logger.error(
                 "[!] One or more services failed the smoketest. Aborting snapshot."
@@ -12124,7 +12197,12 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False, opt_in_un
     finally:
         if is_test_env:
             _logger.info("[*] Shutting down the services this smoketest started (--test mode)...")
-            for svc in reversed(started_services):
+            # A unit another one Requires= is started with it (the band by the bots and the observer), and is no less a service
+            # this run left running: stop what was inactive when the smoketest began and is active now.
+            by_dependency = [
+                svc for svc in already_active_services if svc not in active_at_start and svc != "odoo"
+            ]
+            for svc in reversed(started_services + by_dependency):
                 _logger.info("    Stopping %s...", svc)
                 subprocess.run(["systemctl", "stop", svc], capture_output=True)
 
@@ -14212,9 +14290,19 @@ def provision_environment(
                     env_vars.get("DB_NAME", "hams_test"),
                     env_vars.get("BRIDGE_API_KEY", ""),
                 )
-            run_post_provision_smoketest(
-                has_hams_com, is_test_env=is_test_env, opt_in_units=opt_in_units
-            )
+            hamcall_copy = None
+            if is_test_env:
+                hamcall_copy = prepare_test_host_for_smoketest(
+                    run_cmd_func, env_vars, hams_com_dir, hams_community_dir
+                )
+            try:
+                run_post_provision_smoketest(
+                    has_hams_com, is_test_env=is_test_env, opt_in_units=opt_in_units,
+                    domain=env_vars.get("DOMAIN", "localhost"),
+                )
+            finally:
+                if is_test_env:
+                    cleanup_test_host_after_smoketest(hamcall_copy)
         else:
             _logger.info(
                 "[*] Skipping systemd smoketest inside isolated unshare namespace."

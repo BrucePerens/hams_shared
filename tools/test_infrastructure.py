@@ -38,6 +38,7 @@ from unittest.mock import MagicMock, patch
 import b2_backup
 import infrastructure as infra
 import provision_cache
+import smoketest_fixtures as sf_fixtures
 
 _REAL_OPEN = builtins.open
 
@@ -4523,17 +4524,160 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
             self.assertNotIn(name, infra._smoketest_candidate_services(True, is_test_env=True))
             self.assertIn(name, infra._smoketest_candidate_services(True, is_test_env=False))
 
-    def test_smoketest_skips_units_that_cannot_run_on_a_test_host_only_there(self):
-        skipped = {
-            os.path.basename(sf["path"]): sf["smoketest_skip_in_test"]
-            for sf in infra.MANIFEST["static_files"] if sf.get("smoketest_skip_in_test")
-        }
-        for name in ("hamcall.idx.sync.service", "callbook.delta.export.service", "hams.simulated.observer.service"):
-            self.assertIn(name, skipped)
-            self.assertNotIn(name, infra._smoketest_candidate_services(True, is_test_env=True))
-            self.assertIn(name, infra._smoketest_candidate_services(True, is_test_env=False))
-        for reason in skipped.values():
-            self.assertGreater(len(reason), 20)
+    # [@ANCHOR: infrastructure:test_smoketest_fixtures]
+    def test_no_unit_is_skipped_by_a_flag_in_the_test_smoketest(self):
+        """Bruce, 2026-10-31: a unit a test host cannot run gets a fixture, not a skip flag."""
+        self.assertEqual([], [sf["path"] for sf in infra.MANIFEST["static_files"] if "smoketest_skip_in_test" in sf])
+        test_started = infra._smoketest_candidate_services(True, is_test_env=True)
+        for name in (
+            "callbook.dns.export.service", "callbook.delta.export.service", "relay.satellites.publish.service",
+            "relay.manuals.publish.service", "hams.simulated.band.service", "hams.simulated.observer.service",
+        ):
+            self.assertIn(name, test_started)
+
+    def test_the_test_host_signer_has_no_kms_call_and_a_throwaway_key(self):
+        text = sf_fixtures.relay_signer_test_dropin()
+        for reset in ("ConditionPathExists=\n", "EnvironmentFile=\n", "ExecStartPre=\n"):
+            self.assertIn(reset, text)
+        self.assertIn("ExecStart=/usr/bin/python3 " + sf_fixtures.TEST_SIGNER_PATH, text)
+        launcher = open(sf_fixtures.TEST_SIGNER_SOURCE).read()
+        self.assertIn("ec.generate_private_key", launcher)
+        self.assertNotIn("build_client", launcher)
+        self.assertNotIn("open(", launcher)  # the key lives in memory only
+        self.assertIn("hams-relay-signer.service", sf_fixtures.TEST_SUBSTITUTED_UNITS)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = sf_fixtures.install_relay_signer_test_dropin(root=tmp)
+            self.assertTrue(os.path.exists(path))
+            self.assertTrue(os.path.exists(os.path.join(tmp, sf_fixtures.TEST_SIGNER_PATH.lstrip("/"))))
+
+    def test_hamcall_sync_is_started_only_where_the_licensed_file_is(self):
+        entry = next(sf for sf in infra.MANIFEST["static_files"] if sf["path"].endswith("hamcall.idx.sync.service"))
+        self.assertEqual(sf_fixtures.HAMCALL_INSTALLED, entry["smoketest_requires_file"])
+        with patch.object(os.path, "exists", side_effect=lambda p: False if p == sf_fixtures.HAMCALL_INSTALLED else True):
+            self.assertNotIn("hamcall.idx.sync.service", infra._smoketest_candidate_services(True, is_test_env=True))
+        with patch.object(os.path, "exists", return_value=True):
+            self.assertIn("hamcall.idx.sync.service", infra._smoketest_candidate_services(True, is_test_env=True))
+
+    def test_hamcall_copy_is_installed_for_one_run_and_removed_with_its_staged_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            staged = os.path.join(tmp, "staged.idx")
+            dest = os.path.join(tmp, "opt", "hamcall.idx")
+            with open(staged, "w") as f:
+                f.write("W1AW 2020 1\n")
+            env = {sf_fixtures.HAMCALL_STAGED_ENV: staged}
+            owners = []
+            installed = sf_fixtures.stage_hamcall_index(env, dest=dest, chown=lambda p, o: owners.append((p, o)))
+            self.assertEqual(dest, installed)
+            self.assertEqual(0o640, stat.S_IMODE(os.stat(dest).st_mode))
+            self.assertEqual([(dest, sf_fixtures.HAMCALL_OWNER)], owners)
+            # An operator's own file is neither replaced nor removed.
+            self.assertIsNone(sf_fixtures.stage_hamcall_index(env, dest=dest))
+            sf_fixtures.remove_hamcall_index(installed, env)
+            sf_fixtures.remove_hamcall_index(installed, env)
+            self.assertFalse(os.path.exists(dest))
+            self.assertFalse(os.path.exists(staged))
+            self.assertIsNone(sf_fixtures.stage_hamcall_index({}, dest=dest))
+
+    def test_the_test_pdns_listens_on_a_loopback_port_that_is_not_53(self):
+        text = sf_fixtures.pdns_test_dropin("/usr/sbin/pdns_server --config-name=gsqlite3")
+        self.assertIn("ExecStart=\nExecStart=/usr/sbin/pdns_server --config-name=gsqlite3 ", text)
+        self.assertIn("--local-address=127.0.0.1 --local-port=5300", text)
+        self.assertNotEqual(53, sf_fixtures.PDNS_TEST_PORT)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = sf_fixtures.install_pdns_test_dropin("/usr/sbin/pdns_server", root=tmp)
+            self.assertTrue(path.endswith("pdns.service.d/zz-test-port.conf"))
+            self.assertIn("--local-port=5300", open(path).read())
+
+    def test_the_drop_ins_default_to_the_real_root_not_the_working_directory(self):
+        import inspect as _inspect
+        for fn in (sf_fixtures.install_pdns_test_dropin, sf_fixtures.install_observer_test_dropin,
+                   sf_fixtures.install_relay_signer_test_dropin):
+            self.assertEqual("/", _inspect.signature(fn).parameters["root"].default)
+        for path in (sf_fixtures.TEST_SIGNER_PATH, sf_fixtures.OBSERVER_PYDEPS_DIR):
+            self.assertTrue(path.startswith("/usr/local/lib/hams-test/"))  # readable by every service account
+
+    def test_the_callbook_fixture_is_deterministic_idempotent_test_data(self):
+        sql = sf_fixtures.callbook_fixture_sql()
+        self.assertEqual(sql, sf_fixtures.callbook_fixture_sql())
+        self.assertEqual(len(sf_fixtures.TEST_CALLBOOK_ROWS), sql.count("INSERT INTO ham_callbook"))
+        self.assertEqual(len(sf_fixtures.TEST_CALLBOOK_ROWS), sql.count("WHERE NOT EXISTS"))
+        self.assertIn("W1TST", sql)
+        calls = []
+        sf_fixtures.install_callbook_fixture(lambda *a, **k: calls.append((a, k)), "hams_test")
+        self.assertEqual("hams_test", calls[0][0][0][calls[0][0][0].index("-d") + 1])
+        with self.assertRaises(RuntimeError):
+            sf_fixtures.install_callbook_fixture(lambda *a, **k: None, "hams_prod")
+        self.assertIn("'' ", sf_fixtures.callbook_fixture_sql((("O'X", "A", "B", "C", "D", "E", "F", "G"),)).replace("''", "'' "))
+
+    def test_the_fixture_element_set_passes_the_publishers_own_checksum(self):
+        import importlib.util
+        for com in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "hams_com"),):
+            path = os.path.join(com, "daemons", "relay_satellites", "publish.py")
+            if not os.path.exists(path):
+                self.skipTest("hams_com is not beside hams_shared here")
+            spec = importlib.util.spec_from_file_location("relay_satellites_publish", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.assertTrue(module.tle_checksum_ok(sf_fixtures.TEST_TLE[1]))
+            self.assertTrue(module.tle_checksum_ok(sf_fixtures.TEST_TLE[2]))
+        self.assertIn("ham_satellite_tle", sf_fixtures.tle_fixture_sql())
+
+    def test_band_keys_are_random_private_and_never_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            keys, bot = os.path.join(tmp, "band", "band_bot_keys"), os.path.join(tmp, "bots", "band.key")
+            wrote = sf_fixtures.generate_band_keys(band_keys_file=keys, bot_key_file=bot)
+            self.assertEqual([keys, bot], wrote)
+            name, secret = open(keys).read().strip().split(":")
+            self.assertEqual(sf_fixtures.BAND_KEYS_HOST_NAME, name)
+            self.assertGreaterEqual(len(secret), 43)
+            self.assertRegex(secret, r"^[A-Za-z0-9_=+/-]+$")
+            self.assertEqual(secret, open(bot).read().strip())
+            for path in wrote:
+                self.assertEqual(0o600, stat.S_IMODE(os.stat(path).st_mode))
+            self.assertEqual([], sf_fixtures.generate_band_keys(band_keys_file=keys, bot_key_file=bot))
+            self.assertNotEqual(sf_fixtures.new_band_secret(), sf_fixtures.new_band_secret())
+
+    def test_deployed_source_layout_is_mirrored_for_the_units_that_run_from_it(self):
+        dirs = sf_fixtures.unit_working_directories(infra.MANIFEST["static_files"])
+        self.assertIn(("hams_com", "daemons/relay_satellites"), dirs)
+        self.assertIn(("hams_com", "daemons/relay_manuals"), dirs)
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dest = os.path.join(tmp, "com"), os.path.join(tmp, "deployed")
+            os.makedirs(os.path.join(src, "daemons", "relay_manuals", "__pycache__"))
+            with open(os.path.join(src, "daemons", "relay_manuals", "publish.py"), "w") as f:
+                f.write("print(1)\n")
+            copied = sf_fixtures.mirror_deployed_sources(infra.MANIFEST["static_files"], {"hams_com": src, "hams_open": os.path.join(tmp, "none")}, dest_root=dest)
+            self.assertEqual([os.path.join(dest, "hams_com", "daemons", "relay_manuals")], copied)
+            self.assertTrue(os.path.exists(os.path.join(copied[0], "publish.py")))
+            self.assertFalse(os.path.exists(os.path.join(copied[0], "__pycache__")))
+
+    def test_observer_libraries_install_only_from_hash_pinned_wheels(self):
+        with open(sf_fixtures.OBSERVER_REQUIREMENTS) as f:
+            entries = sf_fixtures.parse_requirements(f.read())
+        names = {n.lower() for n, _, _ in entries}
+        self.assertLessEqual({"aiortc", "av"}, names)
+        self.assertTrue(all(hashes for _, _, hashes in entries))
+        with self.assertRaises(ValueError):
+            sf_fixtures.parse_requirements("aiortc>=1\n")
+        with self.assertRaises(ValueError):
+            sf_fixtures.parse_requirements("aiortc==1.0\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+            sf_fixtures.install_observer_dependencies(lambda cmd, **k: calls.append(cmd), pydeps_dir=tmp)
+            self.assertEqual(1, len(calls))
+            for flag in ("--require-hashes", "--only-binary=:all:", "--no-deps"):
+                self.assertIn(flag, calls[0])
+            sf_fixtures.install_observer_dependencies(lambda cmd, **k: calls.append(cmd), pydeps_dir=tmp)
+            self.assertEqual(1, len(calls))
+        dropin = sf_fixtures.observer_test_dropin()
+        self.assertIn("ODOO_URL=http://127.0.0.1:8069", dropin)
+        self.assertNotIn("hams.com", dropin)
+
+    def test_provision_environment_prepares_and_cleans_up_around_the_test_smoketest(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn("prepare_test_host_for_smoketest(", source)
+        self.assertIn("cleanup_test_host_after_smoketest(hamcall_copy)", source)
+        self.assertIn("finally:", source[source.index("prepare_test_host_for_smoketest("):])
 
     def test_hams_open_shared_daemon_modules_are_installed_flat(self):
         """backup.worker imports exception_reporter from PYTHONPATH=/opt/hams/daemons; provisioning must put it there."""
@@ -4560,7 +4704,8 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
         self.assertNotIn("for unit in linked_activation_units:", source)
 
     def test_smoketest_never_lists_an_external_fetch_service_in_a_test_environment(self):
-        flagged = infra.external_fetch_unit_names()
+        # The one exception is the KMS signer, which a test host runs with a throwaway key and no network call.
+        flagged = infra.external_fetch_unit_names() - sf_fixtures.TEST_SUBSTITUTED_UNITS
         for has_hams_com in (True, False):
             candidates = infra._smoketest_candidate_services(has_hams_com, is_test_env=True)
             self.assertEqual(set(candidates) & flagged, set())
@@ -4602,6 +4747,7 @@ class SmoketestTestModeTests(_SafePatchTestCase):
             infra.subprocess, "run", side_effect=self._fake_systemctl(calls, fail_service)
         )
         self.safe_patch_object(infra.time, "sleep")
+        self.safe_patch_object(infra, "_test_fixture_unit_problems", return_value=[])
         exited = False
         try:
             infra.run_post_provision_smoketest(has_hams_com=True, is_test_env=is_test_env)
@@ -4622,7 +4768,15 @@ class SmoketestTestModeTests(_SafePatchTestCase):
         self.assertFalse(exited)
         started = self._started(calls)
         self.assertTrue(started)
-        self.assertEqual(set(started) & infra.external_fetch_unit_names(), set())
+        self.assertEqual(set(started) & (infra.external_fetch_unit_names() - sf_fixtures.TEST_SUBSTITUTED_UNITS), set())
+
+    def test_test_mode_fails_the_smoketest_when_a_fixture_unit_check_finds_a_problem(self):
+        calls = []
+        self.safe_patch_object(infra.subprocess, "run", side_effect=self._fake_systemctl(calls))
+        self.safe_patch_object(infra.time, "sleep")
+        self.safe_patch_object(infra, "_test_fixture_unit_problems", return_value=["hams.simulated.band.service is inactive"])
+        with self.assertRaises(SystemExit):
+            infra.run_post_provision_smoketest(has_hams_com=True, is_test_env=True)
 
     def test_test_mode_stops_what_it_started_on_success(self):
         calls, _ = self._run(is_test_env=True)
