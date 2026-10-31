@@ -73,7 +73,6 @@
   "daemons/hams_local_relay/src/audio.rs::ExternalInputFeed::push_pcm",
   "daemons/hams_local_relay/src/audio.rs::apply_device_guard",
   "daemons/hams_local_relay/src/audio.rs::classify_device_name",
-  "daemons/hams_local_relay/src/audio.rs::device_name",
   "daemons/hams_local_relay/src/audio.rs::direct_card_names",
   "daemons/hams_local_relay/src/audio.rs::enumerate_names",
   "daemons/hams_local_relay/src/audio.rs::explain_alias_for_cards",
