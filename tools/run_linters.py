@@ -1114,9 +1114,14 @@ def main():
     # bug can be introduced anywhere in daemons/ or ingest/, not just the
     # possibly-scoped `targets`, so this always scans the full repo's own
     # curated file set rather than `targets`.
+    # In `--changed` mode only the changed Python files are checked (mypy runs on one file at a time, as flake8 does here):
+    # the whole-tree scan reports every pre-existing finding in a file nobody touched, which no branch could clear.
+    untyped_argv = [python_exec, os.path.join(dir_path, "tools", "check_untyped_utility_files.py"), dir_path]
+    if changed_set is not None and not target_modules_str and not run_all:
+        untyped_argv += ["--only-files"] + sorted(path for path in changed_set if path.endswith(".py") and os.path.isfile(path))
     _add(
         "check_untyped_utility_files",
-        [python_exec, os.path.join(dir_path, "tools", "check_untyped_utility_files.py"), dir_path],
+        untyped_argv,
         print_ok=False,
     )
 
