@@ -236,13 +236,28 @@ def collect_candidates(repo_root):
     return sorted(set(candidates))
 
 
+def parse_args(argv):
+    """(repo_root, only_files or None). `--only-files F...` limits the check to those files (those of them that the full scan
+    would also check): `run_linters.py --changed` passes the changed Python files, as it does to flake8. Each file is checked on
+    its own, so a file nobody changed is not affected by a finding in another."""
+    if len(argv) < 2:
+        return None, None
+    if "--only-files" not in argv:
+        return argv[1], None
+    index = argv.index("--only-files")
+    return argv[1], {os.path.realpath(path) for path in argv[index + 1:]}
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: check_untyped_utility_files.py <repo_root>")
+    repo_root_arg, only_files = parse_args(sys.argv)
+    if repo_root_arg is None:
+        print("Usage: check_untyped_utility_files.py <repo_root> [--only-files FILE ...]")
         sys.exit(1)
 
-    repo_roots = _resolve_repo_roots(sys.argv[1])
+    repo_roots = _resolve_repo_roots(repo_root_arg)
     candidates = [(root, path) for root in repo_roots for path in collect_candidates(root)]
+    if only_files is not None:
+        candidates = [(root, path) for root, path in candidates if os.path.realpath(path) in only_files]
     if not candidates:
         sys.exit(0)
 

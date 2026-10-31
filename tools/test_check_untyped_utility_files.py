@@ -209,6 +209,28 @@ class MainIntegrationTests(unittest.TestCase):
         )
         return result.returncode, result.stdout + result.stderr
 
+    def _run_only(self, *files):
+        result = subprocess.run(
+            [sys.executable, _SCRIPT, self.tmp, "--only-files", *files], capture_output=True, text=True, timeout=60
+        )
+        return result.returncode, result.stdout + result.stderr
+
+    def test_only_files_checks_the_named_files_and_not_a_broken_one_nobody_changed(self):
+        broken = os.path.join(self.tmp, "daemons", "broken.py")
+        clean = os.path.join(self.tmp, "daemons", "clean.py")
+        _write(broken, "def f(a: int) -> int:\n    return a\n\n\nf('x')\n")
+        _write(clean, "def add(a: int, b: int) -> int:\n    return a + b\n")
+        self.assertEqual(self._run()[0], 1, "the full scan finds the broken file")
+        code, out = self._run_only(clean)
+        self.assertEqual(code, 0, out)
+        code, out = self._run_only(broken)
+        self.assertEqual(code, 1, out)
+        self.assertIn("broken.py", out)
+
+    def test_only_files_with_no_file_checks_nothing(self):
+        _write(os.path.join(self.tmp, "daemons", "broken.py"), "def f(a: int) -> int:\n    return a\n\n\nf('x')\n")
+        self.assertEqual(self._run_only()[0], 0)
+
     def test_a_clean_utility_file_passes(self):
         _write(
             os.path.join(self.tmp, "daemons", "clean.py"),
