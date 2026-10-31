@@ -51,6 +51,37 @@ def _resolve_repo_root(given_path):
     return given_path
 
 
+# Steps that also scan a hams_shared worktree's own files (see shared_worktree_root). Only the checkers whose findings
+# lie in hams_shared's tools: the others are module checkers (init imports, test tags, ...) that judge a tree of Odoo
+# modules and flag hams_shared's `tools/odoo_type_stubs` and the like.
+SHARED_WORKTREE_STEPS = frozenset({"flake8", "check_absolute_paths", "check_shebang"})
+
+
+# [@ANCHOR: run_linters:shared_worktree_root]
+def shared_worktree_root(dir_path, repo_root):
+    """`dir_path` when it is a git worktree of hams_shared, else None.
+
+    A hams_shared worktree resolves `repo_root` to the hams_open main checkout (`_resolve_repo_root`), so
+    flake8, the absolute-path and the shebang checker scanned that checkout and never the worktree: a
+    branch's own findings were not seen, and whatever the main checkout held (stale, or another session's
+    edits) failed the run on files the branch did not touch (found 2026-10-30: 13 flake8 hits and 40
+    absolute-path hits, among them an undefined name the branch had already fixed). The worktree is
+    therefore a scan root of its own for those steps (SHARED_WORKTREE_STEPS). Started in the main checkout
+    (or through the `hams_shared` link into it) it is already under `repo_root`: nothing is added."""
+    real = os.path.realpath(dir_path)
+    root = os.path.realpath(repo_root)
+    if real == root or real.startswith(root + os.sep):
+        return None
+    if (
+        os.path.isdir(os.path.join(dir_path, "tools"))
+        and not os.path.islink(os.path.join(dir_path, "tools"))
+        and os.path.isfile(os.path.join(dir_path, "eslint.config.js"))
+        and not os.path.isfile(os.path.join(dir_path, "zero_sudo", "__manifest__.py"))
+    ):
+        return real
+    return None
+
+
 def _resolve_main_checkout_root(repo_root):
     """Resolves the REAL main checkout of `repo_root`'s own git repository, so the sibling-repo
     paths computed from it (hams_open from hams_com, or vice versa) are correct even when
@@ -834,6 +865,7 @@ def main():
     flake8_cmd = "/usr/bin/flake8"
 
     targets = resolved_mod_paths if scoped else [repo_root]
+    shared_root = shared_worktree_root(dir_path, repo_root)
     outside_modules = []
     if changed_set is not None and not target_modules_str and not run_all:
         outside_modules = changed_outside_modules(changed_set, repo_root, community_dir)
@@ -843,6 +875,21 @@ def main():
         outside every module is one this checker reads (daemons/, ingest/, scripts: a full run scans those trees too).
         A checker that reads only some file types is not widened by a change to another type (a story or a Rust file
         beside a JavaScript fix must not hand the burn list the whole repository)."""
+        scan = _scope_for_modules(step_stem, extra_suffixes)
+        if shared_root and step_stem in SHARED_WORKTREE_STEPS and (not scoped or shared_changed_for(step_stem)):
+            return scan + [shared_root]
+        return scan
+
+    def shared_changed_for(step_stem):
+        suffixes = STEP_META.get(step_stem, {}).get("suffixes")
+        return any(
+            path.startswith(shared_root + os.sep)
+            and widens_module_scope(path)
+            and (suffixes is None or os.path.splitext(path)[1].lower() in suffixes)
+            for path in changed_set or ()
+        )
+
+    def _scope_for_modules(step_stem, extra_suffixes):
         if not outside_modules:
             return targets
         suffixes = STEP_META.get(step_stem, {}).get("suffixes") or extra_suffixes
@@ -874,14 +921,15 @@ def main():
     # could fail (or, depending on E9/F/E402 content, spuriously pass) based on that
     # OTHER session's own in-progress, uncommitted code -- not the real repo state
     # this invocation was actually scoped to check.
-    flake8_targets = targets
+    flake8_targets = scope_for("flake8") if shared_root and not scoped else targets
+    flake8_roots = tuple(os.path.realpath(r) + os.sep for r in [repo_root] + ([shared_root] if shared_root else []))
     if changed_set is not None and not target_modules_str and not run_all:
         # Changed mode: the changed Python files themselves (flake8 applies --exclude to
         # explicitly named files too), instead of every module directory.
         flake8_targets = sorted(
             path
             for path in changed_set
-            if path.endswith(".py") and os.path.isfile(path) and path.startswith(os.path.realpath(repo_root) + os.sep)
+            if path.endswith(".py") and os.path.isfile(path) and path.startswith(flake8_roots)
         )
     flake8_argv = [
         flake8_cmd,

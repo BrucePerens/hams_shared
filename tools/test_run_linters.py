@@ -133,6 +133,51 @@ class ResolveRepoRootTests(unittest.TestCase):
         self.assertEqual(run_linters._resolve_repo_root(fake_repo), fake_repo)
 
 
+# Tests [@ANCHOR: run_linters:shared_worktree_root]
+class SharedWorktreeRootTests(unittest.TestCase):
+    """A hams_shared worktree must be a scan root of its own: flake8, the absolute-path and the shebang checker
+    scanned the hams_open main checkout instead, so a branch's findings were never seen and the main checkout's
+    (stale) findings failed the run on files the branch did not touch (2026-10-30)."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.repo = os.path.join(self.tmp, "hams_open")
+        os.makedirs(os.path.join(self.repo, "hams_shared", "tools"))
+
+    def _worktree(self, name="wt"):
+        path = os.path.join(self.tmp, name)
+        _write(os.path.join(path, "tools", "run_linters.py"))
+        _write(os.path.join(path, "eslint.config.js"))
+        return path
+
+    def test_a_hams_shared_worktree_outside_the_repository_is_a_scan_root(self):
+        worktree = self._worktree()
+        self.assertEqual(run_linters.shared_worktree_root(worktree, self.repo), worktree)
+
+    def test_the_main_checkout_inside_the_repository_adds_nothing(self):
+        main = os.path.join(self.repo, "hams_shared")
+        _write(os.path.join(main, "eslint.config.js"))
+        self.assertIsNone(run_linters.shared_worktree_root(main, self.repo))
+
+    def test_the_repository_itself_adds_nothing(self):
+        self.assertIsNone(run_linters.shared_worktree_root(self.repo, self.repo))
+
+    def test_a_worktree_of_another_repository_adds_nothing(self):
+        # hams_com / hams_open link `tools` to hams_shared; their worktrees are not hams_shared worktrees.
+        other = os.path.join(self.tmp, "other")
+        os.makedirs(other)
+        os.symlink(os.path.join(self.repo, "hams_shared", "tools"), os.path.join(other, "tools"))
+        _write(os.path.join(other, "eslint.config.js"))
+        self.assertIsNone(run_linters.shared_worktree_root(other, self.repo))
+
+    def test_the_findings_steps_are_wired_to_the_worktree_root(self):
+        source = _read_source()
+        for step in sorted(run_linters.SHARED_WORKTREE_STEPS):
+            self.assertIn(f'scope_for("{step}")', source, f"{step} does not take its scan roots from scope_for")
+        self.assertIn("shared_worktree_root(dir_path, repo_root)", source)
+
+
 def _make_manifest_dir(base, name):
     mod_dir = os.path.join(base, name)
     os.makedirs(mod_dir, exist_ok=True)
