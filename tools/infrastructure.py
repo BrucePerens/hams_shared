@@ -3718,6 +3718,54 @@ WantedBy=multi-user.target
             "post_provision_hooks": [hook_daemons_perms],
         },
         {
+            "src": "{HAMS_COMMUNITY_DIR}/zero_sudo/daemon/robots_txt_policy.py",
+            "path": "/opt/hams/daemons/robots_txt_policy.py",
+            "deployed_by_sync_daemons": True,
+            "owner": "hams_com:hams_com",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "src": "{HAMS_COMMUNITY_DIR}/zero_sudo/daemon/ssrf_safe_fetch.py",
+            "path": "/opt/hams/daemons/ssrf_safe_fetch.py",
+            "deployed_by_sync_daemons": True,
+            "owner": "hams_com:hams_com",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "src": "{HAMS_COMMUNITY_DIR}/zero_sudo/daemon/glyph_normalizer.py",
+            "path": "/opt/hams/daemons/glyph_normalizer.py",
+            "deployed_by_sync_daemons": True,
+            "owner": "hams_com:hams_com",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "src": "{HAMS_COMMUNITY_DIR}/zero_sudo/daemon/repeater_page_text.py",
+            "path": "/opt/hams/daemons/repeater_page_text.py",
+            "deployed_by_sync_daemons": True,
+            "owner": "hams_com:hams_com",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "src": "{HAMS_COMMUNITY_DIR}/zero_sudo/daemon/club_spam.py",
+            "path": "/opt/hams/daemons/club_spam.py",
+            "deployed_by_sync_daemons": True,
+            "owner": "hams_com:hams_com",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
+            "src": "{HAMS_COMMUNITY_DIR}/hams_helpdesk/daemon/exception_reporter.py",
+            "path": "/opt/hams/daemons/exception_reporter.py",
+            "deployed_by_sync_daemons": True,
+            "owner": "hams_com:hams_com",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/systemd/system-startup.service",
             "external_fetch": "its ExecStart starts amsat.tle.sync.service, an external fetch",
             "content": """\
@@ -6624,6 +6672,7 @@ WantedBy=timers.target
             # SHA-256 short-circuit makes an unchanged day cheap. Read-only on purpose:
             # the daemon only reads the file and talks to Odoo.
             "path": "/opt/hams/systemd/hamcall.idx.sync.service",
+            "smoketest_skip_in_test": "needs K6BP's licensed hamcall.idx, an operator-placed file a test host never has",
             "content": """\
 [Unit]
 Description=HamCall Licensed Index Presence Sync (One-Shot, manual start)
@@ -6771,6 +6820,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/callbook.dns.export.service",
+            "smoketest_skip_in_test": "flushes the PowerDNS API on 127.0.0.1:8081, and pdns cannot bind port 53 on a host whose systemd-resolved holds it",
             "content": """\
 [Unit]
 Description=Ham Radio Callbook DNS Zone Exporter (One-Shot)
@@ -6854,6 +6904,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/callbook.delta.export.service",
+            "smoketest_skip_in_test": "publishes the callbook view, which is empty in a test database (the exporter refuses to publish nothing)",
             "content": """\
 [Unit]
 Description=Ham Radio Relay Callbook Delta Files (One-Shot)
@@ -6930,6 +6981,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/relay.satellites.publish.service",
+            "smoketest_skip_in_test": "runs code from /opt/hams/src, which only deploy_to_production.py populates",
             "content": """\
 [Unit]
 Description=Ham Radio Relay Satellite Element Sets, Signed Download (One-Shot)
@@ -7007,6 +7059,7 @@ WantedBy=timers.target
         },
         {
             "path": "/opt/hams/systemd/relay.manuals.publish.service",
+            "smoketest_skip_in_test": "runs code from /opt/hams/src, which only deploy_to_production.py populates",
             "content": """\
 [Unit]
 Description=Ham Radio Relay Manuals, Signed Download (One-Shot)
@@ -8152,6 +8205,7 @@ WantedBy=multi-user.target
         },
         {
             "path": "/opt/hams/systemd/hams.simulated.band.service",
+            "smoketest_skip_in_test": "needs the hand-placed /etc/hams-band/band_bot_keys",
             "content": """\
 [Unit]
 Description=Hams.com Simulated Band WebRTC SFU
@@ -8313,6 +8367,7 @@ WantedBy=multi-user.target
             # hams.simulated.bots.service, since the Observer is architecturally independent of the
             # conversational bot fleet, not a client of it.
             "path": "/opt/hams/systemd/hams.simulated.observer.service",
+            "smoketest_skip_in_test": "requires hams.simulated.band, and imports aiortc/av, which Debian does not package and a test host does not install",
             "content": """\
 [Unit]
 Description=Hams.com Simulated Band Official Observer (silent safety monitor)
@@ -11930,6 +11985,14 @@ def _smoketest_candidate_services(has_hams_com=True, is_test_env=False, opt_in_u
             if not is_test_env and svc_name in daemons_to_skip:
                 continue
             if svc_name in external:
+                continue
+            # A unit whose entry says it cannot run on a test host (it needs an operator-placed
+            # secret, a deployed tree or production data) is left out of the test smoketest only.
+            if is_test_env and sf.get("smoketest_skip_in_test"):
+                continue
+            # A unit this environment does not install is never a candidate: a stale copy
+            # left by an earlier run, or one a prod-only entry names, is not this host's to start.
+            if ("test" if is_test_env else "prod") not in sf.get("environments", ["prod", "test"]):
                 continue
             if not _in_host_class(sf):
                 continue
