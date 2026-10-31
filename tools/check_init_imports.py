@@ -131,6 +131,15 @@ def main():
                     rel_path = os.path.relpath(os.path.join(root, file), repo_root)
                     if rel_path in EXCLUDED_FILES:
                         continue
+                    # A scoped run (`run_linters.py --changed`, or naming a module) hands this checker the MODULE
+                    # directory, so `rel_path` lacks the module name the exclusions are written with and
+                    # `ham_training/tests/verify_sanitizer.py` was flagged although a whole-repository run passes it
+                    # (found 2026-10-31: any change that reached ham_training failed the pre-merge lint).
+                    if (
+                        os.path.isfile(os.path.join(repo_root, "__manifest__.py"))
+                        and os.path.join(os.path.basename(os.path.abspath(repo_root)), rel_path) in EXCLUDED_FILES
+                    ):
+                        continue
                     mod_name = file[:-3]
                     if mod_name not in imported:
                         print(
