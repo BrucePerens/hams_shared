@@ -148,6 +148,24 @@ class MainIntegrationTests(unittest.TestCase):
         code, out = self._run()
         self.assertEqual(code, 0, out)
 
+    def test_an_excluded_file_is_never_flagged_when_the_run_is_scoped_to_its_module(self):
+        # `run_linters.py --changed` passes the module directory, not the repository: the exclusion
+        # `ham_training/tests/verify_sanitizer.py` has to match relative to the module's parent.
+        module = os.path.join(self.tmp, "ham_training")
+        _write(os.path.join(module, "__manifest__.py"), "{}\n")
+        _write(os.path.join(module, "tests", "__init__.py"), "\n")
+        _write(os.path.join(module, "tests", "verify_sanitizer.py"), "# real-browser script, not an Odoo test\n")
+        result = subprocess.run([sys.executable, _SCRIPT, module], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_forgotten_import_is_still_flagged_when_the_run_is_scoped_to_a_module(self):
+        module = os.path.join(self.tmp, "ham_training")
+        _write(os.path.join(module, "__manifest__.py"), "{}\n")
+        _write(os.path.join(module, "tests", "__init__.py"), "\n")
+        _write(os.path.join(module, "tests", "test_forgotten.py"), "x = 1\n")
+        result = subprocess.run([sys.executable, _SCRIPT, module], capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_excluded_subdirectories_are_never_walked(self):
         _write(os.path.join(self.tmp, "daemons", "some_daemon", "__init__.py"), "\n")
         _write(os.path.join(self.tmp, "daemons", "some_daemon", "orphan.py"), "\n")
