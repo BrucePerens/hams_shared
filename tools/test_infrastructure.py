@@ -1764,6 +1764,38 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         v_value = cmd[cmd.index("-v") + 1]
         self.assertEqual(v_value, f"db_pass={malicious_pass}")
 
+    def test_in_test_mode_an_existing_role_gets_the_env_files_password(self):
+        # The Debian odoo package creates the role before provisioning runs; the env files carry DB_PASS and the
+        # daemons log in with it, so a test host sets the role's password to it (smoketest, 2026-10-30).
+        mock_role_exists = self.safe_patch_object(infra, "_role_exists", return_value=True)
+        run = MagicMock()
+        infra._create_odoo_role_if_missing(run, "pw'with-quote", is_test=True)
+        mock_role_exists.assert_called_once_with("odoo")
+        alter = run.call_args_list[-1]
+        self.assertEqual(alter.kwargs["input"], "ALTER ROLE odoo WITH PASSWORD :'db_pass';\n")
+        self.assertIn("db_pass=pw'with-quote", alter.args[0])
+        self.assertNotIn("-c", alter.args[0])
+        self.assertNotIn("pw'with-quote", alter.kwargs["input"])
+
+    def test_in_production_mode_an_existing_role_keeps_its_password(self):
+        self.safe_patch_object(infra, "_role_exists", return_value=True)
+        run = MagicMock()
+        infra._create_odoo_role_if_missing(run, "normalPass123")
+        for call in run.call_args_list:
+            self.assertNotIn("PASSWORD", " ".join(str(a) for a in call.args[0]) + str(call.kwargs.get("input", "")))
+
+    def test_provisioning_passes_the_test_flag_to_the_role_step(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn("_create_odoo_role_if_missing(run_cmd_func, db_pass, is_test=is_test)", source)
+
+    def test_wkhtmltox_is_fetched_for_the_machines_own_architecture_with_a_pinned_hash(self):
+        spec = next(f for f in infra.MANIFEST["static_files"] if f["path"] == "/tmp/wkhtmltox.deb")
+        self.assertIn("{DEB_TARGET_ARCH_CPU}", spec["url"])
+        self.assertNotIn("amd64", spec["url"])
+        self.assertEqual(sorted(spec["sha256_by_arch"]), ["amd64", "arm64"])
+        self.assertEqual(infra._pinned_sha256(spec, {"DEB_TARGET_ARCH_CPU": "arm64"}), spec["sha256_by_arch"]["arm64"])
+        self.assertNotEqual(spec["sha256_by_arch"]["amd64"], spec["sha256_by_arch"]["arm64"])
+
     def test_normal_password_still_produces_a_working_command_shape(self):
         cmd = self._run("normalPass123", role_already_exists=False).call_args[0][0]
         self.assertEqual(cmd[:4], ["sudo", "-u", "postgres", "psql"])
@@ -2699,10 +2731,40 @@ class RabbitmqGuestDefaultRemovedTests(unittest.TestCase):
         self.assertGreaterEqual(len(env_vars["RMQ_PASS"]), 32)
 
     def test_test_env_keeps_the_private_brokers_factory_account(self):
-        env_vars = {}
+        env_vars = {"HAMS_ISOLATED_NS": "1"}
         for k, v in infra.MANIFEST["env_defaults"].items():
             env_vars.setdefault(k, v)
         infra.load_and_prompt_env(env_vars, is_test=True)
+        self.assertEqual((env_vars["RMQ_USER"], env_vars["RMQ_PASS"]), ("guest", "guest"))
+
+    def test_a_test_host_with_its_own_broker_gets_a_real_account_the_daemons_accept(self):
+        # Tests [@ANCHOR: infrastructure:_set_test_rabbitmq_credentials]
+        # provision.py --test on a VM: adif.processor refuses guest/guest, so the env files must not carry it.
+        with patch.dict(os.environ):
+            os.environ.pop("HAMS_ISOLATED_NS", None)
+            env_vars = {}
+            infra._set_test_rabbitmq_credentials(env_vars)
+        self.assertEqual(env_vars["RMQ_USER"], "hams_rabbitmq")
+        self.assertNotEqual(env_vars["RMQ_PASS"], "guest")
+        self.assertGreaterEqual(len(env_vars["RMQ_PASS"]), 32)
+
+    def test_guest_left_in_the_env_files_by_an_earlier_run_is_replaced_and_a_real_account_is_kept(self):
+        # Tests [@ANCHOR: infrastructure:_set_test_rabbitmq_credentials]
+        with patch.dict(os.environ):
+            os.environ.pop("HAMS_ISOLATED_NS", None)
+            stale = {"RMQ_USER": "guest", "RMQ_PASS": "guest"}
+            infra._set_test_rabbitmq_credentials(stale)
+            kept = {"RMQ_USER": "svc", "RMQ_PASS": "s3cret-value"}
+            infra._set_test_rabbitmq_credentials(kept)
+        self.assertEqual(stale["RMQ_USER"], "hams_rabbitmq")
+        self.assertNotEqual(stale["RMQ_PASS"], "guest")
+        self.assertEqual((kept["RMQ_USER"], kept["RMQ_PASS"]), ("svc", "s3cret-value"))
+
+    def test_the_isolated_namespace_is_recognised_from_the_process_environment_too(self):
+        # Tests [@ANCHOR: infrastructure:_set_test_rabbitmq_credentials]
+        with patch.dict(os.environ, {"HAMS_ISOLATED_NS": "1"}):
+            env_vars = {}
+            infra._set_test_rabbitmq_credentials(env_vars)
         self.assertEqual((env_vars["RMQ_USER"], env_vars["RMQ_PASS"]), ("guest", "guest"))
 
 

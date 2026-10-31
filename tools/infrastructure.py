@@ -3646,7 +3646,13 @@ WantedBy=multi-user.target
         },
         {
             "path": "/tmp/wkhtmltox.deb",
-            "url": "https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.bookworm_amd64.deb",
+            "url": "https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.bookworm_{DEB_TARGET_ARCH_CPU}.deb",
+            # Upstream publishes this build for amd64 and arm64 only (armhf is a 404); another architecture
+            # fails at the download. Hashes taken from the release files.
+            "sha256_by_arch": {
+                "amd64": "98ba0d157b50d36f23bd0dedf4c0aa28c7b0c50fcdcdc54aa5b6bbba81a3941d",
+                "arm64": "b6606157b27c13e044d0abbe670301f88de4e1782afca4f9c06a5817f3e03a9c",
+            },
             "owner": "root:root",
             "mode": "644",
             "environments": ["prod"],
@@ -12066,6 +12072,25 @@ def generate_secure_password(length=32):
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
+# [@ANCHOR: infrastructure:_set_test_rabbitmq_credentials]
+def _set_test_rabbitmq_credentials(env_vars):
+    """The RabbitMQ account a test-mode provisioning run writes into the env files.
+
+    test.py's private broker (HAMS_ISOLATED_NS=1) knows only the factory "guest" account, so it keeps that.
+    A test host that runs its own broker (provision.py --test on a VM) is provisioned like production:
+    daemons such as adif.processor refuse guest/guest by design, so the files must carry a real account,
+    which provision_environment() then creates in the broker. A guest/guest pair left in the files by an
+    earlier run is replaced, a real account already there is kept."""
+    if env_vars.get("HAMS_ISOLATED_NS") == "1" or os.environ.get("HAMS_ISOLATED_NS") == "1":
+        env_vars.setdefault("RMQ_USER", "guest")
+        env_vars.setdefault("RMQ_PASS", "guest")
+        return
+    if env_vars.get("RMQ_USER", "guest") == "guest":
+        env_vars["RMQ_USER"] = "hams_rabbitmq"
+    if env_vars.get("RMQ_PASS", "guest") == "guest":
+        env_vars["RMQ_PASS"] = generate_secure_password()
+
+
 # [@ANCHOR: infrastructure:_refuse_env_files_from_other_provision_mode]
 def _refuse_env_files_from_other_provision_mode(file_vars, is_test, env_dir):
     """
@@ -12202,9 +12227,7 @@ def load_and_prompt_env(env_vars, is_test):
         env_vars.setdefault("SMTP_HOST", "localhost")
         env_vars.setdefault("SMTP_PORT", "1025")
         env_vars.setdefault("HAMS_CRYPTO_KEY", "0000000000000000000000000000000000000000000=")
-        # A test box's broker only has the factory account (see MANIFEST["env_defaults"]).
-        env_vars.setdefault("RMQ_USER", "guest")
-        env_vars.setdefault("RMQ_PASS", "guest")
+        _set_test_rabbitmq_credentials(env_vars)
     else:
         # Set automatic sensible defaults
         env_vars.setdefault("DB_NAME", "hams_prod")
@@ -12557,7 +12580,7 @@ def _retire_pgbackrest_repo1(conf_path=None):
 
 
 # [@ANCHOR: infrastructure:_create_odoo_role_if_missing]
-def _create_odoo_role_if_missing(run_cmd_func, db_pass):
+def _create_odoo_role_if_missing(run_cmd_func, db_pass, is_test=False):
     """
     Creates the `odoo` PostgreSQL role with the given password, IF it
     doesn't already exist -- checked in Python via _role_exists() first
@@ -12640,6 +12663,18 @@ def _create_odoo_role_if_missing(run_cmd_func, db_pass):
         run_cmd_func(
             ["sudo", "-u", "postgres", "psql", "-c", "ALTER ROLE odoo WITH SUPERUSER;"]
         )
+        if is_test:
+            # A test host's env files carry DB_PASS, and the daemons log in with it over TCP. The role may
+            # predate this run (the Debian odoo package creates one), so set its password to match. Test
+            # hosts only: a production run keeps the password it has.
+            run_cmd_func(
+                [
+                    "sudo", "-u", "postgres", "psql",
+                    "-v", f"db_pass={db_pass}",
+                ],
+                input="ALTER ROLE odoo WITH PASSWORD :'db_pass';\n",
+                text=True,
+            )
         return
     run_cmd_func(
         [
@@ -13927,7 +13962,7 @@ def provision_environment(
                     "[*] Bootstrapping initial Odoo PostgreSQL role and database (%s)...", db_name
                 )
                 db_pass = env_vars.get("DB_PASS", "odoo")
-                _create_odoo_role_if_missing(run_cmd_func, db_pass)
+                _create_odoo_role_if_missing(run_cmd_func, db_pass, is_test=is_test)
 
                 if is_test:
                     _refuse_if_unsafe_test_db_drop(db_name)
