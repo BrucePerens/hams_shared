@@ -1,6 +1,4 @@
 [
-  "content_security_policy/static/src/js/csp_unobtrusive_handlers.js::navigateToSelectedOption",
-  "content_security_policy/static/src/js/csp_unobtrusive_handlers.js::replaceStateFromMarker",
   "daemons/hams_local_relay/src/trust/trust.js::detectOs",
   "daemons/hams_local_relay/src/trust/trust.js::hostCovered",
   "daemons/hams_local_relay/src/trust/trust.js::normHost",
@@ -8,8 +6,6 @@
   "daemons/hams_local_relay/src/trust/trust.js::verdict",
   "daemons/hams_local_relay/tests/trust_wizard_logic.js::obs",
   "daemons/hams_local_relay/tests/trust_wizard_logic.js::text",
-  "daemons/shack_console/console/src/access_role.js::roleChanged",
-  "daemons/shack_console/console/src/access_role.js::roleControl",
   "daemons/shack_console/console/src/access_state.js::accessFrom",
   "daemons/shack_console/console/src/access_state.js::fingerprintStart",
   "daemons/shack_console/console/src/access_state.js::initialAccessState",
