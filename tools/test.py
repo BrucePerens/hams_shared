@@ -1100,6 +1100,18 @@ def apply_skip_google_fonts_download(environ):
     return environ[SKIP_GOOGLE_FONTS_DOWNLOAD_ENV]
 
 
+# Operational switch read by ham_shack's PSK Reporter transports: refuse to touch the real PSK Reporter host. Set for every process
+# the runner starts so a test that forgets to replace a transport fails loudly. Not a probe of Odoo's test_enable (banned);
+# production never has it set. A caller that has chosen a value keeps it.
+BLOCK_PSK_TRANSPORT_ENV = "HAMS_PSK_BLOCK_TRANSPORT"
+
+
+def apply_block_psk_transport(environ):
+    """Default the switch on for the processes the runner starts, unless the caller already chose a value."""
+    environ.setdefault(BLOCK_PSK_TRANSPORT_ENV, "1")
+    return environ[BLOCK_PSK_TRANSPORT_ENV]
+
+
 def run_cmd(cmd, extractor=None, cwd=None, env=None):
     if env is None:
         env = dict(os.environ)
@@ -3569,6 +3581,7 @@ def main():
     # Before anything is spawned, so every child (Odoo, its headless Chrome profiles) inherits it in every mode, namespaced or flat.
     apply_default_test_tmpdir(os.environ)
     apply_skip_google_fonts_download(os.environ)
+    apply_block_psk_transport(os.environ)
 
     if args.pause_on_fail:
         os.environ["HAMS_PAUSE_ON_FAIL"] = "1"
