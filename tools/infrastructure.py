@@ -4062,12 +4062,14 @@ User=hamsd_dx_daemon
 Group=hamsd_dx_daemon
 WorkingDirectory=/opt/hams/daemons/ham_dx_daemon
 
-# Code audit, 2026-10-04: ham_dx_daemon/main.py reads DX_NODE_HOST, DX_NODE_PORT, DX_NODE_CALLSIGN and DX_DAEMON_MAX_PENDING_SPOTS (defaults in code, no environment file sets them) and it reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+# Code audit, 2026-10-04: ham_dx_daemon/main.py reads DX_NODE_HOST, DX_NODE_PORT, DX_NODE_CALLSIGN and DX_DAEMON_MAX_PENDING_SPOTS (defaults in code, except DX_NODE_CALLSIGN which the unit sets and the daemon requires) and it reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
 EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=dx_daemon_service"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/dx_daemon/dx_daemon_service.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
+# REQUIRED: the real callsign the daemon logs in to the DX cluster with. AR-Cluster drops placeholders such as N0CALL (the feed was dead for days); the daemon refuses to start without a valid one.
+Environment="DX_NODE_CALLSIGN=K6BP-2"
 
 # Smoketest Resource Verification
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/ham_dx_daemon/main.py --start-test
