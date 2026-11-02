@@ -202,6 +202,100 @@ class MainTests(unittest.TestCase):
             self.assertEqual(mock_run.call_count, 3)
 
 
+class PurgeStaleBuildScriptOutputTests(unittest.TestCase):
+    """A build script's cached output, shared by every worktree that shares one target dir, must
+    not be reused by a checkout it was not generated in (bench_mcp's build.rs embeds absolute
+    include_str! paths: the second worktree failed to compile once the first was removed)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.here = os.path.join(self.tmp, "wt_here")
+        self.other = os.path.join(self.tmp, "wt_removed")
+        self.crate = os.path.join(self.here, "daemons", "bench_mcp")
+        self.target = os.path.join(self.tmp, "target")
+        os.makedirs(self.crate)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run_dir(self, name, generated_in, profile=("debug",), crate="daemons/bench_mcp"):
+        run_dir = os.path.join(self.target, *profile, "build", name)
+        _write(os.path.join(run_dir, "output"), "cargo:rerun-if-changed=manual\n")
+        _write(
+            os.path.join(run_dir, "out", "manual_files.rs"),
+            f'pub const FILES: &[(&str, &str)] = &[("a.md", include_str!("{generated_in}/{crate}/manual/a.md"))];\n',
+        )
+        fingerprint = os.path.join(self.target, *profile, ".fingerprint", name)
+        _write(os.path.join(fingerprint, "run-build-script-build-script-build"), "x")
+        return run_dir, fingerprint
+
+    def _purge(self):
+        return chk.purge_stale_build_script_output(self.target, self.here, self.crate)
+
+    def test_output_generated_in_a_removed_worktree_is_deleted_with_its_fingerprint(self):
+        run_dir, fingerprint = self._run_dir("bench_mcp-0123456789abcdef", self.other)
+        self.assertEqual(self._purge(), [run_dir])
+        self.assertFalse(os.path.exists(run_dir))
+        self.assertFalse(os.path.exists(fingerprint))
+
+    def test_output_generated_in_another_worktree_that_still_exists_is_deleted_too(self):
+        # Silently building from the other worktree's files is the same bug without the failure.
+        os.makedirs(os.path.join(self.other, "daemons", "bench_mcp", "manual"))
+        run_dir, _ = self._run_dir("bench_mcp-0123456789abcdef", self.other)
+        self.assertEqual(self._purge(), [run_dir])
+
+    def test_output_generated_in_this_checkout_is_kept(self):
+        run_dir, fingerprint = self._run_dir("bench_mcp-0123456789abcdef", self.here)
+        self.assertEqual(self._purge(), [])
+        self.assertTrue(os.path.isdir(run_dir))
+        self.assertTrue(os.path.isdir(fingerprint))
+
+    def test_a_path_that_only_shares_a_prefix_with_this_checkout_is_another_checkout(self):
+        run_dir, _ = self._run_dir("bench_mcp-0123456789abcdef", self.here + "_2")
+        self.assertEqual(self._purge(), [run_dir])
+
+    def test_output_of_a_different_crate_is_kept(self):
+        run_dir, _ = self._run_dir("other-0123456789abcdef", self.other, crate="daemons/other")
+        self.assertEqual(self._purge(), [])
+        self.assertTrue(os.path.isdir(run_dir))
+
+    def test_a_target_triple_directory_is_searched_too(self):
+        run_dir, _ = self._run_dir("bench_mcp-0123456789abcdef", self.other, profile=("x86_64-unknown-linux-gnu", "debug"))
+        self.assertEqual(self._purge(), [run_dir])
+
+    def test_binary_output_and_a_missing_target_directory_are_ignored(self):
+        run_dir = os.path.join(self.target, "debug", "build", "ring-0123456789abcdef")
+        _write(os.path.join(run_dir, "output"), "")
+        os.makedirs(os.path.join(run_dir, "out"))
+        with open(os.path.join(run_dir, "out", "blob.a"), "wb") as f:
+            f.write(b"\0" + f"{self.other}/daemons/bench_mcp/x".encode())
+        self.assertEqual(self._purge(), [])
+        self.assertEqual(
+            chk.purge_stale_build_script_output(os.path.join(self.tmp, "nowhere"), self.here, self.crate), []
+        )
+
+    def test_main_purges_before_it_runs_clippy_and_says_so(self):
+        _write(os.path.join(self.crate, "Cargo.toml"), "[package]\nname = \"bench_mcp\"\n")
+        run_dir, _ = self._run_dir("bench_mcp-0123456789abcdef", self.other)
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:2] == ["cargo", "clippy"] and "--version" not in cmd:
+                seen["run_dir_existed_at_clippy"] = os.path.exists(run_dir)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch.object(sys, "argv", ["check_cargo_clippy.py", self.here]), patch.dict(
+            os.environ, {"CARGO_TARGET_DIR": self.target}
+        ), patch("check_cargo_clippy.subprocess.run", side_effect=fake_run), patch(
+            "builtins.print"
+        ) as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                chk.main()
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertFalse(seen["run_dir_existed_at_clippy"])
+        self.assertIn("another checkout", " ".join(str(c) for c in mock_print.call_args_list))
+
+
 class ResolveRepoRootTests(unittest.TestCase):
     # This checker was added 2026-08-26, after the original dir_path-repo-root audit
     # (LINTER_POLICY_REVISIT.md) that fixed 9 other checkers -- it inherited the same

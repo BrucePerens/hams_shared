@@ -17,7 +17,10 @@ check_cargo_deny.py/check_pip_audit.py: a clippy-flagged pattern can be introduc
 crate, not just near whatever file a targeted lint run happens to be scoped to.
 """
 
+import glob
 import os
+import re
+import shutil
 import subprocess
 import sys
 
@@ -61,6 +64,83 @@ EXCLUDE_CRATE_RELPATHS = {
     "daemons/ham_digital_modes/tools/codec2_riscv32_bench",
     "reference/ambe/imbe.rs",
 }
+
+
+# Cargo names a build script's run directory after the package and a hash that does not contain
+# the checkout's path, so every worktree that shares one CARGO_TARGET_DIR (this project's
+# agents do: one target directory, many `git worktree`s of the same repo) shares it too, and
+# cargo reuses the cached output while the `rerun-if-changed` paths look unchanged. A build
+# script that writes absolute paths into that output (bench_mcp's build.rs writes
+# `include_str!("<checkout>/manual/...")` into $OUT_DIR/manual_files.rs) then hands the next
+# worktree's build a file that names the FIRST worktree's files: when that worktree has been
+# removed the build fails ("couldn't read <old checkout>/manual/..."), and when it has not, the
+# build silently uses the other worktree's files. Found 2026-10-30, when check_cargo_clippy
+# failed twice in one night until the `debug/build/bench_mcp-*` directories were deleted by hand;
+# reproduced with a two-worktree crate that has the same build.rs.
+_MAX_SCANNED_BYTES = 2 * 1024 * 1024
+_PATH_CHARS = r"[^\s\"'<>;,=()\[\]{}`]"
+
+
+def _cached_text(run_dir):
+    """The text of what a build script left in `run_dir`: its `output` (the cargo: lines) and
+    every small text file under `out/` (the generated sources). Binary and huge files are skipped."""
+    names = [os.path.join(run_dir, "output")]
+    for root, _dirs, files in os.walk(os.path.join(run_dir, "out")):
+        names.extend(os.path.join(root, f) for f in files)
+    for name in names:
+        try:
+            if os.path.getsize(name) > _MAX_SCANNED_BYTES:
+                continue
+            with open(name, "rb") as f:
+                data = f.read()
+        except OSError:
+            continue
+        if b"\0" in data[:4096]:
+            continue
+        yield data.decode("utf-8", errors="replace")
+
+
+def _names_another_checkout(text, crate_relpath, current_roots):
+    """True when `text` holds an absolute path through `<some checkout>/<crate_relpath>` where
+    the checkout is not one of `current_roots`."""
+    pattern = re.compile("(/" + _PATH_CHARS + "*?)/" + re.escape(crate_relpath) + r"(?=/|$|[\s\"'])")
+    return any(m.group(1) not in current_roots for m in pattern.finditer(text))
+
+
+def purge_stale_build_script_output(target_dir, repo_root, crate_dir):
+    """Deletes the cached run directory (and its fingerprint) of every build script under
+    `target_dir` whose output names `crate_dir`'s path in a checkout other than `repo_root`, so
+    cargo runs the script again here. Returns the directories removed. Always safe: a deleted run
+    directory only costs a rerun of that script."""
+    relpath = os.path.relpath(crate_dir, repo_root).replace(os.sep, "/")
+    current_roots = {os.path.abspath(repo_root), os.path.realpath(repo_root)}
+    removed = []
+    if relpath == ".":
+        return removed
+    # <target>/<profile>/build and <target>/<triple>/<profile>/build
+    base = glob.escape(target_dir)
+    build_roots = glob.glob(os.path.join(base, "*", "build")) + glob.glob(os.path.join(base, "*", "*", "build"))
+    for build_root in sorted(build_roots):
+        for run_dir in sorted(glob.glob(os.path.join(glob.escape(build_root), "*"))):
+            if not os.path.isfile(os.path.join(run_dir, "output")):
+                continue
+            if not any(_names_another_checkout(t, relpath, current_roots) for t in _cached_text(run_dir)):
+                continue
+            fingerprint = os.path.join(os.path.dirname(build_root), ".fingerprint", os.path.basename(run_dir))
+            shutil.rmtree(run_dir, ignore_errors=True)
+            shutil.rmtree(fingerprint, ignore_errors=True)
+            removed.append(run_dir)
+    return removed
+
+
+def target_dirs(crate_dir):
+    """The cargo target directories a clippy run in `crate_dir` can reuse build output from."""
+    dirs = []
+    shared = os.environ.get("CARGO_TARGET_DIR")
+    if shared:
+        dirs.append(os.path.abspath(shared))
+    dirs.append(os.path.join(crate_dir, "target"))
+    return [d for d in dirs if os.path.isdir(d)]
 
 
 def _resolve_repo_root(given_path):
@@ -143,6 +223,9 @@ def main():
     any_failed = False
     for repo_root, crate_dir in crate_dirs:
         rel_path = os.path.relpath(crate_dir, repo_root)
+        for target_dir in target_dirs(crate_dir):
+            for removed in purge_stale_build_script_output(target_dir, repo_root, crate_dir):
+                print(f"note: removed build-script output cached from another checkout: {removed}")
         res = subprocess.run(
             ["cargo", "clippy", "--", "-W", "clippy::all"],
             capture_output=True,
