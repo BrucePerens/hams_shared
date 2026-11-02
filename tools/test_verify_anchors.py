@@ -35,6 +35,23 @@ import unittest
 import verify_anchors as va  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify_anchors.py")
+
+_TREE_OVERRIDES = ("HAMS_COM_TREE", "HAMS_OPEN_TREE")
+_saved_tree_overrides = {}
+
+
+def setUpModule():
+    """The sibling-repository lookup honours `HAMS_COM_TREE` / `HAMS_OPEN_TREE` (run_linters.py sets one for its own run, and a
+    person running the linters from a worktree exports it), so every test here runs without them: the tests build their own
+    fixture trees and must not see the real sibling repository. Their subprocesses inherit this environment."""
+    for name in _TREE_OVERRIDES:
+        _saved_tree_overrides[name] = os.environ.pop(name, None)
+
+
+def tearDownModule():
+    for name, value in _saved_tree_overrides.items():
+        if value is not None:
+            os.environ[name] = value
 _ANCHOR_PATTERN = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_:]+)\s*\]")
 
 
