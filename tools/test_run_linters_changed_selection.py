@@ -169,6 +169,7 @@ class SelectionFixture(unittest.TestCase):
     def run_script(self, *args):
         env = dict(os.environ)
         env["HAMS_ALLOW_STALE_SHARED"] = "1"
+        env["HAMS_LINT_NO_LOCK"] = "1"  # the selection tests are not heavy runs; never queue behind a real one
         return subprocess.run(
             [sys.executable, os.path.join(self.open_repo, "tools", "run_linters.py"), *args],
             cwd=self.open_repo,

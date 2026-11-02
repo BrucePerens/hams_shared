@@ -17,6 +17,7 @@ import subprocess
 import time
 
 import lint_exec
+import lint_lock
 
 
 def _resolve_repo_root(given_path):
@@ -291,7 +292,44 @@ def _parse_args(argv):
         help="print only the N slowest steps in the timing table (default: all)",
     )
     parser.add_argument("--no-timing", dest="timing", action="store_false", default=True)
+    parser.add_argument(
+        "--lock-timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="give up (exit 75) after waiting this long for the machine-wide lint run lock "
+        "(default: wait; $HAMS_LINT_LOCK_TIMEOUT). Heavy runs queue one at a time per machine; a run "
+        "of steps that total at most $HAMS_LINT_CHEAP_SECONDS (60) takes no lock",
+    )
+    parser.add_argument(
+        "--no-lock",
+        action="store_true",
+        help="take neither the run lock nor the load gate ($HAMS_LINT_NO_LOCK=1; for CI)",
+    )
+    parser.add_argument(
+        "--lock-status", action="store_true", help="print who holds the lint run lock and who is queued, then exit"
+    )
+    parser.add_argument(
+        "--load-limit",
+        type=float,
+        default=None,
+        metavar="LOAD",
+        help="a heavy run waits until the 1-minute load average is at most this (default: the number "
+        "of cores; $HAMS_LINT_LOAD_LIMIT; $HAMS_CI_LOAD_GATE_RATIO scales the default; "
+        "$HAMS_SKIP_CI_LOAD_GATE=1 skips the gate)",
+    )
+    parser.add_argument(
+        "--load-timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="how long the load gate waits before failing (default 900; $HAMS_LINT_LOAD_TIMEOUT)",
+    )
     options = parser.parse_args(argv)
+    if options.no_lock:
+        os.environ["HAMS_LINT_NO_LOCK"] = "1"
+    if options.lock_timeout is None and os.environ.get("HAMS_LINT_LOCK_TIMEOUT"):
+        options.lock_timeout = lint_lock._finite(os.environ["HAMS_LINT_LOCK_TIMEOUT"], None)
     options.timing_to_stderr = False
     if options.cache is None:
         options.cache = options.changed is not None
@@ -763,6 +801,9 @@ def main():
     linters_failed = False
 
     options = _parse_args(sys.argv[1:])
+    if options.lock_status:
+        print("\n".join(lint_lock.status_lines()))
+        sys.exit(0)
     wall_start = time.monotonic()
     tools_dir = os.path.join(dir_path, "tools")
     real_shared_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -1841,6 +1882,29 @@ def main():
         cache = lint_exec.Cache(_cache_path(dir_path))
         fingerprints = lint_exec.InputFingerprints(os.path.realpath(tools_dir))
 
+    # Heavy runs queue one at a time per machine, then wait for the load to fall (lint_lock.py).
+    pending = [
+        step.name
+        for step in steps
+        if step.argv is not None
+        and not (cache is not None and step.cacheable and cache.hit(step.name, fingerprints.step_key(step)) is not None)
+    ]
+    run_ok, run_lock = lint_lock.begin_heavy_run(
+        os.environ,
+        pending,
+        lint_lock.known_durations() if pending else {},
+        os.path.realpath(dir_path),
+        " ".join(["run_linters.py"] + sys.argv[1:])[:160],
+        lock_timeout=options.lock_timeout,
+        load_limit_override=options.load_limit,
+        load_timeout_override=options.load_timeout,
+    )
+    if not run_ok:
+        sys.exit(lint_lock.EXIT_TEMPFAIL)
+    if run_lock:
+        import atexit
+
+        atexit.register(run_lock.release)
     results = lint_exec.execute(steps, options.jobs, cache=cache, fingerprints=fingerprints)
     wall = time.monotonic() - wall_start
     linters_failed = any(r.returncode != 0 for r in results)
