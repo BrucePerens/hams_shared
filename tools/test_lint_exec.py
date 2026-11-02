@@ -484,5 +484,54 @@ class RunLintersCommandLineTests(unittest.TestCase):
         self.assertEqual(seq.stdout, par.stdout)
 
 
+class XdistTests(unittest.TestCase):
+    """pytest steps gain `-n N --dist loadfile` only when xdist can be imported and the step is not serial."""
+
+    def setUp(self):
+        self.step = lint_exec.Step(name="pytest daemons/x", argv=[PY, "-m", "pytest", "-q", "a.py"])
+        self._ok = dict(lint_exec._xdist_ok)
+        lint_exec._xdist_ok[PY] = True
+
+    def tearDown(self):
+        lint_exec._xdist_ok.clear()
+        lint_exec._xdist_ok.update(self._ok)
+
+    def test_workers_divide_the_cores_between_the_parallel_steps(self):
+        self.assertEqual(lint_exec.xdist_workers_for(8, 16, {}), 2)
+        self.assertEqual(lint_exec.xdist_workers_for(1, 16, {}), lint_exec.XDIST_MAX_WORKERS)
+        self.assertEqual(lint_exec.xdist_workers_for(4, 8, {}), 2)
+        self.assertEqual(lint_exec.xdist_workers_for(2, 3, {}), 0)  # too few cores
+        self.assertEqual(lint_exec.xdist_workers_for(8, 16, {"HAMS_LINT_XDIST": "0"}), 0)
+        self.assertEqual(lint_exec.xdist_workers_for(8, 16, {"HAMS_LINT_XDIST": "6"}), 6)
+
+    def test_a_pytest_step_runs_per_file_workers_and_keeps_its_files(self):
+        argv = lint_exec.with_xdist(self.step, 3)
+        self.assertEqual(argv, [PY, "-m", "pytest", "-n", "3", "--dist", "loadfile", "-q", "a.py"])
+
+    def test_off_serial_other_and_already_parallel_steps_are_left_alone(self):
+        self.assertEqual(lint_exec.with_xdist(self.step, 0), self.step.argv)
+        other = lint_exec.Step(name="flake8", argv=[PY, "-m", "pytest", "-q"])
+        self.assertEqual(lint_exec.with_xdist(other, 3), other.argv)
+        own = lint_exec.Step(name="pytest y", argv=[PY, "-m", "pytest", "-n", "2", "a.py"])
+        self.assertEqual(lint_exec.with_xdist(own, 3), own.argv)
+        saved = lint_exec.XDIST_SERIAL
+        lint_exec.XDIST_SERIAL = ("pytest daemons/x",)
+        try:
+            self.assertEqual(lint_exec.with_xdist(self.step, 3), self.step.argv)
+        finally:
+            lint_exec.XDIST_SERIAL = saved
+
+    def test_the_documented_serial_groups_stay_serial(self):
+        for name in ("pytest tools/[host-bound]", "pytest daemons/hams_simulated_bots/tests", "pytest ingest/"):
+            step = lint_exec.Step(name=name, argv=[PY, "-m", "pytest", "-q", "a.py"])
+            self.assertEqual(lint_exec.with_xdist(step, 3), step.argv, name)
+        self.assertNotEqual(lint_exec.with_xdist(self.step, 3), self.step.argv)
+
+    def test_an_interpreter_without_xdist_runs_serially(self):
+        lint_exec._xdist_ok[PY] = False
+        self.assertEqual(lint_exec.with_xdist(self.step, 3), self.step.argv)
+        self.assertFalse(lint_exec.xdist_available("/nonexistent/python3"))
+
+
 if __name__ == "__main__":
     unittest.main()

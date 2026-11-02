@@ -766,6 +766,18 @@ def run_bundle(argv):
     return 1 if any(r.returncode != 0 for r in results) else 0
 
 
+# tools/test_*.py suites that cannot run on another machine's mirror of the tree (see the "host-bound" step).
+HOST_BOUND_TOOL_TESTS = frozenset(
+    {
+        "test_run_linters_changed_selection.py",
+        "test_daemon_family_probe.py",
+        "test_odoo_warning_policy.py",
+        "test_check_owl_templates.py",
+        "test_worktree_hygiene.py",
+    }
+)
+
+
 def main():
     if "--run-bundle" in sys.argv:
         sys.exit(run_bundle(sys.argv[1:]))
@@ -1348,6 +1360,20 @@ def main():
         for f in glob.glob(os.path.join(dir_path, "tools", "test_*.py"))
         if os.path.basename(f) not in _RUNNER_SCRIPTS_NOT_SUITES
     )
+    # Suites that need THIS checkout or this login session (a real .git, hams_open copied to a scratch
+    # directory, the user's systemd bus, the dev box's Odoo/ldap3/Chrome versions): they stay on the
+    # machine that started the run, in a step of their own that --remote never sends away
+    # (lint_remote.requirements_for). Measured 2026-11-02 on the Odoo test VM: 17 failures, all of them these.
+    host_bound = sorted(f for f in tool_test_files if os.path.basename(f) in HOST_BOUND_TOOL_TESTS)
+    tool_test_files = [f for f in tool_test_files if f not in host_bound]
+    if host_bound:
+        _add(
+            "pytest tools/[host-bound]",
+            [python_exec, "-m", "pytest", "-q"] + host_bound,
+            cwd=os.path.join(dir_path, "tools"),
+            fail_header="❌ hams_shared/tools/ unit test failures:",
+            inputs=((os.path.realpath(os.path.join(dir_path, "tools")),), None),
+        )
     if tool_test_files:
         # The suites are independent files: four pytest processes (sized by file length so
         # they finish together) instead of one that takes four minutes on its own.
@@ -2001,6 +2027,8 @@ def main():
     if options.remote and options.remote != "local" or options.where:
         if os.path.realpath(dir_path) == real_shared_dir:
             print("[*] --remote: not supported when started from a hams_shared checkout; running everything here")
+            if options.where:
+                sys.exit(0)  # --where never runs anything
         else:
             roots, role = lint_remote.repo_roles(repo_root, sibling_dir, real_shared_dir)
             steps, remote_jobs = lint_remote.dispatch(

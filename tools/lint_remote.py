@@ -39,10 +39,12 @@ import io
 import json
 import math
 import os
+import re
 import shlex
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 
@@ -81,8 +83,12 @@ def requirements_for(step_name):
         return {"python3", "flake8"}
     if base == "eslint":
         return {"node", "eslint"}
-    if base in ("check_cargo_clippy", "check_cargo_fmt", "check_rust_function_test_anchors"):
+    if base in ("check_cargo_clippy", "check_cargo_fmt"):
+        return {"cargo", "clippy", "python3"}
+    if base == "check_rust_function_test_anchors":
         return {"cargo", "python3"}
+    if step_name == "pytest tools/[host-bound]":
+        return {"local"}  # needs this checkout and this login session (HOST_BOUND_TOOL_TESTS in run_linters.py)
     if base.startswith("pytest"):
         return {"python3", "pytest"}
     if base == "check_owl_templates":
@@ -113,15 +119,32 @@ def runners(inventory):
     }
 
 
+# Tests commit in scratch repositories; a lint machine has no global git identity.
+GIT_IDENTITY = (
+    "GIT_AUTHOR_NAME=lint GIT_AUTHOR_EMAIL=lint@localhost GIT_COMMITTER_NAME=lint GIT_COMMITTER_EMAIL=lint@localhost"
+)
+FORWARDED_ENV = ("HAMS_LINT_XDIST",)  # run_linters settings that must reach the machine's own run
+
+
+def _forwarded_env(environ=None):
+    environ = os.environ if environ is None else environ
+    return "".join(f" {name}={shlex.quote(environ[name])}" for name in FORWARDED_ENV if environ.get(name))
+
+
+REMOTE_PATH_PREFIX = 'export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"; '
+
 PROBE_SCRIPT = r"""
 echo "os=$(uname -s)"
 echo "cores=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null)"
 echo "load1=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)"
 echo "pyver=$(/usr/bin/python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)"
-for t in git tar cargo node flake8; do command -v $t >/dev/null 2>&1 && echo "has_$t=1"; done
+for t in git tar node flake8; do command -v $t >/dev/null 2>&1 && echo "has_$t=1"; done
+cargo --version >/dev/null 2>&1 && echo "has_cargo=1"
+cargo clippy --version >/dev/null 2>&1 && cargo fmt --version >/dev/null 2>&1 && echo "has_clippy=1"
 for t in google-chrome chromium chromium-browser; do command -v $t >/dev/null 2>&1 && echo "has_chrome=1"; done
 command -v eslint >/dev/null 2>&1 && echo "has_eslint=1"
 /usr/bin/python3 -c 'import pytest' >/dev/null 2>&1 && echo "has_pytest=1"
+/usr/bin/python3 -c 'import xdist' >/dev/null 2>&1 && echo "has_xdist=1"
 /usr/bin/python3 -c 'import odoo' >/dev/null 2>&1 && echo "has_odoo=1"
 q="$HOME/.cache/hams-lint/run.lock.queue.d"
 echo "queued=$(ls "$q" 2>/dev/null | grep -c -v '^holder\|^\.')"
@@ -186,6 +209,9 @@ class SshTransport:
         self.timeout = timeout
 
     def argv(self, command):
+        # A non-interactive ssh command gets no login PATH: put the user-level toolchains (rustup in
+        # ~/.cargo/bin, pip --user scripts in ~/.local/bin) in front, as tools/provision_build_host.sh installs them.
+        command = REMOTE_PATH_PREFIX + command
         ssh = self.machine["ssh"]
         args = [os.path.expanduser(a) if a.startswith("~") else a for a in ssh.get("args", [])]
         args = [a.replace("~/", os.path.expanduser("~") + "/") for a in args]
@@ -405,17 +431,40 @@ def _tar_of_files(repo, paths):
     return buffer.getvalue()
 
 
+def _tree_tar(repo, sha, paths=None):
+    """A tar of `paths` (default: everything) as committed in `sha`. Not `git archive`: that honours
+    `export-ignore` in .gitattributes, which silently left 300+ tracked files (hams_local_relay's claims/, fuzz/
+    and a test suite) out of every mirror. A scratch index and `checkout-index` write the files exactly as
+    committed."""
+    with tempfile.TemporaryDirectory(prefix="lint-tree-") as scratch:
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(scratch, "index"))
+        out = os.path.join(scratch, "tree")
+        os.makedirs(out)
+        subprocess.run(["git", "-C", repo, "read-tree", sha], env=env, check=True, capture_output=True)
+        args = ["git", "-C", repo, "checkout-index", "-f", f"--prefix={out}/"]
+        if paths is None:
+            res = subprocess.run(args + ["-a"], env=env, capture_output=True)
+        else:
+            res = subprocess.run(args + ["-z", "--stdin"], env=env, capture_output=True, input=("\0".join(paths) + "\0").encode())
+        if res.returncode != 0:
+            raise RuntimeError(f"git checkout-index failed in {repo}: {res.stderr.decode(errors='replace')[:200]}")
+        tar = subprocess.run(["tar", "-cf", "-", "-C", out, "."], capture_output=True)
+        if tar.returncode != 0:
+            raise RuntimeError(f"tar failed: {tar.stderr.decode(errors='replace')[:200]}")
+        return tar.stdout
+
+
 def _archive(repo, sha, paths=None):
     if paths is None:
-        return git(repo, "archive", "--format=tar", sha)
-    pieces = []
-    for start in range(0, len(paths), 400):
-        pieces.append(git(repo, "archive", "--format=tar", sha, "--", *paths[start : start + 400]))
-    return pieces
+        return _tree_tar(repo, sha)
+    return [_tree_tar(repo, sha, paths[start : start + 2000]) for start in range(0, len(paths), 2000)]
 
 
 def _extract_cmd(dest):
     return f"mkdir -p {shlex.quote(dest)} && tar -x -C {shlex.quote(dest)} -f -"
+
+
+SYNC_FORMAT = 2
 
 
 def sync_repo(transport, repo, dest, sub_exclude=(), log=print, label=None):
@@ -429,7 +478,8 @@ def sync_repo(transport, repo, dest, sub_exclude=(), log=print, label=None):
             previous = json.loads(out)
         except ValueError:
             previous = {}
-    base = previous.get("sha")
+    # A mirror written by an older sync method (git archive: it dropped export-ignore files) is rebuilt in full.
+    base = previous.get("sha") if previous.get("format") == SYNC_FORMAT else None
     known = False
     if base:
         known = subprocess.run(["git", "-C", repo, "cat-file", "-e", base + "^{commit}"], capture_output=True).returncode == 0
@@ -463,7 +513,7 @@ def sync_repo(transport, repo, dest, sub_exclude=(), log=print, label=None):
         _check(transport.run(_extract_cmd(dest), _tar_of_files(repo, changed), timeout=600), "overlay")
     if deleted:
         _check(transport.run(f"cd {shlex.quote(dest)} && xargs -0 rm -f --", ("\0".join(deleted) + "\0").encode()), "overlay-delete")
-    manifest = {"sha": sha, "overlay": changed, "deleted_overlay": deleted, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    manifest = {"format": SYNC_FORMAT, "sha": sha, "overlay": changed, "deleted_overlay": deleted, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
     _check(transport.run(f"cat > {shlex.quote(dest)}/.hams_lint_sync", json.dumps(manifest).encode()), "manifest")
     return {"sha": sha, "dirty": bool(changed or deleted)}
 
@@ -593,6 +643,22 @@ def verify_results(raw, expected_names, bundle_id):
     return not problems, problems
 
 
+def ensure_node_modules(transport, shared_dir, log=print):
+    """The mirror never carries node_modules; ESLint (and the tests that run it) need hams_shared's, so install
+    them from package-lock.json (`npm ci --ignore-scripts`) once per lock-file content. Best effort: without
+    npm or a network the eslint steps and tests that need it fail on the machine and are re-run here."""
+    q = shlex.quote(shared_dir)
+    command = (
+        f"cd {q} 2>/dev/null && [ -f package-lock.json ] && command -v npm >/dev/null || exit 0; "
+        "h=$(sha256sum package-lock.json | cut -d' ' -f1); "
+        '[ "$(cat node_modules/.lock-hash 2>/dev/null)" = "$h" ] && exit 0; '
+        'npm ci --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 && mkdir -p node_modules && echo "$h" > node_modules/.lock-hash'
+    )
+    code, _out, _err = transport.run(command, timeout=900)
+    if code != 0:
+        log("[*] --remote: npm ci in the mirror failed; eslint-dependent steps will run here")
+
+
 def run_on_machine(name, machine, transport, repos, invocation_role, bundle, on_line, log=print):
     """Sync, send the bundle, run it. Returns ('ok'|'failed'|'infra', problems, seconds_by_step).
     'infra' means the machine could not do the job (the caller runs these steps here); 'failed'
@@ -617,6 +683,7 @@ def run_on_machine(name, machine, transport, repos, invocation_role, bundle, on_
         for role in ("hams_com", "hams_open"):
             if role in info:
                 commit_mirror(transport, f"{root}/{role}")
+        ensure_node_modules(transport, f"{root}/hams_open/hams_shared", log)
         results_path = f"{root}/.lint_results.json"
         _check(transport.run(f"rm -f {shlex.quote(results_path)}"), "clear")
         _check(transport.run(f"cat > {shlex.quote(root)}/.lint_bundle.json", json.dumps(bundle).encode()), "bundle")
@@ -630,7 +697,7 @@ def run_on_machine(name, machine, transport, repos, invocation_role, bundle, on_
         if role in info
     )
     command = (
-        f"mkdir -p {tmpdir} && cd {q(root)}/{invocation_role} && TMPDIR={tmpdir} "
+        f"mkdir -p {tmpdir} && cd {q(root)}/{invocation_role} && TMPDIR={tmpdir} {GIT_IDENTITY}{_forwarded_env()} "
         f"nice -n {int(machine.get('nice', 10))} python3 {q(root)}/hams_open/hams_shared/tools/run_linters.py "
         f"--run-bundle {q(root)}/.lint_bundle.json {roots_args} --results-json {q(results_path)} "
         f"-j {int(machine.get('jobs', 2))} --no-timing 2>&1; rm -rf {tmpdir}"
@@ -685,9 +752,12 @@ class RemoteJob:
 
 
 def collect(jobs, all_steps, execute_here, result_class, out=print):
-    """Wait for the remote jobs. Returns (results, hosts): a Result per remote step, the steps of a
+    """Wait for the remote jobs. Returns (results, hosts): a Result per remote step. The steps of a
     machine that could not do its job run here through `execute_here(steps)` (that machine is then not
-    credited), and `hosts` lists the machines whose steps all ran and passed there or failed for real."""
+    credited). A step that FAILED on a machine is run here again: the dev box is the reference
+    environment, and a remote failure is often a package version or service the machine lacks; the
+    local result stands, and the machine is not credited. `hosts` lists the machines whose steps all
+    ran and passed there."""
     results, hosts = [], []
     for job in jobs:
         job.join()
@@ -696,10 +766,16 @@ def collect(jobs, all_steps, execute_here, result_class, out=print):
             wanted = set(job.names)
             results += execute_here([s for s in all_steps if s.name in wanted])
             continue
-        hosts.append(job.host)
+        failed_names = {name for name in job.names if job.status == "failed" and f"step failed: {name}" in job.problems}
         for name in job.names:
-            failed = job.status == "failed" and f"step failed: {name}" in job.problems
-            results.append(result_class(name, 1 if failed else 0, "", job.seconds.get(name, 0.0)))
+            if name not in failed_names:
+                results.append(result_class(name, 0, "", job.seconds.get(name, 0.0)))
+        if failed_names:
+            out(f"[*] --remote: {job.host} reported failing steps ({', '.join(sorted(failed_names))}): "
+                "running them here to confirm (the dev box is the reference environment)")
+            results += execute_here([s for s in all_steps if s.name in failed_names])
+        else:
+            hosts.append(job.host)
     return results, hosts
 
 
@@ -782,54 +858,66 @@ def probe_all(inventory, transports=None, workers=4):
     return probes
 
 
-PROVISION_PIP = "python3 -m pip install --user --break-system-packages pytest flake8"
-PROVISION_UNDO = (
-    "python3 -m pip uninstall -y --break-system-packages pytest flake8; "
-    "rm -rf ~/hams-lint-mirror ~/.cache/hams-lint"
-)
-PROVISION_TODO = {
-    "node": "node and eslint: apt install nodejs (needs sudo: Bruce), or a user-level Node tarball from nodejs.org with its SHA-256 checked",
-    "cargo": "cargo, clippy, rustfmt: rustup in the user's home (curl https://sh.rustup.rs, then rustup component add clippy rustfmt), or apt install cargo clippy rustfmt (needs sudo)",
-    "chrome": "chromium or google-chrome (apt, needs sudo)",
-    "odoo": "the Debian odoo package that provides the odoo python module (apt, needs sudo)",
-    "flake8": "flake8 (pip --user below, or apt install flake8)",
-    "pytest": "pytest (pip --user below, or apt install python3-pytest)",
-}
+PROVISION_SCRIPT = os.path.join(TOOLS, "provision_build_host.sh")
+PROVISION_REQUIREMENTS = os.path.join(TOOLS, "requirements-test.txt")
+PROVISION_DIR = ".cache/hams-lint/provision-src"
+PROVISION_UNDO = f"bash ~/{PROVISION_DIR}/provision_build_host.sh undo"
+TOOLCHAIN_FILES = ("hams_open/daemons/radioctl/rust-toolchain.toml", "hams_com/daemons/hams_local_relay/rust-toolchain.toml")
 
 
-def provision_lines(host, probe):
-    """What would make `host` a more capable runner: user-level pip installs this tool can do, and a
-    to-do list for the rest. Reversible: PROVISION_UNDO removes everything it adds."""
-    lines = [f"{host}: has {', '.join(sorted(probe.caps)) or 'nothing'}"]
-    missing = [cap for cap in ("flake8", "pytest") if cap not in probe.caps]
-    if missing:
-        lines.append(f"  can install now (user level, no sudo): {PROVISION_PIP}")
-    for cap in ("node", "cargo", "chrome", "odoo"):
-        if cap not in probe.caps:
-            lines.append(f"  to do: {PROVISION_TODO[cap]}")
-    lines.append(f"  undo: {PROVISION_UNDO}")
-    return lines
+def rust_pin(roots=None):
+    """The `channel` of the repositories' rust-toolchain.toml files (the same everywhere; the first found)."""
+    roots = roots or [os.path.expanduser("~/workspace")]
+    for root in roots:
+        for rel in TOOLCHAIN_FILES:
+            try:
+                with open(os.path.join(root, rel), encoding="utf-8") as handle:
+                    match = re.search(r'^channel\s*=\s*"([^"]+)"', handle.read(), re.M)
+            except OSError:
+                continue
+            if match:
+                return match.group(1)
+    return None
+
+
+def provision_run(transport, mode, pin=None, timeout=3600, on_line=None):
+    """Copy tools/provision_build_host.sh and tools/requirements-test.txt to the machine and run
+    `mode` (plan|apply|verify|versions|undo). Returns (exit code, output text)."""
+    with open(PROVISION_SCRIPT, "rb") as script, open(PROVISION_REQUIREMENTS, "rb") as reqs:
+        files = {"provision_build_host.sh": script.read(), "requirements-test.txt": reqs.read()}
+    for name, data in files.items():
+        code, _out, err = transport.run(f"mkdir -p ~/{PROVISION_DIR} && cat > ~/{PROVISION_DIR}/{name}", data=data)
+        if code != 0:
+            return code, f"cannot copy {name}: {err.decode(errors='replace')[-200:]}"
+    env = f"HAMS_RUST_TOOLCHAIN={shlex.quote(pin)} " if pin else ""
+    command = f"{env}bash ~/{PROVISION_DIR}/provision_build_host.sh {shlex.quote(mode)} 2>&1"
+    lines = []
+    code = transport.stream(command, lambda line: (lines.append(line), on_line and on_line(line)), timeout=timeout)
+    return code, "\n".join(lines)
 
 
 def main(argv):
-    """`lint_remote.py probe [HOST]` (read-only survey) and `lint_remote.py provision HOST [--apply]`."""
+    """`lint_remote.py probe [HOST]` (read-only survey); `lint_remote.py provision HOST [--apply|--verify|--versions|--undo]`
+    (default: print the plan; changes happen only with --apply or --undo)."""
     inv = load_inventory()
     command = argv[0] if argv else "probe"
     hosts = [a for a in argv[1:] if not a.startswith("--")]
     selected = {h: inv[h] for h in hosts} if hosts else runners(inv)
     transports = make_transports(inv, selected)
+    if command == "provision":
+        mode = "apply" if "--apply" in argv else "undo" if "--undo" in argv else "verify" if "--verify" in argv else "versions" if "--versions" in argv else "plan"
+        status = 0
+        for name in sorted(selected):
+            if name not in runners(inv):
+                print(f"{name}: not a lint runner")
+                continue
+            print(f"== {name}: provision {mode}")
+            code, _text = provision_run(transports[name], mode, pin=rust_pin(), on_line=print)
+            status = status or code
+        return status
     probes = probe_all(inv, transports)
     for name, probe in sorted(probes.items()):
-        if command == "probe":
-            print(name, "unreachable: " + probe.error if not probe.reachable else probe)
-            continue
-        if not probe.reachable:
-            print(f"{name}: unreachable ({probe.error})")
-            continue
-        print("\n".join(provision_lines(name, probe)))
-        if "--apply" in argv and not {"flake8", "pytest"} <= probe.caps:
-            code, out, err = transports[name].run(PROVISION_PIP, timeout=900)
-            print(f"  pip install exit {code}: {(out + err).decode(errors='replace')[-300:]}")
+        print(name, "unreachable: " + probe.error if not probe.reachable else probe)
     return 0
 
 

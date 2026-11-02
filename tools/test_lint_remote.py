@@ -59,6 +59,10 @@ class RequirementTests(unittest.TestCase):
         self.assertEqual(lr.requirements_for("pytest daemons/relay_ca"), {"python3", "pytest"})
         self.assertIn("node", lr.requirements_for("eslint"))
         self.assertIn("cargo", lr.requirements_for("check_cargo_clippy"))
+        self.assertIn("clippy", lr.requirements_for("check_cargo_clippy"))
+        self.assertEqual(lr.requirements_for("pytest tools/[host-bound]"), {"local"})
+        self.assertEqual(lr.requirements_for("pytest tools/[2of4]"), {"python3", "pytest"})
+        self.assertNotIn("clippy", lr.requirements_for("check_rust_function_test_anchors"))
         self.assertEqual(lr.requirements_for("check_float_isfinite"), {"python3"})
         self.assertIn("chrome", lr.requirements_for("check_owl_templates"))
 
@@ -221,6 +225,22 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(self.read("a.txt"), "one\n")
         self.assertFalse(os.path.exists(os.path.join(self.dest, "untracked.txt")))
 
+    def test_files_marked_export_ignore_are_still_mirrored(self):
+        # git archive drops them; 300+ tracked hams_local_relay files (claims/, fuzz/, a test suite) went missing
+        write(os.path.join(self.repo, ".gitattributes"), "private.txt export-ignore\nsub/** export-ignore\n")
+        write(os.path.join(self.repo, "private.txt"), "tracked but export-ignored\n")
+        write(os.path.join(self.repo, "sub", "inner.txt"), "inner\n")
+        git(self.repo, "add", ".gitattributes", "private.txt", "sub/inner.txt")
+        git(self.repo, "commit", "-q", "-m", "export-ignore")
+        self.sync()
+        self.assertEqual(self.read("private.txt"), "tracked but export-ignored\n")
+        self.assertEqual(self.read("sub/inner.txt"), "inner\n")
+        write(os.path.join(self.repo, "sub", "inner2.txt"), "inner2\n")
+        git(self.repo, "add", "sub/inner2.txt")
+        git(self.repo, "commit", "-q", "-m", "more")
+        self.sync()
+        self.assertEqual(self.read("sub/inner2.txt"), "inner2\n")
+
     def test_secrets_symlinks_and_build_output_are_never_shipped(self):
         self.sync()
         write(os.path.join(self.repo, ".env"), "SECRET=1\n")
@@ -363,19 +383,20 @@ class EndToEndTests(unittest.TestCase):
             def join(self):
                 pass
 
-        steps = [lint_exec.Step(name=n, argv=["/usr/bin/true"]) for n in ("a", "b", "c")]
+        steps = [lint_exec.Step(name=n, argv=["/usr/bin/true"]) for n in ("a", "b", "c", "d")]
         ran_here = []
 
         def execute_here(wanted):
             ran_here.extend(s.name for s in wanted)
-            return [lint_exec.Result(s.name, 0, "", 0.1) for s in wanted]
+            return [lint_exec.Result(s.name, 1 if s.name == "d" else 0, "", 0.1) for s in wanted]
 
-        jobs = [Job("m1", "ok", ["a"]), Job("m2", "infra", ["b"], ["sync failed"]), Job("m3", "failed", ["c"], ["step failed: c"])]
+        jobs = [Job("m1", "ok", ["a"]), Job("m2", "infra", ["b"], ["sync failed"]), Job("m3", "failed", ["c", "d"], ["step failed: c", "step failed: d"])]
         results, hosts = lr.collect(jobs, steps, execute_here, lint_exec.Result, out=lambda _l: None)
-        self.assertEqual(ran_here, ["b"])
-        self.assertEqual(sorted(hosts), ["m1", "m3"])
+        # b: the machine could not work; c and d failed there and are run again here (the reference environment)
+        self.assertEqual(ran_here, ["b", "c", "d"])
+        self.assertEqual(hosts, ["m1"])
         by_name = {r.name: r.returncode for r in results}
-        self.assertEqual(by_name, {"a": 0, "b": 0, "c": 1})
+        self.assertEqual(by_name, {"a": 0, "b": 0, "c": 0, "d": 1})
 
     def test_stamp_metadata_names_the_host_and_the_gate_still_parses_it(self):
         import lint_stamp_gate
@@ -386,6 +407,37 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual((mode, count), ("changed", 2))
         self.assertEqual(names, {"flake8", "pytest"})
         self.assertNotIn("hosts=", run_linters.stamp_text("full", ["flake8"]))
+
+
+class ProvisionTests(unittest.TestCase):
+    def test_the_non_interactive_ssh_command_puts_user_level_toolchains_on_the_path(self):
+        transport = lr.SshTransport("m", {"ssh": {"target": "ai@h", "args": []}})
+        command = transport.argv("cargo --version")[-1]
+        self.assertTrue(command.startswith('export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"; '))
+        self.assertTrue(command.endswith("cargo --version"))
+
+    def test_the_rust_pin_is_read_from_the_toolchain_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, lr.TOOLCHAIN_FILES[0])
+            os.makedirs(os.path.dirname(path))
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write('[toolchain]\nchannel = "9.9.9"\n')
+            self.assertEqual(lr.rust_pin([root]), "9.9.9")
+            self.assertIsNone(lr.rust_pin([root + "/none"]))
+
+    def test_the_provision_script_plans_without_changing_anything_and_pins_every_requirement(self):
+        res = subprocess.run(["bash", lr.PROVISION_SCRIPT, "plan"], capture_output=True, text=True, timeout=120)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("apt packages to install", res.stdout)
+        self.assertIn("undo:", res.stdout)
+        bad = subprocess.run(["bash", lr.PROVISION_SCRIPT, "bogus"], capture_output=True, text=True)
+        self.assertEqual(bad.returncode, 2)
+        with open(lr.PROVISION_REQUIREMENTS, encoding="utf-8") as handle:
+            text = handle.read()
+        pins = [line for line in text.splitlines() if "==" in line and not line.startswith("#")]
+        self.assertGreaterEqual(len(pins), 10)
+        self.assertEqual(text.count("--hash=sha256:"), len(pins))
+        self.assertIn("pytest-xdist==", text)
 
 
 if __name__ == "__main__":
