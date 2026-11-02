@@ -17,7 +17,19 @@
       "nice": 19,
       "max_concurrent": 1,
       "max_load_ratio": 0.6,
-      "note": "Debian 13 arm64 Lima VM hams-test-debian on the Mac mini mac1 (Bruce's machine; the VM also runs the production FCC ULS sync): lowest priority, 3 workers, never started by the lint runner (a stopped VM is reported unreachable). Has cargo, node, chromium, flake8, odoo, rsync; pytest is installed per user by tools/lint_remote_provision.sh."
+      "note": "Debian 13 arm64 Lima VM hams-test-debian on the Mac mini mac1 (Bruce's machine; the VM also runs the production FCC ULS sync): lowest priority, 3 workers, never started by the lint runner (a stopped VM is reported unreachable). Provisioned for lint 2026-11-02 (see provisioned). Its PostgreSQL has a createdb role for the ai user (tools tests); hams_shared node_modules are installed in the mirror by the runner (npm ci).",
+      "provisioned": {
+        "date": "2026-11-02",
+        "by": "python3 tools/lint_remote.py provision mac1-vm --apply (tools/provision_build_host.sh)",
+        "versions": {
+          "os": "Debian 13 (trixie) aarch64, 10 cores, 11 GiB",
+          "rust": "rustc and cargo 1.98.1 via rustup (user level), clippy 0.1.98, rustfmt 1.9.0",
+          "node": "v20.19.2 (apt), npm 9.2.0",
+          "python": "3.13.5; pytest 9.1.1, pytest-xdist 3.8.0, pytest-timeout 2.4.0, flake8 7.1.1, mypy and httpx (apt)",
+          "browser": "Chromium 156.0.8078.73 (apt)",
+          "git": "2.47.3"
+        }
+      }
     },
     "bruce-yoga": {
       "ssh": {

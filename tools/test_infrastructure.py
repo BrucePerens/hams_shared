@@ -5390,7 +5390,12 @@ class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
         real_exists = os.path.exists
         self.safe_patch_object(
             infra.os.path, "exists",
-            side_effect=lambda p: True if p.endswith("/common.env") and env_exists else real_exists(p),
+            side_effect=lambda p: (
+                True if p.endswith("/common.env") and env_exists
+                # A provisioned host (the Odoo test VM) already has the wrappers and grants; the plan must not see them.
+                else False if p.startswith(("/usr/local/sbin/", "/etc/sudoers.d/", "/opt/hams/")) and not p.endswith("/common.env")
+                else real_exists(p)
+            ),
         )
         # Nothing exists on this machine for the planner to find, so every entry is "new".
         with infra.planning() as plan:

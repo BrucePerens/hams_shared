@@ -50,6 +50,66 @@ PRUNE_DIRS = frozenset(
 CACHE_VERSION = 1
 
 
+# pytest-xdist (a test-only dependency, tools/requirements-test.txt): a pytest step runs as
+# `pytest -n N --dist loadfile` when the step's interpreter can import xdist and the step is not
+# listed in XDIST_SERIAL. `loadfile` keeps every test file on one worker, so a module's fixtures
+# and the failure report per module stay what they were; only different files overlap. The cache
+# key of a step is computed from its declared argv, so a pass recorded serially still counts.
+# XDIST_SERIAL: step-name prefixes whose files share ports, files or global state across modules
+# (found by running them under -n; see AGENTS.md "Linters"). HAMS_LINT_XDIST=0 turns xdist off,
+# HAMS_LINT_XDIST=N forces N workers.
+XDIST_SERIAL = (
+    "pytest tools/[host-bound]",  # copies the whole tree into scratch directories and drives the real checkout
+    "pytest daemons/hams_simulated_bots",  # idle-CPU and timing tests: another worker's load would fail them
+    "pytest ingest/",  # not validated under -n yet
+    "pytest scripts/",  # not validated under -n yet
+)
+XDIST_MAX_WORKERS = 4
+_xdist_ok = {}
+_xdist_workers = [0]
+
+
+def xdist_available(interpreter):
+    """True when `interpreter` (a path) can import xdist; asked once per interpreter."""
+    if interpreter not in _xdist_ok:
+        try:
+            _xdist_ok[interpreter] = (
+                subprocess.run([interpreter, "-c", "import xdist"], capture_output=True, timeout=60).returncode == 0
+            )
+        except (OSError, subprocess.SubprocessError):
+            _xdist_ok[interpreter] = False
+    return _xdist_ok[interpreter]
+
+
+def xdist_workers_for(jobs, cores=None, environ=None):
+    """Workers per pytest step when `jobs` steps run side by side: the cores divided among them,
+    at least 2 (a single worker is a slower serial run), at most XDIST_MAX_WORKERS; 0 = off."""
+    environ = os.environ if environ is None else environ
+    forced = environ.get("HAMS_LINT_XDIST", "")
+    if forced.isdigit():
+        return 0 if int(forced) < 2 else int(forced)
+    cores = cores or os.cpu_count() or 1
+    return max(2, min(XDIST_MAX_WORKERS, cores // max(1, jobs))) if cores >= 4 else 0
+
+
+def with_xdist(step, workers):
+    """The argv to run for `step`: its own, with `-n workers --dist loadfile` after `pytest` when
+    that is allowed (see XDIST_SERIAL); otherwise unchanged."""
+    argv = step.argv
+    if (
+        workers < 2
+        or not argv
+        or len(argv) < 3
+        or argv[1:3] != ["-m", "pytest"]
+        or not step.name.startswith("pytest ")
+        or step.name.startswith(XDIST_SERIAL)
+        or any(a == "-n" or (a.startswith("-n") and a[2:].isdigit()) for a in argv[3:])
+        or not xdist_available(argv[0])
+    ):
+        return argv
+    return argv[:3] + ["-n", str(workers), "--dist", "loadfile"] + argv[3:]
+
+
 @dataclasses.dataclass
 class Step:
     """One independently runnable check.
@@ -169,7 +229,7 @@ def run_step(step, locks):
     try:
         try:
             res = subprocess.run(
-                step.argv,
+                with_xdist(step, _xdist_workers[0]),
                 capture_output=True,
                 text=True,
                 cwd=step.cwd,
@@ -359,6 +419,8 @@ def execute(steps, jobs, cache=None, fingerprints=None, out=None):
     as every earlier step has been printed. Returns the list of Results (declaration order).
     """
     out = out or sys.stdout
+    # side by side: no more steps than there are to run (one pytest step alone may use the whole machine)
+    _xdist_workers[0] = xdist_workers_for(min(jobs, max(1, sum(1 for step in steps if step.argv is not None))))
     locks = {}
     for step in steps:
         if step.lock and step.lock not in locks:

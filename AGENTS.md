@@ -251,7 +251,7 @@ shared dev box), so agents ran it scoped or not at all and new findings reached 
 now runs steps in parallel (`-j`, default half the cores; `HAMS_LINT_JOBS`), prints each step's output
 in a fixed order, and ends with a per-step timing table.
 
-* **Before every merge run `nice -n 10 python3 tools/run_linters.py --changed`** from your worktree
+* **Before every merge run `nice -n 10 python3 tools/run_linters.py --changed --remote auto`** from your worktree
   root, with the work committed. It runs only the steps whose inputs differ from `origin/main`, scoped
   to the changed modules and the modules that depend on them, and skips steps whose inputs are
   byte-identical to their last passing run. A change under `hams_shared/tools/` runs every step.
@@ -287,29 +287,72 @@ in a fixed order, and ends with a per-step timing table.
   `tools/lint_step_inventory.py compare` proves a restructuring kept every test (`docs/LINT_STEP_ANALYSIS.md`).
 * **Remote execution** (`--remote auto|HOST|local`, `--where`; `tools/lint_remote.py`,
   `tools/lint_machines.json`). The dev box is not the only machine: `--remote auto` probes the lint runners
-  in `lint_machines.json` over ssh (read-only: cores, load, which of python3, flake8, pytest, node, eslint,
-  cargo, chrome, odoo exist), sends each heavy step that a machine can run (>= 60 s; never a step that needs
-  git history, the network or this checkout: `check_summation_bias`, `check_pip_audit`,
-  `check_claims_freshness`, `check_cargo_deny`, ...) to the least-loaded capable machine, and runs the rest
-  here. `--where` prints that routing plan and runs nothing. Machines: **mac1-vm** (the Debian Lima VM on
-  mac1: cargo, node, chromium, flake8, odoo; 3 workers at nice 19, it also runs the production FCC ULS sync,
-  never started by the linter), **bruce-yoga** (Debian x86-64 build server, ssh with `-o
-  HostName=bruce-yoga.lan`, stays awake on AC; python3 and chrome only until provisioned; 4 workers).
-  Not runners, with reasons in the inventory: mac1 itself (Bruce's Mac, python 3.9), `bruce-yoga-win` and
-  `Bruce_Thinkpad` (Windows, PowerShell), and **hams1 and the router (`never`)**. `python3
-  tools/lint_remote.py probe` surveys, `... provision [HOST] [--apply]` lists (and with `--apply` does, at user
-  level, no sudo) what a machine lacks; `... provision` prints the undo. A machine holds a persistent mirror
-  `~/hams-lint-mirror/{hams_com,hams_open}` (tracked tree of HEAD via `git archive`, incremental from the
-  last synced commit, plus uncommitted regular files; never `.git`, `target/`, `node_modules`, symlinks or
-  secrets) and runs the steps through its own run lock and load gate. Output streams back as `[host] ...`.
-  The pass stamp is written locally only when every step passed (here or there) for the commit that is
-  still HEAD, with `hosts=` metadata; a machine that is unreachable, busy, lacks a tool, or whose results
-  cannot be read does not fail the run: its steps run here. The siblings (hams_open or hams_com, and
-  hams_shared) go as they are on this machine.
+  in `lint_machines.json` over ssh (read-only: cores, load, which of python3, flake8, pytest, xdist, node,
+  eslint, cargo with clippy and rustfmt, chrome, odoo exist), sends each heavy step that a machine can run
+  (>= 60 s; never a step that needs git history, the network, this checkout or this login session:
+  `check_summation_bias`, `check_pip_audit`, `check_claims_freshness`, `check_cargo_deny`, the
+  `pytest tools/[host-bound]` step ...) to the least-loaded capable machine, and runs the rest here.
+  `--where` prints that routing plan and runs nothing. Machines (versions are recorded in the inventory):
+  **bruce-yoga** (Debian x86-64 build server, 8 cores, 4 workers at nice 10; ssh with `-o
+  HostName=bruce-yoga.lan`; stays awake on AC, on battery it may suspend and shows as unreachable),
+  **mac1-vm** (the Debian arm64 Lima VM on mac1, 3 workers at nice 19; it also runs the production FCC ULS
+  sync, never started by the linter). Not runners, with reasons in the inventory: mac1 itself (Bruce's Mac,
+  python 3.9), `bruce-yoga-win` and `Bruce_Thinkpad` (Windows), and **hams1 and the router (`never`)**.
+  * **Provisioning is a script, not hand work**: `python3 tools/lint_remote.py provision HOST` prints the
+    plan, `--apply` installs what is missing (`tools/provision_build_host.sh`, run on the machine; apt
+    packages with `sudo -n`, everything else in the user's home: rustup with the toolchain pinned by the
+    repositories' `rust-toolchain.toml`, pytest/xdist/flake8 from `tools/requirements-test.txt` pinned by
+    SHA-256), `--verify` proves it can `cargo test`, run `node --test`, `pytest -n` and take a headless
+    Chrome screenshot, `--versions` prints the versions for the inventory, `--undo` removes exactly what
+    `--apply` recorded. It is idempotent. A new machine needs only an `ai` account with a key and `sudo -n`.
+  * A machine holds a persistent mirror `~/hams-lint-mirror/{hams_com,hams_open}` (the tracked tree of HEAD
+    including `export-ignore` files, incremental from the last synced commit, plus uncommitted regular files;
+    never `.git`, `target/`, symlinks or secrets; `node_modules` of hams_shared is installed there by
+    `npm ci`) and runs the steps through its own run lock and load gate. Output streams back as `[host] ...`.
+  * The pass stamp is written locally only when every step passed (here or there) for the commit that is
+    still HEAD, with `hosts=` metadata. A machine that is unreachable, busy, lacks a tool, or whose results
+    cannot be read does not fail the run: its steps run here. **A step that fails on a machine is run
+    again here** before it counts (the dev box is the reference environment; a remote failure is often a
+    package version the machine lacks), so a remote failure never stamps and never blocks a step that
+    passes here; if you see `reported failing steps ... running them here to confirm` often, the machine
+    needs provisioning (`provision HOST --verify`). The siblings (hams_open or hams_com, and hams_shared)
+    go as they are on this machine.
+* **pytest-xdist** (test-only dependency, approved by Bruce 2026-11-02, `tools/requirements-test.txt`): a
+  `pytest ...` step runs as `pytest -n N --dist loadfile` when its interpreter can import `xdist` (N = cores
+  divided by the steps running side by side, 2 to 4; a file's tests stay on one worker, so module-level state
+  and the report per module are unchanged; the pass cache is unaffected). `HAMS_LINT_XDIST=0` turns it off, `=N`
+  forces N workers. Groups that are not xdist-safe are listed in `lint_exec.XDIST_SERIAL`: `pytest tools/[host-bound]`
+  (copies the tree, drives the real checkout), `pytest daemons/hams_simulated_bots` (idle-CPU and timing tests),
+  and `pytest ingest/` and `pytest scripts/` (not validated yet). All 46 other daemon steps and the four
+  `tools` chunks passed under `-n` on mac1-vm with the same results as serial.
+
 * `--list` names the steps; `--only a,b` / `--skip a,b` select steps (a selected run never stamps);
   `-j 1` is the old sequential order; `--no-cache` ignores cached passes.
 * Never leave a finding for "someone else's PR". A finding in a file you did not touch is still a
   failure of `main`: fix it in a small PR, never with an ignore tag or a wider baseline.
+
+### How an agent runs the linters (rule of 2026-11-02)
+
+1. Commit your work, then from your worktree root run the standard command:
+   `nice -n 10 python3 tools/run_linters.py --changed --remote auto`
+   (`tools` is the `hams_shared/tools` link of your worktree). It queues behind other runs, sends heavy
+   steps to bruce-yoga or mac1-vm when they are up and idle, runs the rest here, and stamps the commit
+   when everything passed. `devbox_tools/prmerge.sh` needs that stamp.
+2. `--only a,b` is for the edit-test loop (a step you are fixing, e.g. `--only flake8,check_cargo_fmt`);
+   it never stamps. Run `--changed` once at the end, not after every edit; a repeat with unchanged inputs
+   is a cache hit (seconds).
+3. Expected duration (measured 2026-11-02 on a docs+code branch where every step was selected, because
+   `hams_shared/tools` had changed): 10 minutes of work on the dev box alone (`--remote local`), 4.7 minutes with
+   mac1-vm taking the clippy build and a pytest chunk (`--remote auto`; bruce-yoga was off the network, so
+   the figure with both machines is not measured yet), each plus the queue wait (2.5 minutes in both runs).
+   A run that selects few steps is much shorter; the timing table at the end names the long ones.
+   `--where` shows the plan in two seconds without running anything.
+4. If the queue is long (`--lock-status`; each run ahead of you takes 5 to 15 minutes): do not start a
+   second heavy run by other means, and do not use `--no-lock`. `--remote auto` already moves the heavy
+   steps off the dev box, so the queue shortens as soon as the machines are up. Spend the wait on the next
+   piece of work; `--lock-timeout S` makes the run give up (exit 75) instead of waiting.
+5. A run that is reported as failed with `[host] ...` lines: read the lines; the step was re-run here, and
+   what remains is a real finding. If a machine is down the run says so and does the work here.
 
 ## Standing Conventions & Institutional Knowledge
 Durable, project-specific conventions, standing authorizations, and architectural philosophy
