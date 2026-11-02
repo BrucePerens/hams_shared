@@ -265,6 +265,21 @@ in a fixed order, and ends with a per-step timing table.
   `--changed --list` prints the selected steps without running them.
   On a clean pass it records a stamp for the commit; `devbox_tools/prmerge.sh` refuses to merge a
   branch tip that has no stamp. A full `run_linters.py` (no options) also stamps.
+* **Heavy runs queue, one per machine** (`tools/lint_lock.py`, 2026-11-02). Ten agents running
+  `--changed` together pushed the dev box to load 55 and failed every timing test, so a run that has
+  steps to execute first takes `~/.cache/hams-lint/run.lock` (a flock fronted by the FIFO ticket queue of
+  `tools/lock_queue.py`; a dead holder or waiter is detected by pid and start time, nothing goes stale).
+  A waiting run prints `waiting for the lint run in <worktree> (pid N), position K`. Then a **load gate**
+  holds the start until the 1-minute load average is at most the number of cores (default wait 900 s, then
+  exit 75 with the reason). Runs that need neither: every step a cached pass, or uncached steps whose
+  recorded durations total at most `HAMS_LINT_CHEAP_SECONDS` (default 60; a step never measured counts as
+  heavy), so `--only check_summation_bias` never waits. Controls: `--lock-timeout S` /
+  `HAMS_LINT_LOCK_TIMEOUT` (exit 75), `--lock-status` (holder and queue), `--no-lock` /
+  `HAMS_LINT_NO_LOCK=1` (CI; no lock, no gate), `--load-limit N` / `HAMS_LINT_LOAD_LIMIT`,
+  `--load-timeout S` / `HAMS_LINT_LOAD_TIMEOUT`; the gate uses the same `HAMS_SKIP_CI_LOAD_GATE=1`,
+  `HAMS_CI_LOAD_GATE_RATIO` and `HAMS_CI_LOAD_GATE_TIMEOUT` as `test.py`'s CI load gate. Do not start a
+  second heavy run by other means (no `nohup` loops around `pgrep`): queue, and spend the wait on something
+  else. `docs/LINT_STEP_ANALYSIS.md` lists what each step costs and overlaps.
 * `--list` names the steps; `--only a,b` / `--skip a,b` select steps (a selected run never stamps);
   `-j 1` is the old sequential order; `--no-cache` ignores cached passes.
 * Never leave a finding for "someone else's PR". A finding in a file you did not touch is still a
