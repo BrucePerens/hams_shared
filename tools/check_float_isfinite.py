@@ -177,19 +177,27 @@ def check_file(path):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: check_float_isfinite.py <repo_root>")
+        print("Usage: check_float_isfinite.py <repo_root> [<repo_root> ...]")
         sys.exit(1)
 
-    repo_root = os.path.abspath(sys.argv[1])
-    if os.path.basename(repo_root) == "hams_shared":
-        repo_root = os.path.dirname(repo_root)
+    # Several roots (hams_com and hams_open) are scanned by ONE process, one step in run_linters.py.
+    roots = []
+    for given in sys.argv[1:]:
+        repo_root = os.path.abspath(given)
+        if os.path.basename(repo_root) == "hams_shared":
+            repo_root = os.path.dirname(repo_root)
+        if repo_root not in roots:
+            roots.append(repo_root)
 
     any_found = False
-    for path in find_python_files(repo_root):
-        for line_num, msg in check_file(path):
-            any_found = True
-            rel = os.path.relpath(path, repo_root)
-            print(f"❌ {rel}:{line_num}: {msg}")
+    for repo_root in roots:
+        for path in find_python_files(repo_root):
+            for line_num, msg in check_file(path):
+                any_found = True
+                rel = os.path.relpath(path, repo_root)
+                if len(roots) > 1:
+                    rel = os.path.join(os.path.basename(repo_root), rel)
+                print(f"❌ {rel}:{line_num}: {msg}")
 
     if any_found:
         sys.exit(1)

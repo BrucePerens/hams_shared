@@ -58,7 +58,20 @@ step would not have run is not counted. Ids are written relative to `--tree`, so
 
 Baseline before any change (hams_com `34f6a2487`, hams_shared `f29d5e3`): 57 steps, 7,551 test ids, 0 duplicates.
 
-## 5. Decisions needed from Bruce
+## 5. Changes made from this analysis
+
+| Change | Before | After | Proof |
+|---|---|---|---|
+| hams_local_relay root, `tests/` and `tools/` | 3 pytest processes | 1 step `pytest daemons/hams_local_relay` (old names still work with `--only`) | 138 ids = 25 + 3 + 110, run together: 138 passed in 244 s (the three separately: 392 s) |
+| Repository-pair scanners (`check_async_lock_scope`, `check_fake_network_listener`, `check_int_float_overflow`, `check_float_isfinite`, `check_window_fetch_reassignment`) | 10 steps (one per repository) | 5 steps over both repositories; the checkers take several roots | `test_run_linters_changed_selection.py`: a change in hams_com or hams_open selects each |
+| Whole-run coverage | 57 pytest steps, 7,551 ids | 55 pytest steps, 7,586 ids (+35 = the new test files of this series) | `lint_step_inventory.py compare before after --allow-new ...`: IDENTICAL, no id lost, none collected twice |
+
+The merge rule (in `run_linters.py`, daemon section): test directories of one daemon that run under the same
+interpreter and hold no two test files of the same name are one session. Different daemons are never merged
+(section 1). A merged step keeps the old step names as `Step.aliases`, which `--only` accepts, and
+`--changed` selects the merged step when any file of the daemon changes.
+
+## 6. Decisions needed from Bruce
 
 * `pytest-xdist` (or a hand-rolled file split of `relay_ca`) to shorten the longest pytest steps. Needs a pinned,
   hash-checked dependency.

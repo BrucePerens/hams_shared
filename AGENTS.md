@@ -280,6 +280,11 @@ in a fixed order, and ends with a per-step timing table.
   `HAMS_CI_LOAD_GATE_RATIO` and `HAMS_CI_LOAD_GATE_TIMEOUT` as `test.py`'s CI load gate. Do not start a
   second heavy run by other means (no `nohup` loops around `pgrep`): queue, and spend the wait on something
   else. `docs/LINT_STEP_ANALYSIS.md` lists what each step costs and overlaps.
+* Steps over several test directories are merged where that is provably safe (one daemon, one interpreter:
+  `pytest daemons/hams_local_relay`); the old step names are aliases that `--only` still accepts. The repository-pair
+  checkers (`check_async_lock_scope`, `check_fake_network_listener`, `check_int_float_overflow`,
+  `check_float_isfinite`, `check_window_fetch_reassignment`) are one step each over hams_com and hams_open.
+  `tools/lint_step_inventory.py compare` proves a restructuring kept every test (`docs/LINT_STEP_ANALYSIS.md`).
 * `--list` names the steps; `--only a,b` / `--skip a,b` select steps (a selected run never stamps);
   `-j 1` is the old sequential order; `--no-cache` ignores cached passes.
 * Never leave a finding for "someone else's PR". A finding in a file you did not touch is still a

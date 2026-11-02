@@ -91,11 +91,13 @@ def check_window_fetch_reassignment(repo_dir):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: check_window_fetch_reassignment.py <repo_dir>")
+        print("Usage: check_window_fetch_reassignment.py <repo_dir> [<repo_dir> ...]")
         sys.exit(1)
 
-    repo_dir = sys.argv[1]
-    violations = check_window_fetch_reassignment(repo_dir)
+    # Several repositories are scanned by ONE process (one step in run_linters.py).
+    violations = []
+    for repo_dir in dict.fromkeys(sys.argv[1:]):
+        violations.extend(check_window_fetch_reassignment(repo_dir))
 
     if violations:
         print("❌ window.fetch Reassignment Violations:")

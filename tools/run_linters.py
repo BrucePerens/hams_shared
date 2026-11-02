@@ -421,7 +421,11 @@ def _filter_by_name(steps, only, skip):
     dropped = [n.strip() for n in skip.split(",") if n.strip()]
 
     def matches(step, names):
-        return any(step.name == n or step.name.startswith(n + "[") or step.name.startswith(n) for n in names)
+        # `aliases`: the names a merged step had before the merge (`--only "pytest daemons/x/tools"`).
+        return any(
+            step.name == n or step.name.startswith(n + "[") or step.name.startswith(n) or n in step.aliases
+            for n in names
+        )
 
     if wanted:
         steps = [s for s in steps if matches(s, wanted)]
@@ -1385,30 +1389,67 @@ def main():
                 return python_exec
             current = os.path.dirname(current)
 
+    # Test directories of ONE daemon that run under the same interpreter are one pytest session
+    # (hams_local_relay: its root, tests/ and tools/ were three processes; 25 + 3 + 110 = 138 tests,
+    # the same 138 in one session). A daemon's directories under different interpreters
+    # (hams_simulated_bots/tests and fine_tuning/tests have separate .venv) stay separate, and so do
+    # directories that hold two test files of the same name (pytest would refuse to import both).
+    # Different daemons are never merged: each has its own bare `main` module.
+    # docs/LINT_STEP_ANALYSIS.md has the evidence.
+    loose_daemon_files = tuple(
+        os.path.join(daemons_root, name)
+        for name in sorted(os.listdir(daemons_root))
+        if os.path.isfile(os.path.join(daemons_root, name))
+    ) if os.path.isdir(daemons_root) else ()
+    daemon_groups = {}
     for test_dir in daemon_test_dirs:
-        files_here = sorted(f for f in daemon_test_files if os.path.dirname(f) == test_dir)
-        # A test_dir one level below its daemon (tools/, tests/) imports its
-        # daemon's own main module by bare name (e.g. hams_simulated_bots/
-        # tests/test_main.py's `from main import ...`) -- that only
-        # resolves with the daemon's own directory on the path too, not
-        # just daemons_root.
-        this_env = dict(daemon_env)
-        this_env["PYTHONPATH"] = os.path.dirname(test_dir) + os.pathsep + this_env["PYTHONPATH"]
         rel_dir = os.path.relpath(test_dir, daemons_root)
         daemon_dir = os.path.join(daemons_root, rel_dir.split(os.sep)[0])
-        loose_daemon_files = tuple(
-            os.path.join(daemons_root, name)
-            for name in sorted(os.listdir(daemons_root))
-            if os.path.isfile(os.path.join(daemons_root, name))
-        )
-        _add(
-            f"pytest {os.path.relpath(test_dir, dir_path)}",
-            [_venv_python_for(test_dir), "-m", "pytest", "-q"] + files_here,
-            cwd=test_dir,
-            env=this_env,
-            fail_header=f"❌ {os.path.relpath(test_dir, dir_path)} unit test failures:",
-            inputs=((os.path.realpath(daemon_dir),) + loose_daemon_files, None),
-        )
+        daemon_groups.setdefault((daemon_dir, _venv_python_for(test_dir)), []).append(test_dir)
+
+    def _group_dirs(dirs):
+        """Split one daemon+interpreter group into the sets that may share a session."""
+        if len(dirs) < 2:
+            return [[d] for d in dirs]
+        names = [
+            os.path.basename(f)
+            for d in dirs
+            for f in daemon_test_files
+            if os.path.dirname(f) == d
+        ]
+        if len(set(names)) != len(names):
+            return [[d] for d in dirs]
+        return [dirs]
+
+    for (daemon_dir, interpreter), dirs_of_daemon in daemon_groups.items():
+        for dirs in _group_dirs(dirs_of_daemon):
+            merged = len(dirs) > 1
+            files_here = sorted(f for f in daemon_test_files if os.path.dirname(f) in dirs)
+            # A test_dir one level below its daemon (tools/, tests/) imports its
+            # daemon's own main module by bare name (e.g. hams_simulated_bots/
+            # tests/test_main.py's `from main import ...`) -- that only
+            # resolves with the daemon's own directory on the path too, not
+            # just daemons_root.
+            this_env = dict(daemon_env)
+            if merged:
+                run_dir = daemon_dir
+                this_env["PYTHONPATH"] = daemon_dir + os.pathsep + this_env["PYTHONPATH"]
+                step_name = f"pytest {os.path.relpath(daemon_dir, dir_path)}"
+                aliases = tuple(f"pytest {os.path.relpath(d, dir_path)}" for d in sorted(dirs))
+            else:
+                run_dir = dirs[0]
+                this_env["PYTHONPATH"] = os.path.dirname(run_dir) + os.pathsep + this_env["PYTHONPATH"]
+                step_name = f"pytest {os.path.relpath(run_dir, dir_path)}"
+                aliases = ()
+            _add(
+                step_name,
+                [interpreter, "-m", "pytest", "-q"] + files_here,
+                cwd=run_dir,
+                env=this_env,
+                fail_header=f"❌ {step_name[len('pytest '):]} unit test failures:",
+                inputs=((os.path.realpath(daemon_dir),) + loose_daemon_files, None),
+                aliases=aliases,
+            )
 
     # 30. check_access_csv_group_order -- catches the exact bug class that
     # silently broke the ENTIRE test suite tonight (not just one module's
@@ -1657,6 +1698,8 @@ def main():
     ],
     )
 
+    _pair_roots = [dir_path] + ([sibling_dir] if sibling_dir else [])
+
     # 45. check_window_fetch_reassignment -- direct `window.fetch = ...`/
     # `window['fetch'] = ...` reassignment in a *.test.js file throws under
     # the real @odoo/hoot test harness (hoot's mocked window makes
@@ -1666,12 +1709,13 @@ def main():
     # this one checks the suite itself doesn't use a pattern that throws
     # before any assertion runs. Takes a single repo_dir argument, so run
     # once per repo rather than once for both like step 44.
-    for _repo in (dir_path, sibling_dir):
-        _add(
-            f"check_window_fetch_reassignment[{os.path.basename(_repo)}]",
-            [python_exec, os.path.join(dir_path, "tools", "check_window_fetch_reassignment.py"), _repo],
-            print_ok=False,
-        )
+    # One process scans both repositories (was one step per repository: two interpreters, two
+    # tree walks; docs/LINT_STEP_ANALYSIS.md).
+    _add(
+        "check_window_fetch_reassignment",
+        [python_exec, os.path.join(dir_path, "tools", "check_window_fetch_reassignment.py"), *_pair_roots],
+        print_ok=False,
+    )
 
     # 46. check_js_test_hook_gating -- ADR 0094: a client-shipped JS file's TEST_*-prefixed
     # postMessage/event branches must be gated behind a real, server-substituted
@@ -1699,12 +1743,13 @@ def main():
     # tokio's own async-aware ones. This gate walks every .rs file in both repos looking for
     # exactly that shape. Same two-repo sweep as step 45 -- daemons live under hams_com, but
     # ham_digital_modes (a real Rust crate) lives under hams_open.
-    for _repo in (dir_path, sibling_dir):
-        _add(
-            f"check_async_lock_scope[{os.path.basename(_repo)}]",
-            [python_exec, os.path.join(dir_path, "tools", "check_async_lock_scope.py"), _repo],
-            print_ok=False,
-        )
+    # One process scans both repositories (was one step per repository: two interpreters, two
+    # tree walks; docs/LINT_STEP_ANALYSIS.md).
+    _add(
+        "check_async_lock_scope",
+        [python_exec, os.path.join(dir_path, "tools", "check_async_lock_scope.py"), *_pair_roots],
+        print_ok=False,
+    )
 
     # 48. check_fake_network_listener -- born the same night as step 47, from the same
     # real-network-integration-test work that found hams_relay_bridge and dx_firehose had zero
@@ -1715,12 +1760,13 @@ def main():
     # regression toward the old anti-pattern -- a hand-rolled Fake/Mock/Dummy/Stub type named
     # for a network primitive (Socket/Listener/Stream/Connection/WebSocket/Channel/Transport)
     # in a file with no real bound listener anywhere in it. Same two-repo sweep as step 47.
-    for _repo in (dir_path, sibling_dir):
-        _add(
-            f"check_fake_network_listener[{os.path.basename(_repo)}]",
-            [python_exec, os.path.join(dir_path, "tools", "check_fake_network_listener.py"), _repo],
-            print_ok=False,
-        )
+    # One process scans both repositories (was one step per repository: two interpreters, two
+    # tree walks; docs/LINT_STEP_ANALYSIS.md).
+    _add(
+        "check_fake_network_listener",
+        [python_exec, os.path.join(dir_path, "tools", "check_fake_network_listener.py"), *_pair_roots],
+        print_ok=False,
+    )
 
     # 49. check_int_float_overflow -- born 2026-09-11 from a real bug found by adversarial
     # review in sota_sync.process_sota_csv()'s own _int() helper: int(float(val)) wrapped in
@@ -1732,12 +1778,13 @@ def main():
     # whole sync cycle. This gate walks every .py file in both repos for int(<expr containing
     # a float(...) call>) not guarded by a try/except that would catch OverflowError. Same
     # two-repo sweep as steps 47/48.
-    for _repo in (dir_path, sibling_dir):
-        _add(
-            f"check_int_float_overflow[{os.path.basename(_repo)}]",
-            [python_exec, os.path.join(dir_path, "tools", "check_int_float_overflow.py"), _repo],
-            print_ok=False,
-        )
+    # One process scans both repositories (was one step per repository: two interpreters, two
+    # tree walks; docs/LINT_STEP_ANALYSIS.md).
+    _add(
+        "check_int_float_overflow",
+        [python_exec, os.path.join(dir_path, "tools", "check_int_float_overflow.py"), *_pair_roots],
+        print_ok=False,
+    )
 
     # 50. check_float_isfinite -- born 2026-09-11/12 from a single night's bug-hunt sweep that
     # found and fixed roughly fifteen separate real instances of the same bug class: float(x)
@@ -1747,12 +1794,13 @@ def main():
     # ValueError with no math.isfinite() call anywhere in the enclosing function. Same two-repo
     # sweep as steps 47/48/49; validated silent on every site fixed that night after adding
     # float-isfinite-ignore escape hatches to the confirmed-safe remainder.
-    for _repo in (dir_path, sibling_dir):
-        _add(
-            f"check_float_isfinite[{os.path.basename(_repo)}]",
-            [python_exec, os.path.join(dir_path, "tools", "check_float_isfinite.py"), _repo],
-            print_ok=False,
-        )
+    # One process scans both repositories (was one step per repository: two interpreters, two
+    # tree walks; docs/LINT_STEP_ANALYSIS.md).
+    _add(
+        "check_float_isfinite",
+        [python_exec, os.path.join(dir_path, "tools", "check_float_isfinite.py"), *_pair_roots],
+        print_ok=False,
+    )
 
     # 51. check_res_config_settings_access -- ADR-0096, born from the real
     # night_shift_todo.md "saving ANY Settings page can crash with an

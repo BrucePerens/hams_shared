@@ -66,6 +66,7 @@ class Step:
     uses_tools  the checker script's own code is an input (always true in practice).
     cacheable   False for steps that read the network or the toolchain's state.
     always      run in `--changed` mode regardless of which files changed.
+    aliases     names this step answered to before steps were merged; `--only` accepts them.
     gated       a step with no argv (`static_output`, always a failure) that `--changed` runs only
                 when one of its inputs changed, instead of always: a missing toolchain fails the
                 step only when there is something for it to check.
@@ -85,6 +86,7 @@ class Step:
     cacheable: bool = True
     always: bool = False
     gated: bool = False
+    aliases: tuple = ()
 
 
 @dataclasses.dataclass
