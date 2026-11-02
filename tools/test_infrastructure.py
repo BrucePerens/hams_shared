@@ -526,12 +526,6 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
     def _start_shipped_pdns(self):
         """A real pdns_server with exactly the shipped config and the exact shipped Lua script
         (only the file paths and the port differ). Returns the UDP/TCP port."""
-        sockets = []
-        for _ in range(2):
-            s = socket.socket(); s.bind(("127.0.0.1", 0)); sockets.append(s)
-        dns_port, web_port = (s.getsockname()[1] for s in sockets)
-        for s in sockets:
-            s.close()
         main_db = os.path.join(self.tmp, "main.sqlite3")
         callbook_db = os.path.join(self.tmp, "callbook.sqlite3")
         self._make_db(main_db, "u.example.org", [
@@ -558,23 +552,58 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
             fh.write(config)
         sockdir = tempfile.mkdtemp(prefix="pdp")  # a UNIX socket path must be short
         self.addCleanup(lambda: shutil.rmtree(sockdir, ignore_errors=True))
-        log = open(os.path.join(self.tmp, "pdns.log"), "w")
-        proc = subprocess.Popen(
-            ["pdns_server", "--guardian=no", "--daemon=no", "--disable-syslog", "--write-pid=no",
-             f"--config-dir={config_dir}", "--config-name=shipped", f"--socket-dir={sockdir}",
-             "--local-address=127.0.0.1", f"--local-port={dns_port}", f"--webserver-port={web_port}"],
-            stdout=log, stderr=subprocess.STDOUT)
-        self.addCleanup(lambda: (proc.terminate(), proc.wait(10), log.close()))
-        deadline = time.time() + 15
-        while True:
-            try:
-                self._udp(dns_port, self._packet("alias.u.example.org", self.TYPE_TXT))
-                return dns_port
-            except OSError:
-                if time.time() > deadline or proc.poll() is not None:
-                    log.flush()
-                    self.fail("pdns_server did not start: " + open(os.path.join(self.tmp, "pdns.log")).read()[-800:])
+        # pdns binds the port on UDP and on TCP, and the port is chosen here before pdns starts, so a parallel
+        # test step can take it in between ("Unable to bind UDP socket ... Address already in use"). Reserve the
+        # port on both protocols, and when pdns still reports the address in use, choose new ports and start again.
+        for attempt in range(5):
+            dns_port, web_port = self._free_dns_and_web_ports()
+            log = open(os.path.join(self.tmp, "pdns.log"), "w")
+            proc = subprocess.Popen(
+                ["pdns_server", "--guardian=no", "--daemon=no", "--disable-syslog", "--write-pid=no",
+                 f"--config-dir={config_dir}", "--config-name=shipped", f"--socket-dir={sockdir}",
+                 "--local-address=127.0.0.1", f"--local-port={dns_port}", f"--webserver-port={web_port}"],
+                stdout=log, stderr=subprocess.STDOUT)
+            self.addCleanup(lambda proc=proc, log=log: (proc.terminate(), proc.wait(10), log.close()))
+            deadline = time.time() + 15
+            while True:
+                try:
+                    self._udp(dns_port, self._packet("alias.u.example.org", self.TYPE_TXT))
+                    return dns_port
+                except OSError:
+                    pass
+                if proc.poll() is not None or time.time() > deadline:
+                    break
                 time.sleep(0.2)
+            log.flush()
+            with open(os.path.join(self.tmp, "pdns.log")) as fh:
+                tail = fh.read()[-800:]
+            if proc.poll() is not None and "Address already in use" in tail and attempt < 4:
+                continue
+            self.fail("pdns_server did not start: " + tail)
+
+    @staticmethod
+    def _free_dns_and_web_ports():
+        """A port that is free on both UDP and TCP (DNS uses both) and a free TCP port for the web server."""
+        held = []
+        try:
+            while True:
+                udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                held.append(udp)
+                udp.bind(("127.0.0.1", 0))
+                port = udp.getsockname()[1]
+                tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                held.append(tcp)
+                try:
+                    tcp.bind(("127.0.0.1", port))
+                except OSError:
+                    continue
+                web = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                held.append(web)
+                web.bind(("127.0.0.1", 0))
+                return port, web.getsockname()[1]
+        finally:
+            for s in held:
+                s.close()
 
     def _skip_without_pdns(self):
         if not shutil.which("pdns_server") or not os.path.exists(self.SCHEMA):
