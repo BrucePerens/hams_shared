@@ -10,6 +10,7 @@ of the repository, including child-directory detection and anti-symlink rules.
 
 import argparse
 import glob
+import json
 import os
 import sys
 import subprocess
@@ -257,6 +258,12 @@ def _parse_args(argv):
     )
     parser.add_argument("--skip", default="", help="comma-separated step names to leave out")
     parser.add_argument("--list", dest="list_steps", action="store_true", help="print step names")
+    parser.add_argument(
+        "--list-json",
+        dest="list_json",
+        action="store_true",
+        help="print every step as JSON (name, argv, cwd, lock, roots, suffixes) for tools/lint_step_inventory.py",
+    )
     parser.add_argument(
         "--changed",
         nargs="?",
@@ -1820,6 +1827,9 @@ def main():
             )
             if skipped:
                 print("   skipped: " + ", ".join(step.name for step, _reason in skipped))
+    if options.list_json:
+        print(json.dumps([lint_exec.step_to_dict(step) for step in steps], indent=1))
+        sys.exit(0)
     if options.list_steps:
         for step in steps:
             print(step.name)
