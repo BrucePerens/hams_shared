@@ -153,6 +153,13 @@ class SelectionFixture(unittest.TestCase):
         _write(os.path.join(cls.open_repo, "daemons", "bench", "README.md"), "bench\n")
         _write(os.path.join(cls.open_repo, "daemons", "bench", "logo.png"), "png\n")
         _write(os.path.join(cls.open_repo, "scripts_top", "run.sh"), "#!/bin/sh\n")
+        # Daemon test directories: pm = root + tests/ + tools/ of one daemon (merged into one session),
+        # pc = a root and a tests/ that both hold test_main.py (cannot share a session), solo = one dir.
+        for relative in (
+            "pm/test_main.py", "pm/tests/test_x.py", "pm/tools/test_y.py", "pm/tools/helper.py",
+            "pc/test_main.py", "pc/tests/test_main.py", "solo/tests/test_s.py", "test_loose.py",
+        ):
+            _write(os.path.join(cls.open_repo, "daemons", relative), "def test_t():\n    pass\n")
         _commit_all(cls.open_repo)
 
         os.makedirs(cls.com_repo)
@@ -195,6 +202,73 @@ class SelectionFixture(unittest.TestCase):
         return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+class MergedDaemonStepTests(SelectionFixture):
+    """Test directories of one daemon share one pytest step; nothing else does."""
+
+    def steps_json(self):
+        result = self.run_script("--list-json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        import json
+
+        return {step["name"]: step for step in json.loads(result.stdout)}
+
+    def test_directories_of_one_daemon_are_one_step_with_every_file(self):
+        steps = self.steps_json()
+        merged = steps["pytest daemons/pm"]
+        files = sorted(os.path.relpath(a, self.open_repo) for a in merged["argv"] if a.endswith(".py"))
+        self.assertEqual(
+            files,
+            sorted(os.path.join("daemons", "pm", p) for p in ("test_main.py", "tests/test_x.py", "tools/test_y.py")),
+        )
+        self.assertEqual(os.path.basename(merged["cwd"]), "pm")
+        self.assertNotIn("pytest daemons/pm/tests", steps)
+        self.assertNotIn("pytest daemons/pm/tools", steps)
+
+    def test_same_named_test_files_and_lone_directories_stay_separate_steps(self):
+        steps = self.steps_json()
+        self.assertIn("pytest daemons/pc", steps)
+        self.assertIn("pytest daemons/pc/tests", steps)
+        self.assertIn("pytest daemons/solo/tests", steps)
+        self.assertIn("pytest daemons", steps)  # the loose daemons/test_*.py files
+
+    def test_every_test_file_is_in_exactly_one_step(self):
+        steps = self.steps_json()
+        seen = {}
+        for name, step in steps.items():
+            if name.startswith("pytest daemons"):
+                for arg in step["argv"]:
+                    if arg.endswith(".py") and os.sep + "test_" in arg:
+                        seen.setdefault(arg, []).append(name)
+        expected = {
+            os.path.join(self.open_repo, "daemons", p)
+            for p in (
+                "pm/test_main.py", "pm/tests/test_x.py", "pm/tools/test_y.py", "pc/test_main.py",
+                "pc/tests/test_main.py", "solo/tests/test_s.py", "test_loose.py",
+            )
+        }
+        self.assertEqual(set(seen), expected)
+        self.assertTrue(all(len(v) == 1 for v in seen.values()), seen)
+
+    def test_old_step_names_still_select_the_merged_step_with_only(self):
+        for old in ("pytest daemons/pm/tools", "pytest daemons/pm/tests", "pytest daemons/pm"):
+            result = self.run_script("--only", old, "--list")
+            self.assertEqual(result.stdout.split("\n")[0], "pytest daemons/pm", old + ": " + result.stdout)
+
+    def test_a_change_in_any_directory_of_the_daemon_selects_its_merged_step(self):
+        # One changed file per test run: `selected` leaves its edits in the tree until setUp resets it.
+        for relative in ("pm/test_main.py", "pm/tests/test_x.py", "pm/tools/test_y.py", "pm/tools/helper.py"):
+            self.setUp()
+            chosen = self.selected((f"hams_open/daemons/{relative}", "VALUE = 3\n"))
+            self.assertIn("pytest daemons/pm", chosen, relative)
+            self.assertNotIn("pytest daemons/solo/tests", chosen, relative)
+            self.assertNotIn("pytest daemons/pc", chosen, relative)
+
+    def test_a_change_in_another_daemon_does_not_select_the_merged_step(self):
+        chosen = self.selected(("hams_open/daemons/solo/tests/test_s.py", "VALUE = 3\n"))
+        self.assertIn("pytest daemons/solo/tests", chosen)
+        self.assertNotIn("pytest daemons/pm", chosen)
+
+
 def _base(name):
     return name.split("[")[0]
 
@@ -230,9 +304,9 @@ class DaemonChangeSelectionTests(SelectionFixture):
             "check_init_imports",
             "check_untyped_utility_files",
             "check_function_test_anchors",
-            "check_int_float_overflow[hams_open]",
-            "check_float_isfinite[hams_open]",
-            "check_fake_network_listener[hams_open]",
+            "check_int_float_overflow",
+            "check_float_isfinite",
+            "check_fake_network_listener",
             "check_summation_bias",
             "check_dependency_cycles",
             "check_model_extension_collisions",
@@ -242,7 +316,11 @@ class DaemonChangeSelectionTests(SelectionFixture):
         unexpected = {
             name
             for name in left_out
-            if name not in STEPS_THAT_CANNOT_READ_PYTHON and not name.startswith("pre_flight_check")
+            if name not in STEPS_THAT_CANNOT_READ_PYTHON
+            and not name.startswith("pre_flight_check")
+            # Another daemon's own pytest step is not affected by a change in this daemon's Python
+            # (MergedDaemonStepTests pins which daemon's step each file selects).
+            and not name.startswith("pytest daemons")
         }
         self.assertEqual(
             unexpected,
@@ -250,6 +328,25 @@ class DaemonChangeSelectionTests(SelectionFixture):
             "steps skipped for a daemons/ Python change that are not on the list of checkers "
             "that cannot read Python",
         )
+
+    def test_the_repository_pair_scanners_are_one_step_that_a_change_in_either_repository_selects(self):
+        """check_int_float_overflow, check_float_isfinite, check_fake_network_listener,
+        check_async_lock_scope and check_window_fetch_reassignment were one step per repository;
+        they are one step over both, so a change in hams_com OR hams_open must still select each."""
+        combined = {
+            "check_int_float_overflow": "daemons/bench/tools/helper.py",
+            "check_float_isfinite": "daemons/bench/tools/helper.py",
+            "check_fake_network_listener": "daemons/bench/tools/helper.py",
+            "check_async_lock_scope": "daemons/bench/src/main.rs",
+            "check_window_fetch_reassignment": "daemons/bench/tools/x.test.js",
+        }
+        names = self.all_steps()
+        for step in combined:
+            self.assertEqual([n for n in names if _base(n) == step], [step], f"{step} must be exactly one step")
+        for repo in ("hams_open", "hams_com"):
+            for step, relative in combined.items():
+                chosen = self.selected((f"{repo}/{relative}", "VALUE = 2\n"))
+                self.assertIn(step, chosen, f"{step} did not run for a change in {repo}/{relative}")
 
     def test_the_pass_does_not_need_the_cargo_checkers_for_a_python_only_change(self):
         chosen = {_base(n) for n in self.selected(("hams_open/daemons/bench/tools/helper.py", "VALUE = 2\n"))}

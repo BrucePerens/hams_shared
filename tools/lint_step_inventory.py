@@ -34,7 +34,15 @@ def is_pytest_step(step):
     return "pytest" in argv
 
 
-def _collect_one(step, tree):
+def _label(absolute, mappings):
+    """Test id path with the first matching `prefix=label` mapping applied (longest prefix first)."""
+    for prefix, label in sorted(mappings, key=lambda m: -len(m[0])):
+        if absolute.startswith(prefix):
+            return (label + os.sep if label else "") + absolute[len(prefix) :]
+    return absolute
+
+
+def _collect_one(step, tree, extra_maps=()):
     argv = list(step["argv"])
     index = argv.index("pytest")
     cwd = step.get("cwd") or os.getcwd()
@@ -44,15 +52,14 @@ def _collect_one(step, tree):
     env.update(step.get("env_delta") or {})
     res = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True)
     ids = []
-    real_tree = os.path.realpath(tree) + os.sep
+    mappings = [(os.path.realpath(tree) + os.sep, "")] + [
+        (os.path.realpath(prefix) + os.sep, label) for prefix, label in extra_maps
+    ]
     for line in res.stdout.splitlines():
         if "::" not in line or line.startswith((" ", "=")):
             continue
         path, _, rest = line.partition("::")
-        absolute = os.path.realpath(os.path.join(cwd, path))
-        if absolute.startswith(real_tree):
-            absolute = absolute[len(real_tree) :]
-        ids.append(f"{absolute}::{rest}")
+        ids.append(f"{_label(os.path.realpath(os.path.join(cwd, path)), mappings)}::{rest}")
     summary = res.stdout.strip().splitlines()[-1] if res.stdout.strip() else ""
     return step["name"], sorted(ids), res.returncode, summary, res.stderr[-400:]
 
@@ -63,7 +70,8 @@ def cmd_collect(args):
     out = {}
     failed = []
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        for name, ids, code, summary, err in pool.map(lambda s: _collect_one(s, args.tree), steps):
+        maps = [tuple(m.split("=", 1)) for m in args.map]
+        for name, ids, code, summary, err in pool.map(lambda s: _collect_one(s, args.tree, maps), steps):
             out[name] = ids
             # pytest exit 5 = nothing collected, 0 = ok; anything else means a collection error.
             if code not in (0, 5):
@@ -99,15 +107,18 @@ def cmd_duplicates(args):
     return 1 if dup else 0
 
 
-def compare(before, after):
+def compare(before, after, allow_new=()):
     """(problems, before_count, after_count): empty problems when the sets are identical and no
-    id is collected twice in `after`."""
+    id is collected twice in `after`. `allow_new`: substrings; a new id containing one is a test
+    the change itself added (reported on the summary line, not as a problem). Lost tests are never
+    allowed."""
     left, right = set(_union(before)), set(_union(after))
     problems = []
     for test_id in sorted(left - right):
         problems.append(f"LOST after the change: {test_id}")
     for test_id in sorted(right - left):
-        problems.append(f"NEW after the change: {test_id}")
+        if not any(part in test_id for part in allow_new):
+            problems.append(f"NEW after the change: {test_id}")
     for test_id, names in sorted(duplicates_of(after).items()):
         problems.append(f"DUPLICATE in after ({', '.join(names)}): {test_id}")
     return problems, len(left), len(right)
@@ -118,7 +129,7 @@ def cmd_compare(args):
         before = json.load(handle)
     with open(args.after, encoding="utf-8") as handle:
         after = json.load(handle)
-    problems, left, right = compare(before, after)
+    problems, left, right = compare(before, after, args.allow_new)
     for line in problems:
         print(line)
     print(f"before: {left} tests in {len(before)} steps; after: {right} tests in {len(after)} steps")
@@ -152,6 +163,13 @@ def main(argv=None):
     collect.add_argument("out")
     collect.add_argument("--tree", default=os.getcwd())
     collect.add_argument("--jobs", type=int, default=2)
+    collect.add_argument(
+        "--map",
+        action="append",
+        default=[],
+        metavar="DIR=LABEL",
+        help="write test files below DIR as LABEL/... (hams_shared's tools live outside --tree and differ per worktree)",
+    )
     collect.set_defaults(func=cmd_collect)
     dup = sub.add_parser("duplicates")
     dup.add_argument("collected")
@@ -159,6 +177,13 @@ def main(argv=None):
     cmp_ = sub.add_parser("compare")
     cmp_.add_argument("before")
     cmp_.add_argument("after")
+    cmp_.add_argument(
+        "--allow-new",
+        action="append",
+        default=[],
+        metavar="SUBSTR",
+        help="a new test id containing SUBSTR is one the change added (a test file of the change); never applies to lost tests",
+    )
     cmp_.set_defaults(func=cmd_compare)
     table = sub.add_parser("table")
     table.add_argument("steps")

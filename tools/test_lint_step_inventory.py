@@ -29,6 +29,12 @@ class CompareTests(unittest.TestCase):
         problems, _, _ = inv.compare({"x": ["t::a"]}, {"x": ["t::a", "t::b"]})
         self.assertEqual(problems, ["NEW after the change: t::b"])
 
+    def test_allow_new_accepts_only_the_changes_own_tests_and_never_a_lost_one(self):
+        problems, _, _ = inv.compare({"x": ["t::a"]}, {"x": ["t::a", "new_test.py::b"]}, allow_new=["new_test.py"])
+        self.assertEqual(problems, [])
+        problems, _, _ = inv.compare({"x": ["new_test.py::a"]}, {"x": []}, allow_new=["new_test.py"])
+        self.assertEqual(problems, ["LOST after the change: new_test.py::a"])
+
     def test_duplicate_in_after_is_reported(self):
         problems, _, _ = inv.compare({"x": ["t::a"]}, {"x": ["t::a"], "y": ["t::a"]})
         self.assertEqual(len(problems), 1)
@@ -55,6 +61,15 @@ class CollectTests(unittest.TestCase):
         self.assertEqual(name, "pytest d")
         self.assertEqual(code, 0)
         self.assertEqual(ids, ["d/test_x.py::test_a", "d/test_x.py::test_b"])
+
+    def test_map_labels_files_outside_the_tree(self):
+        with tempfile.TemporaryDirectory() as tree, tempfile.TemporaryDirectory() as shared:
+            with open(os.path.join(shared, "test_y.py"), "w", encoding="utf-8") as handle:
+                handle.write("def test_a():\n    pass\n")
+            step = {"name": "pytest tools", "argv": [sys.executable, "-m", "pytest", "-q", os.path.join(shared, "test_y.py")],
+                    "cwd": shared, "env_delta": {}}
+            _name, ids, _code, _summary, _err = inv._collect_one(step, tree, [(shared, "hams_shared")])
+        self.assertEqual(ids, ["hams_shared/test_y.py::test_a"])
 
     def test_non_pytest_step_is_not_collected(self):
         self.assertFalse(inv.is_pytest_step({"argv": ["/usr/bin/python3", "tools/check_x.py"]}))
