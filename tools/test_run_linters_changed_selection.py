@@ -95,7 +95,10 @@ class SelectionFixture(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # mkdtemp honours TMPDIR. The workspace is removed by a class cleanup registered at once,
+        # so a failure in the rest of setUpClass (which skips tearDownClass) still removes it.
         cls.ws = tempfile.mkdtemp(prefix="lint-selection-")
+        cls.addClassCleanup(shutil.rmtree, cls.ws, True)
         cls.open_repo = os.path.join(cls.ws, "hams_open")
         cls.com_repo = os.path.join(cls.ws, "hams_com")
         cls.shared = os.path.join(cls.open_repo, "hams_shared")
@@ -104,7 +107,11 @@ class SelectionFixture(unittest.TestCase):
         shutil.copytree(
             HERE,
             os.path.join(cls.shared, "tools"),
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
+            # Only the scripts and their data are read; build output (the Rust scanner's cargo
+            # `target` is tens of MB) and dependency trees are not, so they are not copied.
+            ignore=shutil.ignore_patterns(
+                "__pycache__", "*.pyc", ".pytest_cache", "target", "node_modules", ".mypy_cache", ".ruff_cache",
+            ),
         )
         for name in ("eslint.config.js", "tsconfig.json", "package.json"):
             shutil.copy(os.path.join(SHARED, name), os.path.join(cls.shared, name))
@@ -153,10 +160,6 @@ class SelectionFixture(unittest.TestCase):
         _write(os.path.join(cls.com_repo, "ham_x", "__manifest__.py"), _manifest(["zero_sudo"]))
         _write(os.path.join(cls.com_repo, "ham_x", "__init__.py"))
         _commit_all(cls.com_repo)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.ws, ignore_errors=True)
 
     def setUp(self):
         for repo in (self.open_repo, self.com_repo, self.shared):
