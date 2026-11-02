@@ -280,8 +280,14 @@ class Plan:
     skipped_hosts: dict  # host -> reason
 
 
+# Steps that are fast only when their build output is warm. A fresh worktree has none (check_cargo_clippy took
+# 783 s in one on 2026-11-02, against a recorded median of seconds); a machine's mirror keeps its target/ directories
+# from run to run, so these are routed as if they were heavy.
+COLD_COST_SECONDS = {"check_cargo_clippy": 600.0, "check_cargo_fmt": 0.0}
+
+
 def _est(name, durations):
-    return durations.get(name, UNKNOWN_SECONDS)
+    return max(durations.get(name, UNKNOWN_SECONDS), COLD_COST_SECONDS.get(name.split("[")[0], 0.0))
 
 
 def make_plan(step_names, static_names, durations, inventory, probes, mode, local_cores, local_load):
@@ -331,11 +337,15 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
         ]
         if mode != "auto" and not options and step not in static_names and "local" not in need:
             notes.append(f"{step}: {mode} lacks {', '.join(sorted(need - (candidates[mode][0].caps if mode in candidates else set())))}: runs here")
+        # A step is one process: it finishes when the work queued ahead of it (spread over the workers) is done, plus its own length.
         best = LOCAL
-        best_finish = finish[LOCAL] + seconds / jobs_of[LOCAL]
+        best_finish = finish[LOCAL] + seconds
         for name in options:
-            if finish[name] + seconds / jobs_of[name] < best_finish or mode != "auto":
-                best, best_finish = name, finish[name] + seconds / jobs_of[name]
+            candidate = finish[name] + seconds
+            # The point is to keep the shared dev box free: a capable machine takes a heavy step unless it would
+            # finish it more than one step-length (at most twice as slow) later than the dev box.
+            if candidate <= best_finish + seconds or mode != "auto":
+                best, best_finish = name, candidate
         assigned[best].append(step)
         finish[best] += seconds / jobs_of[best]
     remote = {name: sorted(names, key=step_names.index) for name, names in assigned.items() if name != LOCAL and names}

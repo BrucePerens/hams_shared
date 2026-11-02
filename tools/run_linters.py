@@ -2047,6 +2047,7 @@ def main():
                 sys.exit(0)
             pending = [name for name in pending if name in {s.name for s in steps}]
     # Heavy runs queue one at a time per machine, then wait for the load to fall (lint_lock.py).
+    lock_wait_started = time.monotonic()
     run_ok, run_lock = lint_lock.begin_heavy_run(
         os.environ,
         pending,
@@ -2059,6 +2060,7 @@ def main():
     )
     if not run_ok:
         sys.exit(lint_lock.EXIT_TEMPFAIL)
+    lock_waited = time.monotonic() - lock_wait_started
     if run_lock:
         import atexit
 
@@ -2075,6 +2077,8 @@ def main():
     linters_failed = any(r.returncode != 0 for r in results)
     if options.timing or options.timing_top:
         table = lint_exec.timing_table(results, skipped, wall, top=options.timing_top or None)
+        if lock_waited >= 1:
+            table += f"\n(the wall clock includes {lock_waited:.0f} s of waiting for the lint run lock and the load gate)"
         print("\n" + table, file=sys.stderr if options.timing_to_stderr else sys.stdout)
 
     if not linters_failed and not (options.only or options.skip or target_modules_str):

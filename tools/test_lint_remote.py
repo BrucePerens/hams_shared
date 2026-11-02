@@ -108,7 +108,10 @@ class PlanTests(unittest.TestCase):
         plan = self.plan(probes={"big": busy, "small": idle}, names=["pytest daemons/a"], local_load=40.0)
         self.assertEqual(list(plan.remote), ["small"])
         calm = self.plan(probes={"big": busy, "small": idle}, names=["pytest daemons/a"], local_load=0.0)
-        self.assertEqual(calm.remote, {}, "an idle dev box that would finish first keeps the step")
+        self.assertEqual(list(calm.remote), ["small"], "a heavy step leaves an idle dev box too: it is shared")
+        slow = lr.Probe("small", True, cores=8, load1=4.0, queued=3, caps=FULL.caps)
+        stay = self.plan(probes={"small": slow}, names=["pytest daemons/a"], local_load=0.0)
+        self.assertEqual(stay.remote, {}, "a machine that would finish much later than the dev box does not get it")
 
     def test_a_machine_above_its_load_ratio_or_unreachable_is_skipped_with_a_reason(self):
         overloaded = lr.Probe("big", True, cores=8, load1=7.5, caps=FULL.caps)
