@@ -117,7 +117,7 @@ def lock_decision(environ, pending_names, durations):
     if environ.get(HELD_ENV):
         return False, "the lock is held by the parent run (pid %s)" % environ[HELD_ENV]
     if not pending_names:
-        return False, "every step is a cached pass"
+        return False, "no step left to run here (cached passes, or sent to other machines)"
     threshold = cheap_seconds(environ)
     if is_cheap(pending_names, durations, threshold):
         return False, "cheap run (known steps total at most %g s)" % threshold
@@ -282,7 +282,7 @@ def begin_heavy_run(environ, pending_names, durations, worktree, command, lock_t
     not ok the caller exits with EXIT_TEMPFAIL after printing what `out` received."""
     take, reason = lock_decision(environ, pending_names, durations)
     if not take:
-        if reason.startswith("cheap") or reason.startswith("every"):
+        if reason.startswith(("cheap", "no step")):
             out("[*] lint lock not needed: " + reason)
         return True, None
     lock = RunLock(environ)

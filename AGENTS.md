@@ -285,6 +285,27 @@ in a fixed order, and ends with a per-step timing table.
   checkers (`check_async_lock_scope`, `check_fake_network_listener`, `check_int_float_overflow`,
   `check_float_isfinite`, `check_window_fetch_reassignment`) are one step each over hams_com and hams_open.
   `tools/lint_step_inventory.py compare` proves a restructuring kept every test (`docs/LINT_STEP_ANALYSIS.md`).
+* **Remote execution** (`--remote auto|HOST|local`, `--where`; `tools/lint_remote.py`,
+  `tools/lint_machines.json`). The dev box is not the only machine: `--remote auto` probes the lint runners
+  in `lint_machines.json` over ssh (read-only: cores, load, which of python3, flake8, pytest, node, eslint,
+  cargo, chrome, odoo exist), sends each heavy step that a machine can run (>= 60 s; never a step that needs
+  git history, the network or this checkout: `check_summation_bias`, `check_pip_audit`,
+  `check_claims_freshness`, `check_cargo_deny`, ...) to the least-loaded capable machine, and runs the rest
+  here. `--where` prints that routing plan and runs nothing. Machines: **mac1-vm** (the Debian Lima VM on
+  mac1: cargo, node, chromium, flake8, odoo; 3 workers at nice 19, it also runs the production FCC ULS sync,
+  never started by the linter), **bruce-yoga** (Debian x86-64 build server, ssh with `-o
+  HostName=bruce-yoga.lan`, stays awake on AC; python3 and chrome only until provisioned; 4 workers).
+  Not runners, with reasons in the inventory: mac1 itself (Bruce's Mac, python 3.9), `bruce-yoga-win` and
+  `Bruce_Thinkpad` (Windows, PowerShell), and **hams1 and the router (`never`)**. `python3
+  tools/lint_remote.py probe` surveys, `... provision [HOST] [--apply]` lists (and with `--apply` does, at user
+  level, no sudo) what a machine lacks; `... provision` prints the undo. A machine holds a persistent mirror
+  `~/hams-lint-mirror/{hams_com,hams_open}` (tracked tree of HEAD via `git archive`, incremental from the
+  last synced commit, plus uncommitted regular files; never `.git`, `target/`, `node_modules`, symlinks or
+  secrets) and runs the steps through its own run lock and load gate. Output streams back as `[host] ...`.
+  The pass stamp is written locally only when every step passed (here or there) for the commit that is
+  still HEAD, with `hosts=` metadata; a machine that is unreachable, busy, lacks a tool, or whose results
+  cannot be read does not fail the run: its steps run here. The siblings (hams_open or hams_com, and
+  hams_shared) go as they are on this machine.
 * `--list` names the steps; `--only a,b` / `--skip a,b` select steps (a selected run never stamps);
   `-j 1` is the old sequential order; `--no-cache` ignores cached passes.
 * Never leave a finding for "someone else's PR". A finding in a file you did not touch is still a

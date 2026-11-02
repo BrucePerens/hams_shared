@@ -18,6 +18,7 @@ import time
 
 import lint_exec
 import lint_lock
+import lint_remote
 
 
 def _resolve_repo_root(given_path):
@@ -292,6 +293,24 @@ def _parse_args(argv):
         help="print only the N slowest steps in the timing table (default: all)",
     )
     parser.add_argument("--no-timing", dest="timing", action="store_false", default=True)
+    parser.add_argument("--run-bundle", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--bundle-root", action="append", default=[], help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--results-json",
+        default="",
+        metavar="PATH",
+        help="write each step's name, exit code and seconds, and the commit, to PATH",
+    )
+    parser.add_argument(
+        "--remote",
+        default="",
+        metavar="auto|HOST|local",
+        help="run capable steps on other machines (lint_machines.json): auto = spread by load, HOST = that "
+        "machine, local = this one. Steps that cannot run there, and unreachable machines, run here",
+    )
+    parser.add_argument(
+        "--where", action="store_true", help="with --remote: print the routing plan and the probes, run nothing"
+    )
     parser.add_argument(
         "--lock-timeout",
         type=float,
@@ -359,15 +378,16 @@ def stamp_repos(repo_root, tools_dir, dir_path):
     return repos
 
 
-def stamp_text(mode, step_names):
+def stamp_text(mode, step_names, hosts=()):
     """One line: mode, time, how many steps were selected and their names (the part of a name
     before `[`). prmerge.sh reads it to refuse a stamp that selected nothing for a code change."""
     bases = sorted({name.split("[")[0].split(" ")[0] for name in step_names})
     stamp_time = time.strftime("%Y-%m-%dT%H:%M:%S")
-    return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}\n"
+    host_field = f" hosts={','.join(sorted(set(hosts)))}" if hosts else ""
+    return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}\n"
 
 
-def _write_pass_stamps(repos, mode, step_names=()):
+def _write_pass_stamps(repos, mode, step_names=(), hosts=()):
     """Record "run_linters.py passed (mode) with a clean tree at commit <sha>" for each repo
     involved. devbox_tools/prmerge.sh refuses to merge a branch whose tip has no stamp, so a
     PR cannot land without the full or `--changed` run having passed on exactly that code.
@@ -381,7 +401,7 @@ def _write_pass_stamps(repos, mode, step_names=()):
         try:
             os.makedirs(pass_stamp_dir(), exist_ok=True)
             with open(os.path.join(pass_stamp_dir(), head[0]), "w", encoding="utf-8") as handle:
-                handle.write(stamp_text(mode, step_names))
+                handle.write(stamp_text(mode, step_names, hosts))
         except OSError as error:
             print(f"(pass stamp not written: {error})", file=sys.stderr)
 
@@ -711,7 +731,44 @@ def invocation_root(script_path):
     return given
 
 
+def run_bundle(argv):
+    """Remote side of `--remote`: run the steps in a bundle written by lint_remote.dispatch, with this
+    machine's paths, under this machine's own run lock and load gate; write a results file."""
+    parser = argparse.ArgumentParser(prog="run_linters.py --run-bundle")
+    parser.add_argument("--run-bundle", required=True)
+    parser.add_argument("--bundle-root", action="append", default=[])
+    parser.add_argument("--results-json", required=True)
+    parser.add_argument("-j", "--jobs", type=int, default=2)
+    parser.add_argument("--no-timing", action="store_true")
+    options = parser.parse_args(argv)
+    with open(options.run_bundle, encoding="utf-8") as handle:
+        bundle = json.load(handle)
+    roots = dict(item.split("=", 1) for item in options.bundle_root)
+    steps = lint_remote.import_bundle(bundle, roots)
+    run_ok, run_lock = lint_lock.begin_heavy_run(
+        os.environ,
+        [step.name for step in steps],
+        lint_lock.known_durations(),
+        os.path.dirname(options.run_bundle),
+        "run_linters.py --run-bundle (remote)",
+    )
+    if not run_ok:
+        return lint_lock.EXIT_TEMPFAIL
+    try:
+        results = lint_exec.execute(steps, options.jobs)
+    finally:
+        if run_lock:
+            run_lock.release()
+    with open(options.results_json, "w", encoding="utf-8") as handle:
+        json.dump(lint_remote.results_document(bundle["bundle_id"], results), handle)
+    if not options.no_timing:
+        print(lint_exec.timing_table(results))
+    return 1 if any(r.returncode != 0 for r in results) else 0
+
+
 def main():
+    if "--run-bundle" in sys.argv:
+        sys.exit(run_bundle(sys.argv[1:]))
     dir_path = invocation_root(__file__)
     repo_root = _resolve_repo_root(dir_path)
 
@@ -1930,13 +1987,38 @@ def main():
         cache = lint_exec.Cache(_cache_path(dir_path))
         fingerprints = lint_exec.InputFingerprints(os.path.realpath(tools_dir))
 
-    # Heavy runs queue one at a time per machine, then wait for the load to fall (lint_lock.py).
     pending = [
         step.name
         for step in steps
         if step.argv is not None
         and not (cache is not None and step.cacheable and cache.hit(step.name, fingerprints.step_key(step)) is not None)
     ]
+    # --remote: capable steps run on other machines (lint_remote.py); the rest, and anything a machine
+    # cannot do, runs here.
+    remote_jobs = []
+    all_steps = list(steps)
+    head_before = _git_lines(repo_root, "rev-parse", "HEAD")
+    if options.remote and options.remote != "local" or options.where:
+        if os.path.realpath(dir_path) == real_shared_dir:
+            print("[*] --remote: not supported when started from a hams_shared checkout; running everything here")
+        else:
+            roots, role = lint_remote.repo_roles(repo_root, sibling_dir, real_shared_dir)
+            steps, remote_jobs = lint_remote.dispatch(
+                options.remote or "auto",
+                steps,
+                pending,
+                lint_lock.known_durations(),
+                {step.name: lint_exec.step_to_dict(step) for step in steps},
+                roots,
+                role,
+                os.cpu_count() or 1,
+                os.getloadavg()[0],
+                where=options.where,
+            )
+            if options.where:
+                sys.exit(0)
+            pending = [name for name in pending if name in {s.name for s in steps}]
+    # Heavy runs queue one at a time per machine, then wait for the load to fall (lint_lock.py).
     run_ok, run_lock = lint_lock.begin_heavy_run(
         os.environ,
         pending,
@@ -1954,6 +2036,13 @@ def main():
 
         atexit.register(run_lock.release)
     results = lint_exec.execute(steps, options.jobs, cache=cache, fingerprints=fingerprints)
+    extra_results, remote_hosts = lint_remote.collect(
+        remote_jobs, all_steps, lambda wanted: lint_exec.execute(wanted, options.jobs), lint_exec.Result
+    )
+    results += extra_results
+    if options.results_json:
+        with open(options.results_json, "w", encoding="utf-8") as handle:
+            json.dump(lint_remote.results_document("local", results), handle)
     wall = time.monotonic() - wall_start
     linters_failed = any(r.returncode != 0 for r in results)
     if options.timing or options.timing_top:
@@ -1961,11 +2050,15 @@ def main():
         print("\n" + table, file=sys.stderr if options.timing_to_stderr else sys.stdout)
 
     if not linters_failed and not (options.only or options.skip or target_modules_str):
-        _write_pass_stamps(
-            stamp_repos(repo_root, tools_dir, dir_path),
-            "changed" if changed_set is not None else "full",
-            [step.name for step in steps],
-        )
+        if _git_lines(repo_root, "rev-parse", "HEAD") != head_before:
+            print("(pass stamp not written: HEAD moved during the run)", file=sys.stderr)
+        else:
+            _write_pass_stamps(
+                stamp_repos(repo_root, tools_dir, dir_path),
+                "changed" if changed_set is not None else "full",
+                [step.name for step in all_steps],
+                remote_hosts,
+            )
 
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")

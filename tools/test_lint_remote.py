@@ -1,0 +1,392 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Tests for lint_remote.py: routing, sync, running through a (fake) ssh, stamps and fallback."""
+
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
+
+TOOLS = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, TOOLS)
+import lint_exec  # noqa: E402
+import lint_remote as lr  # noqa: E402
+import run_linters  # noqa: E402
+
+FULL = lr.Probe("m", True, cores=8, load1=0.5, caps=frozenset({"python3", "pytest", "flake8", "node", "cargo", "chrome", "odoo"}))
+
+
+def git(repo, *args):
+    subprocess.run(
+        ["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", *args], check=True, capture_output=True
+    )
+
+
+def write(path, text="x\n"):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+
+def make_repo(path, files):
+    os.makedirs(path, exist_ok=True)
+    git(path, "init", "-q", "-b", "main")
+    for name, text in files.items():
+        write(os.path.join(path, name), text)
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "-m", "init")
+
+
+INVENTORY = {
+    "devbox": {"local": True},
+    "big": {"ssh": {"target": "big"}, "jobs": 4, "max_load_ratio": 0.8},
+    "small": {"ssh": {"target": "small"}, "jobs": 2, "max_load_ratio": 0.8},
+    "winbox": {"runner": False, "reason": "Windows PowerShell host"},
+    "hams1": {"runner": False, "never": True, "reason": "PRODUCTION"},
+}
+DURATIONS = {"pytest daemons/a": 300.0, "pytest daemons/b": 300.0, "check_x": 5.0, "eslint": 200.0, "check_summation_bias": 400.0}
+
+
+class RequirementTests(unittest.TestCase):
+    def test_requirements(self):
+        self.assertEqual(lr.requirements_for("check_summation_bias"), {"local"})
+        self.assertEqual(lr.requirements_for("check_pip_audit"), {"local"})
+        self.assertEqual(lr.requirements_for("pytest daemons/relay_ca"), {"python3", "pytest"})
+        self.assertIn("node", lr.requirements_for("eslint"))
+        self.assertIn("cargo", lr.requirements_for("check_cargo_clippy"))
+        self.assertEqual(lr.requirements_for("check_float_isfinite"), {"python3"})
+        self.assertIn("chrome", lr.requirements_for("check_owl_templates"))
+
+    def test_probe_parsing_measures_capabilities_and_rejects_old_python(self):
+        text = "os=Linux\ncores=8\nload1=1.50\npyver=3.13\nhas_git=1\nhas_tar=1\nhas_flake8=1\nqueued=2\n"
+        probe = lr.parse_probe("m", text)
+        self.assertEqual((probe.cores, probe.load1, probe.queued), (8, 1.5, 2))
+        self.assertEqual(probe.caps, {"git", "tar", "flake8", "python3"})
+        self.assertEqual(lr.parse_probe("m", "os=Linux\nload1=nan\ncores=4\n").load1, 0.0)
+        old = lr.parse_probe("m", "os=Darwin\ncores=12\npyver=3.9\nhas_git=1\nhas_tar=1\n")
+        self.assertNotIn("python3", old.caps)
+        self.assertFalse(lr.parse_probe("m", "garbage").reachable)
+
+
+class PlanTests(unittest.TestCase):
+    def plan(self, mode="auto", probes=None, names=None, local_load=0.0):
+        names = names or ["pytest daemons/a", "pytest daemons/b", "check_x", "eslint", "check_summation_bias"]
+        probes = probes if probes is not None else {"big": FULL, "small": FULL}
+        return lr.make_plan(names, set(), DURATIONS, INVENTORY, probes, mode, 16, local_load)
+
+    def test_local_mode_keeps_everything(self):
+        plan = self.plan("local")
+        self.assertEqual(len(plan.local), 5)
+        self.assertEqual(plan.remote, {})
+
+    def test_auto_sends_heavy_capable_steps_away_and_keeps_cheap_and_local_only_steps(self):
+        plan = self.plan(local_load=40.0)
+        self.assertIn("check_x", plan.local)
+        self.assertIn("check_summation_bias", plan.local)
+        sent = {n for names in plan.remote.values() for n in names}
+        self.assertTrue({"pytest daemons/a", "pytest daemons/b", "eslint"} & sent)
+        self.assertEqual(sorted(plan.local + [n for names in plan.remote.values() for n in names]), sorted(DURATIONS))
+
+    def test_every_step_is_in_exactly_one_place(self):
+        plan = self.plan(local_load=40.0)
+        everything = plan.local + [n for names in plan.remote.values() for n in names]
+        self.assertEqual(len(everything), len(set(everything)))
+
+    def test_least_loaded_machine_gets_the_work(self):
+        busy = lr.Probe("big", True, cores=8, load1=6.0, caps=FULL.caps)
+        idle = lr.Probe("small", True, cores=8, load1=0.0, caps=FULL.caps)
+        # The dev box itself is loaded (this is why --remote exists), so the step leaves it, for the idle machine.
+        plan = self.plan(probes={"big": busy, "small": idle}, names=["pytest daemons/a"], local_load=40.0)
+        self.assertEqual(list(plan.remote), ["small"])
+        calm = self.plan(probes={"big": busy, "small": idle}, names=["pytest daemons/a"], local_load=0.0)
+        self.assertEqual(calm.remote, {}, "an idle dev box that would finish first keeps the step")
+
+    def test_a_machine_above_its_load_ratio_or_unreachable_is_skipped_with_a_reason(self):
+        overloaded = lr.Probe("big", True, cores=8, load1=7.5, caps=FULL.caps)
+        down = lr.Probe("small", False, error="timed out")
+        plan = self.plan(probes={"big": overloaded, "small": down})
+        self.assertEqual(plan.remote, {})
+        text = " ".join(plan.notes)
+        self.assertIn("busy", text)
+        self.assertIn("unreachable", text)
+
+    def test_a_machine_without_the_tools_gets_nothing_it_cannot_run(self):
+        bare = lr.Probe("big", True, cores=8, load1=0.0, caps=frozenset({"python3", "git", "tar"}))
+        plan = self.plan(probes={"big": bare}, names=["pytest daemons/a", "check_x", "eslint"])
+        self.assertEqual(plan.remote, {})
+
+    def test_named_machine_and_refusals(self):
+        plan = self.plan("big", probes={"big": FULL}, names=["pytest daemons/a", "check_x", "check_summation_bias"])
+        self.assertEqual(plan.remote["big"], ["pytest daemons/a", "check_x"])  # a named machine takes cheap steps too
+        self.assertEqual(plan.local, ["check_summation_bias"])
+        for refused in ("hams1", "winbox"):
+            with self.assertRaises(SystemExit) as caught:
+                self.plan(refused)
+            self.assertIn("not a lint runner", str(caught.exception))
+
+    def test_runners_never_include_production_or_windows(self):
+        self.assertEqual(set(lr.runners(INVENTORY)), {"big", "small"})
+        real = lr.load_inventory()
+        self.assertNotIn("hams1", lr.runners(real))
+        self.assertNotIn("Bruce_Thinkpad", lr.runners(real))
+        self.assertNotIn("bruce-yoga-win", lr.runners(real))
+        self.assertTrue(real["hams1"]["never"])
+
+    def test_where_output_names_the_hosts_the_steps_and_the_machines_that_are_not_runners(self):
+        plan = self.plan()
+        text = lr.format_plan(plan, INVENTORY, {"big": FULL, "small": FULL})
+        self.assertIn("devbox", text)
+        self.assertIn("not a runner: hams1: PRODUCTION", text)
+        self.assertIn("not a runner: winbox", text)
+
+
+class ExportTests(unittest.TestCase):
+    def test_paths_become_placeholders_and_back(self):
+        roots = {"hams_com": "/w/hams_com", "hams_open": "/w/hams_open", "hams_shared": "/w/hams_open/hams_shared"}
+        step = {"name": "s", "argv": ["/usr/bin/python3", "/w/hams_open/hams_shared/tools/c.py", "/w/hams_com"], "cwd": "/w/hams_com/daemons/x",
+                "env_delta": {"PYTHONPATH": "/w/hams_com/daemons:/export/u/x"}, "lock": None, "print_ok": True}
+        item = lr.export_step(step, roots, home="/export/u")
+        self.assertEqual(item["argv"][1], "@HAMS_SHARED@/tools/c.py")
+        self.assertEqual(item["cwd"], "@HAMS_COM@/daemons/x")
+        self.assertEqual(item["env_delta"]["PYTHONPATH"], "@HAMS_COM@/daemons:@HOME@/x")
+        steps = lr.import_bundle({"steps": [item]}, {"hams_com": "/r/hams_com", "hams_open": "/r/hams_open", "hams_shared": "/r/hams_open/hams_shared"}, home="/h")
+        self.assertEqual(steps[0].argv[1], "/r/hams_open/hams_shared/tools/c.py")
+        self.assertEqual(steps[0].cwd, "/r/hams_com/daemons/x")
+        self.assertEqual(steps[0].env["PYTHONPATH"], "/r/hams_com/daemons:/h/x")
+
+    def test_a_step_that_still_names_a_local_path_or_local_interpreter_stays_here(self):
+        roots = {"hams_com": "/w/hams_com", "hams_open": "/w/hams_open", "hams_shared": "/w/hams_open/hams_shared"}
+        leaking = {"name": "s", "argv": ["/usr/bin/python3", "/mnt/workspace/other_checkout/x.py"], "cwd": None, "env_delta": {}}
+        self.assertIsNone(lr.export_step(leaking, roots, home="/export/u"))
+        in_home = {"name": "s", "argv": ["/usr/bin/python3", "/export/u/.cache/thing"], "cwd": None, "env_delta": {}}
+        self.assertEqual(lr.export_step(in_home, roots, home="/export/u")["argv"][1], "@HOME@/.cache/thing")
+        venv = {"name": "s", "argv": ["/w/hams_com/daemons/b/.venv/bin/python3", "x"], "cwd": None, "env_delta": {}}
+        self.assertIsNone(lr.export_step(venv, roots, home="/export/u"))
+
+
+class SyncTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="lintremote-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.repo = os.path.join(self.tmp, "repo")
+        self.dest = os.path.join(self.tmp, "remote", "repo")
+        os.makedirs(os.path.dirname(self.dest))
+        make_repo(self.repo, {"a.txt": "one\n", "d/b.txt": "two\n", "keep.txt": "keep\n"})
+        self.transport = lr.ShellTransport("fake", home=self.tmp)
+        self.lines = []
+
+    def sync(self):
+        return lr.sync_repo(self.transport, self.repo, self.dest, log=self.lines.append)
+
+    def read(self, name):
+        with open(os.path.join(self.dest, name), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_full_then_incremental_sync_matches_the_commit(self):
+        info = self.sync()
+        self.assertFalse(info["dirty"])
+        self.assertEqual(self.read("d/b.txt"), "two\n")
+        write(os.path.join(self.repo, "a.txt"), "one-changed\n")
+        os.unlink(os.path.join(self.repo, "keep.txt"))
+        write(os.path.join(self.repo, "new.txt"), "new\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "second")
+        self.lines.clear()
+        info = self.sync()
+        self.assertTrue(any("2 changed, 1 removed" in line for line in self.lines), self.lines)
+        self.assertEqual(self.read("a.txt"), "one-changed\n")
+        self.assertEqual(self.read("new.txt"), "new\n")
+        self.assertFalse(os.path.exists(os.path.join(self.dest, "keep.txt")))
+        self.assertEqual(info["sha"], lr.head_sha(self.repo))
+        manifest = json.loads(self.read(".hams_lint_sync"))
+        self.assertEqual(manifest["sha"], info["sha"])
+
+    def test_uncommitted_files_are_shipped_flagged_and_reverted_on_the_next_sync(self):
+        self.sync()
+        write(os.path.join(self.repo, "a.txt"), "dirty\n")
+        write(os.path.join(self.repo, "untracked.txt"), "u\n")
+        info = self.sync()
+        self.assertTrue(info["dirty"])
+        self.assertEqual(self.read("a.txt"), "dirty\n")
+        self.assertEqual(self.read("untracked.txt"), "u\n")
+        git(self.repo, "checkout", "-q", "--", "a.txt")
+        os.unlink(os.path.join(self.repo, "untracked.txt"))
+        info = self.sync()
+        self.assertFalse(info["dirty"])
+        self.assertEqual(self.read("a.txt"), "one\n")
+        self.assertFalse(os.path.exists(os.path.join(self.dest, "untracked.txt")))
+
+    def test_secrets_symlinks_and_build_output_are_never_shipped(self):
+        self.sync()
+        write(os.path.join(self.repo, ".env"), "SECRET=1\n")
+        write(os.path.join(self.repo, "deploy.key"), "k\n")
+        write(os.path.join(self.repo, "target", "debug", "x"), "bin\n")
+        write(os.path.join(self.repo, ".secrets", "tok"), "t\n")
+        os.symlink("/etc/passwd", os.path.join(self.repo, "link"))
+        write(os.path.join(self.repo, "fine.txt"), "ok\n")
+        self.sync()
+        for name in (".env", "deploy.key", "target/debug/x", ".secrets/tok", "link"):
+            self.assertFalse(os.path.lexists(os.path.join(self.dest, name)), name)
+        self.assertEqual(self.read("fine.txt"), "ok\n")
+
+    def test_the_mirror_gets_a_git_repository_for_checkers_that_list_files(self):
+        self.sync()
+        lr.commit_mirror(self.transport, self.dest)
+        listed = subprocess.run(["git", "-C", self.dest, "ls-files"], capture_output=True, text=True).stdout.split()
+        self.assertIn("d/b.txt", listed)
+        self.assertNotIn(".hams_lint_sync", listed)
+
+
+class VerifyTests(unittest.TestCase):
+    def test_results_must_cover_every_step_pass_and_match_the_run(self):
+        good = json.dumps({"bundle_id": "b1", "steps": [{"name": "a", "returncode": 0}, {"name": "b", "returncode": 0}]})
+        self.assertEqual(lr.verify_results(good, ["a", "b"], "b1"), (True, []))
+        self.assertFalse(lr.verify_results(good, ["a", "b", "c"], "b1")[0])
+        self.assertFalse(lr.verify_results(good, ["a"], "other")[0])
+        failed = json.dumps({"bundle_id": "b1", "steps": [{"name": "a", "returncode": 1}]})
+        self.assertEqual(lr.verify_results(failed, ["a"], "b1"), (False, ["step failed: a"]))
+        self.assertFalse(lr.verify_results("", ["a"], "b1")[0])
+        self.assertFalse(lr.verify_results("{not json", ["a"], "b1")[0])
+
+
+FAKE_SSH = textwrap.dedent(
+    """\
+    #!/bin/sh
+    # Stands in for ssh: runs the last argument (the remote command) in a shell with HOME set to a
+    # directory that plays the remote machine's home. Refuses to run if BatchMode was not requested.
+    case "$*" in *BatchMode=yes*) ;; *) echo "ssh without BatchMode" >&2; exit 97;; esac
+    for last; do :; done
+    HOME="$FAKE_REMOTE_HOME" exec sh -c "$last"
+    """
+)
+
+
+class EndToEndTests(unittest.TestCase):
+    """The whole path through the real SshTransport, with a fake `ssh` that runs the command locally in
+    a separate HOME: sync of three repositories, bundle, remote run_linters --run-bundle, results."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="lintremote-e2e-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        bin_dir = os.path.join(self.tmp, "bin")
+        os.makedirs(bin_dir)
+        fake = os.path.join(bin_dir, "ssh")
+        write(fake, FAKE_SSH)
+        os.chmod(fake, os.stat(fake).st_mode | stat.S_IEXEC)
+        self.remote_home = os.path.join(self.tmp, "remote_home")
+        os.makedirs(self.remote_home)
+        self.env_patch = {"PATH": bin_dir + os.pathsep + os.environ["PATH"], "FAKE_REMOTE_HOME": self.remote_home}
+        self.saved = {k: os.environ.get(k) for k in self.env_patch}
+        os.environ.update(self.env_patch)
+        self.addCleanup(self.restore)
+        self.com = os.path.join(self.tmp, "local", "hams_com")
+        self.open = os.path.join(self.tmp, "local", "hams_open")
+        self.shared = os.path.join(self.tmp, "local", "shared")
+        make_repo(self.com, {"c.txt": "c\n"})
+        make_repo(self.open, {"zero_sudo/__manifest__.py": "{}\n", "o.txt": "o\n"})
+        make_repo(self.shared, {"README": "shared\n"})
+        os.makedirs(os.path.join(self.shared, "tools"))
+        for name in ("run_linters.py", "lint_exec.py", "lint_lock.py", "lock_queue.py", "lint_remote.py"):
+            shutil.copy(os.path.join(TOOLS, name), os.path.join(self.shared, "tools", name))
+        git(self.shared, "add", "-A")
+        git(self.shared, "commit", "-q", "-m", "tools")
+        self.roots = {"hams_com": self.com, "hams_open": self.open, "hams_shared": self.shared}
+        self.machine = {"ssh": {"target": "fake"}, "workdir": "~/mirror", "jobs": 2, "nice": 10}
+        self.transport = lr.SshTransport("fake", self.machine)
+        self.lines = []
+
+    def restore(self):
+        for key, value in self.saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def bundle(self, *steps):
+        items = []
+        for name, argv in steps:
+            items.append({"name": name, "argv": argv, "cwd": None, "env_delta": {}, "lock": None, "print_ok": True})
+        return {"bundle_id": "e2e-1", "steps": items}
+
+    def run_remote(self, bundle):
+        env_keep = {k: os.environ.pop(k, None) for k in ("XDG_CACHE_HOME", "HAMS_LINT_LOAD_LIMIT")}
+        os.environ["HAMS_SKIP_CI_LOAD_GATE"] = "1"
+        try:
+            return lr.run_on_machine(
+                "fake", self.machine, self.transport, self.roots, "hams_com", bundle, self.lines.append, log=self.lines.append
+            )
+        finally:
+            os.environ.pop("HAMS_SKIP_CI_LOAD_GATE", None)
+            for key, value in env_keep.items():
+                if value is not None:
+                    os.environ[key] = value
+
+    def test_a_passing_run_syncs_runs_on_the_other_machine_and_is_verified(self):
+        status, problems, seconds = self.run_remote(
+            self.bundle(("say", ["/usr/bin/python3", "-c", "print('hello from', __import__('os').getcwd() and 'remote')"]))
+        )
+        self.assertEqual((status, problems), ("ok", []), "\n".join(self.lines))
+        self.assertIn("say", seconds)
+        self.assertTrue(any("hello from remote" in line for line in self.lines), self.lines)
+        self.assertTrue(os.path.isfile(os.path.join(self.remote_home, "mirror", "hams_open", "hams_shared", "tools", "run_linters.py")))
+        self.assertTrue(os.path.isfile(os.path.join(self.remote_home, "mirror", "hams_com", "c.txt")))
+        manifest = json.load(open(os.path.join(self.remote_home, "mirror", "hams_com", ".hams_lint_sync"), encoding="utf-8"))
+        self.assertEqual(manifest["sha"], lr.head_sha(self.com))
+
+    def test_a_failing_step_is_a_real_failure_not_a_fallback(self):
+        status, problems, _seconds = self.run_remote(
+            self.bundle(("good", ["/usr/bin/python3", "-c", "pass"]), ("bad", ["/usr/bin/python3", "-c", "import sys; print('boom'); sys.exit(3)"]))
+        )
+        self.assertEqual(status, "failed", "\n".join(self.lines))
+        self.assertEqual(problems, ["step failed: bad"])
+        self.assertTrue(any("boom" in line for line in self.lines))
+
+    def test_a_machine_that_cannot_be_reached_is_an_infrastructure_problem_so_steps_run_here(self):
+        os.environ["PATH"] = "/nonexistent-bin:" + os.environ["PATH"].split(os.pathsep, 1)[1]  # no fake ssh first
+        broken = lr.SshTransport("down", {"ssh": {"target": "nowhere.invalid", "args": ["-o", "ConnectTimeout=2"]}}, timeout=3)
+        status, problems, _ = lr.run_on_machine(
+            "down", self.machine, broken, self.roots, "hams_com", self.bundle(("x", ["/usr/bin/true"])), self.lines.append, log=self.lines.append
+        )
+        self.assertEqual(status, "infra")
+        self.assertTrue(problems)
+
+    def test_collect_runs_infra_steps_here_and_credits_only_machines_that_did_the_work(self):
+        class Job:
+            def __init__(self, host, status, names, problems=()):
+                self.host, self.status, self.names, self.problems, self.seconds = host, status, names, list(problems), {}
+
+            def join(self):
+                pass
+
+        steps = [lint_exec.Step(name=n, argv=["/usr/bin/true"]) for n in ("a", "b", "c")]
+        ran_here = []
+
+        def execute_here(wanted):
+            ran_here.extend(s.name for s in wanted)
+            return [lint_exec.Result(s.name, 0, "", 0.1) for s in wanted]
+
+        jobs = [Job("m1", "ok", ["a"]), Job("m2", "infra", ["b"], ["sync failed"]), Job("m3", "failed", ["c"], ["step failed: c"])]
+        results, hosts = lr.collect(jobs, steps, execute_here, lint_exec.Result, out=lambda _l: None)
+        self.assertEqual(ran_here, ["b"])
+        self.assertEqual(sorted(hosts), ["m1", "m3"])
+        by_name = {r.name: r.returncode for r in results}
+        self.assertEqual(by_name, {"a": 0, "b": 0, "c": 1})
+
+    def test_stamp_metadata_names_the_host_and_the_gate_still_parses_it(self):
+        import lint_stamp_gate
+
+        text = run_linters.stamp_text("changed", ["flake8", "pytest tools/[1of4]"], ["mac1-vm", "bruce-yoga"])
+        self.assertIn("hosts=bruce-yoga,mac1-vm", text)
+        mode, count, names = lint_stamp_gate.parse_stamp(text)
+        self.assertEqual((mode, count), ("changed", 2))
+        self.assertEqual(names, {"flake8", "pytest"})
+        self.assertNotIn("hosts=", run_linters.stamp_text("full", ["flake8"]))
+
+
+if __name__ == "__main__":
+    unittest.main()
