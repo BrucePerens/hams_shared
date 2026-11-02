@@ -97,6 +97,24 @@ class Result:
     skipped: str = None
 
 
+def step_to_dict(step):
+    """JSON-friendly description of a step (the environment is reduced to the keys that differ
+    from the parent's, so secrets in the ambient environment are never printed)."""
+    env_delta = {}
+    for key, value in (step.env or {}).items():
+        if os.environ.get(key) != value:
+            env_delta[key] = value
+    return {
+        "name": step.name,
+        "argv": step.argv,
+        "cwd": step.cwd,
+        "env_delta": env_delta,
+        "lock": step.lock,
+        "roots": list(step.roots),
+        "suffixes": None if step.suffixes is None else sorted(step.suffixes),
+    }
+
+
 def main_worktree_of(path):
     """Working-tree directory of the MAIN checkout of the git repository that contains `path`, or
     None. For a worktree of hams_shared that is the checkout holding node_modules; hams_shared is a
