@@ -1,0 +1,58 @@
+{
+  "_comment": "Machines run_linters.py --remote may use (surveyed read-only 2026-11-02). Capabilities are PROBED at run time (lint_remote.probe); the fields here say how to reach a machine, how hard it may be pushed and why a machine is not a lint runner. Nothing here is a secret: keys are named by path and never read.",
+  "machines": {
+    "devbox": {
+      "local": true,
+      "os": "linux",
+      "note": "This development machine. Always capable (it has the full toolchain); all other machines are optional."
+    },
+    "mac1-vm": {
+      "ssh": {
+        "target": "ai@127.0.0.1",
+        "args": ["-p", "60023", "-i", "~/.secrets/mac1/ai_ed25519", "-o", "IdentitiesOnly=yes", "-o", "UserKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=no", "-o", "LogLevel=ERROR", "-o", "ProxyCommand=ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.secrets/mac1/ai_ed25519 -W %h:%p ai@mac1.local"]
+      },
+      "os": "linux",
+      "workdir": "~/hams-lint-mirror",
+      "jobs": 3,
+      "nice": 19,
+      "max_concurrent": 1,
+      "max_load_ratio": 0.6,
+      "note": "Debian 13 arm64 Lima VM hams-test-debian on the Mac mini mac1 (Bruce's machine; the VM also runs the production FCC ULS sync): lowest priority, 3 workers, never started by the lint runner (a stopped VM is reported unreachable). Has cargo, node, chromium, flake8, odoo, rsync; pytest is installed per user by tools/lint_remote_provision.sh."
+    },
+    "bruce-yoga": {
+      "ssh": {
+        "target": "bruce-yoga",
+        "args": ["-o", "HostName=bruce-yoga.lan"]
+      },
+      "os": "linux",
+      "workdir": "~/hams-lint-mirror",
+      "jobs": 4,
+      "nice": 10,
+      "max_concurrent": 1,
+      "max_load_ratio": 0.8,
+      "note": "Debian 13 x86-64 build and test server (8 cores, GitHub Actions runner bruce-yoga-linux). Stays awake on AC (logind drop-in); on battery it may suspend, which shows as unreachable. Has python3 and chrome only: run tools/lint_remote_provision.sh for flake8, pytest, node, cargo."
+    },
+    "mac1": {
+      "runner": false,
+      "reason": "macOS host and Bruce's own machine; its Linux VM mac1-vm is the lint runner. System python is 3.9 (the linters need 3.10+), no cargo or node."
+    },
+    "bruce-yoga-win": {
+      "runner": false,
+      "reason": "Windows build VM behind bruce-yoga (PowerShell, no POSIX tar/sh pipeline); used for Windows relay builds only."
+    },
+    "Bruce_Thinkpad": {
+      "runner": false,
+      "reason": "Windows laptop (PowerShell); used for Windows relay builds and the Windows side of certificate login."
+    },
+    "hams1": {
+      "runner": false,
+      "never": true,
+      "reason": "PRODUCTION. Never a lint, test or build host."
+    },
+    "omnia": {
+      "runner": false,
+      "never": true,
+      "reason": "Bruce's home router."
+    }
+  }
+}

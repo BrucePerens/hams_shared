@@ -71,8 +71,24 @@ interpreter and hold no two test files of the same name are one session. Differe
 (section 1). A merged step keeps the old step names as `Step.aliases`, which `--only` accepts, and
 `--changed` selects the merged step when any file of the daemon changes.
 
-## 6. Decisions needed from Bruce
+## 6. Machines (surveyed read-only 2026-11-02; `lint_remote.py probe` repeats it)
 
+| Machine | OS, cores | Tools found | Lint runner? |
+|---|---|---|---|
+| devbox | Debian, 16 | everything | yes (local) |
+| mac1-vm (Lima `hams-test-debian` on mac1) | Debian 13 arm64, 10 | cargo, node, chromium, flake8, odoo, rsync; no pytest | yes: lowest priority (shared with Bruce's Mac and the FCC sync) |
+| bruce-yoga | Debian 13 x86-64, 8 | python3 3.13, google-chrome, git; no pytest, flake8, node, cargo, rsync | yes (stdlib-only checkers now; more after `lint_remote.py provision`) |
+| mac1 (the Mac) | macOS arm64, 12 | system python 3.9, no cargo or node | no |
+| bruce-yoga-win, Bruce_Thinkpad | Windows | PowerShell | no (Windows builds only) |
+| hams1, omnia | production, router | | never |
+
+Real end-to-end run (2026-11-02): `run_linters.py --remote bruce-yoga --only check_dependency_cycles` from a
+hams_com worktree: first sync 875 MB (full tree) in 62 s wall, a repeat with two steps 3.8 s wall (incremental).
+
+## 7. Decisions needed from Bruce
+
+* Installing sudo-level packages on bruce-yoga and mac1-vm (nodejs, cargo, clippy, rustfmt, chromium, odoo, pytest) so
+  `--remote auto` can take the Python-test and Rust steps; `lint_remote.py provision` lists them and does the user-level pip part.
 * `pytest-xdist` (or a hand-rolled file split of `relay_ca`) to shorten the longest pytest steps. Needs a pinned,
   hash-checked dependency.
 * Whether the two float scanners should share one parse (a refactor of two checkers).
