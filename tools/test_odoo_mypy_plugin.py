@@ -113,6 +113,17 @@ sys.path.insert(0, _TOOLS_DIR)
 import odoo_registry_builder as orb  # noqa: E402
 
 
+def _mypy_timeout(base_seconds=120):
+    """The time limit of one mypy run. A run takes 22-61 s alone; the lint runs four of these tests side by side next to
+    other steps, and on an 8-core runner some exceeded the fixed 120 s (TimeoutExpired, 2026-11-03). Twice the 1-minute load
+    per core, at least the base, at most 8 times it; a mypy that really hangs still fails."""
+    try:
+        per_core = os.getloadavg()[0] / (os.cpu_count() or 1)
+    except OSError:
+        per_core = 1.0
+    return base_seconds * min(8.0, max(1.0, 2.0 * per_core))
+
+
 def _write(path, content):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -284,7 +295,7 @@ class OdooMypyPluginRealCodeTests(unittest.TestCase):
             env={**os.environ, "ODOO_MYPY_PLUGIN_EXTRA_ROOTS": self._scratch_root},
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=_mypy_timeout(),
         )
         return result.stdout
 
@@ -491,7 +502,7 @@ class OdooMypyPluginClassSiblingsRegressionTests(unittest.TestCase):
             env={**os.environ, "ODOO_MYPY_PLUGIN_EXTRA_ROOTS": self._scratch_root},
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=_mypy_timeout(),
         )
         return result.stdout
 

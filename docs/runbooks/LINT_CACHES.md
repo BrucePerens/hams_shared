@@ -228,3 +228,7 @@ took **640-714 s on a lint runner** against 100-200 s for the others. Run alone 
 independent (each makes its own scratch directory and mypy cache). `run_linters.py` now gives the file a step of its own,
 `pytest tools/[mypy-plugin]` (workers only when the interpreter has pytest-xdist), and leaves it out of the chunks;
 `HAMS_LINT_MYPY_PLUGIN_SPLIT=0` puts it back. Its entry is removed from `lint_test_durations.json`. Pinned by `MypyPluginStepTest`.
+
+The first full run of the split on bruce-yoga (8 cores, other steps running) failed 2 to 8 of the 13 tests with `subprocess.TimeoutExpired`:
+the tests' fixed 120 s limit per mypy run is too short with four workers beside the other steps (22-61 s alone). The limit now follows the
+load (`_mypy_timeout`, the same rule as section 7). That run's step was 330-336 s on the runner against 536-640 s for the chunk that held the file before.
