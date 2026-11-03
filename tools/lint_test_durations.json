@@ -1,7 +1,10 @@
 {
  "_comment": "Seconds per tools/test_*.py file (sum of its tests, measured with pytest -n 4 on the dev box); see lint_test_durations.py.",
  "seconds": {
-  "test_b2_backup.py": 355.08,
+  "test_b2_backup.py": 36.62,
+  "test_b2_backup_end_to_end.py": 145.36,
+  "test_b2_backup_qso.py": 96.7,
+  "test_b2_backup_tenant_archives.py": 76.41,
   "test_build_cloudflared_ffi.py": 69.04,
   "test_bulk_explanation_manager.py": 0.07,
   "test_check_absolute_paths.py": 1.21,
