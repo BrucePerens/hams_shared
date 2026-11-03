@@ -6,6 +6,7 @@ import subprocess
 import argparse
 import multiprocessing
 import re
+import json
 import logging
 
 
@@ -68,13 +69,15 @@ _INVALID_HOOT_MATCHERS = {
 }
 
 
-def check_file(file_path):
+def audit_file(file_path):
+    """The Odoo-architecture rules that run before the syntax check. Returns (code, failure): `failure` is a
+    (path, message) pair or None; `code` is the source text, None when the file could not be read."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
     except (OSError, UnicodeDecodeError) as e:
         logging.warning("Failed to read %s: %s", file_path, e)
-        return None
+        return None, None
 
     # --- Custom Odoo Architecture Checks ---
     if file_path.endswith(".test.js"):
@@ -121,7 +124,7 @@ def check_file(file_path):
                         f"`.{real_equivalent}` instead.\n"
                         f"Code: `{line.strip()}`"
                     )
-                    return file_path, err_msg
+                    return code, (file_path, err_msg)
 
             # window.fetch/globalThis.fetch reassignment in *.test.js is
             # covered by the standalone check_window_fetch_reassignment.py
@@ -160,7 +163,7 @@ def check_file(file_path):
                     f"hardcodes document.location with no injectable seam.\n"
                     f"Code: `{line.strip()}`"
                 )
-                return file_path, err_msg
+                return code, (file_path, err_msg)
 
     if "extends Interaction" in code and "mountComponent(" in code:
         err_msg = (
@@ -170,8 +173,14 @@ def check_file(file_path):
             "`static components` and data props.\n"
             "See docs/LLM_EXPERIENCE.md (Item 38) for details."
         )
-        return file_path, err_msg
+        return code, (file_path, err_msg)
 
+    return code, None
+
+
+def node_check(file_path, code):
+    """The syntax check of one file: `node --input-type=module --check` on its source. Returns
+    (path, message) when it does not parse, else None."""
     # Using --input-type=module forces Node to natively parse ES6 Imports/Exports
     # without needing experimental VM modules or package.json overrides.
     res = subprocess.run(
@@ -186,6 +195,85 @@ def check_file(file_path):
         err_msg = res.stderr.replace("[stdin]", os.path.basename(file_path))
         return file_path, err_msg
     return None
+
+
+def check_file(file_path):
+    """Audit rules, then the syntax check, for one file (one node process)."""
+    code, failure = audit_file(file_path)
+    if failure or code is None:
+        return failure
+    return node_check(file_path, code)
+
+
+# One node process for many files. `node --check` on stdin builds a ModuleWrap from the source; so does
+# vm.SourceTextModule's constructor (parsing only: no linking, no evaluation), so both accept exactly the
+# same sources, but the batch pays node's ~40 ms start-up once instead of once per file (37 minutes for
+# the JavaScript of a console PR under load, 2026-11-02). The batch only says WHICH files do not parse; each
+# of those is checked again on its own so the message is the one `node --check` prints.
+_BATCH_SCRIPT = r"""
+const vm = require('vm');
+let data = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { data += chunk; });
+process.stdin.on('end', () => {
+  const bad = [];
+  for (const [index, code] of JSON.parse(data)) {
+    try { new vm.SourceTextModule(code, { identifier: String(index) }); } catch (error) { bad.push(index); }
+  }
+  process.stdout.write(JSON.stringify(bad));
+});
+"""
+BATCH_SIZE = 400
+
+
+def unparsable_in_batch(items):
+    """Indexes of `items` ((path, code) pairs) that do not parse as an ES module, from one node process
+    per BATCH_SIZE files. None when the batch could not be run (old node without
+    --experimental-vm-modules, a crash): the caller then checks every file on its own."""
+    bad = []
+    for start in range(0, len(items), BATCH_SIZE):
+        chunk = [[start + i, code] for i, (_path, code) in enumerate(items[start:start + BATCH_SIZE])]
+        try:
+            res = subprocess.run(
+                ["node", "--experimental-vm-modules", "--no-warnings", "-e", _BATCH_SCRIPT],
+                input=json.dumps(chunk),
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            found = json.loads(res.stdout) if res.returncode == 0 else None
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            found = None
+        if not isinstance(found, list):
+            return None
+        bad += [int(i) for i in found]
+    return bad
+
+
+def check_files(file_paths, pool_size):
+    """Failures [(path, message)] for the files, same as check_file on each, in batches."""
+    errors = []
+    sources = []
+    if pool_size > 1 and len(file_paths) > 8:
+        with multiprocessing.Pool(pool_size) as pool:
+            audited = pool.map(audit_file, file_paths, chunksize=16)
+    else:
+        audited = [audit_file(p) for p in file_paths]
+    for path, (code, failure) in zip(file_paths, audited):
+        if failure:
+            errors.append(failure)
+        elif code is not None:
+            sources.append((path, code))
+    bad = unparsable_in_batch(sources)
+    if bad is None:
+        suspects = sources
+    else:
+        suspects = [sources[i] for i in bad]
+    for path, code in suspects:
+        result = node_check(path, code)
+        if result:
+            errors.append(result)
+    return errors
 
 
 def main():
@@ -227,10 +315,7 @@ def main():
 
     # Constrain pool size to avoid overwhelming the VM CPU scheduler
     pool_size = min(4, multiprocessing.cpu_count() or 1)
-    with multiprocessing.Pool(pool_size) as pool:
-        for res in pool.imap_unordered(check_file, js_files):
-            if res:
-                errors.append(res)
+    errors = check_files(js_files, pool_size)
 
     if errors:
         print("🚨 JAVASCRIPT SYNTAX ERRORS DETECTED 🚨\n")
