@@ -1680,15 +1680,24 @@ def main():
                 this_env["PYTHONPATH"] = os.path.dirname(run_dir) + os.pathsep + this_env["PYTHONPATH"]
                 step_name = f"pytest {os.path.relpath(run_dir, dir_path)}"
                 aliases = ()
-            _add(
-                step_name,
-                [interpreter, "-m", "pytest", "-q"] + files_here,
-                cwd=run_dir,
-                env=this_env,
-                fail_header=f"❌ {step_name[len('pytest '):]} unit test failures:",
-                inputs=((os.path.realpath(daemon_dir),) + loose_daemon_files, None),
-                aliases=aliases,
+            # A directory listed under "daemon_shards" in lint_test_durations.json (hams_simulated_bots/tests: 540 s
+            # in one process) runs as several pytest sessions balanced by recorded seconds per file.
+            # HAMS_LINT_DAEMON_SHARDS=0 restores the single session.
+            sessions = lint_test_durations.daemon_shards(
+                os.path.relpath(run_dir, dir_path), files_here,
+                disabled=os.environ.get("HAMS_LINT_DAEMON_SHARDS") == "0",
             )
+            for session_index, session_files in enumerate(sessions, 1):
+                session_name = step_name if len(sessions) == 1 else f"{step_name}[{session_index}of{len(sessions)}]"
+                _add(
+                    session_name,
+                    [interpreter, "-m", "pytest", "-q"] + session_files,
+                    cwd=run_dir,
+                    env=this_env,
+                    fail_header=f"❌ {step_name[len('pytest '):]} unit test failures:",
+                    inputs=((os.path.realpath(daemon_dir),) + loose_daemon_files, None),
+                    aliases=aliases if len(sessions) == 1 else (),
+                )
 
     # 30. check_access_csv_group_order -- catches the exact bug class that
     # silently broke the ENTIRE test suite tonight (not just one module's

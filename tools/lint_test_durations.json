@@ -112,5 +112,23 @@
   "test_verify_anchors.py": 51.36,
   "test_wordpress_to_odoo.py": 0.72,
   "test_worktree_hygiene.py": 1.3
+ },
+ "daemon_shards": {
+  "daemons/hams_simulated_bots/tests": {
+   "count": 4,
+   "_comment": "Seconds per test file from the 40 slowest tests of one serial run (hams_com, dev box, 2026-11-03: 947 passed in 540 s); files not listed are estimated from their size.",
+   "seconds": {
+    "test_sfu_offers.py": 147.2,
+    "test_ragchew_flow.py": 125.4,
+    "test_main.py": 90.5,
+    "test_ai_service.py": 29.8,
+    "test_band_connection.py": 20.4,
+    "test_qso_test.py": 17.3,
+    "test_bot_host.py": 11.7,
+    "test_bench_concurrency.py": 10.1,
+    "test_opus_roundtrip.py": 9.6,
+    "test_speech_text.py": 8.5
+   }
+  }
  }
 }

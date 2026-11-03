@@ -194,3 +194,17 @@ import (Odoo `registry.category(...)` lookups carry no types), which the type-aw
 fixed 30 s limit failed three of them, while the script was only slow. The limit is now `_timeout(base)`: the base limit times
 twice the 1-minute load per core, at least the base and at most 8 times it (30 s becomes 75 s at load 20 on 16 cores, 240 s at most),
 so a script that really hangs still fails. Pinned by `SubprocessTimeoutFollowsLoadTests`.
+
+## 8. Daemon test directories run as several sessions
+
+`pytest daemons/hams_simulated_bots/tests` was one process of 947 tests, 540 s serial (dev box, 2026-11-03; no pytest-xdist in that
+daemon's venv, and adding a dependency needs approval): 25 tests of 10-50 s each, real aiortc connections whose time is waiting
+(`SFU_OPENING_OFFER_WAIT_S`, ICE, a four-minute over transcribed in chunks), so the machine was idle for most of it. The directory
+is now `daemon_shards` in `tools/lint_test_durations.json`: `lint_test_durations.daemon_shards` splits its files into 4 sessions
+balanced by recorded seconds per file, run by `run_linters.py` as the steps `pytest daemons/hams_simulated_bots/tests[NofM]`
+(`--only "pytest daemons/hams_simulated_bots/tests"` still selects all four). Measured: the four sessions run side by side,
+each passing (246 + 448 + 153 + 100 = 947 passed, 13 skipped, the same counts as the serial run), **179 s wall against 540 s**
+(load 4 to 17 from other agents; slowest session 179 s, the others 106-151 s; `test_sfu_offers.py` alone is about 150 s). The
+sessions do not share state: every server binds port 0 except `test_main.py` (3000) and `test_observer.py` (3001), which are in
+different files and different ports. `HAMS_LINT_DAEMON_SHARDS=0` restores the single session. Other daemon directories are
+listed in the table only when measured; `lint_test_durations.py refresh` keeps that section.
