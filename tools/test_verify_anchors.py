@@ -36,6 +36,18 @@ import verify_anchors as va  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify_anchors.py")
 
+
+def _timeout(base_seconds):
+    """A subprocess time limit that follows the machine's load. These tests run the whole script (10 s alone on an idle
+    box); with ten agents' lint runs sharing the cores the same run took more than the fixed 30 s limit (2026-11-03,
+    load 20 on 16 cores) while still being correct. The limit is the base limit times twice the 1-minute load per core,
+    never below the base and never above 8 times it, so a script that really hangs still fails, just later."""
+    try:
+        per_core = os.getloadavg()[0] / (os.cpu_count() or 1)
+    except OSError:
+        per_core = 1.0
+    return base_seconds * min(8.0, max(1.0, 2.0 * per_core))
+
 _TREE_OVERRIDES = ("HAMS_COM_TREE", "HAMS_OPEN_TREE")
 _saved_tree_overrides = {}
 
@@ -717,7 +729,7 @@ class StackedAnchorsAreNoLongerARuleTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _run(self):
-        result = subprocess.run([sys.executable, _SCRIPT, self.tmp], capture_output=True, text=True, timeout=60)
+        result = subprocess.run([sys.executable, _SCRIPT, self.tmp], capture_output=True, text=True, timeout=_timeout(60))
         return result.returncode, result.stdout + result.stderr
 
     def test_the_rule_and_its_report_no_longer_exist(self):
@@ -909,7 +921,7 @@ class MainIntegrationTests(unittest.TestCase):
 
     def _run(self):
         result = subprocess.run(
-            [sys.executable, _SCRIPT, self.tmp], capture_output=True, text=True, timeout=30
+            [sys.executable, _SCRIPT, self.tmp], capture_output=True, text=True, timeout=_timeout(30)
         )
         return result.returncode, result.stdout + result.stderr
 
@@ -981,7 +993,7 @@ class MainIntegrationTests(unittest.TestCase):
         _write(os.path.join(dir_b, "mod_a", "__manifest__.py"), "{}\n")
         _write(os.path.join(dir_b, "mod_a", "models", "foo.py"), "# [@ANCHOR: COMM_dup_cross_repo]\n")
         result = subprocess.run(
-            [sys.executable, _SCRIPT, dir_a, dir_b], capture_output=True, text=True, timeout=30
+            [sys.executable, _SCRIPT, dir_a, dir_b], capture_output=True, text=True, timeout=_timeout(30)
         )
         out = result.stdout + result.stderr
         self.assertEqual(result.returncode, 1, out)
@@ -1053,7 +1065,7 @@ class SiblingRepoScanningIntegrationTests(unittest.TestCase):
             [sys.executable, self.script_copy, self.hams_com],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=_timeout(30),
         )
         out = result.stdout + result.stderr
         self.assertNotIn("Missing Cross-Reference Target", out, out)
@@ -1070,10 +1082,30 @@ class SiblingRepoScanningIntegrationTests(unittest.TestCase):
             [sys.executable, self.script_copy, os.path.join(self.hams_com, "mod_a")],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=_timeout(30),
         )
         out = result.stdout + result.stderr
         self.assertNotIn("Missing Cross-Reference Target", out, out)
+
+
+class SubprocessTimeoutFollowsLoadTests(unittest.TestCase):
+    """The time limit of the tests that run verify_anchors.py as a subprocess grows with the load (it failed at load 20)."""
+
+    def _limit(self, load, cores, base=30):
+        import unittest.mock as mock
+
+        with mock.patch("os.getloadavg", return_value=(load, load, load)), mock.patch("os.cpu_count", return_value=cores):
+            return _timeout(base)
+
+    def test_an_idle_machine_keeps_the_base_limit(self):
+        self.assertEqual(self._limit(0.5, 16), 30)
+        self.assertEqual(self._limit(8, 16), 30)
+
+    def test_a_loaded_machine_gets_proportionally_longer(self):
+        self.assertEqual(self._limit(20, 16), 75)
+
+    def test_the_limit_is_capped_so_a_real_hang_still_fails(self):
+        self.assertEqual(self._limit(500, 16), 240)
 
 
 if __name__ == "__main__":
@@ -1109,7 +1141,7 @@ class BaselineRatchetTests(unittest.TestCase):
             [sys.executable, _SCRIPT, target, "--baseline", self.baseline, *flags],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=_timeout(60),
         )
         return r.returncode, r.stdout + r.stderr
 

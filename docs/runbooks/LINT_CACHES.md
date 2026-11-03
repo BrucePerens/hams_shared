@@ -100,8 +100,13 @@ byte-identical with and without the cache (`cmp` on the same trees; unit tests p
 `pytest -n 4 --dist loadfile` run of all 108 files, 3,413 passed in 401 s at load 8-12) show the split by length gives
 estimated chunk times of **195 / 188 / 458 / 351 s** (the 195 and 450-660 s of the logs); `lint_test_durations.balanced_chunks`
 (longest first into the lightest chunk) gives **355 / 279 / 279 / 279 s**, so the slowest chunk drops from 458 to 355 s. The 355 s
-is one file: `test_b2_backup.py` (real kopia repositories, 42 tests, four of them 35-59 s) is a floor under any split
-(xdist `--dist loadfile` keeps a file on one worker). Coverage proof (`lint_step_inventory.py collect` before/after,
+was one file: `test_b2_backup.py` (real kopia repositories, 42 tests, four of them 35-59 s), a floor under any split
+(xdist `--dist loadfile` keeps a file on one worker). **Second pass:** the file is now four (`test_b2_backup.py`,
+`_end_to_end`, `_tenant_archives`, `_qso`; same 42 tests, the shared fixtures imported from the first). Profile: every test
+builds its own repository (`init` + `backup` in `setUp`, 28 kopia calls of 0.1-0.5 s each in the slowest test, 4.4 of its 7.2 s);
+nothing sleeps, so there was nothing to remove without sharing state between tests, which would weaken their isolation. Run
+alone and idle, the four files take 23 / 48 / 61 / 92 s (the slowest 92 s, against 240-355 s for the one file); the table in
+`lint_test_durations.json` has the new files with the old total shared by those proportions. Coverage proof (`lint_step_inventory.py collect` before/after,
 ids normalised to `tools/...`): 3,417 test ids before, 3,444 after, **0 lost, 0 duplicated**, the 27 new ones are the new tests
 of this change. The argv of every `pytest tools/[NofM]` step changed, so each machine's step cache misses once.
 `HAMS_LINT_CHUNKS=size` restores the old split. Refresh the table (command in `lint_test_durations.py`) after large changes.
@@ -128,7 +133,7 @@ of this change. The argv of every `pytest tools/[NofM]` step changed, so each ma
   where the regex engine is the majority, and it is 15 %.
 * `check_untyped_utility_files`: the result of mypy for a file depends on the modules it imports, so a content hash of
   the file alone is not a sound key. mypy's own incremental cache is the right tool; it is per-checkout path.
-* `test_b2_backup.py` (355 s alone, see 3a) and `test_lint_lock.py` (190 s): single files that bound a chunk; profile them next.
+* `test_b2_backup.py` (split into four files, see 3a) and `test_lint_lock.py` (190 s): single files that bound a chunk.
 * `eslint` (result cache): the type-aware rules (`no-floating-promises`) read the types of imported files, so ESLint's own result cache
   is not sound across a change to a dependency either. See the to-do.
 
@@ -159,3 +164,10 @@ changed JSON file; no changed script; a changed script that is a classic script 
 shared with every file of the TypeScript program). `HAMS_LINT_ESLINT=whole` forces the old behaviour. A full run (no
 `--changed`) is unchanged. Not narrowed: a dependent that uses a changed file through a global or a registry name and not an
 import (Odoo `registry.category(...)` lookups carry no types), which the type-aware rules cannot see either.
+
+## 7. Tests that time out under load
+
+`test_verify_anchors.py` runs `verify_anchors.py` as a subprocess (10 s alone). With ten agents' lint runs on 16 cores (load 20) the
+fixed 30 s limit failed three of them, while the script was only slow. The limit is now `_timeout(base)`: the base limit times
+twice the 1-minute load per core, at least the base and at most 8 times it (30 s becomes 75 s at load 20 on 16 cores, 240 s at most),
+so a script that really hangs still fails. Pinned by `SubprocessTimeoutFollowsLoadTests`.
