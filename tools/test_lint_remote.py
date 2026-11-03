@@ -4,6 +4,7 @@
 
 import io
 import json
+import re
 import os
 import shutil
 import stat
@@ -486,6 +487,22 @@ class SyncTests(unittest.TestCase):
         self.assertIn("d/b.txt", listed)
         self.assertNotIn(".hams_lint_sync", listed)
 
+    def test_a_nested_repository_is_a_gitlink_of_the_outer_mirror_not_a_pile_of_its_files(self):
+        self.sync()
+        inner = os.path.join(self.dest, "shared")
+        os.makedirs(inner)
+        write(os.path.join(inner, "lib.rs"), "fn main() {}\n")
+        # An older run committed the inner files into the outer repository.
+        lr.commit_mirror(self.transport, self.dest)
+        self.assertIn("shared/lib.rs", subprocess.run(["git", "-C", self.dest, "ls-files"], capture_output=True, text=True).stdout.split())
+        lr.commit_mirror(self.transport, inner)
+        lr.commit_mirror(self.transport, self.dest, nested=("shared",))
+        listed = subprocess.run(["git", "-C", self.dest, "ls-files", "-s"], capture_output=True, text=True).stdout
+        self.assertNotIn("shared/lib.rs", listed)
+        self.assertIn("160000", listed)
+        self.assertIn("d/b.txt", listed)
+        self.assertEqual(subprocess.run(["git", "-C", inner, "ls-files"], capture_output=True, text=True).stdout.split(), ["lib.rs"])
+
 
 class VerifyTests(unittest.TestCase):
     def test_results_must_cover_every_step_pass_and_match_the_run(self):
@@ -689,7 +706,9 @@ class ProvisionTests(unittest.TestCase):
             text = handle.read()
         pins = [line for line in text.splitlines() if "==" in line and not line.startswith("#")]
         self.assertGreaterEqual(len(pins), 10)
-        self.assertEqual(text.count("--hash=sha256:"), len(pins))
+        # every pin carries at least one hash (a compiled package carries one per architecture) and nothing is unpinned
+        blocks = re.findall(r"^\S+==\S+ \\\n((?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", text, re.M)
+        self.assertEqual(len(blocks), len(pins))
         self.assertIn("pytest-xdist==", text)
 
 

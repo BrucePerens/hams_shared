@@ -317,8 +317,13 @@ in a fixed order, and ends with a per-step timing table.
   * **Provisioning is a script, not hand work**: `python3 tools/lint_remote.py provision HOST` prints the
     plan, `--apply` installs what is missing (`tools/provision_build_host.sh`, run on the machine; apt
     packages with `sudo -n`, everything else in the user's home: rustup with the toolchain pinned by the
-    repositories' `rust-toolchain.toml`, pytest/xdist/flake8 from `tools/requirements-test.txt` pinned by
-    SHA-256), `--verify` proves it can `cargo test`, run `node --test`, `pytest -n` and take a headless
+    repositories' `rust-toolchain.toml`; the Python test stack (pytest, xdist, flake8, hypothesis, mcp, numpy,
+    cryptography, pyopenssl, playwright and their dependencies) from `tools/requirements-test.txt`, every wheel
+    pinned by SHA-256 for both x86-64 and aarch64; Debian's own `python3-*` libraries, including
+    `python3-typeshed` (the stubs mypy needs) and `python3-pyinotify` (no wheel exists); and, downloaded and
+    refused unless their SHA-256 matches, kopia, the Odoo nightly `.deb` the dev box runs (service left
+    disabled) and PostgreSQL 18 from apt.postgresql.org with its key fingerprint checked, plus Go 1.24),
+    `--verify` proves it can `cargo test`, run `node --test`, `pytest -n` and take a headless
     Chrome screenshot, `--versions` prints the versions for the inventory, `--undo` removes exactly what
     `--apply` recorded. It is idempotent. A new machine needs only an `ai` account with a key and `sudo -n`.
   * A machine holds a persistent mirror `~/hams-lint-mirror/{hams_com,hams_open}` (the tracked tree of HEAD
@@ -331,7 +336,11 @@ in a fixed order, and ends with a per-step timing table.
     again here** before it counts (the dev box is the reference environment; a remote failure is often a
     package version the machine lacks), so a remote failure never stamps and never blocks a step that
     passes here; if you see `reported failing steps ... running them here to confirm` often, the machine
-    needs provisioning (`provision HOST --verify`). The siblings (hams_open or hams_com, and hams_shared)
+    needs provisioning (`provision HOST --verify`; both runners have had every Python package, Odoo,
+    PostgreSQL, kopia and Go the steps need since 2026-11-03, so only the steps that must stay local fall back).
+    The mirror's hams_shared is a git repository of its own and a gitlink of the mirror's hams_open, as on the
+    dev box (before 2026-11-03 hams_open's mirror also listed hams_shared's files, which made
+    `check_rust_function_test_anchors` fail on every runner). The siblings (hams_open or hams_com, and hams_shared)
     go as they are on this machine.
 * **pytest-xdist** (test-only dependency, approved by Bruce 2026-11-02, `tools/requirements-test.txt`): a
   `pytest ...` step runs as `pytest -n N --dist loadfile` when its interpreter can import `xdist` (N = cores
