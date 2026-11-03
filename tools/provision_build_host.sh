@@ -35,6 +35,8 @@
 #     smartmontools alsa-utils poppler-utils rpm llvm tesseract-ocr espeak-ng libhamlib-utils pipewire-bin   programs the dev box has and tests call
 #                                    (smartctl, arecord/aplay/amixer, pdftotext, rpmbuild, llvm-nm, tesseract, espeak-ng, rigctl/rigctld, pw-dump)
 #     imagemagick (magick) ffmpeg sox shellcheck libnss3-tools redis-tools   tools the daemon and tools tests run
+#     python3-cssselect -asgiref -olefile -ldap -six -oauthlib -jsonpatch -coverage -orjson -sqlparse -zmq -lark   the rest of what the dev box's tests import
+#                                    (theme_hams' snippet test needs cssselect: it failed on bruce-yoga without it)
 #     python3-aiohttp -pika -pymupdf -flask -flask-cors -serial -feedparser -docx -asyncpg ...   the hams_com daemons' tests
 #     golang-1.24-go                                              libcloudflared build (tools/test_build_cloudflared_ffi.py)
 #     sqlite3 pdns-backend-sqlite3                                the PowerDNS schema file tools/test_infrastructure.py reads; the
@@ -72,6 +74,8 @@ APT_PACKAGES=(build-essential pkg-config cmake clang autoconf automake libtool
   python3-feedparser python3-docx python3-asyncpg python3-defusedxml python3-webencodings
   redis-server rabbitmq-server python3-redis redis-tools imagemagick ffmpeg shellcheck libnss3-tools sox
   smartmontools alsa-utils poppler-utils rpm llvm tesseract-ocr espeak-ng libhamlib-utils pipewire-bin
+  python3-cssselect python3-asgiref python3-olefile python3-ldap python3-six python3-oauthlib python3-jsonpatch
+  python3-coverage python3-orjson python3-sqlparse python3-zmq python3-lark
   sqlite3 pdns-backend-sqlite3)
 
 ODOO_VERSION="19.0.20261029"
