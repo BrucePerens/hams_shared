@@ -1247,6 +1247,8 @@ def main():
         eslint_project = write_eslint_project(hams_shared_dir, [repo_root, sibling_dir])
         eslint_env = dict(os.environ)
         eslint_env["HAMS_ESLINT_TSCONFIG"] = eslint_project
+        # The type-aware project makes node need more than its default heap (about 2 GB): a --changed run died with "JavaScript heap out of memory" (2026-11-02).
+        eslint_env.setdefault("NODE_OPTIONS", "--max-old-space-size=4096")
         eslint_env["NODE_PATH"] = os.pathsep.join(
             [toolchain["node_modules"]] + ([eslint_env["NODE_PATH"]] if eslint_env.get("NODE_PATH") else [])
         )
