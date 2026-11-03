@@ -188,7 +188,12 @@ STEP_META = {
     # changed file runs it.
     "check_burn_list": {"suffixes": frozenset({".py", ".xml", ".js", ".csv", ".html"})},
     "verify_anchors": {
-        "suffixes": frozenset({".py", ".js", ".xml", ".html", ".rs", ".md", ".test"})
+        # ".toml" and ".lock": lint_stamp_gate.py demands verify_anchors for a branch that changes only
+        # Cargo.toml/Cargo.lock, so the runner has to select it too (2026-11-03: a dependency-only
+        # branch could not get a passing stamp, the step was always skipped).
+        "suffixes": frozenset(
+            {".py", ".js", ".xml", ".html", ".rs", ".md", ".test", ".toml", ".lock"}
+        )
     },
     "check_js_syntax": {"suffixes": _JS},
     "check_test_tags": {"suffixes": _PY},
