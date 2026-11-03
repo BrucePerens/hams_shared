@@ -124,9 +124,11 @@ class CargoBudgetTest(unittest.TestCase):
     def test_legacy_directory_is_adopted_once(self):
         cache = self._tmp.name
         legacy = os.path.join(cache, "hams-cargo-target-lint")
-        os.makedirs(os.path.join(legacy, "debug"))
+        os.makedirs(os.path.join(legacy, "debug", "incremental", "a-0123456789abcdef"))
+        os.makedirs(os.path.join(legacy, "debug", "deps"))
         self.assertEqual(lint_cache.adopt_legacy_dir(self.target, {"XDG_CACHE_HOME": cache}), legacy)
-        self.assertTrue(os.path.isdir(os.path.join(self.target, "debug")))
+        self.assertTrue(os.path.isdir(os.path.join(self.target, "debug", "deps")))
+        self.assertFalse(os.path.exists(os.path.join(self.target, "debug", "incremental")))  # never read again
         self.assertIsNone(lint_cache.adopt_legacy_dir(self.target, {"XDG_CACHE_HOME": cache}))
 
 

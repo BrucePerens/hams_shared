@@ -40,6 +40,7 @@ CLI:  python3 tools/lint_cache.py show | prune | clear [cargo|results|all]
 
 import contextlib
 import fcntl
+import glob
 import hashlib
 import json
 import math
@@ -414,6 +415,10 @@ def adopt_legacy_dir(target, environ=None):
         os.rename(legacy, target)
     except OSError:
         return None
+    # The old directory was built with incremental compilation (26 of its 31 GB); these builds run with
+    # CARGO_INCREMENTAL=0, so those sessions are never read again.
+    for profile in glob.glob(os.path.join(glob.escape(target), "*", "incremental")) + glob.glob(os.path.join(glob.escape(target), "*", "*", "incremental")):
+        shutil.rmtree(profile, ignore_errors=True)
     return legacy
 
 
