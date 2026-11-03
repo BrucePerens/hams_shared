@@ -17,6 +17,7 @@ check_cargo_deny.py/check_pip_audit.py: a clippy-flagged pattern can be introduc
 crate, not just near whatever file a targeted lint run happens to be scoped to.
 """
 
+import filecmp
 import glob
 import os
 import re
@@ -84,7 +85,7 @@ _PATH_CHARS = r"[^\s\"'<>;,=()\[\]{}`]"
 
 
 def _cached_text(run_dir):
-    """The text of what a build script left in `run_dir`: its `output` (the cargo: lines) and
+    """(name relative to `run_dir`, text) of what a build script left there: its `output` (the cargo: lines) and
     every small text file under `out/` (the generated sources). Binary and huge files are skipped.
 
     A binary file is recognised by the NUL byte in its first 4 KiB, and only those 4 KiB are read to find out: a
@@ -104,23 +105,121 @@ def _cached_text(run_dir):
                 data = head + f.read()
         except OSError:
             continue
-        yield data.decode("utf-8", errors="replace")
+        yield os.path.relpath(name, run_dir).replace(os.sep, "/"), data.decode("utf-8", errors="replace")
+
+
+def _other_checkout_hits(text, crate_relpath, current_roots):
+    """[(other checkout root, the whole line it was found on, the path found)] for every absolute path in `text`
+    that goes through `<some checkout>/<crate_relpath>` where the checkout is not one of `current_roots`."""
+    if crate_relpath not in text:  # the pattern needs this literal; a substring test is far cheaper than the regex scan
+        return []
+    pattern = re.compile("(/" + _PATH_CHARS + "*?)/" + re.escape(crate_relpath) + r"(?=/|$|[\s\"'])(" + _PATH_CHARS + "*)")
+    hits = []
+    for m in pattern.finditer(text):
+        if m.group(1) in current_roots:
+            continue
+        start = text.rfind("\n", 0, m.start()) + 1
+        end = text.find("\n", m.end())
+        hits.append((m.group(1), text[start:len(text) if end < 0 else end], m.group(1) + "/" + crate_relpath + m.group(2)))
+    return hits
 
 
 def _names_another_checkout(text, crate_relpath, current_roots):
     """True when `text` holds an absolute path through `<some checkout>/<crate_relpath>` where
     the checkout is not one of `current_roots`."""
-    if crate_relpath not in text:  # the pattern needs this literal; a substring test is far cheaper than the regex scan
+    return bool(_other_checkout_hits(text, crate_relpath, current_roots))
+
+
+# What a build script's output may name of another checkout without making it unusable here.
+#
+# A match inside `output` (any `cargo:` line but rerun-if-changed) or inside a generated source is consumed by the
+# compiler or the linker of the crates that depend on it: that output is wrong in every other checkout, always
+# purged (the bench_mcp `include_str!` bug above). Two kinds of match are different (measured 2026-11-03: they were
+# 210-280 s per switch between checkouts, because they rebuilt `opusic-sys` and `hams_local_relay`, which compile C):
+#   * `cargo:rerun-if-changed=<absolute path>`: only says which files cargo should watch.
+#   * files under `out/build/`: the script's private build tree (CMake's cache, ninja files), whose only reader is
+#     the script itself, the next time it runs.
+# Both are harmless if the script does not run again here and the files it was built from are the same here. That is
+# decided by comparing the files (`_same_tree`) and their times against the run's `invoked.timestamp`, the time
+# cargo itself compares: a file changed since the script ran, or one that differs between the two checkouts, makes the
+# output unusable and it is purged as before.
+_RERUN_PREFIXES = ("cargo:rerun-if-changed=", "cargo::rerun-if-changed=")
+_SCRATCH_PREFIX = "out/build/"
+_MAX_COMPARED_BYTES = 512 * 1024 * 1024
+
+
+def _same_tree(a, b, not_after_ns):
+    """True when `a` and `b` are the same file, or the same directory tree, byte for byte, and no file in either
+    was modified after `not_after_ns`. A tree larger than _MAX_COMPARED_BYTES, a missing path, or anything
+    unreadable is "not the same" (the caller then purges, which is always safe)."""
+    budget = [_MAX_COMPARED_BYTES]
+
+    def files(root):
+        if os.path.isfile(root) and not os.path.islink(root):
+            return {"": root}
+        found = {}
+        for dirpath, dirs, names in os.walk(root):
+            dirs[:] = sorted(d for d in dirs if d not in IGNORE_DIR_NAMES)
+            for n in names:
+                full = os.path.join(dirpath, n)
+                found[os.path.relpath(full, root).replace(os.sep, "/")] = full
+        return found
+
+    try:
+        left, right = files(a), files(b)
+        if set(left) != set(right) or not left:
+            return False
+        for rel in sorted(left):
+            pa, pb = left[rel], right[rel]
+            sa, sb = os.lstat(pa), os.lstat(pb)
+            if os.path.islink(pa) or os.path.islink(pb):
+                if not (os.path.islink(pa) and os.path.islink(pb) and os.readlink(pa) == os.readlink(pb)):
+                    return False
+                continue
+            if sa.st_mtime_ns > not_after_ns or sb.st_mtime_ns > not_after_ns or sa.st_size != sb.st_size:
+                return False
+            budget[0] -= sa.st_size
+            if budget[0] < 0 or not filecmp.cmp(pa, pb, shallow=False):
+                return False
+    except OSError:
         return False
-    pattern = re.compile("(/" + _PATH_CHARS + "*?)/" + re.escape(crate_relpath) + r"(?=/|$|[\s\"'])")
-    return any(m.group(1) not in current_roots for m in pattern.finditer(text))
+    return True
 
 
-def purge_stale_build_script_output(target_dir, repo_root, crate_dir, memo=None):
+def _reusable_here(run_dir, hits, repo_root):
+    """True when every match in `hits` ((other root, text file name, line, path found)) is of a harmless kind (see above)
+    and the same sources exist unchanged in this checkout, so this run directory's output is valid here."""
+    try:
+        stamp = os.stat(os.path.join(run_dir, "invoked.timestamp")).st_mtime_ns
+    except OSError:
+        stamp = os.stat(os.path.join(run_dir, "output")).st_mtime_ns
+    pairs = set()
+    scratch = {}  # other root -> directories its private build tree was built from
+    for other_root, name, line, found in hits:
+        if name == "output" and line.startswith(_RERUN_PREFIXES):
+            path = os.path.normpath(line.split("=", 1)[1].strip())
+            if not path.startswith(other_root + os.sep):
+                return False
+            pairs.add((path, os.path.join(repo_root, path[len(other_root) + 1:])))
+        elif name.startswith(_SCRATCH_PREFIX):
+            path = os.path.normpath(found)
+            if not os.path.exists(path):
+                return False
+            scratch.setdefault(other_root, set()).add(path if os.path.isdir(path) else os.path.dirname(path))
+        else:
+            return False
+    for other_root, dirs in scratch.items():
+        common = os.path.commonpath(sorted(dirs))
+        pairs.add((common, os.path.join(repo_root, os.path.relpath(common, other_root))))
+    return all(_same_tree(there, here, stamp) for there, here in sorted(pairs))
+
+
+def purge_stale_build_script_output(target_dir, repo_root, crate_dir, memo=None, kept=None):
     """Deletes the cached run directory (and its fingerprint) of every build script under
     `target_dir` whose output names `crate_dir`'s path in a checkout other than `repo_root`, so
-    cargo runs the script again here. Returns the directories removed. Always safe: a deleted run
-    directory only costs a rerun of that script.
+    cargo runs the script again here, unless the only such names are harmless and the sources are
+    the same here (`_reusable_here`): then it is kept and added to the list `kept` if one is given.
+    Returns the directories removed. Always safe: a deleted run directory only costs a rerun of that script.
 
     `memo` (a dict the caller keeps for the whole run) holds the text of each run directory, read once for all crates:
     the same directories were read again for every crate."""
@@ -143,14 +242,29 @@ def purge_stale_build_script_output(target_dir, repo_root, crate_dir, memo=None)
                 continue
             if memo.get(run_dir, (None, None))[0] != stamp:
                 memo[run_dir] = (stamp, list(_cached_text(run_dir)))
-            if not any(_names_another_checkout(t, relpath, current_roots) for t in memo[run_dir][1]):
+            hits = [
+                (root, name, line, found)
+                for name, text in memo[run_dir][1]
+                for root, line, found in _other_checkout_hits(text, relpath, current_roots)
+            ]
+            if not hits:
                 continue
-            fingerprint = os.path.join(os.path.dirname(build_root), ".fingerprint", os.path.basename(run_dir))
-            shutil.rmtree(run_dir, ignore_errors=True)
-            shutil.rmtree(fingerprint, ignore_errors=True)
+            if _reusable_here(run_dir, hits, os.path.abspath(repo_root)):
+                if kept is not None:
+                    kept.append(run_dir)
+                continue
+            remove_run_dir(run_dir)
             memo.pop(run_dir, None)
             removed.append(run_dir)
     return removed
+
+
+def remove_run_dir(run_dir):
+    """Deletes a build script's run directory and its fingerprint."""
+    build_root = os.path.dirname(run_dir)
+    fingerprint = os.path.join(os.path.dirname(build_root), ".fingerprint", os.path.basename(run_dir))
+    shutil.rmtree(run_dir, ignore_errors=True)
+    shutil.rmtree(fingerprint, ignore_errors=True)
 
 
 def target_dirs(crate_dir):
@@ -249,20 +363,33 @@ def main():
     sys.exit(1 if any_failed else 0)
 
 
+def _run_clippy(crate_dir):
+    return subprocess.run(
+        ["cargo", "clippy", "--", "-W", "clippy::all"],
+        capture_output=True,
+        text=True,
+        cwd=crate_dir,
+    )
+
+
 def _clippy_all(crate_dirs):
     any_failed = False
     scanned = {}
     for repo_root, crate_dir in crate_dirs:
         rel_path = os.path.relpath(crate_dir, repo_root)
+        kept = []
         for target_dir in target_dirs(crate_dir):
-            for removed in purge_stale_build_script_output(target_dir, repo_root, crate_dir, scanned):
+            for removed in purge_stale_build_script_output(target_dir, repo_root, crate_dir, scanned, kept):
                 print(f"note: removed build-script output cached from another checkout: {removed}")
-        res = subprocess.run(
-            ["cargo", "clippy", "--", "-W", "clippy::all"],
-            capture_output=True,
-            text=True,
-            cwd=crate_dir,
-        )
+        res = _run_clippy(crate_dir)
+        if res.returncode != 0 and kept:
+            # A script's private build tree (CMake's cache) kept because it was built from identical sources can still
+            # make a rerun of that script fail; the old behaviour (purge it, build again) is the fallback.
+            for run_dir in kept:
+                print(f"note: build failed with build-script output kept from another checkout; removing it and building again: {run_dir}")
+                remove_run_dir(run_dir)
+                scanned.pop(run_dir, None)
+            res = _run_clippy(crate_dir)
         # clippy's own exit code is 0 even for warnings unless -D is passed; this gate treats
         # any "warning:" line in stderr as a real finding, matching how -W clippy::all is meant
         # to surface style/correctness issues without hard-denying the whole build on every one.
