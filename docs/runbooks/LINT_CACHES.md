@@ -232,3 +232,33 @@ independent (each makes its own scratch directory and mypy cache). `run_linters.
 The first full run of the split on bruce-yoga (8 cores, other steps running) failed 2 to 8 of the 13 tests with `subprocess.TimeoutExpired`:
 the tests' fixed 120 s limit per mypy run is too short with four workers beside the other steps (22-61 s alone). The limit now follows the
 load (`_mypy_timeout`, the same rule as section 7). That run's step was 330-336 s on the runner against 536-640 s for the chunk that held the file before.
+
+## 10. Paired full runs, before and after the two lint-speed passes (2026-11-03)
+
+Method. Full `run_linters.py` (no `--changed`, every step) of hams_open at 14f307be with hams_com at ef0660b67 as the sibling, run on the
+machine itself over ssh (`--remote local` inside its mirror, `nice -n 19`), one run at a time, the dev box only syncing files.
+**Before** = hams_shared at 5ab8b6e (PR #339, before the first pass), with the Cargo directory restored to its old name
+`~/.cache/hams-cargo-target-lint` (warm, as the old code used it). **After** = hams_shared at c29b543 (second pass #344-#349), whose first
+run adopts that directory (`lint cache: adopted the old shared directory ...`, seen on bruce-yoga twice and on mac1-vm).
+
+bruce-yoga (8 cores, shared with another agent's relay tests; `uptime` 1-minute load before to after each run):
+
+| Run | Wall | Sum of step times | Load | check_cargo_clippy | Slowest step |
+|---|---|---|---|---|---|
+| old 1 | 600 s | 1,478 s | 0.4 to 1.8 | 109 s | pytest tools chunk 536 s (holds test_odoo_mypy_plugin.py) |
+| old 2 | **2,585 s** | 3,749 s | 7.4 to 2.8 | **2,365 s** (the 961 s-class stale-output scan) | clippy |
+| new 1 (adopts old directory) | 396 s | 1,517 s | 1.8 to 7.4 | 52 s | mypy-plugin step 335 s |
+| new 2 (adopts again) | 459 s | 1,721 s | 2.8 to 7.8 | 73 s | check_untyped_utility_files 445 s |
+| new 3 (steady state) | **393 s** | 1,487 s | 6.1 to 6.3 | 44 s | mypy-plugin step 330 s |
+
+Ratios: wall 600 to 393-459 s against the faster old run, 2,585 to 393-459 s against the slower one (old time depends on how many build scripts
+the old scan finds; the new scan does not). Clippy 109-2,365 s to 44-73 s. Caveats: load on this runner is another agent's and varies
+between runs; the sums are inflated when steps overlap on 8 cores. In this direct mode `pytest tools/[host-bound]`, 8 tests of
+`test_run_linters_changed_selection.py` and `test_sweep_orphan_worktrees.py` fail in every run, old and new (the mirror is not a git
+checkout; the normal `--remote` path keeps those steps on the dev box), so `rc=1` is the same in all five; the new runs also show 2-8
+`test_odoo_mypy_plugin.py` timeouts at 120 s with four workers, fixed in #352 (limit follows the load) and verified alone on the runner
+(13 passed, 124 s). Not measured: a `--changed` run on a runner (the logs of the real `--remote auto` path are in section 3 and the PR descriptions).
+
+mac1-vm (10 cores, `uptime` 0.3 to 5.4), cross-check of the first-run adoption only: the old directory was adopted and used (3.6 GB), then
+**cleared at once because the disk had 5 GB free against the 10 GB floor** (`/` is 94 % full: 89 of 99 GB used), so clippy was cold. Full run 206 s wall, 601 s
+of step times. The VM cannot hold a warm Cargo directory until about 10 GB is freed on it (not done: it hosts the production FCC sync).
