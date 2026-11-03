@@ -263,6 +263,33 @@ class PurgeStaleBuildScriptOutputTests(unittest.TestCase):
         run_dir, _ = self._run_dir("bench_mcp-0123456789abcdef", self.other, profile=("x86_64-unknown-linux-gnu", "debug"))
         self.assertEqual(self._purge(), [run_dir])
 
+    def test_one_memo_serves_every_crate_and_reads_each_run_dir_once(self):
+        other_crate = os.path.join(self.here, "daemons", "other")
+        os.makedirs(other_crate)
+        run_dir, _ = self._run_dir("bench_mcp-0123456789abcdef", self.here)
+        memo = {}
+        reads = []
+        original = chk._cached_text
+
+        def counting(path):
+            reads.append(path)
+            return original(path)
+
+        with patch.object(chk, "_cached_text", counting):
+            self.assertEqual(chk.purge_stale_build_script_output(self.target, self.here, self.crate, memo), [])
+            self.assertEqual(chk.purge_stale_build_script_output(self.target, self.here, other_crate, memo), [])
+        self.assertEqual(reads, [run_dir])  # the second crate reused the first crate's read
+
+    def test_a_rewritten_output_is_read_again_and_a_stale_one_is_purged(self):
+        run_dir, _ = self._run_dir("bench_mcp-0123456789abcdef", self.here)
+        memo = {}
+        self.assertEqual(chk.purge_stale_build_script_output(self.target, self.here, self.crate, memo), [])
+        # another checkout's build rewrites the script's output (a later mtime): the memo must not hide it
+        _write(os.path.join(run_dir, "out", "manual_files.rs"), f'include_str!("{self.other}/daemons/bench_mcp/manual/a.md")\n')
+        later = os.stat(os.path.join(run_dir, "output")).st_mtime_ns + 5_000_000_000
+        os.utime(os.path.join(run_dir, "output"), ns=(later, later))
+        self.assertEqual(chk.purge_stale_build_script_output(self.target, self.here, self.crate, memo), [run_dir])
+
     def test_binary_output_and_a_missing_target_directory_are_ignored(self):
         run_dir = os.path.join(self.target, "debug", "build", "ring-0123456789abcdef")
         _write(os.path.join(run_dir, "output"), "")

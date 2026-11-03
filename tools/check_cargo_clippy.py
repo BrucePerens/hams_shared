@@ -85,7 +85,11 @@ _PATH_CHARS = r"[^\s\"'<>;,=()\[\]{}`]"
 
 def _cached_text(run_dir):
     """The text of what a build script left in `run_dir`: its `output` (the cargo: lines) and
-    every small text file under `out/` (the generated sources). Binary and huge files are skipped."""
+    every small text file under `out/` (the generated sources). Binary and huge files are skipped.
+
+    A binary file is recognised by the NUL byte in its first 4 KiB, and only those 4 KiB are read to find out: a
+    warm target directory holds gigabytes of object files under `build/*/out/`, and reading each of them whole,
+    for every crate, took 129 s of an otherwise 2 s warm run (measured 2026-11-03)."""
     names = [os.path.join(run_dir, "output")]
     for root, _dirs, files in os.walk(os.path.join(run_dir, "out")):
         names.extend(os.path.join(root, f) for f in files)
@@ -94,10 +98,11 @@ def _cached_text(run_dir):
             if os.path.getsize(name) > _MAX_SCANNED_BYTES:
                 continue
             with open(name, "rb") as f:
-                data = f.read()
+                head = f.read(4096)
+                if b"\0" in head:
+                    continue
+                data = head + f.read()
         except OSError:
-            continue
-        if b"\0" in data[:4096]:
             continue
         yield data.decode("utf-8", errors="replace")
 
@@ -105,20 +110,26 @@ def _cached_text(run_dir):
 def _names_another_checkout(text, crate_relpath, current_roots):
     """True when `text` holds an absolute path through `<some checkout>/<crate_relpath>` where
     the checkout is not one of `current_roots`."""
+    if crate_relpath not in text:  # the pattern needs this literal; a substring test is far cheaper than the regex scan
+        return False
     pattern = re.compile("(/" + _PATH_CHARS + "*?)/" + re.escape(crate_relpath) + r"(?=/|$|[\s\"'])")
     return any(m.group(1) not in current_roots for m in pattern.finditer(text))
 
 
-def purge_stale_build_script_output(target_dir, repo_root, crate_dir):
+def purge_stale_build_script_output(target_dir, repo_root, crate_dir, memo=None):
     """Deletes the cached run directory (and its fingerprint) of every build script under
     `target_dir` whose output names `crate_dir`'s path in a checkout other than `repo_root`, so
     cargo runs the script again here. Returns the directories removed. Always safe: a deleted run
-    directory only costs a rerun of that script."""
+    directory only costs a rerun of that script.
+
+    `memo` (a dict the caller keeps for the whole run) holds the text of each run directory, read once for all crates:
+    the same directories were read again for every crate."""
     relpath = os.path.relpath(crate_dir, repo_root).replace(os.sep, "/")
     current_roots = {os.path.abspath(repo_root), os.path.realpath(repo_root)}
     removed = []
     if relpath == ".":
         return removed
+    memo = {} if memo is None else memo
     # <target>/<profile>/build and <target>/<triple>/<profile>/build
     base = glob.escape(target_dir)
     build_roots = glob.glob(os.path.join(base, "*", "build")) + glob.glob(os.path.join(base, "*", "*", "build"))
@@ -126,11 +137,18 @@ def purge_stale_build_script_output(target_dir, repo_root, crate_dir):
         for run_dir in sorted(glob.glob(os.path.join(glob.escape(build_root), "*"))):
             if not os.path.isfile(os.path.join(run_dir, "output")):
                 continue
-            if not any(_names_another_checkout(t, relpath, current_roots) for t in _cached_text(run_dir)):
+            try:
+                stamp = os.stat(os.path.join(run_dir, "output")).st_mtime_ns  # a rerun of the script rewrites `output`
+            except OSError:
+                continue
+            if memo.get(run_dir, (None, None))[0] != stamp:
+                memo[run_dir] = (stamp, list(_cached_text(run_dir)))
+            if not any(_names_another_checkout(t, relpath, current_roots) for t in memo[run_dir][1]):
                 continue
             fingerprint = os.path.join(os.path.dirname(build_root), ".fingerprint", os.path.basename(run_dir))
             shutil.rmtree(run_dir, ignore_errors=True)
             shutil.rmtree(fingerprint, ignore_errors=True)
+            memo.pop(run_dir, None)
             removed.append(run_dir)
     return removed
 
@@ -233,10 +251,11 @@ def main():
 
 def _clippy_all(crate_dirs):
     any_failed = False
+    scanned = {}
     for repo_root, crate_dir in crate_dirs:
         rel_path = os.path.relpath(crate_dir, repo_root)
         for target_dir in target_dirs(crate_dir):
-            for removed in purge_stale_build_script_output(target_dir, repo_root, crate_dir):
+            for removed in purge_stale_build_script_output(target_dir, repo_root, crate_dir, scanned):
                 print(f"note: removed build-script output cached from another checkout: {removed}")
         res = subprocess.run(
             ["cargo", "clippy", "--", "-W", "clippy::all"],
