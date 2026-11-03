@@ -337,6 +337,42 @@ class DispatchWholeRunTests(unittest.TestCase):
         self.assertEqual(job.status, "ok")
 
 
+class UnfitTests(unittest.TestCase):
+    def test_a_step_that_failed_on_a_machine_and_passed_here_is_not_sent_there_again(self):
+        path = os.path.join(tempfile.mkdtemp(prefix="unfit-"), "u.json")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        lr.record_unfit("big", ["pytest daemons/a"], path=path, now=1000.0)
+        self.assertEqual(lr.load_unfit(path, now=1500.0), {"big": {"pytest daemons/a"}})
+        self.assertEqual(lr.load_unfit(path, now=1000.0 + lr.UNFIT_TTL_SECONDS + 1), {}, "entries expire")
+        self.assertEqual(lr.load_unfit(os.path.join(os.path.dirname(path), "none.json")), {})
+        plan = lr.make_plan(["pytest daemons/a", "pytest daemons/b"], set(), DURATIONS, INVENTORY, {"big": FULL, "small": FULL},
+                            "auto", 16, 40.0, whole=True, unfit={"big": {"pytest daemons/a"}, "small": {"pytest daemons/a"}})
+        self.assertNotIn("pytest daemons/a", [n for ns in plan.remote.values() for n in ns])
+        self.assertIn("pytest daemons/a", plan.local)
+
+    def test_collect_reports_steps_confirmed_here_to_the_callback(self):
+        class Job:
+            host, status, names, problems, seconds = "m", "failed", ["a", "b"], ["step failed: a", "step failed: b"], {}
+
+            def join(self):
+                pass
+
+        steps = [lint_exec.Step(name=n, argv=["/usr/bin/true"]) for n in ("a", "b")]
+        seen = []
+        lr.collect([Job()], steps, lambda wanted: [lint_exec.Result(s.name, 1 if s.name == "b" else 0, "", 0.1) for s in wanted],
+                   lint_exec.Result, out=lambda _l: None, on_unfit=lambda host, names: seen.append((host, names)))
+        self.assertEqual(seen, [("m", ["a"])], "b fails here too: a real failure, not the machine's fault")
+
+    def test_a_system_program_missing_on_the_machine_is_found_on_its_path(self):
+        bundle = {"bundle_id": "x", "steps": [{"name": "f", "argv": ["/usr/bin/definitely-not-here-python3", "-V"]},
+                                              {"name": "g", "argv": ["/usr/bin/python3", "-V"]}]}
+        steps = lr.import_bundle(bundle, {})
+        self.assertEqual(steps[0].argv[0], "/usr/bin/definitely-not-here-python3", "unknown programs are left alone")
+        with mock.patch.object(lr.shutil, "which", return_value="/home/ai/.local/bin/definitely-not-here-python3"):
+            self.assertEqual(lr.import_bundle(bundle, {})[0].argv[0], "/home/ai/.local/bin/definitely-not-here-python3")
+        self.assertEqual(steps[1].argv[0], "/usr/bin/python3")
+
+
 class ExportTests(unittest.TestCase):
     def test_paths_become_placeholders_and_back(self):
         roots = {"hams_com": "/w/hams_com", "hams_open": "/w/hams_open", "hams_shared": "/w/hams_open/hams_shared"}
@@ -558,6 +594,11 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(holder.stdout.readline().strip(), "held")
         os.environ["HAMS_LINT_REMOTE_WAIT"] = "2"
         self.addCleanup(os.environ.pop, "HAMS_LINT_REMOTE_WAIT", None)
+        # when this suite itself runs under a lint run, the "remote" run would inherit the parent's lock marker
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("HAMS_LINT_LOCK_HELD", None)
         started = time.monotonic()
         status, problems, _ = self.run_remote(self.bundle(("say", ["/usr/bin/python3", "-c", "print(1)"])))
         self.assertEqual(status, "infra", "\n".join(self.lines))

@@ -41,6 +41,7 @@ import math
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -315,7 +316,7 @@ def _est(name, durations):
 
 
 def make_plan(step_names, static_names, durations, inventory, probes, mode, local_cores, local_load,
-              whole=False, exclude=()):
+              whole=False, exclude=(), unfit=None):
     """Route steps. `mode`: 'local', 'auto' or a machine name. `static_names`: steps with no command
     (always local). `probes`: name -> Probe for every runner. Pure: no I/O.
 
@@ -354,7 +355,7 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
                 continue
         candidates[name] = (probe, jobs)
     if whole and mode == "auto":
-        return make_whole_plan(step_names, static_names, durations, candidates, skipped, notes, local_cores)
+        return make_whole_plan(step_names, static_names, durations, candidates, skipped, notes, local_cores, unfit or {})
     assigned = {LOCAL: []}
     finish = {LOCAL: local_load * 60.0 / max(1, local_cores)}
     for name, (probe, jobs) in candidates.items():
@@ -396,7 +397,7 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
     return Plan(local, remote, notes, seconds_by, skipped)
 
 
-def make_whole_plan(step_names, static_names, durations, candidates, skipped, notes, local_cores):
+def make_whole_plan(step_names, static_names, durations, candidates, skipped, notes, local_cores, unfit=None):
     """The plan for a run that would have to queue for this machine's run lock (2026-11-03).
 
     One idle machine takes EVERY step it can run, however short (the 60 s floor of the spreading plan is
@@ -413,9 +414,13 @@ def make_whole_plan(step_names, static_names, durations, candidates, skipped, no
         notes.append("whole run: nothing can be shipped, the run queues here as before")
         return Plan(list(step_names), {}, notes, {LOCAL: sum(_est(n, durations) for n in step_names)}, skipped)
 
+    unfit = unfit or {}
+
+    def can_run(step, name):
+        return requirements_for(step) <= candidates[name][0].caps and step not in unfit.get(name, ())
+
     def covered(name):
-        probe = candidates[name][0]
-        return sum(_est(n, durations) for n in movable if requirements_for(n) <= probe.caps)
+        return sum(_est(n, durations) for n in movable if can_run(n, name))
 
     def load_fraction(name):
         probe, _jobs = candidates[name]
@@ -425,11 +430,11 @@ def make_whole_plan(step_names, static_names, durations, candidates, skipped, no
     if covered(primary) <= 0:
         notes.append("whole run: no machine can run any step, the run queues here as before")
         return Plan(list(step_names), {}, notes, {LOCAL: sum(_est(n, durations) for n in step_names)}, skipped)
-    assigned[primary] = [n for n in movable if requirements_for(n) <= candidates[primary][0].caps]
+    assigned[primary] = [n for n in movable if can_run(n, primary)]
     rest = [n for n in movable if n not in assigned[primary]]
     extra = {}
     for step in sorted(rest, key=lambda n: -_est(n, durations)):
-        options = [name for name in candidates if name != primary and requirements_for(step) <= candidates[name][0].caps]
+        options = [name for name in candidates if name != primary and can_run(step, name)]
         if options:
             best = min(options, key=lambda name: (sum(_est(n, durations) for n in extra.get(name, [])), load_fraction(name)))
             extra.setdefault(best, []).append(step)
@@ -696,6 +701,15 @@ def import_bundle(bundle, roots, home=None):
             value = value.replace(placeholder, path)
         return value
 
+    def program(argv):
+        """The dev box names system programs by absolute path (/usr/bin/flake8); a machine that has the program
+        elsewhere on its PATH (pip --user: ~/.local/bin) still runs the step."""
+        if argv and isinstance(argv[0], str) and argv[0].startswith("/usr/bin/") and not os.path.exists(argv[0]):
+            found = shutil.which(os.path.basename(argv[0]))
+            if found:
+                return [found] + argv[1:]
+        return argv
+
     steps = []
     for item in bundle["steps"]:
         env = None
@@ -705,7 +719,7 @@ def import_bundle(bundle, roots, home=None):
         steps.append(
             lint_exec.Step(
                 name=item["name"],
-                argv=[back(a) for a in item["argv"]],
+                argv=program([back(a) for a in item["argv"]]),
                 cwd=back(item.get("cwd")),
                 env=env,
                 lock=item.get("lock"),
@@ -855,7 +869,61 @@ class RemoteJob:
         self.thread.join()
 
 
-def collect(jobs, all_steps, execute_here, result_class, out=print):
+UNFIT_TTL_SECONDS = 3 * 86400.0
+
+
+def unfit_path(environ=None):
+    environ = os.environ if environ is None else environ
+    base = environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "hams-lint", "remote_unfit.json")
+
+
+def load_unfit(path=None, now=None):
+    """host -> set of step names that failed on that machine and passed here in the last three days (a missing
+    Python package or service there). A whole run does not send them again: it would only queue them here
+    afterwards. Unreadable file: nothing is known."""
+    now = time.time() if now is None else now
+    try:
+        with open(path or unfit_path(), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    unfit = {}
+    for host, steps in (data if isinstance(data, dict) else {}).items():
+        if isinstance(steps, dict):
+            names = {name for name, stamp in steps.items() if isinstance(stamp, (int, float)) and now - stamp < UNFIT_TTL_SECONDS}
+            if names:
+                unfit[host] = names
+    return unfit
+
+
+def record_unfit(host, names, path=None, now=None):
+    """Remember that `names` failed on `host` but pass on this machine. Best effort."""
+    now = time.time() if now is None else now
+    path = path or unfit_path()
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        data = data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        data = {}
+    entry = data.setdefault(host, {})
+    for name in names:
+        entry[name] = now
+    for steps in data.values():
+        for name in [n for n, stamp in steps.items() if not isinstance(stamp, (int, float)) or now - stamp >= UNFIT_TTL_SECONDS]:
+            del steps[name]
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def collect(jobs, all_steps, execute_here, result_class, out=print, on_unfit=None):
     """Wait for the remote jobs. Returns (results, hosts): a Result per remote step. The steps of a
     machine that could not do its job run here through `execute_here(steps)` (that machine is then not
     credited). A step that FAILED on a machine is run here again: the dev box is the reference
@@ -877,7 +945,10 @@ def collect(jobs, all_steps, execute_here, result_class, out=print):
         if failed_names:
             out(f"[*] --remote: {job.host} reported failing steps ({', '.join(sorted(failed_names))}): "
                 "running them here to confirm (the dev box is the reference environment)")
-            results += execute_here([s for s in all_steps if s.name in failed_names])
+            confirmed = execute_here([s for s in all_steps if s.name in failed_names])
+            results += confirmed
+            if on_unfit:
+                on_unfit(job.host, [r.name for r in confirmed if r.returncode == 0])
         else:
             hosts.append(job.host)
     return results, hosts
@@ -893,7 +964,8 @@ def repo_roles(repo_root, sibling_dir, shared_dir):
 
 
 def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cores, local_load,
-             where=False, inventory=None, transports=None, probes=None, out=print, whole=False, claim=None, claimed=None):
+             where=False, inventory=None, transports=None, probes=None, out=print, whole=False, claim=None, claimed=None,
+             unfit=None):
     """Split `steps` between this machine and the others.
 
     Returns (local_steps, jobs). With `where` it prints the plan and returns ([], []). Steps that are
@@ -930,7 +1002,7 @@ def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cor
     handles = {}
     for _attempt in range(len(wanted) + 1):
         plan = make_plan(ordered, static, durations, inventory, probes, mode, local_cores, local_load,
-                         whole=whole, exclude=excluded)
+                         whole=whole, exclude=excluded, unfit=unfit)
         if where or not claim:
             break
         handles = {}

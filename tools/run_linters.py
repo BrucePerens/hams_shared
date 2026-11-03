@@ -2086,6 +2086,7 @@ def main():
                 whole=whole_run,
                 claim=lint_lock.try_claim,
                 claimed=lint_lock.claimed,
+                unfit=lint_remote.load_unfit(),
             )
             if options.where:
                 sys.exit(0)
@@ -2138,7 +2139,9 @@ def main():
                 fallback_lock[0] = taken
         return lint_exec.execute(wanted, options.jobs)
 
-    extra_results, remote_hosts = lint_remote.collect(remote_jobs, all_steps, execute_here, lint_exec.Result)
+    extra_results, remote_hosts = lint_remote.collect(
+        remote_jobs, all_steps, execute_here, lint_exec.Result, on_unfit=lint_remote.record_unfit
+    )
     results += extra_results
     if options.results_json:
         with open(options.results_json, "w", encoding="utf-8") as handle:
