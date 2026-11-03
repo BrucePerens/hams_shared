@@ -12,6 +12,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import shutil
 import sys
 import subprocess
@@ -640,6 +641,80 @@ def widens_module_scope(path):
     scope alone; every other file type still widens it."""
     name = os.path.basename(path)
     return not (name.endswith(".rs") or name in _RUST_ONLY_NAMES)
+
+
+ESLINT_MODULE_SUFFIXES = (".js", ".mjs", ".cjs")
+_ESLINT_SKIP_DIRS = frozenset({"node_modules", "target", ".git", "__pycache__", ".venv", "venv"})
+_QUOTED_SPECIFIER = re.compile(r"""['"`]([^'"`\n]+)['"`]""")
+_MODULE_SYNTAX = re.compile(r"^\s*(?:import\s|import\(|export\s)|\bmodule\.exports\b|\brequire\(", re.M)
+
+
+def narrow_eslint_targets(targets, changed_paths, full_triggers=()):
+    """The JavaScript files `--changed` has to give ESLint, or None when the directories in `targets` must be linted whole.
+
+    ESLint's cost is per linted file (measured 2026-11-03, hams_com, type-aware config: one file 8.8 s, the
+    daemons/shack_console directory 93 s), and a one-file console change used to hand it the changed module's
+    directory or, for a change outside every Odoo module (daemons/), the whole repository. The findings of a file depend
+    on that file and on the types it imports, so the narrowed set is the changed files plus every file under `targets`
+    that imports one of them (a quoted import/require/from specifier on an import-like line whose last path part is the
+    changed file's name, or the directory name for an `index` file: a superset of the real importers). Everything
+    else is exactly as before: same config, same project, same rules.
+
+    Returns None (lint `targets` whole) when anything makes the narrowing unsafe: a changed config file
+    (`full_triggers`: eslint.config.js, tsconfig.json, package.json), a changed JSON or other non-script file under
+    `targets`, no changed script, or a changed script that is not a module (a classic script shares its globals with
+    every other file in the TypeScript program, so who is affected cannot be read from imports). A script that was
+    deleted still counts: its importers are linted."""
+    changed = [os.path.realpath(p) for p in changed_paths]
+    if any(p in {os.path.realpath(t) for t in full_triggers} for p in changed):
+        return None
+    roots = [os.path.realpath(t) for t in targets]
+
+    def under_targets(path):
+        return any(path == r or path.startswith(r + os.sep) for r in roots)
+
+    mine = [p for p in changed if under_targets(p)]
+    scripts = [p for p in mine if p.endswith(ESLINT_MODULE_SUFFIXES)]
+    if not scripts or any(p.endswith(".json") for p in mine):
+        return None
+    names = set()
+    for path in scripts:
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8", errors="replace") as handle:
+                    if not _MODULE_SYNTAX.search(handle.read()):
+                        return None
+            except OSError:
+                return None
+        stem = os.path.basename(path).rsplit(".", 1)[0]
+        names.add(stem)
+        if stem == "index":
+            names.add(os.path.basename(os.path.dirname(path)))
+    selected = {p for p in scripts if os.path.isfile(p)}
+    for root in roots:
+        if os.path.isfile(root):
+            continue
+        for current, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in _ESLINT_SKIP_DIRS and not d.startswith(".")]
+            for name in files:
+                full = os.path.join(current, name)
+                if not name.endswith(ESLINT_MODULE_SUFFIXES) or full in selected:
+                    continue
+                try:
+                    with open(full, encoding="utf-8", errors="replace") as handle:
+                        lines = [line for line in handle if "import" in line or "require" in line or "from" in line or "define" in line]
+                except OSError:
+                    continue
+                for line in lines:
+                    for spec in _QUOTED_SPECIFIER.findall(line):
+                        last = spec.rstrip("/").rsplit("/", 1)[-1].rsplit(".", 1)[0] if not spec.endswith("/") else ""
+                        if last in names or spec.rstrip("/").rsplit("/", 1)[-1] in names:
+                            selected.add(full)
+                            break
+                    else:
+                        continue
+                    break
+    return sorted(selected) or None
 
 
 def find_eslint_toolchain(hams_shared_dir):
@@ -1311,6 +1386,20 @@ def main():
         eslint_env["NODE_PATH"] = os.pathsep.join(
             [toolchain["node_modules"]] + ([eslint_env["NODE_PATH"]] if eslint_env.get("NODE_PATH") else [])
         )
+        # --changed: the changed scripts and the files that import them, not every file of the changed modules
+        # (narrow_eslint_targets; HAMS_LINT_ESLINT=whole keeps the whole directories).
+        narrowed = None
+        if (
+            changed_set is not None
+            and not target_modules_str
+            and not run_all
+            and os.environ.get("HAMS_LINT_ESLINT") != "whole"
+        ):
+            narrowed = narrow_eslint_targets(
+                eslint_targets,
+                changed_set,
+                [os.path.join(hams_shared_dir, name) for name in ("eslint.config.js", "tsconfig.json", "package.json")],
+            )
         _add(
             "eslint",
             [
@@ -1318,7 +1407,7 @@ def main():
                 "--config",
                 eslint_config,
                 "--no-error-on-unmatched-pattern",
-            ] + eslint_targets,
+            ] + (["--no-warn-ignored"] + narrowed if narrowed else eslint_targets),
             cwd=workspace_root,
             env=eslint_env,
             fail_header="❌ ESLint Violations:",
