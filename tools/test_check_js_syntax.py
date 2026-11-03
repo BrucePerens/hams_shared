@@ -265,5 +265,86 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("No JS files found", out)
 
 
+SYNTAX_CASES = {
+    "ok_import.js": "import x from 'y';\nexport const z = x;\n",
+    "ok_tla.js": "const a = await Promise.resolve(1);\nexport {a};\n",
+    "ok_meta.js": "export const u = import.meta.url;\n",
+    "ok_hashbang.js": "#!/usr/bin/env node\nexport {};\n",
+    "ok_bom.js": "\ufeffexport const x = 1;\n",
+    "bad_expr.js": "const x = ;\n",
+    "bad_with.js": "with (a) {}\n",
+    "bad_html_comment.js": "<!-- x\nfoo\n",
+    "bad_octal.js": "'use strict'; 010\n",
+    "bad_return.js": "return 5\n",
+    "bad_enum.js": "var enum = 1;\n",
+    "bad_await_function.js": "function f() { return await 1 }\n",
+}
+
+
+class BatchTests(unittest.TestCase):
+    """The batch (one node process) must fail exactly the files that `node --check` fails on their own."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.paths = []
+        for name, text in SYNTAX_CASES.items():
+            path = os.path.join(self.tmp, name)
+            _write(path, text)
+            self.paths.append(path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _single(self):
+        return sorted(p for p in self.paths if chk.check_file(p))
+
+    def test_the_batch_fails_exactly_the_files_that_fail_on_their_own(self):
+        self.assertEqual(sorted(p for p, _msg in chk.check_files(self.paths, 1)), self._single())
+        self.assertEqual(self._single(), sorted(p for p in self.paths if os.path.basename(p).startswith("bad_")))
+
+    def test_the_message_of_a_failure_is_the_one_node_check_prints(self):
+        by_path = dict(chk.check_files(self.paths, 1))
+        bad = os.path.join(self.tmp, "bad_expr.js")
+        self.assertEqual(by_path[bad], chk.check_file(bad)[1])
+        self.assertIn("bad_expr.js", by_path[bad])
+
+    def test_a_batch_that_cannot_run_falls_back_to_one_process_per_file(self):
+        original = chk.unparsable_in_batch
+        chk.unparsable_in_batch = lambda items: None
+        try:
+            self.assertEqual(sorted(p for p, _msg in chk.check_files(self.paths, 1)), self._single())
+        finally:
+            chk.unparsable_in_batch = original
+
+    def test_batches_split_at_the_batch_size(self):
+        original = chk.BATCH_SIZE
+        chk.BATCH_SIZE = 3
+        try:
+            self.assertEqual(sorted(p for p, _msg in chk.check_files(self.paths, 1)), self._single())
+        finally:
+            chk.BATCH_SIZE = original
+
+    def test_the_audit_rules_still_fail_a_file_that_parses(self):
+        path = os.path.join(self.tmp, "x.test.js")
+        _write(path, "expect(a).toBeTruthy();\n")
+        self.assertEqual([p for p, _msg in chk.check_files([path], 1)], [path])
+
+    def test_many_files_take_one_node_process_not_one_each(self):
+        calls = []
+        real_run = chk.subprocess.run
+
+        def counting_run(argv, *args, **kwargs):
+            calls.append(argv)
+            return real_run(argv, *args, **kwargs)
+
+        chk.subprocess.run = counting_run
+        try:
+            ok = [p for p in self.paths if os.path.basename(p).startswith("ok_")]
+            self.assertEqual(chk.check_files(ok, 1), [])
+        finally:
+            chk.subprocess.run = real_run
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
