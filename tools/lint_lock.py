@@ -25,6 +25,14 @@ fails, and each run takes 20-40 minutes instead of 5. So heavy runs queue:
     bounds the wait; HAMS_LINT_LOAD_LIMIT / HAMS_LINT_LOAD_TIMEOUT (or --load-limit /
     --load-timeout) override those for lint only. The runner-process check of test.py's gate is not
     used here: a lint run does not need the box free of CI, only not overloaded.
+  * DISTRIBUTION (2026-11-03). A run that would have to queue here, because a run holds or waits for the
+    lock or the load is above the limit, does not wait while another machine is idle: run_linters.py
+    --remote auto ships the whole run (every step the machine can run) to the least-loaded capable
+    machine, which has its own lock and gate, and takes this lock only for the steps that must stay
+    here. That remainder (git history, network, this checkout: about 75 s in all) does not queue behind
+    other runs either when its known durations total at most HAMS_LINT_RESIDUE_SECONDS (default 240): it
+    waits only for the load gate. `local_busy` is that decision; `claim` keeps two runs on this machine from picking the same
+    idle machine at the same moment (an flock per machine, held while the run's share is executing).
   * OVERRIDES. HAMS_LINT_NO_LOCK=1 (CI, a machine that is used by one run at a time) takes no lock;
     the gate has its own switch above. The holder exports HAMS_LINT_LOCK_HELD so the runs it
     starts itself (tests that call run_linters.py) never queue behind their own parent.
@@ -41,6 +49,7 @@ import time
 import lock_queue
 
 DEFAULT_CHEAP_SECONDS = 60.0
+DEFAULT_RESIDUE_SECONDS = 240.0
 DEFAULT_LOAD_TIMEOUT_SECONDS = 900.0
 EXIT_TEMPFAIL = lock_queue.EXIT_WAIT_TIMEOUT  # 75, same as test.py's wait timeout
 POLL_SECONDS = 15.0
@@ -122,6 +131,11 @@ def lock_decision(environ, pending_names, durations):
     if is_cheap(pending_names, durations, threshold):
         return False, "cheap run (known steps total at most %g s)" % threshold
     return True, "heavy run"
+
+
+def residue_seconds(environ=None):
+    environ = os.environ if environ is None else environ
+    return _finite(environ.get("HAMS_LINT_RESIDUE_SECONDS"), DEFAULT_RESIDUE_SECONDS)
 
 
 def describe_info(worktree, command):
@@ -211,6 +225,61 @@ class RunLock:
         os.environ.pop(HELD_ENV, None)
 
 
+def local_busy(environ=None, loadavg=None, cpu_count=None, qdir=None):
+    """(busy, reason): True when a heavy run started now would wait here, because a lint run holds or waits
+    for the lock, or the 1-minute load average is above the limit. Takes no lock; reads the queue only."""
+    environ = os.environ if environ is None else environ
+    qdir = qdir or queue_dir(environ)
+    tickets = lock_queue.live_tickets(qdir, clean=False)
+    holder = lock_queue.read_holder(qdir)
+    if tickets or holder:
+        return True, "%d lint run(s) hold or wait for the lock here" % max(len(tickets), 1)
+    if environ.get("HAMS_SKIP_CI_LOAD_GATE") == "1":
+        return False, "the lock is free"
+    try:
+        current = (loadavg or (lambda: os.getloadavg()[0]))()
+    except OSError:
+        return False, "the lock is free"
+    limit = load_limit(environ, cpu_count=cpu_count)
+    if current > limit:
+        return True, "load %.1f is above the lint limit %.1f" % (current, limit)
+    return False, "the lock is free and the load is %.1f" % current
+
+
+def claim_dir(environ=None):
+    return os.path.join(cache_dir(environ), "claims")
+
+
+def try_claim(machine, environ=None):
+    """Claim `machine` for the whole run of this process: an exclusive non-blocking flock on
+    claims/<machine>.lock. Returns the open file (close it to release; the kernel drops it when the process
+    dies) or None when another run on this machine has it."""
+    directory = claim_dir(environ)
+    try:
+        os.makedirs(directory, exist_ok=True)
+        handle = open(os.path.join(directory, machine + ".lock"), "a+", encoding="utf-8")  # noqa: SIM115 - held by the caller
+    except OSError:
+        return None
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def claimed(machines, environ=None):
+    """The subset of `machines` that another run holds a claim on right now."""
+    taken = set()
+    for machine in machines:
+        handle = try_claim(machine, environ)
+        if handle is None:
+            taken.add(machine)
+        else:
+            handle.close()
+    return taken
+
+
 def status_lines(environ=None):
     """For `--lock-status`: the holder and the queue."""
     qdir = queue_dir(environ)
@@ -277,10 +346,20 @@ def wait_for_load(limit, timeout, environ=None, loadavg=None, sleep=time.sleep, 
 
 
 def begin_heavy_run(environ, pending_names, durations, worktree, command, lock_timeout=None,
-                    load_limit_override=None, load_timeout_override=None, out=print):
+                    load_limit_override=None, load_timeout_override=None, out=print, residue=False):
     """Everything run_linters.py does before it starts steps. Returns (ok, RunLock or None); on
-    not ok the caller exits with EXIT_TEMPFAIL after printing what `out` received."""
+    not ok the caller exits with EXIT_TEMPFAIL after printing what `out` received.
+
+    `residue`: the rest of this run went to other machines, so these are the few steps that had to stay
+    (or came back): when they are short they take no place in the queue, only the load gate."""
     take, reason = lock_decision(environ, pending_names, durations)
+    if take and residue and is_cheap(pending_names, durations, residue_seconds(environ)):
+        out("[*] lint lock not needed: the steps left here total at most %g s (the rest of the run is on other machines)"
+            % residue_seconds(environ))
+        if not wait_for_load(load_limit(environ, override=load_limit_override), load_timeout(environ, load_timeout_override),
+                             environ=environ, out=out):
+            return False, None
+        return True, None
     if not take:
         if reason.startswith(("cheap", "no step")):
             out("[*] lint lock not needed: " + reason)

@@ -251,8 +251,9 @@ shared dev box), so agents ran it scoped or not at all and new findings reached 
 now runs steps in parallel (`-j`, default half the cores; `HAMS_LINT_JOBS`), prints each step's output
 in a fixed order, and ends with a per-step timing table.
 
-* **Before every merge run `nice -n 10 python3 tools/run_linters.py --changed --remote auto`** from your worktree
-  root, with the work committed. It runs only the steps whose inputs differ from `origin/main`, scoped
+* **Before every merge run `nice -n 10 python3 tools/run_linters.py --changed`** from your worktree
+  root, with the work committed (since 2026-11-03 that means `--remote auto` without saying so; `--remote local`
+  or `HAMS_LINT_REMOTE=local` keeps everything on this machine). It runs only the steps whose inputs differ from `origin/main`, scoped
   to the changed modules and the modules that depend on them, and skips steps whose inputs are
   byte-identical to their last passing run. A change under `hams_shared/tools/` runs every step.
   A step is left out only when no changed file has a type it reads (the suffix table `STEP_META` in
@@ -280,6 +281,21 @@ in a fixed order, and ends with a per-step timing table.
   `HAMS_CI_LOAD_GATE_RATIO` and `HAMS_CI_LOAD_GATE_TIMEOUT` as `test.py`'s CI load gate. Do not start a
   second heavy run by other means (no `nohup` loops around `pgrep`): queue, and spend the wait on something
   else. `docs/LINT_STEP_ANALYSIS.md` lists what each step costs and overlaps.
+  **Runs do not wait for the dev box while another machine is idle** (2026-11-03). Ten agents behind one lock
+  meant 30 minute to 2.5 hour waits while mac1-vm and bruce-yoga sat idle. A run that would queue here (a run
+  holds or waits for the lock, or the load is above the limit) ships the *whole* run to the best idle runner
+  (the one that can run the most of its steps; least loaded on a tie): every step that machine can run,
+  however short, under that machine's own lock and load gate, with output as `[host] ...`. Only the steps
+  that need this checkout (`check_summation_bias`, `check_pip_audit`, `check_claims_freshness`,
+  `check_cargo_deny`, `check_noupdate_edits`, `pytest tools/[host-bound]`, and whatever the machine lacks) stay;
+  when those total at most `HAMS_LINT_RESIDUE_SECONDS` (240) they skip the queue and wait only for the load gate.
+  A machine with a run in progress or in line (probed: the machine's lock is held, or live tickets exist) is
+  never chosen; a per-machine claim (`~/.cache/hams-lint/claims/HOST.lock`, an flock) keeps two runs on this box
+  from choosing the same idle machine. If every machine is busy or unreachable the run queues here exactly as
+  before. Steps that come back from a machine (it could not run them, or they failed there and are confirmed
+  here) take the lock and the gate if the run holds none. `--distribute off` (or `HAMS_LINT_DISTRIBUTE=off`)
+  is the older plan (spread only steps of 60 s or more when the dev box is free, queue for the rest);
+  `--distribute always` ships whole runs even when this box is free; `--where` shows the plan.
 * Steps over several test directories are merged where that is provably safe (one daemon, one interpreter:
   `pytest daemons/hams_local_relay`); the old step names are aliases that `--only` still accepts. The repository-pair
   checkers (`check_async_lock_scope`, `check_fake_network_listener`, `check_int_float_overflow`,
@@ -334,10 +350,11 @@ in a fixed order, and ends with a per-step timing table.
 ### How an agent runs the linters (rule of 2026-11-02)
 
 1. Commit your work, then from your worktree root run the standard command:
-   `nice -n 10 python3 tools/run_linters.py --changed --remote auto`
-   (`tools` is the `hams_shared/tools` link of your worktree). It queues behind other runs, sends heavy
-   steps to bruce-yoga or mac1-vm when they are up and idle, runs the rest here, and stamps the commit
-   when everything passed. `devbox_tools/prmerge.sh` needs that stamp.
+   `nice -n 10 python3 tools/run_linters.py --changed`
+   (`tools` is the `hams_shared/tools` link of your worktree; `--remote auto` is the default since
+   2026-11-03). When the dev box is busy it sends the whole run to bruce-yoga or mac1-vm if one is up and
+   idle, so it starts at once; otherwise it queues here as before. It stamps the commit when everything passed.
+   `devbox_tools/prmerge.sh` needs that stamp.
 2. `--only a,b` is for the edit-test loop (a step you are fixing, e.g. `--only flake8,check_cargo_fmt`);
    it never stamps. Run `--changed` once at the end, not after every edit; a repeat with unchanged inputs
    is a cache hit (seconds).
@@ -348,9 +365,10 @@ in a fixed order, and ends with a per-step timing table.
    A run that selects few steps is much shorter; the timing table at the end names the long ones.
    `--where` shows the plan in two seconds without running anything.
 4. If the queue is long (`--lock-status`; each run ahead of you takes 5 to 15 minutes): do not start a
-   second heavy run by other means, and do not use `--no-lock`. `--remote auto` already moves the heavy
-   steps off the dev box, so the queue shortens as soon as the machines are up. Spend the wait on the next
-   piece of work; `--lock-timeout S` makes the run give up (exit 75) instead of waiting.
+   second heavy run by other means, and do not use `--no-lock`. The run already looked for an idle machine
+   when it started (see the `[*] --remote:` lines); it queues only when every runner is busy, claimed or
+   down. Spend the wait on the next piece of work; `--lock-timeout S` makes the run give up (exit 75)
+   instead of waiting. Do not pass `--remote local` to "be safe": it takes the queue the machines avoid.
 5. A run that is reported as failed with `[host] ...` lines: read the lines; the step was re-run here, and
    what remains is a real finding. If a machine is down the run says so and does the work here.
 

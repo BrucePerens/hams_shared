@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for lint_remote.py: routing, sync, running through a (fake) ssh, stamps and fallback."""
 
+import io
 import json
 import os
 import shutil
@@ -10,7 +11,10 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
+import time
 import unittest
+from unittest import mock
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TOOLS)
@@ -150,6 +154,224 @@ class PlanTests(unittest.TestCase):
         self.assertIn("devbox", text)
         self.assertIn("not a runner: hams1: PRODUCTION", text)
         self.assertIn("not a runner: winbox", text)
+
+
+WFULL = lr.Probe("m", True, cores=8, load1=0.5, caps=FULL.caps | {"eslint"})
+
+
+class WholeRunPlanTests(unittest.TestCase):
+    """2026-11-03: a run that would queue for the dev box's lock ships whole to an idle machine."""
+
+    NAMES = ["pytest daemons/a", "pytest daemons/b", "check_x", "eslint", "check_summation_bias"]
+
+    def plan(self, probes, names=None, whole=True, exclude=(), inventory=None):
+        return lr.make_plan(names or self.NAMES, set(), DURATIONS, inventory or INVENTORY, probes, "auto", 16, 40.0,
+                            whole=whole, exclude=exclude)
+
+    def test_lock_busy_and_a_machine_idle_ships_every_runnable_step_even_a_short_one(self):
+        plan = self.plan({"big": WFULL, "small": WFULL})
+        self.assertEqual(len(plan.remote), 1, "one machine takes the run, not both")
+        (host, names), = plan.remote.items()
+        self.assertEqual(names, ["pytest daemons/a", "pytest daemons/b", "check_x", "eslint"])
+        self.assertEqual(plan.local, ["check_summation_bias"], "only the step that needs this checkout stays")
+        self.assertIn("whole run", " ".join(plan.notes))
+
+    def test_spreading_still_keeps_short_steps_here_when_the_lock_is_free(self):
+        plan = self.plan({"big": WFULL, "small": WFULL}, whole=False)
+        self.assertIn("check_x", plan.local)
+
+    def test_the_less_loaded_machine_with_the_same_tools_is_chosen(self):
+        busy = lr.Probe("big", True, cores=8, load1=3.0, caps=WFULL.caps)
+        idle = lr.Probe("small", True, cores=8, load1=0.2, caps=WFULL.caps)
+        self.assertEqual(list(self.plan({"big": busy, "small": idle}).remote), ["small"])
+
+    def test_the_machine_that_can_run_the_most_wins_over_the_idler_one(self):
+        no_node = lr.Probe("big", True, cores=8, load1=0.0, caps=frozenset({"python3", "pytest", "flake8"}))
+        full = lr.Probe("small", True, cores=8, load1=2.0, caps=WFULL.caps)
+        plan = self.plan({"big": no_node, "small": full})
+        self.assertEqual(list(plan.remote), ["small"])
+
+    def test_a_machine_with_a_run_in_progress_or_in_line_is_not_used_so_all_busy_queues_as_before(self):
+        held = lr.Probe("big", True, cores=8, load1=1.0, caps=WFULL.caps, held=True)
+        queued = lr.Probe("small", True, cores=8, load1=0.1, queued=1, caps=WFULL.caps)
+        plan = self.plan({"big": held, "small": queued})
+        self.assertEqual(plan.remote, {})
+        self.assertEqual(plan.local, self.NAMES, "every step stays here: the run queues for the lock as it always did")
+        self.assertIn("busy", " ".join(plan.notes))
+
+    def test_a_claimed_machine_is_skipped_and_the_other_one_is_used(self):
+        plan = self.plan({"big": WFULL, "small": WFULL}, exclude={"big"})
+        self.assertEqual(list(plan.remote), ["small"])
+        none = self.plan({"big": WFULL, "small": WFULL}, exclude={"big", "small"})
+        self.assertEqual(none.remote, {})
+        self.assertIn("claimed", " ".join(none.notes))
+
+    def test_unreachable_machines_leave_everything_here(self):
+        down = lr.Probe("big", False, error="timed out")
+        plan = self.plan({"big": down, "small": lr.Probe("small", False, error="no route")})
+        self.assertEqual((plan.remote, plan.local), ({}, self.NAMES))
+
+    def test_steps_the_chosen_machine_cannot_run_go_to_the_other_only_when_they_add_up(self):
+        py_only = lr.Probe("big", True, cores=8, load1=0.0, caps=frozenset({"python3", "pytest", "flake8"}))
+        js_only = lr.Probe("small", True, cores=8, load1=0.0, caps=frozenset({"python3", "node", "eslint"}))
+        plan = self.plan({"big": py_only, "small": js_only}, names=["pytest daemons/a", "pytest daemons/b", "eslint"])
+        self.assertEqual(plan.remote, {"big": ["pytest daemons/a", "pytest daemons/b"], "small": ["eslint"]})
+        # a few seconds of node work do not justify a second machine and a second sync
+        durations = dict(DURATIONS, check_js_syntax=3.0)
+        short = lr.make_plan(["pytest daemons/a", "pytest daemons/b", "check_js_syntax"], set(), durations, INVENTORY,
+                             {"big": py_only, "small": js_only}, "auto", 16, 40.0, whole=True)
+        self.assertEqual(list(short.remote), ["big"])
+        self.assertEqual(short.local, ["check_js_syntax"])
+
+    def test_every_step_is_placed_exactly_once(self):
+        plan = self.plan({"big": WFULL, "small": WFULL})
+        everything = plan.local + [n for names in plan.remote.values() for n in names]
+        self.assertEqual(sorted(everything), sorted(self.NAMES))
+
+    def test_where_shows_a_lock_held_on_a_machine(self):
+        held = lr.Probe("big", True, cores=8, load1=1.0, caps=WFULL.caps, held=True)
+        text = lr.format_plan(self.plan({"big": held}), INVENTORY, {"big": held})
+        self.assertIn("run lock held", text)
+
+    def test_the_probe_reads_held_and_counts_only_live_tickets(self):
+        probe = lr.parse_probe("m", "os=Linux\ncores=4\nload1=0.1\npyver=3.13\nhas_git=1\nhas_tar=1\nqueued=2\nheld=1\n")
+        self.assertTrue(probe.held)
+        self.assertEqual(probe.queued, 2)
+        self.assertFalse(lr.parse_probe("m", "os=Linux\nheld=0\n").held)
+
+    def test_the_probe_script_counts_tickets_of_live_processes_and_the_flock(self):
+        # Run the real probe fragment against a fake home: a dead ticket does not count, a held flock does.
+        home = tempfile.mkdtemp(prefix="probe-home-")
+        self.addCleanup(shutil.rmtree, home, True)
+        queue = os.path.join(home, ".cache", "hams-lint", "run.lock.queue.d")
+        os.makedirs(queue)
+        write(os.path.join(queue, "0000000001-%d-5" % os.getpid()), "{}")
+        write(os.path.join(queue, "0000000002-999999999-5"), "{}")
+        write(os.path.join(queue, "holder-%d-5" % os.getpid()), "{}")
+        lock = os.path.join(home, ".cache", "hams-lint", "run.lock")
+        write(lock, "")
+
+        def probe():
+            res = subprocess.run(["bash", "-c", lr.PROBE_SCRIPT], capture_output=True, text=True, env=dict(os.environ, HOME=home))
+            return lr.parse_probe("m", res.stdout)
+
+        free = probe()
+        self.assertEqual((free.queued, free.held), (1, False))
+        holder = subprocess.Popen(["flock", lock, "sleep", "30"])
+        self.addCleanup(holder.kill)
+        deadline = time.time() + 10
+        while time.time() < deadline and not probe().held:
+            time.sleep(0.1)
+        self.assertTrue(probe().held)
+
+
+class DispatchWholeRunTests(unittest.TestCase):
+    """dispatch(): the decision with claims, fallbacks and the unchanged old path."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="lintdispatch-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        open_repo = os.path.join(self.tmp, "hams_open")
+        os.makedirs(open_repo)
+        self.roots = {"hams_open": open_repo, "hams_com": os.path.join(self.tmp, "hams_com"), "hams_shared": os.path.join(self.tmp, "shared")}
+        self.steps = [lint_exec.Step(name=n, argv=["/usr/bin/true"]) for n in ("pytest daemons/a", "check_x", "check_summation_bias")]
+        self.dicts = {s.name: {"name": s.name, "argv": s.argv, "cwd": None, "env_delta": {}} for s in self.steps}
+        self.started = []
+        self.out = []
+        self.patch = mock.patch.object(lr.RemoteJob, "start", lambda job: (self.started.append(job.host), job)[1])
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+
+    def dispatch(self, probes, whole, claim=None, claimed=None):
+        transports = {n: object() for n in ("big", "small")}
+        return lr.dispatch(
+            "auto", self.steps, [s.name for s in self.steps], DURATIONS, self.dicts, self.roots, "hams_open", 16, 40.0,
+            inventory=INVENTORY, transports=transports, probes=probes, out=self.out.append, whole=whole,
+            claim=claim, claimed=claimed,
+        )
+
+    def test_lock_busy_and_a_machine_idle_sends_the_run_there_and_keeps_only_local_steps(self):
+        claims = []
+        local, jobs = self.dispatch({"big": WFULL, "small": WFULL}, True, claim=lambda host: claims.append(host) or io.StringIO(),
+                                    claimed=lambda hosts: set())
+        self.assertEqual([s.name for s in local], ["check_summation_bias"])
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(claims, [jobs[0].host])
+        self.assertIsNotNone(jobs[0].claim)
+
+    def test_a_machine_claimed_between_probe_and_choice_is_replaced_by_the_other(self):
+        tried = []
+
+        def claim(host):
+            tried.append(host)
+            return None if len(tried) == 1 else io.StringIO()
+
+        local, jobs = self.dispatch({"big": WFULL, "small": WFULL}, True, claim=claim, claimed=lambda hosts: set())
+        self.assertEqual(len(tried), 2)
+        self.assertNotEqual(tried[0], tried[1])
+        self.assertEqual([j.host for j in jobs], [tried[1]])
+
+    def test_everything_claimed_or_busy_queues_here_as_before(self):
+        local, jobs = self.dispatch({"big": WFULL, "small": WFULL}, True, claim=lambda host: None, claimed=lambda hosts: set(hosts))
+        self.assertEqual((len(local), jobs), (3, []))
+        self.assertTrue(any("queues here" in line or "claimed" in line for line in self.out), self.out)
+
+    def test_unreachable_machines_fall_back_to_a_local_run(self):
+        down = lr.Probe("x", False, error="timed out")
+        local, jobs = self.dispatch({"big": down, "small": down}, True, claim=lambda host: io.StringIO(), claimed=lambda hosts: set())
+        self.assertEqual((len(local), jobs), (3, []))
+
+    def test_without_whole_the_old_spreading_plan_is_used_and_a_lost_claim_does_not_stop_it(self):
+        local, jobs = self.dispatch({"big": WFULL, "small": WFULL}, False, claim=lambda host: None)
+        self.assertEqual([s.name for s in local], ["check_x", "check_summation_bias"])
+        self.assertEqual([j.names for j in jobs], [["pytest daemons/a"]])
+        self.assertIsNone(jobs[0].claim)
+
+    def test_a_job_releases_its_claim_when_it_ends(self):
+        handle = io.StringIO()
+        bundle = {"bundle_id": "b", "steps": [{"name": "x"}]}
+        job = lr.RemoteJob("big", {}, object(), {}, "hams_open", bundle, lambda _l: None, threading.Lock(), claim=handle)
+        with mock.patch.object(lr, "run_on_machine", return_value=("ok", [], {})):
+            job._run()
+        self.assertTrue(handle.closed)
+        self.assertEqual(job.status, "ok")
+
+
+class UnfitTests(unittest.TestCase):
+    def test_a_step_that_failed_on_a_machine_and_passed_here_is_not_sent_there_again(self):
+        path = os.path.join(tempfile.mkdtemp(prefix="unfit-"), "u.json")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        lr.record_unfit("big", ["pytest daemons/a"], path=path, now=1000.0)
+        self.assertEqual(lr.load_unfit(path, now=1500.0), {"big": {"pytest daemons/a"}})
+        self.assertEqual(lr.load_unfit(path, now=1000.0 + lr.UNFIT_TTL_SECONDS + 1), {}, "entries expire")
+        self.assertEqual(lr.load_unfit(os.path.join(os.path.dirname(path), "none.json")), {})
+        plan = lr.make_plan(["pytest daemons/a", "pytest daemons/b"], set(), DURATIONS, INVENTORY, {"big": FULL, "small": FULL},
+                            "auto", 16, 40.0, whole=True, unfit={"big": {"pytest daemons/a"}, "small": {"pytest daemons/a"}})
+        self.assertNotIn("pytest daemons/a", [n for ns in plan.remote.values() for n in ns])
+        self.assertIn("pytest daemons/a", plan.local)
+
+    def test_collect_reports_steps_confirmed_here_to_the_callback(self):
+        class Job:
+            host, status, names, problems, seconds = "m", "failed", ["a", "b"], ["step failed: a", "step failed: b"], {}
+
+            def join(self):
+                pass
+
+        steps = [lint_exec.Step(name=n, argv=["/usr/bin/true"]) for n in ("a", "b")]
+        seen = []
+        lr.collect([Job()], steps, lambda wanted: [lint_exec.Result(s.name, 1 if s.name == "b" else 0, "", 0.1) for s in wanted],
+                   lint_exec.Result, out=lambda _l: None, on_unfit=lambda host, names: seen.append((host, names)))
+        self.assertEqual(seen, [("m", ["a"])], "b fails here too: a real failure, not the machine's fault")
+
+    def test_a_system_program_missing_on_the_machine_is_found_on_its_path(self):
+        bundle = {"bundle_id": "x", "steps": [{"name": "f", "argv": ["/usr/bin/definitely-not-here-python3", "-V"]},
+                                              {"name": "g", "argv": ["/usr/bin/python3", "-V"]}]}
+        steps = lr.import_bundle(bundle, {})
+        self.assertEqual(steps[0].argv[0], "/usr/bin/definitely-not-here-python3", "unknown programs are left alone")
+        elsewhere = os.path.join(tempfile.gettempdir(), "userbin", "definitely-not-here-python3")
+        with mock.patch.object(lr.shutil, "which", return_value=elsewhere):
+            self.assertEqual(lr.import_bundle(bundle, {})[0].argv[0], elsewhere)
+        self.assertEqual(steps[1].argv[0], "/usr/bin/python3")
 
 
 class ExportTests(unittest.TestCase):
@@ -360,6 +582,34 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(self.remote_home, "mirror", "hams_com", "c.txt")))
         manifest = json.load(open(os.path.join(self.remote_home, "mirror", "hams_com", ".hams_lint_sync"), encoding="utf-8"))
         self.assertEqual(manifest["sha"], lr.head_sha(self.com))
+
+    def test_a_machine_whose_run_lock_is_stuck_does_not_hang_the_run_it_falls_back(self):
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import sys, time; sys.path.insert(0, %r); import lint_lock; "
+             "l = lint_lock.RunLock({'XDG_CACHE_HOME': %r}); assert l.acquire('stuck'); print('held', flush=True); time.sleep(120)"
+             % (TOOLS, os.path.join(self.remote_home, ".cache"))],
+            stdout=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(holder.kill)
+        self.assertEqual(holder.stdout.readline().strip(), "held")
+        os.environ["HAMS_LINT_REMOTE_WAIT"] = "2"
+        self.addCleanup(os.environ.pop, "HAMS_LINT_REMOTE_WAIT", None)
+        # when this suite itself runs under a lint run, the "remote" run would inherit the parent's lock marker
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("HAMS_LINT_LOCK_HELD", None)
+        started = time.monotonic()
+        status, problems, _ = self.run_remote(self.bundle(("say", ["/usr/bin/python3", "-c", "print(1)"])))
+        self.assertEqual(status, "infra", "\n".join(self.lines))
+        self.assertLess(time.monotonic() - started, 60)
+        self.assertTrue(any("gave up waiting for the lint run lock" in line for line in self.lines), self.lines)
+
+    def test_remote_wait_arguments(self):
+        self.assertEqual(lr.remote_wait_args({}), "--lock-timeout 120 --load-timeout 120")
+        self.assertEqual(lr.remote_wait_args({"HAMS_LINT_REMOTE_WAIT": "30"}), "--lock-timeout 30 --load-timeout 30")
+        self.assertEqual(lr.remote_wait_args({"HAMS_LINT_REMOTE_WAIT": "nan"}), "--lock-timeout 120 --load-timeout 120")
 
     def test_a_failing_step_is_a_real_failure_not_a_fallback(self):
         status, problems, _seconds = self.run_remote(
