@@ -12,6 +12,7 @@ import argparse
 import glob
 import json
 import os
+import shutil
 import sys
 import subprocess
 import time
@@ -638,7 +639,6 @@ def write_eslint_project(hams_shared_dir, repos):
     compiler options. Returns its path; the directory is removed when the process exits."""
     import atexit
     import json
-    import shutil
     import tempfile
 
     directory = tempfile.mkdtemp(prefix="hams-eslint-project-")
@@ -1008,7 +1008,9 @@ def main():
         )
 
     # 7. Flake8
-    flake8_cmd = "/usr/bin/flake8"
+    # The dev box and the apt-provisioned lint machines have it in /usr/bin; a machine provisioned with pip --user
+    # (bruce-yoga: ~/.local/bin) has it on the PATH only, and its flake8 step failed there and ran again here.
+    flake8_cmd = "/usr/bin/flake8" if os.path.exists("/usr/bin/flake8") else (shutil.which("flake8") or "/usr/bin/flake8")
 
     targets = resolved_mod_paths if scoped else [repo_root]
     shared_root = shared_worktree_root(dir_path, repo_root)
