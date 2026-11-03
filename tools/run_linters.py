@@ -2049,6 +2049,7 @@ def main():
     # --remote: capable steps run on other machines (lint_remote.py); the rest, and anything a machine
     # cannot do, runs here.
     remote_jobs = []
+    whole_run = False
     all_steps = list(steps)
     head_before = _git_lines(repo_root, "rev-parse", "HEAD")
     if options.remote and options.remote != "local" or options.where:
@@ -2059,7 +2060,6 @@ def main():
         else:
             roots, role = lint_remote.repo_roles(repo_root, sibling_dir, real_shared_dir)
             durations_known = lint_lock.known_durations()
-            whole_run = False
             if options.distribute != "off" and (options.remote or "auto") == "auto":
                 takes_lock, _why = lint_lock.lock_decision(os.environ, pending, durations_known)
                 busy, busy_why = lint_lock.local_busy(os.environ)
@@ -2095,6 +2095,7 @@ def main():
         lock_timeout=options.lock_timeout,
         load_limit_override=options.load_limit,
         load_timeout_override=options.load_timeout,
+        residue=bool(remote_jobs) and whole_run,
     )
     if not run_ok:
         sys.exit(lint_lock.EXIT_TEMPFAIL)
@@ -2120,6 +2121,7 @@ def main():
                 lock_timeout=options.lock_timeout,
                 load_limit_override=options.load_limit,
                 load_timeout_override=options.load_timeout,
+                residue=whole_run,
             )
             if not ok:
                 sys.exit(lint_lock.EXIT_TEMPFAIL)

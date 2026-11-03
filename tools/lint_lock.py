@@ -29,7 +29,9 @@ fails, and each run takes 20-40 minutes instead of 5. So heavy runs queue:
     lock or the load is above the limit, does not wait while another machine is idle: run_linters.py
     --remote auto ships the whole run (every step the machine can run) to the least-loaded capable
     machine, which has its own lock and gate, and takes this lock only for the steps that must stay
-    here. `local_busy` is that decision; `claim` keeps two runs on this machine from picking the same
+    here. That remainder (git history, network, this checkout: about 75 s in all) does not queue behind
+    other runs either when its known durations total at most HAMS_LINT_RESIDUE_SECONDS (default 240): it
+    waits only for the load gate. `local_busy` is that decision; `claim` keeps two runs on this machine from picking the same
     idle machine at the same moment (an flock per machine, held while the run's share is executing).
   * OVERRIDES. HAMS_LINT_NO_LOCK=1 (CI, a machine that is used by one run at a time) takes no lock;
     the gate has its own switch above. The holder exports HAMS_LINT_LOCK_HELD so the runs it
@@ -47,6 +49,7 @@ import time
 import lock_queue
 
 DEFAULT_CHEAP_SECONDS = 60.0
+DEFAULT_RESIDUE_SECONDS = 240.0
 DEFAULT_LOAD_TIMEOUT_SECONDS = 900.0
 EXIT_TEMPFAIL = lock_queue.EXIT_WAIT_TIMEOUT  # 75, same as test.py's wait timeout
 POLL_SECONDS = 15.0
@@ -128,6 +131,11 @@ def lock_decision(environ, pending_names, durations):
     if is_cheap(pending_names, durations, threshold):
         return False, "cheap run (known steps total at most %g s)" % threshold
     return True, "heavy run"
+
+
+def residue_seconds(environ=None):
+    environ = os.environ if environ is None else environ
+    return _finite(environ.get("HAMS_LINT_RESIDUE_SECONDS"), DEFAULT_RESIDUE_SECONDS)
 
 
 def describe_info(worktree, command):
@@ -338,10 +346,20 @@ def wait_for_load(limit, timeout, environ=None, loadavg=None, sleep=time.sleep, 
 
 
 def begin_heavy_run(environ, pending_names, durations, worktree, command, lock_timeout=None,
-                    load_limit_override=None, load_timeout_override=None, out=print):
+                    load_limit_override=None, load_timeout_override=None, out=print, residue=False):
     """Everything run_linters.py does before it starts steps. Returns (ok, RunLock or None); on
-    not ok the caller exits with EXIT_TEMPFAIL after printing what `out` received."""
+    not ok the caller exits with EXIT_TEMPFAIL after printing what `out` received.
+
+    `residue`: the rest of this run went to other machines, so these are the few steps that had to stay
+    (or came back): when they are short they take no place in the queue, only the load gate."""
     take, reason = lock_decision(environ, pending_names, durations)
+    if take and residue and is_cheap(pending_names, durations, residue_seconds(environ)):
+        out("[*] lint lock not needed: the steps left here total at most %g s (the rest of the run is on other machines)"
+            % residue_seconds(environ))
+        if not wait_for_load(load_limit(environ, override=load_limit_override), load_timeout(environ, load_timeout_override),
+                             environ=environ, out=out):
+            return False, None
+        return True, None
     if not take:
         if reason.startswith(("cheap", "no step")):
             out("[*] lint lock not needed: " + reason)

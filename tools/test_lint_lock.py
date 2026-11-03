@@ -236,6 +236,29 @@ class DistributionTests(Base):
         env = dict(self.env, HAMS_SKIP_CI_LOAD_GATE="1")
         self.assertFalse(lint_lock.local_busy(env, loadavg=lambda: 40.0, cpu_count=16)[0])
 
+    def test_the_residue_of_a_shipped_run_skips_the_queue_but_not_the_load_gate(self):
+        self.start_holder()
+        steps = ["pytest tools/[host-bound]", "check_pip_audit"]
+        durations = {steps[0]: 65.0, steps[1]: 8.0}
+        lines = []
+        ok, lock = lint_lock.begin_heavy_run(self.env, steps, durations, "/w", "cmd", lock_timeout=1, out=lines.append, residue=True)
+        self.assertEqual((ok, lock), (True, None), lines)
+        self.assertTrue(any("rest of the run is on other machines" in line for line in lines))
+        # not a residue (the same steps, a plain run): they total over 60 s, so they queue behind the holder
+        ok, lock = lint_lock.begin_heavy_run(self.env, steps, durations, "/w", "cmd", lock_timeout=1, out=lambda _l: None)
+        self.assertEqual((ok, lock), (False, None))
+        # a residue that is itself heavy queues too
+        ok, lock = lint_lock.begin_heavy_run(self.env, steps, {steps[0]: 900.0, steps[1]: 8.0}, "/w", "cmd", lock_timeout=1,
+                                             out=lambda _l: None, residue=True)
+        self.assertEqual((ok, lock), (False, None))
+
+    def test_the_residue_still_waits_for_the_load_gate(self):
+        steps = ["pytest tools/[host-bound]"]
+        env = dict(self.env, HAMS_LINT_LOAD_LIMIT="0.0001", HAMS_LINT_LOAD_TIMEOUT="0")
+        lines = []
+        ok, lock = lint_lock.begin_heavy_run(env, steps, {steps[0]: 65.0}, "/w", "cmd", out=lines.append, residue=True)
+        self.assertEqual((ok, lock), (False, None), lines)
+
     def test_a_machine_is_claimed_by_one_run_at_a_time_and_a_dead_claim_frees_it(self):
         first = lint_lock.try_claim("mac1-vm", self.env)
         self.assertIsNotNone(first)
