@@ -119,5 +119,36 @@ class DaemonShardsTest(unittest.TestCase):
         self.assertGreaterEqual(entry["count"], 2)
 
 
+class MypyPluginStepTest(unittest.TestCase):
+    """test_odoo_mypy_plugin.py (10 cold mypy runs of 22-61 s) has a step of its own, spread over workers by test, and is
+    in no chunk; HAMS_LINT_MYPY_PLUGIN_SPLIT=0 puts it back in the chunks."""
+
+    def steps(self, **env):
+        import subprocess
+        import sys
+
+        run = subprocess.run([sys.executable, os.path.join(ltd.HERE, "run_linters.py"), "--list-json"], capture_output=True,
+                             text=True, env={**os.environ, **env}, timeout=120)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        return {step["name"]: step["argv"] for step in json.loads(run.stdout)}
+
+    def test_the_file_has_its_own_step_with_one_test_per_worker_dispatch_and_is_in_no_chunk(self):
+        steps = self.steps()
+        if "pytest tools/[mypy-plugin]" not in steps:
+            self.skipTest("this tree has no tools/test_odoo_mypy_plugin.py")
+        argv = steps["pytest tools/[mypy-plugin]"]
+        self.assertTrue(any(a.endswith("test_odoo_mypy_plugin.py") for a in argv))
+        if "-n" in argv:  # only when the interpreter has pytest-xdist
+            self.assertEqual(argv[argv.index("--dist") + 1], "load")
+        for name, other in steps.items():
+            if name.startswith("pytest tools/[") and name != "pytest tools/[mypy-plugin]":
+                self.assertFalse(any(a.endswith("test_odoo_mypy_plugin.py") for a in other), name)
+
+    def test_the_switch_restores_the_old_chunks(self):
+        steps = self.steps(HAMS_LINT_MYPY_PLUGIN_SPLIT="0")
+        self.assertNotIn("pytest tools/[mypy-plugin]", steps)
+        self.assertTrue(any(a.endswith("test_odoo_mypy_plugin.py") for argv in steps.values() for a in argv))
+
+
 if __name__ == "__main__":
     unittest.main()

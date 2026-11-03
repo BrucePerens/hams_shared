@@ -81,7 +81,6 @@
   "test_mcp_watchdog_client.py": 42.61,
   "test_mirror_relay_tool_releases.py": 0.12,
   "test_night_watch_agent.py": 0.06,
-  "test_odoo_mypy_plugin.py": 0.01,
   "test_odoo_registry_builder.py": 0.97,
   "test_odoo_site_migrate.py": 1.0,
   "test_odoo_site_migrate_snapshot.py": 0.78,

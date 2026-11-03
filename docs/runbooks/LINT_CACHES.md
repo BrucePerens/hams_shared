@@ -212,3 +212,13 @@ each passing (246 + 448 + 153 + 100 = 947 passed, 13 skipped, the same counts as
 sessions do not share state: every server binds port 0 except `test_main.py` (3000) and `test_observer.py` (3001), which are in
 different files and different ports. `HAMS_LINT_DAEMON_SHARDS=0` restores the single session. Other daemon directories are
 listed in the table only when measured; `lint_test_durations.py refresh` keeps that section.
+
+## 9. The Odoo mypy plugin tests
+
+`tools/test_odoo_mypy_plugin.py` (13 tests, 10 of them in one class, each a cold mypy run with the Odoo plugin: 22-61 s) is skipped unless
+the sibling repository is found, so the duration table was measured with it skipped (0.01 s) and the balanced chunk that held it
+took **640-714 s on a lint runner** against 100-200 s for the others. Run alone in the real hams_open checkout (dev box, load 9-26):
+474 s in one process, **108 s** with the tests spread over four workers by test (`pytest -n 4 --dist load`, load 4-5). The tests are
+independent (each makes its own scratch directory and mypy cache). `run_linters.py` now gives the file a step of its own,
+`pytest tools/[mypy-plugin]` (workers only when the interpreter has pytest-xdist), and leaves it out of the chunks;
+`HAMS_LINT_MYPY_PLUGIN_SPLIT=0` puts it back. Its entry is removed from `lint_test_durations.json`. Pinned by `MypyPluginStepTest`.
