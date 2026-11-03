@@ -8,6 +8,7 @@ import os
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 import lint_cache
 
@@ -104,6 +105,15 @@ class CargoBudgetTest(unittest.TestCase):
             self.assertEqual(target, self.target)
         self.assertEqual(lint_cache.dir_bytes(self.target) > 0, True)
 
+    def test_managed_directory_is_named_by_the_executing_host(self):
+        cache = self._tmp.name
+        shipped = os.path.join(cache, "hams-lint-cargo", "hams_open-1.98.1-deadbeef")  # named by the dispatcher's toolchain
+        environ = {"XDG_CACHE_HOME": cache, "CARGO_TARGET_DIR": shipped, "HAMS_LINT_CARGO_MANAGED": shipped,
+                   "HAMS_LINT_CARGO_REPO": "hams_open"}
+        with lint_cache.cargo_session(environ) as target:
+            self.assertEqual(target, lint_cache.cargo_target_dir("hams_open", environ))
+            self.assertTrue(os.path.isdir(target))
+
     def test_no_cache_uses_a_throwaway_directory(self):
         environ = {"CARGO_TARGET_DIR": self.target, "HAMS_LINT_CARGO_MANAGED": self.target, "HAMS_LINT_NO_CACHE": "1"}
         with lint_cache.cargo_session(environ) as target:
@@ -139,6 +149,21 @@ class BudgetTableTest(unittest.TestCase):
 
 
 class ResultCacheTest(unittest.TestCase):
+    def test_save_prunes_only_its_own_cache_root(self):
+        with tempfile.TemporaryDirectory() as mine, tempfile.TemporaryDirectory() as other:
+            stale = os.path.join(other, "hams-lint-results", "old", "v0.json")
+            os.makedirs(os.path.dirname(stale))
+            open(stale, "w").close()
+            long_ago = time.time() - 60 * 86400
+            os.utime(stale, (long_ago, long_ago))
+            source = os.path.join(mine, "m.py")
+            open(source, "w").write("x\n")
+            with unittest.mock.patch.dict(os.environ, {"XDG_CACHE_HOME": other}):
+                cache = lint_cache.ResultCache("chk", "v1", {"XDG_CACHE_HOME": mine})
+                cache.put(source, [])
+                cache.save()
+            self.assertTrue(os.path.exists(stale))  # another cache root is never touched
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)

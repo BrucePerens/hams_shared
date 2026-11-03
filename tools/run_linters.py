@@ -21,6 +21,7 @@ import lint_cache
 import lint_exec
 import lint_lock
 import lint_remote
+import lint_test_durations
 
 
 def _resolve_repo_root(given_path):
@@ -476,6 +477,7 @@ def _finalise_steps(steps, repo_name=None):
                 managed = lint_cache.cargo_target_dir(repo_name or "lint")
                 env["CARGO_TARGET_DIR"] = managed
                 env["HAMS_LINT_CARGO_MANAGED"] = managed
+                env["HAMS_LINT_CARGO_REPO"] = repo_name or "lint"  # the executing host derives the final name itself
                 # Incremental data was 26 of the 31 GB of the old shared directory and is not reused.
                 env.setdefault("CARGO_INCREMENTAL", "0")
                 step.env = env
@@ -1434,12 +1436,18 @@ def main():
             inputs=((os.path.realpath(os.path.join(dir_path, "tools")),), None),
         )
     if tool_test_files:
-        # The suites are independent files: four pytest processes (sized by file length so
-        # they finish together) instead of one that takes four minutes on its own.
-        sized = sorted(tool_test_files, key=lambda f: -os.path.getsize(f))
-        chunk_count = min(4, len(sized))
-        for chunk_index in range(chunk_count):
-            chunk = sorted(sized[chunk_index::chunk_count])
+        # The suites are independent files: four pytest processes instead of one that takes four minutes on its
+        # own. The split is balanced by MEASURED seconds per file (lint_test_durations.json; a file never measured is
+        # estimated from its size), not by file length: sizing by length left one chunk at 450-660 s and another at
+        # 195 s. HAMS_LINT_CHUNKS=size restores the old split.
+        chunk_count = min(4, len(tool_test_files))
+        if os.environ.get("HAMS_LINT_CHUNKS") == "size":
+            sized = sorted(tool_test_files, key=lambda f: -os.path.getsize(f))
+            chunks = [sorted(sized[i::chunk_count]) for i in range(chunk_count)]
+        else:
+            chunks = lint_test_durations.balanced_chunks(tool_test_files, chunk_count)
+        chunk_count = len(chunks)
+        for chunk_index, chunk in enumerate(chunks):
             _add(
                 f"pytest tools/[{chunk_index + 1}of{chunk_count}]",
                 [python_exec, "-m", "pytest", "-q"] + chunk,

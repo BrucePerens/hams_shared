@@ -434,6 +434,11 @@ def cargo_session(environ=None, log=None):
     if not target or not managed or os.path.abspath(target) != os.path.abspath(managed):
         yield target
         return
+    repo = environ.get("HAMS_LINT_CARGO_REPO")
+    if repo:
+        # The dispatcher names the directory with ITS toolchain; this host may run another (a runner is a different
+        # machine): the name is derived again here, so one toolchain on one machine is one directory.
+        target = cargo_target_dir(repo, environ)
     with locked(target, exclusive=True):
         adopted = adopt_legacy_dir(target, environ)
         if adopted and log:
@@ -475,6 +480,7 @@ class ResultCache:
         environ = os.environ if environ is None else environ
         self.enabled = (environ.get("HAMS_LINT_NO_CACHE") != "1") if enabled is None else enabled
         self.path = os.path.join(results_base(environ), checker, f"{version}.json")
+        self.base = results_base(environ)
         self.max_bytes = int(budgets(environ)["results_mb"] * MB)
         self.entries = {}
         self.new = {}
@@ -542,7 +548,7 @@ class ResultCache:
             self.new = {}
         except OSError as error:
             print(f"(result cache not saved: {error})", file=sys.stderr)
-        _prune_results_dirs(results_base(), keep=self.path)
+        _prune_results_dirs(self.base, keep=self.path)
 
 
 def cached_file_result(cache, path, compute):
