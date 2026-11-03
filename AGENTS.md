@@ -30,6 +30,9 @@ For example: gemini.google.com.
 * **The Flake8 Purge Mandate (Anti-Amnesia):**
   When refactoring or modifying imports, you MUST mentally execute a "Dead Import Purge". Do not leave unused imports behind (e.g., `os`, `unittest`, `stat`). Flake8 will block the build. Similarly, do not assign variables and leave them unused (e.g., `result = func()`).
 
+* **The Anchor Documentation Mandate (ADR 0113):**
+  Every anchor, on a function or on a data structure (struct, enum, class, dataclass, model, table, wire or file format, constants), must have a complete entry in the module's README (the story document): its purpose; the full call interface (every argument with type, units and range, the return value and every special value, every error or panic); anything asynchronous or special (blocking, threads, locks, side effects, idempotence, ordering, timing, security, and for anything that can key a transmitter how the lock, band check and transmit gate apply); and for a data structure the full definition with every field explained, invariants, ownership and lifetime, serialized form and versioning. Write it for a human reader, with a heading per anchor, tables for arguments and fields, and no stub lines. New and changed anchored code meets this in the same pull request, and touching an anchored function or structure with a short entry means upgrading the entry.
+
 * **The Anchor Parity Mandate (Anti-Drift):**
   Before submitting a patch, you MUST verify bidirectional anchor parity. If you create a test claiming `# Tests [@ANCHOR: feature_x]`, you MUST ensure that `[@ANCHOR: feature_x]` physically exists in the core architectural source file it is testing. Tests cannot link to non-existent source features.
 </persona_and_boundaries>
