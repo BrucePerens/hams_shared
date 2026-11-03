@@ -147,7 +147,16 @@ command -v eslint >/dev/null 2>&1 && echo "has_eslint=1"
 /usr/bin/python3 -c 'import xdist' >/dev/null 2>&1 && echo "has_xdist=1"
 /usr/bin/python3 -c 'import odoo' >/dev/null 2>&1 && echo "has_odoo=1"
 q="$HOME/.cache/hams-lint/run.lock.queue.d"
-echo "queued=$(ls "$q" 2>/dev/null | grep -c -v '^holder\|^\.')"
+n=0
+for f in "$q"/*; do
+  b=${f##*/}
+  case $b in holder*|.*|\*) continue;; esac
+  pid=${b#*-}; pid=${pid%%-*}
+  [ -d "/proc/$pid" ] && n=$((n+1))
+done
+echo "queued=$n"
+l="$HOME/.cache/hams-lint/run.lock"
+if [ -e "$l" ] && command -v flock >/dev/null 2>&1 && ! flock -n "$l" true; then echo "held=1"; else echo "held=0"; fi
 echo "awake=1"
 """
 
@@ -161,6 +170,7 @@ class Probe:
     queued: int = 0
     caps: frozenset = frozenset()
     error: str = ""
+    held: bool = False  # a lint run holds the machine's run lock right now
 
 
 def parse_probe(name, text):
@@ -194,7 +204,7 @@ def parse_probe(name, text):
         queued = int(values.get("queued") or 0)
     except ValueError:
         queued = 0
-    return Probe(name, True, cores, load1, queued, frozenset(caps))
+    return Probe(name, True, cores, load1, queued, frozenset(caps), held=values.get("held") == "1")
 
 
 # --- transport ----------------------------------------------------------------------------------
@@ -290,9 +300,13 @@ def _est(name, durations):
     return max(durations.get(name, UNKNOWN_SECONDS), COLD_COST_SECONDS.get(name.split("[")[0], 0.0))
 
 
-def make_plan(step_names, static_names, durations, inventory, probes, mode, local_cores, local_load):
+def make_plan(step_names, static_names, durations, inventory, probes, mode, local_cores, local_load,
+              whole=False, exclude=()):
     """Route steps. `mode`: 'local', 'auto' or a machine name. `static_names`: steps with no command
-    (always local). `probes`: name -> Probe for every runner. Pure: no I/O."""
+    (always local). `probes`: name -> Probe for every runner. Pure: no I/O.
+
+    `whole` (mode 'auto' only): this machine's run lock is busy, so the whole run is shipped, see
+    `make_whole_plan`. `exclude`: machines another run has claimed (whole runs only)."""
     notes = []
     skipped = {}
     if mode == "local" or not mode:
@@ -316,7 +330,17 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
         if probe.load1 > probe.cores * ratio:
             skipped[name] = f"busy: load {probe.load1:.1f} above {probe.cores * ratio:.1f}"
             continue
+        if whole and mode == "auto":
+            # A whole run waits for nothing: a machine with a run in progress or in line is not a place to send it.
+            if name in exclude:
+                skipped[name] = "claimed by another run started on this machine"
+                continue
+            if probe.held or probe.queued >= int(machine.get("max_concurrent", 1)):
+                skipped[name] = f"busy: {max(probe.queued, 1)} lint run(s) hold or wait for its lock"
+                continue
         candidates[name] = (probe, jobs)
+    if whole and mode == "auto":
+        return make_whole_plan(step_names, static_names, durations, candidates, skipped, notes, local_cores)
     assigned = {LOCAL: []}
     finish = {LOCAL: local_load * 60.0 / max(1, local_cores)}
     for name, (probe, jobs) in candidates.items():
@@ -358,6 +382,56 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
     return Plan(local, remote, notes, seconds_by, skipped)
 
 
+def make_whole_plan(step_names, static_names, durations, candidates, skipped, notes, local_cores):
+    """The plan for a run that would have to queue for this machine's run lock (2026-11-03).
+
+    One idle machine takes EVERY step it can run, however short (the 60 s floor of the spreading plan is
+    for a free dev box), under its own run lock and load gate; the machine that can run the most work
+    (least loaded on a tie) is the primary. A step it cannot run goes to another idle machine only when
+    those steps add up to at least REMOTE_MIN_SECONDS there (a second sync costs more than a few short
+    steps); everything else stays here. Steps that need this checkout (LOCAL_ONLY) or have no command stay
+    here. The run therefore waits for this machine's lock only for those."""
+    movable = [n for n in step_names if n not in static_names and "local" not in requirements_for(n)]
+    assigned = {LOCAL: [n for n in step_names if n not in movable]}
+    if not candidates or not movable:
+        for name, reason in skipped.items():
+            notes.append(f"{name}: skipped, {reason}")
+        notes.append("whole run: nothing can be shipped, the run queues here as before")
+        return Plan(list(step_names), {}, notes, {LOCAL: sum(_est(n, durations) for n in step_names)}, skipped)
+
+    def covered(name):
+        probe = candidates[name][0]
+        return sum(_est(n, durations) for n in movable if requirements_for(n) <= probe.caps)
+
+    def load_fraction(name):
+        probe, _jobs = candidates[name]
+        return (probe.load1 + probe.queued * probe.cores) / max(1, probe.cores)
+
+    primary = max(candidates, key=lambda name: (covered(name), -load_fraction(name)))
+    if covered(primary) <= 0:
+        notes.append("whole run: no machine can run any step, the run queues here as before")
+        return Plan(list(step_names), {}, notes, {LOCAL: sum(_est(n, durations) for n in step_names)}, skipped)
+    assigned[primary] = [n for n in movable if requirements_for(n) <= candidates[primary][0].caps]
+    rest = [n for n in movable if n not in assigned[primary]]
+    extra = {}
+    for step in sorted(rest, key=lambda n: -_est(n, durations)):
+        options = [name for name in candidates if name != primary and requirements_for(step) <= candidates[name][0].caps]
+        if options:
+            best = min(options, key=lambda name: (sum(_est(n, durations) for n in extra.get(name, [])), load_fraction(name)))
+            extra.setdefault(best, []).append(step)
+    for name, names in extra.items():
+        if sum(_est(n, durations) for n in names) >= REMOTE_MIN_SECONDS:
+            assigned[name] = names
+    placed = {n for key, names in assigned.items() if key != LOCAL for n in names}
+    assigned[LOCAL] = [n for n in step_names if n not in placed]
+    remote = {name: sorted(names, key=step_names.index) for name, names in assigned.items() if name != LOCAL and names}
+    seconds_by = {name: sum(_est(n, durations) for n in names) for name, names in assigned.items()}
+    notes.append(f"whole run: this machine's lint lock is busy; {primary} takes {len(remote[primary])} of {len(step_names)} steps")
+    for name, reason in skipped.items():
+        notes.append(f"{name}: skipped, {reason}")
+    return Plan(sorted(assigned[LOCAL], key=step_names.index), remote, notes, seconds_by, skipped)
+
+
 def format_plan(plan, inventory, probes):
     lines = ["Routing plan (--where):"]
     local_sec = plan.seconds.get(LOCAL, 0)
@@ -371,7 +445,8 @@ def format_plan(plan, inventory, probes):
     for name, probe in sorted(probes.items()):
         if probe.reachable:
             lines.append(
-                f"  probed {name}: {probe.cores} cores, load {probe.load1:.1f}, {probe.queued} queued; has "
+                f"  probed {name}: {probe.cores} cores, load {probe.load1:.1f}, {probe.queued} queued"
+                + (", run lock held" if probe.held else "") + "; has "
                 + (", ".join(sorted(probe.caps)) or "nothing usable")
             )
         else:
@@ -733,8 +808,9 @@ class RemoteJob:
     """One machine's share of a run, in a thread. After `join()`: `.status` ('ok', 'failed', 'infra'),
     `.problems`, `.seconds` (step name -> seconds) and `.names`."""
 
-    def __init__(self, host, machine, transport, repos, role, bundle, out, print_lock):
+    def __init__(self, host, machine, transport, repos, role, bundle, out, print_lock, claim=None):
         self.host, self.machine, self.transport = host, machine, transport
+        self.claim = claim  # open file holding the machine's claim (lint_lock.try_claim); closed when the job ends
         self.repos, self.role, self.bundle = repos, role, bundle
         self.names = [item["name"] for item in bundle["steps"]]
         self.out, self.print_lock = out, print_lock
@@ -752,6 +828,10 @@ class RemoteJob:
             )
         except Exception as error:  # noqa: BLE001 - any failure of the machinery means "run it here"
             self.status, self.problems, self.seconds = "infra", [f"{type(error).__name__}: {error}"], {}
+        finally:
+            if self.claim is not None:
+                self.claim.close()
+                self.claim = None
 
     def start(self):
         self.thread.start()
@@ -799,11 +879,16 @@ def repo_roles(repo_root, sibling_dir, shared_dir):
 
 
 def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cores, local_load,
-             where=False, inventory=None, transports=None, probes=None, out=print):
+             where=False, inventory=None, transports=None, probes=None, out=print, whole=False, claim=None, claimed=None):
     """Split `steps` between this machine and the others.
 
     Returns (local_steps, jobs). With `where` it prints the plan and returns ([], []). Steps that are
-    cached passes, have no command, or still name a path of this machine stay here."""
+    cached passes, have no command, or still name a path of this machine stay here.
+
+    `whole`: this machine's run lock is busy (lint_lock.local_busy), so ship the whole run to an idle
+    machine (make_whole_plan). `claim(host)` returns a handle that keeps another run on this machine from
+    choosing the same machine (lint_lock.try_claim; None when taken), `claimed(hosts)` the hosts already
+    taken; a claimed machine is not used by a whole run."""
     inventory = inventory if inventory is not None else load_inventory()
     if not (roots.get("hams_open") and os.path.isdir(roots["hams_open"]) and roots.get("hams_shared")):
         out("[*] --remote: needs a hams_open checkout with its hams_shared; running everything here")
@@ -824,10 +909,31 @@ def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cor
         movable[step.name] = step
         exported[step.name] = item
     names = [s.name for s in steps]
-    plan = make_plan(
-        [n for n in names if n in movable] + [n for n in names if n not in movable],
-        {n for n in names if n not in movable}, durations, inventory, probes, mode, local_cores, local_load,
-    )
+    ordered = [n for n in names if n in movable] + [n for n in names if n not in movable]
+    static = {n for n in names if n not in movable}
+    whole = whole and mode == "auto"
+    excluded = set(claimed(list(wanted))) if (whole and claimed) else set()
+    handles = {}
+    for _attempt in range(len(wanted) + 1):
+        plan = make_plan(ordered, static, durations, inventory, probes, mode, local_cores, local_load,
+                         whole=whole, exclude=excluded)
+        if where or not claim:
+            break
+        handles = {}
+        lost = set()
+        for host in plan.remote:
+            handle = claim(host)
+            if handle is None and whole:
+                lost.add(host)  # another run took it between the probe and now: plan again without it
+            else:
+                handles[host] = handle  # a spreading run goes on without the claim: it queues on the machine
+        if not lost:
+            break
+        for handle in handles.values():
+            if handle is not None:
+                handle.close()
+        handles = {}
+        excluded |= lost
     if where:
         out(format_plan(plan, inventory, probes))
         return [], []
@@ -839,7 +945,8 @@ def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cor
     jobs = []
     for host, host_names in plan.remote.items():
         bundle = {"bundle_id": f"{os.getpid()}-{int(time.time())}-{host}", "steps": [exported[n] for n in host_names]}
-        jobs.append(RemoteJob(host, inventory[host], transports[host], roots, role, bundle, out, print_lock).start())
+        jobs.append(RemoteJob(host, inventory[host], transports[host], roots, role, bundle, out, print_lock,
+                              claim=handles.get(host)).start())
     sent = {n for names_ in plan.remote.values() for n in names_}
     return [s for s in steps if s.name not in sent], jobs
 

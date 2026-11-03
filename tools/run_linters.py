@@ -230,6 +230,21 @@ STEP_META = {
 }
 
 
+def default_remote_applies(options, environ):
+    """True when a plain `run_linters.py --changed` (or a full run) uses `--remote auto` without being told
+    (2026-11-03): the stamp-producing runs that agents start. Never for a selected run (--only/--skip, which
+    never stamps), a listing, the remote side of a bundle, a run started by another run (tests), CI, a run
+    that takes no lock, or when HAMS_LINT_REMOTE=local says so. A machine that is down costs seconds
+    (the probe is bounded) and the run goes on here."""
+    if environ.get("HAMS_LINT_REMOTE") == "local" or environ.get("CI") or environ.get("HAMS_LINT_NO_LOCK") == "1":
+        return False
+    if environ.get(lint_lock.HELD_ENV) or options.run_bundle or options.only or options.skip:
+        return False
+    if options.list_steps or options.list_json or options.lock_status or options.where:
+        return False
+    return True
+
+
 def _parse_args(argv):
     """`run_linters.py [MODULES] [options]`: MODULES is the old comma-separated module list."""
     parser = argparse.ArgumentParser(
@@ -309,6 +324,14 @@ def _parse_args(argv):
         "machine, local = this one. Steps that cannot run there, and unreachable machines, run here",
     )
     parser.add_argument(
+        "--distribute",
+        choices=("auto", "off", "always"),
+        default=os.environ.get("HAMS_LINT_DISTRIBUTE", "auto"),
+        help="with --remote auto: auto = when this machine's lint lock is busy (or the load is above the limit), ship the "
+        "whole run to an idle machine instead of queueing; off = only spread heavy steps (the 2026-11-02 behaviour); "
+        "always = ship the whole run even when this machine is free ($HAMS_LINT_DISTRIBUTE)",
+    )
+    parser.add_argument(
         "--where", action="store_true", help="with --remote: print the routing plan and the probes, run nothing"
     )
     parser.add_argument(
@@ -350,6 +373,8 @@ def _parse_args(argv):
     if options.lock_timeout is None and os.environ.get("HAMS_LINT_LOCK_TIMEOUT"):
         options.lock_timeout = lint_lock._finite(os.environ["HAMS_LINT_LOCK_TIMEOUT"], None)
     options.timing_to_stderr = False
+    if not options.remote and default_remote_applies(options, os.environ):
+        options.remote = "auto"
     if options.cache is None:
         options.cache = options.changed is not None
     options.jobs = max(1, options.jobs)
@@ -2033,17 +2058,28 @@ def main():
                 sys.exit(0)  # --where never runs anything
         else:
             roots, role = lint_remote.repo_roles(repo_root, sibling_dir, real_shared_dir)
+            durations_known = lint_lock.known_durations()
+            whole_run = False
+            if options.distribute != "off" and (options.remote or "auto") == "auto":
+                takes_lock, _why = lint_lock.lock_decision(os.environ, pending, durations_known)
+                busy, busy_why = lint_lock.local_busy(os.environ)
+                whole_run = takes_lock and (busy or options.distribute == "always")
+                if whole_run:
+                    print(f"[*] --remote: {busy_why if busy else '--distribute always'}: looking for an idle machine to take the whole run")
             steps, remote_jobs = lint_remote.dispatch(
                 options.remote or "auto",
                 steps,
                 pending,
-                lint_lock.known_durations(),
+                durations_known,
                 {step.name: lint_exec.step_to_dict(step) for step in steps},
                 roots,
                 role,
                 os.cpu_count() or 1,
                 os.getloadavg()[0],
                 where=options.where,
+                whole=whole_run,
+                claim=lint_lock.try_claim,
+                claimed=lint_lock.claimed,
             )
             if options.where:
                 sys.exit(0)
@@ -2068,9 +2104,33 @@ def main():
 
         atexit.register(run_lock.release)
     results = lint_exec.execute(steps, options.jobs, cache=cache, fingerprints=fingerprints)
-    extra_results, remote_hosts = lint_remote.collect(
-        remote_jobs, all_steps, lambda wanted: lint_exec.execute(wanted, options.jobs), lint_exec.Result
-    )
+    fallback_lock = [run_lock]
+
+    def execute_here(wanted):
+        """Steps that come back from a machine (it could not run them, or they failed there and are confirmed
+        here) are heavy work on this machine: take the run lock and the load gate for them if this run does
+        not hold the lock yet (a run that shipped everything away holds none)."""
+        if fallback_lock[0] is None:
+            ok, taken = lint_lock.begin_heavy_run(
+                os.environ,
+                [step.name for step in wanted],
+                lint_lock.known_durations(),
+                os.path.realpath(dir_path),
+                " ".join(["run_linters.py"] + sys.argv[1:])[:160],
+                lock_timeout=options.lock_timeout,
+                load_limit_override=options.load_limit,
+                load_timeout_override=options.load_timeout,
+            )
+            if not ok:
+                sys.exit(lint_lock.EXIT_TEMPFAIL)
+            if taken:
+                import atexit
+
+                atexit.register(taken.release)
+                fallback_lock[0] = taken
+        return lint_exec.execute(wanted, options.jobs)
+
+    extra_results, remote_hosts = lint_remote.collect(remote_jobs, all_steps, execute_here, lint_exec.Result)
     results += extra_results
     if options.results_json:
         with open(options.results_json, "w", encoding="utf-8") as handle:
