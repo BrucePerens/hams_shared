@@ -477,14 +477,25 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
         return {"tc": bool(flags & 0x200), "ra": bool(flags & 0x80), "rcode": flags & 15,
                 "answers": struct.unpack("!H", data[6:8])[0], "size": len(data)}
 
+    @staticmethod
+    def _wait_seconds(base):
+        """The wait for a reply from the server under test, longer when the machine is busy: at load 20 on 16 cores
+        (2026-11-03) PowerDNS answered a loopback query after more than the fixed 3 s. Twice the 1-minute load per core,
+        at least `base`, at most 8 times it."""
+        try:
+            per_core = os.getloadavg()[0] / (os.cpu_count() or 1)
+        except OSError:
+            per_core = 1.0
+        return base * min(8.0, max(1.0, 2.0 * per_core))
+
     def _udp(self, port, packet):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.settimeout(3)
+            sock.settimeout(self._wait_seconds(3))
             sock.sendto(packet, ("127.0.0.1", port))
             return self._reply_fields(sock.recv(65535)) | {}
 
     def _tcp(self, port, packet):
-        with socket.create_connection(("127.0.0.1", port), timeout=3) as sock:
+        with socket.create_connection(("127.0.0.1", port), timeout=self._wait_seconds(3)) as sock:
             sock.sendall(struct.pack("!H", len(packet)) + packet)
             size = struct.unpack("!H", sock.recv(2))[0]
             data = b""

@@ -193,7 +193,9 @@ import (Odoo `registry.category(...)` lookups carry no types), which the type-aw
 `test_verify_anchors.py` runs `verify_anchors.py` as a subprocess (10 s alone). With ten agents' lint runs on 16 cores (load 20) the
 fixed 30 s limit failed three of them, while the script was only slow. The limit is now `_timeout(base)`: the base limit times
 twice the 1-minute load per core, at least the base and at most 8 times it (30 s becomes 75 s at load 20 on 16 cores, 240 s at most),
-so a script that really hangs still fails. Pinned by `SubprocessTimeoutFollowsLoadTests`.
+so a script that really hangs still fails. Pinned by `SubprocessTimeoutFollowsLoadTests`. The same rule now bounds the wait for
+a loopback reply from the PowerDNS under test in `test_infrastructure.py` (`PdnsPublicConfigTests._wait_seconds`): a 3 s `recv`
+timed out at load 14-23 (`test_unusual_query_types_are_refused...`, 2026-11-03) while the server was only slow.
 
 ## 8. Daemon test directories run as several sessions
 
