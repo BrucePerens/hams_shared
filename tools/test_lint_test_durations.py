@@ -3,6 +3,7 @@
 """Tests for lint_test_durations: the split is balanced by measured time, loses no file, repeats exactly, and
 estimates a new file from its size."""
 
+import json
 import os
 import tempfile
 import unittest
@@ -62,6 +63,60 @@ class BalancedChunksTest(unittest.TestCase):
         table = ltd.load_table()
         existing = {os.path.basename(f) for f in os.listdir(ltd.HERE) if f.startswith("test_")}
         self.assertTrue(set(table) <= existing | {"test.py"}, sorted(set(table) - existing))
+
+
+class DaemonShardsTest(unittest.TestCase):
+    """A daemon test directory listed in the table runs as several balanced sessions that lose and repeat no file."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.table = os.path.join(self._tmp.name, "table.json")
+        with open(self.table, "w") as handle:
+            json.dump({"seconds": {}, "daemon_shards": {"daemons/d/tests": {
+                "count": 3, "seconds": {"test_a.py": 100, "test_b.py": 90, "test_c.py": 10, "test_d.py": 10}}}}, handle)
+        self.files = [f"/r/daemons/d/tests/test_{c}.py" for c in "abcdef"]
+
+    def shards(self, rel="daemons/d/tests", **kw):
+        return ltd.daemon_shards(rel, self.files, path=self.table, **kw)
+
+    def test_a_listed_directory_is_split_into_count_sessions_with_every_file_once(self):
+        sessions = self.shards()
+        self.assertEqual(len(sessions), 3)
+        self.assertEqual(sorted(sum(sessions, [])), sorted(self.files))
+
+    def test_the_slow_files_are_in_different_sessions(self):
+        sessions = self.shards()
+        a = next(s for s in sessions if "/r/daemons/d/tests/test_a.py" in s)
+        self.assertNotIn("/r/daemons/d/tests/test_b.py", a)
+
+    def test_the_split_repeats_exactly(self):
+        self.assertEqual(self.shards(), self.shards())
+
+    def test_an_unlisted_directory_a_disabled_split_and_a_single_file_stay_one_session(self):
+        self.assertEqual(self.shards("daemons/other/tests"), [self.files])
+        self.assertEqual(self.shards(disabled=True), [self.files])
+        self.assertEqual(ltd.daemon_shards("daemons/d/tests", self.files[:1], path=self.table), [self.files[:1]])
+
+    def test_a_missing_or_broken_table_is_one_session(self):
+        self.assertEqual(ltd.daemon_shards("daemons/d/tests", self.files, path=os.path.join(self._tmp.name, "none.json")), [self.files])
+
+    def test_never_more_sessions_than_files(self):
+        self.assertEqual(len(ltd.daemon_shards("daemons/d/tests", self.files[:2], path=self.table)), 2)
+
+    def test_refresh_keeps_the_daemon_section(self):
+        junit = os.path.join(self._tmp.name, "j.xml")
+        with open(junit, "w") as handle:
+            handle.write('<testsuites><testsuite><testcase classname="test_x" name="t" time="1.5"/></testsuite></testsuites>')
+        ltd.refresh(junit, self.table)
+        with open(self.table) as handle:
+            data = json.load(handle)
+        self.assertIn("daemons/d/tests", data["daemon_shards"])
+        self.assertEqual(data["seconds"], {"test_x.py": 1.5})
+
+    def test_the_shipped_table_lists_the_simulated_bots_tests(self):
+        entry = ltd.json.load(open(ltd.TABLE))["daemon_shards"]["daemons/hams_simulated_bots/tests"]
+        self.assertGreaterEqual(entry["count"], 2)
 
 
 if __name__ == "__main__":

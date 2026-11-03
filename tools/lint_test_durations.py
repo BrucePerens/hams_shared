@@ -79,6 +79,33 @@ def balanced_chunks(files, count, table=None):
     return [sorted(chunk) for chunk in chunks if chunk]
 
 
+def daemon_shards(rel_dir, files, path=None, disabled=False):
+    """`files` (the test files of the daemon test directory `rel_dir`, relative to the repository root) as a list of
+    lists, one per pytest session: a directory listed under "daemon_shards" in the table is split into that many sessions
+    balanced by the recorded seconds per file (a file not listed is estimated from its size, as for tools/); any other
+    directory, or `disabled`, stays one session. Pure and deterministic, like `balanced_chunks`.
+
+    hams_simulated_bots/tests took 540-585 s in one process (real aiortc connections, 25 tests of 10-50 s each, most of
+    it waiting); its sessions are independent (every server binds port 0 except test_main/test_observer, which use
+    different fixed ports) so they overlap."""
+    try:
+        with open(path or TABLE, encoding="utf-8") as handle:
+            entry = json.load(handle).get("daemon_shards", {}).get(rel_dir.replace(os.sep, "/"))
+    except (OSError, ValueError, AttributeError):
+        entry = None
+    if disabled or not isinstance(entry, dict) or len(files) < 2:
+        return [list(files)]
+    try:
+        count = int(entry.get("count", 1))
+    except (TypeError, ValueError):
+        return [list(files)]
+    if count < 2:
+        return [list(files)]
+    seconds = {name: float(value) for name, value in entry.get("seconds", {}).items()
+               if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0}
+    return balanced_chunks(files, min(count, len(files)), seconds)
+
+
 def refresh(junit_path, table_path=None):
     """Write the table from a pytest junit XML: the sum of the test durations of each test file."""
     totals = {}
@@ -89,9 +116,15 @@ def refresh(junit_path, table_path=None):
         if name is None:
             continue
         totals[name + ".py"] = totals.get(name + ".py", 0.0) + float(case.get("time", 0) or 0)
+    try:  # keep the other sections ("daemon_shards") of the table
+        with open(table_path or TABLE, encoding="utf-8") as handle:
+            table = json.load(handle)
+    except (OSError, ValueError):
+        table = {}
+    table["_comment"] = "Seconds per tools/test_*.py file (sum of its tests, measured with pytest -n 4 on the dev box); see lint_test_durations.py."
+    table["seconds"] = {k: round(v, 2) for k, v in sorted(totals.items())}
     with open(table_path or TABLE, "w", encoding="utf-8") as handle:
-        json.dump({"_comment": "Seconds per tools/test_*.py file (sum of its tests, measured with pytest -n 4 on the dev box); see lint_test_durations.py.",
-                   "seconds": {k: round(v, 2) for k, v in sorted(totals.items())}}, handle, indent=1)
+        json.dump(table, handle, indent=1)
         handle.write("\n")
     return totals
 
