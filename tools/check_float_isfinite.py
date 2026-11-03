@@ -41,6 +41,8 @@ import ast
 import os
 import sys
 
+import lint_cache
+
 IGNORE_DIR_NAMES = {
     "__pycache__",
     "node_modules",
@@ -189,16 +191,20 @@ def main():
         if repo_root not in roots:
             roots.append(repo_root)
 
+    # Per-file results are cached by content hash (lint_cache.ResultCache, keyed also by this checker's own
+    # source), so only files that changed since a run on this machine are parsed. --no-cache bypasses it.
+    cache = lint_cache.ResultCache("check_float_isfinite", lint_cache.checker_version(os.path.abspath(__file__)))
     any_found = False
     for repo_root in roots:
         for path in find_python_files(repo_root):
-            for line_num, msg in check_file(path):
+            for line_num, msg in lint_cache.cached_file_result(cache, path, check_file):
                 any_found = True
                 rel = os.path.relpath(path, repo_root)
                 if len(roots) > 1:
                     rel = os.path.join(os.path.basename(repo_root), rel)
                 print(f"❌ {rel}:{line_num}: {msg}")
 
+    cache.save()
     if any_found:
         sys.exit(1)
     sys.exit(0)

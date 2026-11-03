@@ -24,6 +24,8 @@ import shutil
 import subprocess
 import sys
 
+import lint_cache
+
 # "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
 # site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
 # alone missed a real stray "whisper_venv/" -- see check_float_isfinite.py's own comment and test
@@ -220,6 +222,16 @@ def main():
         )
         sys.exit(1)
 
+    # The persistent target directory is pruned to its disk budget under an exclusive lock before the first
+    # build, and the lock is held until the last one has finished (lint_cache.cargo_session).
+    with lint_cache.cargo_session(log=print) as session_target:
+        if session_target:
+            os.environ["CARGO_TARGET_DIR"] = session_target
+        any_failed = _clippy_all(crate_dirs)
+    sys.exit(1 if any_failed else 0)
+
+
+def _clippy_all(crate_dirs):
     any_failed = False
     for repo_root, crate_dir in crate_dirs:
         rel_path = os.path.relpath(crate_dir, repo_root)
@@ -266,8 +278,7 @@ def main():
             if res.stdout:
                 print(res.stdout, end="")
             print(res.stderr, end="")
-
-    sys.exit(1 if any_failed else 0)
+    return any_failed
 
 
 if __name__ == "__main__":

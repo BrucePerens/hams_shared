@@ -100,5 +100,12 @@
       "never": true,
       "reason": "Bruce's home router."
     }
+  },
+  "cache_budgets": {
+    "_comment": "Disk budgets of the persistent lint caches (tools/lint_cache.py, docs/runbooks/LINT_CACHES.md). cargo_gb: cap of EACH warm Cargo target directory (one per repository and toolchain); free_floor_gb: free space the filesystem must keep (the cache prunes, then clears itself, rather than fail a run); results_mb: cap of the per-file result caches. `hostnames` lets a runner find its own entry. Environment overrides: HAMS_LINT_CARGO_GB, HAMS_LINT_FREE_FLOOR_GB, HAMS_LINT_RESULTS_MB.",
+    "default": {"cargo_gb": 12, "free_floor_gb": 20, "results_mb": 200},
+    "devbox": {"cargo_gb": 25, "free_floor_gb": 30, "results_mb": 200, "hostnames": ["bruce16"]},
+    "mac1-vm": {"cargo_gb": 12, "free_floor_gb": 20, "results_mb": 100, "hostnames": ["lima-hams-test-debian"]},
+    "bruce-yoga": {"cargo_gb": 40, "free_floor_gb": 20, "results_mb": 200, "hostnames": ["bruce-yoga"]}
   }
 }

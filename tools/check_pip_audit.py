@@ -17,6 +17,7 @@ dependency can be introduced by a `requirements.txt` anywhere, not just
 near whatever file a targeted lint run happens to be scoped to.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import os
 import subprocess
 import sys
@@ -132,9 +133,11 @@ def main():
         )
         sys.exit(1)
 
-    any_failed = False
-    for repo_root, req_file in requirements_files:
-        rel_path = os.path.relpath(req_file, repo_root)
+    # The requirements files are independent and each audit is a wait on PyPI's advisory API plus a resolver
+    # run, so they overlap (up to HAMS_PIP_AUDIT_JOBS, default 4). Output is printed in file order, so the
+    # text is the same as the one-after-another run's.
+    def audit_one(item):
+        repo_root, req_file = item
         try:
             res = subprocess.run(
                 [
@@ -152,25 +155,33 @@ def main():
                 timeout=AUDIT_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired:
-            if not any_failed:
-                print("❌ pip-audit findings:")
-            any_failed = True
-            print(
-                f"-- {rel_path} --\npip-audit did not complete within "
-                f"{AUDIT_TIMEOUT_SECONDS}s (stalled network call to PyPI's Advisory Database?) -- "
-                "failing the gate rather than blocking the run indefinitely."
-            )
-            continue
-        if res.returncode != 0:
-            if not any_failed:
-                print("❌ pip-audit findings:")
-            any_failed = True
-            print(f"-- {rel_path} --")
-            if res.stdout:
-                print(res.stdout, end="")
-            if res.stderr:
-                print(res.stderr, end="")
+            return None
+        return res
 
+    jobs = max(1, int(os.environ.get("HAMS_PIP_AUDIT_JOBS", "4") or 4))
+    any_failed = False
+    with ThreadPoolExecutor(max_workers=min(jobs, len(requirements_files))) as pool:
+        for (repo_root, req_file), res in zip(requirements_files, pool.map(audit_one, requirements_files)):
+            rel_path = os.path.relpath(req_file, repo_root)
+            if res is None:
+                if not any_failed:
+                    print("❌ pip-audit findings:")
+                any_failed = True
+                print(
+                    f"-- {rel_path} --\npip-audit did not complete within "
+                    f"{AUDIT_TIMEOUT_SECONDS}s (stalled network call to PyPI's Advisory Database?) -- "
+                    "failing the gate rather than blocking the run indefinitely."
+                )
+                continue
+            if res.returncode != 0:
+                if not any_failed:
+                    print("❌ pip-audit findings:")
+                any_failed = True
+                print(f"-- {rel_path} --")
+                if res.stdout:
+                    print(res.stdout, end="")
+                if res.stderr:
+                    print(res.stderr, end="")
     sys.exit(1 if any_failed else 0)
 
 

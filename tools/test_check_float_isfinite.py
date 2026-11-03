@@ -312,5 +312,48 @@ class FloatIsfinitePropertyTests(unittest.TestCase):
         self.assertEqual(len(findings), n_funcs)
 
 
+class ResultCacheMainTests(unittest.TestCase):
+    """main() with the per-file result cache: the same findings as without it, and a file that changed is
+    re-checked even though its path is the same."""
+
+    BAD = "def f(s):\n    try:\n        return float(s)\n    except ValueError:\n        return 0\n"
+    GOOD = "def f(s):\n    return 0\n"
+
+    def run_main(self, root, cache_home, no_cache=False):
+        import contextlib
+        import io
+        from unittest import mock
+
+        env = {"XDG_CACHE_HOME": cache_home}
+        if no_cache:
+            env["HAMS_LINT_NO_CACHE"] = "1"
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, env), mock.patch("sys.argv", ["chk", root]), contextlib.redirect_stdout(out):
+            try:
+                chk.main()
+            except SystemExit as stop:
+                return stop.code, out.getvalue()
+        return None, out.getvalue()
+
+    def test_cached_run_equals_uncached_run_and_a_changed_file_invalidates_its_entry(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cache_home:
+            root = os.path.join(tmp, "repo")
+            os.makedirs(root)
+            path = os.path.join(root, "m.py")
+            with open(path, "w") as handle:
+                handle.write(self.BAD)
+            first = self.run_main(root, cache_home)
+            second = self.run_main(root, cache_home)  # served from the cache
+            self.assertEqual(first, second)
+            self.assertEqual(first, self.run_main(root, cache_home, no_cache=True))
+            self.assertEqual(first[0], 1)
+            with open(path, "w") as handle:
+                handle.write(self.GOOD)  # same path, new content
+            self.assertEqual(self.run_main(root, cache_home)[0], 0)
+            with open(path, "w") as handle:
+                handle.write(self.BAD)
+            self.assertEqual(self.run_main(root, cache_home), first)
+
+
 if __name__ == "__main__":
     unittest.main()
