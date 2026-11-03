@@ -17,9 +17,11 @@ import sys
 import subprocess
 import time
 
+import lint_cache
 import lint_exec
 import lint_lock
 import lint_remote
+import lint_test_durations
 
 
 def _resolve_repo_root(given_path):
@@ -306,7 +308,13 @@ def _parse_args(argv):
         help="skip steps whose inputs are unchanged since their last passing run "
         "(default with --changed)",
     )
-    parser.add_argument("--no-cache", dest="cache", action="store_false")
+    parser.add_argument(
+        "--no-cache",
+        dest="cache",
+        action="store_false",
+        help="run every step even when its inputs are unchanged, and bypass the persistent lint caches "
+        "(warm Cargo build directory, per-file result caches): a cold, from-scratch run",
+    )
     parser.add_argument(
         "--timing-top",
         type=int,
@@ -353,6 +361,12 @@ def _parse_args(argv):
         "--no-lock",
         action="store_true",
         help="take neither the run lock nor the load gate ($HAMS_LINT_NO_LOCK=1; for CI)",
+    )
+    parser.add_argument(
+        "--lint-caches",
+        choices=("show", "prune", "clear"),
+        help="show the size of the persistent lint caches (warm Cargo build directories, per-file result "
+        "caches) against this machine's budget, prune them to the budget, or delete them; then exit",
     )
     parser.add_argument(
         "--lock-status", action="store_true", help="print who holds the lint run lock and who is queued, then exit"
@@ -443,7 +457,7 @@ def _cache_path(dir_path):
     return os.path.join(base, "hams-lint", f"{key}.json")
 
 
-def _finalise_steps(steps):
+def _finalise_steps(steps, repo_name=None):
     """Apply STEP_META (lock, suffixes, cacheability) by step name, keeping declared order."""
     for step in steps:
         meta = STEP_META.get(step.name.split("[")[0])
@@ -454,13 +468,18 @@ def _finalise_steps(steps):
         if "lock" in meta:
             step.lock = meta["lock"]
             if meta["lock"] == "cargo" and not os.environ.get("CARGO_TARGET_DIR"):
-                # One build directory outside every worktree (AGENTS.md: never a per-worktree
-                # target/): warm after the first run, and the "cargo" lock keeps the steps that
-                # share it from overlapping.
+                # One build directory per repository and toolchain on this machine, outside every
+                # worktree (AGENTS.md: never a per-worktree target/): warm after the first run. The
+                # "cargo" lock keeps the steps of one run that share it from overlapping, and
+                # lint_cache (flock + disk budget + least-recently-used pruning) manages it; see
+                # docs/runbooks/LINT_CACHES.md. HAMS_LINT_CARGO_MANAGED marks it as ours to prune.
                 env = dict(step.env if step.env is not None else os.environ)
-                env["CARGO_TARGET_DIR"] = os.path.join(
-                    os.path.expanduser("~"), ".cache", "hams-cargo-target-lint"
-                )
+                managed = lint_cache.cargo_target_dir(repo_name or "lint")
+                env["CARGO_TARGET_DIR"] = managed
+                env["HAMS_LINT_CARGO_MANAGED"] = managed
+                env["HAMS_LINT_CARGO_REPO"] = repo_name or "lint"  # the executing host derives the final name itself
+                # Incremental data was 26 of the 31 GB of the old shared directory and is not reused.
+                env.setdefault("CARGO_INCREMENTAL", "0")
                 step.env = env
         if "cacheable" in meta:
             step.cacheable = meta["cacheable"]
@@ -908,6 +927,10 @@ def main():
     linters_failed = False
 
     options = _parse_args(sys.argv[1:])
+    if "--no-cache" in sys.argv:
+        os.environ["HAMS_LINT_NO_CACHE"] = "1"  # read by lint_cache in the steps and forwarded to the runners
+    if options.lint_caches:
+        sys.exit(lint_cache.main([options.lint_caches]))
     if options.lock_status:
         print("\n".join(lint_lock.status_lines()))
         sys.exit(0)
@@ -1413,12 +1436,18 @@ def main():
             inputs=((os.path.realpath(os.path.join(dir_path, "tools")),), None),
         )
     if tool_test_files:
-        # The suites are independent files: four pytest processes (sized by file length so
-        # they finish together) instead of one that takes four minutes on its own.
-        sized = sorted(tool_test_files, key=lambda f: -os.path.getsize(f))
-        chunk_count = min(4, len(sized))
-        for chunk_index in range(chunk_count):
-            chunk = sorted(sized[chunk_index::chunk_count])
+        # The suites are independent files: four pytest processes instead of one that takes four minutes on its
+        # own. The split is balanced by MEASURED seconds per file (lint_test_durations.json; a file never measured is
+        # estimated from its size), not by file length: sizing by length left one chunk at 450-660 s and another at
+        # 195 s. HAMS_LINT_CHUNKS=size restores the old split.
+        chunk_count = min(4, len(tool_test_files))
+        if os.environ.get("HAMS_LINT_CHUNKS") == "size":
+            sized = sorted(tool_test_files, key=lambda f: -os.path.getsize(f))
+            chunks = [sorted(sized[i::chunk_count]) for i in range(chunk_count)]
+        else:
+            chunks = lint_test_durations.balanced_chunks(tool_test_files, chunk_count)
+        chunk_count = len(chunks)
+        for chunk_index, chunk in enumerate(chunks):
             _add(
                 f"pytest tools/[{chunk_index + 1}of{chunk_count}]",
                 [python_exec, "-m", "pytest", "-q"] + chunk,
@@ -2023,7 +2052,7 @@ def main():
     ],
     )
 
-    steps = _finalise_steps(steps)
+    steps = _finalise_steps(steps, os.path.basename(main_checkout_root.rstrip(os.sep)))
     skipped = []
     if options.only or options.skip:
         steps = _filter_by_name(steps, options.only, options.skip)

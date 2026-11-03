@@ -49,6 +49,8 @@ import tempfile
 import threading
 import time
 
+import lint_cache
+
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 INVENTORY = os.path.join(TOOLS, "lint_machines.json")
 REMOTE_MIN_SECONDS = 60.0
@@ -124,7 +126,7 @@ def runners(inventory):
 GIT_IDENTITY = (
     "GIT_AUTHOR_NAME=lint GIT_AUTHOR_EMAIL=lint@localhost GIT_COMMITTER_NAME=lint GIT_COMMITTER_EMAIL=lint@localhost"
 )
-FORWARDED_ENV = ("HAMS_LINT_XDIST",)  # run_linters settings that must reach the machine's own run
+FORWARDED_ENV = ("HAMS_LINT_XDIST", "HAMS_LINT_NO_CACHE", "HAMS_LINT_CARGO_GB", "HAMS_LINT_FREE_FLOOR_GB", "HAMS_LINT_RESULTS_MB")  # run_linters settings that must reach the machine's own run
 
 
 def remote_wait_args(environ=None):
@@ -1110,6 +1112,26 @@ def provision_run(transport, mode, pin=None, timeout=3600, on_line=None):
     return code, "\n".join(lines)
 
 
+def caches_run(inventory, transports, selected, action):
+    """`lint_remote.py caches [HOST...] [--prune|--clear]`: show (default), prune to the budget or delete the persistent
+    lint caches (lint_cache.py: warm Cargo build directories, per-file result caches) on each runner. Runs this
+    checkout's lint_cache.py on the machine over stdin, so the machine needs no mirror."""
+    with open(os.path.join(TOOLS, "lint_cache.py"), "rb") as source:
+        program = source.read()
+    status = 0
+    for name in sorted(selected):
+        if name not in runners(inventory):
+            print(f"{name}: not a lint runner")
+            continue
+        print(f"== {name}: lint caches {action}")
+        limits = lint_cache.budgets({"HAMS_LINT_MACHINE": name})
+        env = f"HAMS_LINT_MACHINE={shlex.quote(name)} HAMS_LINT_CARGO_GB={limits['cargo_gb']:g} HAMS_LINT_FREE_FLOOR_GB={limits['free_floor_gb']:g} HAMS_LINT_RESULTS_MB={limits['results_mb']:g}"
+        code, out, err = transports[name].run(f"{env} python3 - {shlex.quote(action)}", data=program, timeout=900)
+        print((out or b"").decode(errors="replace") + (err or b"").decode(errors="replace"), end="")
+        status = status or code
+    return status
+
+
 def main(argv):
     """`lint_remote.py probe [HOST]` (read-only survey); `lint_remote.py provision HOST [--apply|--verify|--versions|--undo]`
     (default: print the plan; changes happen only with --apply or --undo)."""
@@ -1129,6 +1151,9 @@ def main(argv):
             code, _text = provision_run(transports[name], mode, pin=rust_pin(), on_line=print)
             status = status or code
         return status
+    if command == "caches":
+        action = "clear" if "--clear" in argv else "prune" if "--prune" in argv else "show"
+        return caches_run(inv, transports, selected, action)
     probes = probe_all(inv, transports)
     for name, probe in sorted(probes.items()):
         print(name, "unreachable: " + probe.error if not probe.reachable else probe)

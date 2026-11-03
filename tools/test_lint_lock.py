@@ -238,6 +238,8 @@ class DistributionTests(Base):
 
     def test_the_residue_of_a_shipped_run_skips_the_queue_but_not_the_load_gate(self):
         self.start_holder()
+        # The queue decision is under test, not the load: a dev box above its load limit (a busy afternoon) failed this.
+        self.env = dict(self.env, HAMS_LINT_LOAD_LIMIT="100000")
         steps = ["pytest tools/[host-bound]", "check_pip_audit"]
         durations = {steps[0]: 65.0, steps[1]: 8.0}
         lines = []
