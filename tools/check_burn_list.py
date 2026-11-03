@@ -869,6 +869,7 @@ ANCHOR_END_REGEX = re.compile(r"\[@ANCHOR-END:\s*([a-zA-Z0-9_]+)\s*\]")
 # usage of the bare form exists anywhere in either repo as of this writing (grepped), so this
 # tightens closed a real hole without narrowing any actual sanctioned exception in use today.
 _GENERIC_BURN_IGNORE_REGEX = re.compile(r"burn-ignore(?!-)")
+_NOQA_REGEX = re.compile(r"\bnoqa\b", re.IGNORECASE)
 
 
 def _find_anchor_line(content, anchor_name):
@@ -1025,9 +1026,12 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             self.current_method = None
             self.current_decorators = []
             self.current_kwarg_name = None
+            # One breadth-first walk of the whole tree for the four collections below (it was four
+            # walks, about half of this checker's time); same nodes in the same order.
+            _tree_nodes = list(ast.walk(tree))
             self.defined_functions = {
                 n.name
-                for n in ast.walk(tree)
+                for n in _tree_nodes
                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
             }
             # For _check_test_empty()'s own use: a name -> node lookup so a
@@ -1049,7 +1053,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             # sound proof that a passing test really exercises real logic.
             self.function_def_nodes_by_name = {
                 n.name: n
-                for n in ast.walk(tree)
+                for n in _tree_nodes
                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
             }
 
@@ -1061,7 +1065,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             # this repo uses `urllib.robotparser.RobotFileParser()`, an
             # Attribute, which a Name-only match would miss entirely.
             self._robotfileparser_names = set()
-            for n in ast.walk(tree):
+            for n in _tree_nodes:
                 if not isinstance(n, ast.Assign) or not isinstance(n.value, ast.Call):
                     continue
                 called = n.value.func
@@ -1076,7 +1080,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             # Session users in module code (cloudflare_api's module-level `session`, json_rpc_client's `self.session`) went
             # unreported. Both a plain name and an attribute (`self.session = requests.Session()`) are collected.
             self._requests_session_names = set()
-            for n in ast.walk(tree):
+            for n in _tree_nodes:
                 if not isinstance(n, ast.Assign) or not isinstance(n.value, ast.Call):
                     continue
                 called = n.value.func
@@ -4776,6 +4780,29 @@ def scan_file(filepath, is_odoo_module=False):
 
     in_py_multiline = False
     py_multiline_marker = None
+    # Which line rules apply to this file depends on its path only, never on a line: decide it
+    # once per file. (It was a `re.search(ext_pattern, path)` per rule per line, 8 million
+    # string-pattern searches in one scan of hams_open; same rules, same order, same findings.)
+    _norm_path = filepath.replace("\\", "/")
+    _general_rules = [
+        (regex, msg)
+        for ext_pattern, regex, msg in GENERAL_ERROR_RULES
+        if re.search(ext_pattern, _norm_path)
+    ]
+    _odoo_rules = (
+        [
+            (regex, msg)
+            for ext_pattern, regex, msg in ODOO_ERROR_RULES
+            if re.search(ext_pattern, _norm_path)
+        ]
+        if is_odoo_module
+        else []
+    )
+    _warning_rules = [
+        (regex, msg)
+        for ext_pattern, regex, msg in WARNING_RULES
+        if re.search(ext_pattern, _norm_path)
+    ]
     for line_num, line in enumerate(lines, 1):
         stripped = line.strip()
 
@@ -4829,7 +4856,7 @@ def scan_file(filepath, is_odoo_module=False):
         # either side), which the old bare-substring check flagged as 57
         # separate "linter evasion" errors in a file that contains no
         # actual noqa comment at all.
-        if re.search(r"\bnoqa\b", line, re.IGNORECASE):
+        if _NOQA_REGEX.search(line):
             if "noqa: e402" in line.lower():
                 pass  # Exception allowed for sys.path injections in isolated daemon tests
             elif "burn-ignore-noqa-example" in line:
@@ -5389,29 +5416,22 @@ def scan_file(filepath, is_odoo_module=False):
                         }
                     )
 
-        for ext_pattern, regex, msg in GENERAL_ERROR_RULES:
-            if re.search(ext_pattern, filepath.replace("\\", "/")) and regex.search(
-                line
-            ):
+        for regex, msg in _general_rules:
+            if regex.search(line):
                 if "burn-ignore" not in line:
                     errors_found.append(
                         f"Line {line_num}: {msg}\n      Code: `{stripped}`"
                     )
 
-        if is_odoo_module:
-            for ext_pattern, regex, msg in ODOO_ERROR_RULES:
-                if re.search(ext_pattern, filepath.replace("\\", "/")) and regex.search(
-                    line
-                ):
-                    if "burn-ignore" not in line:
-                        errors_found.append(
-                            f"Line {line_num}: {msg}\n      Code: `{stripped}`"
-                        )
+        for regex, msg in _odoo_rules:
+            if regex.search(line):
+                if "burn-ignore" not in line:
+                    errors_found.append(
+                        f"Line {line_num}: {msg}\n      Code: `{stripped}`"
+                    )
 
-        for ext_pattern, regex, msg in WARNING_RULES:
-            if re.search(ext_pattern, filepath.replace("\\", "/")) and regex.search(
-                line
-            ):
+        for regex, msg in _warning_rules:
+            if regex.search(line):
                 if "audit-ignore" not in line:
                     warnings_found.append(
                         f"Line {line_num}: {msg}\n      Code: `{stripped}`"

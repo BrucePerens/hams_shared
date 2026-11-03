@@ -108,11 +108,24 @@ of this change. The argv of every `pytest tools/[NofM]` step changed, so each ma
 
 ## 4. Not cached, and why
 
-* `check_burn_list` (19 s on an idle box; 44-287 s under load): `scan_file` fills module-level cross-file tables
-  (`FOUND_MANIFESTS`, `FOUND_TEST_CONTENTS`, `ACT_WINDOW_ACTIONS`, `REQUIRE_TEST_VERIFICATION`, ...) that the whole-tree
-  passes at the end of `main()` read. A per-file cache has to store and replay every one of those deltas; that is a
-  rewrite of a 6,000-line checker, not a cache. The time is load-dependent, not algorithmic, so it is recorded as a to-do
-  with this evidence and not changed here.
+* `check_burn_list`: **no per-file result cache, deliberately** (second pass, 2026-11-03). `scan_file` fills module-level cross-file
+  tables (`FOUND_MANIFESTS`, `FOUND_TEST_CONTENTS`, `ACT_WINDOW_ACTIONS`, `REQUIRE_TEST_VERIFICATION`, ...) that the whole-tree passes
+  at the end of `main()` read, so a cache has to store and replay every delta: a rewrite, not a cache. It was not needed. A
+  `cProfile` of one scan (hams_open, 918 files) found 8 M `re.search` calls that were not regex work at all: for every line and
+  every rule the scanner re-tested the rule's *file-path* pattern (`re.search(ext_pattern, filepath)`), which depends on the
+  file only. Two mechanical changes, findings byte-identical (`cmp` of the full output on hams_open and hams_com, 577 unit tests):
+  the applicable rules are chosen once per file, and the four whole-tree `ast.walk`s in the visitor's constructor share one walk.
+  Measured, same inputs, same box, one run after the other (load 7-14 from other agents):
+
+  | Scan | Before | After |
+  |---|---|---|
+  | hams_open | 33.5 s (load 8.6) | 13.2 s (load 13.7); 6.3 s (load 7.6) |
+  | hams_com | 258 s (load 14) | 36.9 s (load 12); 23.0 s (load 6.6) |
+  | cProfile, hams_open | 83 s | 21.7 s |
+
+  What is left (profile): 3.8 M real regex searches 3.1 s, the visitor's AST traversal about 6 s, `compile` 1.7 s. That is below
+  `verify_anchors` (16-21 s), so the Rust rewrite (`regex::RegexSet`) is not justified; the evidence for it would be a profile
+  where the regex engine is the majority, and it is 15 %.
 * `check_untyped_utility_files`: the result of mypy for a file depends on the modules it imports, so a content hash of
   the file alone is not a sound key. mypy's own incremental cache is the right tool; it is per-checkout path.
 * `test_b2_backup.py` (355 s alone, see 3a) and `test_lint_lock.py` (190 s): single files that bound a chunk; profile them next.
