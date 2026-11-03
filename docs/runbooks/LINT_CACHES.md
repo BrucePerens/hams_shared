@@ -117,7 +117,8 @@ the changed scripts plus every file under the scoped directories that imports on
 a quoted import/require/from specifier whose last path part is the changed file's name, the directory name for `index`; a
 superset of the real importers) with `--no-warn-ignored`. Measured on a one-file change to
 `daemons/shack_console/console/src/pairing.js`: 4 files (it, two importers, one test), **11.2 s against 79.2 s**; same config,
-same TypeScript project, same rules, so the findings of each linted file are the same.
+same TypeScript project, same rules, so the findings of each linted file are the same: with `undefinedFnForLintTest();` and an unused constant
+planted in that file, the narrowed and the whole-repository run print the same two errors for it (7.3 s against 48.8 s on that run).
 
 Falls back to the whole directories (the old behaviour) for: a changed `eslint.config.js`, `tsconfig.json` or `package.json`; a
 changed JSON file; no changed script; a changed script that is a classic script (no import/export/require: its globals are
