@@ -812,14 +812,16 @@ def run_on_machine(name, machine, transport, repos, invocation_role, bundle, on_
     except (RuntimeError, OSError) as error:
         return "infra", [f"sync failed: {error}"], {}
     q = shlex.quote
-    tmpdir = f"{root}/.tmp-{os.getpid()}"
+    # Short on purpose: Chrome refuses a profile directory whose SingletonSocket path exceeds 107 bytes, and
+    # mac1-vm's home (/home/ai.guest/hams-lint-mirror/...) made check_owl_templates fail there (2026-11-03).
+    tmpdir = f"/tmp/hams-lint-$(id -u)-{os.getpid()}"
     roots_args = " ".join(
         f"--bundle-root {role}={q(root + '/' + role if role != 'hams_shared' else root + '/hams_open/hams_shared')}"
         for role in ("hams_com", "hams_open", "hams_shared")
         if role in info
     )
     command = (
-        f"mkdir -p {tmpdir} && cd {q(root)}/{invocation_role} && TMPDIR={tmpdir} {GIT_IDENTITY}{_forwarded_env()} "
+        f"mkdir -p -m 700 {tmpdir} && cd {q(root)}/{invocation_role} && TMPDIR={tmpdir} {GIT_IDENTITY}{_forwarded_env()} "
         f"nice -n {int(machine.get('nice', 10))} python3 {q(root)}/hams_open/hams_shared/tools/run_linters.py "
         f"--run-bundle {q(root)}/.lint_bundle.json {roots_args} --results-json {q(results_path)} "
         f"-j {int(machine.get('jobs', 2))} --no-timing {remote_wait_args()} 2>&1; rm -rf {tmpdir}"

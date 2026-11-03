@@ -30,11 +30,17 @@
 #     python3-psutil python3-yaml python3-psycopg2 python3-pil    Debian's (archive-signed) Python libraries the tests import;
 #                                                                 pyinotify has no wheel, typeshed carries the types-* stubs mypy needs
 #     python3-websockets                                          check_owl_templates
+#     redis-server rabbitmq-server   test brokers, localhost only (see do_services); started and enabled because the daemon and
+#                                    tools tests connect to `redis` / `rabbitmq` (test.py's own runs start private ones)
+#     imagemagick (magick) ffmpeg sox shellcheck libnss3-tools redis-tools   tools the daemon and tools tests run
+#     python3-aiohttp -pika -pymupdf -flask -flask-cors -serial -feedparser -docx -asyncpg ...   the hams_com daemons' tests
 #     golang-1.24-go                                              libcloudflared build (tools/test_build_cloudflared_ffi.py)
 #     sqlite3 pdns-backend-sqlite3                                the PowerDNS schema file tools/test_infrastructure.py reads; the
 #                                                                 pdns server it pulls in is disabled and never started
 #     chromium fonts-liberation fonts-dejavu-core   only when neither google-chrome nor chromium exists
 #   downloaded and verified (SHA-256 pinned in this script; a file with another hash is refused):
+#     (on a machine with Chromium but no Google Chrome, /usr/bin/google-chrome is a symlink to chromium: the shack_console
+#      Playwright checks hard-code that path)
 #     kopia 0.23.1       /usr/local/bin/kopia (GitHub release tarball; the b2_backup tests run the real binary)
 #     odoo 19.0.20261029 the nightly .deb the dev box and mac1-vm run (sha256 a4ec6004...); installed with its Debian
 #                        dependencies and apt's own `odoo` service left disabled and stopped; needed by the pre_flight_check,
@@ -60,6 +66,9 @@ APT_PACKAGES=(build-essential pkg-config cmake clang autoconf automake libtool
   git rsync curl ca-certificates tar python3-pip python3-venv python3-httpx mypy nodejs npm
   python3-typeshed python3-pyinotify python3-bs4 python3-passlib python3-rjsmin python3-lxml python3-requests
   python3-psutil python3-yaml python3-psycopg2 python3-pil python3-websockets golang-1.24-go gnupg
+  python3-aiohttp python3-aiodns python3-pika python3-pymupdf python3-fitz python3-flask python3-flask-cors python3-serial
+  python3-feedparser python3-docx python3-asyncpg python3-defusedxml python3-webencodings
+  redis-server rabbitmq-server python3-redis redis-tools imagemagick ffmpeg shellcheck libnss3-tools sox
   sqlite3 pdns-backend-sqlite3)
 
 ODOO_VERSION="19.0.20261029"
@@ -259,15 +268,85 @@ do_pgrole() {
   sudo -n -u postgres createuser --createdb "$me" 2>/dev/null && { say "postgres: role $me (createdb) created"; record pgrole-created.txt "$me"; }
 }
 
+# The tests reach Redis and RabbitMQ by the names `redis` and `rabbitmq` (the same /etc/hosts line the dev box and mac1-vm have), on the
+# machine itself. Both brokers listen on 127.0.0.1 only, Erlang's port mapper and distribution port included.
+HOSTS_LINE="127.0.0.1 postgres redis rabbitmq odoo powerdns daemon_dx_firehose"
+add_line() {  # add_line FILE LINE: append LINE once, remember it for undo
+  grep -qxF "$2" "$1" 2>/dev/null && return 0
+  printf '%s\n' "$2" | sudo -n tee -a "$1" >/dev/null && record line-added.txt "$1	$2"
+}
+do_services() {
+  apt_installed redis-server && apt_installed rabbitmq-server || return 0
+  sudo -n true 2>/dev/null || { say "services: sudo -n is not available"; return 1; }
+  grep -Eq '(^|[[:space:]])redis([[:space:]]|$)' /etc/hosts || add_line /etc/hosts "$HOSTS_LINE"
+  local before after; before="$(cksum /etc/rabbitmq/rabbitmq-env.conf 2>/dev/null)"
+  add_line /etc/rabbitmq/rabbitmq-env.conf "NODE_IP_ADDRESS=127.0.0.1"
+  add_line /etc/rabbitmq/rabbitmq-env.conf "ERL_EPMD_ADDRESS=127.0.0.1"
+  add_line /etc/rabbitmq/rabbitmq-env.conf 'SERVER_ADDITIONAL_ERL_ARGS="-kernel inet_dist_use_interface {127,0,0,1}"'
+  # A machine whose own name resolves to a LAN or IPv6 address (bruce-yoga) cannot reach a loopback-only port mapper under its
+  # own name: name the node after localhost. A machine whose name is 127.0.1.1 (mac1-vm) keeps its node and its queues.
+  case "$(getent hosts "$(hostname)" | awk 'NR==1 {print $1}')" in
+    127.*) ;;
+    *) add_line /etc/rabbitmq/rabbitmq-env.conf "NODENAME=rabbit@localhost" ;;
+  esac
+  if ! grep -qs '127.0.1.1:4369' /etc/systemd/system/epmd.socket.d/localhost.conf && systemctl cat epmd.socket >/dev/null 2>&1; then
+    # Erlang's port mapper is socket-activated on every interface by default. The node name resolves to 127.0.1.1 on Debian
+    # (the machine's own /etc/hosts line), so both loopback addresses must answer.
+    printf '[Socket]\nListenStream=\nListenStream=127.0.0.1:4369\nListenStream=127.0.1.1:4369\n' | sudo -n install -D -m 0644 /dev/stdin /etc/systemd/system/epmd.socket.d/localhost.conf \
+      && { grep -qxF /etc/systemd/system/epmd.socket.d/localhost.conf "$STATE/file-installed.txt" 2>/dev/null || record file-installed.txt /etc/systemd/system/epmd.socket.d/localhost.conf; }
+    sudo -n systemctl daemon-reload; sudo -n systemctl restart epmd.socket rabbitmq-server >/dev/null 2>&1
+  fi
+  after="$(cksum /etc/rabbitmq/rabbitmq-env.conf 2>/dev/null)"
+  [ "$before" = "$after" ] || sudo -n systemctl restart rabbitmq-server >/dev/null 2>&1
+  sudo -n systemctl enable --now postgresql redis-server rabbitmq-server >/dev/null 2>&1
+  say "services: postgresql, redis-server, rabbitmq-server enabled on localhost"
+}
+
+# Playwright's own headless shell (revision pinned by the installed playwright wheel) for the tests that call
+# pw.chromium.launch() without a path (daemons/uk_ofcom_sync). Fetched by playwright's installer from its CDN into
+# ~/.cache/ms-playwright; on x86-64 the binary must hash like the dev box's, on other CPUs the hash is only recorded.
+PW_SHELL_SHA256_x86_64="e11fc9ce65c96313476f7ee9844b6fb6a9220fb048693cfe9eee00acf4170a9f"
+do_playwright_browser() {
+  python3 -c 'import playwright' 2>/dev/null || return 0
+  local rev dir
+  rev="$(python3 - <<'PY'
+import json, os, playwright
+b = json.load(open(os.path.join(os.path.dirname(playwright.__file__), "driver", "package", "browsers.json")))
+print(next(x["revision"] for x in b["browsers"] if x["name"] == "chromium-headless-shell"))
+PY
+)"
+  dir="$HOME/.cache/ms-playwright/chromium_headless_shell-$rev"
+  if [ ! -e "$dir/INSTALLATION_COMPLETE" ]; then
+    python3 -m playwright install chromium-headless-shell >/dev/null 2>&1 || { say "playwright: headless shell install failed"; return 1; }
+    record dir-installed.txt "$dir"
+  fi
+  local bin got; bin="$(ls "$dir"/chrome-headless-shell-linux*/chrome-headless-shell "$dir"/chrome-linux/headless_shell 2>/dev/null | head -1)"
+  [ -n "$bin" ] || { say "playwright: no headless shell binary under $dir"; return 1; }
+  got="$(sha256sum "$bin" | cut -d' ' -f1)"
+  if [ "$(uname -m)" = x86_64 ] && [ "$got" != "$PW_SHELL_SHA256_x86_64" ]; then say "playwright: headless shell sha256 $got is not the pinned $PW_SHELL_SHA256_x86_64"; return 1; fi
+  say "playwright: headless shell revision $rev present (sha256 $got)"
+}
+
+# Many browser checks (daemons/shack_console/tools/*.py) launch Playwright with executable_path=/usr/bin/google-chrome. An arm64
+# machine has no Google Chrome, only Debian's chromium (the same engine and version), so /usr/bin/google-chrome points at it there.
+do_chrome_alias() {
+  [ -e /usr/bin/google-chrome ] && return 0
+  have chromium || return 0
+  sudo -n ln -s "$(command -v chromium)" /usr/bin/google-chrome && { record file-installed.txt /usr/bin/google-chrome; say "browser: /usr/bin/google-chrome -> chromium"; }
+}
+
 do_apply() {
   local rc=0
   do_apt || rc=1
   do_postgres || rc=1
+  do_services
   do_odoo || rc=1
   do_kopia || rc=1
+  do_chrome_alias
   do_pgrole
   do_rust || rc=1
   do_pip || rc=1
+  do_playwright_browser || rc=1
   do_versions
   return $rc
 }
@@ -301,6 +380,16 @@ do_verify() {
   printf 'def test_c():\n    assert [1] == [1]\n' >"$d/test_smoke_b.py"
   ( cd "$d" && python3 -m pytest -q -n 2 --dist loadfile test_smoke_a.py test_smoke_b.py 2>&1 | tail -2 ) || { say "FAIL pytest"; rc=1; }
   python3 -m flake8 --version >/dev/null 2>&1 || { say "FAIL flake8"; rc=1; }
+  say "== python libraries, PostgreSQL scratch database, kopia, Go, Odoo"
+  python3 -c 'import odoo.tools, hypothesis, mcp, numpy, cryptography, OpenSSL, playwright, websockets, pyinotify, rjsmin, passlib, bs4; print("ok: imports")' || { say "FAIL python imports"; rc=1; }
+  python3 -m mypy --version >/dev/null 2>&1 || mypy --version >/dev/null 2>&1 || { say "FAIL mypy"; rc=1; }
+  if have psql; then
+    local db="tmp_verify_$$"
+    ( createdb "$db" && psql -qAtc 'select 1' "$db" >/dev/null && dropdb "$db" && echo "ok: scratch database created and dropped" ) || { dropdb --if-exists "$db" 2>/dev/null; say "FAIL scratch database (the lint user needs a createdb role)"; rc=1; }
+  else say "FAIL psql missing"; rc=1; fi
+  kopia --version 2>/dev/null | head -1 || { say "FAIL kopia"; rc=1; }
+  { go version 2>/dev/null || /usr/lib/go-1.24/bin/go version; } || { say "FAIL go"; rc=1; }
+  [ -f /usr/share/pdns-backend-sqlite3/schema/schema.sqlite3.sql ] || { say "FAIL pdns sqlite schema"; rc=1; }
   say "== headless browser screenshot"
   local c; c="$(chrome_bin)"
   if [ -z "$c" ]; then say "FAIL no browser"; rc=1; else
@@ -323,6 +412,16 @@ do_undo() {
   if [ -s "$STATE/pgrole-created.txt" ]; then
     while read -r p; do sudo -n -u postgres dropuser "$p" || true; done <"$STATE/pgrole-created.txt"
     rm -f "$STATE/pgrole-created.txt"
+  fi
+  if [ -s "$STATE/line-added.txt" ]; then
+    while IFS=$'\t' read -r p l; do
+      grep -vxF -- "$l" "$p" | sudo -n tee "$p.hams-undo" >/dev/null && sudo -n cp "$p.hams-undo" "$p" && sudo -n rm -f "$p.hams-undo"
+    done <"$STATE/line-added.txt"
+    rm -f "$STATE/line-added.txt"
+  fi
+  if [ -s "$STATE/dir-installed.txt" ]; then
+    while read -r p; do case "$p" in "$HOME"/.cache/ms-playwright/*) rm -rf "$p" ;; esac; done <"$STATE/dir-installed.txt"
+    rm -f "$STATE/dir-installed.txt"
   fi
   if [ -s "$STATE/file-installed.txt" ]; then
     while read -r p; do sudo -n rm -f "$p"; done <"$STATE/file-installed.txt"
