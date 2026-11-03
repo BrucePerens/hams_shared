@@ -323,6 +323,155 @@ class PurgeStaleBuildScriptOutputTests(unittest.TestCase):
         self.assertIn("another checkout", " ".join(str(c) for c in mock_print.call_args_list))
 
 
+class KeepOutputThatOnlyNamesAnotherCheckoutTests(unittest.TestCase):
+    """Alternating between two checkouts that share one target directory cost 210-280 s per switch because the run
+    directories of `opusic-sys` and `hams_local_relay` (C builds) name the other checkout in files that only the script
+    itself reads. Those, and `rerun-if-changed` lines, are kept when the same sources exist unchanged in this checkout;
+    anything the compiler consumes (a `cargo:` directive, a generated .rs) is still purged."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.here = os.path.join(self.tmp, "wt_here")
+        self.other = os.path.join(self.tmp, "wt_other")
+        self.target = os.path.join(self.tmp, "target")
+        self.relpath = "daemons/relay"
+        self.crate = os.path.join(self.here, self.relpath)
+        for root in (self.here, self.other):
+            _write(os.path.join(root, self.relpath, "vendor", "opus", "CMakeLists.txt"), "project(opus)\n")
+            _write(os.path.join(root, self.relpath, "vendor", "opus", "src", "a.c"), "int a;\n")
+        self.run_dir = os.path.join(self.target, "debug", "build", "relay-0123456789abcdef")
+        self.stamp = 2_000_000_000  # seconds; every source below is older
+        for root in (self.here, self.other):
+            self._age(root, self.stamp - 1000)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _age(self, root, seconds):
+        for dirpath, _dirs, names in os.walk(root):
+            for n in names:
+                os.utime(os.path.join(dirpath, n), (seconds, seconds))
+
+    def _run(self, output="", scratch=None, generated=None):
+        _write(os.path.join(self.run_dir, "output"), output)
+        _write(os.path.join(self.run_dir, "invoked.timestamp"), "")
+        if scratch is not None:
+            _write(os.path.join(self.run_dir, "out", "build", "CMakeCache.txt"), scratch)
+        if generated is not None:
+            _write(os.path.join(self.run_dir, "out", "gen.rs"), generated)
+        for name in ("output", "invoked.timestamp"):
+            os.utime(os.path.join(self.run_dir, name), (self.stamp, self.stamp))
+        _write(os.path.join(self.target, "debug", ".fingerprint", "relay-0123456789abcdef", "f"), "x")
+
+    def _purge(self):
+        kept = []
+        removed = chk.purge_stale_build_script_output(self.target, self.here, self.crate, None, kept)
+        return removed, kept
+
+    def _rerun_line(self):
+        return f"cargo:rerun-if-changed={self.other}/{self.relpath}/vendor/opus\n"
+
+    def _scratch(self):
+        return f"CMAKE_HOME_DIRECTORY:INTERNAL={self.other}/{self.relpath}/vendor/opus\n"
+
+    def test_rerun_if_changed_naming_the_other_checkout_is_kept_when_the_files_are_the_same(self):
+        self._run(self._rerun_line())
+        self.assertEqual(self._purge(), ([], [self.run_dir]))
+        self.assertTrue(os.path.isdir(self.run_dir))
+
+    def test_a_private_build_tree_naming_the_other_checkout_is_kept_when_the_sources_are_the_same(self):
+        self._run("", scratch=self._scratch())
+        self.assertEqual(self._purge(), ([], [self.run_dir]))
+
+    def test_a_file_that_differs_between_the_checkouts_purges_it(self):
+        self._run(self._rerun_line(), scratch=self._scratch())
+        _write(os.path.join(self.here, self.relpath, "vendor", "opus", "src", "a.c"), "int b;\n")
+        self._age(self.here, self.stamp - 1000)
+        self.assertEqual(self._purge(), ([self.run_dir], []))
+        self.assertFalse(os.path.exists(self.run_dir))
+        self.assertFalse(os.path.exists(os.path.join(self.target, "debug", ".fingerprint", "relay-0123456789abcdef")))
+
+    def test_a_file_changed_here_after_the_script_ran_purges_it(self):
+        # cargo reruns the script for this checkout: the other checkout's CMake cache would break that rerun
+        self._run("", scratch=self._scratch())
+        os.utime(os.path.join(self.here, self.relpath, "vendor", "opus", "src", "a.c"), (self.stamp + 5, self.stamp + 5))
+        self.assertEqual(self._purge(), ([self.run_dir], []))
+
+    def test_a_file_changed_in_the_other_checkout_after_the_script_ran_purges_it(self):
+        self._run(self._rerun_line())
+        os.utime(os.path.join(self.other, self.relpath, "vendor", "opus", "src", "a.c"), (self.stamp + 5, self.stamp + 5))
+        self.assertEqual(self._purge(), ([self.run_dir], []))
+
+    def test_an_extra_file_in_one_checkout_purges_it(self):
+        self._run(self._rerun_line())
+        _write(os.path.join(self.here, self.relpath, "vendor", "opus", "src", "new.c"), "int c;\n")
+        self._age(self.here, self.stamp - 1000)
+        self.assertEqual(self._purge(), ([self.run_dir], []))
+
+    def test_a_removed_other_checkout_purges_it(self):
+        self._run(self._rerun_line(), scratch=self._scratch())
+        shutil.rmtree(self.other)
+        self.assertEqual(self._purge(), ([self.run_dir], []))
+
+    def test_a_cargo_directive_naming_the_other_checkout_is_always_purged(self):
+        self._run(f"cargo:rustc-env=SRC={self.other}/{self.relpath}/vendor/opus\n")
+        self.assertEqual(self._purge(), ([self.run_dir], []))
+
+    def test_a_generated_source_naming_the_other_checkout_is_always_purged(self):
+        self._run("", generated=f'include_str!("{self.other}/{self.relpath}/vendor/opus/CMakeLists.txt")\n')
+        self.assertEqual(self._purge(), ([self.run_dir], []))
+
+    def test_one_harmless_and_one_consumed_name_together_are_purged(self):
+        self._run(self._rerun_line() + f"cargo:rustc-link-search={self.other}/{self.relpath}/vendor/opus\n")
+        self.assertEqual(self._purge(), ([self.run_dir], []))
+
+    def test_a_watched_path_outside_the_other_checkout_is_purged(self):
+        self._run(f"cargo:rerun-if-changed={self.other}/{self.relpath}/../../../elsewhere\n")
+        self.assertEqual(self._purge(), ([self.run_dir], []))
+
+    def test_a_symlink_that_differs_purges_it(self):
+        os.symlink("a", os.path.join(self.other, self.relpath, "vendor", "opus", "link"))
+        os.symlink("b", os.path.join(self.here, self.relpath, "vendor", "opus", "link"))
+        self._run(self._rerun_line())
+        self.assertEqual(self._purge(), ([self.run_dir], []))
+
+    def test_a_tree_over_the_comparison_budget_is_purged(self):
+        self._run(self._rerun_line())
+        with patch.object(chk, "_MAX_COMPARED_BYTES", 3):
+            self.assertEqual(self._purge(), ([self.run_dir], []))
+
+    def test_a_failed_build_with_kept_output_removes_it_and_builds_once_more(self):
+        _write(os.path.join(self.crate, "Cargo.toml"), "[package]\nname = \"relay\"\n")
+        self._run(self._rerun_line(), scratch=self._scratch())
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(os.path.exists(self.run_dir))
+            return MagicMock(returncode=101 if len(calls) == 1 else 0, stdout="", stderr="")
+
+        with patch.dict(os.environ, {"CARGO_TARGET_DIR": self.target}), patch(
+            "check_cargo_clippy.subprocess.run", side_effect=fake_run
+        ), patch("builtins.print") as mock_print:
+            failed = chk._clippy_all([(self.here, self.crate)])
+        self.assertFalse(failed)
+        self.assertEqual(calls, [True, False])
+        self.assertIn("building again", " ".join(str(c) for c in mock_print.call_args_list))
+
+    def test_a_failed_build_with_nothing_kept_is_not_repeated(self):
+        _write(os.path.join(self.crate, "Cargo.toml"), "[package]\nname = \"relay\"\n")
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return MagicMock(returncode=101, stdout="", stderr="")
+
+        with patch.dict(os.environ, {"CARGO_TARGET_DIR": self.target}), patch(
+            "check_cargo_clippy.subprocess.run", side_effect=fake_run
+        ), patch("builtins.print"):
+            self.assertTrue(chk._clippy_all([(self.here, self.crate)]))
+        self.assertEqual(len(calls), 1)
+
+
 class ResolveRepoRootTests(unittest.TestCase):
     # This checker was added 2026-08-26, after the original dir_path-repo-root audit
     # (LINTER_POLICY_REVISIT.md) that fixed 9 other checkers -- it inherited the same

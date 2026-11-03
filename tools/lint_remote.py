@@ -307,14 +307,20 @@ class Plan:
     skipped_hosts: dict  # host -> reason
 
 
-# Steps that are fast only when their build output is warm. A fresh worktree has none (check_cargo_clippy took
-# 783 s in one on 2026-11-02, against a recorded median of seconds); a machine's mirror keeps its target/ directories
-# from run to run, so these are routed as if they were heavy.
-COLD_COST_SECONDS = {"check_cargo_clippy": 600.0, "check_cargo_fmt": 0.0}
+# Steps whose recorded time is not what the next run costs. check_cargo_clippy ran cold in a fresh worktree (783 s on
+# 2026-11-02, 889-1,250 s measured), so the router used to assume 600 s; since the warm per-repository Cargo directory
+# (LINT_CACHES.md) the steady state is seconds. Measured 2026-11-03, dev box: warm 6.9-20 s, a switch to another
+# checkout's worktree 16-60 s (before the build-script purge rule: 210-280 s), cold only on the first run of a machine and
+# toolchain or after the disk budget cleared the directory. The recorded median is dominated by the cold history, so it
+# is not used for these steps either; 60 s is the measured upper end of the warm cases.
+WARM_COST_SECONDS = {"check_cargo_clippy": 60.0}
 
 
 def _est(name, durations):
-    return max(durations.get(name, UNKNOWN_SECONDS), COLD_COST_SECONDS.get(name.split("[")[0], 0.0))
+    base = name.split("[")[0]
+    if base in WARM_COST_SECONDS:
+        return WARM_COST_SECONDS[base]
+    return durations.get(name, UNKNOWN_SECONDS)
 
 
 def make_plan(step_names, static_names, durations, inventory, probes, mode, local_cores, local_load,

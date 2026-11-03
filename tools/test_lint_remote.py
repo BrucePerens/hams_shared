@@ -712,5 +712,19 @@ class ProvisionTests(unittest.TestCase):
         self.assertIn("pytest-xdist==", text)
 
 
+class StepCostEstimateTests(unittest.TestCase):
+    """The router's cost of check_cargo_clippy is the measured warm figure, not 600 s and not the cold-dominated median."""
+
+    def test_clippy_is_estimated_at_the_warm_figure_whatever_the_cold_history_says(self):
+        self.assertEqual(lr._est("check_cargo_clippy", {"check_cargo_clippy": 900.0}), lr.WARM_COST_SECONDS["check_cargo_clippy"])
+        self.assertEqual(lr._est("check_cargo_clippy", {}), lr.WARM_COST_SECONDS["check_cargo_clippy"])
+        self.assertLessEqual(lr.WARM_COST_SECONDS["check_cargo_clippy"], 60.0)
+
+    def test_other_steps_use_their_recorded_time_or_the_unknown_default(self):
+        self.assertEqual(lr._est("flake8", {"flake8": 12.0}), 12.0)
+        self.assertEqual(lr._est("check_cargo_fmt", {"check_cargo_fmt": 3.0}), 3.0)
+        self.assertEqual(lr._est("never_measured", {}), lr.UNKNOWN_SECONDS)
+
+
 if __name__ == "__main__":
     unittest.main()

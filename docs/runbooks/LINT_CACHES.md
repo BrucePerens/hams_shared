@@ -78,8 +78,29 @@ object files of `*-sys` crates) and ran a regex over each, once per crate: 961 s
 directory once and only the first 4 KiB of binary files. (3) The shared directory is fast while consecutive runs use the same
 checkout path (5.7 s) and pays 210-280 s whenever the checkout alternates (ten agents, ten worktrees): build scripts whose output
 names the other checkout's path are purged on purpose (bench_mcp's `include_str!` bug) and so are `opusic-sys` and
-`hams_local_relay`, which rebuild C code. Still much better than cold (889 s). A cheaper rule for which outputs to purge, or a
-second directory per checkout for only the `*-sys` units, is a follow-up (night_shift_todo/medium/lint-speed-remaining-costs).
+`hams_local_relay`, which rebuild C code. Still much better than cold (889 s). Fixed in the second pass, next paragraph.
+
+**Checkout switch, second pass (2026-11-03).** The purge rule is now narrower (`check_cargo_clippy.py`, `_reusable_here`). What
+was purged on a switch, found by looking at what names the other checkout (two clean sparse worktrees of hams_com and hams_open
+at the same commit, `daemons/` only; crates hams_local_relay, shack_console, bench_mcp, ham_digital_modes):
+
+| Run directory | Names the other checkout in | Before | Now |
+|---|---|---|---|
+| `opusic-sys` | `out/build/CMakeCache.txt` and other CMake/ninja files (the script's private build tree) | purged, C rebuilt | kept: same sources, older than `invoked.timestamp` |
+| `hams_local_relay` | the same, for its `rade_c` C sources | purged | kept under the same test |
+| `shack_console` (x2) | `cargo:rerun-if-changed=<abs path>` | purged | kept under the same test |
+| `bench_mcp` | `out/manual_files.rs` (`include_str!` of absolute paths) | purged | purged (the bug the purge exists for) |
+
+Kept only when every match is of those two harmless kinds and the files they name exist, byte for byte, in this checkout, and no
+file of either tree is newer than the run's `invoked.timestamp` (the time cargo itself compares: a changed file makes cargo rerun
+the script, and a rerun over the other checkout's CMake cache would fail). A `cargo:` directive or a generated source naming the
+other checkout is always purged. Backstop: if the build of a crate fails while some output was kept, the kept directories are
+deleted and that crate is built once more. Same inputs, idle box (load 1-3), switch from checkout A to B on a copy of the
+directory built from A: **old rule 58.4 s (5 run directories purged), new rule 15.9 s (1 purged)**; with no purge at all 46.6 s
+(cargo itself rebuilds the workspace crates, and bench_mcp's stale `include_str!` file is the hazard). The 210-280 s of the
+earlier measurement covered the whole repository pair at load 8-20. The rule only helps when both checkouts are older than the
+last build, i.e. alternating between existing worktrees; a worktree created after the cached run has newer files, cargo reruns
+those scripts itself, and they are purged as before. Pinned by `KeepOutputThatOnlyNamesAnotherCheckoutTests` (13 cases).
 
 Other steps:
 
@@ -144,8 +165,10 @@ of this change. The argv of every `pytest tools/[NofM]` step changed, so each ma
   `free_floor_gb`/`cargo_gb` for that machine, otherwise every run pays the cold build.
 * Checking what is stored: `python3 tools/run_linters.py --lint-caches show`; on the runners
   `python3 tools/lint_remote.py caches mac1-vm bruce-yoga`.
-* The step estimate `COLD_COST_SECONDS["check_cargo_clippy"] = 600` in `lint_remote.py` still assumes a cold build; with
-  a warm directory the step takes seconds, so it over-estimates the cost when routing. Follow-up.
+* The router's cost of `check_cargo_clippy` (`WARM_COST_SECONDS` in `lint_remote.py`) was `COLD_COST_SECONDS` = 600 s, wrong both ways:
+  warm 6.9-20 s, checkout switch 16-60 s, cold 889-1,250 s (only the first run of a machine and toolchain, or after the budget
+  cleared the directory). It is now the measured warm upper end, 60 s, and the recorded median is not used for this step (it is
+  dominated by the cold history: 233-3,220 s in the 2026-11-02 cache files, 6.9-7.9 s since the warm directory).
 
 ## 6. ESLint in `--changed` mode
 
