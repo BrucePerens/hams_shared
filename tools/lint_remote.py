@@ -622,13 +622,20 @@ def sync_repo(transport, repo, dest, sub_exclude=(), log=print, label=None):
     return {"sha": sha, "dirty": bool(changed or deleted)}
 
 
-def commit_mirror(transport, dest):
-    """Give the mirror a synthetic git repository so `git ls-files`-based checkers work."""
+def commit_mirror(transport, dest, nested=()):
+    """Give the mirror a synthetic git repository so `git ls-files`-based checkers work.
+
+    `nested`: directories inside `dest` that are repositories of their own (hams_open's hams_shared). They get their own
+    synthetic repository first, and files an older run committed into this one are dropped from its index: git then
+    records the directory as a gitlink, exactly as the real hams_open lists its hams_shared submodule. Without that,
+    `git ls-files '*.rs'` in hams_open also listed hams_shared's own Rust sources and check_rust_function_test_anchors
+    failed on the runners for functions the dev box never sees (2026-11-03)."""
     q = shlex.quote(dest)
+    drop = "".join(f"git rm -r -q --cached --ignore-unmatch -- {shlex.quote(n)} >/dev/null 2>&1; " for n in nested)
     cmd = (
         f"cd {q} && {{ [ -d .git ] || git init -q; }} && mkdir -p .git/info && "
         f"for e in .hams_lint_sync .lint_results.json '.tmp-*'; do grep -qxF \"$e\" .git/info/exclude 2>/dev/null || echo \"$e\" >> .git/info/exclude; done; "
-        f"git add -A . >/dev/null 2>&1; "
+        f"{drop}git add -A . >/dev/null 2>&1; "
         f"git -c user.name=lint -c user.email=lint@localhost commit -q --allow-empty -m 'lint mirror' >/dev/null 2>&1; true"
     )
     _check(transport.run(cmd, timeout=900), "mirror commit")
@@ -793,9 +800,11 @@ def run_on_machine(name, machine, transport, repos, invocation_role, bundle, on_
         shared = repos.get("hams_shared")
         if shared and "hams_open" in info:
             info["hams_shared"] = sync_repo(transport, shared, f"{root}/hams_open/hams_shared", log=log, label="hams_shared")
+        if "hams_shared" in info:
+            commit_mirror(transport, f"{root}/hams_open/hams_shared")
         for role in ("hams_com", "hams_open"):
             if role in info:
-                commit_mirror(transport, f"{root}/{role}")
+                commit_mirror(transport, f"{root}/{role}", nested=("hams_shared",) if role == "hams_open" and "hams_shared" in info else ())
         ensure_node_modules(transport, f"{root}/hams_open/hams_shared", log)
         results_path = f"{root}/.lint_results.json"
         _check(transport.run(f"rm -f {shlex.quote(results_path)}"), "clear")
@@ -803,14 +812,16 @@ def run_on_machine(name, machine, transport, repos, invocation_role, bundle, on_
     except (RuntimeError, OSError) as error:
         return "infra", [f"sync failed: {error}"], {}
     q = shlex.quote
-    tmpdir = f"{root}/.tmp-{os.getpid()}"
+    # Short on purpose: Chrome refuses a profile directory whose SingletonSocket path exceeds 107 bytes, and
+    # mac1-vm's long home directory plus the mirror path made check_owl_templates fail there (2026-11-03).
+    tmpdir = f"/tmp/hams-lint-$(id -u)-{os.getpid()}"
     roots_args = " ".join(
         f"--bundle-root {role}={q(root + '/' + role if role != 'hams_shared' else root + '/hams_open/hams_shared')}"
         for role in ("hams_com", "hams_open", "hams_shared")
         if role in info
     )
     command = (
-        f"mkdir -p {tmpdir} && cd {q(root)}/{invocation_role} && TMPDIR={tmpdir} {GIT_IDENTITY}{_forwarded_env()} "
+        f"mkdir -p -m 700 {tmpdir} && cd {q(root)}/{invocation_role} && TMPDIR={tmpdir} {GIT_IDENTITY}{_forwarded_env()} "
         f"nice -n {int(machine.get('nice', 10))} python3 {q(root)}/hams_open/hams_shared/tools/run_linters.py "
         f"--run-bundle {q(root)}/.lint_bundle.json {roots_args} --results-json {q(results_path)} "
         f"-j {int(machine.get('jobs', 2))} --no-timing {remote_wait_args()} 2>&1; rm -rf {tmpdir}"

@@ -84,7 +84,9 @@ reflexively just because a new file trips this check.
 
 import ast
 from concurrent.futures import ThreadPoolExecutor
+import contextlib
 import os
+import queue
 import subprocess
 import sys
 
@@ -248,6 +250,28 @@ def parse_args(argv):
     return argv[1], {os.path.realpath(path) for path in argv[index + 1:]}
 
 
+class cache_slots:
+    """Hands each concurrent mypy run a cache directory of its own (`.mypy_cache/w<N>`).
+
+    mypy's cache is not safe for concurrent runs: with one shared directory and a cold or stale cache, parallel runs
+    read each other's half-written files and crash with `AssertionError: Cannot find module for csv`. It never
+    showed on the dev box, whose cache was already warm; a lint runner with a fresh mirror failed every time
+    (2026-11-03). A worker keeps its directory between runs, so each directory warms up once."""
+
+    def __init__(self, workers):
+        self._free = queue.Queue()
+        for slot in range(workers):
+            self._free.put(slot)
+
+    @contextlib.contextmanager
+    def borrow(self):
+        slot = self._free.get()
+        try:
+            yield slot
+        finally:
+            self._free.put(slot)
+
+
 def main():
     repo_root_arg, only_files = parse_args(sys.argv)
     if repo_root_arg is None:
@@ -270,16 +294,19 @@ def main():
     # The files are independent, so the mypy runs overlap (a whole-repo scan of hundreds of
     # files took five minutes one after another). Output is printed in candidate order, so the
     # text is the same as the sequential run's. $HAMS_LINT_JOBS bounds the workers.
+    workers = max(1, int(os.environ.get("HAMS_LINT_JOBS", "0")) or (os.cpu_count() or 2) // 2)
+    slots = cache_slots(workers)
+
     def run_one(item):
         repo_root, candidate = item
-        return subprocess.run(
-            ["mypy", "--check-untyped-defs", "--ignore-missing-imports", candidate],
-            capture_output=True,
-            text=True,
-            cwd=repo_root,
-        )
+        with slots.borrow() as slot:
+            return subprocess.run(
+                ["mypy", "--check-untyped-defs", "--ignore-missing-imports", f"--cache-dir=.mypy_cache/w{slot}", candidate],
+                capture_output=True,
+                text=True,
+                cwd=repo_root,
+            )
 
-    workers = max(1, int(os.environ.get("HAMS_LINT_JOBS", "0")) or (os.cpu_count() or 2) // 2)
     any_failed = False
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for res in pool.map(run_one, candidates):

@@ -38,6 +38,38 @@ def _class_node(src):
     raise AssertionError("no class in fixture")
 
 
+class CacheSlotTests(unittest.TestCase):
+    def test_concurrent_runs_never_share_a_mypy_cache_directory(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        import time
+
+        slots = chk.cache_slots(3)
+        lock = threading.Lock()
+        in_use, overlaps = set(), []
+
+        def work(_):
+            with slots.borrow() as slot:
+                with lock:
+                    if slot in in_use:
+                        overlaps.append(slot)
+                    in_use.add(slot)
+                time.sleep(0.01)
+                with lock:
+                    in_use.discard(slot)
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            list(pool.map(work, range(30)))
+        self.assertEqual(overlaps, [])
+
+    def test_a_directory_is_reused_after_its_run_ends(self):
+        slots = chk.cache_slots(1)
+        with slots.borrow() as first:
+            pass
+        with slots.borrow() as second:
+            self.assertEqual(first, second)
+
+
 class IsModelClassTests(unittest.TestCase):
     def test_recognizes_models_dot_model(self):
         self.assertTrue(chk._is_model_class(_class_node("class Foo(models.Model):\n    pass\n")))

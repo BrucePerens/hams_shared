@@ -1,5 +1,5 @@
 {
-  "_comment": "Machines run_linters.py --remote may use (surveyed read-only 2026-11-02). Capabilities are PROBED at run time (lint_remote.probe); the fields here say how to reach a machine, how hard it may be pushed and why a machine is not a lint runner. Nothing here is a secret: keys are named by path and never read.",
+  "_comment": "Machines run_linters.py --remote may use (surveyed read-only 2026-11-02, provisioned for every lint step 2026-11-03). Capabilities are PROBED at run time (lint_remote.probe); the fields here say how to reach a machine, how hard it may be pushed and why a machine is not a lint runner. Nothing here is a secret: keys are named by path and never read.",
   "machines": {
     "devbox": {
       "local": true,
@@ -9,7 +9,22 @@
     "mac1-vm": {
       "ssh": {
         "target": "ai@127.0.0.1",
-        "args": ["-p", "60023", "-i", "~/.secrets/mac1/ai_ed25519", "-o", "IdentitiesOnly=yes", "-o", "UserKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=no", "-o", "LogLevel=ERROR", "-o", "ProxyCommand=ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.secrets/mac1/ai_ed25519 -W %h:%p ai@mac1.local"]
+        "args": [
+          "-p",
+          "60023",
+          "-i",
+          "~/.secrets/mac1/ai_ed25519",
+          "-o",
+          "IdentitiesOnly=yes",
+          "-o",
+          "UserKnownHostsFile=/dev/null",
+          "-o",
+          "StrictHostKeyChecking=no",
+          "-o",
+          "LogLevel=ERROR",
+          "-o",
+          "ProxyCommand=ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.secrets/mac1/ai_ed25519 -W %h:%p ai@mac1.local"
+        ]
       },
       "os": "linux",
       "workdir": "~/hams-lint-mirror",
@@ -17,24 +32,28 @@
       "nice": 19,
       "max_concurrent": 1,
       "max_load_ratio": 0.6,
-      "note": "Debian 13 arm64 Lima VM hams-test-debian on the Mac mini mac1 (Bruce's machine; the VM also runs the production FCC ULS sync): lowest priority, 3 workers, never started by the lint runner (a stopped VM is reported unreachable). Provisioned for lint 2026-11-02 (see provisioned). Its PostgreSQL has a createdb role for the ai user (tools tests); hams_shared node_modules are installed in the mirror by the runner (npm ci).",
+      "note": "Debian 13 arm64 Lima VM hams-test-debian on the Mac mini mac1 (Bruce's machine; the VM also runs the production FCC ULS sync): lowest priority, 3 workers, never started by the lint runner (a stopped VM is reported unreachable). Provisioned for lint 2026-11-02 and completed for every lint step 2026-11-03 (the dev box's Python test stack, python3-typeshed; its Odoo, PostgreSQL 18 and kopia were already there). Never touched by the provisioning: the fcc-uls-sync unit, the fccsync account and /opt/fcc-uls-sync. Its PostgreSQL has a createdb role for the ai user (tools tests); hams_shared node_modules are installed in the mirror by the runner (npm ci).",
       "provisioned": {
-        "date": "2026-11-02",
+        "date": "2026-11-03",
         "by": "python3 tools/lint_remote.py provision mac1-vm --apply (tools/provision_build_host.sh)",
         "versions": {
           "os": "Debian 13 (trixie) aarch64, 10 cores, 11 GiB",
           "rust": "rustc and cargo 1.98.1 via rustup (user level), clippy 0.1.98, rustfmt 1.9.0",
           "node": "v20.19.2 (apt), npm 9.2.0",
-          "python": "3.13.5; pytest 9.1.1, pytest-xdist 3.8.0, pytest-timeout 2.4.0, flake8 7.1.1, mypy and httpx (apt)",
+          "python": "3.13.5; pytest 9.1.1, pytest-xdist 3.8.0, hypothesis 6.165.10, mcp 2.2.0, numpy 2.5.0, cryptography 50.0.2, pyopenssl 26.4.0, playwright 1.62.0 (requirements-test.txt); flake8 7.1.1, mypy, httpx, python3-typeshed (apt)",
           "browser": "Chromium 156.0.8078.73 (apt)",
-          "git": "2.47.3"
+          "git": "2.47.3",
+          "odoo": "19.0.20261029, PostgreSQL 18.6, kopia 0.23.0, Go 1.24.4"
         }
       }
     },
     "bruce-yoga": {
       "ssh": {
         "target": "bruce-yoga",
-        "args": ["-o", "HostName=bruce-yoga.lan"]
+        "args": [
+          "-o",
+          "HostName=bruce-yoga.lan"
+        ]
       },
       "os": "linux",
       "workdir": "~/hams-lint-mirror",
@@ -42,7 +61,22 @@
       "nice": 10,
       "max_concurrent": 1,
       "max_load_ratio": 0.8,
-      "note": "Debian 13 x86-64 build and test server (8 cores, GitHub Actions runner bruce-yoga-linux). Stays awake on AC (logind drop-in); on battery it may suspend, which shows as unreachable. Has python3 and chrome only: run tools/lint_remote_provision.sh for flake8, pytest, node, cargo."
+      "note": "Debian 13 x86-64 build and test server (8 cores, 15 GiB, GitHub Actions runner bruce-yoga-linux). Stays awake on AC (logind drop-in); on battery it may suspend, which shows as unreachable. Provisioned for every lint step 2026-11-03 (tools/provision_build_host.sh via lint_remote.py provision bruce-yoga --apply): the dev box's Python test stack, Odoo 19.0.20261029 (service disabled), PostgreSQL 18 (local; createdb role for the ai user), kopia, Go 1.24, Chrome.",
+      "provisioned": {
+        "date": "2026-11-03",
+        "by": "python3 tools/lint_remote.py provision bruce-yoga --apply (tools/provision_build_host.sh)",
+        "versions": {
+          "os": "Debian 13 (trixie) x86_64, 8 cores, 15 GiB",
+          "rust": "rustc and cargo 1.98.1 via rustup (user level), clippy 0.1.98, rustfmt 1.9.0",
+          "node": "v20.19.2 (apt), npm 9.2.0",
+          "python": "3.13.5; pytest 9.1.1, pytest-xdist 3.8.0, hypothesis 6.165.10, mcp 2.2.0, numpy 2.5.0, cryptography 50.0.2, pyopenssl 26.4.0, playwright 1.62.0 (requirements-test.txt); python3-typeshed, -pyinotify, -bs4 (apt)",
+          "odoo": "19.0.20261029 (nightly .deb, sha256 a4ec6004...), service disabled",
+          "postgresql": "18.6 (pgdg)",
+          "kopia": "0.23.1 (/usr/local/bin)",
+          "go": "1.24.4 (golang-1.24-go)",
+          "browser": "Google Chrome 156.0.8078.79"
+        }
+      }
     },
     "mac1": {
       "runner": false,
