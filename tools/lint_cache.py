@@ -42,6 +42,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 import shutil
 import socket
@@ -105,12 +106,14 @@ def budgets(environ=None, machines_file=None):
         table = {}
     for source in (table.get("default", {}), table.get(machine_name(environ), {})):
         for key in out:
-            if isinstance(source.get(key), (int, float)):
+            if isinstance(source.get(key), (int, float)) and math.isfinite(source[key]) and source[key] >= 0:
                 out[key] = source[key]
     for key, env_name in (("cargo_gb", "HAMS_LINT_CARGO_GB"), ("free_floor_gb", "HAMS_LINT_FREE_FLOOR_GB"), ("results_mb", "HAMS_LINT_RESULTS_MB")):
         try:
             if environ.get(env_name):
-                out[key] = float(environ[env_name])
+                value = float(environ[env_name])
+                if math.isfinite(value) and value >= 0:  # "nan" and "inf" parse as floats
+                    out[key] = value
         except ValueError:
             pass
     return out

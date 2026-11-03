@@ -140,6 +140,10 @@ class BudgetTableTest(unittest.TestCase):
         got = lint_cache.budgets({"HAMS_LINT_MACHINE": "m", "HAMS_LINT_CARGO_GB": "2"}, machines_file=handle.name)
         self.assertEqual(got["cargo_gb"], 2)
 
+    def test_nan_and_negative_overrides_are_ignored(self):
+        got = lint_cache.budgets({"HAMS_LINT_MACHINE": "devbox", "HAMS_LINT_CARGO_GB": "nan", "HAMS_LINT_FREE_FLOOR_GB": "-5"})
+        self.assertEqual((got["cargo_gb"], got["free_floor_gb"]), (25, 30))  # the devbox row of lint_machines.json
+
     def test_shipped_inventory_has_a_budget_for_every_runner(self):
         with open(lint_cache.MACHINES_FILE, encoding="utf-8") as handle:
             data = json.load(handle)

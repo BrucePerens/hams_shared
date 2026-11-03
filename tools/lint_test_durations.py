@@ -21,6 +21,7 @@ the current files into N chunks with estimated seconds).
 
 import glob
 import json
+import math
 import os
 import statistics
 import sys
@@ -34,7 +35,8 @@ def load_table(path=None):
     try:
         with open(path or TABLE, encoding="utf-8") as handle:
             data = json.load(handle)
-        return {name: float(seconds) for name, seconds in data.get("seconds", {}).items()}
+        table = {name: float(seconds) for name, seconds in data.get("seconds", {}).items()}
+        return {name: seconds for name, seconds in table.items() if math.isfinite(seconds) and seconds >= 0}
     except (OSError, ValueError, AttributeError):
         return {}
 
