@@ -813,7 +813,7 @@ def run_on_machine(name, machine, transport, repos, invocation_role, bundle, on_
         return "infra", [f"sync failed: {error}"], {}
     q = shlex.quote
     # Short on purpose: Chrome refuses a profile directory whose SingletonSocket path exceeds 107 bytes, and
-    # mac1-vm's home (/home/ai.guest/hams-lint-mirror/...) made check_owl_templates fail there (2026-11-03).
+    # mac1-vm's long home directory plus the mirror path made check_owl_templates fail there (2026-11-03).
     tmpdir = f"/tmp/hams-lint-$(id -u)-{os.getpid()}"
     roots_args = " ".join(
         f"--bundle-root {role}={q(root + '/' + role if role != 'hams_shared' else root + '/hams_open/hams_shared')}"

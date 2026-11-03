@@ -8,7 +8,9 @@
 # manylinux x86_64 wheel (bruce-yoga) AND of the aarch64 wheel (mac1-vm); pip takes the one for its platform and
 # refuses anything else. Pure-Python wheels have one hash.
 #
-# Versions are the dev box's (2026-11-03) for what the tests exercise: hypothesis (tools tests), mcp (test_mcp_server),
+# Versions are the dev box's (2026-11-03) for what the tests exercise, except where pip-audit (the check_pip_audit step audits this
+# file) reports known vulnerabilities in the dev box's version: anyio, cairosvg, certifi, httpcore2, httpx2, opentelemetry-api, pillow
+# (13.0.0; Debian's python3-pil stays 11.1.0 for everything outside the lint user) and pyjwt are newer. The tests exercised: hypothesis (tools tests), mcp (test_mcp_server),
 # numpy (audio_card_characterize), cryptography (relay_ca / relay_signer tests), playwright (shack_console browser
 # checks; the checks drive the system Chrome, no browser is downloaded), with their dependencies. Debian's own
 # packages (apt, signed by the archive) supply the rest: python3-passlib, -pyinotify, -rjsmin, -bs4, -typeshed
@@ -24,16 +26,16 @@
 # then `sha256sum DIR/*.whl`, and compare every hash with the "digests" in https://pypi.org/pypi/<name>/<version>/json.
 annotated-types==0.7.0 \
     --hash=sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53
-anyio==4.14.0 \
-    --hash=sha256:dd9b7a2a9799ed6552fde617b2c5df02b7fdd7d88392fc48101e51bae46164d9
+anyio==4.14.2 \
+    --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494
 attrs==26.1.0 \
     --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
 cairocffi==1.7.1 \
     --hash=sha256:9803a0e11f6c962f3b0ae2ec8ba6ae45e957a146a004697a1ac1bbf16b073b3f
-cairosvg==2.9.0 \
-    --hash=sha256:4b82d07d145377dffdfc19d9791bd5fb65539bb4da0adecf0bdbd9cd4ffd7c68
-certifi==2026.7.22 \
-    --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775
+cairosvg==2.9.1 \
+    --hash=sha256:f91c5628e834be024a0ed4544d76261cd84016a4c73bcdf26c386495825c05a1
+certifi==2026.10.18 \
+    --hash=sha256:73191c47aaa79da394e8fee2dbc2ec827432cab56311122c9e47abf79e390f62
 cffi==2.1.1 \
     --hash=sha256:a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2 \
     --hash=sha256:f16c709686a78c727bbbf059f92b0bf41c6fc60deec706d2dc19f529175a6125
@@ -47,6 +49,8 @@ cssselect2==0.9.0 \
 curl-cffi==0.16.3 \
     --hash=sha256:a875a661e2f9a949be29454880bbb9553307a487c4c08819738298cf5c1622e2 \
     --hash=sha256:d5a4103f2baa1fcf619ec3101b419827d367044ba106b206228137cc71a5a9c5
+defusedxml==0.7.1 \
+    --hash=sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61
 execnet==2.1.2 \
     --hash=sha256:67fba928dd5a544b783f6056f449e5e3931a5c378b128bc18501f7ea79e296ec
 flake8==7.1.1 \
@@ -56,10 +60,10 @@ greenlet==3.5.5 \
     --hash=sha256:634cf15a233a949136879dd388e25d3296e16f3f1e217d2456797b8579ebc6ed
 h11==0.16.0 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
-httpcore2==2.9.1 \
-    --hash=sha256:6182472379e855fe4221246a2bb7ecede403bc61c6798062ae1787d051ccde26
-httpx2==2.9.1 \
-    --hash=sha256:1820fe14a9ab1107bfeff39259987429450b070ec0ff38cc87eb0d8c97fdc71a
+httpcore2==2.12.0 \
+    --hash=sha256:7e04258ce01013d7d615e5b910a3b27fac937d7a95038227e79652b4ba3b4ceb
+httpx2==2.12.0 \
+    --hash=sha256:cc8b6eecb8661c146b8f89a60e97456ee086e91a784ed31ac450c3a9e613dd36
 hypothesis==6.165.10 \
     --hash=sha256:6caadcd1afb62630ff5c5ff353626eaa616553a5971295ad6dc2b19ca8a39620 \
     --hash=sha256:ed68e27b8a61e57a3ccdc7c5a14499e00b54dfe223087204d5d40b3b5ef58b6d
@@ -80,10 +84,13 @@ mcp-types==2.2.0 \
 numpy==2.5.0 \
     --hash=sha256:3893adc2dc7c0412ba76777db55a049215d99c9aa3113003be8f49f4f1290ab9 \
     --hash=sha256:750fb097caf26fa878746d9d119f6f9da12dedcbff1eea966c3e3447647c4a9e
-opentelemetry-api==1.44.0 \
-    --hash=sha256:94b98c893a91b88657eaac1e3ba89618cdb85be6918196705354f34728b2cdef
+opentelemetry-api==1.45.1 \
+    --hash=sha256:b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb
 packaging==26.3 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+pillow==13.0.0 \
+    --hash=sha256:19b66ca0a4d25cc0200b381ce824c7ea090db61427315e73cfb05dbf1b35c369 \
+    --hash=sha256:5f56499c1a74d2b862beb0c33b8016f99d095858455df9d21583bbbc1c15b582
 playwright==1.62.0 \
     --hash=sha256:ba33bae6a13b3d9d354c751cb618af357d20fe1d57767cbcce52079bbef17ad3 \
     --hash=sha256:db2d76613a57ad844362ce42f7d0c2fa26b19a4f7a46d4f76b891c631e6e5aff
@@ -104,8 +111,8 @@ pyflakes==3.2.0 \
     --hash=sha256:84b5be138a2dfbb40689ca07e2152deb896a65c3a3e24c251c5c62489568074a
 pygments==2.21.0 \
     --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9
-pyjwt==2.13.0 \
-    --hash=sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728
+pyjwt==2.15.0 \
+    --hash=sha256:7a3742debf6b879e912dbb9819ceec1594be812452b78c5f2e2dfc56564954f8
 pyopenssl==26.4.0 \
     --hash=sha256:f0eb0cb2d581d3ad2b9c489468485e7f2ab6727d08401bcf9d824c3caddf3c1c
 pytest==9.1.1 \
@@ -141,5 +148,7 @@ uvicorn==0.49.0 \
     --hash=sha256:ba3d14c3ee7e41c6c654c46c9eb489d33213cdd30aa1696eab1374337c13f68f
 wcwidth==0.8.0 \
     --hash=sha256:8c75e6099cefd197c4bcc67a486f70b5dbc68f997c05f34a811d853910450d64
+webencodings==0.5.1 \
+    --hash=sha256:a0af1213f3c2226497a97e2b3aa01a7e4bee4f403f95be16fc9acd2947514a78
 zipstream-ng==1.9.3 \
     --hash=sha256:6614580d7ae56bc9f3c2a342210108450e2d191b62038e818bae7845612584b7
