@@ -546,6 +546,29 @@ class EndToEndTests(unittest.TestCase):
         manifest = json.load(open(os.path.join(self.remote_home, "mirror", "hams_com", ".hams_lint_sync"), encoding="utf-8"))
         self.assertEqual(manifest["sha"], lr.head_sha(self.com))
 
+    def test_a_machine_whose_run_lock_is_stuck_does_not_hang_the_run_it_falls_back(self):
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import sys, time; sys.path.insert(0, %r); import lint_lock; "
+             "l = lint_lock.RunLock({'XDG_CACHE_HOME': %r}); assert l.acquire('stuck'); print('held', flush=True); time.sleep(120)"
+             % (TOOLS, os.path.join(self.remote_home, ".cache"))],
+            stdout=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(holder.kill)
+        self.assertEqual(holder.stdout.readline().strip(), "held")
+        os.environ["HAMS_LINT_REMOTE_WAIT"] = "2"
+        self.addCleanup(os.environ.pop, "HAMS_LINT_REMOTE_WAIT", None)
+        started = time.monotonic()
+        status, problems, _ = self.run_remote(self.bundle(("say", ["/usr/bin/python3", "-c", "print(1)"])))
+        self.assertEqual(status, "infra", "\n".join(self.lines))
+        self.assertLess(time.monotonic() - started, 60)
+        self.assertTrue(any("gave up waiting for the lint run lock" in line for line in self.lines), self.lines)
+
+    def test_remote_wait_arguments(self):
+        self.assertEqual(lr.remote_wait_args({}), "--lock-timeout 120 --load-timeout 120")
+        self.assertEqual(lr.remote_wait_args({"HAMS_LINT_REMOTE_WAIT": "30"}), "--lock-timeout 30 --load-timeout 30")
+        self.assertEqual(lr.remote_wait_args({"HAMS_LINT_REMOTE_WAIT": "nan"}), "--lock-timeout 120 --load-timeout 120")
+
     def test_a_failing_step_is_a_real_failure_not_a_fallback(self):
         status, problems, _seconds = self.run_remote(
             self.bundle(("good", ["/usr/bin/python3", "-c", "pass"]), ("bad", ["/usr/bin/python3", "-c", "import sys; print('boom'); sys.exit(3)"]))

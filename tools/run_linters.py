@@ -765,6 +765,8 @@ def run_bundle(argv):
     parser.add_argument("--results-json", required=True)
     parser.add_argument("-j", "--jobs", type=int, default=2)
     parser.add_argument("--no-timing", action="store_true")
+    parser.add_argument("--lock-timeout", type=float, default=None)
+    parser.add_argument("--load-timeout", type=float, default=None)
     options = parser.parse_args(argv)
     with open(options.run_bundle, encoding="utf-8") as handle:
         bundle = json.load(handle)
@@ -776,6 +778,8 @@ def run_bundle(argv):
         lint_lock.known_durations(),
         os.path.dirname(options.run_bundle),
         "run_linters.py --run-bundle (remote)",
+        lock_timeout=options.lock_timeout,
+        load_timeout_override=options.load_timeout,
     )
     if not run_ok:
         return lint_lock.EXIT_TEMPFAIL

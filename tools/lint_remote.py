@@ -126,6 +126,20 @@ GIT_IDENTITY = (
 FORWARDED_ENV = ("HAMS_LINT_XDIST",)  # run_linters settings that must reach the machine's own run
 
 
+def remote_wait_args(environ=None):
+    """A machine's run lock and load gate are waited for only this long (HAMS_LINT_REMOTE_WAIT seconds, default
+    120): a lock held by a stuck run, or a machine that stays loaded, must not hang this run. The remote run then
+    exits 75 without a results file and its steps run here (infrastructure fallback)."""
+    environ = os.environ if environ is None else environ
+    try:
+        seconds = float(environ.get("HAMS_LINT_REMOTE_WAIT", "120"))
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError(seconds)
+    except ValueError:
+        seconds = 120.0
+    return f"--lock-timeout {seconds:g} --load-timeout {seconds:g}"
+
+
 def _forwarded_env(environ=None):
     environ = os.environ if environ is None else environ
     return "".join(f" {name}={shlex.quote(environ[name])}" for name in FORWARDED_ENV if environ.get(name))
@@ -785,7 +799,7 @@ def run_on_machine(name, machine, transport, repos, invocation_role, bundle, on_
         f"mkdir -p {tmpdir} && cd {q(root)}/{invocation_role} && TMPDIR={tmpdir} {GIT_IDENTITY}{_forwarded_env()} "
         f"nice -n {int(machine.get('nice', 10))} python3 {q(root)}/hams_open/hams_shared/tools/run_linters.py "
         f"--run-bundle {q(root)}/.lint_bundle.json {roots_args} --results-json {q(results_path)} "
-        f"-j {int(machine.get('jobs', 2))} --no-timing 2>&1; rm -rf {tmpdir}"
+        f"-j {int(machine.get('jobs', 2))} --no-timing {remote_wait_args()} 2>&1; rm -rf {tmpdir}"
     )
     code = transport.stream(command, on_line)
     code2, raw, _err = transport.run(f"cat {q(results_path)} 2>/dev/null")
