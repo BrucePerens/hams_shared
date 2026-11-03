@@ -32,6 +32,8 @@
 #     python3-websockets                                          check_owl_templates
 #     redis-server rabbitmq-server   test brokers, localhost only (see do_services); started and enabled because the daemon and
 #                                    tools tests connect to `redis` / `rabbitmq` (test.py's own runs start private ones)
+#     smartmontools alsa-utils poppler-utils rpm llvm tesseract-ocr espeak-ng libhamlib-utils pipewire-bin   programs the dev box has and tests call
+#                                    (smartctl, arecord/aplay/amixer, pdftotext, rpmbuild, llvm-nm, tesseract, espeak-ng, rigctl/rigctld, pw-dump)
 #     imagemagick (magick) ffmpeg sox shellcheck libnss3-tools redis-tools   tools the daemon and tools tests run
 #     python3-aiohttp -pika -pymupdf -flask -flask-cors -serial -feedparser -docx -asyncpg ...   the hams_com daemons' tests
 #     golang-1.24-go                                              libcloudflared build (tools/test_build_cloudflared_ffi.py)
@@ -69,6 +71,7 @@ APT_PACKAGES=(build-essential pkg-config cmake clang autoconf automake libtool
   python3-aiohttp python3-aiodns python3-pika python3-pymupdf python3-fitz python3-flask python3-flask-cors python3-serial
   python3-feedparser python3-docx python3-asyncpg python3-defusedxml python3-webencodings
   redis-server rabbitmq-server python3-redis redis-tools imagemagick ffmpeg shellcheck libnss3-tools sox
+  smartmontools alsa-utils poppler-utils rpm llvm tesseract-ocr espeak-ng libhamlib-utils pipewire-bin
   sqlite3 pdns-backend-sqlite3)
 
 ODOO_VERSION="19.0.20261029"
@@ -148,6 +151,7 @@ do_apt() {
   [ $rc -eq 0 ] || return 1
   local p; for p in $miss; do record apt-installed.txt "$p"; done
   case " $miss " in *" pdns-backend-sqlite3 "*) apt_installed pdns-server && sudo -n systemctl disable --now pdns >/dev/null 2>&1; record apt-installed.txt pdns-server ;; esac
+  case " $miss " in *" smartmontools "*) sudo -n systemctl disable --now smartmontools >/dev/null 2>&1 ;; esac  # the tests call smartctl; no S.M.A.R.T. daemon is wanted
   rm -rf "$HOME"/hams-lint-mirror/*/.mypy_cache 2>/dev/null
   return 0
 }
