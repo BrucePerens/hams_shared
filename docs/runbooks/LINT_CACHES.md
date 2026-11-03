@@ -57,17 +57,38 @@ hash and can never read an old entry; the same content in two worktrees shares a
 and replace the file atomically; the file is capped at `results_mb` (oldest entries dropped first). `--no-cache` /
 `HAMS_LINT_NO_CACHE=1` neither reads nor writes it.
 
-## 3. Measurements (dev box, 16 cores, load 3-8 from other agents' runs; same inputs before and after)
+## 3. Measurements (dev box, 16 cores, load 3-20 from other agents' runs; same inputs before and after)
+
+`check_cargo_clippy` on the main checkouts of hams_open and hams_com (about 40 crates), one shared managed target
+directory, `CARGO_INCREMENTAL=0`, one run after the other (`cargo_pingpong` experiment, 2026-11-03):
+
+| Run | Time | Directory after |
+|---|---|---|
+| A1 cold, main checkouts | **889 s** | 3.8 GB |
+| A2 same checkout again, old stale-output scan | **961 s** (the scan, not cargo) | |
+| same, new scan (`check_cargo_clippy.py` in this change) | **19.6 s** under load, 5.7 s on the next run | |
+| B1 another checkout path (a worktree set): 7 build-script outputs purged, their crates rebuilt | **280 s** | 3.8 GB |
+| B2 same worktree again | 5.7 s | |
+| A3 back to the main checkouts | 210 s (6 purged) | 3.8 GB |
+
+Reading it. (1) The 1,100-1,250 s of the earlier logs are real: a cold clippy of both repositories is 900-1,250 s. An earlier
+measurement in this work (106-129 s cold) was taken on a smaller crate set and is not representative; ignore it.
+(2) Warm runs were dominated by `purge_stale_build_script_output`, which read every file of every `build/*/out` directory (the
+object files of `*-sys` crates) and ran a regex over each, once per crate: 961 s on a 3.8 GB directory. It now reads each run
+directory once and only the first 4 KiB of binary files. (3) The shared directory is fast while consecutive runs use the same
+checkout path (5.7 s) and pays 210-280 s whenever the checkout alternates (ten agents, ten worktrees): build scripts whose output
+names the other checkout's path are purged on purpose (bench_mcp's `include_str!` bug) and so are `opusic-sys` and
+`hams_local_relay`, which rebuild C code. Still much better than cold (889 s). A cheaper rule for which outputs to purge, or a
+second directory per checkout for only the `*-sys` units, is a follow-up (night_shift_todo/medium/lint-speed-remaining-costs).
+
+Other steps:
 
 | Step | Before | After | Notes |
 |---|---|---|---|
-| `check_cargo_clippy`, cold directory (hams_open + hams_com crates) | 111 s, 1,224 MB (incremental on) | 106-129 s, 764 MB (`CARGO_INCREMENTAL=0`) | The 1,100-1,250 s in earlier logs were not reproduced on an idle box: a cold build here is about 2 minutes. Incremental made no difference to the cold time and 60 % more disk. |
-| same, warm, no change | 2.8 s | 2.0-2.3 s | |
-| same, warm directory, a different worktree path | not measured (old directory: dependencies shared, incremental sessions per path) | 19 s | only the workspace's own crates rebuild |
-| `check_float_isfinite` (both repositories) | 10.8 s | 13.7 s cold (load), **0.2 s** warm | per-file result cache |
-| `check_int_float_overflow` | 8.0 s | 8.3 s cold, **0.1 s** warm | per-file result cache |
+| `check_float_isfinite` (both repositories) | 10.8 s | 0.2 s warm (13.7 s cold) | per-file result cache |
+| `check_int_float_overflow` | 8.0 s | 0.1 s warm (8.3 s cold) | per-file result cache |
 | `check_pip_audit` (5 requirements files) | 29.6 s | 21.1 s | files audited concurrently (`HAMS_PIP_AUDIT_JOBS`, default 4) |
-| old shared cargo directory | 31 GB (26 GB incremental) | budgeted, 0.7 GB per repository+toolchain after a cold build | |
+| old shared cargo directory | 31 GB (26 GB incremental) | 3.8 GB after a cold build | |
 
 Findings are identical: the clippy fixture crate with a real warning prints the same diagnostics cold and warm (only
 Cargo's own `Checking` / `Finished ... in 0.05s` progress lines differ), and the two scanners' outputs are
