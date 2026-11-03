@@ -95,7 +95,7 @@ of this change. The argv of every `pytest tools/[NofM]` step changed, so each ma
 * `check_untyped_utility_files`: the result of mypy for a file depends on the modules it imports, so a content hash of
   the file alone is not a sound key. mypy's own incremental cache is the right tool; it is per-checkout path.
 * `test_b2_backup.py` (355 s alone, see 3a) and `test_lint_lock.py` (190 s): single files that bound a chunk; profile them next.
-* `eslint`: the type-aware rules (`no-floating-promises`) read the types of imported files, so ESLint's own result cache
+* `eslint` (result cache): the type-aware rules (`no-floating-promises`) read the types of imported files, so ESLint's own result cache
   is not sound across a change to a dependency either. See the to-do.
 
 ## 5. Operations
@@ -107,3 +107,20 @@ of this change. The argv of every `pytest tools/[NofM]` step changed, so each ma
   `python3 tools/lint_remote.py caches mac1-vm bruce-yoga`.
 * The step estimate `COLD_COST_SECONDS["check_cargo_clippy"] = 600` in `lint_remote.py` still assumes a cold build; with
   a warm directory the step takes seconds, so it over-estimates the cost when routing. Follow-up.
+
+## 6. ESLint in `--changed` mode
+
+ESLint's time is per linted file with the type-aware config (hams_com, 2026-11-03, load 8-12): one file **8.8 s**, the
+`daemons/shack_console` directory 93 s, the whole repository 70-79 s. A change outside every Odoo module (a daemon) hands
+the per-module checkers the whole repository, so a one-file console change linted everything. `--changed` now gives ESLint
+the changed scripts plus every file under the scoped directories that imports one (`run_linters.narrow_eslint_targets`:
+a quoted import/require/from specifier whose last path part is the changed file's name, the directory name for `index`; a
+superset of the real importers) with `--no-warn-ignored`. Measured on a one-file change to
+`daemons/shack_console/console/src/pairing.js`: 4 files (it, two importers, one test), **11.2 s against 79.2 s**; same config,
+same TypeScript project, same rules, so the findings of each linted file are the same.
+
+Falls back to the whole directories (the old behaviour) for: a changed `eslint.config.js`, `tsconfig.json` or `package.json`; a
+changed JSON file; no changed script; a changed script that is a classic script (no import/export/require: its globals are
+shared with every file of the TypeScript program). `HAMS_LINT_ESLINT=whole` forces the old behaviour. A full run (no
+`--changed`) is unchanged. Not narrowed: a dependent that uses a changed file through a global or a registry name and not an
+import (Odoo `registry.category(...)` lookups carry no types), which the type-aware rules cannot see either.
