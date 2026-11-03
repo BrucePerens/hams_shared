@@ -195,7 +195,9 @@ fixed 30 s limit failed three of them, while the script was only slow. The limit
 twice the 1-minute load per core, at least the base and at most 8 times it (30 s becomes 75 s at load 20 on 16 cores, 240 s at most),
 so a script that really hangs still fails. Pinned by `SubprocessTimeoutFollowsLoadTests`. The same rule now bounds the wait for
 a loopback reply from the PowerDNS under test in `test_infrastructure.py` (`PdnsPublicConfigTests._wait_seconds`): a 3 s `recv`
-timed out at load 14-23 (`test_unusual_query_types_are_refused...`, 2026-11-03) while the server was only slow.
+timed out at load 14-23 (`test_unusual_query_types_are_refused...`, 2026-11-03) while the server was only slow. Hypothesis's 200 ms
+per-example deadline failed `test_check_async_lock_scope.py` the same way (251 ms, then 0.92 ms on the retry); `tools/conftest.py`
+turns the deadline off for the tools tests (two files already did, per test), the properties are still checked in full.
 
 ## 8. Daemon test directories run as several sessions
 
