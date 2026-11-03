@@ -1524,6 +1524,27 @@ def main():
             fail_header="❌ hams_shared/tools/ unit test failures:",
             inputs=((os.path.realpath(os.path.join(dir_path, "tools")),), None),
         )
+    # test_odoo_mypy_plugin.py runs a cold mypy with the Odoo plugin for each of its tests (22-61 s each, 10 of them in one
+    # class; 474 s in one process at load 9-26, 640 s for the chunk that held it on a lint runner) and is skipped unless the
+    # sibling repository is found, which is why the duration table never saw it (0.01 s). The tests are independent (each
+    # makes its own scratch directory and mypy cache), so they get a step of their own spread over four workers by test
+    # (`--dist load`, not loadfile). HAMS_LINT_MYPY_PLUGIN_SPLIT=0 keeps the file in the chunks.
+    mypy_plugin_tests = (
+        sorted(f for f in tool_test_files if os.path.basename(f) == "test_odoo_mypy_plugin.py")
+        if os.environ.get("HAMS_LINT_MYPY_PLUGIN_SPLIT") != "0"
+        else []
+    )
+    if mypy_plugin_tests:
+        tool_test_files = [f for f in tool_test_files if f not in mypy_plugin_tests]
+        _add(
+            "pytest tools/[mypy-plugin]",
+            [python_exec, "-m", "pytest", "-q"]
+            + (["-n", "4", "--dist", "load"] if lint_exec.xdist_available(python_exec) else [])
+            + mypy_plugin_tests,
+            cwd=os.path.join(dir_path, "tools"),
+            fail_header="❌ hams_shared/tools/ unit test failures:",
+            inputs=((os.path.realpath(os.path.join(dir_path, "tools")),), None),
+        )
     if tool_test_files:
         # The suites are independent files: four pytest processes instead of one that takes four minutes on its
         # own. The split is balanced by MEASURED seconds per file (lint_test_durations.json; a file never measured is
