@@ -368,8 +368,9 @@ class UnfitTests(unittest.TestCase):
                                               {"name": "g", "argv": ["/usr/bin/python3", "-V"]}]}
         steps = lr.import_bundle(bundle, {})
         self.assertEqual(steps[0].argv[0], "/usr/bin/definitely-not-here-python3", "unknown programs are left alone")
-        with mock.patch.object(lr.shutil, "which", return_value="/home/ai/.local/bin/definitely-not-here-python3"):
-            self.assertEqual(lr.import_bundle(bundle, {})[0].argv[0], "/home/ai/.local/bin/definitely-not-here-python3")
+        elsewhere = os.path.join(tempfile.gettempdir(), "userbin", "definitely-not-here-python3")
+        with mock.patch.object(lr.shutil, "which", return_value=elsewhere):
+            self.assertEqual(lr.import_bundle(bundle, {})[0].argv[0], elsewhere)
         self.assertEqual(steps[1].argv[0], "/usr/bin/python3")
 
 
