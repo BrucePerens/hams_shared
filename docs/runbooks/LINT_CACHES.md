@@ -34,7 +34,7 @@ warm directory it is the crates of the checkout only.
 | Machine | `cargo_gb` (each directory) | `free_floor_gb` | `results_mb` | Why |
 |---|---|---|---|---|
 | devbox | 25 | 30 | 200 | /home is 88 % full |
-| mac1-vm | 12 | 20 | 100 | 99 GB VM disk, hosts the production FCC sync |
+| mac1-vm | 12 | 10 | 100 | 99 GB VM disk with 17 GB free (2026-11-03), hosts the production FCC sync. The floor was 20: with 17 GB free every run was below it, pruned the directory to nothing and built cold (`lint cache: ... cleared the directory`), so the runner never had a warm Cargo directory. Two directories (hams_com 4.5 GB, hams_open 3.6 GB on arm64) leave about 9 GB for the VM, more than the sync needs |
 | bruce-yoga | 40 | 20 | 200 | 192 GB disk, 143 GB free |
 
 Change them in `cache_budgets` of `tools/lint_machines.json`, or per run with `HAMS_LINT_CARGO_GB`,
@@ -100,7 +100,7 @@ directory built from A: **old rule 58.4 s (5 run directories purged), new rule 1
 (cargo itself rebuilds the workspace crates, and bench_mcp's stale `include_str!` file is the hazard). The 210-280 s of the
 earlier measurement covered the whole repository pair at load 8-20. The rule only helps when both checkouts are older than the
 last build, i.e. alternating between existing worktrees; a worktree created after the cached run has newer files, cargo reruns
-those scripts itself, and they are purged as before. Pinned by `KeepOutputThatOnlyNamesAnotherCheckoutTests` (13 cases).
+those scripts itself, and they are purged as before. Pinned by `KeepOutputThatOnlyNamesAnotherCheckoutTests` (15 cases).
 
 Other steps:
 
@@ -152,8 +152,14 @@ of this change. The argv of every `pytest tools/[NofM]` step changed, so each ma
   What is left (profile): 3.8 M real regex searches 3.1 s, the visitor's AST traversal about 6 s, `compile` 1.7 s. That is below
   `verify_anchors` (16-21 s), so the Rust rewrite (`regex::RegexSet`) is not justified; the evidence for it would be a profile
   where the regex engine is the majority, and it is 15 %.
-* `check_untyped_utility_files`: the result of mypy for a file depends on the modules it imports, so a content hash of
-  the file alone is not a sound key. mypy's own incremental cache is the right tool; it is per-checkout path.
+* `check_untyped_utility_files` (mypy per file; 16 s idle on the dev box, 5-212 s under load; on a lint runner 413 s on the first
+  full run and 254 s on the next, at a machine load of 8): **not cached by result, deliberately.** The result of mypy for a file
+  depends on every module it imports (local files, installed packages, stubs), so a content hash of the file alone is not a sound
+  key; a sound key needs the hashes of the whole import closure plus the mypy and package versions, i.e. mypy's own dependency
+  graph, which is what mypy's incremental cache already is. That cache is in effect where the checkout path is stable: each
+  worker keeps `.mypy_cache/w<N>` in the runner's mirror, and the second full run on bruce-yoga was 40 % faster (413 s to 254 s). In
+  `--changed` mode only the changed files are checked. A cache shared across worktrees is not possible (mypy's cache is keyed by
+  path), and a result cache of our own was not built.
 * `test_b2_backup.py` (split into four files, see 3a) and `test_lint_lock.py` (190 s): single files that bound a chunk.
 * `eslint` (result cache): the type-aware rules (`no-floating-promises`) read the types of imported files, so ESLint's own result cache
   is not sound across a change to a dependency either. See the to-do.
