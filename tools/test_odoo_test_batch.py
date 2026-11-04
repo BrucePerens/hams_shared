@@ -88,8 +88,8 @@ class UnitTests(unittest.TestCase):
         self.assertIsNone(otb.module_scope(None))
         self.assertIsNone(otb.module_scope("ham_a,,"))
 
-    def reason(self, args=None, environ=None, cwd_is_root=True, dirty=False):
-        return otb.ineligible_reason(args or namespace(), environ or {}, cwd_is_root, dirty)
+    def reason(self, args=None, environ=None, cwd_is_root=True, dirty=False, has_base=True):
+        return otb.ineligible_reason(args or namespace(), environ or {}, cwd_is_root, dirty, has_base)
 
     def test_plain_committed_module_run_is_eligible(self):
         self.assertIsNone(self.reason())
@@ -107,6 +107,9 @@ class UnitTests(unittest.TestCase):
         self.assertIn("whole-module", self.reason(namespace(module=None)))
         self.assertIn("whole-module", self.reason(namespace(module="ham_a:TestX")))
         self.assertIn("repository root", self.reason(cwd_is_root=False))
+        # 2026-11-04: remote_odoo_test.py syncs a plain copy (a local git with branch "master", no remote) to the test host;
+        # batching it failed every remote run with "invalid reference: origin/main".
+        self.assertIn("origin/main", self.reason(has_base=False))
         self.assertIn("uncommitted", self.reason(dirty=True))
 
     def test_implicated_modules_reads_the_extractor_list(self):

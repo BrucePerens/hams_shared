@@ -51,10 +51,11 @@ def module_scope(module_arg):
 
 
 # [@ANCHOR: odoo_test_batch:ineligible_reason]
-def ineligible_reason(args, environ, cwd_is_root, dirty):
+def ineligible_reason(args, environ, cwd_is_root, dirty, has_base=True):
     """Why this test run must run alone (a short sentence), or None when it may join a batch. `args` is
     test.py's parsed namespace; `cwd_is_root`: the working directory is the repository's top level; `dirty`:
-    uncommitted changes."""
+    uncommitted changes; `has_base`: the repository has an `origin/main` to build the combined tree on (a tree
+    synced to a remote test host by remote_odoo_test.py is a plain copy with no remote, so it runs alone)."""
     if getattr(args, "solo", False):
         return "--solo"
     if environ.get(RUNNER_ENV):
@@ -76,6 +77,8 @@ def ineligible_reason(args, environ, cwd_is_root, dirty):
         return "not run from a repository root"
     if dirty:
         return "uncommitted changes in the tree (only committed tips are batched)"
+    if not has_base:
+        return "no origin/main here to build a combined tree on (a synced copy, not a checkout)"
     return None
 
 
@@ -278,7 +281,8 @@ def maybe_run_batched(args, environ=None, cwd=None, out=print):
     cwd_is_root = bool(root) and os.path.realpath(root) == os.path.realpath(cwd)
     status = subprocess.run(["git", "-C", cwd, "status", "--porcelain"], capture_output=True, text=True)
     dirty = status.returncode != 0 or bool(status.stdout.strip())
-    reason = ineligible_reason(args, environ, cwd_is_root, dirty)
+    base = subprocess.run(["git", "-C", cwd, "rev-parse", "--verify", "--quiet", "origin/main"], capture_output=True, text=True)
+    reason = ineligible_reason(args, environ, cwd_is_root, dirty, has_base=base.returncode == 0)
     if reason is not None:
         if args.module and reason not in ("--solo", "an internal phase of a run"):
             out("[*] test batch: running alone (%s)" % reason)
