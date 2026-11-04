@@ -141,6 +141,19 @@ class StateMachineTests(unittest.TestCase):
             with bq.locked(tmp) as state:
                 self.assertEqual(state["next_id"], 1)  # unreadable state starts over
 
+    def test_locked_does_not_rewrite_an_unchanged_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with bq.locked(tmp) as state:
+                state["next_id"] = 3
+            path = os.path.join(tmp, "state.json")
+            os.utime(path, (1.0, 1.0))
+            with bq.locked(tmp):
+                pass
+            self.assertEqual(os.path.getmtime(path), 1.0)
+            with bq.locked(tmp) as state:
+                state["next_id"] = 4
+            self.assertGreater(os.path.getmtime(path), 1.0)
+
     def test_caps_from_env(self):
         self.assertEqual(bq.caps_from_env({}), {"max_branches": 8, "max_seconds": 1800.0})
         self.assertEqual(bq.caps_from_env({"HAMS_BATCH_MAX_BRANCHES": "3", "HAMS_BATCH_MAX_SECONDS": "0"}),
@@ -301,6 +314,7 @@ class CoalesceTests(unittest.TestCase):
         self.assertEqual(sum(1 for box in (b for _t, b in others) if box["out"]["ran"]), 1)  # one leader
         self.assertTrue(any("joined batch 2 with 2 other branches (batch 1 running" in line for line in self.lines))
         self.assertTrue(any("nothing is running here; starting at once" in line for line in self.lines))
+        self.assertFalse(any("is full" in line for line in self.lines))  # joining is not being refused
 
     def test_cap_makes_extra_branches_wait_for_the_next_batch(self):
         self.caps = {"max_branches": 2, "max_seconds": 0}

@@ -225,7 +225,16 @@ class LintBatch:
         for member in members:
             if member["tip"] not in files:
                 files[member["tip"]] = changed_paths(self.repo, self.base, member["tip"])
-        return owners_of(files), path_finder(sorted({p for paths in files.values() for p in paths}))
+        owners = owners_of(files)
+        # Some checkers name a file by its base name and its directory separately (`File 'x.py' in '<dir>'`):
+        # a base name that only one changed path has is a token of its own.
+        names = {}
+        for path in owners:
+            names.setdefault(os.path.basename(path), []).append(path)
+        for name, paths in names.items():
+            if len(paths) == 1 and len(name) >= 6 and name not in owners:
+                owners[name] = owners[paths[0]]
+        return owners, path_finder(sorted(owners))
 
     def __call__(self, batch_id, members, log_path):
         batch_queue.reap_orphan_trees(self.repo, self.kind, self.repo_name, environ=self.environ)

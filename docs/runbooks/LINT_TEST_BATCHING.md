@@ -56,7 +56,7 @@ branch). `HAMS_LINT_BATCH=off` disables batching for a session. The line `[*] li
 | Variable | Default | Meaning |
 |---|---|---|
 | `HAMS_BATCH_MAX_BRANCHES` | 8 | branches per batch |
-| `HAMS_BATCH_MAX_SECONDS` | 1800 | estimated seconds of work per batch (0 = no cap); lint estimate sums the recorded step durations of the union of steps, 120 s for an unknown step |
+| `HAMS_BATCH_MAX_SECONDS` | 1800 | estimated seconds of work per batch (0 = no cap); lint estimate sums the recorded step durations of the union of steps, unknown steps count 0, divided by the job count -j |
 | `HAMS_BATCH_DIR` | `~/.cache/hams-lint/batches` | queue state, verdicts, logs |
 | `HAMS_BATCH_TREE_DIR` | `~/workspace/tmp` | where combined trees are created |
 | `HAMS_LINT_BATCH` | on | `off` = never batch |
