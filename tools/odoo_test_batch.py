@@ -104,6 +104,26 @@ def implicated_modules(text):
     return found
 
 
+# [@ANCHOR: odoo_test_batch:failing_tests]
+def failing_tests(text):
+    """The set of failing test ids in a ``filtered_test.txt``, each ``"<module>:<Class>.<method>"``.
+
+    Two line forms are read: Odoo's logger form ``odoo.addons.<module>.tests.<file>: ERROR: Class.method`` (also
+    ``FAIL:``) and the unittest form ``ERROR: setUpClass (odoo.addons.<module>.tests.<file>.Class)`` (also
+    ``test_x (...)``, ``tearDownClass``). A failure appears twice in the file (once in the extracted blocks, once
+    in the context); the set holds it once. Empty when no failing test is named (a crash, a module-load error)."""
+    found = set()
+    for line in str(text).splitlines():
+        match = re.search(r"odoo\.addons\.([A-Za-z0-9_]+)\.tests[\w.]*: (?:ERROR|FAIL): ([A-Za-z_]\w*\.\w+)\s*$", line)
+        if match:
+            found.add("%s:%s" % (match.group(1), match.group(2)))
+            continue
+        match = re.search(r"(?:ERROR|FAIL): (\w+) \(odoo\.addons\.([A-Za-z0-9_]+)\.tests\.(?:[\w.]*\.)?(\w+)\)\s*$", line)
+        if match:
+            found.add("%s:%s.%s" % (match.group(2), match.group(3), match.group(1)))
+    return found
+
+
 # [@ANCHOR: odoo_test_batch:module_finder]
 def module_finder(modules):
     """`find_tokens(line)` for `blame_by_tokens`: the entries of `modules` named as whole words in a line."""
@@ -159,11 +179,13 @@ def idle_machines(machines, lock_dir=None):
 
 
 # [@ANCHOR: odoo_test_batch:run_on_machine]
-def run_on_machine(machine, tree, repo_name, members, modules, driver, log_path, work_dir):
-    """Run `test.py -u <modules>` on the test host `machine` for the members' commits, and return the host's result.
+def run_on_machine(machine, tree, repo_name, members, modules, driver, log_path, work_dir, union=None):
+    """Run test.py on the test host `machine` for the members' commits, and return the host's result. The host
+    INSTALLS/UPDATES `union` (default: `modules`) and TESTS only `modules`, its share, so splitting a batch never
+    changes the installed set (a test of one module may need another module of the batch to be installed).
 
     Calls the driver (hams_com's remote_odoo_test.py, `driver` is its argv prefix) as ``driver machine tree
-    modules --repo R --members-file F --result-json J --log L --wait``. The host builds its tree from its own
+    union --repo R --members-file F --result-json J --log L --wait [--share modules]``. The host builds its tree from its own
     origin/main with every member tip merged and runs test.py there. Blocks until the host is done (minutes to an
     hour). Returns the driver's result dict ``{"host", "exit_code", "merged": [sha], "conflicted": [sha],
     "filtered": text, "log", "seconds", "error"}``; a driver that crashed or wrote nothing yields exit_code 75 with
@@ -180,8 +202,11 @@ def run_on_machine(machine, tree, repo_name, members, modules, driver, log_path,
     for stale in (result_file,):
         if os.path.exists(stale):
             os.unlink(stale)  # a result from an earlier call must never be read as this one's
-    argv = [*driver, machine, tree, ",".join(modules), "--repo", repo_name, "--members-file", members_file,
+    union = sorted(union) if union else sorted(modules)
+    argv = [*driver, machine, tree, ",".join(union), "--repo", repo_name, "--members-file", members_file,
             "--result-json", result_file, "--log", log_path, "--wait"]
+    if sorted(modules) != union:
+        argv += ["--share", ",".join(sorted(modules))]
     proc = subprocess.run(argv, capture_output=True, text=True, errors="replace")
     try:
         with open(result_file, encoding="utf-8") as handle:
@@ -386,10 +411,22 @@ class RemoteTestBatch(OdooTestBatch):
                  probe=idle_machines, runner=run_on_machine, out=print, environ=None):
         super().__init__(repo, repo_name, base, passthrough, stamp_writer, sdir=sdir, out=out, environ=environ)
         self.machines = list(machines)
+        self.environmental = []
         self.driver = list(driver)
         self.work_base = work_base
         self.probe = probe
         self.runner = runner
+
+    def __call__(self, batch_id, members, log_path):
+        self.environmental = []
+        doc = super().__call__(batch_id, members, log_path)
+        if self.environmental:
+            note = "%d test(s) fail identically on origin/main (environmental) and were not counted against any branch: %s" % (
+                len(self.environmental), ", ".join(self.environmental[:5]) + (" ..." if len(self.environmental) > 5 else ""))
+            for verdict in doc["verdicts"].values():
+                if verdict.get("status") == batch_queue.PASSED:
+                    verdict["note"] = note
+        return doc
 
     def _run_once(self, batch_id, group):
         self._run_no += 1
@@ -407,7 +444,7 @@ class RemoteTestBatch(OdooTestBatch):
 
         def work_one(machine, mods):
             log_path = os.path.join(work, machine + ".log")
-            outcome = self.runner(machine, self.repo, self.repo_name, group, mods, self.driver, log_path, work)
+            outcome = self.runner(machine, self.repo, self.repo_name, group, mods, self.driver, log_path, work, union)
             with lock:
                 results[machine] = (mods, log_path, outcome)
 
@@ -416,7 +453,7 @@ class RemoteTestBatch(OdooTestBatch):
             thread.start()
         for thread in threads:
             thread.join()
-        failures, exit_code, conflicted_tips, errors = {}, 0, set(), []
+        failures, exit_code, conflicted_tips, errors, environmental = {}, 0, set(), [], set()
         for machine in sorted(results):
             mods, log_path, outcome = results[machine]
             text = outcome.get("filtered") or ""
@@ -433,17 +470,37 @@ class RemoteTestBatch(OdooTestBatch):
             conflicted_tips |= set(outcome.get("conflicted") or ())
             record_durations(self.sdir, mods, outcome.get("seconds") or 0)
             code = outcome.get("exit_code", 1)
-            if code != 0:
-                exit_code = exit_code or code
-                implicated = implicated_modules(text)
-                for module in implicated:
-                    lines = [line.strip() for line in text.splitlines() if module in line][:30]
-                    failures["module %s" % module] = "\n".join(lines) or module
-                if not implicated:
-                    failures["%s test.py" % machine] = (text or tail)[-20000:]
+            if code == 0:
+                continue
+            ids = failing_tests(text)
+            if ids:
+                same_on_main = ids & failing_tests(outcome.get("baseline_filtered") or "") \
+                    if outcome.get("baseline_exit") not in (None, 0) else set()
+                environmental |= same_on_main
+                for test_id in sorted(ids - same_on_main):
+                    module, name = test_id.split(":", 1)
+                    method = name.split(".")[-1]
+                    lines = [line.strip() for line in text.splitlines() if method in line][:10]
+                    failures["module %s" % module] = failures.get("module %s" % module, "") + "\n".join(
+                        ["failed: " + test_id] + lines) + "\n"
+                    exit_code = exit_code or code
+                continue
+            exit_code = exit_code or code
+            implicated = implicated_modules(text)
+            for module in implicated:
+                lines = [line.strip() for line in text.splitlines() if module in line][:30]
+                failures["module %s" % module] = "\n".join(lines) or module
+            if not implicated:
+                failures["%s test.py" % machine] = (text or tail)[-20000:]
+        self.environmental = sorted(environmental)
+        if environmental:
+            self._emit("\n[*] %d failing test(s) fail identically on origin/main (environmental, not charged to any "
+                       "branch):\n    %s\n" % (len(environmental), "\n    ".join(sorted(environmental)[:40])))
         shutil.rmtree(work, ignore_errors=True)
         if errors:
             return {"exit_code": 75, "fatal": True, "failures": {}, "conflicted": [], "detail": "; ".join(errors)}
+        if not failures:
+            exit_code = 0  # nothing but environmental failures: the branches are not at fault
         conflicted = [(m, "merge conflict with origin/main or another branch on the test host")
                       for m in group if m["tip"] in conflicted_tips]
         return {"exit_code": exit_code, "failures": failures, "conflicted": conflicted, "selected": union}
