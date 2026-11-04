@@ -496,6 +496,11 @@ class AttributionTests(unittest.TestCase):
         self.assertTrue(blamed["TA"][0].startswith("flake8: a/x.py:3"))
         self.assertEqual(unattributed, ["anchors"])
 
+    def test_blame_counts_a_line_naming_two_tokens_of_one_owner_once(self):
+        owners = {"a/x.py": ["TA"], "x.py": ["TA"]}
+        blamed, _ = bq.blame_by_tokens({"s": "a/x.py:1: bad"}, owners, lambda line: ["a/x.py", "x.py"])
+        self.assertEqual(len(blamed["TA"]), 1)
+
     def test_blame_shared_file_blames_every_owner(self):
         blamed, unattributed = bq.blame_by_tokens({"s": "shared.py:1: bad"}, self.OWNERS, self.finder)
         self.assertEqual(sorted(blamed), ["TA", "TB"])

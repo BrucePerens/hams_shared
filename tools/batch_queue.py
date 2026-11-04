@@ -360,11 +360,12 @@ def coalesce(sdir, member, run_batch, caps=None, estimate=None, poll=DEFAULT_POL
                         batch_id = None  # a verdict without us: join again
                     else:
                         forming, running = state.get("forming"), state.get("running")
+                        runner_of = running
                         if forming and forming["id"] == batch_id:
                             lead_run = seal(state, member, now=now,
                                             log=log_for(batch_id) if log_for else "")
                         elif running and running["id"] == batch_id:
-                            runner_of = running
+                            pass
                         else:
                             requeues += 1
                             out("[*] batch %d ended without a verdict (its runner died); joining again" % batch_id)
@@ -395,7 +396,10 @@ def coalesce(sdir, member, run_batch, caps=None, estimate=None, poll=DEFAULT_POL
                         "batch": lead_run["id"], "others": others, "ran": True, "doc": doc}
             if now() >= next_report:
                 if batch_id is not None and runner_of is not None:
-                    out("[*] batch %d is forming behind %s" % (batch_id, _describe_running(runner_of, now)))
+                    if runner_of["id"] == batch_id:
+                        out("[*] waiting for %s" % _describe_running(runner_of, now))
+                    else:
+                        out("[*] batch %d is forming behind %s" % (batch_id, _describe_running(runner_of, now)))
                 elif refused and not announced_wait:
                     out("[*] the forming batch is full (%d branches): waiting for the next one" % caps["max_branches"])
                     announced_wait = True
@@ -529,7 +533,9 @@ def blame_by_tokens(failures, owners, find_tokens):
         for line in str(text).splitlines():
             for token in find_tokens(line):
                 for tip in owners.get(token, ()):
-                    blamed.setdefault(tip, []).append("%s: %s" % (name, line.strip()[:300]))
+                    entry = "%s: %s" % (name, line.strip()[:300])
+                    if entry not in blamed.setdefault(tip, []):  # a line naming two tokens counts once
+                        blamed[tip].append(entry)
                     hit = True
         if not hit:
             unattributed.append(name)
