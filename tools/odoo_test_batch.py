@@ -15,16 +15,23 @@ Runs that stay solo: --solo, a dirty tree, a class or method selector (`-u mod:C
 than standard, --mcp, --coverage, --pause-on-fail, --offline-isolation, --profile, --build-daemons, a run started
 by a batch leader, and a working directory that is not a repository root.
 
-Splitting the union across machines by recorded duration is planned (`plan_machine_split` computes the split) but
-the leader still runs everything on this machine: `run_on_machine` is the stub for remote_odoo_test.py.
+Remote test hosts (bruce-yoga, the mac1 VM): hams_com's devbox_tools/remote_odoo_test.py is the front end. Its
+callers join a queue of their own kind ("rtest", `run_remote_member`); the leader (`RemoteTestBatch`) splits the
+union of the members' modules over the idle hosts by recorded duration (`plan_machine_split`), calls
+`run_on_machine` once per host in parallel, and each host builds origin/main + the members' commits from its own
+git clone and runs test.py there. Failures are attributed per module exactly as for local batches.
 """
 
+import fcntl
 import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 
 import batch_queue
@@ -93,7 +100,7 @@ def implicated_modules(text):
             if match:
                 found.append(match.group(1))
             elif line.strip():
-                break
+                active = False  # another section follows; a later header (a second host's text) starts a new list
     return found
 
 
@@ -127,13 +134,64 @@ def plan_machine_split(modules, durations, machines, default=DEFAULT_MODULE_SECO
     return {m: sorted(mods) for m, mods in plan.items() if mods}
 
 
+REMOTE_KIND = "rtest"
+REMOTE_LOCK_DIR = os.path.join("~", ".cache", "hams-remote-test")
+
+
+# [@ANCHOR: odoo_test_batch:idle_machines]
+def idle_machines(machines, lock_dir=None):
+    """The entries of `machines` whose run lock is free right now, in order. The lock is the one
+    remote_odoo_test.py takes (``<lock_dir>/<machine>.lock``, default ~/.cache/hams-remote-test); it is probed
+    with a non-blocking flock and released at once, so the answer can be stale by the time a run starts (the
+    driver then waits for the lock)."""
+    directory = os.path.expanduser(lock_dir or REMOTE_LOCK_DIR)
+    os.makedirs(directory, exist_ok=True)
+    free = []
+    for machine in machines:
+        with open(os.path.join(directory, machine + ".lock"), "a+") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                continue
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        free.append(machine)
+    return free
+
+
 # [@ANCHOR: odoo_test_batch:run_on_machine]
-def run_on_machine(machine, tree, modules, log_directory):
-    """STUB: run `test.py -u <modules>` for the combined `tree` on another test machine through
-    hams_com's devbox_tools/remote_odoo_test.py (bruce-yoga, mac1). Not implemented: remote_odoo_test.py lives
-    in hams_com and syncs a trimmed tree plus a hams_open checkout; wiring it needs a change there and a
-    per-machine queue (to-do night_shift_todo/medium/split-test-batches-across-machines-*.md). Only "local" works."""
-    raise NotImplementedError("running a test batch on %s is not implemented; see the runbook" % machine)
+def run_on_machine(machine, tree, repo_name, members, modules, driver, log_path, work_dir):
+    """Run `test.py -u <modules>` on the test host `machine` for the members' commits, and return the host's result.
+
+    Calls the driver (hams_com's remote_odoo_test.py, `driver` is its argv prefix) as ``driver machine tree
+    modules --repo R --members-file F --result-json J --log L --wait``. The host builds its tree from its own
+    origin/main with every member tip merged and runs test.py there. Blocks until the host is done (minutes to an
+    hour). Returns the driver's result dict ``{"host", "exit_code", "merged": [sha], "conflicted": [sha],
+    "filtered": text, "log", "seconds", "error"}``; a driver that crashed or wrote nothing yields exit_code 75 with
+    "error" set (the run could not start: this is not a test failure)."""
+    members_file = os.path.join(work_dir, machine + "-members.json")
+    result_file = os.path.join(work_dir, machine + "-result.json")
+    seen, unique = set(), []
+    for member in members:
+        if member["tip"] not in seen:
+            seen.add(member["tip"])
+            unique.append({"branch": member["branch"], "tip": member["tip"]})
+    with open(members_file, "w", encoding="utf-8") as handle:
+        json.dump(unique, handle)
+    for stale in (result_file,):
+        if os.path.exists(stale):
+            os.unlink(stale)  # a result from an earlier call must never be read as this one's
+    argv = [*driver, machine, tree, ",".join(modules), "--repo", repo_name, "--members-file", members_file,
+            "--result-json", result_file, "--log", log_path, "--wait"]
+    proc = subprocess.run(argv, capture_output=True, text=True, errors="replace")
+    try:
+        with open(result_file, encoding="utf-8") as handle:
+            result = json.load(handle)
+    except (OSError, ValueError):
+        return {"host": machine, "exit_code": 75, "merged": [], "conflicted": [], "filtered": "", "log": log_path,
+                "seconds": 0.0, "error": "the driver wrote no result (exit %s): %s" % (
+                    proc.returncode, (proc.stdout + proc.stderr)[-400:].strip())}
+    result.setdefault("filtered", "")
+    return result
 
 
 # [@ANCHOR: odoo_test_batch:estimate_seconds]
@@ -305,3 +363,114 @@ def maybe_run_batched(args, environ=None, cwd=None, out=print):
         cwd, os.path.basename(key), branch, head, "origin/main", scope, runner, timeout=args.wait_timeout, out=out,
         sdir=sdir, estimate=lambda modules: estimate_seconds(modules, durations), kind=KIND,
         solo_hint="test.py -u %s --solo" % args.module, environ=environ)
+
+
+# [@ANCHOR: odoo_test_batch:RemoteTestBatch]
+class RemoteTestBatch(OdooTestBatch):
+    """The leader's runner for batches tested on the remote test hosts: an `OdooTestBatch` whose run goes to
+    machines instead of a local combined tree.
+
+    Constructor: ``RemoteTestBatch(repo, repo_name, base, passthrough, stamp_writer, sdir, machines, driver,
+    work_base=None, probe=idle_machines, runner=run_on_machine, out=print, environ=None)``. `machines` is the
+    ordered list of host names it may use, `driver` the argv prefix of remote_odoo_test.py, `probe`/`runner` are
+    replaceable (tests use fakes). Per run (`_run_once`): the union of the group's modules is split over the idle
+    machines (`plan_machine_split`, recorded durations), one thread per machine calls `run_on_machine`, and the
+    results are merged: a conflicted merge (found by the hosts, who all build the same tree) becomes a "conflicted"
+    member, a host that could not start makes the run fatal (exit 75), a failure is the modules each host's
+    ``filtered_test.txt`` implicates (none implicated: unattributable, the batch splits). Durations are recorded per
+    machine from its own wall time. Each host's log is appended to the batch log."""
+
+    kind = REMOTE_KIND
+
+    def __init__(self, repo, repo_name, base, passthrough, stamp_writer, sdir, machines, driver, work_base=None,
+                 probe=idle_machines, runner=run_on_machine, out=print, environ=None):
+        super().__init__(repo, repo_name, base, passthrough, stamp_writer, sdir=sdir, out=out, environ=environ)
+        self.machines = list(machines)
+        self.driver = list(driver)
+        self.work_base = work_base
+        self.probe = probe
+        self.runner = runner
+
+    def _run_once(self, batch_id, group):
+        self._run_no += 1
+        union = sorted({m for member in group for m in member.get("scope", ())})
+        free = self.probe(self.machines) or self.machines[:1]
+        plan = plan_machine_split(union, load_durations(self.sdir), free)
+        self.current_members = group
+        self.last_selected = union
+        self._emit("\n===== remote run %d.%d: %d branch(es): %s =====\n" % (
+            batch_id, self._run_no, len({m["tip"] for m in group}), ", ".join(m["branch"] for m in group)))
+        for machine, mods in plan.items():
+            self._emit("[*] %s: %s\n" % (machine, ",".join(mods)))
+        work = tempfile.mkdtemp(prefix="rtest_b%d_r%d_" % (batch_id, self._run_no), dir=self.work_base)
+        results, lock = {}, threading.Lock()
+
+        def work_one(machine, mods):
+            log_path = os.path.join(work, machine + ".log")
+            outcome = self.runner(machine, self.repo, self.repo_name, group, mods, self.driver, log_path, work)
+            with lock:
+                results[machine] = (mods, log_path, outcome)
+
+        threads = [threading.Thread(target=work_one, args=item) for item in plan.items()]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        failures, exit_code, conflicted_tips, errors = {}, 0, set(), []
+        for machine in sorted(results):
+            mods, log_path, outcome = results[machine]
+            text = outcome.get("filtered") or ""
+            try:
+                with open(log_path, encoding="utf-8", errors="replace") as handle:
+                    tail = handle.read()[-100000:]
+            except OSError:
+                tail = ""
+            self._emit("\n===== %s: exit %s, %.0f s, log %s =====\n%s\n" % (
+                machine, outcome.get("exit_code"), outcome.get("seconds") or 0, log_path, tail))
+            if outcome.get("error"):
+                errors.append("run on %s could not start: %s" % (machine, outcome["error"]))
+                continue
+            conflicted_tips |= set(outcome.get("conflicted") or ())
+            record_durations(self.sdir, mods, outcome.get("seconds") or 0)
+            code = outcome.get("exit_code", 1)
+            if code != 0:
+                exit_code = exit_code or code
+                implicated = implicated_modules(text)
+                for module in implicated:
+                    lines = [line.strip() for line in text.splitlines() if module in line][:30]
+                    failures["module %s" % module] = "\n".join(lines) or module
+                if not implicated:
+                    failures["%s test.py" % machine] = (text or tail)[-20000:]
+        shutil.rmtree(work, ignore_errors=True)
+        if errors:
+            return {"exit_code": 75, "fatal": True, "failures": {}, "conflicted": [], "detail": "; ".join(errors)}
+        conflicted = [(m, "merge conflict with origin/main or another branch on the test host")
+                      for m in group if m["tip"] in conflicted_tips]
+        return {"exit_code": exit_code, "failures": failures, "conflicted": conflicted, "selected": union}
+
+
+# [@ANCHOR: odoo_test_batch:run_remote_member]
+def run_remote_member(tree, repo_name, branch, tip, modules_arg, machines, driver, wait=False, environ=None,
+                      out=print, timeout=None):
+    """The caller's side of a remote test run (remote_odoo_test.py): join the "rtest" queue of the repository of
+    `tree`, block until this branch's verdict, print it, and return the exit code (0 passed, 1 failed, 75 could
+    not run or gave up waiting), or None when the branch must run alone (its merge conflicts with another
+    branch of the batch, or the batch runner kept dying). `modules_arg` is the comma-separated whole-module -u
+    list (a ``:Class`` selector raises ValueError: such a run cannot be batched). `machines` are host names,
+    `driver` the argv prefix of remote_odoo_test.py. `wait` is accepted for symmetry (the queue always waits);
+    `timeout` seconds bound the wait for a verdict."""
+    environ = os.environ if environ is None else environ
+    scope = module_scope(modules_arg)
+    if scope is None:
+        raise ValueError("a run with a class selector or no module list cannot be batched")
+    key = batch_queue.repo_key(tree)
+    sdir = batch_queue.state_dir(REMOTE_KIND, key, environ)
+    durations = load_durations(sdir)
+    runner = RemoteTestBatch(
+        tree, os.path.basename(key), "origin/main", [],
+        lambda sha, modules, batch_id: write_pass_record(sha, modules, batch_id, environ),
+        sdir, machines, driver, out=out, environ=environ)
+    return lint_batch.run_member(
+        tree, os.path.basename(key), branch, tip, "origin/main", scope, runner, timeout=timeout, out=out,
+        sdir=sdir, estimate=lambda modules: estimate_seconds(modules, durations) / max(1, len(machines)),
+        kind=REMOTE_KIND, solo_hint="remote_odoo_test.py <host> <tree> %s --solo" % modules_arg, environ=environ)
