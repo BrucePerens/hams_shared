@@ -120,8 +120,8 @@ class StateMachineTests(unittest.TestCase):
 
     def test_state_dir_per_kind_and_repo(self):
         env = {"HAMS_BATCH_DIR": "/x/b"}
-        self.assertEqual(bq.state_dir("lint", "/home/a/hams_com", env), "/x/b/lint-home_a_hams_com")
-        self.assertNotEqual(bq.state_dir("test", "/home/a/hams_com", env), bq.state_dir("lint", "/home/a/hams_com", env))
+        self.assertEqual(bq.state_dir("lint", "/srv/a/hams_com", env), "/x/b/lint-srv_a_hams_com")
+        self.assertNotEqual(bq.state_dir("test", "/srv/a/hams_com", env), bq.state_dir("lint", "/srv/a/hams_com", env))
         self.assertTrue(bq.state_dir("lint", "/k", {"XDG_CACHE_HOME": "/c"}).startswith("/c/hams-lint/batches/"))
 
     def test_locked_persists_and_exception_does_not_save(self):

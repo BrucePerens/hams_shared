@@ -33,6 +33,7 @@ them exactly as a single run does. It decides only WHO runs next and WHAT that r
 import contextlib
 import fcntl
 import json
+import math
 import os
 import re
 import shutil
@@ -167,9 +168,9 @@ def caps_from_env(environ=None):
         branches = DEFAULT_MAX_BRANCHES
     try:
         seconds = float(environ.get("HAMS_BATCH_MAX_SECONDS", DEFAULT_MAX_SECONDS))
-        if seconds != seconds or seconds in (float("inf"), float("-inf")) or seconds < 0:
-            seconds = DEFAULT_MAX_SECONDS
     except ValueError:
+        seconds = DEFAULT_MAX_SECONDS
+    if not math.isfinite(seconds) or seconds < 0:
         seconds = DEFAULT_MAX_SECONDS
     return {"max_branches": branches, "max_seconds": seconds}
 

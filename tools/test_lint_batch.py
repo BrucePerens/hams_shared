@@ -30,7 +30,6 @@ import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
-import batch_queue  # noqa: E402
 import lint_batch  # noqa: E402
 import test_batch_queue as helpers  # noqa: E402
 
