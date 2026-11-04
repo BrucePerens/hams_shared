@@ -20,6 +20,7 @@ the leader still runs everything on this machine: `run_on_machine` is the stub f
 """
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -151,7 +152,11 @@ def load_durations(sdir):
     try:
         with open(_durations_path(sdir), encoding="utf-8") as handle:
             data = json.load(handle)
-        return {k: float(v) for k, v in data.items() if isinstance(v, (int, float)) and v == v and v < 1e9}
+        table = {}
+        for key, value in data.items():
+            if isinstance(value, (int, float)) and math.isfinite(float(value)) and 0 <= value < 1e9:
+                table[key] = float(value)
+        return table
     except (OSError, ValueError, AttributeError):
         return {}
 
