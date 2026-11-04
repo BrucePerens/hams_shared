@@ -139,6 +139,18 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(lint_batch.changed_paths(work, "origin/main", tip), ["n/new.txt"])
             self.assertEqual(lint_batch.changed_paths(work, "no-such", tip), [])
 
+    def test_tokens_include_unique_base_names_for_checkers_that_print_dir_and_file_apart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = helpers.make_repo(tmp)
+            os.makedirs(os.path.join(work, "ham_x"))
+            tip = helpers.commit_branch(work, "x", {"ham_x/demo_batch_x.py": "a\n", "ham_x/a.py": "b\n"})
+            batch = lint_batch.LintBatch(work, "hams_demo", "origin/main", [], lambda *a: None, fetch=False)
+            owners, find = batch.tokens([{"tip": tip, "branch": "x"}])
+            self.assertEqual(owners["ham_x/demo_batch_x.py"], [tip])
+            self.assertEqual(owners["demo_batch_x.py"], [tip])  # unique and long enough
+            self.assertNotIn("a.py", owners)  # too short to be a token of its own
+            self.assertEqual(find("File 'demo_batch_x.py' in '/t/ham_x'"), ["demo_batch_x.py"])
+
     def test_write_batch_stamp_format_is_accepted_by_the_stamp_gate(self):
         import lint_stamp_gate
         import run_linters

@@ -2263,7 +2263,8 @@ def main():
             lint_batch.LintBatch(repo_root, os.path.basename(main_checkout_root.rstrip(os.sep)), options.changed,
                                  passthrough, write_batch_stamp),
             timeout=options.lock_timeout,
-            estimate=lambda names: sum(batch_durations.get(name, 120.0) for name in names),
+            # Steps run `-j` at a time and many have no record: estimate from the known ones, spread over the jobs.
+            estimate=lambda names: sum(batch_durations.get(name, 0.0) for name in names) / max(1, options.jobs),
         )
         if batch_code is not None:
             sys.exit(batch_code)

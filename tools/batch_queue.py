@@ -127,7 +127,10 @@ def locked(sdir):
                 state = empty_state()
         except (OSError, ValueError):
             state = empty_state()
+        before = json.dumps(state, sort_keys=True)
         yield state
+        if json.dumps(state, sort_keys=True) == before and os.path.exists(_state_path(sdir)):
+            return  # nothing changed: a poll must not rewrite a large file every second
         tmp = _state_path(sdir) + ".tmp-%d-%s" % (os.getpid(), uuid.uuid4().hex)
         with open(tmp, "w", encoding="utf-8") as handle:
             json.dump(state, handle)
@@ -323,12 +326,14 @@ def coalesce(sdir, member, run_batch, caps=None, estimate=None, poll=DEFAULT_POL
     try:
         while True:
             lead_run = None
+            refused = False
             with locked(sdir) as state:
                 for event, ident in prune(state, live):
                     if event == "runner_died":
                         out("[*] batch %d: its runner died; waiting members re-queue" % ident)
                 if batch_id is None:
                     batch_id = join(state, member, caps, now=now, estimate=estimate)
+                    refused = batch_id is None
                     if batch_id is not None:
                         forming = state["forming"]
                         others = sorted({m["branch"] for m in forming["members"] if m["tip"] != member["tip"]})
@@ -391,7 +396,7 @@ def coalesce(sdir, member, run_batch, caps=None, estimate=None, poll=DEFAULT_POL
             if now() >= next_report:
                 if batch_id is not None and runner_of is not None:
                     out("[*] batch %d is forming behind %s" % (batch_id, _describe_running(runner_of, now)))
-                elif batch_id is None and not announced_wait:
+                elif refused and not announced_wait:
                     out("[*] the forming batch is full (%d branches): waiting for the next one" % caps["max_branches"])
                     announced_wait = True
                 next_report = now() + report_every
