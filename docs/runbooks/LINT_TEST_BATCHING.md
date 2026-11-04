@@ -79,10 +79,23 @@ branch). `HAMS_LINT_BATCH=off` disables batching for a session. The line `[*] li
   whose file the finding names. `--solo` repeats a run alone.
 * A failure that names no file (anchor and documentation cross-reference checks name anchors, not files) always splits.
 * hams_shared tips are not batched.
-* Tests: the same queue is used by `test.py` (see the test section below once merged).
+* The leader runs the whole test union on this machine; splitting it across machines is stubbed (see Tests below).
 
 ## Tests (test.py)
 
-Not yet batched; the hook is described and stubbed in `tools/batch_queue.py` consumers: members are modules, attribution
-is `blame_by_tokens` over the module names in the failing test ids, and splitting modules across machines by known duration
-goes through `remote_odoo_test.py`. See `night_shift_todo/medium/test-py-joins-the-coalescing-batch-queue-*.md`.
+`test.py -u ham_a,ham_b` (whole modules, committed tree, repository root) joins the **test** queue of its repository
+(`state_dir("test", ...)`), the same state machine with these differences:
+
+* Scope: the modules of `-u`. A batch's run is `test.py -u <union> --solo --wait -l <dir>` in the combined tree; the nested
+  test.py takes the box-wide test lock exactly as a single run does (so it also queues behind unbatched runs).
+* Attribution: `filtered_test.txt` lists the modules whose tracebacks implicate them; each is blamed on the members whose `-u`
+  names it, the other members pass at once. A crash with no implicated module splits the batch. A module broken by ANOTHER
+  branch's change (a dependency) is blamed on the branch that asked for that module; `--solo` confirms.
+* Cap: 8 branches, or `HAMS_BATCH_MAX_SECONDS` of estimated work from recorded module durations (`durations.json`, an equal share
+  of each run's wall time per module; 300 s for an unrecorded module).
+* Evidence: `~/.cache/hams-test/passed/<tip>` per passed branch (`tests <time> modules=... batch=N`); nothing gates on it yet.
+* Stays solo: `--solo`, `HAMS_TEST_BATCH=off`, `--test-tags`, `-u mod:Class`, any mode but standard, `--mcp`, `--coverage`,
+  `--pause-on-fail`, `--offline-isolation`, `--profile`, `--build-daemons`, a dirty tree, a directory that is not the repository root.
+* Not done (stubbed): spreading the union over machines. `odoo_test_batch.plan_machine_split` computes the split from the recorded
+  durations; `run_on_machine` (to be backed by hams_com `devbox_tools/remote_odoo_test.py`) raises `NotImplementedError`.
+  To-do `night_shift_todo/medium/split-test-batches-across-machines-*.md`.

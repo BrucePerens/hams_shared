@@ -258,7 +258,7 @@ in a fixed order, and ends with a per-step timing table.
   is in progress joins the next batch instead of queueing alone: one combined run over origin/main plus every waiting branch,
   and you still get your own exit code, verdict, log path and pass stamp ("joined batch N with K other branches"). A
   failure is attributed to the branches whose files it names; the others pass at once. `--solo` (or `HAMS_LINT_BATCH=off`)
-  runs alone. See `docs/runbooks/LINT_TEST_BATCHING.md`.
+  runs alone. `test.py -u MODULES` coalesces the same way (`--solo`, `HAMS_TEST_BATCH=off`). See `docs/runbooks/LINT_TEST_BATCHING.md`.
 * **Before every merge run `nice -n 10 python3 tools/run_linters.py --changed`** from your worktree
   root, with the work committed (since 2026-11-03 that means `--remote auto` without saying so; `--remote local`
   or `HAMS_LINT_REMOTE=local` keeps everything on this machine). It runs only the steps whose inputs differ from `origin/main`, scoped
