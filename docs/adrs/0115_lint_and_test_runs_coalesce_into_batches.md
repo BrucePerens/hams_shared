@@ -1,0 +1,52 @@
+# ADR 0115: Lint and Test Runs Coalesce into Batches
+
+## Status
+Accepted (Bruce, 2026-11-04: "the shared lint and test queue on the dev box is our main bottleneck").
+
+## Scope
+The shared dev box's lint run (`tools/run_linters.py --changed`, serialised by `lint_lock.py`) and Odoo test run
+(`tools/test.py -u <modules>`, serialised by its flock and `lock_queue.py`), and the pass records that
+`devbox_tools/prmerge.sh` reads. The mechanism is `tools/batch_queue.py`; the lint side is `tools/lint_batch.py`;
+the operating manual and the anchor reference are `docs/runbooks/LINT_TEST_BATCHING.md` and
+`docs/runbooks/LINT_TEST_BATCHING_ANCHORS.md`.
+
+## Context
+Ten agents each ask for a run of their own branch, one at a time. Every request paid a whole run (5 to 40
+minutes at load 20) although most of the work (the tool steps, anchors, the repository-wide checkers) is the
+same for all of them and the changes rarely interact. The queue was fair but its throughput was one branch per
+run.
+
+## Decision
+1. **Coalesce.** Per machine, per repository and per kind (lint, test) there is at most one running batch and
+   one forming batch. With nothing running a request runs at once. A request that arrives while a batch runs
+   joins the forming batch with its branch tip and scope (lint: the steps it needs; tests: its modules). When
+   the running batch ends, the oldest live member of the forming batch seals it and runs it.
+2. **One run over a combined tree.** The leader creates a temporary git worktree under `~/workspace/tmp` at the
+   base (`origin/main`), merges each branch tip in (a branch that conflicts is dropped and told to run alone
+   as before), runs the linter or tests once and removes the tree.
+3. **Every caller still gets its own answer.** A caller blocks until its own verdict is known and exits with its
+   own code, prints its verdict and the log path; `prmerge.sh` and agents' commands are unchanged. A pass writes
+   the pass stamp of every included tip (the same file `prmerge.sh` checks, same format plus `batch=N`).
+4. **Failures are attributed, passes are not held back.** A failing step is attributed to the branches whose
+   changed files (lint) or modules (tests) it names. Branches whose files and modules checked clean are marked
+   passed at once (Bruce's chosen default). A failure that names no branch's file or module (a red main, a
+   repository-wide check) splits the batch in halves and reruns, bounded to nine runs, so a passing branch is
+   not held back by a failing one.
+5. **Caps.** A batch holds at most 8 branches (`HAMS_BATCH_MAX_BRANCHES`) and, where durations are recorded, an
+   estimated 30 minutes of work (`HAMS_BATCH_MAX_SECONDS`); beyond that a request waits for the next batch.
+6. **What stays solo.** Uncommitted trees, `--only`/`--skip`/module names, `--solo`, the cheap bypass,
+   `HAMS_LINT_NO_LOCK`, runs started by other runs and hams_shared checkouts run alone as before. Repositories
+   are never mixed: the queue key is the repository's main checkout.
+7. **Robust.** Waiters and the runner are recorded with pid and process start time; a dead waiter is dropped
+   when the batch seals, a dead runner frees the running slot and its members re-queue themselves (at most three
+   times, then they run alone); the verdict file is written before the running slot is released.
+8. **Remote machines.** The leader's combined run goes through `run_linters.py --remote auto` like any run, so
+   a whole batch may be shipped to an idle machine, which has its own lock and queue. One running batch per
+   dev box and repository is the limit; per-target-machine batches are a follow-up.
+
+## Consequences
+Throughput scales with the number of waiting branches instead of staying at one per run. A branch's stamp now
+vouches for a run over "main plus the other branches in the batch", not for the branch alone; a failure that
+only appears in the combination is reported against the branch whose file it names, and `--solo` repeats a run
+alone. Merge conflicts between concurrent branches are discovered earlier. Cost: the leader's temporary
+worktree and the extra merge step (seconds).
