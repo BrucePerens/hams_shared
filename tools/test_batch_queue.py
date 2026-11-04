@@ -292,6 +292,8 @@ class CoalesceTests(unittest.TestCase):
             thread.join(10)
         self.assertEqual(calls, [(1, ["br1"]), (2, ["br2", "br3", "br4"])])  # ONE run for three requests
         self.assertEqual(box1["out"]["status"], "passed")
+        self.assertEqual(box1["out"]["doc"]["batch"], 1)  # the leader's own document is complete too
+        self.assertEqual([m["branch"] for m in box1["out"]["doc"]["members"]], ["br1"])
         for _thread, box in others:
             self.assertEqual(box["out"]["status"], "passed")
             self.assertEqual(box["out"]["batch"], 2)

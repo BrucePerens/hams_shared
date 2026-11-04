@@ -381,7 +381,8 @@ def coalesce(sdir, member, run_batch, caps=None, estimate=None, poll=DEFAULT_POL
                 finally:
                     with locked(sdir) as state:
                         if doc is not None:
-                            write_verdicts(sdir, lead_run["id"], dict(doc, members=members), now=now)
+                            doc = dict(doc, members=members, batch=lead_run["id"])
+                            write_verdicts(sdir, lead_run["id"], doc, now=now)
                         finish(state, lead_run["id"])
                 verdict = (doc.get("verdicts") or {}).get(member["tip"]) if doc else None
                 status = (verdict or {}).get("status")
