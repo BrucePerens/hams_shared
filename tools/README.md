@@ -19,3 +19,6 @@ Tools are typically executed directly from the command line or invoked as part o
 - Never cached: non-https URLs, credentials in the URL, credential-like query parameters.
 - Entries marked `"apt_only": True` (or whose destination is under `/usr/share/keyrings/` or `/etc/apt/`) are skipped entirely when `skip_apt` is true, which is how `test.py` provisions, so a test run never contacts the apt key servers.
 - To clear the cache, delete the directory.
+
+## Coalescing lint and test batches
+`run_linters.py --changed` (and, once merged, `test.py -u`) requests that arrive while a run is in progress join the next run, which covers all their branches in one combined tree; each caller still gets its own exit code, verdict and pass stamp. Mechanism `batch_queue.py`, lint side `lint_batch.py`; `--solo` opts out. See `docs/runbooks/LINT_TEST_BATCHING.md`, the anchor reference `docs/runbooks/LINT_TEST_BATCHING_ANCHORS.md` and ADR 0115.

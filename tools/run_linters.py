@@ -20,6 +20,7 @@ import time
 
 import lint_cache
 import lint_exec
+import lint_batch
 import lint_lock
 import lint_remote
 import lint_test_durations
@@ -350,6 +351,12 @@ def _parse_args(argv):
         "--where", action="store_true", help="with --remote: print the routing plan and the probes, run nothing"
     )
     parser.add_argument(
+        "--solo",
+        action="store_true",
+        help="run alone, never joining a coalesced batch with other branches' lint runs "
+        "(docs/runbooks/LINT_TEST_BATCHING.md; $HAMS_LINT_BATCH=off does the same)",
+    )
+    parser.add_argument(
         "--lock-timeout",
         type=float,
         default=None,
@@ -431,6 +438,21 @@ def stamp_text(mode, step_names, hosts=()):
     stamp_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     host_field = f" hosts={','.join(sorted(set(hosts)))}" if hosts else ""
     return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}\n"
+
+
+def write_batch_stamp(tip, step_names, batch_id):
+    """Pass stamp for one branch tip that passed in a coalesced batch (lint_batch.py): the same file and line
+    format `_write_pass_stamps` writes, plus ` batch=N`. Nothing is written when no step names are known (the
+    gate refuses a stamp that selected zero steps)."""
+    if not step_names:
+        print(f"(pass stamp for {tip[:10]} not written: the combined run did not report its steps)", file=sys.stderr)
+        return
+    try:
+        os.makedirs(pass_stamp_dir(), exist_ok=True)
+        with open(os.path.join(pass_stamp_dir(), tip), "w", encoding="utf-8") as handle:
+            handle.write(stamp_text("changed", step_names).rstrip("\n") + f" batch={batch_id}\n")
+    except OSError as error:
+        print(f"(pass stamp not written: {error})", file=sys.stderr)
 
 
 def _write_pass_stamps(repos, mode, step_names=(), hosts=()):
@@ -2211,6 +2233,42 @@ def main():
     whole_run = False
     all_steps = list(steps)
     head_before = _git_lines(repo_root, "rev-parse", "HEAD")
+    # Coalescing batch (ADR 0115): a heavy, plain, committed `--changed` run joins the batch of this repository
+    # instead of queueing alone; the leader runs one combined tree, every member gets its own verdict.
+    batch_durations = lint_lock.known_durations() if pending else {}
+    batch_lock_needed, _batch_why = lint_lock.lock_decision(os.environ, pending, batch_durations)
+    status_lines = _git_lines(repo_root, "status", "--porcelain")
+    batch_reason = lint_batch.ineligible_reason(
+        changed=options.changed, only=options.only, skip=options.skip, modules=target_modules_str,
+        solo=options.solo, bundle=options.run_bundle, environ=os.environ,
+        dirty=status_lines is None or bool(status_lines),
+        is_shared_checkout=os.path.realpath(dir_path) == real_shared_dir,
+        lock_needed=batch_lock_needed,
+    )
+    if batch_reason is None and head_before:
+        branch_lines = _git_lines(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
+        branch_name = branch_lines[0] if branch_lines and branch_lines[0] != "HEAD" else head_before[0][:10]
+        passthrough = ["-j", str(options.jobs)]
+        for flag, value in (("--lock-timeout", options.lock_timeout), ("--load-limit", options.load_limit),
+                            ("--load-timeout", options.load_timeout)):
+            if value is not None:
+                passthrough += [flag, str(value)]
+        batch_code = lint_batch.run_member(
+            repo_root,
+            os.path.basename(main_checkout_root.rstrip(os.sep)),
+            branch_name,
+            head_before[0],
+            options.changed,
+            pending,
+            lint_batch.LintBatch(repo_root, os.path.basename(main_checkout_root.rstrip(os.sep)), options.changed,
+                                 passthrough, write_batch_stamp),
+            timeout=options.lock_timeout,
+            estimate=lambda names: sum(batch_durations.get(name, 120.0) for name in names),
+        )
+        if batch_code is not None:
+            sys.exit(batch_code)
+    elif batch_reason and options.changed is not None:
+        print(f"[*] lint batch: running alone ({batch_reason})")
     if options.remote and options.remote != "local" or options.where:
         if os.path.realpath(dir_path) == real_shared_dir:
             print("[*] --remote: not supported when started from a hams_shared checkout; running everything here")
@@ -2298,7 +2356,11 @@ def main():
     results += extra_results
     if options.results_json:
         with open(options.results_json, "w", encoding="utf-8") as handle:
-            json.dump(lint_remote.results_document("local", results), handle)
+            document = lint_remote.results_document("local", results)
+            # The combined run of a batch (lint_batch.py) attributes failures from these.
+            document["selected"] = [step.name for step in all_steps]
+            document["outputs"] = {r.name: (r.output or "")[-200000:] for r in results if r.returncode != 0}
+            json.dump(document, handle)
     wall = time.monotonic() - wall_start
     linters_failed = any(r.returncode != 0 for r in results)
     if options.timing or options.timing_top:
