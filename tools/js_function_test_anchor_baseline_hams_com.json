@@ -264,7 +264,6 @@
   "daemons/shack_console/console/src/controller.js::Controller.straightKey",
   "daemons/shack_console/console/src/controller.js::Controller.tick",
   "daemons/shack_console/console/src/controller.js::Controller.tune",
-  "daemons/shack_console/console/src/controller.js::initialState",
   "daemons/shack_console/console/src/controller.js::isLocalSim",
   "daemons/shack_console/console/src/controller.js::isRadioAction",
   "daemons/shack_console/console/src/controller.js::isTransmitAction",
