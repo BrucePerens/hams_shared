@@ -4,7 +4,7 @@ One entry per anchor in `tools/batch_queue.py`, `tools/lint_batch.py` and `tools
 coalescing queue. Design and operation: `LINT_TEST_BATCHING.md`; decision: ADR 0115. Tests: `tools/test_batch_queue.py`,
 `tools/test_lint_batch.py`.
 
-Contents: [Data structures](#data-structures) - [batch_queue](#batch_queue) - [lint_batch](#lint_batch) - [run_linters](#run_linters)
+Contents: [Data structures](#data-structures) - [batch_queue](#batch_queue) - [lint_batch](#lint_batch) - [run_linters](#run_linters) - [odoo_test_batch](#odoo_test_batch)
 
 ## Data structures
 
@@ -161,8 +161,9 @@ text)], "head": sha or None, "error": str (only when head is None)}`. Side effec
 it with `remove_tree`); no network. Members sharing a tip are merged once.
 
 ### `batch_queue:remove_tree`
-`remove_tree(repo, dest, run)` runs `git worktree remove --force`, deletes the parent directory and runs `git worktree
-prune`. Safe to call twice and on a half-built tree. Called in a `finally` by the runner.
+`remove_tree(repo, dest, run)` runs `git worktree remove --force`, deletes the parent directory (when files remain, because a test run as the odoo user
+owns them, retries with the non-interactive `sudo -n rm -rf`) and runs `git worktree prune`. Safe to call twice and on a half-built tree.
+Called in a `finally` by the runner.
 
 ### `batch_queue:reap_orphan_trees`
 `reap_orphan_trees(repo, kind, repo_name, environ, live)` removes combined trees whose creator (pid and start time in the
@@ -230,14 +231,17 @@ The leader's runner; an instance is the `run_batch` argument of `coalesce`.
 | `prepare(tree)` | links the tree for linting; default runs `fix_worktree_symlinks.py` when the tree has one |
 | `out`, `environ`, `fetch` | printer, environment for the run, whether to `git fetch origin` first |
 
-Calling the instance fetches, computes each member's changed paths, then `settle`s: each run builds a combined tree, runs the
+Class attributes `kind` ("lint"), `runner_env` (marker exported to the run) and the methods `collect(tree, results, output, code)`
+(what a run reports: lint reads the results file) and `tokens(members)` (owners and finder) are what `OdooTestBatch` replaces;
+`current_members` is the group of the run in progress. Calling the instance fetches, computes each member's changed paths, then `settle`s: each run builds a combined tree, runs the
 command with output teed to the leader's terminal and the batch log, reads the results file and always removes the tree.
 Stamps are written for every `passed` verdict from the step names of the last run. Exit code 75 from the run (lock or load
 gate gave up) is `fatal` for the batch. Concurrency: only the leader runs this, and only after sealing.
 
 ### `lint_batch:run_member`
 The caller's side, used by `run_linters.main`. `run_member(repo, repo_name, branch, tip, base, scope, runner, timeout, out,
-environ, poll, sdir, estimate)` joins through `coalesce`, prints the verdict lines, and returns the exit code: 0 passed, the
+environ, poll, sdir, estimate, kind, solo_hint)` (`kind` "lint" or "test" picks the queue and the wording, `solo_hint` is the command
+quoted in the failure hint) joins through `coalesce`, prints the verdict lines, and returns the exit code: 0 passed, the
 verdict's code (1) failed, 75 timed out. Returns None when the caller must run alone: the merge conflicted (`solo`) or the
 runner kept dying (`gave_up`). For a failure it prints the findings naming the branch, the log path and a reminder that
 `--solo` repeats the run alone.
@@ -249,3 +253,74 @@ runner kept dying (`gave_up`). For a failure it prints the findings naming the b
 ` batch=N` (mode `changed`, the number and names of the combined run's steps). `lint_stamp_gate.py` ignores the extra field.
 Writes nothing, and says so on stderr, when `step_names` is empty (the gate refuses a stamp that selected zero steps).
 Called only by the batch leader for tips whose verdict is `passed`.
+
+## odoo_test_batch
+
+The test side (`tools/odoo_test_batch.py`, hook in `tools/test.py`). Queue directory `state_dir("test", repo_key)`; pass records in
+`~/.cache/hams-test/passed/<tip>`; recorded durations in `<state dir>/durations.json`.
+
+### `odoo_test_batch:module_scope`
+`module_scope(module_arg)` parses a `-u` value into a sorted, de-duplicated list of module names (a `hams_open/` prefix is dropped
+as `test.py` does). Returns None when the run cannot be batched: empty or missing, an empty entry, or any entry with a `:Class`
+selector.
+
+### `odoo_test_batch:ineligible_reason`
+`ineligible_reason(args, environ, cwd_is_root, dirty)`; `args` is test.py's parsed namespace. Returns a short reason when the run
+must run alone, None when it may batch. Alone: `--solo`; the combined run itself (`HAMS_TEST_BATCH_RUNNER`); `HAMS_TEST_BATCH=off`;
+a run inside a run (`HAMS_TEST_LOCK_HELD=1`); the internal re-exec phases; a mode other than standard; `--test-tags`, `--coverage`,
+`--mcp`, `--pause-on-fail`, `--offline-isolation`, `--profile`, `--build-daemons`; no whole-module `-u` list; a directory that is not
+the repository root; uncommitted changes. Pure.
+
+### `odoo_test_batch:implicated_modules`
+`implicated_modules(text)` reads test.py's own `filtered_test.txt`: the `  - <module>` lines under "these modules are implicated in the
+failure(s):". Returns the list (empty when the extractor named none: a crash, or a failure with no traceback).
+
+### `odoo_test_batch:module_finder`
+`module_finder(modules)` returns `find(line)` listing which of `modules` a line names as whole words (`ham_a` is not found in
+`ham_ab`). The `find_tokens` argument of `blame_by_tokens` for tests.
+
+### `odoo_test_batch:plan_machine_split`
+`plan_machine_split(modules, durations, machines, default=300)` returns `{machine: [modules]}`: modules longest first (recorded
+`durations` in seconds, `default` for an unrecorded one) onto the currently least-loaded machine (LPT, within 4/3 of optimal);
+machines with nothing are omitted; one or no machine puts everything on that machine (or `"local"`). Pure. NOT YET USED by the
+leader, which runs everything locally; it is the planned hook for `remote_odoo_test.py`.
+
+### `odoo_test_batch:run_on_machine`
+STUB. `run_on_machine(machine, tree, modules, log_directory)` always raises `NotImplementedError`. It marks where the leader will
+run a share of the union on bruce-yoga or mac1 through hams_com's `devbox_tools/remote_odoo_test.py` (which syncs a trimmed tree
+plus a hams_open checkout and has its own per-host lock). Needs a change in hams_com and a per-machine queue; see the to-do
+`night_shift_todo/medium/split-test-batches-across-machines-*.md`.
+
+### `odoo_test_batch:estimate_seconds`
+`estimate_seconds(modules, durations, default=300)` is the sum of recorded durations, `default` per unrecorded module. The `estimate`
+passed to `join` so a batch stops growing at `HAMS_BATCH_MAX_SECONDS`.
+
+### `odoo_test_batch:load_durations`
+`load_durations(sdir)` returns `{module: seconds}` from `<sdir>/durations.json`; `{}` when missing, unreadable, or when entries are
+not finite numbers (those entries are dropped).
+
+### `odoo_test_batch:record_durations`
+`record_durations(sdir, modules, seconds)` credits each module an equal share of the run's wall time (test.py reports no per-module
+time, so the figure is crude) and averages it with an earlier record; written atomically; ignores a failed write, empty modules
+or non-positive seconds.
+
+### `odoo_test_batch:write_pass_record`
+`write_pass_record(tip, modules, batch_id, environ)` writes `~/.cache/hams-test/passed/<tip>` with one line
+`tests <time> modules=a,b batch=N` (the modules the combined run covered) and returns the path; None when `modules` is empty or the
+write fails. Nothing reads these records yet (prmerge.sh gates on lint only); they are the evidence a later gate can use.
+
+### `odoo_test_batch:OdooTestBatch`
+`LintBatch` subclass for tests (see `lint_batch:LintBatch` for the shared fields). Extra constructor argument `sdir` (durations
+and queue directory). Each run: `python3 <tree>/tools/test.py -u <union of the scopes of the merged members> --solo --wait -l
+<parent>/logs <passthrough: -d, -c, --wait-timeout>`; the log directory is created world-writable because test.py may run as the
+odoo user; `filtered_test.txt` from it is appended to the batch log. Owners are modules (`tokens`): the members whose `-u` list names
+a module own it. `collect`: exit 0 passes the union; otherwise each implicated module becomes a failure naming its lines; no implicated
+module means one failure `test.py` with the text tail, which is unattributable and splits the batch. Records durations after every run.
+Concurrency: leader only; the box-wide test lock is taken by the nested test.py exactly as for a single run.
+
+### `odoo_test_batch:maybe_run_batched`
+`maybe_run_batched(args, environ=None, cwd=None, out=print)`, called by `test.py`'s `main()` right after the argument check and
+before any lock. Reads git for the repository root, dirty state, tip and branch; returns None when the run goes on alone (ineligible,
+printing "test batch: running alone (<reason>)" for a `-u` run, a merge conflict with another branch, a batch runner that kept dying),
+else blocks until this caller's verdict and returns its exit code (0, 1, or 75 when `--wait-timeout` ran out waiting). Side
+effects: queue state under `~/.cache/hams-lint/batches/test-<repo>`, a temporary worktree under `~/workspace/tmp` in the leader.

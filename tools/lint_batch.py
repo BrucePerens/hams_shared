@@ -135,7 +135,13 @@ class LintBatch:
     stamp of one tip), `command(tree, results_json)` (argv; tests replace it with a fake linter),
     `prepare(tree)` (links the tree for linting; default: run fix_worktree_symlinks.py when present),
     `out` (print function), `environ`. `__call__(batch_id, members, log_path)` is the `run_batch`
-    callable of `batch_queue.coalesce`."""
+    callable of `batch_queue.coalesce`.
+
+    Subclasses (odoo_test_batch.OdooTestBatch) change the kind of run through `kind`, `collect` (what a run
+    reports) and `tokens` (who owns which finding); `current_members` is the group being run, for `command`."""
+
+    kind = KIND
+    runner_env = RUNNER_ENV
 
     def __init__(self, repo, repo_name, base, passthrough, stamp_writer, command=None, prepare=None,
                  out=print, environ=None, fetch=True):
@@ -150,6 +156,7 @@ class LintBatch:
         self.environ = dict(os.environ if environ is None else environ)
         self.fetch = fetch
         self.last_selected = []
+        self.current_members = []
         self._run_no = 0
         self._log = None
 
@@ -167,7 +174,7 @@ class LintBatch:
 
     def _run_once(self, batch_id, group):
         self._run_no += 1
-        parent = batch_queue.tree_parent(KIND, self.repo_name, suffix="_b%d_r%d" % (batch_id, self._run_no),
+        parent = batch_queue.tree_parent(self.kind, self.repo_name, suffix="_b%d_r%d" % (batch_id, self._run_no),
                                          environ=self.environ)
         dest = os.path.join(parent, self.repo_name)
         results = os.path.join(parent, "results.json")
@@ -179,9 +186,10 @@ class LintBatch:
             if not built["merged"]:
                 return {"exit_code": 0, "failures": {}, "conflicted": built["conflicted"]}
             self.prepare(dest)
+            self.current_members = built["merged"]
             self._emit("\n===== combined run: %d branch(es): %s =====\n" % (
                 len(built["merged"]), ", ".join(m["branch"] for m in built["merged"])))
-            env = dict(self.environ, **{RUNNER_ENV: str(os.getpid())})
+            env = dict(self.environ, **{self.runner_env: str(os.getpid())})
             env.pop("HAMS_LINT_LOCK_HELD", None)
             proc = subprocess.Popen(self.command(dest, results), cwd=dest, env=env, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, errors="replace")
@@ -195,7 +203,7 @@ class LintBatch:
                 if proc.poll() is None:
                     proc.kill()
                     proc.wait()
-            selected, failed = read_results(results)
+            selected, failed = self.collect(dest, results, "".join(captured), proc.returncode)
             self.last_selected = selected or self.last_selected
             code = proc.returncode
             if code == lock_queue.EXIT_WAIT_TIMEOUT:
@@ -207,17 +215,23 @@ class LintBatch:
         finally:
             batch_queue.remove_tree(self.repo, dest)
 
-    def __call__(self, batch_id, members, log_path):
-        batch_queue.reap_orphan_trees(self.repo, KIND, self.repo_name, environ=self.environ)
-        if self.fetch:
-            subprocess.run(["git", "-C", self.repo, "fetch", "-q", "origin"], capture_output=True, text=True)
+    def collect(self, tree, results, output, code):
+        """(selected step names, {failed step: output}) of the run that just ended. Lint: the results file."""
+        return read_results(results)
+
+    def tokens(self, members):
+        """(owners {token: [tips]}, find_tokens(line)) for attribution. Lint: changed files by path."""
         files = {}
         for member in members:
             if member["tip"] not in files:
                 files[member["tip"]] = changed_paths(self.repo, self.base, member["tip"])
-        all_paths = sorted({p for paths in files.values() for p in paths})
-        finder = path_finder(all_paths)
-        owners = owners_of(files)
+        return owners_of(files), path_finder(sorted({p for paths in files.values() for p in paths}))
+
+    def __call__(self, batch_id, members, log_path):
+        batch_queue.reap_orphan_trees(self.repo, self.kind, self.repo_name, environ=self.environ)
+        if self.fetch:
+            subprocess.run(["git", "-C", self.repo, "fetch", "-q", "origin"], capture_output=True, text=True)
+        owners, finder = self.tokens(members)
 
         def attribute(failures, live):
             live_tips = {m["tip"] for m in live}
@@ -246,21 +260,21 @@ class LintBatch:
 
 # [@ANCHOR: lint_batch:run_member]
 def run_member(repo, repo_name, branch, tip, base, scope, runner, timeout=None, out=print, environ=None,
-               poll=1.0, sdir=None, estimate=None):
+               poll=1.0, sdir=None, estimate=None, kind=KIND, solo_hint="run_linters.py --changed --solo"):
     """The caller's side. Joins the batch for `repo` and blocks until this branch's verdict is known.
 
     Returns an exit code (0 passed, 1 failed, 75 gave up waiting) after printing the verdict, or None
     when the caller must run alone as before (a merge conflict in the combined tree, or a batch runner
     that kept dying). `runner` is a `LintBatch` (used only if this process becomes the leader)."""
     environ = os.environ if environ is None else environ
-    sdir = sdir or batch_queue.state_dir(KIND, batch_queue.repo_key(repo), environ)
-    member = batch_queue.make_member(branch, tip, scope=scope, info="run_linters.py --changed")
+    sdir = sdir or batch_queue.state_dir(kind, batch_queue.repo_key(repo), environ)
+    member = batch_queue.make_member(branch, tip, scope=scope, info=solo_hint)
     outcome = batch_queue.coalesce(
         sdir, member, runner, caps=batch_queue.caps_from_env(environ), estimate=estimate, poll=poll,
         timeout=timeout, out=out, log_for=lambda n: os.path.join(sdir, "logs", "batch-%d.log" % n))
     status = outcome["status"]
     if status == batch_queue.TIMEOUT:
-        out("ERROR: gave up waiting for a lint batch after %g s." % timeout)
+        out("ERROR: gave up waiting for a %s batch after %g s." % (kind, timeout))
         return lock_queue.EXIT_WAIT_TIMEOUT
     if status == batch_queue.GAVE_UP:
         out("[*] the batch runner kept dying; running this branch alone")
@@ -272,13 +286,14 @@ def run_member(repo, repo_name, branch, tip, base, scope, runner, timeout=None, 
     for line in batch_queue.format_verdicts(doc, tip):
         out(line)
     if status == batch_queue.PASSED:
-        out("[*] lint batch %d: %s PASSED (checked together with %d other branch%s; pass stamp written)" % (
-            outcome["batch"], branch, len(outcome["others"]), "" if len(outcome["others"]) == 1 else "es"))
+        out("[*] %s batch %d: %s PASSED (checked together with %d other branch%s; %s written)" % (
+            kind, outcome["batch"], branch, len(outcome["others"]), "" if len(outcome["others"]) == 1 else "es",
+            "pass stamp" if kind == KIND else "pass record"))
         return 0
     for line in verdict.get("findings", [])[:40]:
         out("   " + line)
-    out("\n[!] Halting due to linter violations in this branch. Full log: %s" % (verdict.get("log") or doc.get("log")))
+    out("\n[!] Halting: this branch failed in the combined %s run. Full log: %s" % (kind, verdict.get("log") or doc.get("log")))
     if outcome["others"]:
-        out("    (found in a combined run of %d branches; `run_linters.py --changed --solo` repeats it alone)"
-            % (len(outcome["others"]) + 1))
+        out("    (found in a combined run of %d branches; `%s` repeats it alone)"
+            % (len(outcome["others"]) + 1, solo_hint))
     return verdict.get("exit_code") or 1

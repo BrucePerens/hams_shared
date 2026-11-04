@@ -468,9 +468,13 @@ def build_combined_tree(repo, base, members, dest, run=subprocess.run):
 
 # [@ANCHOR: batch_queue:remove_tree]
 def remove_tree(repo, dest, run=subprocess.run):
-    """Remove a combined tree and its parent directory, and prune git's worktree list. Safe to call twice."""
+    """Remove a combined tree and its parent directory, and prune git's worktree list. Safe to call twice.
+    Files a test run left owned by another user are removed with a non-interactive `sudo -n rm -rf`."""
     _git(repo, "worktree", "remove", "--force", dest, run=run)
     shutil.rmtree(os.path.dirname(dest), ignore_errors=True)
+    if os.path.exists(os.path.dirname(dest)):
+        # A test run as the odoo user leaves files this user cannot delete: retry with sudo, never leave the tree.
+        run(["sudo", "-n", "rm", "-rf", os.path.dirname(dest)], capture_output=True, text=True)
     _git(repo, "worktree", "prune", run=run)
 
 

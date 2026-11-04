@@ -50,6 +50,7 @@ if "--mcp" in sys.argv:
 
 import infrastructure
 import lock_queue
+import odoo_test_batch
 import offline_browser_ns
 
 import argparse
@@ -3215,6 +3216,12 @@ def build_arg_parser():
         "run of named modules that never reference a daemon skips the cargo build (minutes, in RAM "
         "overlay, discarded after every run). A full run (no -u) always builds them.",
     )
+    parser.add_argument(
+        "--solo",
+        action="store_true",
+        help="Run alone: never join a coalesced batch of other branches' `-u MODULES` runs "
+        "(docs/runbooks/LINT_TEST_BATCHING.md; HAMS_TEST_BATCH=off does the same).",
+    )
     parser.add_argument("--internal-ns-init", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--preflight-done", action="store_true", help=argparse.SUPPRESS)
     return parser
@@ -3265,6 +3272,12 @@ def main():
         # Read-only: never opens, probes or takes the lock itself.
         print("\n".join(lock_queue.describe_queue(lock_queue.queue_dir_for_lock(_test_runner_lock_path()))))
         return
+    # Coalescing batch (ADR 0115): a plain committed `-u MODULES` run that starts while another run is in progress
+    # joins the next batch, which tests the union of the members' modules once over a combined tree; this caller
+    # still gets its own verdict and exit code. Anything else (and --solo) falls through to the run below.
+    batch_code = odoo_test_batch.maybe_run_batched(early_args)
+    if batch_code is not None:
+        sys.exit(batch_code)
     # Pre-flight in the first seconds, once per run (the re-exec'd phases carry --preflight-done).
     preflight_done = early_args.preflight_done
     if not early_args.internal_ns_init and not preflight_done and not early_args.queue_status:
