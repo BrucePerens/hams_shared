@@ -298,6 +298,8 @@ def run_member(repo, repo_name, branch, tip, base, scope, runner, timeout=None, 
         out("[*] %s batch %d: %s PASSED (checked together with %d other branch%s; %s written)" % (
             kind, outcome["batch"], branch, len(outcome["others"]), "" if len(outcome["others"]) == 1 else "es",
             "pass stamp" if kind == KIND else "pass record"))
+        if verdict.get("note"):
+            out("    note: " + verdict["note"])
         return 0
     for line in verdict.get("findings", [])[:40]:
         out("   " + line)

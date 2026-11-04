@@ -111,6 +111,8 @@ Odoo tests for a branch run on a remote host through hams_com's `devbox_tools/re
   (`--no-ff`) and runs `test.py --solo -d hams_test -l <dir>` as the odoo user. A conflict is reported by the host and sends that branch to run alone.
 * **Verdicts.** As for local tests: failures are attributed to the branches that asked for the implicated modules; a clean combined run passes every
   branch in it; a host that could not start fails the batch with exit 75 ("run on X could not start"). Each host's log is appended to the batch log.
+* **Splitting divides the tests, not the installation.** Every host installs/updates the whole union of the batch's modules (`test.py -u <union>`) and tests only its share (`--test-tags /m1,/m2`), because a module's tests may need another requested module to be installed (ham_events' listing tests need ham_communications_consent).
+* **Environmental failures.** After a failing run the host re-runs the same modules on its plain origin/main (the baseline). A failing test that also fails there is reported as environmental in the batch log and the passing verdict's note, and is not charged to any branch; the batch does not keep halving over it.
 * `--solo` (or `--env`, `--test-tags`, a `:Class` selector) tests the tip alone on one host without the queue (no merge with main).
 * Hosts: `HAMS_TEST_MACHINES` (default `yoga,mac1`). One running batch at a time per repository on the dev box; a batch uses all idle hosts.
 

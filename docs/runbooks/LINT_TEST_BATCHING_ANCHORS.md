@@ -275,6 +275,13 @@ the repository root; uncommitted changes. Pure.
 `implicated_modules(text)` reads test.py's own `filtered_test.txt`: the `  - <module>` lines under "these modules are implicated in the
 failure(s):". Returns the list (empty when the extractor named none: a crash, or a failure with no traceback). A later section ends the list, and a second header (the texts of two hosts joined) starts another.
 
+### `odoo_test_batch:failing_tests`
+`failing_tests(text) -> set[str]` reads a `filtered_test.txt` and returns the failing tests as ids `"<module>:<Class>.<method>"`. It reads Odoo's logger form
+(`odoo.addons.<module>.tests.<file>: ERROR: Class.method`, also `FAIL:`) and the unittest form (`ERROR: setUpClass (odoo.addons.<module>.tests.<file>.Class)`,
+also `test_x (...)`, `tearDownClass`). A failure is listed twice in the file and counts once. Empty when no failing test is named (a crash, a module-load
+error). Pure. Used by `RemoteTestBatch` to compare a host's failures with its origin/main baseline and to blame the module of each new failure.
+Test: `test_failing_tests_reads_both_line_forms_and_counts_a_failure_once`.
+
 ### `odoo_test_batch:module_finder`
 `module_finder(modules)` returns `find(line)` listing which of `modules` a line names as whole words (`ham_a` is not found in
 `ham_ab`). The `find_tokens` argument of `blame_by_tokens` for tests.
@@ -305,13 +312,14 @@ machines with nothing are omitted; one or no machine puts everything on that mac
 | `tree` | str | the leader's checkout (commits are fetched by the host from GitHub, or pushed to it over ssh from here) |
 | `repo_name` | str | `hams_com` or `hams_open`: the repository under test |
 | `members` | list of Member | the batch's members; only `branch` and `tip` are used, a repeated tip is sent once |
-| `modules` | list of str | this host's share of the union |
+| `modules` | list of str | this host's share of the union: the modules whose TESTS it runs |
+| `union` | list of str or None | every module of the batch; the host INSTALLS/UPDATES all of them (default: `modules`) |
 | `driver` | list of str | argv prefix of `remote_odoo_test.py` |
 | `log_path` | str | the host run's log |
 | `work_dir` | str | existing directory for the members file and the result file |
 
 **Returns.** The driver's result: `{"host", "exit_code", "merged": [sha], "conflicted": [sha], "filtered": text of filtered_test.txt, "log", "seconds", "error"}`. A driver that crashes or writes no result gives `exit_code` 75 and `error` set: the run could not start, which is not a test failure.
-**Special concerns.** Blocks for the whole host run (minutes to an hour). Takes the host's lock inside the driver (`--wait`). Deletes a stale result file first. The host run is `test.py --solo` as the odoo user against `hams_test`.
+**Special concerns.** The driver is called with the union as its module list and `--share <modules>` when the share is smaller, so the host runs `test.py -u <union> --test-tags /m1,/m2`: splitting divides the tests, never the installed set. Blocks for the whole host run (minutes to an hour). Takes the host's lock inside the driver (`--wait`). Deletes a stale result file first. The host run is `test.py --solo` as the odoo user against `hams_test`.
 **See also.** `RemoteTestBatch`; hams_com `devbox_tools/remote_odoo_test.py`, `devbox_tools/testhost_git.py`. Test: `test_run_on_machine_calls_the_driver_and_reads_its_result`.
 
 ### `odoo_test_batch:RemoteTestBatch`
@@ -327,7 +335,7 @@ machines with nothing are omitted; one or no machine puts everything on that mac
 | `probe` | callable | `idle_machines`-like; replaced in tests |
 | `runner` | callable | `run_on_machine`-like; replaced in tests |
 
-**Per run.** The union of the group's modules is split over the idle hosts by recorded duration (`plan_machine_split`; with no idle host the first machine is used and its lock is waited for); one thread per host calls `runner`; each host's log tail is appended to the batch log. Results are merged: a host that could not start makes the run fatal (exit 75, every member of the group fails with `run on X could not start`); a merge conflict (the hosts all build the same tree) becomes a `conflicted` member and its verdict is `solo`; a nonzero exit is attributed through the modules that host's `filtered_test.txt` implicates, none implicated is unattributable and splits the batch. A clean run passes every branch in it (Bruce's rule) and writes the pass record of each (`write_pass_record`).
+**Per run.** The union of the group's modules is split over the idle hosts by recorded duration (`plan_machine_split`; with no idle host the first machine is used and its lock is waited for); one thread per host calls `runner`; each host's log tail is appended to the batch log. Results are merged: a host that could not start makes the run fatal (exit 75, every member of the group fails with `run on X could not start`); a merge conflict (the hosts all build the same tree) becomes a `conflicted` member and its verdict is `solo`; a nonzero exit is read as failing tests (`failing_tests`): those that also fail in the host's origin/main baseline run (`baseline_filtered`, run by the driver after a failing batch run) are environmental, are listed in the batch log and do not fail any branch (a passing verdict carries a `note`); each other failing test is blamed on its module's owners; a failure naming no test falls back to the modules `filtered_test.txt` implicates, none implicated is unattributable and splits the batch. A clean run passes every branch in it (Bruce's rule) and writes the pass record of each (`write_pass_record`).
 **Durations.** Recorded per host from that host's wall time over its own modules.
 **Concurrency.** `_run_once` is called by the leader only; threads write only their own slot under a lock; log output is written after the threads join.
 **See also.** `run_remote_member`, `OdooTestBatch`, `LintBatch`. Tests: `test_a_batch_is_split_over_the_hosts_and_each_branch_gets_its_own_verdict`, `test_a_clean_combined_run_marks_every_branch_passed`, `test_a_host_that_cannot_start_is_exit_75_not_a_test_failure`, `test_a_conflict_found_by_the_hosts_sends_that_branch_to_run_alone`.

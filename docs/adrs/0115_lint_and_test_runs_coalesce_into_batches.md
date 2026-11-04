@@ -49,6 +49,8 @@ run.
    `rtest`); the leader splits the modules over the idle hosts and each host builds the combined tree itself (its `origin/main` plus every
    member's commit, pushed over ssh when GitHub does not have it). Verdict, attribution and pass records are as for local batches.
 
+10. **Splitting divides tests, not installation; environmental failures are not a branch's (2026-11-04).** Found by the first real use (PR #2981): a split put ham_communications_consent on one host and ham_events on another, and ham_events' tests errored for want of the module. Every host installs the whole union and tests only its share. A failing test that also fails on the host's origin/main is environmental: reported, not charged.
+
 ## Consequences
 Throughput scales with the number of waiting branches instead of staying at one per run. A branch's stamp now
 vouches for a run over "main plus the other branches in the batch", not for the branch alone; a failure that

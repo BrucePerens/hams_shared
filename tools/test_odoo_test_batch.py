@@ -12,6 +12,7 @@ contains BAD) and writes the same `filtered_test.txt` summary the real runner wr
 Tests [@ANCHOR: odoo_test_batch:module_scope]
 Tests [@ANCHOR: odoo_test_batch:ineligible_reason]
 Tests [@ANCHOR: odoo_test_batch:implicated_modules]
+Tests [@ANCHOR: odoo_test_batch:failing_tests]
 Tests [@ANCHOR: odoo_test_batch:module_finder]
 Tests [@ANCHOR: odoo_test_batch:plan_machine_split]
 Tests [@ANCHOR: odoo_test_batch:run_on_machine]
@@ -322,7 +323,7 @@ class RemoteTests(unittest.TestCase):
         members = self.members(("a", "ham_a"), ("b", "ham_b"), ("c", "ham_c"))
         seen = {}
 
-        def runner(machine, repo, repo_name, group, mods, driver, log_path, work):
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
             seen[machine] = (list(mods), [m["tip"] for m in group])
             with open(log_path, "w") as log:
                 log.write("log of %s\n" % machine)
@@ -345,7 +346,7 @@ class RemoteTests(unittest.TestCase):
     def test_a_clean_combined_run_marks_every_branch_passed(self):
         members = self.members(("a", "ham_a"), ("b", "ham_b"))
 
-        def runner(machine, repo, repo_name, group, mods, driver, log_path, work):
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
             return {"host": machine, "exit_code": 0, "merged": [], "conflicted": [], "filtered": "", "seconds": 1.0,
                     "error": None, "log": log_path}
 
@@ -356,7 +357,7 @@ class RemoteTests(unittest.TestCase):
     def test_a_host_that_cannot_start_is_exit_75_not_a_test_failure(self):
         members = self.members(("a", "ham_a"))
 
-        def runner(machine, repo, repo_name, group, mods, driver, log_path, work):
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
             return {"host": machine, "exit_code": 75, "error": "ssh refused", "seconds": 0.0, "log": log_path}
 
         verdict = self.batch(runner)(1, members, "")["verdicts"][members[0]["tip"]]
@@ -367,7 +368,7 @@ class RemoteTests(unittest.TestCase):
     def test_a_conflict_found_by_the_hosts_sends_that_branch_to_run_alone(self):
         members = self.members(("a", "ham_a"), ("b", "ham_b"))
 
-        def runner(machine, repo, repo_name, group, mods, driver, log_path, work):
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
             return {"host": machine, "exit_code": 0, "conflicted": [members[1]["tip"]], "filtered": "", "seconds": 1.0,
                     "error": None, "log": log_path}
 
@@ -394,6 +395,84 @@ class RemoteTests(unittest.TestCase):
                                    os.path.join(self.tmp, "y.log"), self.tmp)
         self.assertEqual(crash["exit_code"], 75)
         self.assertIn("wrote no result", crash["error"])
+
+    def test_failing_tests_reads_both_line_forms_and_counts_a_failure_once(self):
+        text = ("2026-11-04 20:42:24,011 1 ERROR hams_test odoo.addons.ham_events.tests.test_member_manual_not_listed: "
+                "ERROR: TestNotListedManualLinks.test_x\n"
+                "2026-11-04 20:42:24,011 1 ERROR hams_test odoo.addons.ham_events.tests.test_member_manual_not_listed: "
+                "ERROR: TestNotListedManualLinks.test_x\n"
+                "2026-11-04 20:59:22,291 1 ERROR hams_test odoo.tests.suite: ERROR: setUpClass "
+                "(odoo.addons.ham_com.tests.test_a.TestA)\n"
+                "FAIL: test_y (odoo.addons.ham_b.tests.test_a.TestB)\n"
+                "Odoo crashed before any test\n")
+        self.assertEqual(otb.failing_tests(text), {"ham_events:TestNotListedManualLinks.test_x",
+                                                   "ham_com:TestA.setUpClass", "ham_b:TestB.test_y"})
+        self.assertEqual(otb.failing_tests("Odoo crashed\n"), set())
+
+    def test_run_on_machine_installs_the_whole_union_and_tests_only_the_share(self):
+        driver = os.path.join(self.tmp, "argv_driver.py")
+        with open(driver, "w") as handle:
+            handle.write("import json, sys\na = sys.argv[1:]\nopen(a[a.index('--result-json') + 1], 'w').write("
+                         "json.dumps({'host': a[0], 'exit_code': 0, 'argv': a, 'filtered': ''}))\n")
+        members = self.members(("a", "ham_a"))
+        split = otb.run_on_machine("mac1", self.work, "hams_com", members, ["ham_events"], [sys.executable, driver],
+                                   os.path.join(self.tmp, "m.log"), self.tmp,
+                                   union=["ham_events", "ham_communications_consent", "ham_club_management"])
+        argv = split["argv"]
+        self.assertEqual(argv[2], "ham_club_management,ham_communications_consent,ham_events")  # all installed
+        self.assertEqual(argv[argv.index("--share") + 1], "ham_events")  # one share tested
+        whole = otb.run_on_machine("mac1", self.work, "hams_com", members, ["ham_a"], [sys.executable, driver],
+                                   os.path.join(self.tmp, "m.log"), self.tmp, union=["ham_a"])
+        self.assertNotIn("--share", whole["argv"])
+
+    def test_splitting_never_changes_the_installed_set(self):
+        # The case that broke the first real use: ham_events' tests need ham_communications_consent INSTALLED.
+        # A host that tests ham_events without it errors exactly as the real hosts did.
+        asked = ["ham_club_management", "ham_communications_consent", "ham_events"]
+        members = self.members(("pr", asked[0]))
+        members[0]["scope"] = asked
+        calls = {}
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            calls[machine] = (list(mods), list(union or mods))
+            broken = "ham_events" in mods and "ham_communications_consent" not in (union or mods)
+            filtered = ("2026-11-04 20:42:24,011 1 ERROR hams_test odoo.addons.ham_events.tests.test_listing: ERROR: "
+                        "TestAdd.test_x\n") if broken else ""
+            return {"host": machine, "exit_code": 1 if broken else 0, "conflicted": [], "filtered": filtered,
+                    "seconds": 5.0, "error": None, "log": log_path}
+
+        verdict = self.batch(runner)(1, members, "")["verdicts"][members[0]["tip"]]
+        self.assertEqual(verdict["status"], "passed", verdict)
+        self.assertEqual(sorted(calls), ["mac1", "yoga"])  # it WAS split over both hosts
+        self.assertEqual(sorted(sum((c[0] for c in calls.values()), [])), asked)  # the tests are divided
+        self.assertTrue(all(c[1] == asked for c in calls.values()), calls)  # every host installs all three
+
+    def test_a_failure_identical_on_origin_main_is_environmental_and_not_charged_to_a_branch(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"))
+        line = "20:42 1 ERROR hams_test odoo.addons.%s.tests.test_x: ERROR: Test%s.test_env\n"
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            return {"host": machine, "exit_code": 1, "conflicted": [], "seconds": 1.0, "error": None, "log": log_path,
+                    "filtered": line % ("ham_a", "A"), "baseline_exit": 1, "baseline_filtered": line % ("ham_a", "A")}
+
+        result = self.batch(runner, machines=("yoga",))(1, members, "")
+        verdicts = result["verdicts"]
+        self.assertEqual({v["status"] for v in verdicts.values()}, {"passed"})
+        self.assertIn("identically on origin/main", verdicts[members[0]["tip"]]["note"])
+        self.assertEqual(len(self.stamps), 2)
+
+    def test_a_new_failure_next_to_an_environmental_one_is_still_charged_to_its_branch(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"))
+        line = "20:42 1 ERROR hams_test odoo.addons.%s.tests.test_x: ERROR: Test%s.test_%s\n"
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            return {"host": machine, "exit_code": 1, "conflicted": [], "seconds": 1.0, "error": None, "log": log_path,
+                    "filtered": line % ("ham_a", "A", "env") + line % ("ham_b", "B", "mine"),
+                    "baseline_exit": 1, "baseline_filtered": line % ("ham_a", "A", "env")}
+
+        verdicts = self.batch(runner, machines=("yoga",))(1, members, "")["verdicts"]
+        self.assertEqual([verdicts[m["tip"]]["status"] for m in members], ["passed", "failed"])
+        self.assertTrue(any("ham_b:TestB.test_mine" in f for f in verdicts[members[1]["tip"]]["findings"]))
 
     def test_run_remote_member_end_to_end_with_a_stand_in_driver(self):
         driver = os.path.join(self.tmp, "driver.py")
