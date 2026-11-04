@@ -8,7 +8,7 @@ Contents: [Data structures](#data-structures) - [batch_queue](#batch_queue) - [l
 
 ## Data structures
 
-### `batch_queue:Member` [@ANCHOR: batch_queue:Member]
+### `batch_queue:Member`
 One waiting request: a plain dict built by `make_member`. Lives in `forming.members` and `running.members` of the state
 file. Created by the requesting process, copied into the JSON state, discarded when its batch is finished or the process dies.
 
@@ -26,7 +26,7 @@ Invariants: `(pid, start)` is unique in a batch (`join` ignores a second join); 
 one verdict). Serialised as JSON; `STATE_VERSION` 1, a different version resets the state. Mutated only inside `locked`.
 Functions: `make_member`, `join`, `leave`, `seal`, `prune`.
 
-### `batch_queue:BatchState` [@ANCHOR: batch_queue:BatchState]
+### `batch_queue:BatchState`
 The queue's state file `<state_dir>/state.json` (written atomically by `locked`).
 
 | Field | Type | Meaning |
@@ -41,14 +41,14 @@ may change it: any process, only while holding the flock on `state.lock`. Create
 `leave`, `seal`, `finish`, `prune`. Verdicts live beside it in `verdicts/<id>.json` (see `batch_queue:Verdict`), logs in
 `logs/batch-<id>.log`. Compatibility: unreadable or other-version files are replaced by an empty state (waiters rejoin).
 
-### `batch_queue:RunResult` [@ANCHOR: batch_queue:RunResult]
+### `batch_queue:RunResult`
 What one run over a group of members returns to `settle`: `{"exit_code": int, "failures": {name: output text},
 "conflicted": [(member, text)], "fatal": bool (optional), "detail": str (optional), "selected": [step names] (optional)}`.
 `exit_code` 0 = everything passed. `failures` has one entry per failed step (lint) or module (tests). `conflicted` lists
 members dropped for a merge conflict. `fatal` means the run could not start (lock timeout, tree creation failed): every live
 member fails with `exit_code`, no splitting. Produced by the runner callable (`LintBatch._run_once`), consumed by `settle`.
 
-### `batch_queue:Verdict` [@ANCHOR: batch_queue:Verdict]
+### `batch_queue:Verdict`
 One branch's answer, stored in the verdict file under its tip: `{"status": "passed"|"failed"|"solo", "exit_code": int,
 "findings": [str] (at most 40 lines naming the branch), "detail": str, "log": path, "batch": id}`. `solo` means "your merge
 conflicted: run alone" (the caller falls back to the normal path). Written by the leader once per batch
@@ -56,7 +56,7 @@ conflicted: run alone" (the caller falls back to the normal path). Written by th
 
 ## batch_queue
 
-### `batch_queue:repo_key` [@ANCHOR: batch_queue:repo_key]
+### `batch_queue:repo_key`
 Identifies a repository for queueing so that worktrees share a queue and repositories never do. Called by `run_member`.
 
 | Argument | Type | Meaning |
@@ -66,7 +66,7 @@ Identifies a repository for queueing so that worktrees share a queue and reposit
 Returns the real path of the main checkout (parent of `git rev-parse --git-common-dir`); on any git error the real path
 of `repo_root`. No locks; runs one git command. See also `state_dir`.
 
-### `batch_queue:state_dir` [@ANCHOR: batch_queue:state_dir]
+### `batch_queue:state_dir`
 Queue directory for one kind of run in one repository.
 
 | Argument | Type | Meaning |
@@ -77,22 +77,22 @@ Queue directory for one kind of run in one repository.
 
 Returns `<base>/<kind>-<key with runs of other characters replaced by _>`. Does not create it (`locked` does).
 
-### `batch_queue:locked` [@ANCHOR: batch_queue:locked]
+### `batch_queue:locked`
 Context manager: takes an exclusive blocking `flock` on `<sdir>/state.lock`, yields the state dict, saves it on normal
 exit (tmp file + rename) and releases. Purpose: every state change is atomic across processes. Special concerns: keep the
 block short (no waiting, no running, no printing); an exception inside the block discards the changes; the lock is dropped
 by the kernel if the process dies. Creates `sdir`. A missing, unreadable or other-version state file yields `empty_state()`.
 
-### `batch_queue:prune` [@ANCHOR: batch_queue:prune]
+### `batch_queue:prune`
 Removes dead waiters from the forming batch (an emptied batch disappears) and frees the running slot when its runner is
 dead. `prune(state, live=lock_queue.is_live)` returns a list of events (`("runner_died", batch_id)`); mutates `state`; call
 inside `locked` at every poll. `live(pid, start)` must be cheap (two `/proc` reads). Idempotent.
 
-### `batch_queue:caps_from_env` [@ANCHOR: batch_queue:caps_from_env]
+### `batch_queue:caps_from_env`
 Reads `HAMS_BATCH_MAX_BRANCHES` (int, at least 1, default 8) and `HAMS_BATCH_MAX_SECONDS` (finite float, at least 0, 0 = no
 duration cap, default 1800) from `environ`; bad values fall back to the defaults. Returns `{"max_branches", "max_seconds"}`.
 
-### `batch_queue:join` [@ANCHOR: batch_queue:join]
+### `batch_queue:join`
 Adds a member to the forming batch, creating it when none exists.
 
 | Argument | Type | Meaning |
@@ -108,26 +108,26 @@ estimate with this member would exceed `max_seconds`; the first member is always
 Joining twice from the same process returns the same id without duplicating; a second caller with the same tip shares the
 slot. Forming batches accept members while a batch runs: that is the point.
 
-### `batch_queue:leave` [@ANCHOR: batch_queue:leave]
+### `batch_queue:leave`
 Removes the member (same pid and start) from the forming batch; an emptied batch disappears. Used on timeout and on SIGTERM.
 No effect once the batch is sealed.
 
-### `batch_queue:seal` [@ANCHOR: batch_queue:seal]
+### `batch_queue:seal`
 `seal(state, member, now, log)`: when nothing is running and `member` is the oldest member of the forming batch (call
 `prune` first), moves the batch to `running` with `member` as runner and returns it; otherwise None. `log` is the batch log
 path stored for status output. The sealed member list is final: later requests form the next batch.
 
-### `batch_queue:finish` [@ANCHOR: batch_queue:finish]
+### `batch_queue:finish`
 `finish(state, batch_id)` frees the running slot if it still holds that batch. Call after the verdict file is written.
 
-### `batch_queue:write_verdicts` [@ANCHOR: batch_queue:write_verdicts]
+### `batch_queue:write_verdicts`
 `write_verdicts(sdir, batch_id, doc, now)` publishes `{verdicts, log, members, batch, finished}` as `verdicts/<id>.json`
 atomically and deletes verdict files older than a day. The leader calls it before `finish`, so a waiter never sees a gap.
 
-### `batch_queue:read_verdicts` [@ANCHOR: batch_queue:read_verdicts]
+### `batch_queue:read_verdicts`
 `read_verdicts(sdir, batch_id)` returns the verdict document or None when absent or unreadable. Cheap; polled once a second.
 
-### `batch_queue:coalesce` [@ANCHOR: batch_queue:coalesce]
+### `batch_queue:coalesce`
 The caller's whole interaction with the queue: join, wait, possibly lead, return the member's own result.
 
 | Argument | Type | Meaning |
@@ -147,34 +147,34 @@ Returns `{"status": "passed"|"failed"|"solo"|"timeout"|"gave_up", "verdict", "ba
 "joined batch N with K other branches", "nothing is running here; starting at once", "batch N starts with ...". Locks: only
 the short `locked` sections. Retry safety: a repeated call joins a fresh batch.
 
-### `batch_queue:tree_parent` [@ANCHOR: batch_queue:tree_parent]
+### `batch_queue:tree_parent`
 `tree_parent(kind, repo_name, pid, start, suffix, environ)` returns the directory
 `<HAMS_BATCH_TREE_DIR or ~/workspace/tmp>/batch_<kind>_<repo>_<pid>-<start><suffix>` that holds one combined tree
 (`<parent>/<repo_name>`). The parent holds nothing else so the linters' "sibling beside the repository" lookup finds no
 stray neighbour. The name carries the creator's pid and start time so `reap_orphan_trees` can tell an orphan.
 
-### `batch_queue:build_combined_tree` [@ANCHOR: batch_queue:build_combined_tree]
+### `batch_queue:build_combined_tree`
 `build_combined_tree(repo, base, members, dest, run)` runs `git worktree add --detach dest base` from `repo`, then merges
 each member's tip with `git merge --no-ff --no-edit` using a fixed identity (`hams-batch`), in order. A merge that fails is
 aborted, the tree reset, and the member reported conflicted. Returns `{"merged": [members], "conflicted": [(member,
 text)], "head": sha or None, "error": str (only when head is None)}`. Side effects: a new registered worktree (always remove
 it with `remove_tree`); no network. Members sharing a tip are merged once.
 
-### `batch_queue:remove_tree` [@ANCHOR: batch_queue:remove_tree]
+### `batch_queue:remove_tree`
 `remove_tree(repo, dest, run)` runs `git worktree remove --force`, deletes the parent directory and runs `git worktree
 prune`. Safe to call twice and on a half-built tree. Called in a `finally` by the runner.
 
-### `batch_queue:reap_orphan_trees` [@ANCHOR: batch_queue:reap_orphan_trees]
+### `batch_queue:reap_orphan_trees`
 `reap_orphan_trees(repo, kind, repo_name, environ, live)` removes combined trees whose creator (pid and start time in the
 directory name) is dead, and returns the removed parents. Runs at the start of every batch.
 
-### `batch_queue:blame_by_tokens` [@ANCHOR: batch_queue:blame_by_tokens]
+### `batch_queue:blame_by_tokens`
 Attributes failed checks to branches. `failures` is `{name: output text}`; `owners` maps a token (a changed file path or a
 module name) to the tips that own it; `find_tokens(line)` yields the tokens a line names. Returns `({tip: [name: line,
 ...]}, [names with no owned token])`. A failure naming at least one owned token is attributed to every owner of every token
 it names; a failure naming none is unattributable and makes `settle` split.
 
-### `batch_queue:settle` [@ANCHOR: batch_queue:settle]
+### `batch_queue:settle`
 Turns runs into verdicts. `settle(members, run_once, attribute, budget=9, log)`: `run_once(group)` returns a `RunResult`;
 `attribute(failures, live_members)` returns what `blame_by_tokens` returns. Rules: exit 0 passes all; every failure
 attributed: blamed tips fail, the rest pass at once; any unattributed failure (or none blamed): split the live members in
@@ -182,42 +182,42 @@ halves and settle each; a single member that fails unattributed fails with the f
 with the run's exit code; conflicted members get `solo`; when `budget` runs are used up the rest fail with a note. Returns
 `{tip: Verdict}`. Bound: about 2*log2(K)+1 runs for K members (red main on 8 members stops at the budget of 9).
 
-### `batch_queue:format_verdicts` [@ANCHOR: batch_queue:format_verdicts]
+### `batch_queue:format_verdicts`
 `format_verdicts(doc, my_tip)` returns the printable lines: a header with batch id and log path, then one line per distinct
 branch with its status in capitals, tip prefix, `<- you` for the caller and the detail of a non-pass.
 
 ## lint_batch
 
-### `lint_batch:ineligible_reason` [@ANCHOR: lint_batch:ineligible_reason]
+### `lint_batch:ineligible_reason`
 Decides whether a run may join a batch. Keyword arguments: `changed` (the `--changed` base or None), `only`, `skip`,
 `modules` (selection options), `solo`, `bundle`, `environ`, `dirty` (uncommitted changes), `is_shared_checkout`,
 `lock_needed` (the run is heavy). Returns a short reason string when the run must run alone, None when it may batch.
 Pure; checked in the order solo, runner marker, `HAMS_LINT_NO_LOCK`, lock held, `HAMS_LINT_BATCH=off`, not changed,
 selection, bundle, dirty, hams_shared, cheap.
 
-### `lint_batch:changed_paths` [@ANCHOR: lint_batch:changed_paths]
+### `lint_batch:changed_paths`
 `changed_paths(repo, base, tip)` returns the repository-relative paths in `git diff --name-only base...tip` (the merge-base
 diff); `[]` if git fails. These are the tokens that own findings.
 
-### `lint_batch:path_finder` [@ANCHOR: lint_batch:path_finder]
+### `lint_batch:path_finder`
 `path_finder(paths)` returns `find(line)` listing the paths a line of output names. A path matches only where the previous
 character is not a file-name character, so `a.py` does not match `data.py`; absolute paths into the combined tree match by
 their suffix. A line can name several owners' paths (a shared file); all are returned.
 
-### `lint_batch:owners_of` [@ANCHOR: lint_batch:owners_of]
+### `lint_batch:owners_of`
 `owners_of({tip: [paths]})` returns `{path: [tips]}`, the `owners` argument of `blame_by_tokens`.
 
-### `lint_batch:default_command` [@ANCHOR: lint_batch:default_command]
+### `lint_batch:default_command`
 `default_command(tree, results_json, passthrough, base)` returns the argv of the combined run: `nice -n 10 python3
 <tree>/tools/run_linters.py --changed <base> --solo --results-json <path> <passthrough>`. `--solo` stops it batching again.
 `passthrough` carries `-j`, `--lock-timeout`, `--load-limit`, `--load-timeout` of the leader's own command.
 
-### `lint_batch:read_results` [@ANCHOR: lint_batch:read_results]
+### `lint_batch:read_results`
 `read_results(path)` reads the combined run's `--results-json` file: returns `(selected step names, {failed step: output})`;
 `([], {})` if unreadable. The file's `selected` and `outputs` keys are added by `run_linters.py` (outputs are cut to the last
 200000 characters per step).
 
-### `lint_batch:LintBatch` [@ANCHOR: lint_batch:LintBatch]
+### `lint_batch:LintBatch`
 The leader's runner; an instance is the `run_batch` argument of `coalesce`.
 
 | Field (constructor argument) | Meaning |
@@ -235,7 +235,7 @@ command with output teed to the leader's terminal and the batch log, reads the r
 Stamps are written for every `passed` verdict from the step names of the last run. Exit code 75 from the run (lock or load
 gate gave up) is `fatal` for the batch. Concurrency: only the leader runs this, and only after sealing.
 
-### `lint_batch:run_member` [@ANCHOR: lint_batch:run_member]
+### `lint_batch:run_member`
 The caller's side, used by `run_linters.main`. `run_member(repo, repo_name, branch, tip, base, scope, runner, timeout, out,
 environ, poll, sdir, estimate)` joins through `coalesce`, prints the verdict lines, and returns the exit code: 0 passed, the
 verdict's code (1) failed, 75 timed out. Returns None when the caller must run alone: the merge conflicted (`solo`) or the
@@ -244,7 +244,7 @@ runner kept dying (`gave_up`). For a failure it prints the findings naming the b
 
 ## run_linters
 
-### `run_linters:write_batch_stamp` [@ANCHOR: run_linters:write_batch_stamp]
+### `run_linters:write_batch_stamp`
 `write_batch_stamp(tip, step_names, batch_id)` writes `~/.cache/hams-lint/passed/<tip>` in the format of `stamp_text` plus
 ` batch=N` (mode `changed`, the number and names of the combined run's steps). `lint_stamp_gate.py` ignores the extra field.
 Writes nothing, and says so on stderr, when `step_names` is empty (the gate refuses a stamp that selected zero steps).
