@@ -21,6 +21,7 @@ file. Created by the requesting process, copied into the JSON state, discarded w
 | `queued_at` | float | epoch seconds; informational |
 | `solo` | bool | True: the member needs a batch of its own (`join` refuses to mix it) |
 | `info` | str | free text for status output |
+| `install` | list of str | tests only, optional (the key is absent when empty, and an older member never has it): modules the hosts must INSTALL for this member's tests but must not test (test companions). Never in the duration estimate or the split |
 
 Invariants: `(pid, start)` is unique in a batch (`join` ignores a second join); several members may share a `tip` (they share
 one verdict). Serialised as JSON; `STATE_VERSION` 1, a different version resets the state. Mutated only inside `locked`.
@@ -264,6 +265,9 @@ The test side (`tools/odoo_test_batch.py`, hook in `tools/test.py`). Queue direc
 as `test.py` does). Returns None when the run cannot be batched: empty or missing, an empty entry, or any entry with a `:Class`
 selector.
 
+### `odoo_test_batch:union_of`
+`union_of(members, field)` returns the set of module names found in `field` ("scope" or "install") across `members`. A member without the key (queued before `install` existed, or with no companions) contributes nothing, which is the backward-compatibility rule for the queue's state file. Pure. Test: `test_union_of_reads_a_field_and_ignores_members_without_it`.
+
 ### `odoo_test_batch:ineligible_reason`
 `ineligible_reason(args, environ, cwd_is_root, dirty)`; `args` is test.py's parsed namespace. Returns a short reason when the run
 must run alone, None when it may batch. Alone: `--solo`; the combined run itself (`HAMS_TEST_BATCH_RUNNER`); `HAMS_TEST_BATCH=off`;
@@ -335,6 +339,7 @@ machines with nothing are omitted; one or no machine puts everything on that mac
 | `probe` | callable | `idle_machines`-like; replaced in tests |
 | `runner` | callable | `run_on_machine`-like; replaced in tests |
 
+**Install-only modules.** A member's `install` modules (test companions such as another module's service account) are added to the installed set that every host gets (`-u`), but only the `scope` union is split over the hosts and tested (`--share`), and only it is the run's `selected` list. A module that one member installs and another tests is tested. The batch log says `installed on every host, not tested: ...`. Test: `test_install_only_modules_are_installed_on_every_host_but_never_tested`, `test_a_module_one_member_installs_and_another_tests_is_tested`.
 **Per run.** The union of the group's modules is split over ALL the hosts by recorded duration (`plan_machine_split`); a host that is busy (`probe` finds its lock held) still gets its share, labelled "busy now" in the batch log, and its driver waits for the lock (Bruce 2026-11-05, "Combine tests": batch 31 put 24 modules on yoga alone because the others were busy for a few minutes); one thread per host calls `runner`; each host's log tail is appended to the batch log. Results are merged: a host that could not start makes the run fatal (exit 75, every member of the group fails with `run on X could not start`); a merge conflict (the hosts all build the same tree) becomes a `conflicted` member and its verdict is `solo`; a nonzero exit is read as failing tests (`failing_tests`): those that also fail in the host's origin/main baseline run (`baseline_filtered`, run by the driver after a failing batch run) are environmental, are listed in the batch log and do not fail any branch (a passing verdict carries a `note`); each other failing test is blamed on its module's owners; a failure naming no test falls back to the modules `filtered_test.txt` implicates, none implicated is unattributable and splits the batch. A clean run passes every branch in it (Bruce's rule) and writes the pass record of each (`write_pass_record`).
 **Durations.** Recorded per host from that host's wall time over its own modules.
 **Concurrency.** `_run_once` is called by the leader only; threads write only their own slot under a lock; log output is written after the threads join.
@@ -352,6 +357,7 @@ machines with nothing are omitted; one or no machine puts everything on that mac
 | `machines` | list of str | hosts the leader may use |
 | `driver` | list of str | argv prefix of `remote_odoo_test.py` |
 | `wait`, `timeout`, `environ`, `out` | | `timeout` seconds bound the wait; the queue always waits |
+| `install` | list of str | modules to install on every host for this branch's tests without testing them (stored as the member's `install`); default none |
 
 **Returns.** The exit code: 0 passed, 1 failed, 75 could not run or gave up; `None` when the branch must run alone (its merge conflicts with another branch, or the runner kept dying).
 **Special concerns.** Blocks for minutes to an hour. The queue is `state_dir("rtest", repo_key)`, separate from the local `test` queue. Prints the batch verdicts. Writes `~/.cache/hams-test/passed/<tip>` for each passed branch (leader).

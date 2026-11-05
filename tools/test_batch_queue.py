@@ -96,6 +96,9 @@ class StateMachineTests(unittest.TestCase):
         self.caps = {"max_branches": 3, "max_seconds": 100.0}
 
     def test_member_fields(self):
+        self.assertNotIn("install", bq.make_member("b", "abc", scope=["x"]))  # old readers never see the key
+        withinst = bq.make_member("b", "abc", scope=["x"], install=["z", "x", "z"])
+        self.assertEqual(withinst["install"], ["z"])  # sorted, de-duplicated, and not what is already tested
         member = bq.make_member("b", "abc", scope=["y", "x", "x"], solo=True)
         self.assertEqual(member["pid"], os.getpid())
         self.assertEqual(member["scope"], ["x", "y"])
