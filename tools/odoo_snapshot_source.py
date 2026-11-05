@@ -35,8 +35,8 @@ import unicodedata
 import xmlrpc.client
 
 LANG = "en_US"
-IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
-ORDER_RE = re.compile(r"^([a-z_][a-z0-9_]*)(?:\s+(asc|desc))?$", re.I)
+IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*\Z")
+ORDER_RE = re.compile(r"^([a-z_][a-z0-9_]*)(?:\s+(asc|desc))?\Z", re.I)
 SNAPSHOT_DB_PREFIX = "mig_"  # restore refuses any other database name: it must never touch a real one
 
 

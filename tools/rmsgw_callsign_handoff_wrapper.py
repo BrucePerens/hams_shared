@@ -72,7 +72,7 @@ RMSGW_BINARY = "rmsgw"
 # scoping each lookahead to `[A-Z0-9]*` (not `.*`), which cannot cross the "-" SSID separator
 # since "-" isn't in that character class, so each lookahead can only be satisfied by a character
 # actually inside the base callsign.
-_CALLSIGN_RE = re.compile(r"^(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*[0-9])[A-Z0-9]{2,8}(-[0-9]{1,2})?$")
+_CALLSIGN_RE = re.compile(r"^(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*[0-9])[A-Z0-9]{2,8}(-[0-9]{1,2})?\Z")
 
 
 def main(argv):

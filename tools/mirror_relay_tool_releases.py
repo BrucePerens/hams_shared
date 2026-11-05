@@ -59,9 +59,9 @@ import urllib.request
 # these, not guessed.
 GITHUB_REPO = {"pat": "la5nta/pat"}
 ASSET_PATTERNS = {
-    ("pat", "windows"): re.compile(r"^pat_.*_windows_i386\.zip$"),
-    ("pat", "macos"): re.compile(r"^pat_.*_darwin_amd64\.pkg$"),
-    ("pat", "linux"): re.compile(r"^pat_.*_linux_amd64\.tar\.gz$"),
+    ("pat", "windows"): re.compile(r"^pat_.*_windows_i386\.zip\Z"),
+    ("pat", "macos"): re.compile(r"^pat_.*_darwin_amd64\.pkg\Z"),
+    ("pat", "linux"): re.compile(r"^pat_.*_linux_amd64\.tar\.gz\Z"),
 }
 
 

@@ -31,10 +31,10 @@ import shutil
 import subprocess
 import tarfile
 
-NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,23}$")
-MODULE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-LABEL_RE = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
-SIZE_RE = re.compile(r"^[0-9]+[KMGT]?$")
+NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,23}\Z")
+MODULE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}\Z")
+LABEL_RE = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)\Z")
+SIZE_RE = re.compile(r"^[0-9]+[KMGT]?\Z")
 PORT_LOW, PORT_HIGH = 18000, 18999
 
 # Names a tenant may never have: they would collide with PostgreSQL's own databases or with
@@ -181,7 +181,7 @@ def _check_int(field, value, low, high):
         raise SpecError(f"{field} must be an integer in {low}..{high}: {value!r}")
 
 
-STATIC_PATH_RE = re.compile(r"^/[A-Za-z0-9_.~-]+(?:/[A-Za-z0-9_.~-]+)*/$")
+STATIC_PATH_RE = re.compile(r"^/[A-Za-z0-9_.~-]+(?:/[A-Za-z0-9_.~-]+)*/\Z")
 
 
 def _validate_static_site(value, spec):
@@ -255,7 +255,7 @@ def validate_spec(raw):
         raise SpecError("workers > 0 requires an explicit gevent_port (the default 8072 is hams_prod)")
     _check_size("memory_max", spec["memory_max"])
     _check_size("memory_high", spec["memory_high"])
-    if not re.match(r"^[0-9]+%$", str(spec["cpu_quota"])):
+    if not re.match(r"^[0-9]+%\Z", str(spec["cpu_quota"])):
         raise SpecError(f"cpu_quota must look like 100%: {spec['cpu_quota']!r}")
     for key in ("modules", "extra_modules"):
         value = spec[key]
@@ -269,10 +269,10 @@ def validate_spec(raw):
                 f"extra module {module!r} is not allow-listed for tenants "
                 f"({', '.join(sorted(EXTRA_MODULE_ALLOWLIST))})"
             )
-    if not re.match(r"^[A-Za-z0-9_.@-]{1,64}$", spec["admin_login"]):
+    if not re.match(r"^[A-Za-z0-9_.@-]{1,64}\Z", spec["admin_login"]):
         raise SpecError("admin_login has unsupported characters")
     spec["static_site"] = _validate_static_site(spec["static_site"], spec)
-    if not re.match(r"^[a-z]{2,3}_[A-Z]{2}$", spec["language"]):
+    if not re.match(r"^[a-z]{2,3}_[A-Z]{2}\Z", spec["language"]):
         raise SpecError(f"language must look like en_US: {spec['language']!r}")
     return spec
 
@@ -1021,7 +1021,7 @@ def backup_tenant(spec, paths, system, keep=7):
         },
     }
     system.write_text(os.path.join(target, "MANIFEST.json"), json.dumps(manifest, indent=2) + "\n", 0o600, "root:root")
-    sets = sorted(d for d in system.listdir(paths.backup_dir(name)) if re.match(r"^\d{8}T\d{6}Z$", d))
+    sets = sorted(d for d in system.listdir(paths.backup_dir(name)) if re.match(r"^\d{8}T\d{6}Z\Z", d))
     for old in sets[:-keep] if keep > 0 else []:
         system.remove_tree(os.path.join(paths.backup_dir(name), old))
     return target
@@ -1046,7 +1046,7 @@ def verify_backup(directory):
 
 
 def latest_backup(paths, system, name):
-    sets = sorted(d for d in system.listdir(paths.backup_dir(name)) if re.match(r"^\d{8}T\d{6}Z$", d))
+    sets = sorted(d for d in system.listdir(paths.backup_dir(name)) if re.match(r"^\d{8}T\d{6}Z\Z", d))
     return os.path.join(paths.backup_dir(name), sets[-1]) if sets else None
 
 
