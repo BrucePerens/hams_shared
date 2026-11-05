@@ -83,3 +83,59 @@ Special concerns: blocking file I/O only; no locks. Idempotent and safe to retry
 same directory, owner and mode copied, then `os.replace`). Honours `--plan` (records the write, changes nothing). Security: the password is
 still required and no other role is affected; the rule does not weaken the `odoo`/`postgres` peer rules. See also the tests
 `CacheManagerSocketRuleForTestHostsTests` in `test_infrastructure.py` and `_provision_cache_manager_role`.
+
+## Rotated Odoo API keys and the processes that hold them
+
+`daemon_key_manager` rotates every daemon's Odoo API key: the monthly cron, and every start of `hams.daemon.keys.service` (it runs
+`action_force_provision_all`). A rotation writes the new key to the daemon's key file, revokes the old key and restarts nothing. A
+process that read its key once therefore fails every Odoo call with 401 until it is restarted (`backup.worker`, 2026-10-27 to
+2026-11-05). `Type=oneshot` units read the file afresh on every run and are safe; every other process that names a file under
+`/opt/hams/etc/keys/` has to re-read it itself. The two anchors below are the guard that keeps that true as units are added. The audit
+with the evidence for each row is the "Rotation safety audit 2026-11-05" section of `daemon_key_manager/README.md`.
+
+### `[@ANCHOR: infrastructure:rotated_key_reload_policy]` `KEY_RELOAD_MECHANISMS` and `ROTATED_KEY_RELOAD_POLICY`
+
+Purpose: the declared answer, for every long-running key holder in the MANIFEST, to "how does this process survive a rotation?". Two
+module-level dicts in `infrastructure.py`, read only by `test_infrastructure.py` (`RotatedKeyReloadPolicyTests`) and by the companion
+source check in hams_com (`daemons/test_daemon_key_reload_coverage.py`).
+
+`KEY_RELOAD_MECHANISMS` is the closed vocabulary, `{mechanism: sentence}`:
+
+| Mechanism | Meaning |
+|---|---|
+| `hams_config` | Odoo calls go through `hams_config.get_odoo_client()`; its `execute()` re-reads `ODOO_KEY_FILE` after a 401 and retries once. |
+| `own_reload` | The daemon has its own re-read of the key file after a 401, with one retry (`backup_worker`, `generalized_monitor`). |
+| `per_call` | The key file is read again for every use, because each use makes a new `get_odoo_client()`. |
+| `unused` | The key is loaded but never presented to Odoo, so a revoked key cannot fail anything. |
+
+`ROTATED_KEY_RELOAD_POLICY` is `{name: (mechanism, reason)}`:
+
+| Part | Type | Meaning |
+|---|---|---|
+| `name` | str | Base name of the unit file (`backup.worker.service`) or of a wrapper script that exports `ODOO_KEY_FILE` (`run-ticket-triage-mcp.sh`). Must equal a name returned by `long_running_key_holders()`. |
+| `mechanism` | str | A key of `KEY_RELOAD_MECHANISMS`. |
+| `reason` | str | More than 20 characters: the source file that does the re-read, and any detail a reviewer needs (for example that the unit still loads an `EnvironmentFile=` that only seeds the first key). |
+
+Invariants (each is a test): every holder the MANIFEST yields has a row; every row names a current holder; every mechanism is in the
+vocabulary; a holder whose key arrives through `EnvironmentFile=` (systemd reads that once, at start) is `own_reload` or `unused`.
+Lifetime: edited by hand in the same pull request that adds, removes or changes a unit; nothing writes it at run time. Concurrency: none
+(import-time constants). Adding a long-running daemon that holds a key means adding a row here and a row to the audit table; the
+companion check in hams_com then confirms the daemon's source really goes through `get_odoo_client()` (or the named own reload).
+Created and read by: `long_running_key_holders()` (below) and the tests.
+
+### `[@ANCHOR: infrastructure:long_running_key_holders]` `long_running_key_holders(manifest)`
+
+Purpose: lists the MANIFEST processes that can outlive a key rotation and name a key file, so the guard compares them with
+`ROTATED_KEY_RELOAD_POLICY`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `manifest` | dict | A MANIFEST-shaped dict; only `manifest["static_files"]` is read, each item's `path` and `content`. Borrowed, never changed. Tests pass a synthetic one. |
+
+Returns `{name: set_of_how}`. `name` is the base name of a `.service` file whose `Type=` is not `oneshot` (no `Type=` means `simple`), or of
+a `.sh` wrapper script. `how` holds `"environment_file"` (an `EnvironmentFile=` line, with or without the `-`, that points under
+`/opt/hams/etc/keys/`) and/or `"key_file"` (any other uncommented line that mentions a path under that directory, such as
+`Environment="ODOO_KEY_FILE=..."` or `export ODOO_KEY_FILE=...`). Comment lines (`#`, `;`) do not count. Drop-in `.conf` files, timers,
+sudoers files and oneshot services are skipped. Raises nothing for odd input (missing keys are treated as empty). Pure function: no I/O, no
+locks, safe to call repeatedly. Example: `long_running_key_holders(MANIFEST)["backup.worker.service"] == {"environment_file"}`. See also the
+tests `RotatedKeyReloadPolicyTests` in `test_infrastructure.py` and `ROTATED_KEY_RELOAD_POLICY` above.
