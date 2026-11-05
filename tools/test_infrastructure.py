@@ -4765,6 +4765,14 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
         for name in ("exception_reporter.py", "glyph_normalizer.py", "ssrf_safe_fetch.py", "club_spam.py"):
             self.assertIn("/opt/hams/daemons/" + name, paths)
 
+    def test_the_units_of_the_ai_daemons_have_the_daemons_pythonpath(self):
+        """The AI daemons import ai_quota.py and exception_reporter.py (flat in /opt/hams/daemons) to file the one quota
+        ticket; credential.touch.timer lacked PYTHONPATH (hams_shared #379) and the two ticket.triage units did too."""
+        units = {sf["path"]: sf for sf in infra.MANIFEST["static_files"]}
+        for name in ("credential.touch.timer", "ticket.triage", "ticket.triage.event", "event.ai.enrichment"):
+            body = units["/opt/hams/systemd/%s.service" % name]["content"]
+            self.assertIn('Environment="PYTHONPATH=/opt/hams/daemons"', body, name)
+
     def test_smoketest_never_starts_an_opt_in_service_unless_named(self):
         self.assertNotIn(
             "code.review.sweep.service", infra._smoketest_candidate_services(True, is_test_env=False)
