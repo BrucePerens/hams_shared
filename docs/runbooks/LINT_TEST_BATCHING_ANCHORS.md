@@ -318,7 +318,7 @@ machines with nothing are omitted; one or no machine puts everything on that mac
 | `log_path` | str | the host run's log |
 | `work_dir` | str | existing directory for the members file and the result file |
 
-**Returns.** The driver's result: `{"host", "exit_code", "merged": [sha], "conflicted": [sha], "filtered": text of filtered_test.txt, "log", "seconds", "error"}`. A driver that crashes or writes no result gives `exit_code` 75 and `error` set: the run could not start, which is not a test failure.
+**Returns.** The driver's result: `{"host", "exit_code", "merged": [sha], "conflicted": [sha], "filtered": text of filtered_test.txt, "log", "seconds", "error", "durations": {module: seconds} (optional: the host's per-module test times)}`. A driver that crashes or writes no result gives `exit_code` 75 and `error` set: the run could not start, which is not a test failure.
 **Special concerns.** The driver is called with the union as its module list and `--share <modules>` when the share is smaller, so the host runs `test.py -u <union> --test-tags /m1,/m2`: splitting divides the tests, never the installed set. Blocks for the whole host run (minutes to an hour). Takes the host's lock inside the driver (`--wait`). Deletes a stale result file first. The host run is `test.py --solo` as the odoo user against `hams_test`.
 **See also.** `RemoteTestBatch`; hams_com `devbox_tools/remote_odoo_test.py`, `devbox_tools/testhost_git.py`. Test: `test_run_on_machine_calls_the_driver_and_reads_its_result`.
 
@@ -362,13 +362,24 @@ machines with nothing are omitted; one or no machine puts everything on that mac
 passed to `join` so a batch stops growing at `HAMS_BATCH_MAX_SECONDS`.
 
 ### `odoo_test_batch:load_durations`
-`load_durations(sdir)` returns `{module: seconds}` from `<sdir>/durations.json`; `{}` when missing, unreadable, or when entries are
-not finite numbers (those entries are dropped).
+`load_durations(sdir)` returns `{module: seconds}` for the repository's test queue: the crude equal-share table
+`<sdir>/durations.json` overlaid with the measured table `<sdir>/module_durations.json` (`record_module_durations`), so a module with
+a measured time uses it and any other module its crude figure. `{}` when both are missing or unreadable; entries that are not finite
+numbers in [0, 1e9) are dropped. `plan_machine_split` and `estimate_seconds` read this table.
 
 ### `odoo_test_batch:record_durations`
-`record_durations(sdir, modules, seconds)` credits each module an equal share of the run's wall time (test.py reports no per-module
-time, so the figure is crude) and averages it with an earlier record; written atomically; ignores a failed write, empty modules
-or non-positive seconds.
+`record_durations(sdir, modules, seconds)` credits each module an equal share of the run's wall time (the crude figure, used only when a
+host reported no per-module times) and averages it with an earlier crude record in `<sdir>/durations.json`; written atomically; ignores
+a failed write, empty modules or non-positive seconds. It never reads or changes a measured figure.
+
+### `odoo_test_batch:record_module_durations`
+`record_module_durations(sdir, durations)` stores the measured per-module test times of one host's run in `<sdir>/module_durations.json`.
+`durations` is `{module: seconds}` as the host's `odoo.tests.stats: <module>: N tests <s>s` lines report them
+(`remote_odoo_test.module_test_seconds` in hams_com's devbox_tools, returned by `drive_host` as `result["durations"]`; `RemoteTestBatch`
+passes each host's figures here). The first measurement of a module is stored as it is; a later one is averaged 50/50 with the stored
+figure because the hosts differ in speed. Entries whose module is not a non-empty string or whose seconds are not a finite number in
+[0, 1e9) (including booleans) are ignored; an empty mapping writes nothing; the file is written atomically and a failed write is
+ignored. The time is Odoo's test time for the module, not its install time.
 
 ### `odoo_test_batch:write_pass_record`
 `write_pass_record(tip, modules, batch_id, environ)` writes `~/.cache/hams-test/passed/<tip>` with one line

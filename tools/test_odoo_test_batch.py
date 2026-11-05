@@ -22,6 +22,7 @@ Tests [@ANCHOR: odoo_test_batch:run_remote_member]
 Tests [@ANCHOR: odoo_test_batch:estimate_seconds]
 Tests [@ANCHOR: odoo_test_batch:load_durations]
 Tests [@ANCHOR: odoo_test_batch:record_durations]
+Tests [@ANCHOR: odoo_test_batch:record_module_durations]
 Tests [@ANCHOR: odoo_test_batch:write_pass_record]
 Tests [@ANCHOR: odoo_test_batch:OdooTestBatch]
 Tests [@ANCHOR: odoo_test_batch:maybe_run_batched]
@@ -142,6 +143,24 @@ class UnitTests(unittest.TestCase):
         one = "these modules are implicated in the failure(s):\n  - ham_a\nlater section\n"
         two = "these modules are implicated in the failure(s):\n  - ham_b\n"
         self.assertEqual(otb.implicated_modules(one + two), ["ham_a", "ham_b"])
+
+    def test_measured_durations_override_the_crude_share_and_are_averaged_across_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            otb.record_durations(tmp, ["a", "b"], 100.0)  # crude: 50 each
+            otb.record_module_durations(tmp, {"a": 10.0, "c": 7.0})
+            self.assertEqual(otb.load_durations(tmp), {"a": 10.0, "b": 50.0, "c": 7.0})  # measured a wins, crude b stays
+            otb.record_module_durations(tmp, {"a": 30.0})
+            self.assertEqual(otb.load_durations(tmp)["a"], 20.0)  # averaged with the earlier measurement
+            otb.record_durations(tmp, ["a"], 1000.0)  # a crude record never touches a measured figure
+            self.assertEqual(otb.load_durations(tmp)["a"], 20.0)
+            otb.record_module_durations(tmp, {})
+            otb.record_module_durations(tmp, {"bad": float("nan"), "neg": -1.0, "huge": 1e12, "flag": True, "str": "5", "": 1.0})
+            self.assertEqual(otb.load_durations(tmp)["a"], 20.0)
+            for name in ("bad", "neg", "huge", "flag", "str", ""):
+                self.assertNotIn(name, otb.load_durations(tmp))
+            with open(os.path.join(tmp, "module_durations.json"), "w") as handle:
+                handle.write("not json")
+            self.assertEqual(otb.load_durations(tmp)["a"], 525.0)  # an unreadable measured table falls back to the crude one
 
     def test_estimate_and_durations_roundtrip(self):
         self.assertEqual(otb.estimate_seconds(["a", "b"], {"a": 10.0}), 10.0 + otb.DEFAULT_MODULE_SECONDS)
@@ -342,6 +361,32 @@ class RemoteTests(unittest.TestCase):
         self.assertEqual(sorted(tip for tip, _ in self.stamps), sorted([members[0]["tip"], members[2]["tip"]]))
         self.assertIn("log of yoga", open(log_path).read())
         self.assertTrue(os.path.exists(os.path.join(self.sdir, "durations.json")))
+
+    def test_measured_module_times_are_recorded_per_module_and_balance_the_next_split(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"), ("c", "ham_c"))
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            measured = {"ham_a": 900.0, "ham_b": 30.0, "ham_c": 20.0}
+            return {"host": machine, "exit_code": 0, "merged": [], "conflicted": [], "filtered": "", "seconds": 1000.0,
+                    "error": None, "log": log_path, "durations": {m: measured[m] for m in mods}}
+
+        self.batch(runner)(1, members, "")
+        table = otb.load_durations(self.sdir)
+        self.assertEqual(table, {"ham_a": 900.0, "ham_b": 30.0, "ham_c": 20.0})  # real figures, not equal shares
+        self.assertFalse(os.path.exists(os.path.join(self.sdir, "durations.json")))  # no crude share was credited
+        # the heavy module now sits alone on one host, the two light ones together on the other
+        plan = otb.plan_machine_split(["ham_a", "ham_b", "ham_c"], table, ["yoga", "mac1"])
+        self.assertEqual(sorted(plan.values()), [["ham_a"], ["ham_b", "ham_c"]])
+
+    def test_a_host_that_reports_no_module_times_is_credited_an_equal_share_as_before(self):
+        members = self.members(("a", "ham_a"))
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            return {"host": machine, "exit_code": 0, "merged": [], "conflicted": [], "filtered": "", "seconds": 60.0,
+                    "error": None, "log": log_path, "durations": {}}
+
+        self.batch(runner)(1, members, "")
+        self.assertEqual(otb.load_durations(self.sdir), {"ham_a": 60.0})
 
     def test_a_clean_combined_run_marks_every_branch_passed(self):
         members = self.members(("a", "ham_a"), ("b", "ham_b"))

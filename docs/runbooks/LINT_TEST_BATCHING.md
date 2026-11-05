@@ -91,8 +91,9 @@ branch). `HAMS_LINT_BATCH=off` disables batching for a session. The line `[*] li
 * Attribution: `filtered_test.txt` lists the modules whose tracebacks implicate them; each is blamed on the members whose `-u`
   names it, the other members pass at once. A crash with no implicated module splits the batch. A module broken by ANOTHER
   branch's change (a dependency) is blamed on the branch that asked for that module; `--solo` confirms.
-* Cap: 8 branches, or `HAMS_BATCH_MAX_SECONDS` of estimated work from recorded module durations (`durations.json`, an equal share
-  of each run's wall time per module; 300 s for an unrecorded module).
+* Cap: 8 branches, or `HAMS_BATCH_MAX_SECONDS` of estimated work from recorded module durations (`module_durations.json`: the test
+  time per module from each host's `odoo.tests.stats` lines; `durations.json`: an equal share of a run's wall time, used when a host
+  reported no per-module times; 300 s for an unrecorded module).
 * Evidence: `~/.cache/hams-test/passed/<tip>` per passed branch (`tests <time> modules=... batch=N`); nothing gates on it yet.
 * Stays solo: `--solo`, `HAMS_TEST_BATCH=off`, `--test-tags`, `-u mod:Class`, any mode but standard, `--mcp`, `--coverage`,
   `--pause-on-fail`, `--offline-isolation`, `--profile`, `--build-daemons`, a dirty tree, a directory that is not the repository root.
@@ -116,4 +117,4 @@ Odoo tests for a branch run on a remote host through hams_com's `devbox_tools/re
 * `--solo` (or `--env`, `--test-tags`, a `:Class` selector) tests the tip alone on one host without the queue (no merge with main).
 * Hosts: `HAMS_TEST_MACHINES` (default `yoga,mac1`). One running batch at a time per repository on the dev box; a batch uses all idle hosts.
 
-Not done: per-module (instead of equal-share) durations; per-target-machine running slots (to-do `batches-per-target-machine-8e2c4b17`).
+Not done: per-target-machine running slots (to-do `batches-per-target-machine-8e2c4b17`).

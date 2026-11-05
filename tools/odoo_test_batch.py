@@ -229,39 +229,82 @@ def _durations_path(sdir):
     return os.path.join(sdir, "durations.json")
 
 
-# [@ANCHOR: odoo_test_batch:load_durations]
-def load_durations(sdir):
-    """{module: seconds} recorded for this repository's test queue; {} when none or unreadable."""
+def _module_durations_path(sdir):
+    return os.path.join(sdir, "module_durations.json")
+
+
+def _read_seconds_table(path):
+    """{name: seconds} from the JSON file at `path`; entries that are not finite numbers in [0, 1e9) are dropped; {} when
+    the file is missing or unreadable."""
     try:
-        with open(_durations_path(sdir), encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
         table = {}
         for key, value in data.items():
-            if isinstance(value, (int, float)) and math.isfinite(float(value)) and 0 <= value < 1e9:
+            if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                    and math.isfinite(float(value)) and 0 <= value < 1e9:
                 table[key] = float(value)
         return table
     except (OSError, ValueError, AttributeError):
         return {}
 
 
+def _write_seconds_table(path, table):
+    """Write `table` as JSON at `path` atomically (temporary file, then rename); a failed write is ignored."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp-%d" % os.getpid()
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(table, handle)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+# [@ANCHOR: odoo_test_batch:load_durations]
+def load_durations(sdir):
+    """{module: seconds} recorded for this repository's test queue; {} when none or unreadable. A module with a
+    measured time (`record_module_durations`, from the hosts' own per-module test times) uses it; any other module
+    uses the crude equal-share figure of `record_durations`."""
+    table = _read_seconds_table(_durations_path(sdir))
+    table.update(_read_seconds_table(_module_durations_path(sdir)))
+    return table
+
+
 # [@ANCHOR: odoo_test_batch:record_durations]
 def record_durations(sdir, modules, seconds):
-    """Fold one run into the table: each module of a run that took `seconds` in all is credited an equal share
-    (a crude figure: test.py reports no per-module time), averaged 50/50 with an earlier record."""
+    """Fold one run into the crude table: each module of a run that took `seconds` in all is credited an equal share
+    (used only when the host reported no per-module times), averaged 50/50 with an earlier record. Measured times
+    (`record_module_durations`) take precedence over this table in `load_durations`."""
     if not modules or not seconds or seconds < 0:
         return
     share = float(seconds) / len(modules)
-    table = load_durations(sdir)
+    table = _read_seconds_table(_durations_path(sdir))
     for module in modules:
         table[module] = share if module not in table else (table[module] + share) / 2.0
-    try:
-        os.makedirs(sdir, exist_ok=True)
-        tmp = _durations_path(sdir) + ".tmp-%d" % os.getpid()
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(table, handle)
-        os.replace(tmp, _durations_path(sdir))
-    except OSError:
-        pass
+    _write_seconds_table(_durations_path(sdir), table)
+
+
+# [@ANCHOR: odoo_test_batch:record_module_durations]
+def record_module_durations(sdir, durations):
+    """Fold the measured per-module test times of one host's run into `<sdir>/module_durations.json`:
+    `durations` is {module: seconds} as the host's ``odoo.tests.stats`` lines report them
+    (`remote_odoo_test.module_test_seconds`). A module's first measurement is stored as it is, a later one is averaged
+    50/50 with the stored figure (the hosts differ in speed). Entries that are not finite numbers in [0, 1e9) are
+    ignored; written atomically; a failed write is ignored."""
+    if not durations:
+        return
+    table = _read_seconds_table(_module_durations_path(sdir))
+    changed = False
+    for module, seconds in durations.items():
+        if not isinstance(module, str) or not module or isinstance(seconds, bool) \
+                or not isinstance(seconds, (int, float)) or not math.isfinite(float(seconds)) \
+                or not 0 <= seconds < 1e9:
+            continue
+        table[module] = float(seconds) if module not in table else (table[module] + float(seconds)) / 2.0
+        changed = True
+    if changed:
+        _write_seconds_table(_module_durations_path(sdir), table)
 
 
 # [@ANCHOR: odoo_test_batch:write_pass_record]
@@ -403,7 +446,8 @@ class RemoteTestBatch(OdooTestBatch):
     results are merged: a conflicted merge (found by the hosts, who all build the same tree) becomes a "conflicted"
     member, a host that could not start makes the run fatal (exit 75), a failure is the modules each host's
     ``filtered_test.txt`` implicates (none implicated: unattributable, the batch splits). Durations are recorded per
-    machine from its own wall time. Each host's log is appended to the batch log."""
+    module from the host's own per-module test times (`outcome["durations"]`, `record_module_durations`); a host that
+    reported none is credited an equal share of its wall time (`record_durations`). Each host's log is appended to the batch log."""
 
     kind = REMOTE_KIND
 
@@ -468,7 +512,10 @@ class RemoteTestBatch(OdooTestBatch):
                 errors.append("run on %s could not start: %s" % (machine, outcome["error"]))
                 continue
             conflicted_tips |= set(outcome.get("conflicted") or ())
-            record_durations(self.sdir, mods, outcome.get("seconds") or 0)
+            if outcome.get("durations"):
+                record_module_durations(self.sdir, outcome["durations"])
+            else:
+                record_durations(self.sdir, mods, outcome.get("seconds") or 0)
             code = outcome.get("exit_code", 1)
             if code == 0:
                 continue
