@@ -1290,6 +1290,90 @@ def oneshot_run_timeout_dropin_entries(manifest):
     return entries
 
 
+# [@ANCHOR: infrastructure:rotated_key_reload_policy]
+# daemon_key_manager rotates every daemon's Odoo API key (the monthly cron, and every start of hams.daemon.keys.service, which runs
+# action_force_provision_all): it writes the new key to the daemon's key file, revokes the old key, and restarts nothing (Odoo may not
+# run systemctl, and a restart would kill a running 50-minute pgbackrest backup). A process that read its key once at start, from an
+# EnvironmentFile or from the file, then fails every Odoo call with 401 until someone restarts it: backup.worker failed for nine days
+# (2026-10-27 to 2026-11-05, ticket 116). A Type=oneshot unit reads the file afresh on every run and is safe. Every other process that
+# names a key under /opt/hams/etc/keys/ must therefore re-read the key itself, and this table is where each one says how.
+# long_running_key_holders() finds them in the MANIFEST; test_infrastructure.py fails for one missing here, for an entry that no longer
+# matches a holder, and for a unit that loads a key through EnvironmentFile (frozen at start) without its own reload. Audit table with
+# the evidence for each row: hams_open daemon_key_manager/README.md, "Rotation safety audit 2026-11-05".
+KEY_RELOAD_MECHANISMS = {
+    "hams_config": "Odoo calls go through hams_config.get_odoo_client(); its execute() re-reads ODOO_KEY_FILE after a 401 and retries once",
+    "own_reload": "the daemon has its own re-read of the key file after a 401, with one retry",
+    "per_call": "the key file is read again for every use (a new get_odoo_client() per call)",
+    "unused": "the key is loaded but never presented to Odoo, so a revoked key cannot fail anything",
+}
+ROTATED_KEY_RELOAD_POLICY = {
+    "adif.processor.service": ("hams_config", "daemons/adif_processor/main.py: one get_odoo_client() for the consumer's life."),
+    "adif.ingress.service": ("hams_config", "daemons/adif_ingress/main.py: get_odoo_client() per request and at start."),
+    "aprs.is.sync.service": ("hams_config", "daemons/aprs_is_sync/main.py: get_odoo_client() with a call timeout."),
+    "gdpr.csv.export.service": ("hams_config", "daemons/gdpr_csv_export/main.py."),
+    "ham.dx.daemon.service": ("hams_config", "daemons/ham_dx_daemon/main.py: one client for the flusher, short call timeout."),
+    "noaa-swpc-sync.service": ("hams_config", "daemons/noaa_swpc_sync/main.py."),
+    "pdns.sync.service": ("hams_config", "daemons/pdns_sync/main.py (its PowerDNS key is a different credential, from pdns.env)."),
+    "backup.worker.service": (
+        "own_reload", "backup_management/daemon/main.py _reload_odoo_key(); the unit still loads backup_worker.env, which only seeds the "
+                      "first key (hams_open #1204)."),
+    "pager-os-monitor.service": (
+        "own_reload", "pager_duty/daemon/generalized_monitor.py OdooClient.reload_key(); the unit still loads pager_duty.env, which only "
+                      "seeds the first key (hams_open #1208). pager_monitor_db.env is a PostgreSQL login, not an Odoo key."),
+    "hams.simulated.bots.service": (
+        "per_call", "daemons/hams_simulated_bots/main.py create_safety_ticket() makes a new get_odoo_client() for each ticket."),
+    "hams.simulated.observer.service": (
+        "per_call", "daemons/hams_simulated_bots/observer.py _create_observer_ticket() makes a new get_odoo_client() for each flag."),
+    "cache-manager.service": (
+        "unused", "distributed_redis_cache/daemons/cache_manager.py loads cache_manager.env but only uses its PostgreSQL login "
+                  "(cache_manager_db.env) and Redis; no HTTP client."),
+    "run-ticket-triage-mcp.sh": (
+        "hams_config", "daemons/hams_ticket_triage_mcp/main.py: a new get_odoo_client() per tool call, for the length of one agent session."),
+    "run-event-enrichment-mcp.sh": (
+        "hams_config", "daemons/hams_event_enrichment_mcp/main.py: a new get_odoo_client() per tool call, for the length of one agent "
+                       "session."),
+}
+_KEY_DIRECTORY = "/opt/hams/etc/keys/"
+
+
+def _uncommented_lines(content):
+    """The non-blank, non-comment lines of a unit or script text, stripped."""
+    return [
+        line.strip() for line in (content or "").splitlines()
+        if line.strip() and not line.strip().startswith(("#", ";"))
+    ]
+
+
+# [@ANCHOR: infrastructure:long_running_key_holders]
+def long_running_key_holders(manifest):
+    """The processes in `manifest` that name a file under /opt/hams/etc/keys/ and are not Type=oneshot, as {name: how}.
+
+    `name` is the base name of the unit file (a `.service` whose Type= is anything but `oneshot`; no Type= means `simple`) or of a
+    wrapper script (`.sh`) that exports ODOO_KEY_FILE for a process that can outlive a rotation. `how` is the set of ways the key
+    reaches it: "environment_file" (an EnvironmentFile= line under the key directory; systemd reads it once, at start) and/or
+    "key_file" (any other mention of a key path, such as Environment="ODOO_KEY_FILE=..."; the process reads the file itself). Comment
+    lines do not count. A one-shot unit is skipped because it reads its key afresh on every run. Pure: reads `manifest["static_files"]`
+    only."""
+    holders = {}
+    for spec in manifest.get("static_files", []):
+        path = spec.get("path", "")
+        name = os.path.basename(path)
+        lines = _uncommented_lines(spec.get("content"))
+        if name.endswith(".service"):
+            if _unit_directives(spec.get("content")).get("Type") == "oneshot":
+                continue
+        elif not name.endswith(".sh"):
+            continue
+        how = set()
+        for line in lines:
+            if _KEY_DIRECTORY not in line:
+                continue
+            how.add("environment_file" if line.startswith("EnvironmentFile=") else "key_file")
+        if how:
+            holders.setdefault(name, set()).update(how)
+    return holders
+
+
 def _is_server_unit(entry):
     """True for a unit file of the hams.com server (the prod or test environment). A unit of another host,
     such as the FCC sync on pi500-1, which has its own User=, is not part of the account ratchets."""

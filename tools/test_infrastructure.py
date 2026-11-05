@@ -3722,6 +3722,64 @@ class OneshotRunTimeoutTests(unittest.TestCase):
         self.assertIn("timeout", (probe.stdout + probe.stderr).lower())
 
 
+class RotatedKeyReloadPolicyTests(unittest.TestCase):
+    """A rotated Odoo API key is rewritten on disk and the old key revoked while nothing is restarted, so every process that
+    outlives a rotation must re-read its key. The MANIFEST must not hold a long-running key holder that nobody has accounted for."""
+
+    # Tests [@ANCHOR: infrastructure:long_running_key_holders]
+    def test_every_long_running_key_holder_in_the_manifest_has_a_declared_reload_mechanism(self):
+        holders = infra.long_running_key_holders(infra.MANIFEST)
+        self.assertGreater(len(holders), 10)  # the real set is found, not an empty one that passes trivially
+        undeclared = sorted(set(holders) - set(infra.ROTATED_KEY_RELOAD_POLICY))
+        self.assertEqual(
+            undeclared, [],
+            "These non-oneshot units or wrapper scripts name a key under /opt/hams/etc/keys/ but are not in "
+            "ROTATED_KEY_RELOAD_POLICY. A rotation rewrites the key and revokes the old one without restarting anything, so the "
+            "process must re-read its key after a 401 (hams_config.get_odoo_client() does). Add the row with the mechanism and "
+            "the file that proves it, and a row to the audit table in daemon_key_manager/README.md.")
+
+    # Tests [@ANCHOR: infrastructure:rotated_key_reload_policy]
+    def test_the_policy_names_only_real_holders_with_a_known_mechanism_and_a_reason(self):
+        holders = infra.long_running_key_holders(infra.MANIFEST)
+        self.assertEqual(sorted(set(infra.ROTATED_KEY_RELOAD_POLICY) - set(holders)), [],
+                         "ROTATED_KEY_RELOAD_POLICY has a row for a unit that is gone, is a oneshot now, or no longer names a key")
+        for name, (mechanism, reason) in infra.ROTATED_KEY_RELOAD_POLICY.items():
+            with self.subTest(name=name):
+                self.assertIn(mechanism, infra.KEY_RELOAD_MECHANISMS)
+                self.assertGreater(len(reason.strip()), 20, "say which file does the re-read")
+
+    def test_a_key_loaded_through_environment_file_needs_its_own_reload_or_to_be_unused(self):
+        """systemd reads EnvironmentFile= once, at start. hams_config and the per-call clients read the file, never the environment, so
+        a unit that gets its key only through EnvironmentFile has to say it re-reads the file itself (or never uses the key)."""
+        holders = infra.long_running_key_holders(infra.MANIFEST)
+        for name, how in holders.items():
+            if "environment_file" in how:
+                with self.subTest(name=name):
+                    self.assertIn(infra.ROTATED_KEY_RELOAD_POLICY[name][0], {"own_reload", "unused"})
+
+    def test_the_guard_trips_on_a_new_daemon_and_ignores_oneshots_comments_and_unrelated_files(self):
+        key = "/opt/hams/etc/keys/new_thing_service_internal.key"
+        manifest = {"static_files": [
+            {"path": "/opt/hams/systemd/new.thing.service",
+             "content": f'[Service]\nType=simple\nEnvironment="ODOO_KEY_FILE={key}"\n'},
+            {"path": "/opt/hams/systemd/typeless.service", "content": f"[Service]\nEnvironmentFile=-{key}\n"},
+            {"path": "/opt/hams/systemd/timer.driven.service",
+             "content": f'[Service]\nType=oneshot\nEnvironment="ODOO_KEY_FILE={key}"\n'},
+            {"path": "/opt/hams/systemd/commented.service",
+             "content": f"[Service]\nType=simple\n# Environment=ODOO_KEY_FILE={key}\n"},
+            {"path": "/usr/local/sbin/run-new-mcp.sh", "content": f"#!/bin/bash\nexport ODOO_KEY_FILE={key}\nexec x\n"},
+            {"path": "/etc/systemd/system/new.thing.service.d/keys.conf", "content": f"[Service]\nReadWritePaths={key}\n"},
+        ]}
+        holders = infra.long_running_key_holders(manifest)
+        self.assertEqual(holders, {
+            "new.thing.service": {"key_file"},
+            "typeless.service": {"environment_file"},
+            "run-new-mcp.sh": {"key_file"},
+        })
+        undeclared = sorted(set(holders) - set(infra.ROTATED_KEY_RELOAD_POLICY))
+        self.assertEqual(undeclared, ["new.thing.service", "run-new-mcp.sh", "typeless.service"])
+
+
 class TimerDrivenUnitTests(unittest.TestCase):
     """A sync that has a timer runs once and exits, so its service must be Type=oneshot and must not carry
     Restart=always. ncvec.sync and au.pii.sync were Type=simple with Restart=always and RestartSec=60 while their main
