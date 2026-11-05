@@ -47,7 +47,7 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
 
 | Program | Role | Platforms | Obtained | Version or pin | Licence | Watched |
 |---|---|---|---|---|---|---|
-| Pat (`la5nta/pat`) | Winlink client | Linux, Windows (macOS: not installable yet) | managed download from the hams.com mirror, SHA-256 checked | v1.0.0 | MIT | yes (release) |
+| Pat (`la5nta/pat`) | Winlink client | Linux, Windows (macOS: not installable yet) | managed download from the hams.com mirror, SHA-256 checked | v1.0.1 | MIT | yes (release) |
 | Mercury (`Rhizomatica/mercury`, branch `mercuryv2`) | HF modem | Windows, macOS, Linux | loopback-patched build `tnc-loopback-v1`, mirrored | commit `9bb58799ef5ea5a8afaadb2441ea4806f14583b9` plus `mercury-loopback-bind.patch` | see source tree | yes (branch) |
 | ardopcf (`pflarue/ardop`, branch `develop`) | ARDOP modem | Windows, macOS, Linux | loopback-patched build `tnc-loopback-v1`, mirrored | commit `c1e11ef514ff0776fea74fb7bf7283909910af38` plus `ardopcf-loopback-bind.patch` | see source tree | yes (branch) |
 | Direwolf (`wb2osz/direwolf`) | packet TNC | Windows, macOS, Linux | loopback-patched build `tnc-loopback-v1`, mirrored | commit `eda1383f5fa9d8ba3cb27f99db1d2c79494404c9` plus `direwolf-loopback-bind.patch` | GPL-2.0+ | **no** |
