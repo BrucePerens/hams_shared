@@ -91,7 +91,7 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
 | Program | Role | Version or pin | Watched |
 |---|---|---|---|
 | kopia | backups | v0.23.1 (`binary_manifest.json`) | yes |
-| etcd | coordination | v3.7.2 (`binary_manifest.json`) | yes |
+| etcd | coordination | v3.7.3 (`binary_manifest.json`) | yes |
 | cloudflared | tunnel | 2026.9.3 (`binary_manifest.json`) | yes |
 | Odoo, PostgreSQL, Redis, RabbitMQ, Node, Go, Chrome or Chromium with Playwright | production and the test runners | see `hams_shared/tools/provision_build_host.sh`, `requirements-test.txt` and `docs/runbooks/TEST_RUNNERS.md` | pip-audit and package updates |
 
