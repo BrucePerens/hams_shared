@@ -8757,6 +8757,9 @@ Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/ticket_triage_agent
 EnvironmentFile=-/opt/hams/etc/ticket_triage.env
+# ai_quota.py and exception_reporter.py (synced flat to /opt/hams/daemons) file the one "AI service quota used up" ticket
+# when the Claude plan quota is used up (2026-11-05); without this the imports fail.
+Environment="PYTHONPATH=/opt/hams/daemons"
 # Longer than the pre-check (60s) plus the CLI's own hard timeout (600s) and kill grace.
 TimeoutStartSec=900
 
@@ -8871,6 +8874,9 @@ Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/ticket_triage_agent
 EnvironmentFile=-/opt/hams/etc/ticket_triage.env
+# ai_quota.py and exception_reporter.py (synced flat to /opt/hams/daemons) file the one "AI service quota used up" ticket
+# when the Claude plan quota is used up (2026-11-05); without this the imports fail.
+Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="HAMS_TRIAGE_SPOOL_DIR=/opt/hams/spool/ticket_triage"
 # Debounce 120 + lock wait 700 + pre-check 60 + CLI timeout 600 + kill grace, with margin.
 TimeoutStartSec=1800
