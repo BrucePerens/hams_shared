@@ -8670,6 +8670,9 @@ ReadWritePaths=@ACCOUNT_HOME_PARENT@/hams_ai_agent @ACCOUNT_HOME_PARENT@/hams_ev
 Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/credential_touch
+# exception_reporter.py (synced flat to /opt/hams/daemons) files the one "AI service quota used up" ticket
+# (2026-11-05); without this the import failed and no ticket was filed.
+Environment="PYTHONPATH=/opt/hams/daemons"
 
 ExecStart=/usr/bin/python3 /opt/hams/daemons/credential_touch/main.py
 
