@@ -22,3 +22,37 @@ Tools are typically executed directly from the command line or invoked as part o
 
 ## Coalescing lint and test batches
 `run_linters.py --changed` and `test.py -u MODULES` requests that arrive while a run is in progress join the next run, which covers all their branches in one combined tree; each caller still gets its own exit code, verdict and pass stamp. Mechanism `batch_queue.py`, lint side `lint_batch.py`, test side `odoo_test_batch.py`; `--solo` opts out. See `docs/runbooks/LINT_TEST_BATCHING.md`, the anchor reference `docs/runbooks/LINT_TEST_BATCHING_ANCHORS.md` and ADR 0115.
+
+## Held pins in `dependency_watch.json`
+
+`check_dependency_releases.py` fails the weekly Dependency Release Watch when a pin is behind upstream. A pin that cannot move yet
+(for example a program whose loopback-bind patch must be rewritten and rebuilt for five platforms) is recorded as held instead of
+being left red or removed from the watch (ADR 0114 decision 2).
+
+### `[@ANCHOR: dependency_watch_hold_marker]` hold marker
+
+An optional `"hold"` object on a `dependency_watch.json` entry, plus the constant `MAX_HOLD_DAYS` (90) in `check_dependency_releases.py`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `reason` | string | Non-empty. Why the pin cannot move, in plain words, and where the work is tracked. Printed in the weekly report. |
+| `until` | string | ISO date `YYYY-MM-DD`, the last day the hold applies. Must be at most `MAX_HOLD_DAYS` days after the day the check runs. |
+
+Invariants: a hold never hides a pin that is current (the report says the hold is not needed); once `until` has passed the pin counts as
+stale again and the weekly run fails with "hold expired"; a malformed hold is an error and fails the run. Extending a hold means editing
+`until` in a reviewed pull request, so nobody can leave a pin silently behind. Written by people editing the JSON, read only by
+`hold_status()`.
+
+### `[@ANCHOR: dependency_hold_status]` `hold_status(entry, today)`
+
+Purpose: classifies one entry's hold marker for `check_one()`, so a held, stale pin is reported but does not fail the run.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `entry` | dict | One entry of `dependency_watch.json`; only the optional `"hold"` key is read. |
+| `today` | `datetime.date` | The day to judge the hold against (injected so tests are deterministic). |
+
+Returns `None` when the entry has no `"hold"`; otherwise a tuple `(state, message)` where `state` is `"active"` (message is
+`<reason> (until <date>)`), `"expired"` (`until` is before `today`) or `"invalid"` (not an object, empty reason, missing or unparseable
+`until`, or `until` more than `MAX_HOLD_DAYS` ahead). Raises nothing for bad input. Pure function: no I/O, no network, safe to call
+repeatedly. See also the tests in `test_check_dependency_releases.py`.

@@ -22,6 +22,7 @@ in the environment -- unauthenticated GitHub API calls are limited to 60/hour pe
 which this script's small dependency count stays well under, but a token avoids ever caring.
 """
 
+import datetime
 import json
 import os
 import sys
@@ -30,6 +31,10 @@ import urllib.request
 
 GITHUB_API = "https://api.github.com"
 REQUEST_TIMEOUT_SECONDS = 15
+
+# A hold may not be set further ahead than this, so it cannot silently become permanent.
+# [@ANCHOR: dependency_watch_hold_marker]
+MAX_HOLD_DAYS = 90
 
 
 def _github_get(path):
@@ -54,7 +59,35 @@ def check_branch_mode(repo, branch, pinned):
     return latest_sha, latest_sha != pinned
 
 
-def check_one(name, entry):
+# [@ANCHOR: dependency_hold_status]
+def hold_status(entry, today):
+    """Classifies an entry's optional "hold" marker (see tools/README.md, "Held pins").
+
+    Returns None when the entry has no hold, ("active", "<reason> (until <date>)") when it
+    is valid and unexpired, ("expired", "<message>") when its date has passed, and
+    ("invalid", "<message>") when it is malformed (not an object, empty reason, missing or
+    unparseable "until", or "until" more than MAX_HOLD_DAYS from today).
+    """
+    if "hold" not in entry:
+        return None
+    hold = entry["hold"]
+    if not isinstance(hold, dict):
+        return ("invalid", "hold must be an object with 'reason' and 'until'")
+    reason = hold.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        return ("invalid", "hold has no reason")
+    try:
+        until = datetime.date.fromisoformat(str(hold.get("until")))
+    except ValueError:
+        return ("invalid", "hold 'until' must be an ISO date (YYYY-MM-DD)")
+    if until > today + datetime.timedelta(days=MAX_HOLD_DAYS):
+        return ("invalid", f"hold 'until' {until} is more than {MAX_HOLD_DAYS} days away")
+    if until < today:
+        return ("expired", f"hold expired on {until}: {reason.strip()}")
+    return ("active", f"{reason.strip()} (until {until})")
+
+
+def check_one(name, entry, today=None):
     repo = entry["repo"]
     mode = entry["mode"]
     pinned = entry["pinned"]
@@ -82,7 +115,20 @@ def check_one(name, entry):
         # entry's failure from the rest" design already proven for HTTPError/URLError above.
         return {"name": name, "error": f"unexpected response from GitHub API for {repo}: {e}"}
 
-    return {"name": name, "repo": repo, "pinned": pinned, "latest": latest, "stale": stale}
+    result = {"name": name, "repo": repo, "pinned": pinned, "latest": latest, "stale": stale}
+    hold = hold_status(entry, today or datetime.date.today())
+    if hold is not None:
+        state, message = hold
+        if state == "invalid":
+            return {"name": name, "error": message}
+        if stale and state == "active":
+            result["stale"] = False
+            result["held"] = message
+        elif stale:
+            result["hold_note"] = message
+        else:
+            result["hold_note"] = f"hold not needed, the pin is current ({message})"
+    return result
 
 
 def main():
@@ -102,9 +148,12 @@ def main():
         if "error" in r:
             any_error = True
             print(f"⚠️  {r['name']}: could not check -- {r['error']}")
+        elif r.get("held"):
+            print(f"⏸  {r['name']} ({r['repo']}): pinned {r['pinned']!r}, latest is {r['latest']!r}; HELD: {r['held']}")
         elif r["stale"]:
             any_stale = True
-            print(f"🔄 {r['name']} ({r['repo']}): pinned {r['pinned']!r}, latest is {r['latest']!r}")
+            note = f" ({r['hold_note']})" if r.get("hold_note") else ""
+            print(f"🔄 {r['name']} ({r['repo']}): pinned {r['pinned']!r}, latest is {r['latest']!r}{note}")
         else:
             print(f"✅ {r['name']} ({r['repo']}): up to date at {r['pinned']!r}")
 
