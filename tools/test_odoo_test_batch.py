@@ -37,6 +37,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -337,6 +338,27 @@ class RemoteTests(unittest.TestCase):
             fcntl.flock(held, fcntl.LOCK_EX)
             self.assertEqual(otb.idle_machines(["yoga", "mac1"], self.tmp), ["mac1"])
         self.assertEqual(otb.idle_machines(["yoga", "mac1"], self.tmp), ["yoga", "mac1"])
+
+    def test_a_busy_host_still_gets_a_share_and_is_labelled_busy(self):
+        # Tests [@ANCHOR: odoo_test_batch:RemoteTestBatch]
+        members = self.members(("a", "ham_a"), ("b", "ham_b"))
+        used = set()
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            used.add(machine)
+            open(log_path, "w").close()
+            return {"exit_code": 0, "filtered": "", "conflicted": [], "error": None, "seconds": 1.0}
+
+        batch = self.batch(runner)
+        batch.probe = lambda names: ["mac1"]  # yoga's lock is held right now
+        log_path = os.path.join(self.tmp, "b1.log")
+        with unittest.mock.patch("sys.stdout"):
+            batch(1, members, log_path)
+        self.assertEqual(used, {"yoga", "mac1"})
+        with open(log_path, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertRegex(text, r"\[\*\] yoga: .*busy now")
+        self.assertNotRegex(text, r"\[\*\] mac1: .*busy now")
 
     def test_a_batch_is_split_over_the_hosts_and_each_branch_gets_its_own_verdict(self):
         members = self.members(("a", "ham_a"), ("b", "ham_b"), ("c", "ham_c"))

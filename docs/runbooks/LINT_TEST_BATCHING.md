@@ -107,7 +107,7 @@ Odoo tests for a branch run on a remote host through hams_com's `devbox_tools/re
 * **Getting a commit there.** The tree under test must be committed. The host fetches the branch from GitHub; a commit that is not on GitHub is
   pushed over ssh to `refs/devbox/<sha12>` in the host's clone. Uncommitted work is refused.
 * **The queue.** The caller joins the `rtest` queue of its repository on the dev box (`run_remote_member`). The leader splits the union of the
-  batch's modules over the idle hosts (`idle_machines`, `plan_machine_split`, recorded durations), runs `remote_odoo_test.py <host> ... --members-file`
+  batch's modules over all the hosts (`plan_machine_split`, recorded durations; a busy host's share waits for its lock), runs `remote_odoo_test.py <host> ... --members-file`
   once per host in parallel (`run_on_machine`), and each host resets its clones, checks out its own `origin/main`, merges every member tip
   (`--no-ff`) and runs `test.py --solo -d hams_test -l <dir>` as the odoo user. A conflict is reported by the host and sends that branch to run alone.
 * **Verdicts.** As for local tests: failures are attributed to the branches that asked for the implicated modules; a clean combined run passes every
@@ -115,6 +115,6 @@ Odoo tests for a branch run on a remote host through hams_com's `devbox_tools/re
 * **Splitting divides the tests, not the installation.** Every host installs/updates the whole union of the batch's modules (`test.py -u <union>`) and tests only its share (`--test-tags /m1,/m2`), because a module's tests may need another requested module to be installed (ham_events' listing tests need ham_communications_consent).
 * **Environmental failures.** After a failing run the host re-runs the same modules on its plain origin/main (the baseline). A failing test that also fails there is reported as environmental in the batch log and the passing verdict's note, and is not charged to any branch; the batch does not keep halving over it.
 * `--solo` (or `--env`, `--test-tags`, a `:Class` selector) tests the tip alone on one host without the queue (no merge with main).
-* Hosts: `HAMS_TEST_MACHINES` (default `yoga,mac1`). One running batch at a time per repository on the dev box; a batch uses all idle hosts.
+* Hosts: `HAMS_TEST_MACHINES` (default `yoga,mac1`). One running batch at a time per repository on the dev box; a batch uses all the hosts, waiting for any that is busy.
 
 Not done: per-target-machine running slots (to-do `batches-per-target-machine-8e2c4b17`).

@@ -441,8 +441,8 @@ class RemoteTestBatch(OdooTestBatch):
     Constructor: ``RemoteTestBatch(repo, repo_name, base, passthrough, stamp_writer, sdir, machines, driver,
     work_base=None, probe=idle_machines, runner=run_on_machine, out=print, environ=None)``. `machines` is the
     ordered list of host names it may use, `driver` the argv prefix of remote_odoo_test.py, `probe`/`runner` are
-    replaceable (tests use fakes). Per run (`_run_once`): the union of the group's modules is split over the idle
-    machines (`plan_machine_split`, recorded durations), one thread per machine calls `run_on_machine`, and the
+    replaceable (tests use fakes). Per run (`_run_once`): the union of the group's modules is split over ALL the
+    machines (`plan_machine_split`, recorded durations; a busy host's share waits for its lock, `probe` only labels it busy), one thread per machine calls `run_on_machine`, and the
     results are merged: a conflicted merge (found by the hosts, who all build the same tree) becomes a "conflicted"
     member, a host that could not start makes the run fatal (exit 75), a failure is the modules each host's
     ``filtered_test.txt`` implicates (none implicated: unattributable, the batch splits). Durations are recorded per
@@ -475,14 +475,19 @@ class RemoteTestBatch(OdooTestBatch):
     def _run_once(self, batch_id, group):
         self._run_no += 1
         union = sorted({m for member in group for m in member.get("scope", ())})
-        free = self.probe(self.machines) or self.machines[:1]
-        plan = plan_machine_split(union, load_durations(self.sdir), free)
+        # Every host gets a share, busy or not: each host's driver waits for that host's lock (--wait). Splitting over only
+        # the hosts idle at this instant put a whole 24-module batch on bruce-yoga while mac1 and bruce17 freed up minutes
+        # later (2026-11-05, batch 31: Bruce, "Combine tests").
+        idle = self.probe(self.machines)
+        busy = [m for m in self.machines if m not in idle]
+        plan = plan_machine_split(union, load_durations(self.sdir), list(self.machines))
         self.current_members = group
         self.last_selected = union
         self._emit("\n===== remote run %d.%d: %d branch(es): %s =====\n" % (
             batch_id, self._run_no, len({m["tip"] for m in group}), ", ".join(m["branch"] for m in group)))
         for machine, mods in plan.items():
-            self._emit("[*] %s: %s\n" % (machine, ",".join(mods)))
+            self._emit("[*] %s: %s%s\n" % (machine, ",".join(mods), " (busy now: its share starts when the host is free)"
+                                            if machine in busy else ""))
         work = tempfile.mkdtemp(prefix="rtest_b%d_r%d_" % (batch_id, self._run_no), dir=self.work_base)
         results, lock = {}, threading.Lock()
 
