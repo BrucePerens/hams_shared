@@ -23,6 +23,7 @@
 #        except by `undo`, and only those this script installed):
 #     build-essential pkg-config cmake clang autoconf automake libtool   C/C++ toolchain; the vendored opus
 #     libssl-dev libusb-1.0-0-dev libasound2-dev libudev-dev libhamlib-dev   openssl, rusb, cpal/alsa, serialport, hamlib-oracle
+#     libopus-dev libsecret-tools python3-numpy                          the relay's librade/Opus build and its tests (hams_local_relay/install_debian_deps.sh); remote_cargo_test.py
 #     git rsync curl ca-certificates tar                                 sync of the mirror, rustup
 #     python3-pip python3-venv python3-httpx mypy                        pip; httpx and mypy (hams_shared tools tests use them)
 #     nodejs npm                                                         console and JavaScript checks (Debian's node 20)
@@ -67,6 +68,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 APT_PACKAGES=(build-essential pkg-config cmake clang autoconf automake libtool
   libssl-dev libusb-1.0-0-dev libasound2-dev libudev-dev libhamlib-dev
+  libopus-dev libsecret-tools python3-numpy
   git rsync curl ca-certificates tar python3-pip python3-venv python3-httpx mypy nodejs npm
   python3-typeshed python3-pyinotify python3-bs4 python3-passlib python3-rjsmin python3-lxml python3-requests
   python3-psutil python3-yaml python3-psycopg2 python3-pil python3-websockets golang-1.24-go gnupg
