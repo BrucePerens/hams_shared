@@ -10,6 +10,7 @@ The end-to-end tests use real processes, a real git repository with an origin an
 contains BAD) and writes the same `filtered_test.txt` summary the real runner writes.
 
 Tests [@ANCHOR: odoo_test_batch:module_scope]
+Tests [@ANCHOR: odoo_test_batch:union_of]
 Tests [@ANCHOR: odoo_test_batch:ineligible_reason]
 Tests [@ANCHOR: odoo_test_batch:implicated_modules]
 Tests [@ANCHOR: odoo_test_batch:failing_tests]
@@ -29,6 +30,8 @@ Tests [@ANCHOR: odoo_test_batch:maybe_run_batched]
 """
 
 import argparse
+import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -513,6 +516,47 @@ class RemoteTests(unittest.TestCase):
         self.assertEqual(sorted(calls), ["mac1", "yoga"])  # it WAS split over both hosts
         self.assertEqual(sorted(sum((c[0] for c in calls.values()), [])), asked)  # the tests are divided
         self.assertTrue(all(c[1] == asked for c in calls.values()), calls)  # every host installs all three
+
+    def test_install_only_modules_are_installed_on_every_host_but_never_tested(self):
+        members = self.members(("pr", "ham_nets"))
+        members[0]["install"] = ["ham_relay_bridge", "ham_communications_consent", "ham_nets"]
+        calls = {}
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            calls[machine] = (list(mods), list(union))
+            return {"host": machine, "exit_code": 0, "conflicted": [], "filtered": "", "seconds": 5.0, "error": None,
+                    "log": log_path}
+
+        batch = self.batch(runner)
+        shown = io.StringIO()
+        with contextlib.redirect_stdout(shown):
+            verdict = batch(1, members, "")["verdicts"][members[0]["tip"]]
+        self.assertEqual(verdict["status"], "passed", verdict)
+        tested = sorted(sum((c[0] for c in calls.values()), []))
+        self.assertEqual(tested, ["ham_nets"])  # the companions' tests are not planned onto any host
+        self.assertTrue(all(c[1] == ["ham_communications_consent", "ham_nets", "ham_relay_bridge"] for c in calls.values()), calls)
+        self.assertEqual(batch.last_selected, ["ham_nets"])
+        self.assertIn("installed on every host, not tested: ham_communications_consent,ham_relay_bridge", shown.getvalue())
+
+    def test_a_module_one_member_installs_and_another_tests_is_tested(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"))
+        members[0]["install"] = ["ham_b"]
+        calls = {}
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            calls[machine] = (list(mods), list(union))
+            return {"host": machine, "exit_code": 0, "conflicted": [], "filtered": "", "seconds": 5.0, "error": None,
+                    "log": log_path}
+
+        self.batch(runner)(1, members, "")
+        self.assertEqual(sorted(sum((c[0] for c in calls.values()), [])), ["ham_a", "ham_b"])
+
+    def test_union_of_reads_a_field_and_ignores_members_without_it(self):
+        old = {"scope": ["a"]}  # a member written before "install" existed
+        new = {"scope": ["b"], "install": ["c", "a"]}
+        self.assertEqual(otb.union_of([old, new], "install"), {"a", "c"})
+        self.assertEqual(otb.union_of([old, new], "scope"), {"a", "b"})
+        self.assertEqual(otb.union_of([], "install"), set())
 
     def test_a_failure_identical_on_origin_main_is_environmental_and_not_charged_to_a_branch(self):
         members = self.members(("a", "ham_a"), ("b", "ham_b"))

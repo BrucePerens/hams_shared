@@ -57,6 +57,13 @@ def module_scope(module_arg):
     return sorted(set(modules))
 
 
+# [@ANCHOR: odoo_test_batch:union_of]
+def union_of(members, field):
+    """The set of module names in the `field` ("scope" or "install") of every member; a member without the key (written
+    before the field existed) contributes nothing."""
+    return {m for member in members for m in member.get(field, ())}
+
+
 # [@ANCHOR: odoo_test_batch:ineligible_reason]
 def ineligible_reason(args, environ, cwd_is_root, dirty):
     """Why this test run must run alone (a short sentence), or None when it may join a batch. `args` is
@@ -475,6 +482,7 @@ class RemoteTestBatch(OdooTestBatch):
     def _run_once(self, batch_id, group):
         self._run_no += 1
         union = sorted({m for member in group for m in member.get("scope", ())})
+        installed = sorted(union_of(group, "install") | set(union))  # companions are installed, never tested
         # Every host gets a share, busy or not: each host's driver waits for that host's lock (--wait). Splitting over only
         # the hosts idle at this instant put a whole 24-module batch on bruce-yoga while mac1 and bruce17 freed up minutes
         # later (2026-11-05, batch 31: Bruce, "Combine tests").
@@ -485,6 +493,8 @@ class RemoteTestBatch(OdooTestBatch):
         self.last_selected = union
         self._emit("\n===== remote run %d.%d: %d branch(es): %s =====\n" % (
             batch_id, self._run_no, len({m["tip"] for m in group}), ", ".join(m["branch"] for m in group)))
+        if set(installed) - set(union):
+            self._emit("[*] installed on every host, not tested: %s\n" % ",".join(sorted(set(installed) - set(union))))
         for machine, mods in plan.items():
             self._emit("[*] %s: %s%s\n" % (machine, ",".join(mods), " (busy now: its share starts when the host is free)"
                                             if machine in busy else ""))
@@ -493,7 +503,7 @@ class RemoteTestBatch(OdooTestBatch):
 
         def work_one(machine, mods):
             log_path = os.path.join(work, machine + ".log")
-            outcome = self.runner(machine, self.repo, self.repo_name, group, mods, self.driver, log_path, work, union)
+            outcome = self.runner(machine, self.repo, self.repo_name, group, mods, self.driver, log_path, work, installed)
             with lock:
                 results[machine] = (mods, log_path, outcome)
 
@@ -560,14 +570,16 @@ class RemoteTestBatch(OdooTestBatch):
 
 # [@ANCHOR: odoo_test_batch:run_remote_member]
 def run_remote_member(tree, repo_name, branch, tip, modules_arg, machines, driver, wait=False, environ=None,
-                      out=print, timeout=None):
+                      out=print, timeout=None, install=()):
     """The caller's side of a remote test run (remote_odoo_test.py): join the "rtest" queue of the repository of
     `tree`, block until this branch's verdict, print it, and return the exit code (0 passed, 1 failed, 75 could
     not run or gave up waiting), or None when the branch must run alone (its merge conflicts with another
     branch of the batch, or the batch runner kept dying). `modules_arg` is the comma-separated whole-module -u
     list (a ``:Class`` selector raises ValueError: such a run cannot be batched). `machines` are host names,
     `driver` the argv prefix of remote_odoo_test.py. `wait` is accepted for symmetry (the queue always waits);
-    `timeout` seconds bound the wait for a verdict."""
+    `timeout` seconds bound the wait for a verdict. `install` are modules the hosts must INSTALL for this branch's tests
+    without testing them (test companions: a service account, an imported helper); they join the member as ``install``
+    and `RemoteTestBatch._run_once` adds them to every host's installed set but not to the tested split."""
     environ = os.environ if environ is None else environ
     scope = module_scope(modules_arg)
     if scope is None:
@@ -582,4 +594,5 @@ def run_remote_member(tree, repo_name, branch, tip, modules_arg, machines, drive
     return lint_batch.run_member(
         tree, os.path.basename(key), branch, tip, "origin/main", scope, runner, timeout=timeout, out=out,
         sdir=sdir, estimate=lambda modules: estimate_seconds(modules, durations) / max(1, len(machines)),
-        kind=REMOTE_KIND, solo_hint="remote_odoo_test.py <host> <tree> %s --solo" % modules_arg, environ=environ)
+        kind=REMOTE_KIND, solo_hint="remote_odoo_test.py <host> <tree> %s --solo" % modules_arg, environ=environ,
+        install=install)

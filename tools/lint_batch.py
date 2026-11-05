@@ -269,7 +269,7 @@ class LintBatch:
 
 # [@ANCHOR: lint_batch:run_member]
 def run_member(repo, repo_name, branch, tip, base, scope, runner, timeout=None, out=print, environ=None,
-               poll=1.0, sdir=None, estimate=None, kind=KIND, solo_hint="run_linters.py --changed --solo"):
+               poll=1.0, sdir=None, estimate=None, kind=KIND, solo_hint="run_linters.py --changed --solo", install=()):
     """The caller's side. Joins the batch for `repo` and blocks until this branch's verdict is known.
 
     Returns an exit code (0 passed, 1 failed, 75 gave up waiting) after printing the verdict, or None
@@ -277,7 +277,7 @@ def run_member(repo, repo_name, branch, tip, base, scope, runner, timeout=None, 
     that kept dying). `runner` is a `LintBatch` (used only if this process becomes the leader)."""
     environ = os.environ if environ is None else environ
     sdir = sdir or batch_queue.state_dir(kind, batch_queue.repo_key(repo), environ)
-    member = batch_queue.make_member(branch, tip, scope=scope, info=solo_hint)
+    member = batch_queue.make_member(branch, tip, scope=scope, info=solo_hint, install=install)
     outcome = batch_queue.coalesce(
         sdir, member, runner, caps=batch_queue.caps_from_env(environ), estimate=estimate, poll=poll,
         timeout=timeout, out=out, log_for=lambda n: os.path.join(sdir, "logs", "batch-%d.log" % n))
