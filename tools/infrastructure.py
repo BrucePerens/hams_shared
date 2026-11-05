@@ -12937,6 +12937,54 @@ def _provision_cache_manager_role(
     apply_permissions(env_file, "odoo:odoo", 0o600)
 
 
+# [@ANCHOR: infrastructure:_allow_cache_manager_socket_password_for_test]
+CACHE_MANAGER_SOCKET_HBA_LINE = "local   all             cache_manager_ro                        scram-sha-256\n"
+
+
+def _allow_cache_manager_socket_password_for_test(hba_paths=None):
+    """
+    Test hosts only: lets cache_manager_ro log in over the Unix socket with its password, and returns
+    True when a pg_hba.conf changed (PostgreSQL then needs a reload).
+
+    Why: the remote test runner (devbox_tools/remote_odoo_test.py) runs test.py with
+    PGHOST=/var/run/postgresql so Odoo, running as the odoo OS user, reaches PostgreSQL by peer
+    authentication. TestRealCacheManager starts the real cache_manager.py daemon from inside that run;
+    the daemon honours PGHOST, so it connects through the socket as cache_manager_ro, for which Debian's
+    `local all all peer` rule demands an OS user of that name and fails ("Peer authentication failed for
+    user cache_manager_ro"). On hams1 the daemon has no PGHOST and uses TCP with the password under the
+    scram-sha-256 loopback rules. This rule gives the socket the same password check the TCP path has, for
+    this one role, so the daemon works the same way in both places. It loosens nothing: the password is
+    still required, and no other role is affected.
+
+    The line is inserted immediately before the first `local all all ...` rule (pg_hba.conf is first-match),
+    never at the end. Idempotent: nothing changes when the line is already there. Production never calls this
+    (it is reached only when provisioning with --test); hams1 keeps pg_hba.conf as Debian ships it.
+    """
+    if hba_paths is None:
+        hba_paths = sorted(glob.glob("/etc/postgresql/*/main/pg_hba.conf"))
+    changed = False
+    for path in hba_paths:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        if any(line.split() == CACHE_MANAGER_SOCKET_HBA_LINE.split() for line in lines):
+            continue
+        index = next((i for i, line in enumerate(lines) if line.split()[:3] == ["local", "all", "all"]), None)
+        if index is None:
+            raise RuntimeError(f"{path} has no `local all all` rule to place the cache_manager_ro rule before")
+        lines.insert(index, CACHE_MANAGER_SOCKET_HBA_LINE)
+        changed = True
+        if _plan("write", f"{path} (cache_manager_ro socket password rule, test host)"):
+            continue
+        st = os.stat(path)
+        tmp_path = path + ".hams-provision.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write("".join(lines))
+        os.chown(tmp_path, st.st_uid, st.st_gid)
+        os.chmod(tmp_path, st.st_mode & 0o7777)
+        os.replace(tmp_path, path)
+    return changed
+
+
 # [@ANCHOR: infrastructure:_provision_pager_monitor_role]
 def _provision_pager_monitor_role(run_cmd_func, db_name):
     """The PostgreSQL login of pager_duty's PostgreSQL ping check (generalized_monitor.py): the same CONNECT-only role as
@@ -14122,6 +14170,8 @@ def provision_environment(
                     "PostgreSQL role..."
                 )
                 _provision_cache_manager_role(run_cmd_func, db_name)
+                if is_test and _allow_cache_manager_socket_password_for_test() and not is_isolated_ns:
+                    run_cmd_func(["systemctl", "reload", "postgresql"])
                 _logger.info("[*] Provisioning pager_duty's PostgreSQL ping login...")
                 _provision_pager_monitor_role(run_cmd_func, db_name)
         except Exception as e:  # audit-ignore-catch-all

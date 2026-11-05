@@ -3397,6 +3397,46 @@ class PostgresqlLockdownTests(unittest.TestCase):
         self.assertNotIn("s/peer/trust", source)
 
 
+class CacheManagerSocketRuleForTestHostsTests(unittest.TestCase):
+    STOCK = (
+        "local   all             postgres                                peer\n"
+        "local   all             all                                     peer\n"
+        "host    all             all             127.0.0.1/32            scram-sha-256\n"
+    )
+
+    def _hba(self, text):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "pg_hba.conf")
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def test_inserts_the_rule_before_the_catch_all_peer_rule_once(self):
+        # Tests [@ANCHOR: infrastructure:_allow_cache_manager_socket_password_for_test]
+        path = self._hba(self.STOCK)
+        self.assertTrue(infra._allow_cache_manager_socket_password_for_test([path]))
+        with open(path) as f:
+            lines = f.read().splitlines()
+        self.assertEqual(lines[0].split()[2], "postgres")
+        self.assertEqual(lines[1].split(), ["local", "all", "cache_manager_ro", "scram-sha-256"])
+        self.assertEqual(lines[2].split(), ["local", "all", "all", "peer"])
+        with open(path) as f:
+            first = f.read()
+        self.assertFalse(infra._allow_cache_manager_socket_password_for_test([path]))
+        with open(path) as f:
+            self.assertEqual(f.read(), first)
+
+    def test_a_file_without_a_local_catch_all_rule_is_an_error_not_a_guess(self):
+        path = self._hba("host all all 127.0.0.1/32 scram-sha-256\n")
+        with self.assertRaises(RuntimeError):
+            infra._allow_cache_manager_socket_password_for_test([path])
+
+    def test_only_a_test_provision_reaches_it(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn("if is_test and _allow_cache_manager_socket_password_for_test()", source)
+
+
 class PostgresqlArchiveTimeoutTests(unittest.TestCase):
     """archive_timeout bounds how much WAL a quiet site can lose (hams1 had 0, 2026-10-12)."""
 
