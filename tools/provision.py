@@ -331,7 +331,7 @@ def provision():
         # Mirrors test.py's own rebuild_db() identifier check (same
         # underlying risk shape: a config value interpolated unvalidated
         # into a destructive operation).
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", db_name):
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\Z", db_name):
             _logger.error(
                 f"[!] DB_NAME {db_name!r} is not a safe database/directory "
                 "name (must match ^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to "

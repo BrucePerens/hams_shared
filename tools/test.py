@@ -1822,7 +1822,7 @@ def wait_for_socket(sock_path, name, timeout=60.0):
     return False
 
 
-_SAFE_DB_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SAFE_DB_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 
 _HOST_CORE_DAEMONS = ("postgresql", "redis-server", "rabbitmq-server", "pdns")
 

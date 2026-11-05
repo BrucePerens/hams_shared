@@ -73,8 +73,8 @@ import sys
 
 DEFAULT_CONFIG = "/opt/hams/etc/b2_backup/config.json"
 
-NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
-SHA1_NAME_RE = re.compile(r"^[0-9a-f]{40}$")
+NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,40}\Z")
+SHA1_NAME_RE = re.compile(r"^[0-9a-f]{40}\Z")
 REQUIRED_SECRETS = ("KOPIA_PASSWORD",)
 S3_SECRETS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
 # Seconds. A nightly job that has not succeeded for 36 hours, or a weekly test for 9 days, has missed a run.
@@ -82,7 +82,7 @@ BACKUP_MAX_AGE = 36 * 3600
 RESTORE_MAX_AGE = 9 * 24 * 3600
 # The per-tenant pg_dump + filestore archives `tenant_ctl.py backup` writes under /opt/hams/backups/tenants/<name>/<stamp>/.
 TENANT_ARCHIVES_SOURCE = "tenant_archives"
-ARCHIVE_SET_RE = re.compile(r"^\d{8}T\d{6}Z$")
+ARCHIVE_SET_RE = re.compile(r"^\d{8}T\d{6}Z\Z")
 # The Simulated Band QSO recordings (hams_shared MANIFEST creates /var/lib/hams/qso_recordings, odoo:odoo 0750). Retained
 # forever, written once and renamed from *.tmp when finished, so a finalised file never changes.
 RECORDINGS_SOURCE = "qso_recordings"
