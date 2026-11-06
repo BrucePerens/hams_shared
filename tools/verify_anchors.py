@@ -37,6 +37,7 @@ RULES OF TRACEABILITY:
 """
 
 import ast
+import getpass
 import json
 import os
 import re
@@ -106,6 +107,68 @@ ANCHOR_SCAN_EXCLUDE_DIRS = {
 # directories (".claude-wt-shared-caproot" in the hams_open checkout) are full copies of the tree and
 # are not matched by the exact ".claude" name above.
 ANCHOR_SCAN_EXCLUDE_DIR_PREFIXES = (".claude",)
+
+
+# Files a scan could not open because the user running it may not read them. A scan used to die on the first one with a
+# bare PermissionError traceback (and test.py then reported "semantic-anchor violations" that did not exist). They are
+# collected here instead and reported by `report_unreadable_files` as one finding per file.
+UNREADABLE_FILES = []
+# Exit status of a scan that found unreadable files, distinct from 1 (anchor violations) so a caller can tell them apart.
+UNREADABLE_EXIT_CODE = 3
+
+
+def _note_unreadable(path, error):
+    """Records that ``path`` could not be read (``error`` is the PermissionError) and lets the scan go on."""
+    UNREADABLE_FILES.append((path, error))
+
+
+def current_user_name():
+    """Name of the user running this process, for messages; falls back to the numeric uid."""
+    try:
+        return getpass.getuser()
+    except (KeyError, OSError):
+        return str(os.getuid())
+
+
+def unreadable_message(path, user):
+    """The one-line finding for an unreadable file: the file, the user, and the fix."""
+    return f"UNREADABLE FILE: {path} cannot be read by user '{user}'. Fix: chmod 644 {path}"
+
+
+def report_unreadable_files():
+    """Prints one finding per file in UNREADABLE_FILES; returns True when there were any."""
+    if not UNREADABLE_FILES:
+        return False
+    user = current_user_name()
+    print(f"\n[!] {len(UNREADABLE_FILES)} file(s) could not be read; the anchor scan was not completed:")
+    for path, _error in sorted(UNREADABLE_FILES, key=lambda item: item[0]):
+        print(f"  - {unreadable_message(path, user)}")
+    print("    These are not anchor violations. Make them readable (chmod 644) and run again.")
+    return True
+
+
+def unreadable_tracked_files(checkouts):
+    """Every git-tracked file of the given checkouts that this process may not read, as a sorted list of paths.
+
+    ``checkouts`` is a list of directories, each a git working tree (a directory that is not one, or where git is
+    missing, contributes nothing). Reads only the file mode through ``os.access``; never opens a file."""
+    unreadable = []
+    for checkout in checkouts:
+        try:
+            listing = subprocess.run(
+                ["git", "-C", checkout, "ls-files", "-z"], capture_output=True, check=True
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if isinstance(listing, bytes):
+            listing = listing.decode("utf-8", "surrogateescape")
+        for name in str(listing).split("\0"):
+            if not name:
+                continue
+            full_path = os.path.join(checkout, name)
+            if os.path.lexists(full_path) and not os.path.isdir(full_path) and not os.access(full_path, os.R_OK):
+                unreadable.append(full_path)
+    return sorted(unreadable)
 
 
 def _is_excluded_dir(name, extra=()):
@@ -492,6 +555,9 @@ def find_anchors_in_docs(root_dir, repo_root):
                                 doc_anchor_lines.setdefault(full_path, set()).add(line_num)
                 except UnicodeDecodeError:
                     continue
+                except PermissionError as error:
+                    _note_unreadable(full_path, error)
+                    continue
 
     return doc_anchors, contract_anchors, doc_anchor_lines
 
@@ -687,6 +753,9 @@ def find_anchors_in_code(root_dir, repo_root):
                         )
                 except UnicodeDecodeError:
                     continue
+                except PermissionError as error:
+                    _note_unreadable(full_path, error)
+                    continue
 
     for island in CODE_ISLANDS_UNDER_DOCS:
         island_path = os.path.join(root_dir, island)
@@ -714,6 +783,9 @@ def find_anchors_in_code(root_dir, repo_root):
                                 repo_root,
                             )
                     except UnicodeDecodeError:
+                        continue
+                    except PermissionError as error:
+                        _note_unreadable(full_path, error)
                         continue
 
     return (
@@ -1599,8 +1671,14 @@ def main():
                                     mod, anchor_name = anchor_name.split(":", 1)
                                 if _clean(anchor_name).startswith("UX_"):
                                     user_manual_anchors.add(f"{mod}:{anchor_name}")
+                except PermissionError as error:
+                    _note_unreadable(full_doc_path, error)
+                    continue
                 except (OSError, UnicodeDecodeError):
                     continue
+
+    if report_unreadable_files():
+        sys.exit(UNREADABLE_EXIT_CODE)
 
     explicit_non_primary = [
         os.path.abspath(d) for d in final_targets if d not in primary_dirs
