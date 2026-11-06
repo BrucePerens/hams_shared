@@ -861,6 +861,16 @@ def shared_checkout_staleness(shared_root):
     return int(behind[0]), is_main, None
 
 
+# [@ANCHOR: run_linters:real_shared_root]
+def real_shared_root(script_path):
+    """The hams_shared checkout that holds `script_path`, symlinks resolved.
+
+    The staleness check must examine this checkout, not the repository the script was started from:
+    through a hams_open or hams_com `tools` link, `invocation_root` is that repository, and its own
+    unpushed or behind commits were reported as a stale hams_shared (found 2026-10-29)."""
+    return os.path.dirname(os.path.dirname(os.path.realpath(script_path)))
+
+
 def invocation_root(script_path):
     """The directory the script was started from: the repository for `tools/run_linters.py` and
     for `hams_shared/tools/run_linters.py` alike.
@@ -936,12 +946,12 @@ def main():
 
     # 0. A stale main hams_shared checkout gives wrong results to every worktree that links to it.
     if not os.environ.get("HAMS_ALLOW_STALE_SHARED"):
-        behind, is_main, _error = shared_checkout_staleness(os.path.realpath(dir_path))
+        behind, is_main, _error = shared_checkout_staleness(real_shared_root(__file__))
         if behind and is_main:
             print(
-                f"🛑 The hams_shared checkout at {os.path.realpath(dir_path)} is {behind} commit(s) behind origin/main, so these "
+                f"🛑 The hams_shared checkout at {real_shared_root(__file__)} is {behind} commit(s) behind origin/main, so these "
                 "linters and their tests are not the current ones and the results (and the pass stamp) cannot be trusted.\n"
-                f"   Fix: git -C {os.path.realpath(dir_path)} merge --ff-only origin/main   "
+                f"   Fix: git -C {real_shared_root(__file__)} merge --ff-only origin/main   "
                 "(or `git checkout --detach origin/main` if it is a detached submodule checkout),\n"
                 "   or set HAMS_ALLOW_STALE_SHARED=1 to run anyway."
             )
@@ -1033,7 +1043,7 @@ def main():
         sys.exit(0)
     wall_start = time.monotonic()
     tools_dir = os.path.join(dir_path, "tools")
-    real_shared_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    real_shared_dir = real_shared_root(__file__)
     steps = []
 
     def _add(name, argv, **step_options):
