@@ -2254,6 +2254,7 @@ def main():
         dirty=status_lines is None or bool(status_lines),
         is_shared_checkout=os.path.realpath(dir_path) == real_shared_dir,
         lock_needed=batch_lock_needed,
+        foreign_shared=lint_batch.foreign_shared_checkout(repo_root, main_checkout_root),
     )
     if batch_reason is None and head_before:
         branch_lines = _git_lines(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
