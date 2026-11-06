@@ -57,6 +57,45 @@ INVENTORY = {
 DURATIONS = {"pytest daemons/a": 300.0, "pytest daemons/b": 300.0, "check_x": 5.0, "eslint": 200.0, "check_summation_bias": 400.0}
 
 
+class CargoJobsShellTests(unittest.TestCase):
+    """cargo_jobs_shell picks CARGO_BUILD_JOBS on the remote machine from its measured MemAvailable."""
+
+    def jobs(self, avail_kb, cores, share=1, preset=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            meminfo = os.path.join(tmp, "meminfo")
+            with open(meminfo, "w") as handle:
+                handle.write("MemTotal: 99999999 kB\nMemAvailable: %d kB\n" % avail_kb)
+            env = {"PATH": os.environ["PATH"], "CARGO_JOBS_MEMINFO": meminfo, "CARGO_JOBS_CORES": str(cores)}
+            if preset:
+                env["CARGO_BUILD_JOBS"] = preset
+            out = subprocess.run(["bash", "-c", lr.cargo_jobs_shell(share) + ' && echo "jobs=${CARGO_BUILD_JOBS:-unset}"'],
+                                 env=env, capture_output=True, text=True, check=True)
+            return out.stdout.strip()
+
+    def test_the_mac1_vm_gets_three_jobs_not_ten(self):
+        self.assertEqual(self.jobs(9749 * 1024, 10), "jobs=3")
+
+    def test_a_big_host_is_capped_at_its_cores(self):
+        self.assertEqual(self.jobs(60 * 1024 * 1024, 8), "jobs=8")
+
+    def test_a_starved_host_still_gets_one_job(self):
+        self.assertEqual(self.jobs(1024 * 1024, 10), "jobs=1")
+        self.assertEqual(self.jobs(100, 10), "jobs=1")
+
+    def test_concurrent_steps_share_the_budget(self):
+        self.assertEqual(self.jobs(14 * 1024 * 1024, 8, share=1), "jobs=5")
+        self.assertEqual(self.jobs(14 * 1024 * 1024, 8, share=4), "jobs=1")
+
+    def test_a_job_count_the_caller_set_is_kept(self):
+        self.assertEqual(self.jobs(9749 * 1024, 10, preset="7"), "jobs=7")
+
+    def test_without_meminfo_nothing_is_set(self):
+        out = subprocess.run(["bash", "-c", lr.cargo_jobs_shell(1) + ' && echo "jobs=${CARGO_BUILD_JOBS:-unset}"'],
+                             env={"PATH": os.environ["PATH"], "CARGO_JOBS_MEMINFO": "/nonexistent/meminfo"},
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(out.stdout.strip(), "jobs=unset")
+
+
 class RequirementTests(unittest.TestCase):
     def test_requirements(self):
         self.assertEqual(lr.requirements_for("check_summation_bias"), {"local"})

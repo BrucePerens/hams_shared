@@ -148,6 +148,28 @@ def _forwarded_env(environ=None):
     return "".join(f" {name}={shlex.quote(environ[name])}" for name in FORWARDED_ENV if environ.get(name))
 
 
+# Memory one cargo job (a rustc, or a link) may need, and what the host keeps for everything else. A debug build of the relay holds a
+# 5 GiB rustc; the mac1 VM (11 GiB, no swap) ran out of memory with cargo's default of one job per core (10), 23 kills by 2026-11-06.
+CARGO_JOB_KB = 2621440
+CARGO_RESERVE_KB = 1572864
+
+
+def cargo_jobs_shell(share=1):
+    """Shell text (ends with a successful status) that exports CARGO_BUILD_JOBS on the machine it runs on, unless the caller
+    already set it: (MemAvailable - 1.5 GiB) / 2.5 GiB, divided by `share` (how many lint steps run at once and may each run cargo),
+    at least 1 and at most the core count. Without /proc/meminfo it sets nothing. $CARGO_JOBS_MEMINFO and $CARGO_JOBS_CORES replace
+    /proc/meminfo and nproc (tests). Pure: returns text."""
+    return (
+        'if [ -z "${CARGO_BUILD_JOBS:-}" ]; then '
+        'cj_kb=$(awk \'/^MemAvailable:/{print $2}\' "${CARGO_JOBS_MEMINFO:-/proc/meminfo}" 2>/dev/null); '
+        'cj_cores=${CARGO_JOBS_CORES:-$(nproc 2>/dev/null || echo 1)}; '
+        'if [ -n "$cj_kb" ]; then '
+        f'cj=$(( (cj_kb - {CARGO_RESERVE_KB}) / {CARGO_JOB_KB} / {max(1, int(share))} )); '
+        '[ "$cj" -lt 1 ] && cj=1; [ "$cj" -gt "$cj_cores" ] && cj=$cj_cores; export CARGO_BUILD_JOBS=$cj; '
+        'fi; fi'
+    )
+
+
 REMOTE_PATH_PREFIX = 'export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"; '
 
 PROBE_SCRIPT = r"""
@@ -829,7 +851,8 @@ def run_on_machine(name, machine, transport, repos, invocation_role, bundle, on_
         if role in info
     )
     command = (
-        f"mkdir -p -m 700 {tmpdir} && cd {q(root)}/{invocation_role} && TMPDIR={tmpdir} {GIT_IDENTITY}{_forwarded_env()} "
+        f"mkdir -p -m 700 {tmpdir} && cd {q(root)}/{invocation_role} && "
+        f"{cargo_jobs_shell(machine.get('jobs', 2))} && TMPDIR={tmpdir} {GIT_IDENTITY}{_forwarded_env()} "
         f"nice -n {int(machine.get('nice', 10))} python3 {q(root)}/hams_open/hams_shared/tools/run_linters.py "
         f"--run-bundle {q(root)}/.lint_bundle.json {roots_args} --results-json {q(results_path)} "
         f"-j {int(machine.get('jobs', 2))} --no-timing {remote_wait_args()} 2>&1; rm -rf {tmpdir}"
