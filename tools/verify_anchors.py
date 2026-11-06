@@ -160,7 +160,9 @@ def unreadable_tracked_files(checkouts):
             ).stdout
         except (OSError, subprocess.SubprocessError):
             continue
-        for name in listing.decode("utf-8", "surrogateescape").split("\0"):
+        if isinstance(listing, bytes):
+            listing = listing.decode("utf-8", "surrogateescape")
+        for name in str(listing).split("\0"):
             if not name:
                 continue
             full_path = os.path.join(checkout, name)
