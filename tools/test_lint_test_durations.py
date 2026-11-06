@@ -147,7 +147,7 @@ class MypyPluginStepTest(unittest.TestCase):
     def test_the_switch_restores_the_old_chunks(self):
         steps = self.steps(HAMS_LINT_MYPY_PLUGIN_SPLIT="0")
         self.assertNotIn("pytest tools/[mypy-plugin]", steps)
-        self.assertTrue(any(a.endswith("test_odoo_mypy_plugin.py") for argv in steps.values() for a in argv))
+        self.assertTrue(any(a.endswith("test_odoo_mypy_plugin.py") for argv in steps.values() for a in (argv or [])))
 
 
 if __name__ == "__main__":

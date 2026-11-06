@@ -22,6 +22,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -177,6 +178,24 @@ def step_to_dict(step):
     }
 
 
+# [@ANCHOR: lint_exec:_main_submodule_gitdir]
+def _main_submodule_gitdir(common):
+    """The git directory of the MAIN checkout's submodule when `common` is a submodule's git directory
+    inside a linked worktree of the parent, else `common` unchanged.
+
+    A submodule initialised inside a worktree of its parent keeps its git directory at
+    `<parent>/.git/worktrees/<worktree>/modules/<name>`, whose `core.worktree` names the worktree's own
+    submodule directory, so `main_worktree_of` answered the worktree itself and the run found no main
+    checkout (ESLint "not installed" from a hams_open worktree with hams_shared checked out inside it,
+    2026-11-06). The main checkout's submodule is the same name under `<parent>/.git/modules/`."""
+    match = re.match(r"^(.*[/\\]\.git)[/\\]worktrees[/\\][^/\\]+[/\\]modules[/\\](.+)$", common)
+    if match:
+        main = os.path.join(match.group(1), "modules", match.group(2))
+        if os.path.isdir(main):
+            return main
+    return common
+
+
 def main_worktree_of(path):
     """Working-tree directory of the MAIN checkout of the git repository that contains `path`, or
     None. For a worktree of hams_shared that is the checkout holding node_modules; hams_shared is a
@@ -193,6 +212,7 @@ def main_worktree_of(path):
     common = git("-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if not common:
         return None
+    common = _main_submodule_gitdir(common)
     configured = git("--git-dir", common, "config", "core.worktree")
     if configured:
         return os.path.realpath(os.path.join(common, configured))
