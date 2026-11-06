@@ -13,6 +13,7 @@ directly against real temp-directory fixtures.
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -525,6 +526,66 @@ class ResolveRepoRootsTests(unittest.TestCase):
         repo = self._make_repo("hams_open", module_names=["zero_sudo"])
         os.makedirs(os.path.join(self.workspace, "hams_com", "not_a_module"))
         self.assertEqual(chk._resolve_repo_roots(repo), [repo])
+
+
+def _git(cwd, *args):
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main", *args],
+        cwd=cwd, check=True, capture_output=True,
+    )
+
+
+class SiblingIsAnotherRepositoryTests(unittest.TestCase):
+    """2026-11-05: from a hams_open worktree at ~/workspace/tmp/<topic>, `../hams_open` is the symlink
+    ~/workspace/tmp/hams_open -> the main hams_open checkout. It was taken as the "sibling", so every hams_open
+    crate was linted twice (worktree and main) in one target directory and main's unchanged crates failed
+    against the worktree's metadata. The sibling must be the OTHER repository, found by identity."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.ws = os.path.realpath(os.path.join(self.tmp, "workspace"))
+        env = patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        for name in ("HAMS_COM_TREE", "HAMS_OPEN_TREE"):
+            os.environ.pop(name, None)
+        self.open_main = self._repo("hams_open", "zero_sudo")
+        self.com_main = self._repo("hams_com", "ham_base")
+        os.makedirs(os.path.join(self.ws, "tmp"))
+        self.open_wt = os.path.join(self.ws, "tmp", "wt-topic")
+        _git(self.open_main, "worktree", "add", "-q", "-b", "topic", self.open_wt)
+        os.symlink(self.open_main, os.path.join(self.ws, "tmp", "hams_open"))
+
+    def _repo(self, name, module):
+        repo = os.path.join(self.ws, name)
+        _write(os.path.join(repo, module, "__manifest__.py"), "{}")
+        _git(repo, "init", "-q")
+        _git(repo, "remote", "add", "origin", f"https://github.com/BrucePerens/{name}.git")
+        _git(repo, "add", module)
+        _git(repo, "commit", "-q", "-m", "init")
+        return repo
+
+    def test_a_worktree_beside_a_symlink_to_its_own_main_checkout_gets_the_other_repository(self):
+        self.assertEqual(chk._resolve_repo_roots(self.open_wt), [self.open_wt, self.com_main])
+        self.assertEqual(chk._resolve_repo_roots(os.path.join(self.open_wt, "hams_shared")), [self.open_wt, self.com_main])
+
+    def test_the_main_checkout_of_its_own_repository_is_never_a_sibling(self):
+        shutil.rmtree(self.com_main)
+        self.assertEqual(chk._resolve_repo_roots(self.open_wt), [self.open_wt])
+
+    def test_the_main_checkouts_still_pair_up(self):
+        self.assertEqual(chk._resolve_repo_roots(self.open_main), [self.open_main, self.com_main])
+        self.assertEqual(chk._resolve_repo_roots(self.com_main), [self.com_main, self.open_main])
+
+    def test_a_worktree_of_the_other_repository_beside_it_is_accepted(self):
+        com_wt = os.path.join(self.ws, "tmp", "wt-com")
+        _git(self.com_main, "worktree", "add", "-q", "-b", "topic", com_wt)
+        self.assertEqual(chk._resolve_repo_roots(com_wt), [com_wt, os.path.join(self.ws, "tmp", "hams_open")])
+
+    def test_the_tree_variable_wins_but_never_names_the_same_repository(self):
+        os.environ["HAMS_COM_TREE"] = self.open_main
+        self.assertEqual(chk._resolve_repo_roots(self.open_wt), [self.open_wt, self.com_main])
 
 
 if __name__ == "__main__":
