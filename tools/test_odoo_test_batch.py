@@ -12,6 +12,7 @@ contains BAD) and writes the same `filtered_test.txt` summary the real runner wr
 Tests [@ANCHOR: odoo_test_batch:module_scope]
 Tests [@ANCHOR: odoo_test_batch:union_of]
 Tests [@ANCHOR: odoo_test_batch:ineligible_reason]
+Tests [@ANCHOR: odoo_test_batch:main_checkout_root]
 Tests [@ANCHOR: odoo_test_batch:implicated_modules]
 Tests [@ANCHOR: odoo_test_batch:failing_tests]
 Tests [@ANCHOR: odoo_test_batch:module_finder]
@@ -102,6 +103,14 @@ class UnitTests(unittest.TestCase):
 
     def test_plain_committed_module_run_is_eligible(self):
         self.assertIsNone(self.reason())
+
+    def test_a_foreign_hams_shared_runs_alone_and_says_why(self):
+        self.assertIn("hams_shared", self.reason_foreign())
+        self.assertIsNone(otb.ineligible_reason(namespace(), {}, True, False, foreign_shared=False))
+        self.assertIn("uncommitted", otb.ineligible_reason(namespace(), {}, True, True, foreign_shared=True))
+
+    def reason_foreign(self):
+        return otb.ineligible_reason(namespace(), {}, True, False, foreign_shared=True)
 
     def test_everything_that_runs_alone(self):
         self.assertIn("--solo", self.reason(namespace(solo=True)))
@@ -652,6 +661,28 @@ class MaybeRunBatchedTests(unittest.TestCase):
         os.makedirs(sub)
         self.assertIsNone(otb.maybe_run_batched(namespace(), self.env, sub, out=self.lines.append))
         self.assertTrue(any("repository root" in line for line in self.lines))
+
+    def test_a_tree_with_a_hand_linked_hams_shared_is_not_batched_and_main_root_is_found(self):
+        # The main checkout has a hams_shared (ignored, so the tree stays clean); the worktree's is linked by hand elsewhere.
+        os.makedirs(os.path.join(self.work, "hams_shared"))
+        with open(os.path.join(self.work, ".git", "info", "exclude"), "a") as handle:
+            handle.write("hams_shared\n")
+        tree = os.path.join(self.tmp, "wt")
+        helpers.git(self.work, "worktree", "add", "-q", "-b", "topic", tree)
+        self.assertEqual(os.path.realpath(otb.main_checkout_root(tree)), os.path.realpath(self.work))
+        self.assertEqual(otb.main_checkout_root(self.work), self.work)
+        self.assertEqual(otb.main_checkout_root(self.tmp), self.tmp)  # not a repository: itself
+        os.symlink(os.path.join(self.tmp, "hs_branch"), os.path.join(tree, "hams_shared"))
+        os.makedirs(os.path.join(self.tmp, "hs_branch"))
+        self.assertIsNone(otb.maybe_run_batched(namespace(module="ham_a"), self.env, tree, out=self.lines.append))
+        self.assertTrue(any("running alone" in line and "hams_shared" in line for line in self.lines), self.lines)
+        # A link to the main checkout's own hams_shared batches as before (it gets past the check; no line names hams_shared).
+        os.unlink(os.path.join(tree, "hams_shared"))
+        os.symlink(os.path.join(self.work, "hams_shared"), os.path.join(tree, "hams_shared"))
+        self.lines.clear()
+        self.assertEqual(
+            otb.ineligible_reason(namespace(module="ham_a"), self.env, True, False,
+                                  foreign_shared=otb.lint_batch.foreign_shared_checkout(tree, self.work)), None)
 
     def test_a_committed_run_with_nothing_else_going_runs_at_once_and_passes(self):
         os.makedirs(os.path.join(self.work, "ham_a"))
