@@ -75,6 +75,9 @@ class CargoJobsShellTests(unittest.TestCase):
     def test_the_mac1_vm_gets_three_jobs_not_ten(self):
         self.assertEqual(self.jobs(9749 * 1024, 10), "jobs=3")
 
+    def test_lint_on_the_mac1_vm_runs_three_steps_at_once_so_each_cargo_gets_one_job(self):
+        self.assertEqual(self.jobs(9749 * 1024, 10, share=3), "jobs=1")
+
     def test_a_big_host_is_capped_at_its_cores(self):
         self.assertEqual(self.jobs(60 * 1024 * 1024, 8), "jobs=8")
 
