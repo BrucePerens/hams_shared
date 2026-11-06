@@ -34,6 +34,7 @@ regardless of which repo invoked the check from.
 
 import ast
 import os
+import lint_exec
 import sys
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "tools", "radae"}
@@ -59,21 +60,7 @@ def _resolve_repo_root(given_path):
 
 def _find_sibling_repo(repo_root):
     """Mirrors check_access_csv_group_order.py's own sibling-repo resolution."""
-    repo_root = os.path.abspath(repo_root)
-    for sibling_name in ("hams_open", "hams_com"):
-        if os.path.basename(repo_root) == sibling_name:
-            continue
-        candidate = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
-        if not os.path.isdir(candidate):
-            continue
-        has_a_module = any(
-            os.path.isfile(os.path.join(candidate, d, "__manifest__.py"))
-            for d in os.listdir(candidate)
-            if os.path.isdir(os.path.join(candidate, d))
-        )
-        if has_a_module:
-            return candidate
-    return None
+    return lint_exec.sibling_repo_root(repo_root, lint_exec.has_odoo_module)
 
 
 def _find_modules(roots):

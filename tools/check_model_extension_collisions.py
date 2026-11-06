@@ -47,6 +47,7 @@ collision is a property of the whole registry, not any single module.
 
 import ast
 import os
+import lint_exec
 import sys
 
 
@@ -74,21 +75,7 @@ def _find_sibling_repo(repo_root):
     """Mirrors run_linters.py's / check_dependency_cycles.py's sibling-repo
     resolution so the graph this script builds is complete regardless of
     which repo it's invoked from."""
-    repo_root = os.path.abspath(repo_root)
-    for sibling_name in ("hams_open", "hams_com"):
-        if os.path.basename(repo_root) == sibling_name:
-            continue
-        candidate = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
-        if not os.path.isdir(candidate):
-            continue
-        has_a_module = any(
-            os.path.isfile(os.path.join(candidate, d, "__manifest__.py"))
-            for d in os.listdir(candidate)
-            if os.path.isdir(os.path.join(candidate, d))
-        )
-        if has_a_module:
-            return candidate
-    return None
+    return lint_exec.sibling_repo_root(repo_root, lint_exec.has_odoo_module)
 
 
 def _is_model_class(node):

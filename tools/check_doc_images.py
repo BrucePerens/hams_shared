@@ -28,6 +28,7 @@ Usage: check_doc_images.py <repo_root>
 
 import hashlib
 import os
+import lint_exec
 import re
 import sys
 
@@ -104,9 +105,8 @@ def _resolve_repo_roots(given_path):
     if os.path.basename(given_path) == "hams_shared":
         given_path = os.path.dirname(given_path)
     roots = [given_path]
-    sibling_name = "hams_open" if os.path.basename(given_path) != "hams_open" else "hams_com"
-    sibling = os.path.abspath(os.path.join(given_path, "..", sibling_name))
-    if os.path.isdir(sibling) and os.path.isfile(os.path.join(sibling, "AGENTS.md")):
+    sibling = lint_exec.sibling_repo_root(given_path, lint_exec.has_agents_md)
+    if sibling:
         roots.append(sibling)
     return roots
 

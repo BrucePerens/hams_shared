@@ -29,6 +29,7 @@ substitution.
 """
 
 import os
+import lint_exec
 import sys
 import ast
 
@@ -51,21 +52,7 @@ def _find_sibling_repo(repo_root):
     derived from the same wrong `dir_path` (see _resolve_repo_root above), so a caller-supplied
     sibling arg can be wrong even after repo_root itself is fixed; computing it here too means
     this script is correct regardless of what run_linters.py passes."""
-    repo_root = os.path.abspath(repo_root)
-    for sibling_name in ("hams_open", "hams_com"):
-        if os.path.basename(repo_root) == sibling_name:
-            continue
-        candidate = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
-        if not os.path.isdir(candidate):
-            continue
-        has_a_module = any(
-            os.path.isfile(os.path.join(candidate, d, "__manifest__.py"))
-            for d in os.listdir(candidate)
-            if os.path.isdir(os.path.join(candidate, d))
-        )
-        if has_a_module:
-            return candidate
-    return None
+    return lint_exec.sibling_repo_root(repo_root, lint_exec.has_odoo_module)
 
 
 def find_nested_template_literals(code):

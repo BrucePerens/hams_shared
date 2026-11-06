@@ -425,3 +425,15 @@ inside a linked worktree of its parent) and `<parent>/.git/modules/<name>` exist
 by `main_worktree_of`, whose `core.worktree` lookup would otherwise name the worktree's own submodule directory, so a hams_open
 worktree with `hams_shared` checked out inside it found no `node_modules` and ESLint was "not installed". Pure string work plus
 one `isdir`. Test: `MainWorktreeTests.test_the_main_worktree_of_a_submodule_checked_out_in_a_parent_worktree_is_the_main_submodule`.
+
+### `lint_exec:has_odoo_module`
+`has_odoo_module(path) -> bool`: True when a directory directly under `path` holds an Odoo `__manifest__.py`; False for a
+missing or unreadable `path`. It is the `accept` argument that the module-scanning checkers (`check_dead_code`,
+`check_dependency_cycles`, `check_model_extension_collisions`, `odoo_registry_builder`, and the others listed in
+`test_sibling_repo_checkers.py`) hand to `lint_exec.sibling_repo_root` to take the other repository by identity instead of
+by directory name. Test: `SiblingByIdentityTests.test_the_accept_tests_look_for_a_module_and_for_agents_md`.
+
+### `lint_exec:has_agents_md`
+`has_agents_md(path) -> bool`: True when `path` holds an `AGENTS.md`. The `accept` argument of `check_doc_images`, which scans
+manuals rather than modules. Same test as `lint_exec:has_odoo_module`.
+

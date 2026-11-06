@@ -86,6 +86,7 @@ import ast
 from concurrent.futures import ThreadPoolExecutor
 import contextlib
 import os
+import lint_exec
 import queue
 import subprocess
 import sys
@@ -119,13 +120,8 @@ def _resolve_repo_roots(given_path):
     check_self_writeable_field_tests.py already uses for the identical two-repos problem."""
     repo_root = _resolve_repo_root(given_path)
     roots = [repo_root]
-    sibling_name = "hams_open" if os.path.basename(repo_root) != "hams_open" else "hams_com"
-    sibling = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
-    if os.path.isdir(sibling) and any(
-        os.path.isfile(os.path.join(sibling, d, "__manifest__.py"))
-        for d in os.listdir(sibling)
-        if os.path.isdir(os.path.join(sibling, d))
-    ):
+    sibling = lint_exec.sibling_repo_root(repo_root, lint_exec.has_odoo_module)
+    if sibling:
         roots.append(sibling)
     return roots
 
