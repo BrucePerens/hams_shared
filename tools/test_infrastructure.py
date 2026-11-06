@@ -163,6 +163,15 @@ class FormatEnvTests(unittest.TestCase):
         self.assertIn('DB=hams_prod;', text)
         self.assertNotIn("$hams_prod", text)
 
+    def test_the_dx_daemon_unit_lists_fallback_cluster_nodes_in_order(self):
+        # The unit set no DX_NODES, so when dxc.nc7j.com was down the DX feed stopped (2026-11-03).
+        entry = next(
+            item for item in infra.MANIFEST["static_files"]
+            if item.get("path") == "/opt/hams/systemd/ham.dx.daemon.service"
+        )
+        text = infra.format_env(entry["content"], {})
+        self.assertIn('Environment="DX_NODES=dxc.nc7j.com:7373,w3lpl.net:7373,dxc.ve7cc.net:23"', text)
+
     def test_the_key_bootstrapper_commits_what_succeeded_then_fails_on_a_partial_result(self):
         # action_force_provision_all() now returns a "danger" result instead of raising when a daemon fails, so
         # the unit must commit what succeeded (files are already written) and then fail the unit itself.
