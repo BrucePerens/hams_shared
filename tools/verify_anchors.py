@@ -151,7 +151,9 @@ def unreadable_tracked_files(checkouts):
     """Every git-tracked file of the given checkouts that this process may not read, as a sorted list of paths.
 
     ``checkouts`` is a list of directories, each a git working tree (a directory that is not one, or where git is
-    missing, contributes nothing). Reads only the file mode through ``os.access``; never opens a file."""
+    missing, contributes nothing). Reads only the file mode through ``os.access``; never opens a file. A tracked symlink is
+    skipped: it is git content, not a file the scan reads, and a fixture link to a path that exists only on another machine
+    (bench_mcp's fake sysfs ``driver`` links) is not an unreadable file."""
     unreadable = []
     for checkout in checkouts:
         try:
@@ -166,6 +168,8 @@ def unreadable_tracked_files(checkouts):
             if not name:
                 continue
             full_path = os.path.join(checkout, name)
+            if os.path.islink(full_path):
+                continue
             if os.path.lexists(full_path) and not os.path.isdir(full_path) and not os.access(full_path, os.R_OK):
                 unreadable.append(full_path)
     return sorted(unreadable)
