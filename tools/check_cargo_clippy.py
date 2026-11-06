@@ -26,6 +26,7 @@ import subprocess
 import sys
 
 import lint_cache
+import lint_exec
 
 # "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
 # site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
@@ -295,15 +296,20 @@ def _resolve_repo_roots(given_path):
     checkers."""
     repo_root = _resolve_repo_root(given_path)
     roots = [repo_root]
-    sibling_name = "hams_open" if os.path.basename(repo_root) != "hams_open" else "hams_com"
-    sibling = os.path.abspath(os.path.join(repo_root, "..", sibling_name))
-    if os.path.isdir(sibling) and any(
-        os.path.isfile(os.path.join(sibling, d, "__manifest__.py"))
-        for d in os.listdir(sibling)
-        if os.path.isdir(os.path.join(sibling, d))
-    ):
+    # The sibling is the OTHER repository by identity, never a second checkout of this one (lint_exec.sibling_repo_root).
+    sibling = lint_exec.sibling_repo_root(repo_root, accept=_has_odoo_module)
+    if sibling:
         roots.append(sibling)
     return roots
+
+
+def _has_odoo_module(directory):
+    """True when a direct subdirectory of `directory` is an Odoo module (has __manifest__.py)."""
+    return any(
+        os.path.isfile(os.path.join(directory, d, "__manifest__.py"))
+        for d in os.listdir(directory)
+        if os.path.isdir(os.path.join(directory, d))
+    )
 
 
 def find_cargo_crates(repo_root):
