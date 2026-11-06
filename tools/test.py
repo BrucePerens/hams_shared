@@ -1746,11 +1746,34 @@ def check_linters(
             sibling_dir = os.path.abspath(sibling_tree)
         if os.path.isdir(sibling_dir):
             anchor_scan_dirs.append(sibling_dir)
+    # Files the user running this (the odoo user, under sudo) may not read: name them before the scan, not as a
+    # traceback inside it and a "violations" verdict that is not true.
+    unreadable = _va.unreadable_tracked_files(anchor_scan_dirs)
+    if unreadable:
+        user = _va.current_user_name()
+        for path in unreadable:
+            print(_va.unreadable_message(path, user))
+        print("🛑 Halting: tracked files this user cannot read.")
+        halt_preflight(
+            extractor,
+            f"{len(unreadable)} git-tracked file(s) cannot be read by user '{user}' (listed above).",
+            "chmod 644 each file named above (a Write-tool file is created mode 600 and a fast-forward does not "
+            "rewrite it), then rerun.",
+        )
     res_anchor = subprocess.run(
         [python_exec, os.path.join(shared_dir, "tools", "verify_anchors.py")] + anchor_scan_dirs,
         capture_output=True,
         text=True,
     )
+    if res_anchor.returncode == _va.UNREADABLE_EXIT_CODE:
+        print(res_anchor.stdout)
+        print(res_anchor.stderr)
+        print("🛑 Halting: files the anchor scan could not read.")
+        halt_preflight(
+            extractor,
+            "the anchor scan could not read some files (listed above); this is not an anchor violation.",
+            "chmod 644 each file named above, then rerun.",
+        )
     if res_anchor.returncode != 0:
         print(res_anchor.stdout)
         print(res_anchor.stderr)
