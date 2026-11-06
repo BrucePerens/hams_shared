@@ -76,6 +76,42 @@ def drive(argv):
     print("RESULT " + json.dumps({"code": code}))
 
 
+class ForeignSharedTests(unittest.TestCase):
+    """Tests [@ANCHOR: lint_batch:foreign_shared_checkout] with real directories and symlinks."""
+
+    def setUp(self):
+        import tempfile
+        self.root = tempfile.mkdtemp(prefix="foreign_shared_")
+        self.addCleanup(__import__("shutil").rmtree, self.root, True)
+        self.main_shared = os.path.join(self.root, "main_shared")
+        os.makedirs(self.main_shared)
+        self.main = os.path.join(self.root, "hams_open")
+        self.tree = os.path.join(self.root, "tmp_topic")
+        os.makedirs(self.main)
+        os.makedirs(self.tree)
+        os.symlink(self.main_shared, os.path.join(self.main, "hams_shared"))
+
+    def test_a_link_to_the_main_checkouts_hams_shared_is_not_foreign(self):
+        os.symlink(self.main_shared, os.path.join(self.tree, "hams_shared"))
+        self.assertFalse(lint_batch.foreign_shared_checkout(self.tree, self.main))
+
+    def test_the_main_checkout_itself_is_not_foreign(self):
+        self.assertFalse(lint_batch.foreign_shared_checkout(self.main, self.main))
+
+    def test_a_hams_shared_linked_by_hand_to_another_checkout_is_foreign(self):
+        other = os.path.join(self.root, "hs_worktree")
+        os.makedirs(other)
+        os.symlink(other, os.path.join(self.tree, "hams_shared"))
+        self.assertTrue(lint_batch.foreign_shared_checkout(self.tree, self.main))
+
+    def test_a_submodule_checked_out_inside_the_tree_is_foreign(self):
+        os.makedirs(os.path.join(self.tree, "hams_shared"))
+        self.assertTrue(lint_batch.foreign_shared_checkout(self.tree, self.main))
+
+    def test_a_missing_hams_shared_is_not_foreign(self):
+        self.assertFalse(lint_batch.foreign_shared_checkout(self.tree, self.main))
+
+
 class UnitTests(unittest.TestCase):
     def reason(self, **kw):
         base = dict(changed="origin/main", only="", skip="", modules="", solo=False, bundle="", environ={},
@@ -100,6 +136,10 @@ class UnitTests(unittest.TestCase):
         self.assertIn("uncommitted", self.reason(dirty=True))
         self.assertIn("hams_shared", self.reason(is_shared_checkout=True))
         self.assertIn("cheap", self.reason(lock_needed=False))
+
+    def test_a_foreign_hams_shared_runs_alone(self):
+        self.assertIsNone(self.reason(foreign_shared=False))
+        self.assertIn("hams_shared is not the main", self.reason(foreign_shared=True))
 
     def test_path_finder_respects_file_name_boundaries(self):
         find = lint_batch.path_finder(["a.py", "m/data.py", "tools/a.py"])

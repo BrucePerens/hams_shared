@@ -193,9 +193,17 @@ branch with its status in capitals, tip prefix, `<- you` for the caller and the 
 ### `lint_batch:ineligible_reason`
 Decides whether a run may join a batch. Keyword arguments: `changed` (the `--changed` base or None), `only`, `skip`,
 `modules` (selection options), `solo`, `bundle`, `environ`, `dirty` (uncommitted changes), `is_shared_checkout`,
-`lock_needed` (the run is heavy). Returns a short reason string when the run must run alone, None when it may batch.
+`lock_needed` (the run is heavy), `foreign_shared` (optional, default False: the tree's `hams_shared` is not the main
+checkout's). Returns a short reason string when the run must run alone, None when it may batch.
 Pure; checked in the order solo, runner marker, `HAMS_LINT_NO_LOCK`, lock held, `HAMS_LINT_BATCH=off`, not changed,
-selection, bundle, dirty, hams_shared, cheap.
+selection, bundle, dirty, hams_shared, foreign hams_shared, cheap.
+
+### `lint_batch:foreign_shared_checkout`
+`foreign_shared_checkout(tree_root, main_root) -> bool`: True when `<tree_root>/hams_shared` and `<main_root>/hams_shared`
+resolve (realpath) to different directories. The batch's combined tree links `hams_shared` to the main checkout's, so a
+branch whose own `hams_shared` was linked by hand (a hams_shared worktree holding the change under test) would be linted with
+main's tools and passed with a stamp; such a run goes alone. False when either `hams_shared` is missing. Test:
+`ForeignSharedTests`.
 
 ### `lint_batch:changed_paths`
 `changed_paths(repo, base, tip)` returns the repository-relative paths in `git diff --name-only base...tip` (the merge-base

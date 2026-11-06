@@ -30,9 +30,10 @@ MAX_OUTPUT_PER_STEP = 200000
 
 # [@ANCHOR: lint_batch:ineligible_reason]
 def ineligible_reason(changed, only, skip, modules, solo, bundle, environ, dirty, is_shared_checkout,
-                      lock_needed):
+                      lock_needed, foreign_shared=False):
     """Why this run must NOT join a batch (a short sentence), or None when it may. The run is
-    eligible only as a plain committed `--changed` run that would take the lint lock (a heavy run)."""
+    eligible only as a plain committed `--changed` run that would take the lint lock (a heavy run).
+    `foreign_shared` is True when the tree's `hams_shared` is not the main checkout's (see `foreign_shared_checkout`)."""
     if solo:
         return "--solo"
     if environ.get(RUNNER_ENV):
@@ -53,9 +54,28 @@ def ineligible_reason(changed, only, skip, modules, solo, bundle, environ, dirty
         return "uncommitted changes in the tree (only committed tips are batched)"
     if is_shared_checkout:
         return "hams_shared runs alone (its tools are the linter)"
+    if foreign_shared:
+        return "this tree's hams_shared is not the main checkout's (the combined tree would lint with the main one)"
     if not lock_needed:
         return "cheap or fully cached run: it takes no lock"
     return None
+
+
+# [@ANCHOR: lint_batch:foreign_shared_checkout]
+def foreign_shared_checkout(tree_root, main_root):
+    """True when `tree_root`'s `hams_shared` resolves to a different directory than `main_root`'s.
+
+    The combined tree of a batch is a fresh worktree of the repository whose `hams_shared` is linked to the
+    MAIN checkout's (fix_worktree_symlinks.py), so it never carries what a branch linked by hand (a hams_shared
+    worktree with a change under test, or a submodule checked out inside the worktree): the batch linted and
+    passed the branch with main's tools and wrote its pass stamp (reproduced 2026-11-06 with a deliberately
+    failing checker: batched PASSED, `--solo` FAILED). Such a tree runs alone. A missing `hams_shared` on
+    either side is not foreign (nothing to compare)."""
+    own = os.path.join(tree_root, "hams_shared")
+    main = os.path.join(main_root, "hams_shared")
+    if not os.path.exists(own) or not os.path.exists(main):
+        return False
+    return os.path.realpath(own) != os.path.realpath(main)
 
 
 # [@ANCHOR: lint_batch:changed_paths]
