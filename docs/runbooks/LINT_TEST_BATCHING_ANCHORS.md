@@ -277,11 +277,14 @@ selector.
 `union_of(members, field)` returns the set of module names found in `field` ("scope" or "install") across `members`. A member without the key (queued before `install` existed, or with no companions) contributes nothing, which is the backward-compatibility rule for the queue's state file. Pure. Test: `test_union_of_reads_a_field_and_ignores_members_without_it`.
 
 ### `odoo_test_batch:ineligible_reason`
-`ineligible_reason(args, environ, cwd_is_root, dirty)`; `args` is test.py's parsed namespace. Returns a short reason when the run
+`ineligible_reason(args, environ, cwd_is_root, dirty, foreign_shared=False)`; `args` is test.py's parsed namespace; `foreign_shared` is True when the tree's `hams_shared` is not the main checkout's (`lint_batch:foreign_shared_checkout`). Returns a short reason when the run
 must run alone, None when it may batch. Alone: `--solo`; the combined run itself (`HAMS_TEST_BATCH_RUNNER`); `HAMS_TEST_BATCH=off`;
 a run inside a run (`HAMS_TEST_LOCK_HELD=1`); the internal re-exec phases; a mode other than standard; `--test-tags`, `--coverage`,
 `--mcp`, `--pause-on-fail`, `--offline-isolation`, `--profile`, `--build-daemons`; no whole-module `-u` list; a directory that is not
-the repository root; uncommitted changes. Pure.
+the repository root; uncommitted changes; a `hams_shared` linked by hand to something other than the main checkout's (the combined tree links the main one, so the branch would be tested with main's helpers and pass). Pure.
+
+### `odoo_test_batch:main_checkout_root`
+`main_checkout_root(repo) -> str`: the main checkout of the git repository `repo` belongs to, the parent of `git rev-parse --git-common-dir`, so a worktree nested anywhere resolves to the real checkout; `repo` itself when git cannot say. `maybe_run_batched` passes it to `lint_batch.foreign_shared_checkout`.
 
 ### `odoo_test_batch:implicated_modules`
 `implicated_modules(text)` reads test.py's own `filtered_test.txt`: the `  - <module>` lines under "these modules are implicated in the

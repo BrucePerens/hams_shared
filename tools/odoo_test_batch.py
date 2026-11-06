@@ -11,7 +11,8 @@ reads the modules Odoo's extractor implicated (the list test.py writes into filt
 the branches that asked for that module, and writes a pass record (`~/.cache/hams-test/passed/<tip>`) for every
 branch that passed. Every caller prints its own verdict and exits with its own code.
 
-Runs that stay solo: --solo, a dirty tree, a class or method selector (`-u mod:Class`), --test-tags, a mode other
+Runs that stay solo: --solo, a dirty tree, a tree whose `hams_shared` is linked by hand to something other than the main
+checkout's (the combined tree links the main one; `lint_batch.foreign_shared_checkout`), a class or method selector (`-u mod:Class`), --test-tags, a mode other
 than standard, --mcp, --coverage, --pause-on-fail, --offline-isolation, --profile, --build-daemons, a run started
 by a batch leader, and a working directory that is not a repository root.
 
@@ -65,10 +66,12 @@ def union_of(members, field):
 
 
 # [@ANCHOR: odoo_test_batch:ineligible_reason]
-def ineligible_reason(args, environ, cwd_is_root, dirty):
+def ineligible_reason(args, environ, cwd_is_root, dirty, foreign_shared=False):
     """Why this test run must run alone (a short sentence), or None when it may join a batch. `args` is
     test.py's parsed namespace; `cwd_is_root`: the working directory is the repository's top level; `dirty`:
-    uncommitted changes."""
+    uncommitted changes; `foreign_shared`: the tree's `hams_shared` is not the main checkout's
+    (`lint_batch.foreign_shared_checkout`): the combined tree links the main one, so a branch under test in a
+    hand-linked hams_shared would be tested with main's helpers and pass."""
     if getattr(args, "solo", False):
         return "--solo"
     if environ.get(RUNNER_ENV):
@@ -90,7 +93,22 @@ def ineligible_reason(args, environ, cwd_is_root, dirty):
         return "not run from a repository root"
     if dirty:
         return "uncommitted changes in the tree (only committed tips are batched)"
+    if foreign_shared:
+        return "this tree's hams_shared is not the main checkout's (the combined tree would test with the main one)"
     return None
+
+
+# [@ANCHOR: odoo_test_batch:main_checkout_root]
+def main_checkout_root(repo):
+    """The directory of the main checkout of the git repository `repo` belongs to (the parent of its common git
+    directory, so a worktree nested anywhere resolves to the real checkout); `repo` itself when git cannot say."""
+    result = subprocess.run(["git", "-C", repo, "rev-parse", "--git-common-dir"], capture_output=True, text=True)
+    common = result.stdout.strip()
+    if result.returncode != 0 or not common:
+        return repo
+    if not os.path.isabs(common):
+        common = os.path.join(repo, common)
+    return os.path.dirname(os.path.normpath(common))
 
 
 # [@ANCHOR: odoo_test_batch:implicated_modules]
@@ -411,7 +429,8 @@ def maybe_run_batched(args, environ=None, cwd=None, out=print):
     cwd_is_root = bool(root) and os.path.realpath(root) == os.path.realpath(cwd)
     status = subprocess.run(["git", "-C", cwd, "status", "--porcelain"], capture_output=True, text=True)
     dirty = status.returncode != 0 or bool(status.stdout.strip())
-    reason = ineligible_reason(args, environ, cwd_is_root, dirty)
+    foreign = bool(root) and lint_batch.foreign_shared_checkout(root, main_checkout_root(root))
+    reason = ineligible_reason(args, environ, cwd_is_root, dirty, foreign_shared=foreign)
     if reason is not None:
         if args.module and reason not in ("--solo", "an internal phase of a run"):
             out("[*] test batch: running alone (%s)" % reason)
