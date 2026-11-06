@@ -415,3 +415,13 @@ before any lock. Reads git for the repository root, dirty state, tip and branch;
 printing "test batch: running alone (<reason>)" for a `-u` run, a merge conflict with another branch, a batch runner that kept dying),
 else blocks until this caller's verdict and returns its exit code (0, 1, or 75 when `--wait-timeout` ran out waiting). Side
 effects: queue state under `~/.cache/hams-lint/batches/test-<repo>`, a temporary worktree under `~/workspace/tmp` in the leader.
+
+## lint_exec
+
+### `lint_exec:_main_submodule_gitdir`
+`_main_submodule_gitdir(common) -> str`: given the git common directory of a checkout, returns the git directory of the MAIN
+checkout's submodule when `common` has the form `<parent>/.git/worktrees/<worktree>/modules/<name>` (a submodule initialised
+inside a linked worktree of its parent) and `<parent>/.git/modules/<name>` exists; otherwise returns `common` unchanged. Used
+by `main_worktree_of`, whose `core.worktree` lookup would otherwise name the worktree's own submodule directory, so a hams_open
+worktree with `hams_shared` checked out inside it found no `node_modules` and ESLint was "not installed". Pure string work plus
+one `isdir`. Test: `MainWorktreeTests.test_the_main_worktree_of_a_submodule_checked_out_in_a_parent_worktree_is_the_main_submodule`.
