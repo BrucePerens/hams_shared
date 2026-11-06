@@ -65,6 +65,16 @@ class UnreadableFileTests(unittest.TestCase):
         os.chmod(self.locked_doc, 0o644)
         self.assertEqual(va.unreadable_tracked_files([self.root]), [self.locked_code])
 
+    def test_a_tracked_symlink_to_a_missing_path_is_not_an_unreadable_file(self):
+        # bench_mcp's fake sysfs fixtures track `driver` links to paths that exist only on the machine they came from;
+        # os.access follows the link and says "unreadable", which halted every hams_open Odoo run (2026-11-06).
+        link = os.path.join(self.root, "fixtures", "sys", "driver")
+        os.makedirs(os.path.dirname(link))
+        os.symlink("../../../bus/usb/drivers/usb", link)
+        subprocess.run(["git", "add", "fixtures/sys/driver"], cwd=self.root, check=True)
+        self.assertNotIn(link, va.unreadable_tracked_files([self.root]))
+        self.assertEqual(va.unreadable_tracked_files([self.root]), sorted([self.locked_doc, self.locked_code]))
+
     def test_the_message_names_file_user_and_fix(self):
         message = va.unreadable_message("/a/b.md", "odoo")
         self.assertIn("/a/b.md", message)
