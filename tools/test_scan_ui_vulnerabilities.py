@@ -230,6 +230,7 @@ class MainIntegrationTests(unittest.TestCase):
         self.tools_dir = os.path.join(self.tmp, "tools")
         os.makedirs(self.tools_dir)
         shutil.copy(_SCRIPT, os.path.join(self.tools_dir, "scan_ui_vulnerabilities.py"))
+        shutil.copy(os.path.join(os.path.dirname(_SCRIPT), "lint_exec.py"), os.path.join(self.tools_dir, "lint_exec.py"))
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)

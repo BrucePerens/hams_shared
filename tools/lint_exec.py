@@ -306,6 +306,24 @@ def sibling_repo_root(repo_root, accept=os.path.isdir):
     return None
 
 
+# [@ANCHOR: lint_exec:has_odoo_module]
+def has_odoo_module(path):
+    """True when a directory directly under `path` holds an Odoo `__manifest__.py`: the `accept` test of
+    `sibling_repo_root` for the checkers that scan modules (hams_open and hams_com both have some)."""
+    try:
+        names = os.listdir(path)
+    except OSError:
+        return False
+    return any(os.path.isfile(os.path.join(path, name, "__manifest__.py")) for name in names)
+
+
+# [@ANCHOR: lint_exec:has_agents_md]
+def has_agents_md(path):
+    """True when `path` holds an `AGENTS.md`: the `accept` test of `sibling_repo_root` for the documentation
+    checkers (`check_doc_images`), which scan manuals rather than modules."""
+    return os.path.isfile(os.path.join(path, "AGENTS.md"))
+
+
 def render_output(step, returncode, stdout, stderr):
     """The text the old orchestrator printed for one finished command."""
     parts = []
