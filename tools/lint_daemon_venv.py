@@ -17,14 +17,20 @@ every worktree and shared by all of them, then replaces itself with that venv's 
 """
 
 import argparse
+import contextlib
 import fcntl
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
+import time
 
 READY_MARKER = ".hams-lint-venv-ready"
+KEEP_VENVS = 2  # newest venvs kept per name by prune_venvs
+PRUNE_MIN_AGE_SECONDS = 3600  # a venv used within this long is never pruned (another run may be using it)
+_VENV_TAG = re.compile(r"^(?P<name>.+)-py\d+-[0-9a-f]{16}$")
 
 
 def _cache_root(environ):
@@ -55,7 +61,9 @@ def ensure_venv(name, requirements_path, environ=None, run=subprocess.run):
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target + ".lock", "w", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if os.path.exists(os.path.join(target, READY_MARKER)):
+        marker_path = os.path.join(target, READY_MARKER)
+        if os.path.exists(marker_path):
+            os.utime(marker_path)  # the marker's mtime is the venv's last use (prune_venvs keeps the newest)
             return python
         partial = target + ".partial"
         shutil.rmtree(partial, ignore_errors=True)
@@ -72,7 +80,54 @@ def ensure_venv(name, requirements_path, environ=None, run=subprocess.run):
         with open(os.path.join(partial, READY_MARKER), "w", encoding="utf-8") as marker:
             marker.write(requirements_path + "\n")
         os.rename(partial, target)
+    prune_venvs(name, environ=environ)
     return python
+
+
+# [@ANCHOR: lint_daemon_venv:prune_venvs]
+def prune_venvs(name, keep=KEEP_VENVS, environ=None, now=None, min_age=PRUNE_MIN_AGE_SECONDS):
+    """Deletes all but the `keep` most recently used cached venvs of `name`; returns the directories removed.
+
+    Only complete venvs of exactly this `name` count (`fine_tuning`'s venv is not `hams_simulated_bots`'s). Recency is
+    the mtime of the ready marker, which `ensure_venv` touches on every use. A venv used less than `min_age` seconds ago
+    is never removed, and neither is one whose `<dir>.lock` is held (being built); a leftover `<dir>.partial` older than
+    `min_age` of this name is removed too. Never raises for a directory it cannot remove."""
+    environ = os.environ if environ is None else environ
+    now = time.time() if now is None else now
+    base = os.path.join(_cache_root(environ), "hams-lint-venvs")
+    found = []
+    removed = []
+    try:
+        entries = sorted(os.listdir(base))
+    except OSError:
+        return removed
+    for entry in entries:
+        path = os.path.join(base, entry)
+        match = _VENV_TAG.match(entry[: -len(".partial")] if entry.endswith(".partial") else entry)
+        if not match or match.group("name") != name or not os.path.isdir(path):
+            continue
+        if entry.endswith(".partial"):
+            if now - os.path.getmtime(path) > min_age:
+                shutil.rmtree(path, ignore_errors=True)
+                removed.append(path)
+            continue
+        marker = os.path.join(path, READY_MARKER)
+        if os.path.exists(marker):
+            found.append((os.path.getmtime(marker), path))
+    found.sort(reverse=True)
+    for used, path in found[keep:]:
+        if now - used < min_age:
+            continue
+        with open(path + ".lock", "a", encoding="utf-8") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                continue
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path)
+        with contextlib.suppress(OSError):
+            os.remove(path + ".lock")
+    return removed
 
 
 # [@ANCHOR: lint_daemon_venv:main]

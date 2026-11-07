@@ -666,40 +666,41 @@ def widens_module_scope(path):
 
 
 ESLINT_MODULE_SUFFIXES = (".js", ".mjs", ".cjs")
-# A daemon listed here has a requirements.txt of packages that must never be installed system-wide (its venv is
-# isolated by design): the pytest step of its own tests runs under a cached venv built from that file
-# (lint_daemon_venv.py) wherever the daemon has no `.venv` of its own. ISOLATED_VENV_PREFIX marks such a group's
-# "interpreter" in the step grouping. Documentation: docs/runbooks/LINT_DAEMON_VENVS.md.
-# [@ANCHOR: run_linters:ISOLATED_VENV_DAEMONS]
-ISOLATED_VENV_DAEMONS = ("hams_simulated_bots",)
+# A directory listed here (relative to `daemons/`) has a requirements.txt of packages that must not be installed
+# system-wide (an isolated venv by design): the pytest step of the tests at or below it runs under a cached venv built
+# from that file (lint_daemon_venv.py) wherever no `.venv` was found in the tree. The nearest listed directory above a
+# test directory wins (hams_simulated_bots/fine_tuning/tests uses fine_tuning's, not the bot's). ISOLATED_VENV_PREFIX
+# marks such a group's "interpreter" in the step grouping. Documentation: docs/runbooks/LINT_DAEMON_VENVS.md.
+# [@ANCHOR: run_linters:ISOLATED_VENV_DIRS]
+ISOLATED_VENV_DIRS = ("hams_simulated_bots", "hams_simulated_bots/fine_tuning")
 ISOLATED_VENV_PREFIX = "isolated-venv:"
 
 
 # [@ANCHOR: run_linters:isolated_venv_marker_for]
 def isolated_venv_marker_for(test_dir, daemons_root):
-    """`ISOLATED_VENV_PREFIX + <daemon>` when `test_dir` is the directory of a daemon in ISOLATED_VENV_DAEMONS or
-    its direct tests/tools directory and the daemon has a requirements.txt; otherwise None. Deeper directories
-    (hams_simulated_bots/fine_tuning/tests, which has its own torch-sized venv) are never matched."""
-    parts = os.path.relpath(test_dir, daemons_root).split(os.sep)
-    if len(parts) <= 2 and parts[0] in ISOLATED_VENV_DAEMONS and os.path.isfile(
-        os.path.join(daemons_root, parts[0], "requirements.txt")
-    ):
-        return ISOLATED_VENV_PREFIX + parts[0]
+    """`ISOLATED_VENV_PREFIX + <directory relative to daemons_root, with "/">` for the nearest directory at or above
+    `test_dir` (and below `daemons_root`) that is in ISOLATED_VENV_DIRS and holds a requirements.txt; otherwise None."""
+    rel = os.path.relpath(test_dir, daemons_root).replace(os.sep, "/")
+    while rel not in (".", "") and not rel.startswith(".."):
+        if rel in ISOLATED_VENV_DIRS and os.path.isfile(os.path.join(daemons_root, rel, "requirements.txt")):
+            return ISOLATED_VENV_PREFIX + rel
+        rel = rel.rpartition("/")[0]
     return None
 
 
 # [@ANCHOR: run_linters:pytest_argv_prefix]
 def pytest_argv_prefix(interpreter, python_exec, dir_path):
     """The argv that starts `python -m pytest -q` for a group's `interpreter`: a venv's python path as it is, or for
-    an isolated-venv marker the system `python_exec` running `<dir_path>/tools/lint_daemon_venv.py` for that daemon's
-    requirements.txt (which builds or reuses the cached venv, then execs pytest in it)."""
+    an isolated-venv marker the system `python_exec` running `<dir_path>/tools/lint_daemon_venv.py` for that
+    directory's requirements.txt (which builds or reuses the cached venv, then execs pytest in it). The venv's name
+    is the marker's directory with "/" replaced by "_"."""
     if interpreter.startswith(ISOLATED_VENV_PREFIX):
-        name = interpreter[len(ISOLATED_VENV_PREFIX):]
+        rel = interpreter[len(ISOLATED_VENV_PREFIX):]
         return [
             python_exec,
             os.path.join(dir_path, "tools", "lint_daemon_venv.py"),
-            "--name", name,
-            "--requirements", os.path.join(dir_path, "daemons", name, "requirements.txt"),
+            "--name", rel.replace("/", "_"),
+            "--requirements", os.path.join(dir_path, "daemons", *rel.split("/"), "requirements.txt"),
             "--", "-m", "pytest", "-q",
         ]
     return [interpreter, "-m", "pytest", "-q"]
