@@ -5,6 +5,9 @@ locking, the managed-directory rule and the per-file result cache (a changed fil
 
 import json
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -238,6 +241,66 @@ class BudgetTableTest(unittest.TestCase):
         for name, machine in data["machines"].items():
             if machine.get("runner", True) and not machine.get("never"):
                 self.assertIn(name, data["cache_budgets"], name)
+
+
+class CheckerVersionTest(unittest.TestCase):
+    """The result cache's version is the checker's source, not where the checkout happens to be."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def copy_of(self, text, *parts):
+        path = os.path.join(self._tmp.name, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        return path
+
+    # Tests [@ANCHOR: lint_cache:checker_version]
+    def test_same_source_in_two_checkouts_has_one_version(self):
+        first = self.copy_of("print(1)\n", "batch_1", "tools", "chk.py")
+        second = self.copy_of("print(1)\n", "batch_2_other_path", "tools", "chk.py")
+        self.assertEqual(lint_cache.checker_version(first), lint_cache.checker_version(second))
+
+    # Tests [@ANCHOR: lint_cache:checker_version]
+    def test_an_edit_to_the_source_changes_the_version(self):
+        first = self.copy_of("print(1)\n", "a", "chk.py")
+        second = self.copy_of("print(2)\n", "b", "chk.py")
+        self.assertNotEqual(lint_cache.checker_version(first), lint_cache.checker_version(second))
+
+    # Tests [@ANCHOR: lint_cache:checker_version]
+    def test_a_different_file_name_with_the_same_text_is_a_different_version(self):
+        first = self.copy_of("print(1)\n", "a", "chk_one.py")
+        second = self.copy_of("print(1)\n", "a", "chk_two.py")
+        self.assertNotEqual(lint_cache.checker_version(first), lint_cache.checker_version(second))
+
+    # Tests [@ANCHOR: lint_cache:checker_version]
+    def test_the_order_of_the_paths_does_not_matter(self):
+        one = self.copy_of("a\n", "d", "one.py")
+        two = self.copy_of("b\n", "d", "two.py")
+        self.assertEqual(lint_cache.checker_version(one, two), lint_cache.checker_version(two, one))
+
+    # Tests [@ANCHOR: lint_cache:checker_version]
+    def test_a_real_checker_run_from_two_checkouts_shares_one_cache_file(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        repo = os.path.join(self._tmp.name, "repo")
+        os.makedirs(repo)
+        with open(os.path.join(repo, "m.py"), "w", encoding="utf-8") as handle:
+            handle.write("x = 1\n")
+        cache_root = os.path.join(self._tmp.name, "cache")
+        env = {k: v for k, v in os.environ.items() if k != "HAMS_LINT_NO_CACHE"}
+        env["XDG_CACHE_HOME"] = cache_root
+        for checkout in ("worktree_a", "worktree_b_a_different_path"):
+            tools = os.path.join(self._tmp.name, checkout, "tools")
+            os.makedirs(tools)
+            for name in ("check_float_isfinite.py", "lint_cache.py"):
+                shutil.copy(os.path.join(here, name), tools)
+            run = subprocess.run([sys.executable, os.path.join(tools, "check_float_isfinite.py"), repo],
+                                 env=env, capture_output=True, text=True, timeout=120)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        stored = os.listdir(os.path.join(cache_root, "hams-lint-results", "check_float_isfinite"))
+        self.assertEqual(len([n for n in stored if n.endswith(".json")]), 1, stored)
 
 
 class ResultCacheTest(unittest.TestCase):
