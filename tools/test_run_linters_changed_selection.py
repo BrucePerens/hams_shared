@@ -495,6 +495,32 @@ class ModuleChangeSelectionTests(SelectionFixture):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+    def test_the_devbox_tools_step_of_a_hams_com_checkout_elsewhere_is_told_where_hams_open_is(self):
+        # A lint batch holds hams_com in its own directory with no hams_open beside it; the devbox_tools tests that read
+        # the other repository (test_no_external_browser_loads, test_download_cacheability) failed there with "hams_open
+        # is not checked out" on every branch after #414 (2026-11-07). The step passes HAMS_OPEN_TREE, as verify_anchors does.
+        _write(os.path.join(self.com_repo, "devbox_tools", "test_sample.py"), "def test_t():\n    pass\n")
+        _git(self.com_repo, "add", "-A")
+        _git(self.com_repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "x")
+        elsewhere = tempfile.mkdtemp(prefix="lint-com-elsewhere-")
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        worktree = os.path.join(elsewhere, "hams_com")
+        _git(self.com_repo, "worktree", "add", "-q", "-b", "side", worktree)
+        self.addCleanup(_git, self.com_repo, "worktree", "remove", "--force", worktree)
+        os.symlink(self.shared, os.path.join(worktree, "hams_shared"))
+        os.symlink(os.path.join("hams_shared", "tools"), os.path.join(worktree, "tools"))
+        env = dict(os.environ, HAMS_ALLOW_STALE_SHARED="1", HAMS_LINT_NO_LOCK="1", PYTHONDONTWRITEBYTECODE="1")
+        result = subprocess.run(
+            [sys.executable, os.path.join(worktree, "tools", "run_linters.py"), "--list-json"],
+            cwd=worktree, capture_output=True, text=True, env=env, timeout=120,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        import json
+
+        step = {s["name"]: s for s in json.loads(result.stdout)}["pytest devbox_tools/"]
+        self.assertEqual(os.path.realpath(step["env_delta"].get("HAMS_OPEN_TREE", "")), os.path.realpath(self.open_repo))
+
+
 class HamsSharedChangeSelectionTests(SelectionFixture):
     def test_a_guide_under_hams_shared_docs_runs_the_documentation_checkers(self):
         chosen = {_base(n) for n in self.selected(("hams_open/hams_shared/docs/guide.md", "guide 2\n"))}

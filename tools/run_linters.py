@@ -2061,6 +2061,9 @@ def main():
             [python_exec, "-m", "pytest", "-q", "-p", "no:cacheprovider"] + devbox_test_files,
             cwd=os.path.join(repo_root, "devbox_tools"),
             fail_header="❌ devbox_tools/ unit test failures:",
+            # A lint batch holds hams_com in a directory of its own, with no hams_open beside it: the tests that read
+            # the other repository look at HAMS_OPEN_TREE first (verify_anchors gets it the same way).
+            env=dict(os.environ, HAMS_OPEN_TREE=os.path.realpath(community_dir)) if community_dir else None,
         )
 
     # 42. check_owl_templates -- real, standalone Owl QWeb template compile verification via a
