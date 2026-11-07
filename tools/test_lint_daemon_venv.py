@@ -13,7 +13,6 @@ Tests [@ANCHOR: run_linters:pytest_argv_prefix]
 
 import os
 import subprocess
-import sys
 import tempfile
 import unittest
 
