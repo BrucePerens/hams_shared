@@ -48,6 +48,18 @@ python3 tools/run_linters.py --lint-caches show|prune|clear        # this machin
 python3 tools/lint_remote.py caches [HOST...] [--prune|--clear]     # runners (default: show)
 ```
 
+### Other directories under the same budget, and the ones outside it (2026-11-07)
+
+* The relay export test (`test_export_source_release`, hams_com) builds in a named managed directory,
+  `~/.cache/hams-lint-cargo/relay-export-test-<rustc>` (`lint_cache.named_cargo_session`), so it is pruned
+  least-recently-used, capped by `cargo_gb`, cleared rather than failing, and removed after 14 unused days like the lint
+  directories. It runs with `CARGO_INCREMENTAL=0`. An explicit `CARGO_TARGET_DIR` is used untouched. Its old directory,
+  `~/.cache/hams-relay-export-test-target` (19 GB on mac1-vm by 2026-11-03), is listed as `legacy` by `show` and removed by
+  `clear cargo`.
+* Reported by `show` / `lint_remote.py caches` but never pruned (each is needed): `~/hams-lint-mirror`
+  (8.6 GB on mac1-vm), `/opt/hams-testsrc` (26 GB), `~/.cache/ms-playwright` (0.6 GB) and `/var/lib/machines` (7 GB of Pi
+  build root file systems for the arm64 builds).
+
 ## 2. Per-file result caches
 
 `lint_cache.ResultCache(checker, version)` stores a checker's per-file result under

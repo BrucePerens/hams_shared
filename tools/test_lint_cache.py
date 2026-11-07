@@ -32,6 +32,12 @@ def make_unit(profile, crate, unit_hash, size, age_seconds, incremental=0):
     return paths
 
 
+def locked_free(path):
+    """True when nobody holds the exclusive lock beside `path`."""
+    with lint_cache.locked(path, wait=False) as held:
+        return held
+
+
 class CargoBudgetTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -120,6 +126,86 @@ class CargoBudgetTest(unittest.TestCase):
             self.assertNotEqual(target, self.target)
             self.assertTrue(os.path.isdir(target))
         self.assertFalse(os.path.exists(target))
+
+    # Tests [@ANCHOR: lint_cache:named_cargo_session]
+    def test_named_session_directory_is_under_the_budgeted_cargo_base(self):
+        cache = self._tmp.name
+        environ = {"XDG_CACHE_HOME": cache}
+        with lint_cache.named_cargo_session("relay-export-test", environ) as target:
+            self.assertEqual(target, lint_cache.cargo_target_dir("relay-export-test", environ))
+            self.assertEqual(os.path.dirname(target), lint_cache.cargo_base(environ))
+            self.assertTrue(os.path.isdir(target))
+            self.assertFalse(locked_free(target))  # the lock is held for the whole build
+        self.assertTrue(locked_free(target))
+        self.assertTrue(any("relay-export-test" in line for line in lint_cache.show_lines(environ)))
+
+    # Tests [@ANCHOR: lint_cache:named_cargo_session]
+    def test_named_session_prunes_before_use_and_clears_when_pruning_is_not_enough(self):
+        cache = self._tmp.name
+        base = {"XDG_CACHE_HOME": cache, "HAMS_LINT_CARGO_GB": str(9000 / lint_cache.GB), "HAMS_LINT_FREE_FLOOR_GB": "0"}
+        target = lint_cache.cargo_target_dir("relay-export-test", base)
+        profile = os.path.join(target, "debug")
+        old = make_unit(profile, "old", "aaaaaaaaaaaaaaaa", 4000, 5000)
+        new = make_unit(profile, "new", "cccccccccccccccc", 4000, 10)
+        make_unit(profile, "mid", "bbbbbbbbbbbbbbbb", 4000, 3000)
+        with lint_cache.named_cargo_session("relay-export-test", base):
+            self.assertFalse(any(os.path.exists(p) for p in old))  # least recently used went first
+            self.assertTrue(all(os.path.exists(p) for p in new))
+        tiny = {**base, "HAMS_LINT_CARGO_GB": "0"}
+        with lint_cache.named_cargo_session("relay-export-test", tiny) as cleared:
+            self.assertEqual(cleared, target)
+            self.assertEqual(lint_cache.dir_bytes(cleared), 0)  # cleared, not failed
+
+    # Tests [@ANCHOR: lint_cache:named_cargo_session]
+    def test_named_session_leaves_an_explicit_cargo_target_dir_alone(self):
+        make_unit(self.profile, "a", "0123456789abcdef", 1000, 10)
+        environ = {"XDG_CACHE_HOME": self._tmp.name, "CARGO_TARGET_DIR": self.target, "HAMS_LINT_CARGO_GB": "0"}
+        with lint_cache.named_cargo_session("relay-export-test", environ) as target:
+            self.assertEqual(target, self.target)
+        self.assertGreater(lint_cache.dir_bytes(self.target), 0)
+
+    # Tests [@ANCHOR: lint_cache:named_cargo_session]
+    def test_named_session_no_cache_uses_a_throwaway_directory(self):
+        environ = {"XDG_CACHE_HOME": self._tmp.name, "HAMS_LINT_NO_CACHE": "1"}
+        with lint_cache.named_cargo_session("relay-export-test", environ) as target:
+            self.assertTrue(os.path.isdir(target))
+            self.assertNotEqual(os.path.dirname(target), lint_cache.cargo_base(environ))
+        self.assertFalse(os.path.exists(target))
+
+    # Tests [@ANCHOR: lint_cache:named_cargo_session]
+    def test_named_session_name_is_part_of_the_directory(self):
+        environ = {"XDG_CACHE_HOME": self._tmp.name}
+        with lint_cache.named_cargo_session("other-test-build", environ) as target:
+            self.assertTrue(os.path.basename(target).startswith("other-test-build-"))
+
+    # Tests [@ANCHOR: lint_cache:other_caches]
+    def test_unbudgeted_caches_are_reported_with_sizes(self):
+        home = os.path.join(self._tmp.name, "home")
+        for relative, size in (("hams-lint-mirror/repo/file", 3000), (".cache/ms-playwright/chromium/file", 2000)):
+            path = os.path.join(home, relative)
+            os.makedirs(os.path.dirname(path))
+            with open(path, "wb") as handle:
+                handle.write(b"x" * size)
+        environ = {"HOME": home, "XDG_CACHE_HOME": os.path.join(home, ".cache")}
+        paths = {entry[1] for entry in lint_cache.other_caches(environ)}
+        self.assertEqual(paths, {os.path.join(home, "hams-lint-mirror"), "/opt/hams-testsrc",
+                                 os.path.join(home, ".cache", "ms-playwright"), "/var/lib/machines"})
+        text = "\n".join(lint_cache.show_lines(environ))
+        self.assertIn(f"other {os.path.join(home, 'hams-lint-mirror')}: 0.00 GB (not budgeted:", text)
+        self.assertIn("ms-playwright", text)
+
+    # Tests [@ANCHOR: lint_cache:legacy_cargo_dirs]
+    def test_old_export_test_directory_is_reported_and_cleared_with_the_cargo_caches(self):
+        cache = self._tmp.name
+        environ = {"XDG_CACHE_HOME": cache}
+        self.assertEqual([os.path.basename(p) for p in lint_cache.legacy_cargo_dirs(environ)],
+                         ["hams-cargo-target-lint", "hams-relay-export-test-target"])
+        old = os.path.join(cache, "hams-relay-export-test-target")
+        make_unit(os.path.join(old, "debug"), "a", "0123456789abcdef", 1000, 10)
+        self.assertTrue(any("hams-relay-export-test-target" in line for line in lint_cache.show_lines(environ)))
+        with unittest.mock.patch.dict(os.environ, environ), unittest.mock.patch("builtins.print"):
+            self.assertEqual(lint_cache.main(["clear", "cargo"]), 0)
+        self.assertFalse(os.path.exists(old))
 
     def test_legacy_directory_is_adopted_once(self):
         cache = self._tmp.name

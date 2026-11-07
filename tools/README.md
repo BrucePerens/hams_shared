@@ -227,6 +227,74 @@ Special concerns: runs one `git rev-parse --git-common-dir` for a worktree; no w
 `AnchorScanSiblingDirTests` in `test_test.py`, `resolve_repo_layout()`, and `verify_anchors.py`'s own
 `_add_sibling_repo_target()`.
 
+## Lint cache directories: named Cargo builds and the unbudgeted caches
+
+Written 2026-11-07. Code: `tools/lint_cache.py`; the runbook is `docs/runbooks/LINT_CACHES.md`. The relay export test
+(`test_export_source_release.py` in hams_com) compiled the relay in `~/.cache/hams-relay-export-test-target`, outside the
+budget; on `mac1-vm` it reached 19 GB and the lint cache's free-space floor then cleared the warm Cargo directory on every
+run. These anchors put that build under the budget and make every other cache visible.
+
+### `[@ANCHOR: lint_cache:named_cargo_session]` `named_cargo_session(name, environ=None, log=None)`
+
+Purpose: a context manager that gives a test which runs cargo (the relay export test) a Cargo target directory under the
+same budget, least-recently-used pruning, lock and unused-days rule as the lint Cargo directories.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `name` | str | Directory name stem, for example `relay-export-test`; the directory is `<cache>/hams-lint-cargo/<name>-<rustc release>-<8 hex>`. A path separator or empty string is the caller's error (not checked). |
+| `environ` | mapping or `None` | Environment to read (`XDG_CACHE_HOME` for the location, `CARGO_TARGET_DIR`, `HAMS_LINT_NO_CACHE`, `HAMS_LINT_MACHINE` and the `HAMS_LINT_*` budget overrides); `None` means `os.environ`. |
+| `log` | callable or `None` | Receives each `lint cache: ...` line (size against budget, prune, clear, removal). |
+
+Yields (str) the directory to pass as `CARGO_TARGET_DIR`:
+1. `HAMS_LINT_NO_CACHE=1`: a new throwaway directory, deleted when the block ends;
+2. a `CARGO_TARGET_DIR` already in `environ`: that directory, untouched (never pruned or locked);
+3. otherwise the named directory, after `prepare_cargo_target`: unused directories of the base removed, the directory
+   pruned (incremental data first, then whole units, oldest first, to 80 % of the budget) when it is over `cargo_gb` or
+   the disk is under `free_floor_gb`, and cleared when that is not enough. It never raises for lack of space.
+
+Special concerns: holds the exclusive flock `<dir>.lock` from before the prune until the block ends, so a second build in the
+same directory waits and a prune never runs under a live build; blocks while another holder has it. The budget is the
+machine's `cache_budgets` entry in `lint_machines.json` (key `HAMS_LINT_MACHINE`, else the host name). The caller should
+also set `CARGO_INCREMENTAL=0`, as the lint builds do, so no `incremental/` data accumulates. Not idempotent on disk: each
+entry may prune. Not for use from several threads of one process with the same name (the flock is per open file; the
+second waits for the first, which is the intent). See `CargoBudgetTest` in `test_lint_cache.py`.
+
+### `[@ANCHOR: lint_cache:legacy_cargo_dirs]` `legacy_cargo_dirs(environ=None)`
+
+Purpose: names the old Cargo target directories that predate the budget so `show` can report them and `clear cargo` can
+delete them.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `environ` | mapping or `None` | Environment for `cache_root` (`XDG_CACHE_HOME`, else `~/.cache`); `None` means `os.environ`. |
+
+Returns a list of two absolute paths, in this order: `<cache>/hams-cargo-target-lint` (the old single lint directory,
+which `adopt_legacy_dir` renames into the budget on first use) and `<cache>/hams-relay-export-test-target` (the relay
+export test's old directory, not adopted: its 19 GB was mostly incremental data). The paths need not exist. No side
+effects.
+
+### `[@ANCHOR: lint_cache:other_caches]` `other_caches(environ=None)`
+
+Purpose: the directories the lint and test steps create or need that no budget governs. `show_lines` (and so
+`python3 tools/lint_cache.py show`, `run_linters.py --lint-caches show` and `lint_remote.py caches`) reports the size of
+each one that exists, so none can grow unseen. They are reported, never pruned by this code, because each is needed.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `environ` | mapping or `None` | Environment to read `HOME` from (else `~` is expanded); `None` means `os.environ`. |
+
+Returns a list of `(label, path, why)` tuples (all str), always these four:
+
+| Label | Path | Why it is kept |
+|---|---|---|
+| lint mirror | `~/hams-lint-mirror` | The runner's copy of the repositories (8.6 GB on `mac1-vm`), refreshed by every run. |
+| test sources | `/opt/hams-testsrc` | Sources of the Odoo test hosts' test trees (26 GB on `mac1-vm`). |
+| playwright | `~/.cache/ms-playwright` | Browsers for the browser tests, downloaded once (0.6 GB). |
+| machines | `/var/lib/machines` | Root file systems for the arm64 Pi builds (7 GB on `mac1-vm`); needed. |
+
+Special concerns: no side effects; sizing walks the tree (tens of seconds for `/opt/hams-testsrc`) and skips files it
+cannot read (`/var/lib/machines` is root-only, so its size is what the running user can see).
+
 ## Odoo-test hosts and the lint runner; signal exits of test.py
 
 The mac1 VM (`hams-test-debian`) and bruce17 run Odoo browser tests (Odoo, PostgreSQL, Chromium) and are also lint runners and relay
