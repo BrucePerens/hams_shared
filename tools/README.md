@@ -227,6 +227,73 @@ Special concerns: runs one `git rev-parse --git-common-dir` for a worktree; no w
 `AnchorScanSiblingDirTests` in `test_test.py`, `resolve_repo_layout()`, and `verify_anchors.py`'s own
 `_add_sibling_repo_target()`.
 
+## Odoo-test hosts and the lint runner; signal exits of test.py
+
+The mac1 VM (`hams-test-debian`) and bruce17 run Odoo browser tests (Odoo, PostgreSQL, Chromium) and are also lint runners and relay
+`cargo test` hosts. On 2026-11-04 a relay build overlapped an Odoo browser test in the 11 GiB VM and test.py's OOM watchdog killed the
+Odoo run (exit 247). `remote_cargo_test.py` now takes the host's Odoo-test lock; the lint runner takes it too, through the entries below.
+
+### `[@ANCHOR: lint_lock:held_locks]` `HeldLocks`
+
+Purpose: a handle that stands for several open lock files at once, so a lint run's claim on a machine and its hold on that machine's
+Odoo-test lock are released together when the run's share ends. Defined in `lint_lock.py`; created by `lint_remote.dispatch()`;
+closed by `RemoteJob._run()` (through its `claim` attribute) in a `finally`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `handles` | list of open file objects | The locks held, in the order given. `None` entries passed to the constructor are dropped. |
+
+Constructor: `HeldLocks(handles)` with an iterable of open files or `None`. `close()` closes every handle and returns `None`; it may be
+called again (closing a closed file is a no-op). Invariants: after `close()` every flock it owned is released (the kernel also drops them
+if the process dies). Lifetime: owned by one `RemoteJob`; never shared between threads, never persisted. Anything with a `close()` method
+can be used where a claim is expected, which is why this quacks like the plain file `try_claim()` returns.
+
+### `[@ANCHOR: lint_lock:try_odoo_test_lock]` `try_odoo_test_lock(lock_name, directory=None)`
+
+Purpose: lets a lint run use a remote host that also runs Odoo tests only while no Odoo test run uses it, and keeps Odoo test runs off it
+meanwhile. `lint_remote.dispatch()` calls it (through `run_linters.py`) for every machine chosen for a run whose entry in
+`lint_machines.json` has `"odoo_test_lock": "<name>"` (the mac1 VM: `mac1`; bruce17: `bruce17`). The name is the lock file of
+`devbox_tools/remote_odoo_test.py` (`~/.cache/hams-remote-test/<name>.lock`, `remote_odoo_test.lock_path`), the same file
+`remote_cargo_test.try_lock` takes for relay builds.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `lock_name` | str | Odoo-test host name, without `.lock`. |
+| `directory` | str or `None` | Lock directory; `None` means `~/.cache/hams-remote-test` (`ODOO_TEST_LOCK_DIR`). Tests pass a temporary directory. |
+
+Returns the open, exclusively flocked file (keep it open for as long as the machine is in use; close it to release), stamped with
+`pid N lint run since <time>`; or `None` when another process holds the lock (an Odoo test run, a relay build, another lint run) or the
+directory cannot be created. It never raises for those causes and never waits.
+
+Special concerns: non-blocking; creates the directory and the lock file; no other side effects; safe to retry. The caller treats `None` as
+"this machine is busy": the machine is excluded and the run is planned again without it (whole or spread plans alike), so a lint run never
+queues behind an Odoo test or the reverse. The lock is not inherited by child processes. See also `HeldLocks`, `make_plan()` (its
+`exclude` set is honoured in every mode), and the tests `test_the_odoo_test_lock_is_exclusive_with_an_odoo_run_and_released_together_with_the_claim`
+in `test_lint_lock.py` and `test_a_machine_whose_odoo_test_lock_is_taken_is_not_used_and_the_lock_is_kept_for_the_run` in
+`test_lint_remote.py`.
+
+### `[@ANCHOR: test:signal_exit_verdict]` `signal_exit_verdict(returncode, watchdog_fired, odoo_result_lines)`
+
+Purpose: turns an Odoo process that a signal killed into a readable status and summary line. Before it, `run_cmd()` returned the
+negative `subprocess` code and `sys.exit(-9)` appeared as exit 247, and a run killed after `odoo.tests.result: 0 failed` looked like an
+ordinary failure. `run_cmd()` calls it once per run, after the process is reaped.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `returncode` | int | `Popen.returncode`: 0 or positive is a normal exit; `-N` means signal N. |
+| `watchdog_fired` | bool | True when this runner's `OOMWatchdog` set its `fired` event, that is, it sent the kill itself. |
+| `odoo_result_lines` | list of dict or `None` | `FailureExtractor.odoo_result_lines`: dicts with integer `failed`, `errors`, `total` for each `odoo.tests.result:` line seen. |
+
+Returns `(exit status, line)`. For a normal exit: `(returncode, None)`. For signal N: `(128 + N, line)`, the shell convention (SIGKILL: 137,
+SIGTERM: 143), and a line of the form `Odoo was killed by SIGKILL (signal 9; OOM watchdog: yes|no): exit status 137.` followed by either the
+verdict Odoo had printed ("still a failure because the process did not exit normally") or "no test verdict exists". A run is a failure in
+every signal case. An unknown signal number is named `signal N`. `run_cmd()` prints the line, logs it at error level and stores it in
+`FailureExtractor.signal_line`, which `finish_and_write()` prints in the summary unless the CPU-limit message (`cpu_limit_verdict`) already
+explains the kill.
+
+Special concerns: pure, no I/O, no locks. The status changed from 256 - N (247) to 128 + N, so anything that matched 247 must match 137.
+See also the test class `SignalExitVerdictTests` in `test_test.py`, `OOMWatchdog` and `cpu_limit_verdict()`.
+
 ## Staged-file size check
 
 `check_staged_files.py` (run by `git-hooks/pre-commit`) refuses a commit that stages a file over 5 MB (`MAX_BYTES`) or

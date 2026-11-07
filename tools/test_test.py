@@ -115,6 +115,42 @@ class OdooCpuLimitTests(unittest.TestCase):
         self.assertIn("TEST RUN INCOMPLETE", source)
 
 
+class SignalExitVerdictTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:signal_exit_verdict]
+
+    Exit 247 (`sys.exit(-9)`) was unreadable, and a run SIGKILLed after "0 failed" looked like a plain failure (2026-11-04)."""
+
+    RESULT = [{"failed": 0, "errors": 0, "total": 267}]
+
+    def test_a_clean_or_failing_exit_is_unchanged_and_has_no_line(self):
+        self.assertEqual(_test_runner.signal_exit_verdict(0, False, None), (0, None))
+        self.assertEqual(_test_runner.signal_exit_verdict(1, True, self.RESULT), (1, None))
+
+    def test_a_sigkill_from_the_watchdog_exits_137_and_says_so(self):
+        status, line = _test_runner.signal_exit_verdict(-signal.SIGKILL, True, None)
+        self.assertEqual(status, 137)
+        self.assertIn("killed by SIGKILL", line)
+        self.assertIn("OOM watchdog: yes", line)
+        self.assertIn("no test verdict exists", line)
+
+    def test_a_kill_after_zero_failed_names_the_verdict_and_stays_a_failure(self):
+        status, line = _test_runner.signal_exit_verdict(-signal.SIGKILL, False, self.RESULT)
+        self.assertEqual(status, 137)
+        self.assertIn("OOM watchdog: no", line)
+        self.assertIn("0 failed, 0 error(s) of 267 tests", line)
+        self.assertIn("still a failure", line)
+
+    def test_a_real_killed_child_gives_the_same_status_a_shell_reports(self):
+        proc = subprocess.Popen(["sleep", "60"])
+        proc.kill()
+        returncode = proc.wait(timeout=10)
+        self.assertEqual(_test_runner.signal_exit_verdict(returncode, False, None)[0], 128 + signal.SIGKILL)
+
+    def test_the_watchdog_flag_is_not_set_until_it_fires(self):
+        watchdog = _test_runner.OOMWatchdog(os.getpid(), os.getpid())
+        self.assertFalse(watchdog.fired.is_set())
+
+
 class RabbitMqWrapperTrapTests(unittest.TestCase):
     """The shell that runs RabbitMQ stops its process group on SIGTERM and exits cleanly. Its trap used to re-enter itself
     (its own `kill -TERM 0` reached it) until bash segfaulted on a stack overflow at the end of every test run."""

@@ -50,6 +50,7 @@ import threading
 import time
 
 import lint_cache
+import lint_lock
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 INVENTORY = os.path.join(TOOLS, "lint_machines.json")
@@ -375,11 +376,11 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
         if probe.load1 > probe.cores * ratio:
             skipped[name] = f"busy: load {probe.load1:.1f} above {probe.cores * ratio:.1f}"
             continue
+        if name in exclude:
+            skipped[name] = "claimed by another run (a lint claim, or the Odoo-test lock of a host that an Odoo test run is using)"
+            continue
         if whole and mode == "auto":
             # A whole run waits for nothing: a machine with a run in progress or in line is not a place to send it.
-            if name in exclude:
-                skipped[name] = "claimed by another run started on this machine"
-                continue
             if probe.held or probe.queued >= int(machine.get("max_concurrent", 1)):
                 skipped[name] = f"busy: {max(probe.queued, 1)} lint run(s) hold or wait for its lock"
                 continue
@@ -1007,7 +1008,7 @@ def repo_roles(repo_root, sibling_dir, shared_dir):
 
 def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cores, local_load,
              where=False, inventory=None, transports=None, probes=None, out=print, whole=False, claim=None, claimed=None,
-             unfit=None):
+             unfit=None, odoo_lock=None):
     """Split `steps` between this machine and the others.
 
     Returns (local_steps, jobs). With `where` it prints the plan and returns ([], []). Steps that are
@@ -1016,7 +1017,9 @@ def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cor
     `whole`: this machine's run lock is busy (lint_lock.local_busy), so ship the whole run to an idle
     machine (make_whole_plan). `claim(host)` returns a handle that keeps another run on this machine from
     choosing the same machine (lint_lock.try_claim; None when taken), `claimed(hosts)` the hosts already
-    taken; a claimed machine is not used by a whole run."""
+    taken; a claimed machine is not used by a whole run. `odoo_lock(name)` takes the dev box's Odoo-test lock for a machine whose
+    inventory entry has `odoo_test_lock` (lint_lock.try_odoo_test_lock; None when an Odoo test run holds it): such a machine is
+    not used while that lock is taken, and the run keeps the lock until its share ends."""
     inventory = inventory if inventory is not None else load_inventory()
     if not (roots.get("hams_open") and os.path.isdir(roots["hams_open"]) and roots.get("hams_shared")):
         out("[*] --remote: needs a hams_open checkout with its hams_shared; running everything here")
@@ -1053,8 +1056,19 @@ def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cor
             handle = claim(host)
             if handle is None and whole:
                 lost.add(host)  # another run took it between the probe and now: plan again without it
-            else:
-                handles[host] = handle  # a spreading run goes on without the claim: it queues on the machine
+                continue
+            odoo_name = inventory[host].get("odoo_test_lock")
+            if odoo_name and odoo_lock:
+                # The machine is also an Odoo test host (the mac1 VM, bruce17): a lint run next to an Odoo browser test ran
+                # it out of memory (2026-11-04), so the lint run holds the host's Odoo-test lock too, or does not use it.
+                odoo = odoo_lock(odoo_name)
+                if odoo is None:
+                    if handle is not None:
+                        handle.close()
+                    lost.add(host)
+                    continue
+                handle = lint_lock.HeldLocks([handle, odoo])
+            handles[host] = handle  # a spreading run goes on without the claim: it queues on the machine
         if not lost:
             break
         for handle in handles.values():

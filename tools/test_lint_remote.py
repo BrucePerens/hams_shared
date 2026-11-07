@@ -364,6 +364,46 @@ class DispatchWholeRunTests(unittest.TestCase):
         local, jobs = self.dispatch({"big": down, "small": down}, True, claim=lambda host: io.StringIO(), claimed=lambda hosts: set())
         self.assertEqual((len(local), jobs), (3, []))
 
+    def test_a_machine_whose_odoo_test_lock_is_taken_is_not_used_and_the_lock_is_kept_for_the_run(self):
+        """Tests [@ANCHOR: lint_lock:try_odoo_test_lock]"""
+        inventory = dict(INVENTORY, big=dict(INVENTORY["big"], odoo_test_lock="bigbox"))
+        asked = []
+
+        def odoo_lock(name):
+            asked.append(name)
+            return None
+
+        transports = {n: object() for n in ("big", "small")}
+        local, jobs = lr.dispatch(
+            "auto", self.steps, [s.name for s in self.steps], DURATIONS, self.dicts, self.roots, "hams_open", 16, 40.0,
+            inventory=inventory, transports=transports, probes={"big": WFULL, "small": WFULL}, out=self.out.append, whole=True,
+            claim=lambda host: io.StringIO(), claimed=lambda hosts: set(), odoo_lock=odoo_lock,
+        )
+        self.assertEqual([j.host for j in jobs], ["small"], "the machine an Odoo test run holds is skipped")
+        self.assertEqual(set(asked), {"bigbox"} if asked else set(), "only a machine with odoo_test_lock asks for the lock")
+        held = io.StringIO()
+        local, jobs = lr.dispatch(
+            "auto", self.steps, [s.name for s in self.steps], DURATIONS, self.dicts, self.roots, "hams_open", 16, 40.0,
+            inventory=dict(inventory, small=dict(INVENTORY["small"], odoo_test_lock="smallbox")), transports=transports,
+            probes={"big": WFULL, "small": WFULL}, out=self.out.append, whole=True,
+            claim=lambda host: io.StringIO(), claimed=lambda hosts: set(), odoo_lock=lambda name: held,
+        )
+        self.assertEqual(len(jobs), 1)
+        self.assertFalse(held.closed, "the Odoo-test lock stays held while the run's share executes")
+        jobs[0].claim.close()
+        self.assertTrue(held.closed, "and is released with the claim")
+
+    def test_with_every_odoo_test_lock_taken_the_run_stays_here(self):
+        inventory = {k: dict(v, odoo_test_lock=k) if "ssh" in v else v for k, v in INVENTORY.items()}
+        transports = {n: object() for n in ("big", "small")}
+        for whole in (True, False):
+            local, jobs = lr.dispatch(
+                "auto", self.steps, [s.name for s in self.steps], DURATIONS, self.dicts, self.roots, "hams_open", 16, 40.0,
+                inventory=inventory, transports=transports, probes={"big": WFULL, "small": WFULL}, out=self.out.append, whole=whole,
+                claim=lambda host: io.StringIO(), claimed=lambda hosts: set(), odoo_lock=lambda name: None,
+            )
+            self.assertEqual((len(local), jobs), (3, []), "whole=%s" % whole)
+
     def test_without_whole_the_old_spreading_plan_is_used_and_a_lost_claim_does_not_stop_it(self):
         local, jobs = self.dispatch({"big": WFULL, "small": WFULL}, False, claim=lambda host: None)
         self.assertEqual([s.name for s in local], ["check_x", "check_summation_bias"])

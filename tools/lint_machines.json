@@ -31,6 +31,7 @@
       "jobs": 3,
       "nice": 19,
       "max_concurrent": 1,
+      "odoo_test_lock": "mac1",
       "max_load_ratio": 0.6,
       "note": "Debian 13 arm64 Lima VM hams-test-debian on the Mac mini mac1 (Bruce's machine; the VM also runs the production FCC ULS sync): lowest priority, 3 workers, never started by the lint runner (a stopped VM is reported unreachable). Provisioned for lint 2026-11-02 and completed for every lint step 2026-11-03 (the dev box's Python test stack, python3-typeshed; its Odoo, PostgreSQL 18 and kopia were already there). Never touched by the provisioning: the fcc-uls-sync unit, the fccsync account and /opt/fcc-uls-sync. Its PostgreSQL has a createdb role for the ai user (tools tests); hams_shared node_modules are installed in the mirror by the runner (npm ci).",
       "provisioned": {
@@ -54,6 +55,7 @@
       "jobs": 2,
       "nice": 10,
       "max_concurrent": 1,
+      "odoo_test_lock": "bruce17",
       "max_load_ratio": 0.8,
       "note": "HP Notebook board 81FF (Core i7-7500U, 2 cores / 4 threads, 7.6 GiB, 256 GB SATA SSD), Debian 13 x86-64, wifi only (RTL8188EE; hp-notebook-81ff-support fixes its PCIe error flood). A light helper and clean-room test host: lint fan-out, one Odoo module test at a time, small CI. Provisioned 2026-11-04 with tools/provision_build_host.sh via lint_remote.py provision bruce17 --apply.",
       "provisioned": {

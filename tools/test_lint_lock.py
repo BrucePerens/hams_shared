@@ -281,5 +281,32 @@ class DistributionTests(Base):
         self.assertEqual(out, "False", "and gets it once the owner let go: no child kept it open")
 
 
+
+    def test_the_odoo_test_lock_is_exclusive_with_an_odoo_run_and_released_together_with_the_claim(self):
+        """Tests [@ANCHOR: lint_lock:try_odoo_test_lock]
+        Tests [@ANCHOR: lint_lock:held_locks]"""
+        directory = os.path.join(self.cache, "odoo-locks")
+        odoo_run = lint_lock.try_odoo_test_lock("mac1", directory)  # stands for remote_odoo_test.py holding mac1.lock
+        self.assertIsNotNone(odoo_run)
+        self.assertIsNone(lint_lock.try_odoo_test_lock("mac1", directory), "an Odoo test run holds it: the lint run must not take it")
+        other = lint_lock.try_odoo_test_lock("bruce17", directory)
+        self.assertIsNotNone(other, "the lock is per host")
+        other.close()
+        odoo_run.close()
+        taken = lint_lock.try_odoo_test_lock("mac1", directory)
+        self.assertIsNotNone(taken)
+        with open(os.path.join(directory, "mac1.lock"), encoding="utf-8") as stamp:
+            self.assertIn("lint run", stamp.read())
+        claim = lint_lock.try_claim("mac1-vm", self.env)
+        pair = lint_lock.HeldLocks([claim, taken, None])
+        self.assertIsNone(lint_lock.try_odoo_test_lock("mac1", directory))
+        pair.close()
+        pair.close()
+        self.assertEqual(lint_lock.claimed(["mac1-vm"], self.env), set(), "closing the pair released the claim")
+        reopened = lint_lock.try_odoo_test_lock("mac1", directory)
+        self.assertIsNotNone(reopened, "and the Odoo-test lock")
+        reopened.close()
+
+
 if __name__ == "__main__":
     unittest.main()
