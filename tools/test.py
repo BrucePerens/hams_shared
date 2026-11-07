@@ -2555,16 +2555,19 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
 
 # [@ANCHOR: test:missing_host_apt_packages]
-def missing_host_apt_packages(pkg_specs, os_id, dpkg_installed, pip_installed):
+def missing_host_apt_packages(pkg_specs, os_id, dpkg_installed, pip_installed, have_cargo=False):
     """Names of the manifest's apt packages that are absent, in manifest order. Full entry: tools/README.md.
 
     A package listed in infrastructure.PIP_FALLBACK_APT_PACKAGES counts as present when its pip distribution
     is installed, because that is what provisioning installs on a release with no apt candidate (awscli on
-    Ubuntu 24.04)."""
+    Ubuntu 24.04). A Rust toolchain package (infrastructure.APT_RUST_TOOLCHAIN_NAMES) counts as present when
+    `have_cargo`: provisioning never installs it over a cargo already on PATH (rustup)."""
     missing = []
     for pkg_spec in pkg_specs:
         pkg_name = pkg_spec.get("debian_name", pkg_spec["name"]) if os_id == "debian" else pkg_spec["name"]
         if dpkg_installed(pkg_name):
+            continue
+        if have_cargo and pkg_name in infrastructure.APT_RUST_TOOLCHAIN_NAMES:
             continue
         pip_name = infrastructure.PIP_FALLBACK_APT_PACKAGES.get(pkg_name)
         if pip_name and pip_installed(pip_name):
@@ -2600,7 +2603,8 @@ def check_host_apt_packages():
     os_id = infrastructure.get_os_identifier()
     try:
         missing = missing_host_apt_packages(
-            infrastructure.MANIFEST.get("apt_packages", []), os_id, _dpkg_installed, _pip_distribution_installed
+            infrastructure.MANIFEST.get("apt_packages", []), os_id, _dpkg_installed, _pip_distribution_installed,
+            have_cargo=shutil.which("cargo") is not None,
         )
     except FileNotFoundError as e:
         _logger.debug("Skipping APT package check, dpkg-query not found: %s", e)
