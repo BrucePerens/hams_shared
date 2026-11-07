@@ -177,6 +177,10 @@ class SelectionFixture(unittest.TestCase):
         env = dict(os.environ)
         env["HAMS_ALLOW_STALE_SHARED"] = "1"
         env["HAMS_LINT_NO_LOCK"] = "1"  # the selection tests are not heavy runs; never queue behind a real one
+        # The workspace repositories have no .gitignore: a tools/__pycache__ written by this run is an untracked
+        # change to the checker tooling, and --changed then selects every step. Passed only on hosts whose git
+        # ignores __pycache__ globally or whose environment already set this (found in a cloud session, 2026-11-07).
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         return subprocess.run(
             [sys.executable, os.path.join(self.open_repo, "tools", "run_linters.py"), *args],
             cwd=self.open_repo,
