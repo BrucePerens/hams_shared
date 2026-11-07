@@ -13205,7 +13205,6 @@ def _provision_cache_manager_role(
     purpose="cache_manager.py",
     owner="odoo:hamsd_cache_manager",
     mode=0o640,
-    legacy_env_file="/opt/hams/etc/keys/cache_manager_db.env",
 ):
     """
     Creates (or rotates the password of) a dedicated, minimally-privileged PostgreSQL role for
@@ -13213,10 +13212,9 @@ def _provision_cache_manager_role(
 
     The daemon runs as its own account (hamsd_cache_manager, FAMILY_ACCOUNT_UNITS `db_login`), so its file is in the family key
     directory, odoo:hamsd_cache_manager 0640: the account reads it through the group, and odoo, a member of the group, reads it
-    when distributed_redis_cache's real-daemon Odoo test starts cache_manager.py as odoo on a test host. `legacy_env_file` is
-    where the file lived before (odoo:odoo 0600): while env_file does not exist yet, the password recorded there is kept, so
-    moving the file never rotates the role's password under a running daemon. The legacy file is left in place (the coordinator
-    removes it once the daemon runs from the new path); None for a caller with no earlier path.
+    when distributed_redis_cache's real-daemon Odoo test starts cache_manager.py as odoo on a test host. The old flat file
+    (keys/cache_manager_db.env, odoo:odoo 0600) is neither read nor kept: its password is not carried over, so a host that
+    still had only that file would get the role's password rotated here (the coordinator removed it on hams1 2026-11-07).
 
     Mirrors distributed_redis_cache/scripts/provision_cache_manager_db_role.py's own role-creation
     SQL and env-file shape (see that script's own docstring for why a separate role and a separate
@@ -13244,8 +13242,6 @@ def _provision_cache_manager_role(
     hand to something env_file does not record; delete env_file to force a rotation.
     """
     existing_password = _read_env_value(env_file, "DB_PASS")
-    if not existing_password and legacy_env_file and not os.path.exists(env_file):
-        existing_password = _read_env_value(legacy_env_file, "DB_PASS")
     role_exists = _role_exists(role_name)
     password = existing_password or generate_secure_password()
     if not (role_exists and existing_password):
@@ -13361,7 +13357,6 @@ def _provision_pager_monitor_role(run_cmd_func, db_name):
         # pager-os-monitor.service still runs as odoo and loads this file through EnvironmentFile= (SHARED_ODOO_ACCOUNT_UNITS).
         owner="odoo:odoo",
         mode=0o600,
-        legacy_env_file=None,
     )
 
 
