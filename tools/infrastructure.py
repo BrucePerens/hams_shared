@@ -9751,6 +9751,65 @@ WantedBy=multi-user.target
             "external_fetch": "queries the DNS root servers every 5 minutes and api.github.com once a day (the credential-expiry check)",
         },
         {
+            # pager_duty's log analyzer (hams_open pager_duty/daemon/pager_log_analyzer.py): tails the log files named in the
+            # exported pager_config.json for the active pager.log.pattern regexes and hands a match to the monitor through the
+            # Redis list pager_log_anomalies. Added 2026-11-07 (Bruce approved paging on the PANIC and CRITICAL patterns only).
+            #
+            # It is the one pager unit that runs as root, because its own isolation sequence needs it: it reads the exported
+            # config (odoo-owned 0600 in a 700 directory), chroots to /var/log, empties the capability bounding set and
+            # becomes nobody:adm before it opens a single log file (so a log file it cannot read as nobody:adm, group adm,
+            # stays unread: see the checklist in the pagerduty-maintenance-flag-follow-ups to-do). The capability set is only
+            # what that sequence uses: CAP_DAC_READ_SEARCH (the config), CAP_SYS_CHROOT, CAP_SETUID and CAP_SETGID (the
+            # drop) and CAP_SETPCAP (PR_CAPBSET_DROP; without it the bounding-set drop fails and the daemon would log that
+            # it succeeded). Every other directive is the monitor's: ProtectSystem=strict with no ReadWritePaths (it
+            # writes nothing; /var/log is read-only to it), ProtectHome, PrivateTmp, PrivateDevices, NoNewPrivileges (it
+            # does not block chroot or setresuid), the same address families. It loads only redis.env (REDIS_HOST/PORT/
+            # USERNAME/PASSWORD; the daemon resolves REDIS_HOST before the chroot), never an Odoo key, a database
+            # login or the SMTP settings: it only talks to Redis. PAGER_CONFIG_PATH names the same exported file as the
+            # monitor (the unit's resolve_config_path rule).
+            "path": "/opt/hams/systemd/pager-log-analyzer.service",
+            "content": """\
+[Unit]
+Description=Pager Duty Log Analyzer (log-pattern matches to the monitor through Redis)
+After=network.target redis-server.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction. Root only for the daemon's own chroot and privilege drop (see the MANIFEST comment).
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_CHROOT CAP_SETUID CAP_SETGID CAP_SETPCAP
+Type=simple
+User=root
+WorkingDirectory=/opt/hams/src/hams_open/pager_duty/daemon
+
+EnvironmentFile=/opt/hams/etc/redis.env
+Environment=PAGER_CONFIG_PATH=/opt/hams/spool/pager_duty/pager_config.json
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/pager_duty/daemon/pager_log_analyzer.py
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pager-log-analyzer
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             # Reports a failed daemon to the Odoo exception tickets (Helpdesk > Server Exceptions, source "External
             # daemon"): hams_open hams_helpdesk/daemon/ (README.md there). Every production service has an
             # OnFailure=hams-exception-report@%n.service drop-in (exception_report_dropin_entries, appended to this

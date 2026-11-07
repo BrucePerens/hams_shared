@@ -4487,6 +4487,7 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "relay.manuals.publish.service": "reads files of the deployed repository and signs through a local socket; no outside server",
         "relay.manuals.publish.timer": "activates relay.manuals.publish.service (local)",
         "pdns.sync.service": "RabbitMQ consumer writing to the local PowerDNS API",
+        "pager-log-analyzer.service": "reads local log files and talks only to the local Redis; fetches nothing",
         "hams-site-monitor.service": "probes local ports, our own site and units; posts only to the operator's own webhook or SMTP",
         "hams-site-monitor.timer": "activates hams-site-monitor.service (local)",
         "stray.odoo.shell.detector.service": "inspects local processes",
@@ -7178,6 +7179,66 @@ class ExceptionReportUnitTests(unittest.TestCase):
         with open(os.path.join(daemon, "hams-exception-report-crash.conf"), encoding="utf-8") as f:
             self.assertEqual(body(f.read()), body(infra.EXCEPTION_REPORT_CRASH_DROPIN_CONTENT))
         self.assertTrue(os.path.isfile(os.path.join(daemon, "exception_reporter.py")))
+
+
+class PagerLogAnalyzerUnitTests(_SafePatchTestCase):
+    """Tests [@ANCHOR: infrastructure:boot_service_unit_names]
+
+    The pager-log-analyzer.service unit in the MANIFEST (2026-11-07, Bruce approved paging on the PANIC and CRITICAL log
+    patterns). The analyzer chroots to /var/log and drops to nobody:adm by itself, so the unit is the one pager unit that
+    runs as root, with only the capabilities that sequence uses."""
+
+    UNIT = "pager-log-analyzer.service"
+    DAEMON = "/opt/hams/src/hams_open/pager_duty/daemon/pager_log_analyzer.py"
+
+    def _text(self):
+        matches = [
+            spec["content"]
+            for spec in infra.MANIFEST["static_files"]
+            if spec["path"] == "/opt/hams/systemd/" + self.UNIT
+        ]
+        self.assertEqual(len(matches), 1, "the MANIFEST must carry exactly one pager-log-analyzer.service")
+        return matches[0]
+
+    def test_unit_is_enabled_at_boot_and_runs_the_deployed_module_file(self):
+        self.assertIn(self.UNIT, infra.boot_service_unit_names())
+        text = self._text()
+        self.assertIn("ExecStart=/usr/bin/python3 " + self.DAEMON + "\n", text)
+        self.assertIn("Restart=always", text)
+        self.assertNotIn("/opt/odoo/addons", text)
+        self.assertNotIn("/etc/pager_daemons.env", text)
+
+    def test_unit_loads_the_redis_login_only_and_names_the_monitors_config_file(self):
+        files = re.findall(r"^EnvironmentFile=(\S+)$", self._text(), re.M)
+        self.assertEqual(files, ["/opt/hams/etc/redis.env"])
+        self.assertIn("Environment=PAGER_CONFIG_PATH=/opt/hams/spool/pager_duty/pager_config.json\n", self._text())
+
+    def test_unit_has_the_monitors_sandbox_and_only_the_capabilities_of_its_own_isolation_sequence(self):
+        text = self._text()
+        for line in ("ProtectSystem=strict", "ProtectHome=read-only", "PrivateTmp=true", "PrivateDevices=true",
+                     "NoNewPrivileges=true", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "User=root"):
+            self.assertIn(line + "\n", text)
+        self.assertNotIn("ReadWritePaths", text)
+        caps = re.search(r"^CapabilityBoundingSet=(.*)$", text, re.M).group(1).split()
+        self.assertEqual(sorted(caps), ["CAP_DAC_READ_SEARCH", "CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID", "CAP_SYS_CHROOT"])
+        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.UNIT), set())
+
+    def test_unit_is_prod_only_local_only_and_not_a_shared_odoo_unit(self):
+        spec = [s for s in infra.MANIFEST["static_files"] if s["path"] == "/opt/hams/systemd/" + self.UNIT][0]
+        self.assertEqual(spec["environments"], ["prod"])
+        self.assertNotIn(self.UNIT, infra.external_fetch_unit_names())
+        self.assertNotIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
+
+    def test_the_file_the_unit_runs_exists_in_hams_open(self):
+        here = os.path.dirname(os.path.realpath(infra.__file__))
+        found = False
+        while here != os.path.dirname(here):
+            if os.path.isfile(os.path.join(here, "pager_duty", "daemon", "pager_log_analyzer.py")):
+                found = True
+                break
+            here = os.path.dirname(here)
+        if not found:  # a hams_shared-only checkout has no hams_open above it
+            self.skipTest("no hams_open checkout above this hams_shared")
 
 
 class PagerOsMonitorUnitTests(_SafePatchTestCase):
