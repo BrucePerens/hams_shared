@@ -1072,10 +1072,6 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "Relay and auth behavior: Bruce reviews and merges changes to the relay units himself (night rules), so it is not "
         "migrated unattended (plan section 13)."
     ),
-    "hams.simulated.band.service": (
-        "Its credentials in /etc/hams-band are hand-placed odoo-owned files outside the key flow; an account change needs "
-        "those files provisioned in the MANIFEST first (plan section 13)."
-    ),
     "hams.simulated.bots.service": (
         "Credentials in /etc/hams-bots are hand-placed odoo-owned files outside the key flow, and the bots write "
         "/opt/hams/cache/whisper; both need MANIFEST ownership before an account change (plan section 13)."
@@ -1598,6 +1594,16 @@ FAMILY_ACCOUNT_UNITS = {
         "no_state": True,
         "no_key": True,
     },
+    # The Simulated Band's SFU holds no Odoo key and loads no environment file. It writes only the QSO recordings, through the
+    # production drop-in qso-recording.conf (so the base unit's ReadWritePaths= is empty: `no_state`), and odoo reads those
+    # recordings through the group (`odoo_reads`). Its hand-placed secrets are in /etc/hams-band, root:hamsd_simband 0750.
+    "hams.simulated.band.service": {
+        "user": "hamsd_simband",
+        "environment_files": frozenset(),
+        "no_state": True,
+        "no_key": True,
+        "odoo_reads": True,
+    },
     # distributed_redis_cache's invalidation daemon holds no Odoo key. Its one credential is the CONNECT-only PostgreSQL login
     # that provisioning writes (_provision_cache_manager_role), and the daemon reads that file itself, so `db_login` names it:
     # the file lives in the family key directory, odoo:hamsd_cache_manager 0640, the same shape as an Odoo key. odoo is in the
@@ -2043,6 +2049,20 @@ MANIFEST = {
             # the traversal group plus the ACL entries on the directories it passes through are all it has.
             "user": "hamsd_cache_manager",
             "group": "hamsd_cache_manager",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/hams_simulated_band (hams.simulated.band.service): the Simulated Band's WebRTC SFU. No Odoo key; it reads the
+            # hand-placed /etc/hams-band secrets through the group and writes the QSO recordings. odoo joins this group only to
+            # READ the recordings (ham_communications_consent's ingest scan, the session log and the recording portal), never to
+            # write them. Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_simband",
+            "group": "hamsd_simband",
             "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
@@ -3232,18 +3252,36 @@ MANIFEST = {
         },
 
         {
-            # Simulated Band recordings: the SFU (hams.simulated.band.service, User=odoo) writes one .opus plus .json
-            # sidecar per recorded contact here, and Odoo (same account) reads them: ham_communications_consent's ingest
+            # Simulated Band recordings: the SFU (hams.simulated.band.service, User=hamsd_simband since 2026-11-07) writes one
+            # .opus plus .json sidecar per recorded contact here, and Odoo reads them: ham_communications_consent's ingest
             # scan and ham_simulated_band's session log, both through the system parameter
             # ham_communications_consent.qso_recording_root, which a ham_communications_consent migration sets to this path.
+            # Odoo only lists and opens them (os.listdir, open for reading; checked 2026-11-07), so it reads through the group:
+            # odoo is in hamsd_simband (FAMILY_ACCOUNT_UNITS `odoo_reads`) and the unit's UMask=0027 makes new files 0640.
+            # recursive_owner hands the recordings the SFU wrote as odoo to the new account (owner only, never the mode).
             # Recordings are retained forever (Bruce's standing rule; the Simulated Band is public like a ham band), so
             # nothing deletes in here; the pager check on this filesystem is what warns before it fills.
             # Production only: a test environment never sets HAMS_QSO_RECORDING_DIR, and a set variable with a
             # missing directory is a startup panic by design. Not mounted into any other runtime.
             "path": "/var/lib/hams/qso_recordings",
-            "owner": "odoo:odoo",
+            "owner": "hamsd_simband:hamsd_simband",
             "provision_mode": "750",
+            "recursive_owner": True,
             "environments": ["prod"],
+        },
+        {
+            # The band server's hand-placed secrets: band_bot_keys (HAMS_BAND_BOT_KEYS_FILE, one name:secret line per bot
+            # host, minted with daemons/hams_simulated_band/tools/new_bot_key.sh) and, where a host sets it, the identity
+            # key (HAMS_BAND_IDENT_KEY_FILE, tools/new_ident_key.py). Their content is placed by a person, never by
+            # provisioning; only the directory is the MANIFEST's. Owned by root (only root edits a key), group hamsd_simband,
+            # 0750: the SFU's account reads through the group, nobody else lists it. The SFU re-reads band_bot_keys on every bot
+            # connection and on a sweep (bot_auth.rs: deleting a line revokes a host at once), so the file stays a real path
+            # the account reads, mode 0640 root:hamsd_simband (the SFU accepts 0600 or 0640 and nothing wider); a
+            # LoadCredential= snapshot would end that revocation.
+            "path": "/etc/hams-band",
+            "owner": "root:hamsd_simband",
+            "provision_mode": "750",
+            "environments": ["prod", "test"],
         },
         {
             "path": "/var/lib/odoo/backups",
@@ -8341,8 +8379,29 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 CapabilityBoundingSet=
 ReadWritePaths=
+# Its own account, hamsd_simband (hams_com docs/proposals/DAEMON_OS_ISOLATION_PLAN.md section 17). Code audit of
+# daemons/hams_simulated_band/src, 2026-11-07: environment BIND_ADDR (default 127.0.0.1:3000), HAMS_BAND_* (bot_auth.rs,
+# ident.rs: the key files HAMS_BAND_BOT_KEYS_FILE and HAMS_BAND_IDENT_KEY_FILE, both 0600 or 0640, re-read while running),
+# HAMS_SIMULATED_BAND_ICE_SERVERS and the recording directory (named only by the production drop-in, qso-recording.conf),
+# its one write;
+# starts no process; lists interfaces with getifaddrs over netlink (rtc-shared via nix), reads no top-level /proc file of any
+# dependency, so ProcSubset=pid holds; looks at no other process. Odoo reads the recordings through the group, hence 0027.
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=simple
-User=odoo
+User=hamsd_simband
+Group=hamsd_simband
 WorkingDirectory=/opt/hams/daemons/hams_simulated_band
 
 # Added 2026-10-02 -- like hams.simulated.bots.service's own 2026-09-30 fold-in
@@ -8350,7 +8409,8 @@ WorkingDirectory=/opt/hams/daemons/hams_simulated_band
 # on hams1 (/etc/systemd/system/hams.simulated.band.service.d/bot-keys.conf,
 # dated 2026-09-24). It is a file *path*, not a secret: the per-host bot key
 # lines (minted with daemons/hams_simulated_band/tools/new_bot_key.sh) stay
-# hand-placed at this path, mode 0600/0640, never in this unit text. Without
+# hand-placed at this path, root:hamsd_simband 0640 (the directory is the
+# MANIFEST's, root:hamsd_simband 0750), never in this unit text. Without
 # the variable the SFU starts but refuses every QAI (bot) client; with it set
 # and the file missing, the SFU fails fast at startup by design (bot_auth.rs).
 # Since 2026-10-04 a production-style provisioning run also enables this unit at boot

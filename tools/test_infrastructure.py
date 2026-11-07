@@ -5034,7 +5034,7 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
         "adif.ingress.service", "adif.processor.service", "backup.worker.service",
         "code.review.sweep.service", "credential.touch.timer.service", "event.ai.enrichment.service",
         "hams-exception-report@.service", "hams.daemon.keys.service", "hams.data.relay.service",
-        "hams.relay.bridge.service", "hams.simulated.band.service", "hams.simulated.bots.service",
+        "hams.relay.bridge.service", "hams.simulated.bots.service",
         "hams.simulated.observer.service", "pager-os-monitor.service", "stray.odoo.shell.detector.service",
         "ticket.triage.event.service", "ticket.triage.service",
     )
@@ -5226,13 +5226,19 @@ class SimulatedBandRecordingProvisioningTests(unittest.TestCase):
         # One path in both lines, and nothing else writable.
         self.assertEqual(set(re.findall(r"/var/lib/[\w/]+", text)), {self.PATH})
 
-    def test_the_directory_is_odoo_owned_private_and_production_only(self):
+    def test_the_directory_is_the_band_accounts_private_and_production_only(self):
+        # Since 2026-11-07 the SFU runs as hamsd_simband; odoo reads the recordings through the group (it only lists and opens
+        # them), and recursive_owner hands the recordings written as odoo to the new account.
         spec = self._directory()
-        self.assertEqual(spec["owner"], "odoo:odoo")
+        self.assertEqual(spec["owner"], "hamsd_simband:hamsd_simband")
         self.assertEqual(spec["provision_mode"], "750")
+        self.assertTrue(spec["recursive_owner"])
         self.assertEqual(spec["environments"], ["prod"])
         self.assertNotIn("runtime_mount", spec)
         self.assertNotIn("preserve_existing", spec)
+        account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == "hamsd_simband"][0]
+        self.assertIn("odoo", account["add_to_users"])
+        self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, "UMask"), ["0027"])
 
     def test_the_dropin_is_root_owned_world_readable_and_production_only(self):
         spec = self._dropin()
@@ -5257,6 +5263,69 @@ class SimulatedBandRecordingProvisioningTests(unittest.TestCase):
             text = spec.get("content") or ""
             if self.PATH in text:
                 self.assertNotRegex(text, r"(?i)\b(rm|find\b.*-delete|tmpfiles|systemd-tmpfiles)\b", spec["path"])
+
+
+class SimulatedBandAccountTests(unittest.TestCase):
+    """The Simulated Band SFU on its own account, hamsd_simband (daemon OS isolation, 2026-11-07). Derived from
+    daemons/hams_simulated_band/src: no Odoo key, no environment file, the hand-placed secrets in /etc/hams-band re-read while
+    running, the recordings its only write, interfaces listed over netlink, no other process looked at."""
+
+    UNIT = "hams.simulated.band.service"
+
+    def _values(self, directive):
+        return infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, directive)
+
+    def test_the_unit_left_the_shared_account(self):
+        self.assertEqual((self._values("User"), self._values("Group")), (["hamsd_simband"], ["hamsd_simband"]))
+        self.assertNotIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertEqual(infra.FAMILY_ACCOUNT_UNITS[self.UNIT]["user"], "hamsd_simband")
+
+    def test_the_unit_carries_the_isolation_set_and_keeps_netlink(self):
+        expected = {
+            "ProtectProc": ["invisible"], "ProcSubset": ["pid"], "UMask": ["0027"], "ProtectKernelTunables": ["true"],
+            "ProtectKernelModules": ["true"], "ProtectKernelLogs": ["true"], "ProtectControlGroups": ["true"],
+            "ProtectClock": ["true"], "RestrictNamespaces": ["true"], "RestrictRealtime": ["true"],
+            "RestrictSUIDSGID": ["true"], "LockPersonality": ["true"], "SystemCallArchitectures": ["native"],
+            "CapabilityBoundingSet": [], "ReadWritePaths": [], "EnvironmentFile": [], "SupplementaryGroups": [],
+        }
+        for directive, value in expected.items():
+            with self.subTest(directive=directive):
+                self.assertEqual(self._values(directive), value)
+        self.assertEqual(sorted(self._values("RestrictAddressFamilies")), ["AF_INET", "AF_INET6", "AF_NETLINK", "AF_UNIX"])
+
+    def test_the_bot_key_file_stays_a_path_the_account_reads_in_a_root_owned_directory(self):
+        # The SFU re-reads band_bot_keys on every bot connection, so revocation is immediate: no LoadCredential= snapshot.
+        self.assertIn('"HAMS_BAND_BOT_KEYS_FILE=/etc/hams-band/band_bot_keys"', self._values("Environment"))
+        self.assertEqual(self._values("LoadCredential"), [])
+        entry = [d for d in infra.MANIFEST["directories"] if d["path"] == "/etc/hams-band"]
+        self.assertEqual(len(entry), 1)
+        self.assertEqual(
+            (entry[0]["owner"], entry[0]["provision_mode"], entry[0]["environments"]),
+            ("root:hamsd_simband", "750", ["prod", "test"]),
+        )
+        # Only the directory: provisioning never writes, re-owns or re-modes the secrets inside it.
+        self.assertNotIn("recursive_owner", entry[0])
+        self.assertEqual([e for e in infra.MANIFEST["static_files"] if e["path"].startswith("/etc/hams-band/")], [])
+
+    def test_the_account_is_a_nologin_family_account_odoo_reads_through(self):
+        account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == "hamsd_simband"]
+        self.assertEqual(len(account), 1)
+        self.assertEqual(
+            {k: account[0][k] for k in ("group", "home", "shell", "add_to_users", "member_of", "not_member_of", "environments")},
+            {"group": "hamsd_simband", "home": "/nonexistent", "shell": "/usr/sbin/nologin", "add_to_users": ["odoo"],
+             "member_of": ["hams_traverse"], "not_member_of": ["hams_com"], "environments": ["prod", "test"]},
+        )
+        rules = infra.FAMILY_ACCOUNT_UNITS[self.UNIT]
+        self.assertTrue(rules["no_key"] and rules["odoo_reads"] and rules["no_state"])
+        self.assertEqual(rules["environment_files"], frozenset())
+
+    def test_the_bots_and_the_observer_still_run_as_odoo_with_their_reason(self):
+        # They hold the AI safety key (a registry row with no registration in code) and read the speech models, which are
+        # hams_com-only; both need their own change first (night_shift_todo daemon OS isolation).
+        for unit in ("hams.simulated.bots.service", "hams.simulated.observer.service"):
+            with self.subTest(unit=unit):
+                self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "User"), ["odoo"])
+                self.assertIn(unit, infra.SHARED_ODOO_ACCOUNT_UNITS)
 
 
 class FamilyAccountUnitTests(_SafePatchTestCase):
