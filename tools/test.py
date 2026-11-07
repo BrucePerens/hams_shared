@@ -62,6 +62,7 @@ import logging
 import math
 import os
 import pwd
+import importlib.metadata
 import queue
 import re
 import shutil
@@ -1504,6 +1505,27 @@ def warn_if_sibling_checkout_is_behind(path):
         )
 
 
+# [@ANCHOR: test:anchor_scan_sibling_dir]
+def anchor_scan_sibling_dir(base_dir, other_repo_name, environ=None):
+    """The other repository's checkout for the pre-flight anchor scan, or None. Full entry: tools/README.md.
+
+    Order: <OTHER>_TREE (e.g. HAMS_OPEN_TREE), then <other> beside base_dir, then <other> beside the MAIN
+    checkout of a linked worktree (resolve_repo_layout, as get_addons_path uses). The last step is what a
+    batch tree (~/workspace/tmp/batch_*/hams_com) needs: nothing sits beside it."""
+    environ = os.environ if environ is None else environ
+    tree = environ.get(f"{other_repo_name.upper()}_TREE", "").strip()
+    if tree and os.path.isdir(tree):
+        return os.path.abspath(tree)
+    beside = os.path.abspath(os.path.join(base_dir, "..", other_repo_name))
+    if os.path.isdir(beside):
+        return beside
+    parent_dir, _repo_root = resolve_repo_layout(base_dir)
+    beside_main = os.path.join(parent_dir, other_repo_name)
+    if os.path.isdir(beside_main):
+        return beside_main
+    return None
+
+
 def get_addons_path(base_dir):
     paths = ["/usr/lib/python3/dist-packages/odoo/addons", base_dir]
 
@@ -1740,11 +1762,8 @@ def check_linters(
     )
     anchor_scan_dirs = [base_dir]
     if other_repo_name:
-        sibling_dir = os.path.abspath(os.path.join(base_dir, "..", other_repo_name))
-        sibling_tree = os.environ.get(f"{other_repo_name.upper()}_TREE", "").strip()
-        if sibling_tree and os.path.isdir(sibling_tree):
-            sibling_dir = os.path.abspath(sibling_tree)
-        if os.path.isdir(sibling_dir):
+        sibling_dir = anchor_scan_sibling_dir(base_dir, other_repo_name)
+        if sibling_dir:
             anchor_scan_dirs.append(sibling_dir)
     # Files the user running this (the odoo user, under sudo) may not read: name them before the scan, not as a
     # traceback inside it and a "violations" verdict that is not true.
@@ -2535,28 +2554,54 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     sys.exit(ret)
 
 
+# [@ANCHOR: test:missing_host_apt_packages]
+def missing_host_apt_packages(pkg_specs, os_id, dpkg_installed, pip_installed):
+    """Names of the manifest's apt packages that are absent, in manifest order. Full entry: tools/README.md.
+
+    A package listed in infrastructure.PIP_FALLBACK_APT_PACKAGES counts as present when its pip distribution
+    is installed, because that is what provisioning installs on a release with no apt candidate (awscli on
+    Ubuntu 24.04)."""
+    missing = []
+    for pkg_spec in pkg_specs:
+        pkg_name = pkg_spec.get("debian_name", pkg_spec["name"]) if os_id == "debian" else pkg_spec["name"]
+        if dpkg_installed(pkg_name):
+            continue
+        pip_name = infrastructure.PIP_FALLBACK_APT_PACKAGES.get(pkg_name)
+        if pip_name and pip_installed(pip_name):
+            continue
+        missing.append(pkg_name)
+    return missing
+
+
+def _dpkg_installed(pkg_name):
+    res = subprocess.run(
+        ["dpkg-query", "-W", "-f=${Status}", pkg_name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return "install ok installed" in res.stdout
+
+
+def _pip_distribution_installed(dist_name):
+    try:
+        importlib.metadata.version(dist_name)
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    return True
+
+
+# [@ANCHOR: test:check_host_apt_packages]
 def check_host_apt_packages():
     """
     Verifies all required host packages are installed on Debian/Ubuntu systems
-    prior to namespace isolation. Uses the manifest in infrastructure.py.
+    prior to namespace isolation. Uses the manifest in infrastructure.py. Full entry: tools/README.md.
     """
     os_id = infrastructure.get_os_identifier()
-    missing = []
     try:
-        for pkg_spec in infrastructure.MANIFEST.get("apt_packages", []):
-            pkg_name = (
-                pkg_spec.get("debian_name", pkg_spec["name"])
-                if os_id == "debian"
-                else pkg_spec["name"]
-            )
-            res = subprocess.run(
-                ["dpkg-query", "-W", "-f=${Status}", pkg_name],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if "install ok installed" not in res.stdout:
-                missing.append(pkg_name)
+        missing = missing_host_apt_packages(
+            infrastructure.MANIFEST.get("apt_packages", []), os_id, _dpkg_installed, _pip_distribution_installed
+        )
     except FileNotFoundError as e:
         _logger.debug("Skipping APT package check, dpkg-query not found: %s", e)
         return
