@@ -1078,7 +1078,7 @@ Returns: a new `dict`. When `sibling_dir` is an existing directory, `HAMS_OPEN_T
 
 Errors: none of its own. Special concerns: pure apart from one `isdir` check, no locks, no network, handles no secret. Data: none kept.
 
-Example: `devbox_tools_env("/home/bruce/workspace/hams_open", {"PATH": "/bin"})["HAMS_OPEN_TREE"]` is `"/home/bruce/workspace/hams_open"`.
+Example: `devbox_tools_env(open_dir, {"PATH": "/bin"})["HAMS_OPEN_TREE"]` is the real path of `open_dir` when that directory exists.
 
 See also: tests `DevboxToolsEnvTests` in `test_devbox_tools_env.py`.
 

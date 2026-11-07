@@ -2,11 +2,8 @@
 # Copyright © Bruce Perens K6BP. All Rights Reserved.
 """The `pytest devbox_tools/` lint step is told where the sibling hams_open checkout is."""
 import os
-import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import run_linters
 
