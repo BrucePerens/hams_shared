@@ -1996,35 +1996,21 @@ class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
         mode = os.stat(env_path).st_mode & 0o777
         self.assertEqual(mode, 0o600)
 
-    def test_moving_the_file_keeps_the_password_recorded_at_the_old_path(self):
-        # The running daemon (as odoo, from the old flat file) must keep working while provisioning writes the new file:
-        # no ALTER ROLE, the same password, and the old file left alone for the coordinator to remove.
+    def test_the_old_flat_file_is_neither_read_nor_kept(self):
+        # The old flat keys/cache_manager_db.env is gone from hams1 (2026-11-07): provisioning must not take its password
+        # (so the role is rotated, not silently kept) and the function takes no parameter naming it.
         run_cmd = MagicMock()
         self.safe_patch_object(infra, "_role_exists", return_value=True)
         self.safe_patch_object(infra, "apply_permissions")
         legacy = os.path.join(self.tmp, "keys", "cache_manager_db.env")
         os.makedirs(os.path.dirname(legacy))
         with open(legacy, "w") as f:
-            f.write("DB_USER=cache_manager_ro\nDB_PASS=the-live-password\n")
+            f.write("DB_USER=cache_manager_ro\nDB_PASS=the-old-password\n")
         new = os.path.join(self.tmp, "keys", "cache_manager", "cache_manager_db.env")
-        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=new, legacy_env_file=legacy)
-        self.assertEqual(infra._read_env_value(new, "DB_PASS"), "the-live-password")
-        sql = [c.kwargs["input"] for c in run_cmd.call_args_list]
-        self.assertFalse(any("PASSWORD" in q for q in sql), sql)
-        self.assertTrue(os.path.exists(legacy))
-
-    def test_the_new_file_wins_over_the_old_one(self):
-        run_cmd = MagicMock()
-        self.safe_patch_object(infra, "_role_exists", return_value=True)
-        self.safe_patch_object(infra, "apply_permissions")
-        legacy = os.path.join(self.tmp, "keys", "cache_manager_db.env")
-        new = os.path.join(self.tmp, "keys", "cache_manager", "cache_manager_db.env")
-        for path, password in ((legacy, "old-password"), (new, "current-password")):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                f.write(f"DB_PASS={password}\n")
-        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=new, legacy_env_file=legacy)
-        self.assertEqual(infra._read_env_value(new, "DB_PASS"), "current-password")
+        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=new)
+        self.assertNotEqual(infra._read_env_value(new, "DB_PASS"), "the-old-password")
+        self.assertTrue(any("ALTER ROLE" in c.kwargs["input"] for c in run_cmd.call_args_list))
+        self.assertNotIn("legacy_env_file", infra._provision_cache_manager_role.__code__.co_varnames)
 
     def test_the_pager_monitor_login_stays_odoo_only(self):
         # pager-os-monitor.service still runs as odoo (SHARED_ODOO_ACCOUNT_UNITS); its file keeps odoo:odoo 0600.
@@ -2033,8 +2019,8 @@ class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
         infra._provision_pager_monitor_role(MagicMock(), "hams_test")
         self.assertEqual(len(calls), 1)
         self.assertEqual(
-            (calls[0]["env_file"], calls[0]["owner"], calls[0]["mode"], calls[0]["legacy_env_file"]),
-            ("/opt/hams/etc/keys/pager_monitor_db.env", "odoo:odoo", 0o600, None),
+            (calls[0]["env_file"], calls[0]["owner"], calls[0]["mode"]),
+            ("/opt/hams/etc/keys/pager_monitor_db.env", "odoo:odoo", 0o600),
         )
 
     def test_a_rerun_keeps_the_recorded_password_and_alters_nothing(self):
@@ -7072,11 +7058,10 @@ class CacheManagerUnitTests(unittest.TestCase):
             ("odoo:hamsd_cache_manager", "750", ["prod", "test"]),
         )
         defaults = dict(zip(
-            infra._provision_cache_manager_role.__code__.co_varnames[2:9], infra._provision_cache_manager_role.__defaults__
+            infra._provision_cache_manager_role.__code__.co_varnames[2:8], infra._provision_cache_manager_role.__defaults__
         ))
         self.assertEqual(defaults["env_file"], login)
         self.assertEqual((defaults["owner"], defaults["mode"]), ("odoo:hamsd_cache_manager", 0o640))
-        self.assertEqual(defaults["legacy_env_file"], "/opt/hams/etc/keys/cache_manager_db.env")
 
     def test_the_daemon_reads_the_path_provisioning_writes(self):
         hams_open = self._hams_open_dir()
