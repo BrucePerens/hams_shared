@@ -230,13 +230,18 @@ class MainIntegrationTests(unittest.TestCase):
         self.tools_dir = os.path.join(self.tmp, "tools")
         os.makedirs(self.tools_dir)
         shutil.copy(_SCRIPT, os.path.join(self.tools_dir, "scan_ui_vulnerabilities.py"))
+        # lint_exec (imported by the script) lives outside the scanned tree: its docstrings hold the very tags this scan flags.
+        self.lib = tempfile.mkdtemp()
+        shutil.copy(os.path.join(os.path.dirname(_SCRIPT), "lint_exec.py"), os.path.join(self.lib, "lint_exec.py"))
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
+        shutil.rmtree(self.lib, ignore_errors=True)
 
     def _run(self):
         result = subprocess.run(
             [sys.executable, os.path.join(self.tools_dir, "scan_ui_vulnerabilities.py")],
+            env={**os.environ, "PYTHONPATH": self.lib},
             capture_output=True,
             text=True,
             timeout=30,

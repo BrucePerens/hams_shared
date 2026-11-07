@@ -97,8 +97,12 @@ cargo-deny, dependency-watch) may stay.
 **Rust is tested on the dev box, not in GitHub CI** (Bruce's decision, 2026-10-03). The Rust CI
 workflows (hams_com `build-relay`, `build-server-daemons`, `test-jetson`, `test-pi500-runner-smoke`)
 are disabled, so GitHub CI now runs no tests at all. **Process: after a session of work on Rust code,
-build and test it on the dev box before merging** -- `cargo fmt --check`, `cargo clippy --all-targets
--- -D warnings` and `cargo test` in each crate you touched, run under `nice` with a
+build and test it before merging** -- `cargo fmt --check`, `cargo clippy --all-targets
+-- -D warnings` and `cargo test` in each crate you touched. **The full `cargo test` of `hams_local_relay` and `shack_console`
+(about 20 minutes) runs on the remote build hosts, not on the dev box (Bruce, 2026-11-04):
+`python3 ~/workspace/hams_com/devbox_tools/remote_cargo_test.py auto <committed worktree> daemons/hams_local_relay`
+(relay cargo test: use `remote_cargo_test.py auto`; exit 0 passed, 1 failed, 75 could not run; a filter goes after the crate,
+`... daemons/hams_local_relay -- updater::`). Cargo you do run on the dev box goes under `nice` with a
 `CARGO_TARGET_DIR` of its own per concurrent job (e.g. `~/.cache/hams-cargo-target-<job>`),
 deleted when the job is done. Do not share one target directory between worktrees building at the
 same time: they overwrite each other's test binary, so a "pass" can come from another branch's

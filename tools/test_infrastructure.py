@@ -163,6 +163,15 @@ class FormatEnvTests(unittest.TestCase):
         self.assertIn('DB=hams_prod;', text)
         self.assertNotIn("$hams_prod", text)
 
+    def test_the_dx_daemon_unit_lists_fallback_cluster_nodes_in_order(self):
+        # The unit set no DX_NODES, so when dxc.nc7j.com was down the DX feed stopped (2026-11-03).
+        entry = next(
+            item for item in infra.MANIFEST["static_files"]
+            if item.get("path") == "/opt/hams/systemd/ham.dx.daemon.service"
+        )
+        text = infra.format_env(entry["content"], {})
+        self.assertIn('Environment="DX_NODES=dxc.nc7j.com:7373,w3lpl.net:7373,dxc.ve7cc.net:23"', text)
+
     def test_the_key_bootstrapper_commits_what_succeeded_then_fails_on_a_partial_result(self):
         # action_force_provision_all() now returns a "danger" result instead of raising when a daemon fails, so
         # the unit must commit what succeeded (files are already written) and then fail the unit itself.
@@ -1976,7 +1985,9 @@ class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
 
         infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=env_path)
 
-        mock_apply_permissions.assert_called_once_with(env_path, "odoo:odoo", 0o600)
+        # Since 2026-11-06 the daemon runs as hamsd_cache_manager and reads the file through the group (odoo, a member,
+        # still reads it for the real-daemon Odoo test). The file is created 0600 and only then handed to the group.
+        mock_apply_permissions.assert_called_once_with(env_path, "odoo:hamsd_cache_manager", 0o640)
         with open(env_path) as f:
             content = f.read()
         self.assertIn("DB_NAME=hams_test\n", content)
@@ -1984,6 +1995,47 @@ class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
         self.assertRegex(content, r"DB_PASS=\S{20,}\n")
         mode = os.stat(env_path).st_mode & 0o777
         self.assertEqual(mode, 0o600)
+
+    def test_moving_the_file_keeps_the_password_recorded_at_the_old_path(self):
+        # The running daemon (as odoo, from the old flat file) must keep working while provisioning writes the new file:
+        # no ALTER ROLE, the same password, and the old file left alone for the coordinator to remove.
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra, "_role_exists", return_value=True)
+        self.safe_patch_object(infra, "apply_permissions")
+        legacy = os.path.join(self.tmp, "keys", "cache_manager_db.env")
+        os.makedirs(os.path.dirname(legacy))
+        with open(legacy, "w") as f:
+            f.write("DB_USER=cache_manager_ro\nDB_PASS=the-live-password\n")
+        new = os.path.join(self.tmp, "keys", "cache_manager", "cache_manager_db.env")
+        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=new, legacy_env_file=legacy)
+        self.assertEqual(infra._read_env_value(new, "DB_PASS"), "the-live-password")
+        sql = [c.kwargs["input"] for c in run_cmd.call_args_list]
+        self.assertFalse(any("PASSWORD" in q for q in sql), sql)
+        self.assertTrue(os.path.exists(legacy))
+
+    def test_the_new_file_wins_over_the_old_one(self):
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra, "_role_exists", return_value=True)
+        self.safe_patch_object(infra, "apply_permissions")
+        legacy = os.path.join(self.tmp, "keys", "cache_manager_db.env")
+        new = os.path.join(self.tmp, "keys", "cache_manager", "cache_manager_db.env")
+        for path, password in ((legacy, "old-password"), (new, "current-password")):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(f"DB_PASS={password}\n")
+        infra._provision_cache_manager_role(run_cmd, "hams_test", env_file=new, legacy_env_file=legacy)
+        self.assertEqual(infra._read_env_value(new, "DB_PASS"), "current-password")
+
+    def test_the_pager_monitor_login_stays_odoo_only(self):
+        # pager-os-monitor.service still runs as odoo (SHARED_ODOO_ACCOUNT_UNITS); its file keeps odoo:odoo 0600.
+        calls = []
+        self.safe_patch_object(infra, "_provision_cache_manager_role", side_effect=lambda *a, **k: calls.append(k))
+        infra._provision_pager_monitor_role(MagicMock(), "hams_test")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            (calls[0]["env_file"], calls[0]["owner"], calls[0]["mode"], calls[0]["legacy_env_file"]),
+            ("/opt/hams/etc/keys/pager_monitor_db.env", "odoo:odoo", 0o600, None),
+        )
 
     def test_a_rerun_keeps_the_recorded_password_and_alters_nothing(self):
         # Round-2 production runbook, 2026-10-03: the password used to rotate on every run.
@@ -3397,6 +3449,46 @@ class PostgresqlLockdownTests(unittest.TestCase):
         self.assertNotIn("s/peer/trust", source)
 
 
+class CacheManagerSocketRuleForTestHostsTests(unittest.TestCase):
+    STOCK = (
+        "local   all             postgres                                peer\n"
+        "local   all             all                                     peer\n"
+        "host    all             all             127.0.0.1/32            scram-sha-256\n"
+    )
+
+    def _hba(self, text):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "pg_hba.conf")
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def test_inserts_the_rule_before_the_catch_all_peer_rule_once(self):
+        # Tests [@ANCHOR: infrastructure:_allow_cache_manager_socket_password_for_test]
+        path = self._hba(self.STOCK)
+        self.assertTrue(infra._allow_cache_manager_socket_password_for_test([path]))
+        with open(path) as f:
+            lines = f.read().splitlines()
+        self.assertEqual(lines[0].split()[2], "postgres")
+        self.assertEqual(lines[1].split(), ["local", "all", "cache_manager_ro", "scram-sha-256"])
+        self.assertEqual(lines[2].split(), ["local", "all", "all", "peer"])
+        with open(path) as f:
+            first = f.read()
+        self.assertFalse(infra._allow_cache_manager_socket_password_for_test([path]))
+        with open(path) as f:
+            self.assertEqual(f.read(), first)
+
+    def test_a_file_without_a_local_catch_all_rule_is_an_error_not_a_guess(self):
+        path = self._hba("host all all 127.0.0.1/32 scram-sha-256\n")
+        with self.assertRaises(RuntimeError):
+            infra._allow_cache_manager_socket_password_for_test([path])
+
+    def test_only_a_test_provision_reaches_it(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertIn("if is_test and _allow_cache_manager_socket_password_for_test()", source)
+
+
 class PostgresqlArchiveTimeoutTests(unittest.TestCase):
     """archive_timeout bounds how much WAL a quiet site can lose (hams1 had 0, 2026-10-12)."""
 
@@ -3680,6 +3772,64 @@ class OneshotRunTimeoutTests(unittest.TestCase):
         if "Failed to connect" in probe.stderr or "No such file" in probe.stderr:
             self.skipTest("no user systemd session: " + probe.stderr.strip()[:80])
         self.assertIn("timeout", (probe.stdout + probe.stderr).lower())
+
+
+class RotatedKeyReloadPolicyTests(unittest.TestCase):
+    """A rotated Odoo API key is rewritten on disk and the old key revoked while nothing is restarted, so every process that
+    outlives a rotation must re-read its key. The MANIFEST must not hold a long-running key holder that nobody has accounted for."""
+
+    # Tests [@ANCHOR: infrastructure:long_running_key_holders]
+    def test_every_long_running_key_holder_in_the_manifest_has_a_declared_reload_mechanism(self):
+        holders = infra.long_running_key_holders(infra.MANIFEST)
+        self.assertGreater(len(holders), 10)  # the real set is found, not an empty one that passes trivially
+        undeclared = sorted(set(holders) - set(infra.ROTATED_KEY_RELOAD_POLICY))
+        self.assertEqual(
+            undeclared, [],
+            "These non-oneshot units or wrapper scripts name a key under /opt/hams/etc/keys/ but are not in "
+            "ROTATED_KEY_RELOAD_POLICY. A rotation rewrites the key and revokes the old one without restarting anything, so the "
+            "process must re-read its key after a 401 (hams_config.get_odoo_client() does). Add the row with the mechanism and "
+            "the file that proves it, and a row to the audit table in daemon_key_manager/README.md.")
+
+    # Tests [@ANCHOR: infrastructure:rotated_key_reload_policy]
+    def test_the_policy_names_only_real_holders_with_a_known_mechanism_and_a_reason(self):
+        holders = infra.long_running_key_holders(infra.MANIFEST)
+        self.assertEqual(sorted(set(infra.ROTATED_KEY_RELOAD_POLICY) - set(holders)), [],
+                         "ROTATED_KEY_RELOAD_POLICY has a row for a unit that is gone, is a oneshot now, or no longer names a key")
+        for name, (mechanism, reason) in infra.ROTATED_KEY_RELOAD_POLICY.items():
+            with self.subTest(name=name):
+                self.assertIn(mechanism, infra.KEY_RELOAD_MECHANISMS)
+                self.assertGreater(len(reason.strip()), 20, "say which file does the re-read")
+
+    def test_a_key_loaded_through_environment_file_needs_its_own_reload_or_to_be_unused(self):
+        """systemd reads EnvironmentFile= once, at start. hams_config and the per-call clients read the file, never the environment, so
+        a unit that gets its key only through EnvironmentFile has to say it re-reads the file itself (or never uses the key)."""
+        holders = infra.long_running_key_holders(infra.MANIFEST)
+        for name, how in holders.items():
+            if "environment_file" in how:
+                with self.subTest(name=name):
+                    self.assertIn(infra.ROTATED_KEY_RELOAD_POLICY[name][0], {"own_reload", "unused"})
+
+    def test_the_guard_trips_on_a_new_daemon_and_ignores_oneshots_comments_and_unrelated_files(self):
+        key = "/opt/hams/etc/keys/new_thing_service_internal.key"
+        manifest = {"static_files": [
+            {"path": "/opt/hams/systemd/new.thing.service",
+             "content": f'[Service]\nType=simple\nEnvironment="ODOO_KEY_FILE={key}"\n'},
+            {"path": "/opt/hams/systemd/typeless.service", "content": f"[Service]\nEnvironmentFile=-{key}\n"},
+            {"path": "/opt/hams/systemd/timer.driven.service",
+             "content": f'[Service]\nType=oneshot\nEnvironment="ODOO_KEY_FILE={key}"\n'},
+            {"path": "/opt/hams/systemd/commented.service",
+             "content": f"[Service]\nType=simple\n# Environment=ODOO_KEY_FILE={key}\n"},
+            {"path": "/usr/local/sbin/run-new-mcp.sh", "content": f"#!/bin/bash\nexport ODOO_KEY_FILE={key}\nexec x\n"},
+            {"path": "/etc/systemd/system/new.thing.service.d/keys.conf", "content": f"[Service]\nReadWritePaths={key}\n"},
+        ]}
+        holders = infra.long_running_key_holders(manifest)
+        self.assertEqual(holders, {
+            "new.thing.service": {"key_file"},
+            "typeless.service": {"environment_file"},
+            "run-new-mcp.sh": {"key_file"},
+        })
+        undeclared = sorted(set(holders) - set(infra.ROTATED_KEY_RELOAD_POLICY))
+        self.assertEqual(undeclared, ["new.thing.service", "run-new-mcp.sh", "typeless.service"])
 
 
 class TimerDrivenUnitTests(unittest.TestCase):
@@ -4725,6 +4875,14 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
         for name in ("exception_reporter.py", "glyph_normalizer.py", "ssrf_safe_fetch.py", "club_spam.py"):
             self.assertIn("/opt/hams/daemons/" + name, paths)
 
+    def test_the_units_of_the_ai_daemons_have_the_daemons_pythonpath(self):
+        """The AI daemons import ai_quota.py and exception_reporter.py (flat in /opt/hams/daemons) to file the one quota
+        ticket; credential.touch.timer lacked PYTHONPATH (hams_shared #379) and the two ticket.triage units did too."""
+        units = {sf["path"]: sf for sf in infra.MANIFEST["static_files"]}
+        for name in ("credential.touch.timer", "ticket.triage", "ticket.triage.event", "event.ai.enrichment"):
+            body = units["/opt/hams/systemd/%s.service" % name]["content"]
+            self.assertIn('Environment="PYTHONPATH=/opt/hams/daemons"', body, name)
+
     def test_smoketest_never_starts_an_opt_in_service_unless_named(self):
         self.assertNotIn(
             "code.review.sweep.service", infra._smoketest_candidate_services(True, is_test_env=False)
@@ -4872,7 +5030,7 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
     # The pinned final list. Deliberately a literal in the test as well as the map in infrastructure.py: a unit cannot join the
     # shared odoo account by editing one place. When a unit moves to its own account, delete it here in the same change.
     PINNED_ODOO_UNITS = (
-        "adif.ingress.service", "adif.processor.service", "backup.worker.service", "cache-manager.service",
+        "adif.ingress.service", "adif.processor.service", "backup.worker.service",
         "code.review.sweep.service", "credential.touch.timer.service", "event.ai.enrichment.service",
         "hams-exception-report@.service", "hams.daemon.keys.service", "hams.data.relay.service",
         "hams.relay.bridge.service", "hams.simulated.band.service", "hams.simulated.bots.service",
@@ -5144,10 +5302,11 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 self.assertEqual(account["shell"], "/usr/sbin/nologin")
                 # odoo must be in the group to hand it a key file (chgrp, never chown); a unit with no key
                 # file has nothing to hand over and odoo is not in its group.
-                if rules.get("no_key") and not rules.get("odoo_reads"):
+                if rules.get("no_key") and not rules.get("odoo_reads") and not rules.get("db_login"):
                     self.assertNotIn("odoo", account.get("add_to_users", []))
                 else:
                     # `odoo_reads`: no key to hand over, but odoo reads what the unit writes (group read, never write).
+                    # `db_login`: a provisioned database login in the family key directory, which odoo reads in a test.
                     self.assertIn("odoo", account["add_to_users"])
                 # The traversal group (not hams_com) is what lets the account reach /opt/hams, and the
                 # account is taken out of hams_com so it cannot read the ADIF queue or other hams_com data.
@@ -5341,7 +5500,7 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 user = rules["user"]
                 family = user[len("hamsd_"):]
                 directory = f"/opt/hams/etc/keys/{family}"
-                if rules.get("no_key"):
+                if rules.get("no_key") and not rules.get("db_login"):
                     self.assertEqual([d for d in infra.MANIFEST["directories"] if d["path"] == directory], [])
                     continue
                 entries = [d for d in infra.MANIFEST["directories"] if d["path"] == directory]
@@ -5351,6 +5510,10 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 # odoo must be a member of the group, or it cannot chgrp the directory or the key files.
                 account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == user][0]
                 self.assertIn("odoo", account.get("add_to_users", []))
+                if rules.get("db_login"):
+                    # No Odoo key: the daemon reads its database login from the family directory itself.
+                    self.assertEqual(os.path.dirname(rules["db_login"]), directory)
+                    continue
                 values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
                 key_file = [v.strip('"').split("=", 1)[1] for v in values if v.strip('"').startswith("ODOO_KEY_FILE=")][0]
                 self.assertEqual(os.path.dirname(key_file), directory)
@@ -6739,13 +6902,79 @@ class CacheManagerUnitTests(unittest.TestCase):
     def test_unit_is_sandboxed_and_writes_nothing(self):
         text = self._text()
         for line in ("ProtectSystem=strict", "PrivateTmp=true", "PrivateDevices=true", "NoNewPrivileges=true",
-                     "CapabilityBoundingSet=", "User=odoo"):
+                     "CapabilityBoundingSet=", "User=hamsd_cache_manager", "Group=hamsd_cache_manager"):
             self.assertIn(line + "\n", text)
         self.assertNotIn("ReadWritePaths", text)
+        self.assertNotIn("SupplementaryGroups", text)
 
     def test_unit_is_classified(self):
-        self.assertIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
+        # Left the shared odoo account 2026-11-06 (daemon OS isolation): a family unit, not an external fetch.
+        self.assertNotIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertEqual(infra.FAMILY_ACCOUNT_UNITS[self.UNIT]["user"], "hamsd_cache_manager")
         self.assertNotIn(self.UNIT, infra.external_fetch_unit_names())
+
+    def test_unit_carries_the_isolation_set_derived_from_the_daemon(self):
+        # cache_manager.py writes no file, starts no process and reads no other process (code audit in the unit comment), so
+        # it takes the full family set; it connects to PostgreSQL and Redis over loopback TCP, hence the three families.
+        values = lambda d: infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, d)
+        expected = {
+            "ProtectProc": ["invisible"], "ProcSubset": ["pid"], "UMask": ["0027"], "ProtectHome": ["read-only"],
+            "ProtectKernelTunables": ["true"], "ProtectKernelModules": ["true"], "ProtectKernelLogs": ["true"],
+            "ProtectControlGroups": ["true"], "ProtectClock": ["true"], "RestrictNamespaces": ["true"],
+            "RestrictRealtime": ["true"], "RestrictSUIDSGID": ["true"], "LockPersonality": ["true"],
+            "SystemCallArchitectures": ["native"], "RestrictAddressFamilies": ["AF_INET", "AF_INET6", "AF_UNIX"],
+            "CapabilityBoundingSet": [], "ReadWritePaths": [],
+        }
+        for directive, value in expected.items():
+            with self.subTest(directive=directive):
+                self.assertEqual(values(directive), value)
+        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.UNIT), set())
+        self.assertNotIn(self.UNIT, infra.SANDBOX_BASELINE_EXEMPTIONS)
+
+    def test_unit_loads_only_the_redis_login_and_no_odoo_key(self):
+        # The Odoo key file keys/cache_manager.env was never used by the daemon; systemd would hand its ODOO_RPC_KEY to the
+        # new account if the unit still loaded it.
+        self.assertEqual(
+            infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, "EnvironmentFile"), ["/opt/hams/etc/redis.env"]
+        )
+        directives = [line for line in self._text().splitlines() if line and not line.startswith("#")]
+        self.assertEqual([line for line in directives if "/opt/hams/etc/keys/" in line], [])
+        self.assertNotIn(self.UNIT, infra.long_running_key_holders(infra.MANIFEST))
+        self.assertNotIn(self.UNIT, infra.ROTATED_KEY_RELOAD_POLICY)
+
+    def test_account_is_a_nologin_family_account_odoo_can_hand_the_login_to(self):
+        account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == "hamsd_cache_manager"]
+        self.assertEqual(len(account), 1)
+        account = account[0]
+        self.assertEqual(
+            {k: account[k] for k in ("group", "home", "shell", "add_to_users", "member_of", "not_member_of", "environments")},
+            {"group": "hamsd_cache_manager", "home": "/nonexistent", "shell": "/usr/sbin/nologin", "add_to_users": ["odoo"],
+             "member_of": ["hams_traverse"], "not_member_of": ["hams_com"], "environments": ["prod", "test"]},
+        )
+
+    def test_the_login_lives_in_the_family_key_directory_where_provisioning_writes_it(self):
+        login = infra.FAMILY_ACCOUNT_UNITS[self.UNIT]["db_login"]
+        self.assertEqual(login, "/opt/hams/etc/keys/cache_manager/cache_manager_db.env")
+        directory = [d for d in infra.MANIFEST["directories"] if d["path"] == os.path.dirname(login)]
+        self.assertEqual(len(directory), 1)
+        self.assertEqual(
+            (directory[0]["owner"], directory[0]["provision_mode"], directory[0]["environments"]),
+            ("odoo:hamsd_cache_manager", "750", ["prod", "test"]),
+        )
+        defaults = dict(zip(
+            infra._provision_cache_manager_role.__code__.co_varnames[2:9], infra._provision_cache_manager_role.__defaults__
+        ))
+        self.assertEqual(defaults["env_file"], login)
+        self.assertEqual((defaults["owner"], defaults["mode"]), ("odoo:hamsd_cache_manager", 0o640))
+        self.assertEqual(defaults["legacy_env_file"], "/opt/hams/etc/keys/cache_manager_db.env")
+
+    def test_the_daemon_reads_the_path_provisioning_writes(self):
+        hams_open = self._hams_open_dir()
+        if hams_open is None:
+            self.skipTest("hams_shared checked out without hams_open")
+        with open(os.path.join(hams_open, "distributed_redis_cache", "daemons", "cache_manager.py"), encoding="utf-8") as f:
+            code = f.read()
+        self.assertIn('DB_ENV_FILE = "' + infra.FAMILY_ACCOUNT_UNITS[self.UNIT]["db_login"] + '"', code)
 
     def test_packaging_copy_in_hams_open_matches(self):
         hams_open = self._hams_open_dir()

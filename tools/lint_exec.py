@@ -22,6 +22,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -177,6 +178,24 @@ def step_to_dict(step):
     }
 
 
+# [@ANCHOR: lint_exec:_main_submodule_gitdir]
+def _main_submodule_gitdir(common):
+    """The git directory of the MAIN checkout's submodule when `common` is a submodule's git directory
+    inside a linked worktree of the parent, else `common` unchanged.
+
+    A submodule initialised inside a worktree of its parent keeps its git directory at
+    `<parent>/.git/worktrees/<worktree>/modules/<name>`, whose `core.worktree` names the worktree's own
+    submodule directory, so `main_worktree_of` answered the worktree itself and the run found no main
+    checkout (ESLint "not installed" from a hams_open worktree with hams_shared checked out inside it,
+    2026-11-06). The main checkout's submodule is the same name under `<parent>/.git/modules/`."""
+    match = re.match(r"^(.*[/\\]\.git)[/\\]worktrees[/\\][^/\\]+[/\\]modules[/\\](.+)$", common)
+    if match:
+        main = os.path.join(match.group(1), "modules", match.group(2))
+        if os.path.isdir(main):
+            return main
+    return common
+
+
 def main_worktree_of(path):
     """Working-tree directory of the MAIN checkout of the git repository that contains `path`, or
     None. For a worktree of hams_shared that is the checkout holding node_modules; hams_shared is a
@@ -193,12 +212,116 @@ def main_worktree_of(path):
     common = git("-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if not common:
         return None
+    common = _main_submodule_gitdir(common)
     configured = git("--git-dir", common, "config", "core.worktree")
     if configured:
         return os.path.realpath(os.path.join(common, configured))
     if os.path.basename(common) == ".git":
         return os.path.dirname(common)
     return None
+
+
+REPO_PAIR = ("hams_com", "hams_open")
+
+# Bound at import: the checkers' tests replace `subprocess.run` to script the checker's own commands (cargo), and
+# these git probes of the repository layout must not consume those scripted answers.
+_run_git = subprocess.run
+
+
+def _git_out(path, *args):
+    """stdout of `git -C path ARGS`, stripped, or None when git fails or is missing."""
+    try:
+        res = _run_git(["git", "-C", path, *args], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return res.stdout.strip() if res.returncode == 0 else None
+
+
+def repo_name(path):
+    """hams_com or hams_open for a checkout or worktree, whatever its directory is called; None when it
+    cannot be told. The directory's own name when it is one of the two, else the basename of its
+    `origin` URL (a worktree under ~/workspace/tmp/<topic> is named after the topic)."""
+    path = os.path.abspath(path)
+    if os.path.basename(path) in REPO_PAIR:
+        return os.path.basename(path)
+    if not _checkout_common_dir(path):
+        return None
+    url = _git_out(path, "remote", "get-url", "origin") or ""
+    name = os.path.basename(url.rstrip("/"))
+    name = name[: -len(".git")] if name.endswith(".git") else name
+    return name if name in REPO_PAIR else None
+
+
+def _checkout_common_dir(path):
+    """Real path of the git common directory of the checkout whose top level is `path`, or None when `path` is
+    not the top of a checkout (a plain directory inside some other repository answers None, not that one's)."""
+    top = _git_out(path, "rev-parse", "--show-toplevel")
+    if not top or os.path.realpath(top) != os.path.realpath(path):
+        return None
+    common = _git_out(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    return os.path.realpath(common) if common else None
+
+
+def _same_repository(a, b):
+    """True when `a` and `b` are the same directory or two checkouts of one git repository (a worktree and
+    its main checkout share the git common directory)."""
+    if os.path.realpath(a) == os.path.realpath(b):
+        return True
+    common_a, common_b = _checkout_common_dir(a), _checkout_common_dir(b)
+    return bool(common_a and common_a == common_b)
+
+
+def sibling_repo_root(repo_root, accept=os.path.isdir):
+    """The OTHER repository of the pair (hams_open for a hams_com checkout and the reverse), or None.
+
+    The repository is told by identity (`repo_name`), not by its directory name. A hams_open worktree at
+    ~/workspace/tmp/<topic> used to take `../hams_open` as its "sibling": the symlink
+    ~/workspace/tmp/hams_open -> the main hams_open checkout, so the cargo gate linted hams_open twice,
+    worktree and main, in one target directory, and reported main's crates against the worktree's
+    metadata (false E0004, 2026-11-05). Candidates, first accepted wins: HAMS_COM_TREE / HAMS_OPEN_TREE
+    (as verify_anchors.py), the directory beside `repo_root`, the directory beside its main checkout. A
+    candidate must be a directory that `accept` takes and must not be `repo_root`'s own repository, by
+    `repo_name` or by sharing its git common directory (a worktree and its main checkout do)."""
+    repo_root = os.path.abspath(repo_root)
+    own = repo_name(repo_root)
+    if own:
+        other = REPO_PAIR[1 - REPO_PAIR.index(own)]
+    else:
+        other = "hams_open" if os.path.basename(repo_root) != "hams_open" else "hams_com"
+    candidates = []
+    override = os.environ.get(other.upper() + "_TREE", "").strip()
+    if override:
+        candidates.append(os.path.abspath(override))
+    candidates.append(os.path.join(os.path.dirname(repo_root), other))
+    main = main_worktree_of(repo_root) if _checkout_common_dir(repo_root) else None
+    if main:
+        candidates.append(os.path.join(os.path.dirname(main), other))
+    for candidate in candidates:
+        if not os.path.isdir(candidate) or not accept(candidate):
+            continue
+        name = repo_name(candidate)
+        if (own and name == own) or _same_repository(candidate, repo_root):
+            continue
+        return candidate
+    return None
+
+
+# [@ANCHOR: lint_exec:has_odoo_module]
+def has_odoo_module(path):
+    """True when a directory directly under `path` holds an Odoo `__manifest__.py`: the `accept` test of
+    `sibling_repo_root` for the checkers that scan modules (hams_open and hams_com both have some)."""
+    try:
+        names = os.listdir(path)
+    except OSError:
+        return False
+    return any(os.path.isfile(os.path.join(path, name, "__manifest__.py")) for name in names)
+
+
+# [@ANCHOR: lint_exec:has_agents_md]
+def has_agents_md(path):
+    """True when `path` holds an `AGENTS.md`: the `accept` test of `sibling_repo_root` for the documentation
+    checkers (`check_doc_images`), which scan manuals rather than modules."""
+    return os.path.isfile(os.path.join(path, "AGENTS.md"))
 
 
 def render_output(step, returncode, stdout, stderr):

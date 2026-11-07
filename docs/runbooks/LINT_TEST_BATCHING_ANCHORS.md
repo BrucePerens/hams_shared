@@ -21,6 +21,7 @@ file. Created by the requesting process, copied into the JSON state, discarded w
 | `queued_at` | float | epoch seconds; informational |
 | `solo` | bool | True: the member needs a batch of its own (`join` refuses to mix it) |
 | `info` | str | free text for status output |
+| `install` | list of str | tests only, optional (the key is absent when empty, and an older member never has it): modules the hosts must INSTALL for this member's tests but must not test (test companions). Never in the duration estimate or the split |
 
 Invariants: `(pid, start)` is unique in a batch (`join` ignores a second join); several members may share a `tip` (they share
 one verdict). Serialised as JSON; `STATE_VERSION` 1, a different version resets the state. Mutated only inside `locked`.
@@ -192,9 +193,17 @@ branch with its status in capitals, tip prefix, `<- you` for the caller and the 
 ### `lint_batch:ineligible_reason`
 Decides whether a run may join a batch. Keyword arguments: `changed` (the `--changed` base or None), `only`, `skip`,
 `modules` (selection options), `solo`, `bundle`, `environ`, `dirty` (uncommitted changes), `is_shared_checkout`,
-`lock_needed` (the run is heavy). Returns a short reason string when the run must run alone, None when it may batch.
+`lock_needed` (the run is heavy), `foreign_shared` (optional, default False: the tree's `hams_shared` is not the main
+checkout's). Returns a short reason string when the run must run alone, None when it may batch.
 Pure; checked in the order solo, runner marker, `HAMS_LINT_NO_LOCK`, lock held, `HAMS_LINT_BATCH=off`, not changed,
-selection, bundle, dirty, hams_shared, cheap.
+selection, bundle, dirty, hams_shared, foreign hams_shared, cheap.
+
+### `lint_batch:foreign_shared_checkout`
+`foreign_shared_checkout(tree_root, main_root) -> bool`: True when `<tree_root>/hams_shared` and `<main_root>/hams_shared`
+resolve (realpath) to different directories. The batch's combined tree links `hams_shared` to the main checkout's, so a
+branch whose own `hams_shared` was linked by hand (a hams_shared worktree holding the change under test) would be linted with
+main's tools and passed with a stamp; such a run goes alone. False when either `hams_shared` is missing. Test:
+`ForeignSharedTests`.
 
 ### `lint_batch:changed_paths`
 `changed_paths(repo, base, tip)` returns the repository-relative paths in `git diff --name-only base...tip` (the merge-base
@@ -264,16 +273,29 @@ The test side (`tools/odoo_test_batch.py`, hook in `tools/test.py`). Queue direc
 as `test.py` does). Returns None when the run cannot be batched: empty or missing, an empty entry, or any entry with a `:Class`
 selector.
 
+### `odoo_test_batch:union_of`
+`union_of(members, field)` returns the set of module names found in `field` ("scope" or "install") across `members`. A member without the key (queued before `install` existed, or with no companions) contributes nothing, which is the backward-compatibility rule for the queue's state file. Pure. Test: `test_union_of_reads_a_field_and_ignores_members_without_it`.
+
 ### `odoo_test_batch:ineligible_reason`
-`ineligible_reason(args, environ, cwd_is_root, dirty)`; `args` is test.py's parsed namespace. Returns a short reason when the run
+`ineligible_reason(args, environ, cwd_is_root, dirty, foreign_shared=False)`; `args` is test.py's parsed namespace; `foreign_shared` is True when the tree's `hams_shared` is not the main checkout's (`lint_batch:foreign_shared_checkout`). Returns a short reason when the run
 must run alone, None when it may batch. Alone: `--solo`; the combined run itself (`HAMS_TEST_BATCH_RUNNER`); `HAMS_TEST_BATCH=off`;
 a run inside a run (`HAMS_TEST_LOCK_HELD=1`); the internal re-exec phases; a mode other than standard; `--test-tags`, `--coverage`,
 `--mcp`, `--pause-on-fail`, `--offline-isolation`, `--profile`, `--build-daemons`; no whole-module `-u` list; a directory that is not
-the repository root; uncommitted changes. Pure.
+the repository root; uncommitted changes; a `hams_shared` linked by hand to something other than the main checkout's (the combined tree links the main one, so the branch would be tested with main's helpers and pass). Pure.
+
+### `odoo_test_batch:main_checkout_root`
+`main_checkout_root(repo) -> str`: the main checkout of the git repository `repo` belongs to, the parent of `git rev-parse --git-common-dir`, so a worktree nested anywhere resolves to the real checkout; `repo` itself when git cannot say. `maybe_run_batched` passes it to `lint_batch.foreign_shared_checkout`.
 
 ### `odoo_test_batch:implicated_modules`
 `implicated_modules(text)` reads test.py's own `filtered_test.txt`: the `  - <module>` lines under "these modules are implicated in the
-failure(s):". Returns the list (empty when the extractor named none: a crash, or a failure with no traceback).
+failure(s):". Returns the list (empty when the extractor named none: a crash, or a failure with no traceback). A later section ends the list, and a second header (the texts of two hosts joined) starts another.
+
+### `odoo_test_batch:failing_tests`
+`failing_tests(text) -> set[str]` reads a `filtered_test.txt` and returns the failing tests as ids `"<module>:<Class>.<method>"`. It reads Odoo's logger form
+(`odoo.addons.<module>.tests.<file>: ERROR: Class.method`, also `FAIL:`) and the unittest form (`ERROR: setUpClass (odoo.addons.<module>.tests.<file>.Class)`,
+also `test_x (...)`, `tearDownClass`). A failure is listed twice in the file and counts once. Empty when no failing test is named (a crash, a module-load
+error). Pure. Used by `RemoteTestBatch` to compare a host's failures with its origin/main baseline and to blame the module of each new failure.
+Test: `test_failing_tests_reads_both_line_forms_and_counts_a_failure_once`.
 
 ### `odoo_test_batch:module_finder`
 `module_finder(modules)` returns `find(line)` listing which of `modules` a line names as whole words (`ham_a` is not found in
@@ -282,27 +304,99 @@ failure(s):". Returns the list (empty when the extractor named none: a crash, or
 ### `odoo_test_batch:plan_machine_split`
 `plan_machine_split(modules, durations, machines, default=300)` returns `{machine: [modules]}`: modules longest first (recorded
 `durations` in seconds, `default` for an unrecorded one) onto the currently least-loaded machine (LPT, within 4/3 of optimal);
-machines with nothing are omitted; one or no machine puts everything on that machine (or `"local"`). Pure. NOT YET USED by the
-leader, which runs everything locally; it is the planned hook for `remote_odoo_test.py`.
+machines with nothing are omitted; one or no machine puts everything on that machine (or `"local"`). Pure. Used by `RemoteTestBatch` to split a batch over the idle test hosts.
+
+### `odoo_test_batch:idle_machines`
+**Purpose.** Tells the remote leader which test hosts are free right now, so a batch is split only over hosts that can start at once.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `machines` | list of str | host names (`yoga`, `mac1`), in preference order |
+| `lock_dir` | str or None | directory of the per-host lock files; default `~/.cache/hams-remote-test` (the files `remote_odoo_test.py` locks) |
+
+**Returns.** The names whose lock could be taken without waiting, in the given order.
+**Special concerns.** Takes each lock non-blocking and releases it at once, so the answer may be stale when the run starts (the driver then waits for the lock, `--wait`). Creates the directory and empty lock files. Never blocks.
+**See also.** `RemoteTestBatch`, `remote_odoo_test.py host_is_idle` (same probe in hams_com). Test: `test_idle_machines_skips_a_host_whose_lock_is_held`.
 
 ### `odoo_test_batch:run_on_machine`
-STUB. `run_on_machine(machine, tree, modules, log_directory)` always raises `NotImplementedError`. It marks where the leader will
-run a share of the union on bruce-yoga or mac1 through hams_com's `devbox_tools/remote_odoo_test.py` (which syncs a trimmed tree
-plus a hams_open checkout and has its own per-host lock). Needs a change in hams_com and a per-machine queue; see the to-do
-`night_shift_todo/medium/split-test-batches-across-machines-*.md`.
+**Purpose.** Runs one host's share of a test batch. The host has its own clone of the repository and builds `origin/main` plus every member's commit itself; nothing is copied.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `machine` | str | host name known to `remote_odoo_test.py` |
+| `tree` | str | the leader's checkout (commits are fetched by the host from GitHub, or pushed to it over ssh from here) |
+| `repo_name` | str | `hams_com` or `hams_open`: the repository under test |
+| `members` | list of Member | the batch's members; only `branch` and `tip` are used, a repeated tip is sent once |
+| `modules` | list of str | this host's share of the union: the modules whose TESTS it runs |
+| `union` | list of str or None | every module of the batch; the host INSTALLS/UPDATES all of them (default: `modules`) |
+| `driver` | list of str | argv prefix of `remote_odoo_test.py` |
+| `log_path` | str | the host run's log |
+| `work_dir` | str | existing directory for the members file and the result file |
+
+**Returns.** The driver's result: `{"host", "exit_code", "merged": [sha], "conflicted": [sha], "filtered": text of filtered_test.txt, "log", "seconds", "error", "durations": {module: seconds} (optional: the host's per-module test times)}`. A driver that crashes or writes no result gives `exit_code` 75 and `error` set: the run could not start, which is not a test failure.
+**Special concerns.** The driver is called with the union as its module list and `--share <modules>` when the share is smaller, so the host runs `test.py -u <union> --test-tags /m1,/m2`: splitting divides the tests, never the installed set. Blocks for the whole host run (minutes to an hour). Takes the host's lock inside the driver (`--wait`). Deletes a stale result file first. The host run is `test.py --solo` as the odoo user against `hams_test`.
+**See also.** `RemoteTestBatch`; hams_com `devbox_tools/remote_odoo_test.py`, `devbox_tools/testhost_git.py`. Test: `test_run_on_machine_calls_the_driver_and_reads_its_result`.
+
+### `odoo_test_batch:RemoteTestBatch`
+**Purpose.** The leader's runner for batches tested on the remote hosts. An `OdooTestBatch` whose run goes to machines.
+
+| Constructor argument | Type | Meaning |
+|---|---|---|
+| `repo`, `repo_name`, `base`, `passthrough`, `stamp_writer` | as `LintBatch` | `base` is `origin/main` |
+| `sdir` | str | the queue directory (durations are kept there) |
+| `machines` | list of str | hosts it may use, in preference order |
+| `driver` | list of str | argv prefix of `remote_odoo_test.py` |
+| `work_base` | str or None | parent of the per-run scratch directory |
+| `probe` | callable | `idle_machines`-like; replaced in tests |
+| `runner` | callable | `run_on_machine`-like; replaced in tests |
+
+**Install-only modules.** A member's `install` modules (test companions such as another module's service account) are added to the installed set that every host gets (`-u`), but only the `scope` union is split over the hosts and tested (`--share`), and only it is the run's `selected` list. A module that one member installs and another tests is tested. The batch log says `installed on every host, not tested: ...`. Test: `test_install_only_modules_are_installed_on_every_host_but_never_tested`, `test_a_module_one_member_installs_and_another_tests_is_tested`.
+**Per run.** The union of the group's modules is split over ALL the hosts by recorded duration (`plan_machine_split`); a host that is busy (`probe` finds its lock held) still gets its share, labelled "busy now" in the batch log, and its driver waits for the lock (Bruce 2026-11-05, "Combine tests": batch 31 put 24 modules on yoga alone because the others were busy for a few minutes); one thread per host calls `runner`; each host's log tail is appended to the batch log. Results are merged: a host that could not start makes the run fatal (exit 75, every member of the group fails with `run on X could not start`); a merge conflict (the hosts all build the same tree) becomes a `conflicted` member and its verdict is `solo`; a nonzero exit is read as failing tests (`failing_tests`): those that also fail in the host's origin/main baseline run (`baseline_filtered`, run by the driver after a failing batch run) are environmental, are listed in the batch log and do not fail any branch (a passing verdict carries a `note`); each other failing test is blamed on its module's owners; a failure naming no test falls back to the modules `filtered_test.txt` implicates, none implicated is unattributable and splits the batch. A clean run passes every branch in it (Bruce's rule) and writes the pass record of each (`write_pass_record`).
+**Durations.** Recorded per host from that host's wall time over its own modules.
+**Concurrency.** `_run_once` is called by the leader only; threads write only their own slot under a lock; log output is written after the threads join.
+**See also.** `run_remote_member`, `OdooTestBatch`, `LintBatch`. Tests: `test_a_batch_is_split_over_the_hosts_and_each_branch_gets_its_own_verdict`, `test_a_clean_combined_run_marks_every_branch_passed`, `test_a_host_that_cannot_start_is_exit_75_not_a_test_failure`, `test_a_conflict_found_by_the_hosts_sends_that_branch_to_run_alone`.
+
+### `odoo_test_batch:run_remote_member`
+**Purpose.** The caller's side of a remote test run (`remote_odoo_test.py`): join the repository's `rtest` queue and block until this branch's verdict.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `tree` | str | committed checkout or worktree of the repository (its main checkout names the queue) |
+| `repo_name` | str | `hams_com` or `hams_open` |
+| `branch`, `tip` | str | name and commit of the branch under test |
+| `modules_arg` | str | comma-separated whole-module list; a `:Class` selector raises `ValueError` |
+| `machines` | list of str | hosts the leader may use |
+| `driver` | list of str | argv prefix of `remote_odoo_test.py` |
+| `wait`, `timeout`, `environ`, `out` | | `timeout` seconds bound the wait; the queue always waits |
+| `install` | list of str | modules to install on every host for this branch's tests without testing them (stored as the member's `install`); default none |
+
+**Returns.** The exit code: 0 passed, 1 failed, 75 could not run or gave up; `None` when the branch must run alone (its merge conflicts with another branch, or the runner kept dying).
+**Special concerns.** Blocks for minutes to an hour. The queue is `state_dir("rtest", repo_key)`, separate from the local `test` queue. Prints the batch verdicts. Writes `~/.cache/hams-test/passed/<tip>` for each passed branch (leader).
+**See also.** `lint_batch.run_member`. Test: `test_run_remote_member_end_to_end_with_a_stand_in_driver`.
 
 ### `odoo_test_batch:estimate_seconds`
 `estimate_seconds(modules, durations, default=300)` is the sum of recorded durations, `default` per unrecorded module. The `estimate`
 passed to `join` so a batch stops growing at `HAMS_BATCH_MAX_SECONDS`.
 
 ### `odoo_test_batch:load_durations`
-`load_durations(sdir)` returns `{module: seconds}` from `<sdir>/durations.json`; `{}` when missing, unreadable, or when entries are
-not finite numbers (those entries are dropped).
+`load_durations(sdir)` returns `{module: seconds}` for the repository's test queue: the crude equal-share table
+`<sdir>/durations.json` overlaid with the measured table `<sdir>/module_durations.json` (`record_module_durations`), so a module with
+a measured time uses it and any other module its crude figure. `{}` when both are missing or unreadable; entries that are not finite
+numbers in [0, 1e9) are dropped. `plan_machine_split` and `estimate_seconds` read this table.
 
 ### `odoo_test_batch:record_durations`
-`record_durations(sdir, modules, seconds)` credits each module an equal share of the run's wall time (test.py reports no per-module
-time, so the figure is crude) and averages it with an earlier record; written atomically; ignores a failed write, empty modules
-or non-positive seconds.
+`record_durations(sdir, modules, seconds)` credits each module an equal share of the run's wall time (the crude figure, used only when a
+host reported no per-module times) and averages it with an earlier crude record in `<sdir>/durations.json`; written atomically; ignores
+a failed write, empty modules or non-positive seconds. It never reads or changes a measured figure.
+
+### `odoo_test_batch:record_module_durations`
+`record_module_durations(sdir, durations)` stores the measured per-module test times of one host's run in `<sdir>/module_durations.json`.
+`durations` is `{module: seconds}` as the host's `odoo.tests.stats: <module>: N tests <s>s` lines report them
+(`remote_odoo_test.module_test_seconds` in hams_com's devbox_tools, returned by `drive_host` as `result["durations"]`; `RemoteTestBatch`
+passes each host's figures here). The first measurement of a module is stored as it is; a later one is averaged 50/50 with the stored
+figure because the hosts differ in speed. Entries whose module is not a non-empty string or whose seconds are not a finite number in
+[0, 1e9) (including booleans) are ignored; an empty mapping writes nothing; the file is written atomically and a failed write is
+ignored. The time is Odoo's test time for the module, not its install time.
 
 ### `odoo_test_batch:write_pass_record`
 `write_pass_record(tip, modules, batch_id, environ)` writes `~/.cache/hams-test/passed/<tip>` with one line
@@ -324,3 +418,25 @@ before any lock. Reads git for the repository root, dirty state, tip and branch;
 printing "test batch: running alone (<reason>)" for a `-u` run, a merge conflict with another branch, a batch runner that kept dying),
 else blocks until this caller's verdict and returns its exit code (0, 1, or 75 when `--wait-timeout` ran out waiting). Side
 effects: queue state under `~/.cache/hams-lint/batches/test-<repo>`, a temporary worktree under `~/workspace/tmp` in the leader.
+
+## lint_exec
+
+### `lint_exec:_main_submodule_gitdir`
+`_main_submodule_gitdir(common) -> str`: given the git common directory of a checkout, returns the git directory of the MAIN
+checkout's submodule when `common` has the form `<parent>/.git/worktrees/<worktree>/modules/<name>` (a submodule initialised
+inside a linked worktree of its parent) and `<parent>/.git/modules/<name>` exists; otherwise returns `common` unchanged. Used
+by `main_worktree_of`, whose `core.worktree` lookup would otherwise name the worktree's own submodule directory, so a hams_open
+worktree with `hams_shared` checked out inside it found no `node_modules` and ESLint was "not installed". Pure string work plus
+one `isdir`. Test: `MainWorktreeTests.test_the_main_worktree_of_a_submodule_checked_out_in_a_parent_worktree_is_the_main_submodule`.
+
+### `lint_exec:has_odoo_module`
+`has_odoo_module(path) -> bool`: True when a directory directly under `path` holds an Odoo `__manifest__.py`; False for a
+missing or unreadable `path`. It is the `accept` argument that the module-scanning checkers (`check_dead_code`,
+`check_dependency_cycles`, `check_model_extension_collisions`, `odoo_registry_builder`, and the others listed in
+`test_sibling_repo_checkers.py`) hand to `lint_exec.sibling_repo_root` to take the other repository by identity instead of
+by directory name. Test: `SiblingByIdentityTests.test_the_accept_tests_look_for_a_module_and_for_agents_md`.
+
+### `lint_exec:has_agents_md`
+`has_agents_md(path) -> bool`: True when `path` holds an `AGENTS.md`. The `accept` argument of `check_doc_images`, which scans
+manuals rather than modules. Same test as `lint_exec:has_odoo_module`.
+

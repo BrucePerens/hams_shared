@@ -177,6 +177,10 @@ class SelectionFixture(unittest.TestCase):
         env = dict(os.environ)
         env["HAMS_ALLOW_STALE_SHARED"] = "1"
         env["HAMS_LINT_NO_LOCK"] = "1"  # the selection tests are not heavy runs; never queue behind a real one
+        # The workspace repositories have no .gitignore: a tools/__pycache__ written by this run is an untracked
+        # change to the checker tooling, and --changed then selects every step. Passed only on hosts whose git
+        # ignores __pycache__ globally or whose environment already set this (found in a cloud session, 2026-11-07).
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         return subprocess.run(
             [sys.executable, os.path.join(self.open_repo, "tools", "run_linters.py"), *args],
             cwd=self.open_repo,
@@ -641,6 +645,35 @@ class MainWorktreeTests(unittest.TestCase):
         linked = os.path.join(directory, "linked")
         _git(main, "worktree", "add", "-q", "-b", "side", linked)
         self.assertEqual(os.path.realpath(lint_exec.main_worktree_of(linked)), os.path.realpath(main))
+
+    def test_the_main_worktree_of_a_submodule_checked_out_in_a_parent_worktree_is_the_main_submodule(self):
+        """Tests [@ANCHOR: lint_exec:_main_submodule_gitdir]: a submodule initialised inside a linked worktree of its
+        parent has its git directory under `.git/worktrees/<name>/modules/`; the main checkout is the parent's own."""
+        import lint_exec
+
+        directory = tempfile.mkdtemp(prefix="mainwt-")
+        self.addCleanup(shutil.rmtree, directory, True)
+        ident = ("-c", "user.name=t", "-c", "user.email=t@example.invalid")
+        sub = os.path.join(directory, "sub_origin")
+        os.makedirs(sub)
+        _git(sub, "init", "-q", "-b", "main")
+        _write(os.path.join(sub, "s"), "x\n")
+        _git(sub, "add", "-A")
+        _git(sub, *ident, "commit", "-q", "-m", "s")
+        parent = os.path.join(directory, "parent")
+        os.makedirs(parent)
+        _git(parent, "init", "-q", "-b", "main")
+        _git(parent, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "shared")
+        _git(parent, *ident, "commit", "-q", "-m", "p")
+        linked = os.path.join(directory, "linked")
+        _git(parent, "worktree", "add", "-q", "-b", "side", linked)
+        _git(linked, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q", "shared")
+        inside = os.path.join(linked, "shared")
+        common = subprocess.run(["git", "-C", inside, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                check=True, capture_output=True, text=True).stdout
+        self.assertIn("worktrees", common)
+        self.assertEqual(os.path.realpath(lint_exec.main_worktree_of(inside)), os.path.realpath(os.path.join(parent, "shared")))
+        self.assertEqual(lint_exec._main_submodule_gitdir("/x/plain/.git"), "/x/plain/.git")
 
 
 if __name__ == "__main__":

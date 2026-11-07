@@ -1034,11 +1034,6 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "Writes /opt/hams/etc/keys today, so a family account cannot hold it until its key-directory write access is removed; "
         "its own phase, the pgbackrest sidecar (ADR-0103) already took the root part (plan section 13)."
     ),
-    "cache-manager.service": (
-        "Reads /opt/hams/etc/keys/cache_manager_db.env (odoo-owned, 0600) directly, a fixed path in cache_manager.py; "
-        "it holds only a CONNECT-only PostgreSQL login, but a family account needs that file's ownership changed first "
-        "(plan section 13)."
-    ),
     "pager-os-monitor.service": (
         "Acts as pager_service_internal with the odoo-owned key file keys/pager_duty.env and reads the CONNECT-only PostgreSQL "
         "login keys/pager_monitor_db.env, both odoo-owned 0600; a family account needs those files' ownership changed first "
@@ -1290,6 +1285,87 @@ def oneshot_run_timeout_dropin_entries(manifest):
     return entries
 
 
+# [@ANCHOR: infrastructure:rotated_key_reload_policy]
+# daemon_key_manager rotates every daemon's Odoo API key (the monthly cron, and every start of hams.daemon.keys.service, which runs
+# action_force_provision_all): it writes the new key to the daemon's key file, revokes the old key, and restarts nothing (Odoo may not
+# run systemctl, and a restart would kill a running 50-minute pgbackrest backup). A process that read its key once at start, from an
+# EnvironmentFile or from the file, then fails every Odoo call with 401 until someone restarts it: backup.worker failed for nine days
+# (2026-10-27 to 2026-11-05, ticket 116). A Type=oneshot unit reads the file afresh on every run and is safe. Every other process that
+# names a key under /opt/hams/etc/keys/ must therefore re-read the key itself, and this table is where each one says how.
+# long_running_key_holders() finds them in the MANIFEST; test_infrastructure.py fails for one missing here, for an entry that no longer
+# matches a holder, and for a unit that loads a key through EnvironmentFile (frozen at start) without its own reload. Audit table with
+# the evidence for each row: hams_open daemon_key_manager/README.md, "Rotation safety audit 2026-11-05".
+KEY_RELOAD_MECHANISMS = {
+    "hams_config": "Odoo calls go through hams_config.get_odoo_client(); its execute() re-reads ODOO_KEY_FILE after a 401 and retries once",
+    "own_reload": "the daemon has its own re-read of the key file after a 401, with one retry",
+    "per_call": "the key file is read again for every use (a new get_odoo_client() per call)",
+    "unused": "the key is loaded but never presented to Odoo, so a revoked key cannot fail anything",
+}
+ROTATED_KEY_RELOAD_POLICY = {
+    "adif.processor.service": ("hams_config", "daemons/adif_processor/main.py: one get_odoo_client() for the consumer's life."),
+    "adif.ingress.service": ("hams_config", "daemons/adif_ingress/main.py: get_odoo_client() per request and at start."),
+    "aprs.is.sync.service": ("hams_config", "daemons/aprs_is_sync/main.py: get_odoo_client() with a call timeout."),
+    "gdpr.csv.export.service": ("hams_config", "daemons/gdpr_csv_export/main.py."),
+    "ham.dx.daemon.service": ("hams_config", "daemons/ham_dx_daemon/main.py: one client for the flusher, short call timeout."),
+    "noaa-swpc-sync.service": ("hams_config", "daemons/noaa_swpc_sync/main.py."),
+    "pdns.sync.service": ("hams_config", "daemons/pdns_sync/main.py (its PowerDNS key is a different credential, from pdns.env)."),
+    "backup.worker.service": (
+        "own_reload", "backup_management/daemon/main.py _reload_odoo_key(); the unit still loads backup_worker.env, which only seeds the "
+                      "first key (hams_open #1204)."),
+    "pager-os-monitor.service": (
+        "own_reload", "pager_duty/daemon/generalized_monitor.py OdooClient.reload_key(); the unit still loads pager_duty.env, which only "
+                      "seeds the first key (hams_open #1208). pager_monitor_db.env is a PostgreSQL login, not an Odoo key."),
+    "hams.simulated.bots.service": (
+        "per_call", "daemons/hams_simulated_bots/main.py create_safety_ticket() makes a new get_odoo_client() for each ticket."),
+    "hams.simulated.observer.service": (
+        "per_call", "daemons/hams_simulated_bots/observer.py _create_observer_ticket() makes a new get_odoo_client() for each flag."),
+    "run-ticket-triage-mcp.sh": (
+        "hams_config", "daemons/hams_ticket_triage_mcp/main.py: a new get_odoo_client() per tool call, for the length of one agent session."),
+    "run-event-enrichment-mcp.sh": (
+        "hams_config", "daemons/hams_event_enrichment_mcp/main.py: a new get_odoo_client() per tool call, for the length of one agent "
+                       "session."),
+}
+_KEY_DIRECTORY = "/opt/hams/etc/keys/"
+
+
+def _uncommented_lines(content):
+    """The non-blank, non-comment lines of a unit or script text, stripped."""
+    return [
+        line.strip() for line in (content or "").splitlines()
+        if line.strip() and not line.strip().startswith(("#", ";"))
+    ]
+
+
+# [@ANCHOR: infrastructure:long_running_key_holders]
+def long_running_key_holders(manifest):
+    """The processes in `manifest` that name a file under /opt/hams/etc/keys/ and are not Type=oneshot, as {name: how}.
+
+    `name` is the base name of the unit file (a `.service` whose Type= is anything but `oneshot`; no Type= means `simple`) or of a
+    wrapper script (`.sh`) that exports ODOO_KEY_FILE for a process that can outlive a rotation. `how` is the set of ways the key
+    reaches it: "environment_file" (an EnvironmentFile= line under the key directory; systemd reads it once, at start) and/or
+    "key_file" (any other mention of a key path, such as Environment="ODOO_KEY_FILE=..."; the process reads the file itself). Comment
+    lines do not count. A one-shot unit is skipped because it reads its key afresh on every run. Pure: reads `manifest["static_files"]`
+    only."""
+    holders = {}
+    for spec in manifest.get("static_files", []):
+        path = spec.get("path", "")
+        name = os.path.basename(path)
+        lines = _uncommented_lines(spec.get("content"))
+        if name.endswith(".service"):
+            if _unit_directives(spec.get("content")).get("Type") == "oneshot":
+                continue
+        elif not name.endswith(".sh"):
+            continue
+        how = set()
+        for line in lines:
+            if _KEY_DIRECTORY not in line:
+                continue
+            how.add("environment_file" if line.startswith("EnvironmentFile=") else "key_file")
+        if how:
+            holders.setdefault(name, set()).update(how)
+    return holders
+
+
 def _is_server_unit(entry):
     """True for a unit file of the hams.com server (the prod or test environment). A unit of another host,
     such as the FCC sync on pi500-1, which has its own User=, is not part of the account ratchets."""
@@ -1521,6 +1597,17 @@ FAMILY_ACCOUNT_UNITS = {
         "environment_files": frozenset({"common.env", "db_app.env"}),
         "no_state": True,
         "no_key": True,
+    },
+    # distributed_redis_cache's invalidation daemon holds no Odoo key. Its one credential is the CONNECT-only PostgreSQL login
+    # that provisioning writes (_provision_cache_manager_role), and the daemon reads that file itself, so `db_login` names it:
+    # the file lives in the family key directory, odoo:hamsd_cache_manager 0640, the same shape as an Odoo key. odoo is in the
+    # group because distributed_redis_cache's real-daemon Odoo test starts cache_manager.py as odoo on a test host.
+    "cache-manager.service": {
+        "user": "hamsd_cache_manager",
+        "environment_files": frozenset({"redis.env"}),
+        "no_state": True,
+        "no_key": True,
+        "db_login": "/opt/hams/etc/keys/cache_manager/cache_manager_db.env",
     },
     "club.crawl.service": {
         "user": "hamsd_club_crawl",
@@ -1949,6 +2036,21 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # distributed_redis_cache/daemons/cache_manager.py (cache-manager.service): LISTENs for PostgreSQL NOTIFY and increments
+            # the Redis invalidation counter. No Odoo key; its one credential is the CONNECT-only PostgreSQL login
+            # keys/cache_manager/cache_manager_db.env (FAMILY_ACCOUNT_UNITS `db_login`). odoo joins this group to read that file
+            # in the real-daemon Odoo test on a test host; it never writes it (provisioning, as root, does). Not in hams_com:
+            # the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_cache_manager",
+            "group": "hamsd_cache_manager",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
             # daemons/gdpr_csv_export: the GDPR export builder, which handles members' personal data. Its own account and key
             # (gdpr_export_service_internal.key) mean no other daemon reads the key or anything the unit holds. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
             "user": "hamsd_gdpr_export",
@@ -2340,6 +2442,16 @@ MANIFEST = {
             # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
             "path": "/opt/hams/etc/keys/qrz_scraper",
             "owner": "odoo:hamsd_qrz_scraper",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the cache_manager family (hamsd_cache_manager): it holds no Odoo key, only the PostgreSQL login
+            # cache_manager_db.env that _provision_cache_manager_role writes (as root, odoo:hamsd_cache_manager 0640). Owned by odoo,
+            # group = the one account that consumes it, 0750, the same rule as every key directory (NIGHT_PLAN 226).
+            "path": "/opt/hams/etc/keys/cache_manager",
+            "owner": "odoo:hamsd_cache_manager",
             "provision_mode": "750",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
@@ -4062,7 +4174,7 @@ User=hamsd_dx_daemon
 Group=hamsd_dx_daemon
 WorkingDirectory=/opt/hams/daemons/ham_dx_daemon
 
-# Code audit, 2026-10-04: ham_dx_daemon/main.py reads DX_NODE_HOST, DX_NODE_PORT, DX_NODE_CALLSIGN and DX_DAEMON_MAX_PENDING_SPOTS (defaults in code, except DX_NODE_CALLSIGN which the unit sets and the daemon requires) and it reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+# Code audit, 2026-10-04: ham_dx_daemon/main.py reads DX_NODE_HOST, DX_NODE_PORT, DX_NODES, DX_NODE_CALLSIGN and DX_DAEMON_MAX_PENDING_SPOTS (defaults in code, except DX_NODE_CALLSIGN which the unit sets and the daemon requires) and it reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file). No database, Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
 EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=dx_daemon_service"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/dx_daemon/dx_daemon_service.key"
@@ -4070,6 +4182,8 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 # REQUIRED: the real callsign the daemon logs in to the DX cluster with. AR-Cluster drops placeholders such as N0CALL (the feed was dead for days); the daemon refuses to start without a valid one.
 Environment="DX_NODE_CALLSIGN=K6BP-2"
+# Ordered fallbacks, tried in turn when a node fails or goes quiet (ham_dx_daemon/main.py DX_NODES). Measured 2026-11-03: the public clusters re-share each other's spots, so the fallbacks add availability, not volume; one session is open at a time.
+Environment="DX_NODES=dxc.nc7j.com:7373,w3lpl.net:7373,dxc.ve7cc.net:23"
 
 # Smoketest Resource Verification
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/ham_dx_daemon/main.py --start-test
@@ -8670,6 +8784,9 @@ ReadWritePaths=@ACCOUNT_HOME_PARENT@/hams_ai_agent @ACCOUNT_HOME_PARENT@/hams_ev
 Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/credential_touch
+# exception_reporter.py (synced flat to /opt/hams/daemons) files the one "AI service quota used up" ticket
+# (2026-11-05); without this the import failed and no ticket was filed.
+Environment="PYTHONPATH=/opt/hams/daemons"
 
 ExecStart=/usr/bin/python3 /opt/hams/daemons/credential_touch/main.py
 
@@ -8754,6 +8871,9 @@ Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/ticket_triage_agent
 EnvironmentFile=-/opt/hams/etc/ticket_triage.env
+# ai_quota.py and exception_reporter.py (synced flat to /opt/hams/daemons) file the one "AI service quota used up" ticket
+# when the Claude plan quota is used up (2026-11-05); without this the imports fail.
+Environment="PYTHONPATH=/opt/hams/daemons"
 # Longer than the pre-check (60s) plus the CLI's own hard timeout (600s) and kill grace.
 TimeoutStartSec=900
 
@@ -8868,6 +8988,9 @@ Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/ticket_triage_agent
 EnvironmentFile=-/opt/hams/etc/ticket_triage.env
+# ai_quota.py and exception_reporter.py (synced flat to /opt/hams/daemons) file the one "AI service quota used up" ticket
+# when the Claude plan quota is used up (2026-11-05); without this the imports fail.
+Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="HAMS_TRIAGE_SPOOL_DIR=/opt/hams/spool/ticket_triage"
 # Debounce 120 + lock wait 700 + pre-check 60 + CLI timeout 600 + kill grace, with margin.
 TimeoutStartSec=1800
@@ -9487,9 +9610,17 @@ WantedBy=timers.target
             # devbox_tools/deploy_to_production.py), like the B2 backup units, so it is always the same code as the
             # installed module and needs no second copy under /opt/hams/daemons. Redis requires an ACL login on hams1,
             # so redis.env is loaded (REDIS_HOST/PORT/USERNAME/PASSWORD); the restricted PostgreSQL login
-            # (cache_manager_ro, CONNECT only) is read by the daemon itself from keys/cache_manager_db.env, which
-            # provisioning writes (_provision_cache_manager_role). It writes nothing to disk. Runs as odoo because
-            # that key file is odoo-owned 0600 (see SHARED_ODOO_ACCOUNT_UNITS).
+            # (cache_manager_ro, CONNECT only) is read by the daemon itself from
+            # keys/cache_manager/cache_manager_db.env, which provisioning writes (_provision_cache_manager_role).
+            #
+            # Its own account, hamsd_cache_manager (hams_com docs/proposals/DAEMON_OS_ISOLATION_PLAN.md; it left
+            # SHARED_ODOO_ACCOUNT_UNITS 2026-11-06). Code audit of cache_manager.py, 2026-11-06: environment REDIS_HOST,
+            # REDIS_PORT, REDIS_PASSWORD, REDIS_USERNAME (redis.env), PGHOST and CACHE_MANAGER_DB_ENV_FILE (unset here); the
+            # file keys/cache_manager/cache_manager_db.env (DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASS, loaded with
+            # override); connections: PostgreSQL and Redis on loopback TCP only; writes no file; no subprocess; reads no
+            # other process. So: redis.env only, no writable path, the full isolation set. The Odoo key file
+            # keys/cache_manager.env is no longer loaded: no line of the daemon ever read ODOO_RPC_LOGIN or ODOO_RPC_KEY
+            # (KEY_RELOAD_MECHANISMS "unused" said so), and the daemon no longer opens it either.
             "path": "/opt/hams/systemd/cache-manager.service",
             "content": """\
 [Unit]
@@ -9506,12 +9637,26 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+# Its own account, hamsd_cache_manager (DAEMON_OS_ISOLATION_PLAN.md section 5): it writes nothing and reads no other process.
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=simple
-User=odoo
+User=hamsd_cache_manager
+Group=hamsd_cache_manager
 WorkingDirectory=/opt/hams/src/hams_open/distributed_redis_cache/daemons
 
 EnvironmentFile=/opt/hams/etc/redis.env
-EnvironmentFile=-/opt/hams/etc/keys/cache_manager.env
 
 ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/distributed_redis_cache/daemons/cache_manager.py
 
@@ -12848,12 +12993,22 @@ def _provision_cache_manager_role(
     run_cmd_func,
     db_name,
     role_name="cache_manager_ro",
-    env_file="/opt/hams/etc/keys/cache_manager_db.env",
+    env_file="/opt/hams/etc/keys/cache_manager/cache_manager_db.env",
     purpose="cache_manager.py",
+    owner="odoo:hamsd_cache_manager",
+    mode=0o640,
+    legacy_env_file="/opt/hams/etc/keys/cache_manager_db.env",
 ):
     """
     Creates (or rotates the password of) a dedicated, minimally-privileged PostgreSQL role for
-    distributed_redis_cache/daemons/cache_manager.py, and writes its credentials to env_file.
+    distributed_redis_cache/daemons/cache_manager.py, and writes its credentials to env_file, owned by `owner` with `mode`.
+
+    The daemon runs as its own account (hamsd_cache_manager, FAMILY_ACCOUNT_UNITS `db_login`), so its file is in the family key
+    directory, odoo:hamsd_cache_manager 0640: the account reads it through the group, and odoo, a member of the group, reads it
+    when distributed_redis_cache's real-daemon Odoo test starts cache_manager.py as odoo on a test host. `legacy_env_file` is
+    where the file lived before (odoo:odoo 0600): while env_file does not exist yet, the password recorded there is kept, so
+    moving the file never rotates the role's password under a running daemon. The legacy file is left in place (the coordinator
+    removes it once the daemon runs from the new path); None for a caller with no earlier path.
 
     Mirrors distributed_redis_cache/scripts/provision_cache_manager_db_role.py's own role-creation
     SQL and env-file shape (see that script's own docstring for why a separate role and a separate
@@ -12881,6 +13036,8 @@ def _provision_cache_manager_role(
     hand to something env_file does not record; delete env_file to force a rotation.
     """
     existing_password = _read_env_value(env_file, "DB_PASS")
+    if not existing_password and legacy_env_file and not os.path.exists(env_file):
+        existing_password = _read_env_value(legacy_env_file, "DB_PASS")
     role_exists = _role_exists(role_name)
     password = existing_password or generate_secure_password()
     if not (role_exists and existing_password):
@@ -12925,16 +13082,59 @@ def _provision_cache_manager_role(
             f.write(content)
     elif _planning():
         return
-    # Unlike cache_manager.env (loaded via the systemd unit's own
-    # EnvironmentFile=, read by systemd as root before it drops privileges
-    # to User=odoo), this file is read directly by cache_manager.py's own
-    # Python code (load_dotenv) running as the odoo OS user -- root:root
-    # (write_env_files()'s own convention for systemd-loaded files) would
-    # leave the daemon unable to read its own credentials. This function
-    # itself typically runs as root (infrastructure.py's own provisioning
-    # flow), so the file exists as root:root immediately after os.open()
-    # above until this chown/chmod actually runs.
-    apply_permissions(env_file, "odoo:odoo", 0o600)
+    # This file is read directly by the daemon's own Python code (load_dotenv) running as its unprivileged account, not by
+    # systemd as root, so root:root (write_env_files()'s convention for systemd-loaded files) would leave the daemon unable to
+    # read its own credentials. This function runs as root (the provisioning flow), so the file is root:root 0600 right after
+    # os.open() above until this chown (first) and chmod run.
+    apply_permissions(env_file, owner, mode)
+
+
+# [@ANCHOR: infrastructure:_allow_cache_manager_socket_password_for_test]
+CACHE_MANAGER_SOCKET_HBA_LINE = "local   all             cache_manager_ro                        scram-sha-256\n"
+
+
+def _allow_cache_manager_socket_password_for_test(hba_paths=None):
+    """
+    Test hosts only: lets cache_manager_ro log in over the Unix socket with its password, and returns
+    True when a pg_hba.conf changed (PostgreSQL then needs a reload).
+
+    Why: the remote test runner (devbox_tools/remote_odoo_test.py) runs test.py with
+    PGHOST=/var/run/postgresql so Odoo, running as the odoo OS user, reaches PostgreSQL by peer
+    authentication. TestRealCacheManager starts the real cache_manager.py daemon from inside that run;
+    the daemon honours PGHOST, so it connects through the socket as cache_manager_ro, for which Debian's
+    `local all all peer` rule demands an OS user of that name and fails ("Peer authentication failed for
+    user cache_manager_ro"). On hams1 the daemon has no PGHOST and uses TCP with the password under the
+    scram-sha-256 loopback rules. This rule gives the socket the same password check the TCP path has, for
+    this one role, so the daemon works the same way in both places. It loosens nothing: the password is
+    still required, and no other role is affected.
+
+    The line is inserted immediately before the first `local all all ...` rule (pg_hba.conf is first-match),
+    never at the end. Idempotent: nothing changes when the line is already there. Production never calls this
+    (it is reached only when provisioning with --test); hams1 keeps pg_hba.conf as Debian ships it.
+    """
+    if hba_paths is None:
+        hba_paths = sorted(glob.glob("/etc/postgresql/*/main/pg_hba.conf"))
+    changed = False
+    for path in hba_paths:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        if any(line.split() == CACHE_MANAGER_SOCKET_HBA_LINE.split() for line in lines):
+            continue
+        index = next((i for i, line in enumerate(lines) if line.split()[:3] == ["local", "all", "all"]), None)
+        if index is None:
+            raise RuntimeError(f"{path} has no `local all all` rule to place the cache_manager_ro rule before")
+        lines.insert(index, CACHE_MANAGER_SOCKET_HBA_LINE)
+        changed = True
+        if _plan("write", f"{path} (cache_manager_ro socket password rule, test host)"):
+            continue
+        st = os.stat(path)
+        tmp_path = path + ".hams-provision.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write("".join(lines))
+        os.chown(tmp_path, st.st_uid, st.st_gid)
+        os.chmod(tmp_path, st.st_mode & 0o7777)
+        os.replace(tmp_path, path)
+    return changed
 
 
 # [@ANCHOR: infrastructure:_provision_pager_monitor_role]
@@ -12950,6 +13150,10 @@ def _provision_pager_monitor_role(run_cmd_func, db_name):
         role_name="pager_monitor_ro",
         env_file="/opt/hams/etc/keys/pager_monitor_db.env",
         purpose="pager_duty's PostgreSQL ping check",
+        # pager-os-monitor.service still runs as odoo and loads this file through EnvironmentFile= (SHARED_ODOO_ACCOUNT_UNITS).
+        owner="odoo:odoo",
+        mode=0o600,
+        legacy_env_file=None,
     )
 
 
@@ -13576,6 +13780,13 @@ def _apt_install_missing(run_cmd_func, packages, apt_opts, label):
     return to_install
 
 
+# [@ANCHOR: infrastructure:pip_fallback_apt_packages]
+# apt package name -> pip distribution installed in its place when the OS release has no apt candidate (Ubuntu
+# 24.04 dropped awscli). provision_environment installs the pip one; test.py's check_host_apt_packages accepts it.
+# Full entry: tools/README.md.
+PIP_FALLBACK_APT_PACKAGES = {"awscli": "awscli"}
+
+
 def provision_environment(
     run_cmd_func,
     env_vars,
@@ -13783,7 +13994,6 @@ def provision_environment(
             # Falls back to pip for exactly this one known case rather than building
             # generic any-package-might-be-missing handling for a problem only ever
             # seen here once.
-            PIP_FALLBACK_APT_PACKAGES = {"awscli": "awscli"}
             missing_apt_packages = []
             for pkg in all_packages:
                 probe = subprocess.run(
@@ -14122,6 +14332,8 @@ def provision_environment(
                     "PostgreSQL role..."
                 )
                 _provision_cache_manager_role(run_cmd_func, db_name)
+                if is_test and _allow_cache_manager_socket_password_for_test() and not is_isolated_ns:
+                    run_cmd_func(["systemctl", "reload", "postgresql"])
                 _logger.info("[*] Provisioning pager_duty's PostgreSQL ping login...")
                 _provision_pager_monitor_role(run_cmd_func, db_name)
         except Exception as e:  # audit-ignore-catch-all

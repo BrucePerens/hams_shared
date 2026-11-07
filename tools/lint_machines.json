@@ -47,6 +47,30 @@
         }
       }
     },
+    "bruce17": {
+      "ssh": {"target": "bruce17", "args": ["-o", "HostName=bruce17.lan"]},
+      "os": "linux",
+      "workdir": "~/hams-lint-mirror",
+      "jobs": 2,
+      "nice": 10,
+      "max_concurrent": 1,
+      "max_load_ratio": 0.8,
+      "note": "HP Notebook board 81FF (Core i7-7500U, 2 cores / 4 threads, 7.6 GiB, 256 GB SATA SSD), Debian 13 x86-64, wifi only (RTL8188EE; hp-notebook-81ff-support fixes its PCIe error flood). A light helper and clean-room test host: lint fan-out, one Odoo module test at a time, small CI. Provisioned 2026-11-04 with tools/provision_build_host.sh via lint_remote.py provision bruce17 --apply.",
+      "provisioned": {
+        "date": "2026-11-04",
+        "by": "python3 tools/lint_remote.py provision bruce17 --apply (tools/provision_build_host.sh)",
+        "versions": {
+          "os": "Debian 13 (trixie) x86_64, 2 cores / 4 threads, 7.6 GiB",
+          "rust": "rustc and cargo 1.98.1 via rustup (user level), clippy 0.1.98, rustfmt 1.9.0",
+          "node": "v20.19.2 (apt), npm 9.2.0",
+          "python": "3.13.5; pytest 9.1.1, pytest-xdist 3.8.0, hypothesis 6.165.10, mcp 2.2.0, numpy 2.5.0, cryptography 50.0.2, playwright 1.62.0 (requirements-test.txt)",
+          "odoo": "19.0.20261029, service disabled",
+          "postgresql": "18.6 (pgdg)",
+          "kopia": "0.23.1",
+          "browser": "Google Chrome 157.0.8103.38"
+        }
+      }
+    },
     "bruce-yoga": {
       "ssh": {
         "target": "bruce-yoga",
@@ -106,6 +130,7 @@
     "default": {"cargo_gb": 12, "free_floor_gb": 20, "results_mb": 200},
     "devbox": {"cargo_gb": 25, "free_floor_gb": 30, "results_mb": 200, "hostnames": ["bruce16"]},
     "mac1-vm": {"cargo_gb": 12, "free_floor_gb": 10, "results_mb": 100, "hostnames": ["lima-hams-test-debian"]},
-    "bruce-yoga": {"cargo_gb": 40, "free_floor_gb": 20, "results_mb": 200, "hostnames": ["bruce-yoga"]}
+    "bruce-yoga": {"cargo_gb": 40, "free_floor_gb": 20, "results_mb": 200, "hostnames": ["bruce-yoga"]},
+    "bruce17": {"cargo_gb": 20, "free_floor_gb": 30, "results_mb": 100, "hostnames": ["bruce17"]}
   }
 }

@@ -91,11 +91,32 @@ branch). `HAMS_LINT_BATCH=off` disables batching for a session. The line `[*] li
 * Attribution: `filtered_test.txt` lists the modules whose tracebacks implicate them; each is blamed on the members whose `-u`
   names it, the other members pass at once. A crash with no implicated module splits the batch. A module broken by ANOTHER
   branch's change (a dependency) is blamed on the branch that asked for that module; `--solo` confirms.
-* Cap: 8 branches, or `HAMS_BATCH_MAX_SECONDS` of estimated work from recorded module durations (`durations.json`, an equal share
-  of each run's wall time per module; 300 s for an unrecorded module).
+* Cap: 8 branches, or `HAMS_BATCH_MAX_SECONDS` of estimated work from recorded module durations (`module_durations.json`: the test
+  time per module from each host's `odoo.tests.stats` lines; `durations.json`: an equal share of a run's wall time, used when a host
+  reported no per-module times; 300 s for an unrecorded module).
 * Evidence: `~/.cache/hams-test/passed/<tip>` per passed branch (`tests <time> modules=... batch=N`); nothing gates on it yet.
 * Stays solo: `--solo`, `HAMS_TEST_BATCH=off`, `--test-tags`, `-u mod:Class`, any mode but standard, `--mcp`, `--coverage`,
   `--pause-on-fail`, `--offline-isolation`, `--profile`, `--build-daemons`, a dirty tree, a directory that is not the repository root.
-* Not done (stubbed): spreading the union over machines. `odoo_test_batch.plan_machine_split` computes the split from the recorded
-  durations; `run_on_machine` (to be backed by hams_com `devbox_tools/remote_odoo_test.py`) raises `NotImplementedError`.
-  To-do `night_shift_todo/medium/split-test-batches-across-machines-*.md`.
+
+## Remote test hosts (bruce-yoga, the mac1 VM)
+
+Odoo tests for a branch run on a remote host through hams_com's `devbox_tools/remote_odoo_test.py <yoga|mac1|auto> <tree> <modules>`.
+
+* **Real clones.** Each host holds git clones of hams_com and hams_open (with the hams_shared submodule) in `/opt/hams-testsrc`, made from GitHub
+  with read-only deploy keys (`devbox_tools/provision_test_clones.py <host>`, idempotent, verifies origin/main equals GitHub's main). Nothing is rsynced.
+* **Getting a commit there.** The tree under test must be committed. The host fetches the branch from GitHub; a commit that is not on GitHub is
+  pushed over ssh to `refs/devbox/<sha12>` in the host's clone. Uncommitted work is refused.
+* **The queue.** The caller joins the `rtest` queue of its repository on the dev box (`run_remote_member`). The leader splits the union of the
+  batch's modules over all the hosts (`plan_machine_split`, recorded durations; a busy host's share waits for its lock), runs `remote_odoo_test.py <host> ... --members-file`
+  once per host in parallel (`run_on_machine`), and each host resets its clones, checks out its own `origin/main`, merges every member tip
+  (`--no-ff`) and runs `test.py --solo -d hams_test -l <dir>` as the odoo user. A conflict is reported by the host and sends that branch to run alone.
+* **Companions are installed, not tested.** A member may carry `install`: modules its tests need installed (hams_com `asset_gate.py` test companions) that
+  it did not ask to test. The hosts install the union of `scope` and `install`; only the `scope` union is split and tested.
+* **Verdicts.** As for local tests: failures are attributed to the branches that asked for the implicated modules; a clean combined run passes every
+  branch in it; a host that could not start fails the batch with exit 75 ("run on X could not start"). Each host's log is appended to the batch log.
+* **Splitting divides the tests, not the installation.** Every host installs/updates the whole union of the batch's modules (`test.py -u <union>`) and tests only its share (`--test-tags /m1,/m2`), because a module's tests may need another requested module to be installed (ham_events' listing tests need ham_communications_consent).
+* **Environmental failures.** After a failing run the host re-runs the same modules on its plain origin/main (the baseline). A failing test that also fails there is reported as environmental in the batch log and the passing verdict's note, and is not charged to any branch; the batch does not keep halving over it.
+* `--solo` (or `--env`, `--test-tags`, a `:Class` selector) tests the tip alone on one host without the queue (no merge with main).
+* Hosts: `HAMS_TEST_MACHINES` (default `yoga,mac1`). One running batch at a time per repository on the dev box; a batch uses all the hosts, waiting for any that is busy.
+
+Not done: per-target-machine running slots (to-do `batches-per-target-machine-8e2c4b17`).

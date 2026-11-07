@@ -243,6 +243,20 @@ class ProvisionForceResetTests(ProvisionTestCase):
             f"expected the real DB_NAME to reach dropdb, got: {commands_run}",
         )
 
+    def test_force_reset_refuses_a_db_name_with_a_trailing_newline(self):
+        # `$` also matches before a final newline, so "hams_test\n" used to pass the identifier check; it ends with \Z now.
+        self.safe_patch_dict(os.environ, {"DB_NAME": "hams_test\n"})
+        self.safe_patch_object(os, "geteuid", return_value=0)
+        self.safe_patch_object(sys, "argv", ["provision.py", "--force-reset"])
+        mock_infra = self.safe_patch_object(provision, "infrastructure", MagicMock())
+        mock_infra.get_os_identifier.return_value = "debian"
+        mock_subprocess = self.safe_patch_object(provision, "subprocess", MagicMock())
+        self.safe_patch("os.chdir")
+        with self.assertRaises(SystemExit) as ctx:
+            provision.provision()
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertFalse([c for c in mock_subprocess.run.call_args_list if c.args[0][:2] == ["rm", "-rf"]])
+
     def test_force_reset_refuses_an_unsafe_db_name_instead_of_running_rm_rf(self):
         # Bug-hunt regression test (2026-09-10): DB_NAME feeds directly
         # into an `rm -rf` filestore path with no validation -- a

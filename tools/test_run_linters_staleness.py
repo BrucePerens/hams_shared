@@ -55,5 +55,26 @@ class TestSharedCheckoutStaleness(unittest.TestCase):
         self.assertTrue(error)
 
 
+class TestRealSharedRoot(unittest.TestCase):
+    # Tests [@ANCHOR: run_linters:real_shared_root]
+    def test_through_a_repositorys_tools_link_it_is_hams_shared_not_the_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shared = os.path.realpath(os.path.join(tmp, "hams_shared"))
+            os.makedirs(os.path.join(shared, "tools"))
+            open(os.path.join(shared, "tools", "run_linters.py"), "w").close()
+            repo = os.path.join(tmp, "hams_open")
+            os.makedirs(repo)
+            os.symlink(os.path.join(shared, "tools"), os.path.join(repo, "tools"))
+            self.assertEqual(run_linters.real_shared_root(os.path.join(repo, "tools", "run_linters.py")), shared)
+
+    # Tests [@ANCHOR: run_linters:real_shared_root]
+    def test_started_in_hams_shared_itself_it_is_that_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shared = os.path.realpath(tmp)
+            os.makedirs(os.path.join(shared, "tools"))
+            open(os.path.join(shared, "tools", "run_linters.py"), "w").close()
+            self.assertEqual(run_linters.real_shared_root(os.path.join(shared, "tools", "run_linters.py")), shared)
+
+
 if __name__ == "__main__":
     unittest.main()

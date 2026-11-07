@@ -10,20 +10,29 @@ The end-to-end tests use real processes, a real git repository with an origin an
 contains BAD) and writes the same `filtered_test.txt` summary the real runner writes.
 
 Tests [@ANCHOR: odoo_test_batch:module_scope]
+Tests [@ANCHOR: odoo_test_batch:union_of]
 Tests [@ANCHOR: odoo_test_batch:ineligible_reason]
+Tests [@ANCHOR: odoo_test_batch:main_checkout_root]
 Tests [@ANCHOR: odoo_test_batch:implicated_modules]
+Tests [@ANCHOR: odoo_test_batch:failing_tests]
 Tests [@ANCHOR: odoo_test_batch:module_finder]
 Tests [@ANCHOR: odoo_test_batch:plan_machine_split]
 Tests [@ANCHOR: odoo_test_batch:run_on_machine]
+Tests [@ANCHOR: odoo_test_batch:idle_machines]
+Tests [@ANCHOR: odoo_test_batch:RemoteTestBatch]
+Tests [@ANCHOR: odoo_test_batch:run_remote_member]
 Tests [@ANCHOR: odoo_test_batch:estimate_seconds]
 Tests [@ANCHOR: odoo_test_batch:load_durations]
 Tests [@ANCHOR: odoo_test_batch:record_durations]
+Tests [@ANCHOR: odoo_test_batch:record_module_durations]
 Tests [@ANCHOR: odoo_test_batch:write_pass_record]
 Tests [@ANCHOR: odoo_test_batch:OdooTestBatch]
 Tests [@ANCHOR: odoo_test_batch:maybe_run_batched]
 """
 
 import argparse
+import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -32,6 +41,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -94,6 +104,14 @@ class UnitTests(unittest.TestCase):
     def test_plain_committed_module_run_is_eligible(self):
         self.assertIsNone(self.reason())
 
+    def test_a_foreign_hams_shared_runs_alone_and_says_why(self):
+        self.assertIn("hams_shared", self.reason_foreign())
+        self.assertIsNone(otb.ineligible_reason(namespace(), {}, True, False, foreign_shared=False))
+        self.assertIn("uncommitted", otb.ineligible_reason(namespace(), {}, True, True, foreign_shared=True))
+
+    def reason_foreign(self):
+        return otb.ineligible_reason(namespace(), {}, True, False, foreign_shared=True)
+
     def test_everything_that_runs_alone(self):
         self.assertIn("--solo", self.reason(namespace(solo=True)))
         self.assertIn("combined run", self.reason(environ={otb.RUNNER_ENV: "1"}))
@@ -134,9 +152,28 @@ class UnitTests(unittest.TestCase):
         unknown = otb.plan_machine_split(["a", "b", "c"], {}, ["m1", "m2"])  # unrecorded modules count the default
         self.assertEqual(sorted(len(v) for v in unknown.values()), [1, 2])
 
-    def test_run_on_machine_is_a_clear_stub(self):
-        with self.assertRaises(NotImplementedError):
-            otb.run_on_machine("yoga", "/tree", ["ham_a"], "/logs")
+    def test_implicated_modules_reads_two_hosts_texts_joined(self):
+        one = "these modules are implicated in the failure(s):\n  - ham_a\nlater section\n"
+        two = "these modules are implicated in the failure(s):\n  - ham_b\n"
+        self.assertEqual(otb.implicated_modules(one + two), ["ham_a", "ham_b"])
+
+    def test_measured_durations_override_the_crude_share_and_are_averaged_across_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            otb.record_durations(tmp, ["a", "b"], 100.0)  # crude: 50 each
+            otb.record_module_durations(tmp, {"a": 10.0, "c": 7.0})
+            self.assertEqual(otb.load_durations(tmp), {"a": 10.0, "b": 50.0, "c": 7.0})  # measured a wins, crude b stays
+            otb.record_module_durations(tmp, {"a": 30.0})
+            self.assertEqual(otb.load_durations(tmp)["a"], 20.0)  # averaged with the earlier measurement
+            otb.record_durations(tmp, ["a"], 1000.0)  # a crude record never touches a measured figure
+            self.assertEqual(otb.load_durations(tmp)["a"], 20.0)
+            otb.record_module_durations(tmp, {})
+            otb.record_module_durations(tmp, {"bad": float("nan"), "neg": -1.0, "huge": 1e12, "flag": True, "str": "5", "": 1.0})
+            self.assertEqual(otb.load_durations(tmp)["a"], 20.0)
+            for name in ("bad", "neg", "huge", "flag", "str", ""):
+                self.assertNotIn(name, otb.load_durations(tmp))
+            with open(os.path.join(tmp, "module_durations.json"), "w") as handle:
+                handle.write("not json")
+            self.assertEqual(otb.load_durations(tmp)["a"], 525.0)  # an unreadable measured table falls back to the crude one
 
     def test_estimate_and_durations_roundtrip(self):
         self.assertEqual(otb.estimate_seconds(["a", "b"], {"a": 10.0}), 10.0 + otb.DEFAULT_MODULE_SECONDS)
@@ -266,6 +303,322 @@ class EndToEndTests(unittest.TestCase):
                       + results["good-c"][1])
 
 
+FAKE_DRIVER = r'''
+import json, os, sys
+a = sys.argv[1:]
+machine, tree, modules = a[0], a[1], a[2].split(",")
+members = json.load(open(a[a.index("--members-file") + 1]))
+bad = [m for m in modules if m in os.environ.get("FAKE_BAD", "").split(",")]
+with open(os.environ["FAKE_CALLS"], "a") as calls:
+    calls.write("%s:%s:%s\n" % (machine, ",".join(modules), len(members)))
+with open(a[a.index("--log") + 1], "w") as log:
+    log.write("host log of %s\n" % machine)
+text = ("these modules are implicated in the failure(s):\n" + "".join("  - %s\n" % m for m in bad)) if bad else ""
+json.dump({"host": machine, "exit_code": 1 if bad else 0, "merged": [m["tip"] for m in members], "conflicted": [],
+           "filtered": text, "log": a[a.index("--log") + 1], "seconds": 5.0, "error": None},
+          open(a[a.index("--result-json") + 1], "w"))
+'''
+
+
+class RemoteTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        self.work = helpers.make_repo(self.tmp)
+        self.sdir = os.path.join(self.tmp, "state")
+        self.stamps = []
+        self.lines = []
+
+    def members(self, *specs):
+        out = []
+        for name, module in specs:
+            os.makedirs(os.path.join(self.work, module), exist_ok=True)
+            tip = helpers.commit_branch(self.work, name, {"%s/f_%s.py" % (module, name): "ok\n"})
+            out.append({"pid": os.getpid(), "start": 1, "branch": name, "tip": tip, "scope": [module],
+                        "queued_at": 0, "solo": False, "info": ""})
+        return out
+
+    def batch(self, runner, machines=("yoga", "mac1")):
+        return otb.RemoteTestBatch(
+            self.work, "hams_demo", "origin/main", [], lambda tip, modules, bid: self.stamps.append((tip, modules)),
+            self.sdir, list(machines), ["driver"], work_base=self.tmp, probe=lambda names: list(names),
+            runner=runner, out=self.lines.append)
+
+    def test_idle_machines_skips_a_host_whose_lock_is_held(self):
+        import fcntl
+        with open(os.path.join(self.tmp, "yoga.lock"), "a+") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            self.assertEqual(otb.idle_machines(["yoga", "mac1"], self.tmp), ["mac1"])
+        self.assertEqual(otb.idle_machines(["yoga", "mac1"], self.tmp), ["yoga", "mac1"])
+
+    def test_a_busy_host_still_gets_a_share_and_is_labelled_busy(self):
+        # Tests [@ANCHOR: odoo_test_batch:RemoteTestBatch]
+        members = self.members(("a", "ham_a"), ("b", "ham_b"))
+        used = set()
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            used.add(machine)
+            open(log_path, "w").close()
+            return {"exit_code": 0, "filtered": "", "conflicted": [], "error": None, "seconds": 1.0}
+
+        batch = self.batch(runner)
+        batch.probe = lambda names: ["mac1"]  # yoga's lock is held right now
+        log_path = os.path.join(self.tmp, "b1.log")
+        with unittest.mock.patch("sys.stdout"):
+            batch(1, members, log_path)
+        self.assertEqual(used, {"yoga", "mac1"})
+        with open(log_path, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertRegex(text, r"\[\*\] yoga: .*busy now")
+        self.assertNotRegex(text, r"\[\*\] mac1: .*busy now")
+
+    def test_a_batch_is_split_over_the_hosts_and_each_branch_gets_its_own_verdict(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"), ("c", "ham_c"))
+        seen = {}
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            seen[machine] = (list(mods), [m["tip"] for m in group])
+            with open(log_path, "w") as log:
+                log.write("log of %s\n" % machine)
+            bad = [m for m in mods if m == "ham_b"]
+            return {"host": machine, "exit_code": 1 if bad else 0, "merged": [], "conflicted": [], "seconds": 40.0,
+                    "error": None, "log": log_path,
+                    "filtered": "modules are implicated in the failure(s):\n" + "".join("  - %s\n" % m for m in bad)}
+
+        log_path = os.path.join(self.tmp, "batch.log")
+        result = self.batch(runner)(1, members, log_path)
+        verdicts = result["verdicts"]
+        self.assertEqual([verdicts[m["tip"]]["status"] for m in members], ["passed", "failed", "passed"])
+        self.assertEqual(sorted(seen), ["mac1", "yoga"])  # both hosts got a share
+        self.assertEqual(sorted(sum((v[0] for v in seen.values()), [])), ["ham_a", "ham_b", "ham_c"])
+        self.assertTrue(all(len(v[1]) == 3 for v in seen.values()))  # every host merges every branch
+        self.assertEqual(sorted(tip for tip, _ in self.stamps), sorted([members[0]["tip"], members[2]["tip"]]))
+        self.assertIn("log of yoga", open(log_path).read())
+        self.assertTrue(os.path.exists(os.path.join(self.sdir, "durations.json")))
+
+    def test_measured_module_times_are_recorded_per_module_and_balance_the_next_split(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"), ("c", "ham_c"))
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            measured = {"ham_a": 900.0, "ham_b": 30.0, "ham_c": 20.0}
+            return {"host": machine, "exit_code": 0, "merged": [], "conflicted": [], "filtered": "", "seconds": 1000.0,
+                    "error": None, "log": log_path, "durations": {m: measured[m] for m in mods}}
+
+        self.batch(runner)(1, members, "")
+        table = otb.load_durations(self.sdir)
+        self.assertEqual(table, {"ham_a": 900.0, "ham_b": 30.0, "ham_c": 20.0})  # real figures, not equal shares
+        self.assertFalse(os.path.exists(os.path.join(self.sdir, "durations.json")))  # no crude share was credited
+        # the heavy module now sits alone on one host, the two light ones together on the other
+        plan = otb.plan_machine_split(["ham_a", "ham_b", "ham_c"], table, ["yoga", "mac1"])
+        self.assertEqual(sorted(plan.values()), [["ham_a"], ["ham_b", "ham_c"]])
+
+    def test_a_host_that_reports_no_module_times_is_credited_an_equal_share_as_before(self):
+        members = self.members(("a", "ham_a"))
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            return {"host": machine, "exit_code": 0, "merged": [], "conflicted": [], "filtered": "", "seconds": 60.0,
+                    "error": None, "log": log_path, "durations": {}}
+
+        self.batch(runner)(1, members, "")
+        self.assertEqual(otb.load_durations(self.sdir), {"ham_a": 60.0})
+
+    def test_a_clean_combined_run_marks_every_branch_passed(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"))
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            return {"host": machine, "exit_code": 0, "merged": [], "conflicted": [], "filtered": "", "seconds": 1.0,
+                    "error": None, "log": log_path}
+
+        verdicts = self.batch(runner)(1, members, "")["verdicts"]
+        self.assertEqual({v["status"] for v in verdicts.values()}, {"passed"})
+        self.assertEqual(len(self.stamps), 2)
+
+    def test_a_host_that_cannot_start_is_exit_75_not_a_test_failure(self):
+        members = self.members(("a", "ham_a"))
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            return {"host": machine, "exit_code": 75, "error": "ssh refused", "seconds": 0.0, "log": log_path}
+
+        verdict = self.batch(runner)(1, members, "")["verdicts"][members[0]["tip"]]
+        self.assertEqual(verdict["exit_code"], 75)
+        self.assertIn("run on yoga could not start: ssh refused", verdict["detail"])
+        self.assertEqual(self.stamps, [])
+
+    def test_a_conflict_found_by_the_hosts_sends_that_branch_to_run_alone(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"))
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            return {"host": machine, "exit_code": 0, "conflicted": [members[1]["tip"]], "filtered": "", "seconds": 1.0,
+                    "error": None, "log": log_path}
+
+        verdicts = self.batch(runner, machines=("yoga",))(1, members, "")["verdicts"]
+        self.assertEqual(verdicts[members[0]["tip"]]["status"], "passed")
+        self.assertEqual(verdicts[members[1]["tip"]]["status"], "solo")
+
+    def test_run_on_machine_calls_the_driver_and_reads_its_result(self):
+        driver = os.path.join(self.tmp, "driver.py")
+        with open(driver, "w") as handle:
+            handle.write(FAKE_DRIVER)
+        calls = os.path.join(self.tmp, "calls")
+        old = os.environ.get("FAKE_CALLS")
+        os.environ["FAKE_CALLS"] = calls
+        try:
+            members = self.members(("a", "ham_a"))
+            result = otb.run_on_machine("yoga", self.work, "hams_com", members + members, ["ham_a"],
+                                        [sys.executable, driver], os.path.join(self.tmp, "yoga.log"), self.tmp)
+        finally:
+            os.environ.pop("FAKE_CALLS") if old is None else os.environ.update(FAKE_CALLS=old)
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(open(calls).read().strip(), "yoga:ham_a:1")  # the duplicate tip is sent once
+        crash = otb.run_on_machine("yoga", self.work, "hams_com", members, ["ham_a"], [sys.executable, "-c", "pass"],
+                                   os.path.join(self.tmp, "y.log"), self.tmp)
+        self.assertEqual(crash["exit_code"], 75)
+        self.assertIn("wrote no result", crash["error"])
+
+    def test_failing_tests_reads_both_line_forms_and_counts_a_failure_once(self):
+        text = ("2026-11-04 20:42:24,011 1 ERROR hams_test odoo.addons.ham_events.tests.test_member_manual_not_listed: "
+                "ERROR: TestNotListedManualLinks.test_x\n"
+                "2026-11-04 20:42:24,011 1 ERROR hams_test odoo.addons.ham_events.tests.test_member_manual_not_listed: "
+                "ERROR: TestNotListedManualLinks.test_x\n"
+                "2026-11-04 20:59:22,291 1 ERROR hams_test odoo.tests.suite: ERROR: setUpClass "
+                "(odoo.addons.ham_com.tests.test_a.TestA)\n"
+                "FAIL: test_y (odoo.addons.ham_b.tests.test_a.TestB)\n"
+                "Odoo crashed before any test\n")
+        self.assertEqual(otb.failing_tests(text), {"ham_events:TestNotListedManualLinks.test_x",
+                                                   "ham_com:TestA.setUpClass", "ham_b:TestB.test_y"})
+        self.assertEqual(otb.failing_tests("Odoo crashed\n"), set())
+
+    def test_run_on_machine_installs_the_whole_union_and_tests_only_the_share(self):
+        driver = os.path.join(self.tmp, "argv_driver.py")
+        with open(driver, "w") as handle:
+            handle.write("import json, sys\na = sys.argv[1:]\nopen(a[a.index('--result-json') + 1], 'w').write("
+                         "json.dumps({'host': a[0], 'exit_code': 0, 'argv': a, 'filtered': ''}))\n")
+        members = self.members(("a", "ham_a"))
+        split = otb.run_on_machine("mac1", self.work, "hams_com", members, ["ham_events"], [sys.executable, driver],
+                                   os.path.join(self.tmp, "m.log"), self.tmp,
+                                   union=["ham_events", "ham_communications_consent", "ham_club_management"])
+        argv = split["argv"]
+        self.assertEqual(argv[2], "ham_club_management,ham_communications_consent,ham_events")  # all installed
+        self.assertEqual(argv[argv.index("--share") + 1], "ham_events")  # one share tested
+        whole = otb.run_on_machine("mac1", self.work, "hams_com", members, ["ham_a"], [sys.executable, driver],
+                                   os.path.join(self.tmp, "m.log"), self.tmp, union=["ham_a"])
+        self.assertNotIn("--share", whole["argv"])
+
+    def test_splitting_never_changes_the_installed_set(self):
+        # The case that broke the first real use: ham_events' tests need ham_communications_consent INSTALLED.
+        # A host that tests ham_events without it errors exactly as the real hosts did.
+        asked = ["ham_club_management", "ham_communications_consent", "ham_events"]
+        members = self.members(("pr", asked[0]))
+        members[0]["scope"] = asked
+        calls = {}
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            calls[machine] = (list(mods), list(union or mods))
+            broken = "ham_events" in mods and "ham_communications_consent" not in (union or mods)
+            filtered = ("2026-11-04 20:42:24,011 1 ERROR hams_test odoo.addons.ham_events.tests.test_listing: ERROR: "
+                        "TestAdd.test_x\n") if broken else ""
+            return {"host": machine, "exit_code": 1 if broken else 0, "conflicted": [], "filtered": filtered,
+                    "seconds": 5.0, "error": None, "log": log_path}
+
+        verdict = self.batch(runner)(1, members, "")["verdicts"][members[0]["tip"]]
+        self.assertEqual(verdict["status"], "passed", verdict)
+        self.assertEqual(sorted(calls), ["mac1", "yoga"])  # it WAS split over both hosts
+        self.assertEqual(sorted(sum((c[0] for c in calls.values()), [])), asked)  # the tests are divided
+        self.assertTrue(all(c[1] == asked for c in calls.values()), calls)  # every host installs all three
+
+    def test_install_only_modules_are_installed_on_every_host_but_never_tested(self):
+        members = self.members(("pr", "ham_nets"))
+        members[0]["install"] = ["ham_relay_bridge", "ham_communications_consent", "ham_nets"]
+        calls = {}
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            calls[machine] = (list(mods), list(union))
+            return {"host": machine, "exit_code": 0, "conflicted": [], "filtered": "", "seconds": 5.0, "error": None,
+                    "log": log_path}
+
+        batch = self.batch(runner)
+        shown = io.StringIO()
+        with contextlib.redirect_stdout(shown):
+            verdict = batch(1, members, "")["verdicts"][members[0]["tip"]]
+        self.assertEqual(verdict["status"], "passed", verdict)
+        tested = sorted(sum((c[0] for c in calls.values()), []))
+        self.assertEqual(tested, ["ham_nets"])  # the companions' tests are not planned onto any host
+        self.assertTrue(all(c[1] == ["ham_communications_consent", "ham_nets", "ham_relay_bridge"] for c in calls.values()), calls)
+        self.assertEqual(batch.last_selected, ["ham_nets"])
+        self.assertIn("installed on every host, not tested: ham_communications_consent,ham_relay_bridge", shown.getvalue())
+
+    def test_a_module_one_member_installs_and_another_tests_is_tested(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"))
+        members[0]["install"] = ["ham_b"]
+        calls = {}
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            calls[machine] = (list(mods), list(union))
+            return {"host": machine, "exit_code": 0, "conflicted": [], "filtered": "", "seconds": 5.0, "error": None,
+                    "log": log_path}
+
+        self.batch(runner)(1, members, "")
+        self.assertEqual(sorted(sum((c[0] for c in calls.values()), [])), ["ham_a", "ham_b"])
+
+    def test_union_of_reads_a_field_and_ignores_members_without_it(self):
+        old = {"scope": ["a"]}  # a member written before "install" existed
+        new = {"scope": ["b"], "install": ["c", "a"]}
+        self.assertEqual(otb.union_of([old, new], "install"), {"a", "c"})
+        self.assertEqual(otb.union_of([old, new], "scope"), {"a", "b"})
+        self.assertEqual(otb.union_of([], "install"), set())
+
+    def test_a_failure_identical_on_origin_main_is_environmental_and_not_charged_to_a_branch(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"))
+        line = "20:42 1 ERROR hams_test odoo.addons.%s.tests.test_x: ERROR: Test%s.test_env\n"
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            return {"host": machine, "exit_code": 1, "conflicted": [], "seconds": 1.0, "error": None, "log": log_path,
+                    "filtered": line % ("ham_a", "A"), "baseline_exit": 1, "baseline_filtered": line % ("ham_a", "A")}
+
+        result = self.batch(runner, machines=("yoga",))(1, members, "")
+        verdicts = result["verdicts"]
+        self.assertEqual({v["status"] for v in verdicts.values()}, {"passed"})
+        self.assertIn("identically on origin/main", verdicts[members[0]["tip"]]["note"])
+        self.assertEqual(len(self.stamps), 2)
+
+    def test_a_new_failure_next_to_an_environmental_one_is_still_charged_to_its_branch(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"))
+        line = "20:42 1 ERROR hams_test odoo.addons.%s.tests.test_x: ERROR: Test%s.test_%s\n"
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            return {"host": machine, "exit_code": 1, "conflicted": [], "seconds": 1.0, "error": None, "log": log_path,
+                    "filtered": line % ("ham_a", "A", "env") + line % ("ham_b", "B", "mine"),
+                    "baseline_exit": 1, "baseline_filtered": line % ("ham_a", "A", "env")}
+
+        verdicts = self.batch(runner, machines=("yoga",))(1, members, "")["verdicts"]
+        self.assertEqual([verdicts[m["tip"]]["status"] for m in members], ["passed", "failed"])
+        self.assertTrue(any("ham_b:TestB.test_mine" in f for f in verdicts[members[1]["tip"]]["findings"]))
+
+    def test_run_remote_member_end_to_end_with_a_stand_in_driver(self):
+        driver = os.path.join(self.tmp, "driver.py")
+        with open(driver, "w") as handle:
+            handle.write(FAKE_DRIVER)
+        env = dict(os.environ, FAKE_CALLS=os.path.join(self.tmp, "calls"), HAMS_BATCH_DIR=os.path.join(self.tmp, "b"),
+                   XDG_CACHE_HOME=os.path.join(self.tmp, "cache"), HAMS_BATCH_TREE_DIR=os.path.join(self.tmp, "trees"),
+                   FAKE_BAD="ham_b")
+        old = dict(os.environ)
+        os.environ.update(env)
+        try:
+            members = self.members(("a", "ham_a"), ("b", "ham_b"))
+            good = otb.run_remote_member(self.work, "hams_com", "a", members[0]["tip"], "ham_a", ["yoga"],
+                                         [sys.executable, driver], environ=env, out=self.lines.append)
+            bad = otb.run_remote_member(self.work, "hams_com", "b", members[1]["tip"], "ham_b", ["yoga"],
+                                        [sys.executable, driver], environ=env, out=self.lines.append)
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+        self.assertEqual((good, bad), (0, 1), self.lines)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "cache", "hams-test", "passed", members[0]["tip"])))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "cache", "hams-test", "passed", members[1]["tip"])))
+        with self.assertRaises(ValueError):
+            otb.run_remote_member(self.work, "hams_com", "a", members[0]["tip"], "ham_a:TestX", ["yoga"], [], environ=env)
+
+
 class MaybeRunBatchedTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -308,6 +661,28 @@ class MaybeRunBatchedTests(unittest.TestCase):
         os.makedirs(sub)
         self.assertIsNone(otb.maybe_run_batched(namespace(), self.env, sub, out=self.lines.append))
         self.assertTrue(any("repository root" in line for line in self.lines))
+
+    def test_a_tree_with_a_hand_linked_hams_shared_is_not_batched_and_main_root_is_found(self):
+        # The main checkout has a hams_shared (ignored, so the tree stays clean); the worktree's is linked by hand elsewhere.
+        os.makedirs(os.path.join(self.work, "hams_shared"))
+        with open(os.path.join(self.work, ".git", "info", "exclude"), "a") as handle:
+            handle.write("hams_shared\n")
+        tree = os.path.join(self.tmp, "wt")
+        helpers.git(self.work, "worktree", "add", "-q", "-b", "topic", tree)
+        self.assertEqual(os.path.realpath(otb.main_checkout_root(tree)), os.path.realpath(self.work))
+        self.assertEqual(otb.main_checkout_root(self.work), self.work)
+        self.assertEqual(otb.main_checkout_root(self.tmp), self.tmp)  # not a repository: itself
+        os.symlink(os.path.join(self.tmp, "hs_branch"), os.path.join(tree, "hams_shared"))
+        os.makedirs(os.path.join(self.tmp, "hs_branch"))
+        self.assertIsNone(otb.maybe_run_batched(namespace(module="ham_a"), self.env, tree, out=self.lines.append))
+        self.assertTrue(any("running alone" in line and "hams_shared" in line for line in self.lines), self.lines)
+        # A link to the main checkout's own hams_shared batches as before (it gets past the check; no line names hams_shared).
+        os.unlink(os.path.join(tree, "hams_shared"))
+        os.symlink(os.path.join(self.work, "hams_shared"), os.path.join(tree, "hams_shared"))
+        self.lines.clear()
+        self.assertEqual(
+            otb.ineligible_reason(namespace(module="ham_a"), self.env, True, False,
+                                  foreign_shared=otb.lint_batch.foreign_shared_checkout(tree, self.work)), None)
 
     def test_a_committed_run_with_nothing_else_going_runs_at_once_and_passes(self):
         os.makedirs(os.path.join(self.work, "ham_a"))

@@ -61,14 +61,18 @@ GAVE_UP = "gave_up"
 
 
 # [@ANCHOR: batch_queue:Member]
-# One waiting request: {"pid", "start", "branch", "tip", "scope": [str], "queued_at", "solo", "info"}.
+# One waiting request: {"pid", "start", "branch", "tip", "scope": [str], "queued_at", "solo", "info"} and, only when the
+# caller asked for any, "install": [str] (modules a test run installs without testing them; an old member has no such key).
 # See docs/runbooks/LINT_TEST_BATCHING.md for the field table.
-def make_member(branch, tip, scope=(), solo=False, info="", pid=None, start=None, now=time.time):
+def make_member(branch, tip, scope=(), solo=False, info="", pid=None, start=None, now=time.time, install=()):
     """Build a `Member` record for the calling process (or for `pid`/`start`, used by tests)."""
     pid = os.getpid() if pid is None else pid
     start = lock_queue.proc_start_time(pid) if start is None else start
-    return {"pid": pid, "start": start, "branch": branch, "tip": tip, "scope": sorted(set(scope)),
-            "queued_at": now(), "solo": bool(solo), "info": info}
+    member = {"pid": pid, "start": start, "branch": branch, "tip": tip, "scope": sorted(set(scope)),
+              "queued_at": now(), "solo": bool(solo), "info": info}
+    if install:  # absent when empty, so a state file written here stays readable by a leader that predates the field
+        member["install"] = sorted(set(install) - set(scope))
+    return member
 
 
 # [@ANCHOR: batch_queue:BatchState]
