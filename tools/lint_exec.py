@@ -64,6 +64,7 @@ XDIST_SERIAL = (
     "pytest daemons/hams_simulated_bots",  # idle-CPU and timing tests: another worker's load would fail them
     "pytest ingest/",  # not validated under -n yet
     "pytest scripts/",  # not validated under -n yet
+    "pytest devbox_tools/",  # not validated under -n yet
 )
 XDIST_MAX_WORKERS = 4
 _xdist_ok = {}

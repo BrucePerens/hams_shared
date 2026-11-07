@@ -2050,6 +2050,19 @@ def main():
             inputs=((os.path.realpath(ingest_dir),), None),
         )
 
+    # 41b. hams_com/devbox_tools/ unit test suites. Nothing ran them: no step above reaches devbox_tools/, so
+    # test_no_external_browser_loads and test_relay_e2e_console_page (which read every tracked file and the console
+    # source) went red on main and no lint run noticed (2026-11-07). The inputs stay the default (both repositories,
+    # any file) because those two tests read files all over the tree.
+    devbox_test_files = sorted(glob.glob(os.path.join(repo_root, "devbox_tools", "test_*.py")))
+    if devbox_test_files:
+        _add(
+            "pytest devbox_tools/",
+            [python_exec, "-m", "pytest", "-q", "-p", "no:cacheprovider"] + devbox_test_files,
+            cwd=os.path.join(repo_root, "devbox_tools"),
+            fail_header="❌ devbox_tools/ unit test failures:",
+        )
+
     # 42. check_owl_templates -- real, standalone Owl QWeb template compile verification via a
     # real headless Chrome. Built 2026-09-07 after a live-instrumented investigation
     # (OFFLINE_HAM_OPERATION.md) found ham_shack.WebShackTemplate had a genuine compile error (a
