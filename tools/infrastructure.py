@@ -9766,7 +9766,9 @@ WantedBy=multi-user.target
             # does not block chroot or setresuid), the same address families. It loads only redis.env (REDIS_HOST/PORT/
             # USERNAME/PASSWORD; the daemon resolves REDIS_HOST before the chroot), never an Odoo key, a database
             # login or the SMTP settings: it only talks to Redis. PAGER_CONFIG_PATH names the same exported file as the
-            # monitor (the unit's resolve_config_path rule).
+            # monitor (the unit's resolve_config_path rule). No User= line: root is the default, and an explicit User=root
+            # together with NoNewPrivileges=true makes systemd leave CAP_SETUID out of the effective set (seen on hams1
+            # 2026-11-07: CapEff 0x40144 with that line, 0x401c4 without), so setresuid to nobody failed with EPERM.
             "path": "/opt/hams/systemd/pager-log-analyzer.service",
             "content": """\
 [Unit]
@@ -9786,7 +9788,6 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_CHROOT CAP_SETUID CAP_SETGID CAP_SETPCAP
 Type=simple
-User=root
 WorkingDirectory=/opt/hams/src/hams_open/pager_duty/daemon
 
 EnvironmentFile=/opt/hams/etc/redis.env

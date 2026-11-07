@@ -7216,8 +7216,11 @@ class PagerLogAnalyzerUnitTests(_SafePatchTestCase):
     def test_unit_has_the_monitors_sandbox_and_only_the_capabilities_of_its_own_isolation_sequence(self):
         text = self._text()
         for line in ("ProtectSystem=strict", "ProtectHome=read-only", "PrivateTmp=true", "PrivateDevices=true",
-                     "NoNewPrivileges=true", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "User=root"):
+                     "NoNewPrivileges=true", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"):
             self.assertIn(line + "\n", text)
+        # Root by default, never an explicit User=root: with NoNewPrivileges that drops CAP_SETUID from the
+        # effective set and the daemon's own drop to nobody:adm fails (hams1, 2026-11-07).
+        self.assertNotRegex(text, r"(?m)^User=")
         self.assertNotIn("ReadWritePaths", text)
         caps = re.search(r"^CapabilityBoundingSet=(.*)$", text, re.M).group(1).split()
         self.assertEqual(sorted(caps), ["CAP_DAC_READ_SEARCH", "CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID", "CAP_SYS_CHROOT"])
