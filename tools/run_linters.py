@@ -59,6 +59,25 @@ def _resolve_repo_root(given_path):
     return given_path
 
 
+# Heap option given to ESLint's node process (see eslint_node_env).
+ESLINT_NODE_OPTIONS = "--max-old-space-size=4096"
+
+
+# [@ANCHOR: run_linters:eslint_node_env]
+def eslint_node_env(base_env):
+    """A copy of `base_env` in which NODE_OPTIONS carries a heap size for ESLint.
+
+    The type-aware ESLint project makes node need more than its default heap (about 2 GB): a --changed run
+    died with "JavaScript heap out of memory" (2026-11-02). `setdefault` did not help when the shell exported
+    NODE_OPTIONS as an empty string (the agents' shells did, 2026-11-03), so an unset, empty or
+    whitespace-only value is treated alike and replaced by ESLINT_NODE_OPTIONS; a real value is the caller's
+    choice and is kept. `base_env` is not changed."""
+    env = dict(base_env)
+    if not env.get("NODE_OPTIONS", "").strip():
+        env["NODE_OPTIONS"] = ESLINT_NODE_OPTIONS
+    return env
+
+
 # Steps that also scan a hams_shared worktree's own files (see shared_worktree_root). Only the checkers whose findings
 # lie in hams_shared's tools: the others are module checkers (init imports, test tags, ...) that judge a tree of Odoo
 # modules and flag hams_shared's `tools/odoo_type_stubs` and the like.
@@ -809,16 +828,21 @@ def write_eslint_project(hams_shared_dir, repos):
     # (the relay's trust pages, the shack console, test scripts). 2026-10-29: only */static/** was listed, so any run that
     # linted daemons/ failed on files that had nothing wrong with them.
     includes = []
+    excludes = []
     for repo in repos:
         if repo and os.path.isdir(repo):
             real = os.path.realpath(repo)
             includes.append(os.path.join(real, "*", "static", "**", "*.js"))
             includes.append(os.path.join(real, "daemons", "**", "*.js"))
             includes.append(os.path.join(real, "daemons", "**", "*.mjs"))
+            # `cargo test` leaves thousands of generated JavaScript files under daemons/*/target; reading them made
+            # the type-aware project run out of memory (2026-11-03). Patterns are relative to this file's directory.
+            excludes.append(os.path.join(real, "**", "target", "**"))
+            excludes.append(os.path.join(real, "**", "node_modules", "**"))
     path = os.path.join(directory, "tsconfig.json")
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(
-            {"extends": os.path.join(hams_shared_dir, "tsconfig.json"), "include": includes},
+            {"extends": os.path.join(hams_shared_dir, "tsconfig.json"), "include": includes, "exclude": excludes},
             handle,
         )
     return path
@@ -1451,10 +1475,8 @@ def main():
         # tree's files and ESLint reported every file as "not found in the provided project".
         # The project is generated per run from the repositories being linted.
         eslint_project = write_eslint_project(hams_shared_dir, [repo_root, sibling_dir])
-        eslint_env = dict(os.environ)
+        eslint_env = eslint_node_env(os.environ)
         eslint_env["HAMS_ESLINT_TSCONFIG"] = eslint_project
-        # The type-aware project makes node need more than its default heap (about 2 GB): a --changed run died with "JavaScript heap out of memory" (2026-11-02).
-        eslint_env.setdefault("NODE_OPTIONS", "--max-old-space-size=4096")
         eslint_env["NODE_PATH"] = os.pathsep.join(
             [toolchain["node_modules"]] + ([eslint_env["NODE_PATH"]] if eslint_env.get("NODE_PATH") else [])
         )

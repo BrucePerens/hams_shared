@@ -835,3 +835,41 @@ Purpose: steps 4 to 10, in that order, on `start()`'s state. `os_id` is `"debian
 database and the self-check are not run and every change is printed as a PLAN line (provision.py wraps the call in
 `infrastructure.planning()`). Prints `<n> change(s) to this host; <m> step(s) skipped` and the skipped steps. Returns
 the `Report`; raises `SystemExit(1)` when the self-check fails. Tests: `StartFinishTests`.
+
+### `[@ANCHOR: run_linters:eslint_node_env]` `eslint_node_env(base_env)`
+
+Purpose: gives the ESLint step of `run_linters.py` a 4 GB node heap whatever the caller's shell exported. The type-aware
+ESLint project needs more than node's default heap (about 2 GB); a `--changed` run died with "JavaScript heap out of
+memory" on 2026-11-02. The first fix used `setdefault("NODE_OPTIONS", ...)`, which does nothing when the variable exists
+but is an empty string, and the agents' shells exported it empty, so ESLint kept the small heap and failed again
+(2026-11-03). The function replaces every "no real value" case, so nobody has to `unset NODE_OPTIONS` by hand any more.
+Called once, where the ESLint step builds its environment; no other tool in `tools/` starts node with a heap option
+(the small `node --check` and scanner helpers need none).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `base_env` | mapping of str to str | The environment to start from, normally `os.environ`. Borrowed and never changed. |
+
+Returns: a new `dict` copy of `base_env`. Its `NODE_OPTIONS` is `ESLINT_NODE_OPTIONS` when the variable was missing,
+empty, or only whitespace; a non-empty value is returned as it was (a caller who set their own heap size or other
+node options keeps them, and no option is merged into it). Every other variable is copied unchanged.
+
+Errors: none of its own (a non-string `NODE_OPTIONS` value raises `AttributeError`; the environment never holds one).
+
+Special concerns: pure, not blocking, no files, no network, no locks, idempotent (calling it on its own result changes
+nothing). It handles no secret and reads nothing but its argument.
+
+Data: `ESLINT_NODE_OPTIONS` (module constant, str, default `"--max-old-space-size=4096"`, V8 heap limit in megabytes) is
+the only value the function inserts; it is read only by `eslint_node_env`. To raise the limit change that constant.
+
+Example:
+
+```python
+env = eslint_node_env({"NODE_OPTIONS": "", "PATH": "/usr/bin"})
+# env["NODE_OPTIONS"] == "--max-old-space-size=4096"
+```
+
+See also: tests `EslintNodeEnvTests` in `test_run_linters.py` (`# Tests [@ANCHOR: run_linters:eslint_node_env]`); the
+out-of-memory cause from `daemons/*/target` is handled by `write_eslint_project()`, whose generated tsconfig now also carries
+`exclude` globs (`<repo>/**/target/**`, `<repo>/**/node_modules/**`, absolute because tsconfig patterns are relative to the
+generated file); test `test_the_generated_project_excludes_cargo_target_and_node_modules`.
