@@ -30,6 +30,11 @@ CARGO TARGET DIRECTORIES
     build does not prune again.
   * A directory whose toolchain (or repository) is no longer used for UNUSED_DAYS days is removed.
   * HAMS_LINT_NO_CACHE=1 (run_linters.py --no-cache) builds in a throwaway directory.
+  * NAMED DIRECTORIES: a test that compiles (the relay export test) takes `named_cargo_session(name)`, a directory
+    `<cache>/hams-lint-cargo/<name>-<rustc>` under the same budget, LRU pruning, lock and unused-days rule.
+
+OTHER CACHES the lint and test steps leave outside the budget (`other_caches`) are only reported by `show`, never
+pruned: a mirror, a test source tree, a browser download and container root file systems the builds need.
 
 RESULT CACHES (`ResultCache`): per-file results of the slow Python static checks keyed by the content
 hash of the file and of the checker's own version; stored in `<cache>/hams-lint-results/<checker>/`,
@@ -138,6 +143,30 @@ def toolchain_id(environ=None):
 
 def cargo_target_dir(repo_name, environ=None):
     return os.path.join(cargo_base(environ), f"{repo_name}-{toolchain_id(environ)}")
+
+
+# [@ANCHOR: lint_cache:legacy_cargo_dirs]
+def legacy_cargo_dirs(environ=None):
+    """The pre-budget cargo target directories that the budgeted `hams-lint-cargo` replaced, in `cache_root`:
+    the old single lint directory (`adopt_legacy_dir` renames it into the budget) and the relay export test's
+    `hams-relay-export-test-target` (19 GB on mac1-vm, 2026-11-03). `show` reports them; `clear cargo` removes them."""
+    root = cache_root(environ)
+    return [os.path.join(root, "hams-cargo-target-lint"), os.path.join(root, "hams-relay-export-test-target")]
+
+
+# [@ANCHOR: lint_cache:other_caches]
+def other_caches(environ=None):
+    """`[(label, path, why)]`: the directories the lint and test steps create or need outside the Cargo and
+    result budgets. They are reported by `show` (and so by `lint_remote.py caches`) and never pruned here:
+    each is needed by the next run or by another build."""
+    environ = os.environ if environ is None else environ
+    home = environ.get("HOME") or os.path.expanduser("~")
+    return [
+        ("lint mirror", os.path.join(home, "hams-lint-mirror"), "the runner's copy of the repositories, refreshed by every run"),
+        ("test sources", "/opt/hams-testsrc", "the sources of the Odoo test hosts' test trees"),
+        ("playwright", os.path.join(home, ".cache", "ms-playwright"), "browsers for the browser tests, downloaded once"),
+        ("machines", "/var/lib/machines", "root file systems for the arm64 Pi builds; needed"),
+    ]
 
 
 def dir_bytes(path):
@@ -455,6 +484,32 @@ def cargo_session(environ=None, log=None):
         yield target
 
 
+# [@ANCHOR: lint_cache:named_cargo_session]
+@contextlib.contextmanager
+def named_cargo_session(name, environ=None, log=None):
+    """Context for a test that builds with cargo (the relay export test): yields the Cargo target directory to use
+    for it, `<cache>/hams-lint-cargo/<name>-<rustc>`, with the machine's budget enforced (LRU prune, then clear;
+    never a failure) and the exclusive lock held until the block ends. A `CARGO_TARGET_DIR` set by the caller is
+    yielded untouched; HAMS_LINT_NO_CACHE=1 yields a throwaway directory deleted afterwards."""
+    environ = os.environ if environ is None else environ
+    if environ.get("HAMS_LINT_NO_CACHE") == "1":
+        scratch = tempfile.mkdtemp(prefix=f"hams-{name}-cold-cargo-")
+        try:
+            if log:
+                log(f"lint cache: --no-cache: cold cargo build in {scratch}")
+            yield scratch
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        return
+    if environ.get("CARGO_TARGET_DIR"):
+        yield environ["CARGO_TARGET_DIR"]
+        return
+    target = cargo_target_dir(name, environ)
+    with locked(target, exclusive=True):
+        prepare_cargo_target(target, environ, log)
+        yield target
+
+
 # ---------------------------------------------------------------------------------------------------------
 # Per-file result caches
 
@@ -598,12 +653,15 @@ def show_lines(environ=None):
             full = os.path.join(base, name)
             if os.path.isdir(full):
                 lines.append(f"  cargo {name}: {dir_bytes(full) / GB:.2f} GB")
-    legacy = os.path.join(cache_root(environ), "hams-cargo-target-lint")
-    if os.path.isdir(legacy):
-        lines.append(f"  legacy {legacy}: {dir_bytes(legacy) / GB:.2f} GB (the pre-budget shared directory; `clear cargo` removes it)")
+    for legacy in legacy_cargo_dirs(environ):
+        if os.path.isdir(legacy):
+            lines.append(f"  legacy {legacy}: {dir_bytes(legacy) / GB:.2f} GB (a pre-budget directory; `clear cargo` removes it)")
     rb = results_base(environ)
     if os.path.isdir(rb):
         lines.append(f"  results {rb}: {dir_bytes(rb) / MB:.2f} MB")
+    for label, path, why in other_caches(environ):
+        if os.path.isdir(path):
+            lines.append(f"  other {path}: {dir_bytes(path) / GB:.2f} GB (not budgeted: {label}, {why})")
     free = free_bytes(cache_root(environ))
     if free is not None:
         lines.append(f"  free on {cache_root(environ)}: {free / GB:.0f} GB")
@@ -629,7 +687,7 @@ def main(argv=None):
     if command == "clear":
         targets = []
         if which in ("cargo", "all"):
-            targets += [cargo_base(), os.path.join(cache_root(), "hams-cargo-target-lint")]
+            targets += [cargo_base(), *legacy_cargo_dirs()]
         if which in ("results", "all"):
             targets.append(results_base())
         for path in targets:
