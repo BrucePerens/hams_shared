@@ -9,7 +9,7 @@ About 1.5 GB of `target/` was once committed in a worktree where the pre-commit 
 git-hooks/pre-commit now fails closed when it cannot find its checkers, and this is one of them.
 
 Only files being added or modified are judged, by the size of the staged blob, so removing an old large file is allowed.
-A deliberate large file: `git commit --no-verify`, and say why in the commit message.
+A deliberate large file is named in LARGE_FILES_ALLOWED (exact path) with the reason beside it; nothing else is exempt.
 """
 
 import subprocess
@@ -17,6 +17,13 @@ import sys
 
 MAX_BYTES = 5 * 1024 * 1024
 BUILD_DIRECTORIES = ("target",)
+# [@ANCHOR: tools:large_files_allowed]
+# Exact paths allowed over MAX_BYTES. The pinned Opus source archive (5.3 MB, GitHub's zip of commit 940d4e5, the bytes
+# rade_c/cmake/BuildOpus.cmake checks by SHA-256) is committed so relay builds need no download: Bruce, 2026-11-07, so
+# cloud sessions (whose GitHub gate refuses archives) can build the relay.
+LARGE_FILES_ALLOWED = frozenset({
+    "daemons/hams_local_relay/rade_c/third_party/opus-940d4e5af64351ca8ba8390df3f555484c567fbb.zip",
+})
 
 
 def staged_entries():
@@ -51,7 +58,7 @@ def violations(entries):
         parts = path.split("/")
         if any(part in BUILD_DIRECTORIES for part in parts[:-1]):
             problems.append(f"{path}: build output ({'/'.join(BUILD_DIRECTORIES)}/ is never committed)")
-        elif size > MAX_BYTES:
+        elif size > MAX_BYTES and path not in LARGE_FILES_ALLOWED:
             problems.append(f"{path}: {size / 1048576:.1f} MB is over the {MAX_BYTES // 1048576} MB limit")
     return problems
 

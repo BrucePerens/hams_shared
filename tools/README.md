@@ -223,3 +223,23 @@ findings, so every batched `test.py -u` run failed its pre-flight unless `HAMS_O
 Special concerns: runs one `git rev-parse --git-common-dir` for a worktree; no writes; no locks. See also
 `AnchorScanSiblingDirTests` in `test_test.py`, `resolve_repo_layout()`, and `verify_anchors.py`'s own
 `_add_sibling_repo_target()`.
+
+## Staged-file size check
+
+`check_staged_files.py` (run by `git-hooks/pre-commit`) refuses a commit that stages a file over 5 MB (`MAX_BYTES`) or
+anything under a `target/` directory.
+
+### `[@ANCHOR: tools:large_files_allowed]` `LARGE_FILES_ALLOWED`
+
+- **What it is:** a `frozenset` of repository-relative paths (strings, `/`-separated, exactly as `git diff --cached
+  --name-only` prints them) that may be staged even though they are larger than `MAX_BYTES`. Membership is by exact
+  path: the same file name in another directory is still refused, and a path under `target/` is refused whatever
+  this set says (the build-output check runs first).
+- **Members and why:** `daemons/hams_local_relay/rade_c/third_party/opus-940d4e5af64351ca8ba8390df3f555484c567fbb.zip`
+  (5.3 MB): GitHub's zip of Opus commit 940d4e5, the exact bytes `rade_c/cmake/BuildOpus.cmake` checks by SHA-256.
+  Committed on Bruce's decision of 2026-11-07 so relay builds need no download; cloud sessions, whose GitHub gate
+  refuses repository archives, can then build the relay.
+- **Invariants and concerns:** add a path only for a deliberate, reviewed large file, with its reason in the comment
+  beside the set and here. The set is read-only at run time; nothing else exempts a file from the size limit.
+- **Tests:** `tools/test_check_staged_files.py`,
+  `test_the_named_opus_archive_may_exceed_the_limit_but_the_same_name_elsewhere_may_not`.

@@ -58,6 +58,18 @@ class StagedFilesTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("big.bin", result.stderr)
 
+    def test_the_named_opus_archive_may_exceed_the_limit_but_the_same_name_elsewhere_may_not(self):
+        allowed = "daemons/hams_local_relay/rade_c/third_party/opus-940d4e5af64351ca8ba8390df3f555484c567fbb.zip"
+        _write(os.path.join(self.repo, allowed), b"x" * (5 * 1024 * 1024 + 1))
+        _git(self.repo, "add", allowed)
+        self.assertEqual(self._check().returncode, 0)
+        elsewhere = "third_party/opus-940d4e5af64351ca8ba8390df3f555484c567fbb.zip"
+        _write(os.path.join(self.repo, elsewhere), b"x" * (5 * 1024 * 1024 + 1))
+        _git(self.repo, "add", elsewhere)
+        result = self._check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(elsewhere, result.stderr)
+
     def test_a_file_under_a_target_directory_is_refused_at_any_depth(self):
         _write(os.path.join(self.repo, "daemons/x/target/debug/app"), b"y")
         _git(self.repo, "add", "-f", "daemons/x/target/debug/app")
