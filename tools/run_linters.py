@@ -1027,7 +1027,10 @@ def main():
         main_open = repo_root
         try:
             lint_layout.reap_orphans(main_open)
-            layout = lint_layout.build(dir_path, main_open, _sibling_checkout(main_open, main_open, "hams_com"))
+            layout = lint_layout.build(
+                dir_path, main_open, _sibling_checkout(main_open, main_open, "hams_com"),
+                out=lambda text: print(text, file=sys.stderr),  # stdout stays clean for --list-json / --list-steps
+            )
         except (lint_layout.LayoutError, OSError) as error:
             print(f"🛑 cannot build the sibling layout for this hams_shared tree: {error}", file=sys.stderr)
             sys.exit(2)

@@ -373,7 +373,7 @@ hams_open. Called once by `run_linters.main` for a hams_shared worktree, before 
 | `com_main` | str or None | The main hams_com checkout. None or a missing directory gives a layout without hams_com. |
 | `environ` | mapping or None | Environment for `batch_queue.tree_parent`: `HAMS_BATCH_TREE_DIR` chooses the directory the layout goes under (default `~/workspace/tmp`). None means `os.environ`. |
 | `fetch` | bool | Passed to `base_commit`. |
-| `out` | callable | Receives the one progress line (`[*] hams_shared tree: linting in a layout ...`). |
+| `out` | callable | Receives the one progress line (run_linters passes a stderr printer so --list-json stays clean) (`[*] hams_shared tree: linting in a layout ...`). |
 
 Returns a `Layout`. Errors: `LayoutError` (a `RuntimeError`) when a git command fails or a sibling has no commit; the half-built layout
 is removed first. `OSError` for a filesystem failure, also after removing what was made. `run_linters.py` prints the error and exits 2:
