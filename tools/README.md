@@ -1065,6 +1065,23 @@ database and the self-check are not run and every change is printed as a PLAN li
 `infrastructure.planning()`). Prints `<n> change(s) to this host; <m> step(s) skipped` and the skipped steps. Returns
 the `Report`; raises `SystemExit(1)` when the self-check fails. Tests: `StartFinishTests`.
 
+### `[@ANCHOR: run_linters:devbox_tools_env]` `devbox_tools_env(sibling_dir, environ=None)`
+
+Purpose: gives the `pytest devbox_tools/` step of `run_linters.py` the location of the sibling hams_open checkout. A lint batch or a worktree has no `hams_open` directory beside its copy of hams_com, so `test_no_external_browser_loads` and `test_download_cacheability` failed with "hams_open checkout not found" on every pre-merge run from the day the step was added (2026-11-07), and no hams_com branch could get a pass stamp. Called once, where the step is added.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `sibling_dir` | str or None | The sibling hams_open directory the run resolved (`sibling_dir` in `main`). Borrowed. |
+| `environ` | mapping or None | The environment to start from; default `os.environ`. Never changed. |
+
+Returns: a new `dict`. When `sibling_dir` is an existing directory, `HAMS_OPEN_TREE` in it is that directory's real path (replacing any value the caller had); otherwise the environment is returned as copied.
+
+Errors: none of its own. Special concerns: pure apart from one `isdir` check, no locks, no network, handles no secret. Data: none kept.
+
+Example: `devbox_tools_env("/home/bruce/workspace/hams_open", {"PATH": "/bin"})["HAMS_OPEN_TREE"]` is `"/home/bruce/workspace/hams_open"`.
+
+See also: tests `DevboxToolsEnvTests` in `test_devbox_tools_env.py`.
+
 ### `[@ANCHOR: run_linters:eslint_node_env]` `eslint_node_env(base_env)`
 
 Purpose: gives the ESLint step of `run_linters.py` a 4 GB node heap whatever the caller's shell exported. The type-aware

@@ -157,6 +157,18 @@ def _sibling_checkout(repo_root, main_checkout_root, name):
     return os.path.abspath(os.path.join(main_checkout_root, "..", name))
 
 
+# [@ANCHOR: run_linters:devbox_tools_env]
+def devbox_tools_env(sibling_dir, environ=None):
+    """The environment for the `pytest devbox_tools/` step: `environ` (default the process's) with `HAMS_OPEN_TREE` pointing at
+    the sibling hams_open checkout when there is one. A lint batch or worktree has no `hams_open` directory beside the lint
+    copy of hams_com, so `test_no_external_browser_loads` and `test_download_cacheability` failed with "hams_open checkout not
+    found" on every pre-merge run from 2026-11-07 (when the step was added). The environment is a copy; `environ` is not changed."""
+    env = dict(os.environ if environ is None else environ)
+    if sibling_dir and os.path.isdir(sibling_dir):
+        env["HAMS_OPEN_TREE"] = os.path.realpath(sibling_dir)
+    return env
+
+
 def _default_inputs(dir_path, sibling_dir, shared_dir=None, repo_root=None):
     """Roots and suffixes a step reads when it declares nothing narrower: both repos and the real
     hams_shared directory, any file.
@@ -2061,6 +2073,7 @@ def main():
             [python_exec, "-m", "pytest", "-q", "-p", "no:cacheprovider"] + devbox_test_files,
             cwd=os.path.join(repo_root, "devbox_tools"),
             fail_header="❌ devbox_tools/ unit test failures:",
+            env=devbox_tools_env(sibling_dir),
         )
 
     # 42. check_owl_templates -- real, standalone Owl QWeb template compile verification via a
