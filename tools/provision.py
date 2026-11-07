@@ -6,6 +6,7 @@ Standalone Environment Provisioning Script
 Must be run as root.
 """
 import argparse
+import contextlib
 import os
 import re
 import sys
@@ -38,6 +39,7 @@ import logging
 _provision_tools_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _provision_tools_dir)
 import infrastructure  # noqa: E402
+import provision_test_environment  # noqa: E402
 
 
 # Bug-hunt fix (2026-10-01, found via a full tools/run_linters.py sweep): this script is
@@ -149,13 +151,20 @@ def _provision_only_units(plan, env_vars):
 
 
 def provision():
-    if repo_root is None:
+    test_environment = "--test-environment" in sys.argv[1:]
+    if test_environment:
+        # Before the sudo re-exec and before anything else: the marker files need no root. The database check runs
+        # again as root in provision_test_environment.start(), once PostgreSQL can be asked.
+        provision_test_environment.refuse_production()
+    # A standalone hams_shared clone is how a fresh host starts: --test-environment clones hams_open and hams_com
+    # beside it (provision_test_environment.discover_layout). Every other mode needs the full layout.
+    if repo_root is None and not test_environment:
         _logger.error(
             "[!] %s is not inside a hams_open checkout (no ancestor directory has this file as its hams_shared/tools/"
             "provision.py). Run it from <hams_open>/hams_shared/tools/ or <hams_com>/tools/; refusing to guess a root.",
             os.path.abspath(__file__))
         sys.exit(1)
-    os.chdir(repo_root)
+    os.chdir(repo_root or _provision_tools_dir)
 
     if os.geteuid() != 0:
         _logger.info("[*] Elevating privileges (sudo) to provision environment...")
@@ -180,7 +189,7 @@ def provision():
     orig_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
     env_vars = dict(os.environ)
     env_vars["DEBIAN_FRONTEND"] = "noninteractive"
-    env_vars["REPO_ROOT"] = repo_root
+    env_vars["REPO_ROOT"] = repo_root or ""
 
     os_id = infrastructure.get_os_identifier()
     _logger.info(f"[*] Discovered OS: {os_id}")
@@ -261,7 +270,39 @@ def provision():
         "changed trust-on-first-use hash (a changed signing key is otherwise refused). Same as "
         "HAMS_PROVISION_REFRESH=1. Review the logged old and new hash first",
     )
+    parser.add_argument(
+        "--test-environment",
+        action="store_true",
+        help="Make this host a test host where test.py and run_linters.py work, in one command: clone the missing "
+        "repositories beside this checkout (with the push credential the host already has), the test-runner "
+        "packages, Odoo, PostgreSQL with a hams_test database, then a self-check. Refuses production. Idempotent. "
+        "With --test, the full test provisioning also runs. tools/README.md, provision_test_environment.py",
+    )
+    parser.add_argument(
+        "--git-key",
+        metavar="PATH",
+        help="With --test-environment: an SSH deploy key (mode 600) to clone and push with when the host has no cloud "
+        "git proxy and no authenticated gh. Set as core.sshCommand on these clones only; never read or copied",
+    )
+    parser.add_argument(
+        "--workspace",
+        metavar="DIR",
+        help="With --test-environment: the directory that holds (or will hold) hams_com and hams_open. Default: the "
+        "parent of this checkout",
+    )
+    parser.add_argument(
+        "--no-self-check",
+        action="store_true",
+        help="With --test-environment: skip the closing run_linters.py --changed and test.py -u zero_sudo",
+    )
     args, _ = parser.parse_known_args()
+    if (args.git_key or args.workspace or args.no_self_check) and not args.test_environment:
+        _logger.error("[!] --git-key, --workspace and --no-self-check only apply with --test-environment")
+        sys.exit(1)
+    if args.test_environment and (args.fetch_models or args.only_host_class or args.daemon_family or args.units):
+        _logger.error("[!] --test-environment cannot be combined with --fetch-models, --only-host-class, "
+                      "--daemon-family or --units")
+        sys.exit(1)
     if args.refresh_cache:
         os.environ["HAMS_PROVISION_REFRESH"] = "1"
 
@@ -312,7 +353,33 @@ def provision():
         _provision_only_units(args.plan, env_vars)
         return
 
-    infrastructure.load_and_prompt_env(env_vars, args.test)
+    def run_sys(cmd, **kw):
+        printable = " ".join(infrastructure.redact_command(cmd))
+        if args.plan:
+            # --plan: never execute; record the command (passwords masked) and report success.
+            print(f"PLAN run: {printable}", flush=True)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        _logger.info(f"[*] Running: {printable}")
+        if "env" not in kw:
+            kw["env"] = env_vars
+        return subprocess.run(cmd, check=True, **kw)
+
+    test_env_state = None
+    if args.test_environment:
+        # The clones come first: with --test, provision_environment() below needs hams_com and hams_open in place.
+        try:
+            test_env_state = provision_test_environment.start(
+                run_sys, env_vars, orig_user, _provision_tools_dir, repo_root, workspace=args.workspace,
+                git_key=args.git_key, plan=args.plan,
+            )
+        except ValueError as e:
+            _logger.error(f"[!] {e}")
+            sys.exit(1)
+        if not repo_root or not os.path.exists(os.path.join(repo_root, ".git")):
+            # Started from a standalone hams_shared clone: the hams_open just cloned is the root --test needs.
+            env_vars["REPO_ROOT"] = test_env_state["layout"]["hams_open"]
+    if args.test or not args.test_environment:
+        infrastructure.load_and_prompt_env(env_vars, args.test)
 
     if args.force_reset and args.plan:
         _logger.warning(
@@ -353,17 +420,6 @@ def provision():
         _logger.info("[*] Flushing redis cache...")
         subprocess.run(["redis-cli", "flushall"], check=False)
 
-    def run_sys(cmd, **kw):
-        printable = " ".join(infrastructure.redact_command(cmd))
-        if args.plan:
-            # --plan: never execute; record the command (passwords masked) and report success.
-            print(f"PLAN run: {printable}", flush=True)
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-        _logger.info(f"[*] Running: {printable}")
-        if "env" not in kw:
-            kw["env"] = env_vars
-        return subprocess.run(cmd, check=True, **kw)
-
     if os_id == "debian" and "python3-pypdf2" in infrastructure._installed_apt_packages():
         # Already there (every re-run on a provisioned box): rebuilding and re-installing it would
         # only churn dpkg on a live host.
@@ -401,10 +457,17 @@ def provision():
         run_sys(["equivs-build", "python3-pypdf2.control"], cwd="/tmp")
         run_sys(["dpkg", "-i", "/tmp/python3-pypdf2_1.0_all.deb"])
 
-    infrastructure.provision_environment(
-        run_sys, env_vars, orig_user, os_id, is_test=args.test, hold_odoo=args.hold_odoo,
-        plan=args.plan, opt_in_units=tuple(args.enable_opt_in),
-    )
+    if args.test or not args.test_environment:
+        infrastructure.provision_environment(
+            run_sys, env_vars, orig_user, os_id, is_test=args.test, hold_odoo=args.hold_odoo,
+            plan=args.plan, opt_in_units=tuple(args.enable_opt_in),
+        )
+    if args.test_environment:
+        with (infrastructure.planning() if args.plan else contextlib.nullcontext()):
+            provision_test_environment.finish(
+                test_env_state, run_sys, env_vars, os_id, self_check=not args.no_self_check, plan=args.plan,
+            )
+        return
     if args.plan:
         return
 

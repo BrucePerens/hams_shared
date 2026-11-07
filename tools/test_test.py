@@ -1655,6 +1655,22 @@ class MissingHostAptPackagesTests(unittest.TestCase):
         _test_runner.missing_host_apt_packages(self.SPECS, "debian", lambda n: seen.append(n) or True, lambda n: False)
         self.assertEqual(seen, ["awscli", "cargo-web", "jing"])
 
+    def test_cargo_on_path_satisfies_the_rust_toolchain_packages(self):
+        # Provisioning skips the apt cargo when rustup's cargo is on PATH (infrastructure._filter_apt_install), and
+        # the cloud container's pre-flight then stopped at "Missing required host APT packages: cargo" (2026-11-07).
+        installed = {"awscli", "jing"}
+        self.assertEqual(
+            _test_runner.missing_host_apt_packages(self.SPECS, "ubuntu", installed.__contains__, lambda n: False,
+                                                   have_cargo=True),
+            [])
+        self.assertEqual(
+            _test_runner.missing_host_apt_packages(self.SPECS, "debian", installed.__contains__, lambda n: False,
+                                                   have_cargo=True),
+            [])
+        self.assertEqual(
+            _test_runner.missing_host_apt_packages(self.SPECS, "ubuntu", installed.__contains__, lambda n: False),
+            ["cargo"])
+
     def test_the_fallback_map_names_awscli(self):
         self.assertEqual(_test_runner.infrastructure.PIP_FALLBACK_APT_PACKAGES.get("awscli"), "awscli")
 

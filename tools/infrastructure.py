@@ -10673,6 +10673,47 @@ WantedBy=timers.target
             "environments": ["early_prod"],
         },
     ],
+    # [@ANCHOR: infrastructure:test_environment_apt_packages]
+    # The test-runner apt packages `provision.py --test-environment` installs on top of "apt_packages" (and only
+    # there: test.py's pre-flight checks "apt_packages" alone, and production needs none of these). Each entry:
+    # name, optional debian_name, why, and optional skip_if_command (a command whose presence on PATH means the
+    # host already has the tool from elsewhere: the cloud image's Google Chrome and Node 22). Full entry:
+    # tools/README.md. They were hand-installed by hams_com devbox_tools/lima/provision_hams_test_vm.py and
+    # devbox_tools/cloud_session_setup.sh until 2026-11-07.
+    "test_environment_apt_packages": [
+        {"name": "socat", "why": "HamsHttpCase's TLS proxy (zero_sudo/tests/common.py)"},
+        {"name": "iproute2", "why": "test.py brings up lo in its network namespace with `ip`"},
+        {"name": "nodejs", "why": "test.py's JS pre-flight and run_linters.py's JS checks", "skip_if_command": "node"},
+        {"name": "npm", "why": "`npm ci` in hams_shared (ESLint, acorn)", "skip_if_command": "npm"},
+        {
+            "name": "chromium",
+            "why": "Odoo tours and hoot tests",
+            "skip_if_command": "google-chrome",
+        },
+        {"name": "fonts-liberation", "why": "browser tests render text"},
+        {"name": "fonts-dejavu-core", "why": "browser tests render text"},
+        {"name": "fonts-noto-color-emoji", "why": "browser tests render text"},
+        {"name": "golang-go", "why": "build_cloudflared_ffi.py (libcloudflared)", "skip_if_command": "go"},
+        {"name": "cmake", "why": "the relay's vendored Opus and rade_c"},
+        {"name": "clang", "why": "bindgen in the Rust crates"},
+        {"name": "autoconf", "why": "the relay's vendored Opus"},
+        {"name": "automake", "why": "the relay's vendored Opus"},
+        {"name": "libtool", "why": "the relay's vendored Opus"},
+        {"name": "pkg-config", "why": "Rust -sys crates"},
+        {"name": "libssl-dev", "why": "Rust -sys crates"},
+        {"name": "libudev-dev", "why": "bench_mcp, the relay"},
+        {"name": "libasound2-dev", "why": "bench_mcp, the relay"},
+        {"name": "libusb-1.0-0-dev", "why": "bench_mcp"},
+        {"name": "libhamlib-dev", "why": "the relay"},
+        {"name": "libhamlib-utils", "why": "the relay's rigctld tests"},
+        {"name": "libopus-dev", "why": "the relay"},
+        {"name": "libsecret-tools", "why": "the relay's keyring tests (daemons/hams_local_relay/install_debian_deps.sh)"},
+        {"name": "python3-lxml-html-clean", "why": "Odoo 19 imports lxml.html.clean; lxml 5.2 split it out"},
+        {"name": "python3-pytest", "why": "daemons/ and tools/ test suites"},
+        {"name": "python3-httpx", "why": "hams_com tools/mcp_watchdog_client.py and its tests (mcp now pulls httpx2)"},
+        {"name": "python3-flask", "why": "daemons/hams_local_relay tests (as provision.py --test)"},
+        {"name": "python3-flask-cors", "why": "daemons/hams_local_relay tests (as provision.py --test)"},
+    ],
     "env_defaults": {
         "DB_PORT": "5432",
         "RMQ_PORT": "5672",
@@ -13948,6 +13989,54 @@ def _apt_install_missing(run_cmd_func, packages, apt_opts, label):
 PIP_FALLBACK_APT_PACKAGES = {"awscli": "awscli"}
 
 
+# [@ANCHOR: infrastructure:runtime_pip_packages]
+# The pip distributions every provisioned host gets (no Debian package exists for any of them). provision_environment()
+# installs them with `pip3 install ... --ignore-installed typing_extensions --break-system-packages`; provision.py
+# --test-environment installs the missing ones. Full entry: tools/README.md.
+RUNTIME_PIP_PACKAGES = (
+    "pgeocode",
+    "telnetlib3",
+    "mcp",
+    "adif-io",
+    # au_callsign_sync/main.py's `from playwright.sync_api
+    # import ...` is a real runtime dependency (the ACMA
+    # scraper), not test-only -- confirmed live on hams1,
+    # 2026-09-22: au.callsign.sync.service crashed with
+    # ModuleNotFoundError on every run, nothing anywhere
+    # installed this package. No Debian package exists
+    # (`apt-cache search python3-playwright` returns
+    # nothing), so pip is the only path, matching the other
+    # entries in this same list. The browser binary itself
+    # is NOT installed here -- the daemon's own
+    # scrape_acma_spa() already self-installs Chromium into
+    # /opt/hams/cache/ms-playwright on every run ("JIT
+    # Self-Healing", its own log line), idempotent and
+    # already the provisioned cache path; only the
+    # `playwright` package itself was ever missing.
+    "playwright",
+    # hams_config.py's smart_download() now imports curl_cffi
+    # unconditionally (this codebase's fail-fast policy forbids
+    # a try/except-guarded soft import for its optional
+    # `impersonate` parameter) -- real gap found live on
+    # hams1, 2026-09-22: fcc.uls.sync needed a real
+    # browser-TLS-fingerprint impersonation library to get
+    # past Akamai's bot detection (plain `requests`, and even
+    # real `curl` with matching headers, both still got 403).
+    # No Debian package exists for it, matching the other
+    # entries in this list.
+    "curl_cffi",
+    # daemons/relay_ca/cloudkms_shim.py build_client(): the two CA signer daemons on hams1
+    # (host class ca_signer) call Google Cloud KMS through this client. It is imported lazily and
+    # only there, so every other host merely carries an unused package. No Debian package
+    # exists (`apt-cache search google-cloud-kms` is empty), matching the entries around it.
+    "google-cloud-kms",
+)
+
+# [@ANCHOR: infrastructure:test_pip_packages]
+# Test-only pip distributions (is_test provisioning and provision.py --test-environment). Full entry: tools/README.md.
+TEST_PIP_PACKAGES = ("hypothesis", "pip-audit")
+
+
 def provision_environment(
     run_cmd_func,
     env_vars,
@@ -14193,49 +14282,9 @@ def provision_environment(
 
             _logger.info("[*] Installing pip packages...")
             run_cmd_func(
-                [
-                    "pip3",
-                    "install",
-                    "pgeocode",
-                    "telnetlib3",
-                    "mcp",
-                    "adif-io",
-                    # au_callsign_sync/main.py's `from playwright.sync_api
-                    # import ...` is a real runtime dependency (the ACMA
-                    # scraper), not test-only -- confirmed live on hams1,
-                    # 2026-09-22: au.callsign.sync.service crashed with
-                    # ModuleNotFoundError on every run, nothing anywhere
-                    # installed this package. No Debian package exists
-                    # (`apt-cache search python3-playwright` returns
-                    # nothing), so pip is the only path, matching the other
-                    # entries in this same list. The browser binary itself
-                    # is NOT installed here -- the daemon's own
-                    # scrape_acma_spa() already self-installs Chromium into
-                    # /opt/hams/cache/ms-playwright on every run ("JIT
-                    # Self-Healing", its own log line), idempotent and
-                    # already the provisioned cache path; only the
-                    # `playwright` package itself was ever missing.
-                    "playwright",
-                    # hams_config.py's smart_download() now imports curl_cffi
-                    # unconditionally (this codebase's fail-fast policy forbids
-                    # a try/except-guarded soft import for its optional
-                    # `impersonate` parameter) -- real gap found live on
-                    # hams1, 2026-09-22: fcc.uls.sync needed a real
-                    # browser-TLS-fingerprint impersonation library to get
-                    # past Akamai's bot detection (plain `requests`, and even
-                    # real `curl` with matching headers, both still got 403).
-                    # No Debian package exists for it, matching the other
-                    # entries in this list.
-                    "curl_cffi",
-                    # daemons/relay_ca/cloudkms_shim.py build_client(): the two CA signer daemons on hams1
-                    # (host class ca_signer) call Google Cloud KMS through this client. It is imported lazily and
-                    # only there, so every other host merely carries an unused package. No Debian package
-                    # exists (`apt-cache search google-cloud-kms` is empty), matching the entries around it.
-                    "google-cloud-kms",
-                    "--ignore-installed",
-                    "typing_extensions",
-                    "--break-system-packages",
-                ]
+                ["pip3", "install"]
+                + list(RUNTIME_PIP_PACKAGES)
+                + ["--ignore-installed", "typing_extensions", "--break-system-packages"]
             )
             # Remove pip's cryptography to prevent it from shadowing Debian's python3-cryptography, which breaks python3-openssl
             run_cmd_func(
@@ -14268,14 +14317,7 @@ def provision_environment(
                 # test.py runs the Odoo process as.
                 _logger.info("[*] Installing test-only pip packages (hypothesis, pip-audit)...")
                 run_cmd_func(
-                    [
-                        "pip3",
-                        "install",
-                        "hypothesis",
-                        "pip-audit",
-                        "--ignore-installed",
-                        "--break-system-packages",
-                    ]
+                    ["pip3", "install"] + list(TEST_PIP_PACKAGES) + ["--ignore-installed", "--break-system-packages"]
                 )
 
                 # Same "invisible to a fresh checkout" gap, found via
