@@ -584,6 +584,17 @@ class EslintFromAnyLayoutTests(unittest.TestCase):
         self.assertIn("no-undef", result.stdout)
         self.assertNotIn("parserOptions.project", result.stdout)
 
+    def test_the_generated_project_excludes_cargo_target_and_node_modules(self):
+        # cargo test output under daemons/*/target holds thousands of generated JavaScript files; the type-aware
+        # project read them all and ESLint ran out of memory (2026-11-03).
+        project = run_linters.write_eslint_project(SHARED, [self.repo, self.sibling])
+        with open(project, encoding="utf-8") as handle:
+            data = json.load(handle)
+        # tsconfig patterns are relative to the generated file's directory, so each is anchored at the repository.
+        real = os.path.realpath(self.repo)
+        self.assertIn(os.path.join(real, "**", "target", "**"), data["exclude"])
+        self.assertIn(os.path.join(real, "**", "node_modules", "**"), data["exclude"])
+
     def test_the_generated_project_lists_both_repositories(self):
         project = run_linters.write_eslint_project(SHARED, [self.repo, self.sibling])
         with open(project, encoding="utf-8") as handle:

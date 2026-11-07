@@ -429,5 +429,37 @@ class PreFlightCheckStepPrintsOnSuccessTests(unittest.TestCase):
         self.assertIn("traceback", printed)
 
 
+# Tests [@ANCHOR: run_linters:eslint_node_env]
+class EslintNodeEnvTests(unittest.TestCase):
+    """An empty NODE_OPTIONS (the agents' shells had one) kept `setdefault` from adding the heap size, so
+    ESLint ran with node's default ~2 GB heap and died out of memory (2026-11-03)."""
+
+    HEAP = "--max-old-space-size=4096"
+
+    def test_an_unset_node_options_gets_the_heap_option(self):
+        self.assertEqual(run_linters.eslint_node_env({"PATH": "/bin"})["NODE_OPTIONS"], self.HEAP)
+
+    def test_an_empty_node_options_gets_the_heap_option(self):
+        self.assertEqual(run_linters.eslint_node_env({"NODE_OPTIONS": ""})["NODE_OPTIONS"], self.HEAP)
+
+    def test_a_blank_node_options_gets_the_heap_option(self):
+        self.assertEqual(run_linters.eslint_node_env({"NODE_OPTIONS": "  \t"})["NODE_OPTIONS"], self.HEAP)
+
+    def test_a_real_node_options_is_kept(self):
+        self.assertEqual(
+            run_linters.eslint_node_env({"NODE_OPTIONS": "--max-old-space-size=8192"})["NODE_OPTIONS"],
+            "--max-old-space-size=8192",
+        )
+
+    def test_the_other_variables_are_kept_and_the_input_is_not_changed(self):
+        base = {"NODE_OPTIONS": "", "PATH": "/bin"}
+        result = run_linters.eslint_node_env(base)
+        self.assertEqual(result["PATH"], "/bin")
+        self.assertEqual(base["NODE_OPTIONS"], "")
+
+    def test_the_eslint_step_uses_it(self):
+        self.assertIn("eslint_node_env(os.environ)", _read_source())
+
+
 if __name__ == "__main__":
     unittest.main()
