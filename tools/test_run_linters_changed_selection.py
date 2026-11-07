@@ -59,10 +59,11 @@ STEPS_THAT_CANNOT_READ_PYTHON = {
     "check_doc_images",
     "check_binary_manifest_consistency",
     "eslint",
-    # Test suites for code in other directories: their inputs are tools/, scripts/ and ingest/.
+    # Test suites for code in other directories: their inputs are tools/, scripts/, ingest/ and devbox_tools/.
     "pytest tools/",
     "pytest scripts/",
     "pytest ingest/",
+    "pytest devbox_tools/",
 }
 
 
