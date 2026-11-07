@@ -21,6 +21,7 @@ import time
 import lint_cache
 import lint_exec
 import lint_batch
+import lint_layout
 import lint_lock
 import lint_remote
 import lint_test_durations
@@ -433,13 +434,20 @@ def pass_stamp_dir():
     return os.path.join(base, "hams-lint", "passed")
 
 
-def stamp_repos(repo_root, tools_dir, dir_path):
+# [@ANCHOR: run_linters:stamp_repos]
+def stamp_repos(repo_root, tools_dir, dir_path, layout=None):
     """Repositories a pass may stamp. The real hams_shared checkout is stamped only when this run
     scanned it: started from it, or reachable below `repo_root` without crossing a symlink. A
     repository's `hams_shared` link to the main checkout is not followed by the checkers' directory
     walks, so a run from a worktree that links it covers none of its files and must not vouch for
-    its commit (found 2026-10-30: Rust and tool PRs carried stamps that checked nothing)."""
+    its commit (found 2026-10-30: Rust and tool PRs carried stamps that checked nothing).
+
+    `layout` (lint_layout.Layout or None): given when a hams_shared worktree was linted in a layout of throwaway
+    sibling clones; only the hams_shared tree is stamped then."""
     shared_repo = os.path.dirname(os.path.realpath(tools_dir))
+    if layout is not None:
+        # The layout's siblings are throwaway clones at main with a foreign hams_shared: they must not carry a stamp.
+        return [shared_repo]
     repos = [repo_root]
     if os.path.realpath(dir_path) == shared_repo:
         repos.append(shared_repo)
@@ -1007,6 +1015,24 @@ def main():
         sys.exit(run_bundle(sys.argv[1:]))
     dir_path = invocation_root(__file__)
     repo_root = _resolve_repo_root(dir_path)
+    # A hams_shared worktree is linted inside a layout of its own: this hams_shared as hams_open/hams_shared, hams_com
+    # beside it. The main checkouts' submodule is whatever commit they have, so every cross-repository step (anchors,
+    # claims, burn list) used to judge the OLD hams_shared and never the branch (2026-11-07, #411 and #412).
+    layout = None
+    if shared_worktree_root(dir_path, repo_root) and not any(
+        flag in sys.argv for flag in ("--lint-caches", "--lock-status")
+    ):
+        import atexit
+
+        main_open = repo_root
+        try:
+            lint_layout.reap_orphans(main_open)
+            layout = lint_layout.build(dir_path, main_open, _sibling_checkout(main_open, main_open, "hams_com"))
+        except (lint_layout.LayoutError, OSError) as error:
+            print(f"🛑 cannot build the sibling layout for this hams_shared tree: {error}", file=sys.stderr)
+            sys.exit(2)
+        atexit.register(lint_layout.remove, layout)
+        repo_root = layout.hams_open
 
     # 0. A stale main hams_shared checkout gives wrong results to every worktree that links to it.
     if not os.environ.get("HAMS_ALLOW_STALE_SHARED"):
@@ -1133,9 +1159,15 @@ def main():
     changed_set = None
     run_all = False
     if options.changed is not None:
+        # The layout's siblings are pristine clones: only the hams_shared tree under lint has changes (and the copy
+        # of each changed file in the layout counts as changed too).
         changed_set, run_all = _collect_changed(
-            options.changed, repo_root, sibling_dir, tools_dir
+            options.changed,
+            None if layout else repo_root,
+            None if layout else sibling_dir,
+            tools_dir,
         )
+        changed_set = lint_layout.mirror_changed(changed_set, layout)
     mod_array = []
     scoped = bool(target_modules_str)
     if changed_set is not None and not target_modules_str and not run_all:
@@ -2344,7 +2376,7 @@ def main():
     elif batch_reason and options.changed is not None:
         print(f"[*] lint batch: running alone ({batch_reason})")
     if options.remote and options.remote != "local" or options.where:
-        if os.path.realpath(dir_path) == real_shared_dir:
+        if os.path.realpath(dir_path) == real_shared_dir and layout is None:
             print("[*] --remote: not supported when started from a hams_shared checkout; running everything here")
             if options.where:
                 sys.exit(0)  # --where never runs anything
@@ -2449,7 +2481,7 @@ def main():
             print("(pass stamp not written: HEAD moved during the run)", file=sys.stderr)
         else:
             _write_pass_stamps(
-                stamp_repos(repo_root, tools_dir, dir_path),
+                stamp_repos(repo_root, tools_dir, dir_path, layout),
                 "changed" if changed_set is not None else "full",
                 [step.name for step in all_steps],
                 remote_hosts,

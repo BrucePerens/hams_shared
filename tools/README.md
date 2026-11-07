@@ -315,6 +315,147 @@ Special concerns: reads each file in full on every call (a few kilobytes); no wr
 age out through `_prune_results_dirs` (`UNUSED_DAYS`). See `CheckerVersionTest` in `test_lint_cache.py`, including one test
 that runs the real checker from two copies in different directories and counts the cache files.
 
+## Linting a hams_shared tree: the sibling layout (`lint_layout.py`)
+
+Why: until 2026-11-07 `run_linters.py` started from a hams_shared worktree read the sibling hams_open and hams_com **main
+checkouts**, whose `hams_shared` submodule is whatever commit the main checkout has. Every cross-repository step (`verify_anchors`,
+`check_claims_freshness`, the burn-list scan, the module checkers, ...) therefore judged the old hams_shared and never the branch.
+hams_shared #411 passed its gate, merged, and broke `verify_anchors` on every branch in all three repositories (its new runbook line
+cited an anchor in a form the scanner reports as missing); its fix #412 could not pass its own gate for the same reason in reverse,
+and the coordinator linted it in a layout built by hand. Now `run_linters.py` builds that layout itself, for every run started from a
+hams_shared worktree (`shared_worktree_root` is true), before it computes any path, and deletes it at exit. Local and `--remote` runs
+use it alike: `lint_remote.repo_roles` takes the layout's hams_open and hams_com and the worktree as hams_shared, and the machines'
+mirror (`hams_open/hams_shared` synced from the worktree) is the same shape. Batching (`lint_batch.py`) stays off for hams_shared
+(`is_shared_checkout`): a combined tree of hams_shared would be linted by the same code, one tree per run.
+
+### `[@ANCHOR: lint_layout:Layout]` `Layout(parent, hams_open, hams_com, shared_source, shared_copy)`
+
+Purpose: the record `lint_layout.build` returns and `run_linters.py` keeps for the run: where the throwaway layout is, so the run can
+point its repository root at it, stamp only the hams_shared tree, translate changed paths, and delete it. A `collections.namedtuple`
+defined in `tools/lint_layout.py`; immutable (`_replace` makes a changed copy). Lives for one lint run and is never stored.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `parent` | str | The directory that holds the layout and nothing else: `<HAMS_BATCH_TREE_DIR or ~/workspace/tmp>/batch_lintlayout_hams_shared_<pid>-<start>`. The name is what `reap_orphans` matches, so a run that was killed is cleaned up by the next one. |
+| `hams_open` | str | `<parent>/hams_open`: a shared-object git clone of the main hams_open at `base_commit`, whose `hams_shared` directory is `shared_copy`. Becomes the run's `repo_root`. |
+| `hams_com` | str or None | `<parent>/hams_com`: a clone of the main hams_com at its `base_commit`; its tracked `hams_shared` link resolves to `../hams_open/hams_shared`. None when no hams_com checkout exists (then the run falls back to the main one for the sibling role). |
+| `shared_source` | str | Real path of the hams_shared worktree under lint (the run's `dir_path`). Never written. |
+| `shared_copy` | str | `<hams_open>/hams_shared`: a real directory (not a link: the checkers do not follow one), itself a git clone at the worktree's HEAD with the worktree's uncommitted regular files overlaid. |
+
+Invariants: `hams_open` and `hams_com` are siblings in `parent`; `shared_copy` is below `hams_open`; none of the paths is inside the
+main checkouts or the worktree. Ownership: created by `build`, held by `run_linters.main`, deleted by `remove` (atexit). Serialised
+form: none. Concurrency: one run owns it; other runs have layouts of their own (names carry the pid). Functions: `build` creates it,
+`remove` deletes it, `mirror_changed` reads it, `reap_orphans` clears dead ones, `run_linters.stamp_repos` reads it.
+
+### `[@ANCHOR: lint_layout:base_commit]` `base_commit(checkout, fetch=True)`
+
+Purpose: chooses the commit a sibling repository is linted at, so the layout shows the world as it will be after this hams_shared
+change merges: `origin/main` of the sibling (the main checkouts are only fast-forwarded and are often behind), else its HEAD.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `checkout` | str | A git checkout of the sibling (the main hams_open or hams_com). Read only, except that `git fetch -q origin` may update its remote-tracking refs. |
+| `fetch` | bool | True (default): run `git fetch -q origin` first, limited to 20 s, failure ignored. False in tests and offline runs. |
+
+Returns a 40-character commit sha (str), or None when `checkout` has neither `origin/main` nor a HEAD (not a git repository). Raises
+nothing: a failing git call is the same as a missing ref. Special concerns: blocking for at most 20 s (the fetch); needs the network
+only for the fetch; no locks; idempotent. See also: `build` (the only caller); tests `BaseCommitTests` in `test_lint_layout.py`.
+
+### `[@ANCHOR: lint_layout:build]` `build(shared_tree, open_main, com_main, environ=None, fetch=True, out=print)`
+
+Purpose: makes the layout in which a hams_shared tree is linted, so the cross-repository steps see THIS hams_shared inside the sibling
+hams_open. Called once by `run_linters.main` for a hams_shared worktree, before any path is computed.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `shared_tree` | str | The hams_shared worktree (or checkout) under lint. Read only; its HEAD and its uncommitted regular files (`lint_remote.dirty_files`: secrets, `.git`, `target`, `node_modules` and symlinks are skipped) are copied. |
+| `open_main` | str | The main hams_open checkout. Read only (see `base_commit` for the fetch). |
+| `com_main` | str or None | The main hams_com checkout. None or a missing directory gives a layout without hams_com. |
+| `environ` | mapping or None | Environment for `batch_queue.tree_parent`: `HAMS_BATCH_TREE_DIR` chooses the directory the layout goes under (default `~/workspace/tmp`). None means `os.environ`. |
+| `fetch` | bool | Passed to `base_commit`. |
+| `out` | callable | Receives the one progress line (`[*] hams_shared tree: linting in a layout ...`). |
+
+Returns a `Layout`. Errors: `LayoutError` (a `RuntimeError`) when a git command fails or a sibling has no commit; the half-built layout
+is removed first. `OSError` for a filesystem failure, also after removing what was made. `run_linters.py` prints the error and exits 2:
+it must never fall back to the main checkouts, which is the bug this removes.
+
+Special concerns: blocking, a few seconds to tens of seconds (a `git clone --shared` and checkout of each sibling; hams_open is about
+8,700 files); no network except the optional fetch; nothing is registered in any source repository (shared-object clones, so deleting
+the directory is the whole cleanup); disk use is the checked-out files of both siblings (a few hundred MB). Copies no secrets.
+Not idempotent: each call makes a new directory. The caller must run `remove` (atexit in `run_linters.py`); `reap_orphans` is the
+safety net for a killed run.
+
+Example:
+
+```python
+layout = lint_layout.build(dir_path, main_open, main_com)
+atexit.register(lint_layout.remove, layout)
+repo_root = layout.hams_open        # anchors, claims, burn list now read this hams_shared
+```
+
+See also: tests `BuildTests` and `IncidentTests` in `test_lint_layout.py`: a hams_shared change whose docs cite a missing anchor fails
+`verify_anchors` in the layout (and passes when the citation is fixed); the main checkouts, which the old code scanned, pass the same
+change.
+
+### `[@ANCHOR: lint_layout:remove]` `remove(layout)`
+
+Purpose: deletes the layout's directory when the run ends.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `layout` | `Layout` | The layout to delete; `layout.parent` and everything below it go. |
+
+Returns None. Errors: none raised (`batch_queue.remove_tree` ignores failures). Special concerns: idempotent and safe on a half-built
+layout; files a test run left owned by another user are removed with a non-interactive `sudo -n rm -rf`; blocking for the time a recursive
+delete takes. See also: `build`, `reap_orphans`; tests `BuildTests.test_remove_deletes_the_directory_and_is_safe_twice`.
+
+### `[@ANCHOR: lint_layout:mirror_changed]` `mirror_changed(changed, layout)`
+
+Purpose: makes `--changed` see a hams_shared change in the layout. `run_linters.py --changed` reports the files the branch changed in
+the worktree; the layout lints a copy of them, and a step whose inputs are rooted at hams_open (not at the worktree) would not be
+selected for a change that exists only under the worktree path.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `changed` | set of str | Absolute real paths reported as changed. Not modified. |
+| `layout` | `Layout` or None | The run's layout; None when the run has none. |
+
+Returns a new set: `changed` plus, for every path below `layout.shared_source`, the same relative path below `layout.shared_copy`. With
+`layout` None the argument itself is returned. Errors: none. Pure (no files, no locks). See also: tests `MirrorChangedTests`.
+
+### `[@ANCHOR: lint_layout:reap_orphans]` `reap_orphans(repo, environ=None)`
+
+Purpose: deletes layouts left by a lint run that was killed (SIGKILL skips atexit), so `~/workspace/tmp` does not fill up. Called by
+`run_linters.py` just before it builds a new layout.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `repo` | str | Any git checkout; `batch_queue.remove_tree` runs `git worktree prune` there. |
+| `environ` | mapping or None | `HAMS_BATCH_TREE_DIR` names the directory to scan (default `~/workspace/tmp`). |
+
+Returns the list of removed parent directories. Only names `batch_lintlayout_hams_shared_<pid>-<start>[...]` whose process
+(`lock_queue.is_live`) is gone are removed; a live run's layout is never touched. Errors: none (an unreadable directory gives an empty
+list). Special concerns: idempotent; safe to run concurrently with other runs. See also: `batch_queue:reap_orphan_trees`, which it
+calls; tests `ReapOrphansTests`.
+
+### `[@ANCHOR: run_linters:stamp_repos]` `stamp_repos(repo_root, tools_dir, dir_path, layout=None)`
+
+Purpose: the repositories a passing run may stamp (`devbox_tools/prmerge.sh` refuses to merge a tip with no stamp, so a stamp must
+describe code that was really linted).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `repo_root` | str | The run's repository root (hams_open or hams_com checkout; the layout's hams_open for a hams_shared run). |
+| `tools_dir` | str | The `tools` directory the run used; its parent is the hams_shared checkout that supplied the linters. |
+| `dir_path` | str | The directory the run started from. |
+| `layout` | `Layout` or None | Given for a hams_shared worktree run. |
+
+Returns a list of repository directories (str). With `layout`: only the hams_shared tree (the layout's siblings are throwaway clones
+of main with a foreign hams_shared, and a stamp on main's commit would vouch for code that was not linted in that form). Without it:
+`repo_root`, plus the hams_shared checkout when the run started from it or scanned it below `repo_root` without crossing a symlink (a
+link to the main checkout is not followed by the directory walks, so such a run must not vouch for its commit; found 2026-10-30).
+Pure apart from `os.path.realpath` calls. Tests: `StampReposTests` in `test_lint_layout.py`.
+
 ## Odoo-test hosts and the lint runner; signal exits of test.py
 
 The mac1 VM (`hams-test-debian`) and bruce17 run Odoo browser tests (Odoo, PostgreSQL, Chromium) and are also lint runners and relay
