@@ -262,3 +262,5 @@ checkout; the normal `--remote` path keeps those steps on the dev box), so `rc=1
 mac1-vm (10 cores, `uptime` 0.3 to 5.4), cross-check of the first-run adoption only: the old directory was adopted and used (3.6 GB), then
 **cleared at once because the disk had 5 GB free against the 10 GB floor** (`/` is 94 % full: 89 of 99 GB used), so clippy was cold. Full run 206 s wall, 601 s
 of step times. The VM cannot hold a warm Cargo directory until about 10 GB is freed on it (not done: it hosts the production FCC sync).
+
+The isolated venv of `hams_simulated_bots`' pytest step is cached the same way (`~/.cache/hams-lint-venvs/`, not budgeted): `LINT_DAEMON_VENVS.md`.
