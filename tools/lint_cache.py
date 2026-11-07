@@ -522,6 +522,7 @@ def file_digest(path):
     return h.hexdigest()
 
 
+# [@ANCHOR: lint_cache:checker_version]
 def checker_version(*paths):
     """Hash of the checker's own source files: any edit to the checker invalidates every entry. Each file is
     identified by its base name and text, never its directory: the checkout of every lint run is a new path, and a
