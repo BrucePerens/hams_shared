@@ -220,6 +220,14 @@ def _run_js_scan(filepaths):
         results = json.loads(proc.stdout)
     except json.JSONDecodeError as error:
         raise SystemExit(f"[!] JS function scan printed output that is not JSON: {error}")
+    # A file the scanner could not read or parse is a partial scan, never "no functions": its
+    # functions would drop out of the result and, under --generate-baseline, out of the baseline.
+    failed = [f"{entry['file']}: {entry['error']}" for entry in results if "error" in entry]
+    if failed:
+        raise SystemExit(
+            f"[!] JS function scan could not read or parse {len(failed)} file(s); a partial scan "
+            "never passes the gate or rewrites a baseline:\n    " + "\n    ".join(failed[:20])
+        )
     return {
         entry["file"]: [(f["name"], f["start"], f["end"]) for f in entry["functions"]]
         for entry in results
@@ -238,8 +246,8 @@ def scan_tree(repo_root):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 all_contents[filepath] = f.read()
-        except (OSError, UnicodeDecodeError):
-            continue
+        except (OSError, UnicodeDecodeError) as error:
+            raise SystemExit(f"[!] JS function scan could not read {filepath}: {error}")
 
     tour_files = {fp for fp, content in all_contents.items() if _is_tour_registration_file(content)}
     test_asset_files = _web_assets_tests_files(repo_root)

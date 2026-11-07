@@ -5,10 +5,9 @@
 // JS sub-track). Reads a JSON array of absolute file paths on stdin, parses each with acorn
 // (already vendored under hams_shared/node_modules as an eslint transitive dependency -- no new
 // dependency added), and writes a JSON array of {file, functions: [{name, start, end}]} to
-// stdout, one entry per file that parsed successfully. A file that fails to parse (real syntax
-// error, or a syntax acorn's own ecmaVersion doesn't cover) is silently omitted -- matching
-// check_function_test_anchors.py's own scan_file behavior on a Python SyntaxError, not crashing
-// the whole batch over one bad file.
+// stdout, one entry per file. A file that cannot be read or parsed gets {file, error}; the
+// caller (check_js_function_test_anchors.py) fails the scan on any such entry, because a file
+// left out of the scan silently shrinks the result and, on --generate-baseline, the baseline.
 //
 // Scope, matching check_function_test_anchors.py's own Python scope as closely as JS's much
 // richer function-expression grammar allows: only NAMED, independently-callable units --
@@ -129,7 +128,7 @@ function scanFile(filepath) {
     try {
         content = fs.readFileSync(filepath, "utf-8");
     } catch (e) {
-        return null;
+        return { file: filepath, error: "unreadable: " + e.message };
     }
     let tree;
     try {
@@ -140,7 +139,7 @@ function scanFile(filepath) {
             allowHashBang: true,
         });
     } catch (e) {
-        return null;
+        return { file: filepath, error: "parse error: " + e.message };
     }
     const found = [];
     walk(tree, [], found, new Set());
@@ -167,8 +166,7 @@ function main() {
         }
         const results = [];
         for (const filepath of files) {
-            const result = scanFile(filepath);
-            if (result) results.push(result);
+            results.push(scanFile(filepath));
         }
         process.stdout.write(JSON.stringify(results));
     });
