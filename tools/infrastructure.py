@@ -13780,6 +13780,13 @@ def _apt_install_missing(run_cmd_func, packages, apt_opts, label):
     return to_install
 
 
+# [@ANCHOR: infrastructure:pip_fallback_apt_packages]
+# apt package name -> pip distribution installed in its place when the OS release has no apt candidate (Ubuntu
+# 24.04 dropped awscli). provision_environment installs the pip one; test.py's check_host_apt_packages accepts it.
+# Full entry: tools/README.md.
+PIP_FALLBACK_APT_PACKAGES = {"awscli": "awscli"}
+
+
 def provision_environment(
     run_cmd_func,
     env_vars,
@@ -13987,7 +13994,6 @@ def provision_environment(
             # Falls back to pip for exactly this one known case rather than building
             # generic any-package-might-be-missing handling for a problem only ever
             # seen here once.
-            PIP_FALLBACK_APT_PACKAGES = {"awscli": "awscli"}
             missing_apt_packages = []
             for pkg in all_packages:
                 probe = subprocess.run(

@@ -1560,5 +1560,115 @@ class HaltPreflightTests(unittest.TestCase):
         self.assertEqual(last_two, ["❌ PRE-FLIGHT FAILED: lint findings.", "   NEXT: fix them."])
 
 
+class AnchorScanSiblingDirTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:anchor_scan_sibling_dir]
+
+    A combined batch tree (~/workspace/tmp/batch_test_*/hams_com) has no hams_open beside it, so the pre-flight
+    anchor scan ran on hams_com alone and reported ~200 false findings (found 2026-11-06 in a cloud session)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def _git(self, *args, cwd):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"] + list(args),
+                       cwd=cwd, check=True, capture_output=True)
+
+    def _main_checkout_with_sibling(self):
+        main = os.path.join(self.tmp, "ws", "hams_com")
+        os.makedirs(main)
+        os.makedirs(os.path.join(self.tmp, "ws", "hams_open"))
+        self._git("init", "-q", cwd=main)
+        self._git("commit", "-q", "--allow-empty", "-m", "x", cwd=main)
+        return main
+
+    def test_the_sibling_beside_the_checkout_is_used(self):
+        main = self._main_checkout_with_sibling()
+        self.assertEqual(_test_runner.anchor_scan_sibling_dir(main, "hams_open", environ={}),
+                         os.path.join(self.tmp, "ws", "hams_open"))
+
+    def test_a_worktree_placed_anywhere_uses_the_main_checkouts_sibling(self):
+        main = self._main_checkout_with_sibling()
+        tree = os.path.join(self.tmp, "batch", "batch_test_hams_com_1", "hams_com")
+        self._git("worktree", "add", "-q", "--detach", tree, cwd=main)
+        self.assertEqual(_test_runner.anchor_scan_sibling_dir(tree, "hams_open", environ={}),
+                         os.path.join(self.tmp, "ws", "hams_open"))
+
+    def test_a_sibling_beside_a_worktree_wins_over_the_main_checkouts(self):
+        main = self._main_checkout_with_sibling()
+        tree = os.path.join(self.tmp, "pair", "hams_com")
+        self._git("worktree", "add", "-q", "--detach", tree, cwd=main)
+        paired = os.path.join(self.tmp, "pair", "hams_open")
+        os.makedirs(paired)
+        self.assertEqual(_test_runner.anchor_scan_sibling_dir(tree, "hams_open", environ={}), paired)
+
+    def test_the_tree_variable_wins_and_a_missing_one_is_ignored(self):
+        main = self._main_checkout_with_sibling()
+        elsewhere = os.path.join(self.tmp, "elsewhere")
+        os.makedirs(elsewhere)
+        self.assertEqual(_test_runner.anchor_scan_sibling_dir(main, "hams_open", {"HAMS_OPEN_TREE": elsewhere}),
+                         elsewhere)
+        self.assertEqual(
+            _test_runner.anchor_scan_sibling_dir(main, "hams_open", {"HAMS_OPEN_TREE": os.path.join(self.tmp, "no")}),
+            os.path.join(self.tmp, "ws", "hams_open"))
+
+    def test_no_sibling_anywhere_is_none(self):
+        lone = os.path.join(self.tmp, "lone", "hams_com")
+        os.makedirs(lone)
+        self.assertIsNone(_test_runner.anchor_scan_sibling_dir(lone, "hams_open", environ={}))
+
+
+class MissingHostAptPackagesTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:missing_host_apt_packages]
+    Tests [@ANCHOR: test:check_host_apt_packages]
+    Tests [@ANCHOR: infrastructure:pip_fallback_apt_packages]
+
+    Ubuntu 24.04 has no awscli package; provisioning installs it with pip, and the pre-flight used to refuse the
+    host anyway ("Missing required host APT packages: awscli")."""
+
+    SPECS = [{"name": "awscli", "debian_name": "awscli"}, {"name": "cargo", "debian_name": "cargo-web"},
+             {"name": "jing"}]
+
+    def test_every_package_installed_is_nothing_missing(self):
+        self.assertEqual(_test_runner.missing_host_apt_packages(self.SPECS, "ubuntu", lambda n: True, lambda n: False),
+                         [])
+
+    def test_awscli_from_pip_counts_as_installed(self):
+        installed = {"cargo", "jing"}
+        self.assertEqual(
+            _test_runner.missing_host_apt_packages(self.SPECS, "ubuntu", installed.__contains__, {"awscli"}.__contains__),
+            [])
+
+    def test_awscli_absent_from_both_is_missing(self):
+        installed = {"cargo", "jing"}
+        self.assertEqual(
+            _test_runner.missing_host_apt_packages(self.SPECS, "ubuntu", installed.__contains__, lambda n: False),
+            ["awscli"])
+
+    def test_a_package_without_a_pip_fallback_is_never_taken_from_pip(self):
+        self.assertEqual(
+            _test_runner.missing_host_apt_packages(self.SPECS, "ubuntu", lambda n: n == "awscli", lambda n: True),
+            ["cargo", "jing"])
+
+    def test_debian_names_are_checked_on_debian(self):
+        seen = []
+        _test_runner.missing_host_apt_packages(self.SPECS, "debian", lambda n: seen.append(n) or True, lambda n: False)
+        self.assertEqual(seen, ["awscli", "cargo-web", "jing"])
+
+    def test_the_fallback_map_names_awscli(self):
+        self.assertEqual(_test_runner.infrastructure.PIP_FALLBACK_APT_PACKAGES.get("awscli"), "awscli")
+
+    def test_check_exits_naming_only_what_is_really_missing(self):
+        out = io.StringIO()
+        with patch.object(_test_runner, "_dpkg_installed", lambda n: n != "awscli" and n != "jing"), \
+                patch.object(_test_runner, "_pip_distribution_installed", lambda n: n == "awscli"), \
+                patch.object(_test_runner.infrastructure, "MANIFEST", {"apt_packages": self.SPECS}), \
+                patch.object(_test_runner.infrastructure, "get_os_identifier", lambda: "ubuntu"), \
+                contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+            _test_runner.check_host_apt_packages()
+        self.assertIn("Missing required host APT packages: jing", out.getvalue())
+        self.assertNotIn("awscli", out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

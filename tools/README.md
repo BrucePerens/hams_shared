@@ -139,3 +139,87 @@ a `.sh` wrapper script. `how` holds `"environment_file"` (an `EnvironmentFile=` 
 sudoers files and oneshot services are skipped. Raises nothing for odd input (missing keys are treated as empty). Pure function: no I/O, no
 locks, safe to call repeatedly. Example: `long_running_key_holders(MANIFEST)["backup.worker.service"] == {"environment_file"}`. See also the
 tests `RotatedKeyReloadPolicyTests` in `test_infrastructure.py` and `ROTATED_KEY_RELOAD_POLICY` above.
+
+## test.py pre-flight: host packages and the sibling repository
+
+These run in `test.py`'s pre-flight, before any lock, namespace or database work. They were changed so a fresh Ubuntu 24.04
+host (a Claude Code cloud session container, the jetson-1 LAN host) and a combined batch tree pass the pre-flight when nothing
+is really wrong. hams_com's `docs/runbooks/CLOUD_SESSION_TESTING.md` lists every step a cloud session takes.
+
+### `[@ANCHOR: infrastructure:pip_fallback_apt_packages]` `PIP_FALLBACK_APT_PACKAGES`
+
+Purpose: names the apt packages the MANIFEST lists that some OS release no longer ships, and the pip distribution installed in
+their place. It lives at module level in `infrastructure.py` so provisioning (which installs the pip distribution) and
+`test.py`'s pre-flight (which accepts it) read one list.
+
+| Key | Value | Meaning |
+|---|---|---|
+| apt package name (str) | pip distribution name (str) | `"awscli": "awscli"`: Ubuntu 24.04 dropped the `awscli` package (snap or pip only). Needed only by `daemons/ses_inbound_mail_ingest/main.py`'s `aws` shell-out. |
+
+Invariants: every key is an apt package name in `MANIFEST["apt_packages"]`; the value is a name `importlib.metadata.version()`
+accepts. Read by `provision_environment()` (after an `apt-cache show` finds no candidate, it runs
+`pip3 install --break-system-packages <value>`) and by `missing_host_apt_packages()` below. Nobody writes it at run time.
+Adding an entry is a decision that pip is an acceptable source for that tool on every host. See also the tests
+`MissingHostAptPackagesTests` in `test_test.py`.
+
+### `[@ANCHOR: test:missing_host_apt_packages]` `missing_host_apt_packages(pkg_specs, os_id, dpkg_installed, pip_installed)`
+
+Purpose: decides which MANIFEST apt packages a host lacks. A pure function so the decision can be tested without dpkg;
+`check_host_apt_packages()` is its only production caller.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `pkg_specs` | list of dict | `MANIFEST["apt_packages"]` entries: `name`, optional `debian_name`. |
+| `os_id` | str | `get_os_identifier()`: `"debian"` selects `debian_name` (falling back to `name`); anything else uses `name`. |
+| `dpkg_installed` | callable(str) -> bool | True when dpkg reports the package `install ok installed`. |
+| `pip_installed` | callable(str) -> bool | True when the pip distribution is installed for the running interpreter. |
+
+Returns the missing package names as a list of str, in manifest order (empty when nothing is missing). A package counts as
+present when dpkg has it, or when it is a key of `PIP_FALLBACK_APT_PACKAGES` and `pip_installed(value)` is true; pip is never
+consulted for any other package. Raises whatever the callables raise (`check_host_apt_packages()` treats `FileNotFoundError`
+from a host without `dpkg-query` as "cannot check").
+
+Special concerns: no side effects of its own; blocking only as far as the callables are. See also
+`MissingHostAptPackagesTests` in `test_test.py`.
+
+### `[@ANCHOR: test:check_host_apt_packages]` `check_host_apt_packages()`
+
+Purpose: stops a non-isolated run (one without `HAMS_ISOLATED_NS=1`) before the namespace is built when a MANIFEST apt package
+is missing, with the `apt-get install` command that fixes it. `main()` calls it once, in the first process, before re-executing
+through `unshare`.
+
+Call interface: no arguments; returns `None` when nothing is missing or when `dpkg-query` does not exist (a non-Debian host:
+the check is skipped, logged at debug). Otherwise prints `Missing required host APT packages: <names>` and the install command,
+then exits with status 1 (`SystemExit`). Uses `_dpkg_installed()` (`dpkg-query -W -f=${Status}`, one subprocess per package)
+and `_pip_distribution_installed()` (`importlib.metadata.version()` in the running interpreter) through
+`missing_host_apt_packages()`.
+
+Special concerns: blocking, about 60 short subprocesses; read-only; no locks. Before 2026-11-07 it demanded `awscli` from apt,
+so every non-isolated run on Ubuntu 24.04 stopped here even after provisioning had installed the pip `awscli`. See also
+`MissingHostAptPackagesTests` in `test_test.py`.
+
+### `[@ANCHOR: test:anchor_scan_sibling_dir]` `anchor_scan_sibling_dir(base_dir, other_repo_name, environ=None)`
+
+Purpose: finds the other repository's checkout (hams_open for a hams_com run, and the reverse) so the pre-flight anchor scan
+covers both repositories. Anchors in each cite the other's docs and tests, so a scan of one alone reports hundreds of false
+"missing" findings. Called once by `check_linters()`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `base_dir` | str | The checkout under test (the working directory test.py was started in). |
+| `other_repo_name` | str | `"hams_open"` or `"hams_com"`. |
+| `environ` | mapping or `None` | Environment to read `<OTHER_REPO_NAME>_TREE` from (`HAMS_OPEN_TREE`, `HAMS_COM_TREE`); `None` means `os.environ`. |
+
+Returns the absolute path of the first of these that is a directory, else `None`:
+1. `<OTHER_REPO_NAME>_TREE` from `environ` (an explicit choice wins; a value that is not a directory is ignored);
+2. `<other_repo_name>` beside `base_dir` (a plain checkout, or a deliberately paired pair of worktrees);
+3. `<other_repo_name>` beside the main checkout of a linked worktree, from `resolve_repo_layout()` (the same rule
+   `get_addons_path()` uses for the addons path).
+
+Step 3 is what a combined batch tree needs (`~/workspace/tmp/batch_test_<repo>_*/hams_com`, or under `HAMS_BATCH_TREE_DIR`):
+nothing sits beside it. Before 2026-11-07 the scan of a batch tree covered hams_com alone and failed with about 220 false
+findings, so every batched `test.py -u` run failed its pre-flight unless `HAMS_OPEN_TREE` was set.
+
+Special concerns: runs one `git rev-parse --git-common-dir` for a worktree; no writes; no locks. See also
+`AnchorScanSiblingDirTests` in `test_test.py`, `resolve_repo_layout()`, and `verify_anchors.py`'s own
+`_add_sibling_repo_target()`.
