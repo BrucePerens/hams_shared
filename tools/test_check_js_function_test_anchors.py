@@ -194,11 +194,12 @@ class ScanTreeTests(unittest.TestCase):
         gaps = cjfta.scan_tree(self.tmp)
         self.assertEqual(gaps, {})
 
-    def test_a_syntax_error_file_is_skipped_not_crashed_on(self):
+    def test_a_syntax_error_file_fails_the_scan_instead_of_being_skipped(self):
         _write(os.path.join(self.tmp, "broken.js"), "function broken( {\n    return 1\n")
         _init_git_repo(self.tmp)
-        gaps = cjfta.scan_tree(self.tmp)
-        self.assertEqual(gaps, {})
+        with self.assertRaises(SystemExit) as caught:
+            cjfta.scan_tree(self.tmp)
+        self.assertIn("broken.js", str(caught.exception))
 
     def test_a_begin_end_anchor_counts_as_anchored(self):
         _write(
@@ -267,6 +268,20 @@ class FailedScanTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 cjfta.main()
         self.assertNotEqual(caught.exception.code, 0)
+
+    def test_a_partial_scan_never_rewrites_the_baseline(self):
+        repo = self._repo_with_a_gap()
+        _write(os.path.join(repo, "broken.js"), "function broken( {\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        baseline = os.path.join(self.tmp, "baseline.json")
+        _write(baseline, '["foo.js::bar", "broken.js::broken"]\n')
+        argv = ["x", repo, "--baseline", baseline, "--generate-baseline"]
+        with unittest.mock.patch("sys.argv", argv):
+            with self.assertRaises(SystemExit) as caught:
+                cjfta.main()
+        self.assertNotEqual(caught.exception.code, 0)
+        with open(baseline, encoding="utf-8") as f:
+            self.assertIn("broken.js::broken", f.read())
 
     def test_no_files_to_scan_is_the_only_empty_result(self):
         self.assertEqual(cjfta._run_js_scan([]), {})
