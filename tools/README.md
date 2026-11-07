@@ -295,6 +295,26 @@ Returns a list of `(label, path, why)` tuples (all str), always these four:
 Special concerns: no side effects; sizing walks the tree (tens of seconds for `/opt/hams-testsrc`) and skips files it
 cannot read (`/var/lib/machines` is root-only, so its size is what the running user can see).
 
+### `[@ANCHOR: lint_cache:checker_version]` `checker_version(*paths)`
+
+Purpose: the version string of a per-file result cache (`ResultCache`): a hash of the checker's own source, so an edit to a
+checker discards its stored results and nothing else does. Fixed 2026-11-07: the hash used to include each file's absolute
+path, and every lint run works in a new checkout path (a batch directory or worktree), so every run opened a new, empty
+cache file. `check_float_isfinite` had 347 such files (370 kB each) and both it and `check_int_float_overflow` re-parsed
+every Python file on every run (about 42 s each in a batch, 6-8 s on an idle dev box; 0.09 s with a warm cache).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `*paths` | str (one or more) | The checker's source files, each readable. A missing file raises `OSError` (the caller passes its own `__file__`). |
+
+Returns a 16-character lowercase hex str: SHA-256 over the (base name, bytes) pairs, sorted, so the same text under any
+directory gives the same version, a changed byte or a different file name gives another, and the order of `paths` does not
+matter. Two different checkers never share a file anyway: the cache path also holds the checker's name.
+
+Special concerns: reads each file in full on every call (a few kilobytes); no writes, no locks. Old per-path version files
+age out through `_prune_results_dirs` (`UNUSED_DAYS`). See `CheckerVersionTest` in `test_lint_cache.py`, including one test
+that runs the real checker from two copies in different directories and counts the cache files.
+
 ## Odoo-test hosts and the lint runner; signal exits of test.py
 
 The mac1 VM (`hams-test-debian`) and bruce17 run Odoo browser tests (Odoo, PostgreSQL, Chromium) and are also lint runners and relay
