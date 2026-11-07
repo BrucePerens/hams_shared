@@ -143,6 +143,7 @@ class OOMWatchdog(multiprocessing.Process):
         self.target_pid = target_pid
         self.runner_pid = runner_pid
         self.rss_limit_gb = rss_limit_gb
+        self.fired = multiprocessing.Event()  # set just before the watchdog kills the run
 
     def run(self):
         try:
@@ -187,6 +188,7 @@ class OOMWatchdog(multiprocessing.Process):
                         if total_rss_gb > self.rss_limit_gb
                         else f"Host available memory ({mem_avail_mb}MB) is critically low (< 512MB)"
                     )
+                    self.fired.set()
                     print(
                         f"\n[🚨 OOM WATCHDOG] Aggregate memory exceeded limits! ({reason}). Terminating children...\n",
                         flush=True,
@@ -491,6 +493,8 @@ class FailureExtractor:
     """
     # Set by run_cmd when the Odoo process died of the CPU-time limit: the run is then not a test verdict.
     cpu_limit_line = None
+    # Set by run_cmd when the Odoo process was killed by a signal (signal_exit_verdict): the line printed in the summary.
+    signal_line = None
 
 
     def __init__(self, log_dir, disable_atexit=False, mcp_mode=False):
@@ -906,6 +910,8 @@ class FailureExtractor:
         if self.cpu_limit_line:
             print(self.cpu_limit_line)
             print("🛑 TEST RUN INCOMPLETE: the Odoo process hit the CPU-time limit; the counts below cover only the tests that ran.")
+        elif self.signal_line:
+            print(self.signal_line)
         if a:
             print(
                 "🛑 TEST RUN ABORTED: Did not complete due to pre-flight linter errors."
@@ -1064,6 +1070,32 @@ def cpu_limit_verdict(returncode, cpu_seconds, soft_limit=ODOO_CPU_LIMIT_SOFT_SE
             f"signal {-returncode}): this run is NOT a test verdict -- the tests after that point never ran."
         )
     return None
+
+
+# [@ANCHOR: test:signal_exit_verdict]
+def signal_exit_verdict(returncode, watchdog_fired, odoo_result_lines):
+    """(exit status, summary line) for an Odoo process that a signal killed, or (returncode, None) when none did. Full entry: tools/README.md.
+
+    `subprocess` reports a signal as a negative return code and `sys.exit(-9)` shows up in a shell as 247, which reads like a test
+    failure code; the shell's own convention, 128 + signal, is returned instead. The line says which signal, whether this runner's OOM
+    watchdog sent it, and, when Odoo had already printed `odoo.tests.result:`, what that verdict was (the run still fails)."""
+    if returncode >= 0:
+        return returncode, None
+    number = -returncode
+    try:
+        name = signal.Signals(number).name
+    except ValueError:
+        name = f"signal {number}"
+    line = f"🛑 Odoo was killed by {name} (signal {number}; OOM watchdog: {'yes' if watchdog_fired else 'no'}): exit status {128 + number}."
+    if odoo_result_lines:
+        failed = sum(r["failed"] for r in odoo_result_lines)
+        errors = sum(r["errors"] for r in odoo_result_lines)
+        total = sum(r["total"] for r in odoo_result_lines)
+        line += (f" Before the kill Odoo had printed odoo.tests.result: {failed} failed, {errors} error(s) of {total} tests;"
+                 " the run is still a failure because the process did not exit normally.")
+    else:
+        line += " Odoo had printed no odoo.tests.result line, so no test verdict exists."
+    return 128 + number, line
 
 
 # The shell that runs RabbitMQ in its own process group and stops the group on SIGTERM (PDEATHSIG or clean-up). The trap
@@ -1393,7 +1425,15 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         # observed).
         return 1
 
-    return process.returncode
+    exit_status, signal_line = signal_exit_verdict(
+        process.returncode, watchdog.fired.is_set(), getattr(extractor, "odoo_result_lines", None)
+    )
+    if signal_line and not cpu_limit_line:
+        print(signal_line, flush=True)
+        _logger.error(signal_line)
+        if extractor is not None:
+            extractor.signal_line = signal_line
+    return exit_status
 
 
 def is_git_checkout_root(path):

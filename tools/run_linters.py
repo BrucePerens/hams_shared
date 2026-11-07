@@ -2349,6 +2349,7 @@ def main():
                 whole=whole_run,
                 claim=lint_lock.try_claim,
                 claimed=lint_lock.claimed,
+                odoo_lock=lint_lock.try_odoo_test_lock,
                 unfit=lint_remote.load_unfit(),
             )
             if options.where:

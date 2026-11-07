@@ -268,6 +268,42 @@ def try_claim(machine, environ=None):
     return handle
 
 
+# [@ANCHOR: lint_lock:held_locks]
+class HeldLocks:
+    """Several open lock files released together: `close()` closes every one (and may be called again). Full entry: tools/README.md."""
+
+    def __init__(self, handles):
+        self.handles = [handle for handle in handles if handle is not None]
+
+    def close(self):
+        for handle in self.handles:
+            handle.close()
+
+
+ODOO_TEST_LOCK_DIR = os.path.expanduser("~/.cache/hams-remote-test")
+
+
+# [@ANCHOR: lint_lock:try_odoo_test_lock]
+def try_odoo_test_lock(lock_name, directory=None):
+    """Take the dev box's Odoo-test lock for a remote host without waiting; None when an Odoo test run holds it. Full entry: tools/README.md."""
+    directory = directory or ODOO_TEST_LOCK_DIR
+    try:
+        os.makedirs(directory, exist_ok=True)
+        handle = open(os.path.join(directory, lock_name + ".lock"), "a+", encoding="utf-8")  # noqa: SIM115 - held by the caller
+    except OSError:
+        return None
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    handle.seek(0)
+    handle.truncate()
+    handle.write("pid %d lint run since %s\n" % (os.getpid(), time.strftime("%Y-%m-%dT%H:%M:%S")))
+    handle.flush()
+    return handle
+
+
 def claimed(machines, environ=None):
     """The subset of `machines` that another run holds a claim on right now."""
     taken = set()
