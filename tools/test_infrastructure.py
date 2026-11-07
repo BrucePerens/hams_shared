@@ -8217,7 +8217,12 @@ class LlamaServerUnitTests(unittest.TestCase):
         self.assertEqual(self._values("CPUWeight"), ["20"])
         self.assertEqual(self._values("MemoryMax"), ["6G"])
         self.assertEqual(self._values("TasksMax"), ["64"])
-        self.assertIn("-t 6", self._exec_start())
+        self.assertIn("-t 10 -tb 12", self._exec_start())
+
+    def test_the_command_line_is_the_tuning_that_runs_on_hams1(self):
+        """Adopted from the live unit 2026-11-07 (the copy in /etc/systemd/system had been tuned by hand and never brought back)."""
+        self.assertIn("-t 10 -tb 12 -c 4096 -np 2 -cram 1536 --no-webui", self._exec_start())
+        self.assertNotIn("-cram 64", self._exec_start())
 
     def test_the_tree_is_root_owned_and_the_key_directory_is_not_readable_by_the_service_account(self):
         dirs = {d["path"]: d for d in infra.MANIFEST["directories"]}
@@ -8233,6 +8238,15 @@ class LlamaServerUnitTests(unittest.TestCase):
         self.assertTrue(spec["url"].startswith("https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/"))
         self.assertEqual((spec["owner"], spec["mode"]), ("root:root", "644"))
         self.assertIn(f"-m {spec['path']}", self._exec_start())
+
+
+class EventCoverSyncLiveTuningTests(unittest.TestCase):
+    """event.cover.image.sync.service carries the 10 places per prompt that runs on hams1 (adopted 2026-11-07)."""
+
+    def test_places_per_prompt_is_the_live_value(self):
+        spec = [e for e in infra.MANIFEST["static_files"] if e["path"] == "/opt/hams/systemd/event.cover.image.sync.service"][0]
+        self.assertIn('Environment="EVENT_COVER_PLACES_PER_PROMPT=10"', spec["content"])
+        self.assertNotIn("EVENT_COVER_PLACES_PER_PROMPT=20", spec["content"])
 
 
 class RelayPublisherUnitTests(unittest.TestCase):

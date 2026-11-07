@@ -6121,7 +6121,9 @@ EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=event_sync_service_internal"
 Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_sync/event_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
-Environment="EVENT_COVER_PLACES_PER_PROMPT=20"
+# 2026-11-07: 10 places per grounded prompt, the value running on hams1, adopted from the live unit by the coordinator's decision
+# (the unit had been edited by hand and this file still said 20, which the 2026-10-09 go-live chose to cut grounding cost).
+Environment="EVENT_COVER_PLACES_PER_PROMPT=10"
 Environment="DAEMON_ARGS="
 
 # Execution via system Python
@@ -10133,6 +10135,10 @@ WantedBy=multi-user.target
             # starting it takes ~3 GB of RAM on the production host and needs the binary and the key file first.
             # Measured on hams1 (2026-10-13): resident ~3.8 GB of which ~2 GB is the mapped model file, ~10 tokens/s for one
             # request, ~8.5 each for two at once.
+            # 2026-11-07: ExecStart carries the tuning that has been running on hams1 (-t 10 -tb 12 -cram 1536), adopted from the
+            # live unit by the coordinator's decision. It had been changed by hand in /etc/systemd/system and never brought back
+            # here (this file said -t 6 -cram 64). A larger prompt cache can push the working set past MemoryHigh=5G (MemoryMax=6G
+            # is unchanged), and ten threads leave fewer than the six cores for Odoo that docs/design/HAMS1_LLM_SERVER.md planned.
             "path": "/opt/hams/systemd/hams-llama-server.service",
             "opt_in": "needs the compiled binary and /etc/hams-llm/server.env first; see hams_com docs/design/HAMS1_LLM_SERVER.md",
             "content": """\
@@ -10151,7 +10157,7 @@ WorkingDirectory=/
 ExecStart=/opt/hams/llm/bin/llama-server \\
   --host 127.0.0.1 --port 8179 \\
   -m /opt/hams/llm/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf \\
-  -t 6 -c 4096 -np 2 -cram 64 --no-webui --jinja --reasoning off
+  -t 10 -tb 12 -c 4096 -np 2 -cram 1536 --no-webui --jinja --reasoning off
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
