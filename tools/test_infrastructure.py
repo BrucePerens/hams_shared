@@ -5265,6 +5265,46 @@ class SimulatedBandRecordingProvisioningTests(unittest.TestCase):
                 self.assertNotRegex(text, r"(?i)\b(rm|find\b.*-delete|tmpfiles|systemd-tmpfiles)\b", spec["path"])
 
 
+class OdooUnitSecondTierTests(unittest.TestCase):
+    """The second sandbox tier on four units that still run as odoo (daemon OS isolation, 2026-11-07), each derived from its
+    daemon's code: none sets a kernel tunable, loads a module, reads the kernel log, writes a cgroup, sets the clock, makes a
+    namespace, asks for realtime scheduling, creates a setuid or setgid file or changes personality. Units whose needs come from
+    configuration or from tools that use those features are left out on purpose: pager-os-monitor (remediation commands and checks
+    configured in Odoo), backup.worker (kopia restore may recreate setuid files), the agent units (the CLI's own sandbox), the
+    simulated bots (native speech libraries, unmeasured) and the relay units (Bruce reviews them)."""
+
+    SECOND_TIER = {
+        "ProtectKernelTunables": ["true"], "ProtectKernelModules": ["true"], "ProtectKernelLogs": ["true"],
+        "ProtectControlGroups": ["true"], "ProtectClock": ["true"], "RestrictNamespaces": ["true"],
+        "RestrictRealtime": ["true"], "RestrictSUIDSGID": ["true"], "LockPersonality": ["true"],
+        "SystemCallArchitectures": ["native"],
+    }
+    UNITS = ("adif.ingress.service", "adif.processor.service", "hams-exception-report@.service",
+             "stray.odoo.shell.detector.service")
+
+    def test_the_four_units_carry_the_second_tier(self):
+        for unit in self.UNITS:
+            for directive, value in self.SECOND_TIER.items():
+                with self.subTest(unit=unit, directive=directive):
+                    self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive), value)
+
+    def test_they_still_share_odoo_so_no_proc_hiding_or_umask(self):
+        # adif.* share hams_com 770 directories with Odoo (a narrower umask would lock Odoo out of their files), and the stray
+        # detector must see every odoo process (ps -eo).
+        for unit in self.UNITS:
+            with self.subTest(unit=unit):
+                self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "User"), ["odoo"])
+                for directive in ("ProtectProc", "ProcSubset", "UMask"):
+                    self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive), [])
+
+    def test_the_units_left_out_are_still_left_out(self):
+        # A unit that gains RestrictNamespaces or RestrictSUIDSGID later must be a reviewed change: the reasons are above.
+        for unit in ("pager-os-monitor.service", "backup.worker.service", "credential.touch.timer.service",
+                     "hams.simulated.bots.service", "hams.relay.bridge.service"):
+            with self.subTest(unit=unit):
+                self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "RestrictNamespaces"), [])
+
+
 class SimulatedBandAccountTests(unittest.TestCase):
     """The Simulated Band SFU on its own account, hamsd_simband (daemon OS isolation, 2026-11-07). Derived from
     daemons/hams_simulated_band/src: no Odoo key, no environment file, the hand-placed secrets in /etc/hams-band re-read while

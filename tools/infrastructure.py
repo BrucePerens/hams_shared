@@ -3953,6 +3953,17 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+# Second tier (hams_com DAEMON_OS_ISOLATION_PLAN.md section 5, 2026-11-07), derived from daemons/adif_processor/main.py (hams_com): RabbitMQ and Odoo over TCP, files in the ADIF directories with default modes, no subprocess: none of it sets a kernel tunable, loads a module, reads the kernel log, writes a cgroup, sets the clock, makes a namespace, asks for realtime scheduling, creates a setuid or setgid file or changes personality. Not ProtectProc= or UMask=: the unit still runs as odoo beside Odoo and shares its directories.
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 # /opt/hams/failed_input added 2026-09-23: main.py's save_failed_payload() writes a
 # diagnostic metadata JSON file there for any job it can't process -- found live,
 # itself failing with "Read-only file system" while handling an unrelated real
@@ -8088,6 +8099,17 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+# Second tier (hams_com DAEMON_OS_ISOLATION_PLAN.md section 5, 2026-11-07), derived from daemons/adif_ingress/main.py (hams_com): RabbitMQ and Odoo over TCP, files in its spool directories with default modes, no subprocess: none of it sets a kernel tunable, loads a module, reads the kernel log, writes a cgroup, sets the clock, makes a namespace, asks for realtime scheduling, creates a setuid or setgid file or changes personality. Not ProtectProc= or UMask=: the unit still runs as odoo beside Odoo and shares its directories.
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 ReadWritePaths=/opt/hams/spool /opt/hams/spool/adif_uploads
 Type=simple
 User=odoo
@@ -9622,6 +9644,17 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+# Second tier (hams_com DAEMON_OS_ISOLATION_PLAN.md section 5, 2026-11-07), derived from daemons/stray_odoo_shell_detector/main.py (hams_com): runs ps -eo and reads its output, writes nothing: none of it sets a kernel tunable, loads a module, reads the kernel log, writes a cgroup, sets the clock, makes a namespace, asks for realtime scheduling, creates a setuid or setgid file or changes personality. Not ProtectProc= or UMask=: the unit still runs as odoo beside Odoo and shares its directories.
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=oneshot
 User=odoo
 WorkingDirectory=/opt/hams/daemons/stray_odoo_shell_detector
@@ -9915,6 +9948,14 @@ ProtectControlGroups=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+# Second tier (hams_com DAEMON_OS_ISOLATION_PLAN.md section 5, 2026-11-07), derived from hams_helpdesk/daemon/exception_reporter.py (hams_open): journalctl and systemctl show as subprocesses, one HTTP POST to Odoo: none of it sets a kernel tunable, loads a module, reads the kernel log, writes a cgroup, sets the clock, makes a namespace, asks for realtime scheduling, creates a setuid or setgid file or changes personality. Not ProtectProc= or UMask=: the unit still runs as odoo beside Odoo and shares its directories.
+ProtectKernelLogs=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 """,
             "owner": "root:root",
             "mode": "644",
