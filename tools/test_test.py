@@ -351,6 +351,7 @@ class MainModeDispatchTests(unittest.TestCase):
             try:
                 with patch.dict(os.environ, env_overrides), \
                      patch.object(sys, "argv", ["test.py", "--mode", mode, "-u", "dummy_mod"]), \
+                     patch.object(_test_runner.host_requirements, "require_test_host"), \
                      patch.object(_test_runner, "get_addons_path", return_value="/dummy/addons"), \
                      patch.object(_test_runner, "load_ignore_file", return_value=[]), \
                      patch.object(_test_runner, "get_local_modules", return_value=["dummy_mod"]), \
