@@ -36,6 +36,7 @@ import datetime
 import fcntl
 import functools
 import json
+import math
 import os
 import pwd
 import re
@@ -138,7 +139,8 @@ def boot_time():
         with open("/proc/stat") as handle:
             for line in handle:
                 if line.startswith("btime "):
-                    return float(line.split()[1])
+                    value = float(line.split()[1])
+                    return value if math.isfinite(value) else 0.0
     except (OSError, ValueError):
         pass
     return 0.0

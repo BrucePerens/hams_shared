@@ -764,7 +764,8 @@ class KillPidTests(ProcTestCase):
         for argv0 in ("claude", "python3 tools/test.py -u m", "chrome --user-data-dir=/somewhere/else"):
             proc = self.spawn(f'exec -a "{argv0}" sleep 120', argv0, cwd=self.tmp)
             ticks = ap.read_proc(proc.pid).start_ticks
-            done = cli("kill-pid", str(proc.pid), "--start-time", str(ticks), env=self.env)
+            elsewhere = dict(self.env, TMPDIR=os.path.join(self.tmp, "another-tmpdir"))  # the cwd is not under it
+            done = cli("kill-pid", str(proc.pid), "--start-time", str(ticks), env=elsewhere)
             self.assertEqual(done.returncode, 3, argv0)
             self.assertTrue(self.alive(proc), argv0)
 
