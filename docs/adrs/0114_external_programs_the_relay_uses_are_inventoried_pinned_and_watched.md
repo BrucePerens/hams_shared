@@ -37,9 +37,12 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
    with the SHA-256 the server reports checked on install. Stock builds of the radio modem programs are never
    installed; only our loopback-patched builds (release `tnc-loopback-v1` and its successors) with the
    corresponding source published beside them.
-5. **Enforcement (to-do).** A linter will scan the relay source and the installers for programs launched by a
-   literal name and fail when a name is missing from the tables here, and will fail when a pinned program is
-   absent from `dependency_watch.json`. Until it exists, review enforces points 1 and 2.
+5. **Enforcement.** `hams_shared/tools/check_external_programs_documented.py`, a step of `run_linters.py`, scans the relay
+   source (test code left out) and the installers for programs launched or detected by a literal name and fails when a
+   name is missing from the tables here; it fails when a table row that names an `owner/repo` is absent from
+   `dependency_watch.json` or not marked watched, and when a watch entry is absent here. It has no baseline. Programs
+   that an installer or script starts without detecting them first (`cp`, `tar`, `curl`, and so on) are not scanned;
+   review covers them.
 
 ## Inventory
 
@@ -50,8 +53,8 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
 | Pat (`la5nta/pat`) | Winlink client | Linux, Windows (macOS: not installable yet) | managed download from the hams.com mirror, SHA-256 checked | v1.0.1 | MIT | yes (release) |
 | Mercury (`Rhizomatica/mercury`, branch `mercuryv2`) | HF modem | Windows, macOS, Linux | loopback-patched build `tnc-loopback-v1`, mirrored | commit `9bb58799ef5ea5a8afaadb2441ea4806f14583b9` plus `mercury-loopback-bind.patch` | see source tree | yes (branch) |
 | ardopcf (`pflarue/ardop`, branch `develop`) | ARDOP modem | Windows, macOS, Linux | loopback-patched build `tnc-loopback-v1`, mirrored | commit `c1e11ef514ff0776fea74fb7bf7283909910af38` plus `ardopcf-loopback-bind.patch` | see source tree | yes (branch) |
-| Direwolf (`wb2osz/direwolf`) | packet TNC | Windows, macOS, Linux | loopback-patched build `tnc-loopback-v1`, mirrored | commit `eda1383f5fa9d8ba3cb27f99db1d2c79494404c9` plus `direwolf-loopback-bind.patch` | GPL-2.0+ | **no** |
-| ka9q-radio `radiod` (`ka9q/ka9q-radio`) | SDR front end of the shared receiver | Linux (Pi, servers) | installed by the operator at `/usr/local/sbin/radiod`; the relay ships `hams-radiod@.service` and an install script only | reviewed and fuzzed at commit `8c50dbbe9958c59a24e392fa1785501350e833f9` | GPL-3.0 | **no** |
+| Direwolf (`wb2osz/direwolf`) | packet TNC | Windows, macOS, Linux | loopback-patched build `tnc-loopback-v1`, mirrored | commit `eda1383f5fa9d8ba3cb27f99db1d2c79494404c9` plus `direwolf-loopback-bind.patch` | GPL-2.0+ | yes (branch `master`) |
+| ka9q-radio `radiod` (`ka9q/ka9q-radio`) | SDR front end of the shared receiver | Linux (Pi, servers) | installed by the operator at `/usr/local/sbin/radiod`; the relay ships `hams-radiod@.service` and an install script only | reviewed and fuzzed at commit `8c50dbbe9958c59a24e392fa1785501350e833f9` | GPL-3.0 | yes (branch `main`; held, see `dependency_watch.json`) |
 | `rigctl` / `rigctld` (Hamlib) | radio capability dump; network rig control in tests | all | with Hamlib | Debian 13 package 4.6.2-1; Windows static 4.7.2 | LGPL-2.1+ | yes (4.7.2) |
 
 ### Libraries outside the package managers that the shipped programs link
@@ -70,7 +73,7 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
 
 | Platform | Programs | Used for |
 |---|---|---|
-| Linux and Raspberry Pi | `amixer`, `arecord`, `pactl` (alsa-utils, PulseAudio or PipeWire); `tpm2_create`, `tpm2_createprimary`, `tpm2_load`, `tpm2_unseal`; `pkexec`; `id`; `modprobe`; `lsof`, `netstat`; `which`, `sh`; `nmcli`; `systemctl`, `loginctl`, `journalctl`; `udevadm`; `dmidecode`; `gpsd`/`gpspipe`; `chrony` with PPS; DKMS (the stock `ch341` driver); ModemManager (a udev rule keeps it off our radios); NetworkManager | audio devices and mixers, sealing secrets in the TPM, privileged actions, serial permissions, device discovery, loopback-bind verification, services and autostart, GPS and time |
+| Linux and Raspberry Pi | `amixer`, `arecord`, `pactl` (alsa-utils, PulseAudio or PipeWire); `tpm2_create`, `tpm2_createprimary`, `tpm2_load`, `tpm2_unseal`, `tpm2_hmac`, `tpm2_readpublic`; `pkexec`; `id`; `modprobe`; `lsof`, `netstat`; `which`, `sh`; `nmcli`; `ip`, `traceroute` (the check-in network report); `systemctl`, `loginctl`, `journalctl`; `udevadm`; `dmidecode`; `gpsd`/`gpspipe`; `chrony` with PPS; DKMS (the stock `ch341` driver); ModemManager (a udev rule keeps it off our radios); NetworkManager | audio devices and mixers, sealing secrets in the TPM, privileged actions, serial permissions, device discovery, loopback-bind verification, services and autostart, GPS and time |
 | Windows | PowerShell; `schtasks`; `sc.exe`; `certutil`; `reg`; com0com (detected, not installed); virtual audio cables (detected) | installer, autostart, certificates, machine identity, virtual serial ports and audio |
 | macOS | `launchctl`; `hdiutil`, `xar`, `cpio`, `gunzip`; `ioreg`; `system_profiler`; `pkgutil`; BlackHole (detected) | installer, autostart, unpacking downloaded tools, hardware identity |
 
@@ -95,12 +98,23 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
 | cloudflared | tunnel | 2026.10.7 (`binary_manifest.json`) | yes |
 | Odoo, PostgreSQL, Redis, RabbitMQ, Node, Go, Chrome or Chromium with Playwright | production and the test runners | see `hams_shared/tools/provision_build_host.sh`, `requirements-test.txt` and `docs/runbooks/TEST_RUNNERS.md` | pip-audit and package updates |
 
+### Tools the installers and release scripts detect (`command -v`, `Get-Command`)
+
+| Platform | Programs | Used for |
+|---|---|---|
+| Linux installers | `sudo`; `apt-get`, `dnf`, `pacman`; `ldd`, `ldconfig`; `gpg`; `chronyd`; `dkms`, `mokutil` | privilege, package managers of the three distribution families, finding missing shared libraries, checking the repository signing key, GPS time, building and signing the USB serial driver |
+| Release builds | `cargo`, `cargo-deb`, `cargo-generate-rpm`, `innoextract` | building the packages and checking the Windows installer's contents |
+
+## Discovery functions (launches whose program name is a variable)
+`find_pat_binary` (`winlink.rs`), `find_direwolf_binary` (`direwolf.rs`), `find_mercury_binary` (`mercury.rs`) and
+`find_ardopcf_binary` (`ardop.rs`) each locate one managed, pinned program from the first table and nothing else; the
+relay starts that path with `Command::new(<variable>)`. The enforcement linter requires all four to exist and to be
+named here, so a new discovery function (or a rename) is a change to this ADR.
+
 ## Known gaps (to-dos)
-- Direwolf and ka9q-radio are pinned but not in `dependency_watch.json`; add them.
 - PortAudio, hidapi, RADE, Transformers.js and the model files have no upstream check.
 - Inno Setup, MinGW-w64, wine and the container images are not pinned beyond what the release preflight
   prints; record the exact versions the next release uses.
-- The enforcement linter in decision point 5.
 - Pat is not installable on macOS; the mirror has no macOS build yet.
 
 ## Consequences

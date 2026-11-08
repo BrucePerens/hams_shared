@@ -59,6 +59,7 @@ STEPS_THAT_CANNOT_READ_PYTHON = {
     "check_doc_images",
     "check_binary_manifest_consistency",
     "check_night_shift_history",
+    "check_external_programs_documented",
     "eslint",
     # Test suites for code in other directories: their inputs are tools/, scripts/, ingest/ and devbox_tools/.
     "pytest tools/",

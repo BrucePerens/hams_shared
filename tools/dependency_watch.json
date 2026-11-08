@@ -54,5 +54,25 @@
     "pinned": "4.7.2",
     "pinned_via": "hams_com daemons/hams_local_relay/install_relay_runtime_deps.sh HAMLIB_VERSION/HAMLIB_SHA256 (source fallback for building mercury) and hams_com .github/workflows/build-relay.yml build-windows \"Cross-build hamlib for mingw-w64\" step HAMLIB_VERSION/HAMLIB_SHA256 (statically linked into the Windows binary, plus a native host build whose rigctl/rotctl --list build.rs bakes into its model tables); otherwise the system package (libhamlib-dev), also referenced by hamlib.rs",
     "notes": "The distro package is used when it provides every Hamlib 4.x call mercury makes (the install script compiles and links a probe to decide). Where it doesn't (Ubuntu 20.04 ships 3.3, Ubuntu 22.04's 4.3.1 lacks rigerror2), install_relay_runtime_deps.sh builds this pinned release from the checksum-verified release tarball as a static library inside its temporary build directory and links mercury against it (added 2026-09-14 after the ubuntu:20.04 CI leg failed with \"'RIG_CAPS_PORT_TYPE' undeclared\"). When bumping, update HAMLIB_VERSION and HAMLIB_SHA256 there too (sha256 from the release asset's digest: gh api repos/Hamlib/Hamlib/releases/tags/<version>). When bumping, also update build-relay.yml's build-windows step (same two constants): until 2026-09-15 that step downloaded 4.6.2 with no checksum and outside this watch, and baked its model tables from Ubuntu 24.04's libhamlib-utils 4.5.5 rather than the release it links. When bumping, confirm build.rs's fixed-width `rigctl --list` parser still fits the new release's output (the Windows leg's Build log prints \"baked N Hamlib rig model(s)\")."
+  },
+  "direwolf": {
+    "repo": "wb2osz/direwolf",
+    "mode": "branch",
+    "branch": "master",
+    "pinned": "eda1383f5fa9d8ba3cb27f99db1d2c79494404c9",
+    "pinned_via": "hams_com daemons/hams_local_relay/packaging/tnc_loopback_release/SOURCE.txt (the loopback-patched build tnc-loopback-v1 is made from exactly this commit); started by daemons/hams_local_relay/src/direwolf.rs find_direwolf_binary()",
+    "notes": "Added 2026-11-08 (ADR 0114 known gap; to-do external-programs-inventory-enforcement-and-watch-gaps). `gh api repos/wb2osz/direwolf/compare/eda1383f...master` on that day: identical, the pin is the tip of master."
+  },
+  "ka9q-radio": {
+    "repo": "ka9q/ka9q-radio",
+    "mode": "branch",
+    "branch": "main",
+    "pinned": "8c50dbbe9958c59a24e392fa1785501350e833f9",
+    "pinned_via": "hams_com docs/reviews/RADIOD_FUZZ_2026-10-30.md and docs/reviews/RADIOD_TRIAL_2026-10-30.md (the commit reviewed and fuzzed); installed by the operator, the relay ships packaging/linux/hams-radiod@.service and install_radiod_service.sh only",
+    "hold": {
+      "reason": "Added 2026-11-08 with upstream 4 commits ahead (2026-11-01 to 2026-11-02: src/radio.c +17, src/rtp.c +4, mDNS service name without the host name, Opus advertised for the default stream, debian changelog and docs/PREVIEW.txt). The pin is the commit that was reviewed and fuzzed; the new commits are small but a bump needs a fresh review and fuzz run of radio.c and rtp.c, which was not done in this change. Tracked in hams_com night_shift_todo (external programs inventory follow-ups).",
+      "until": "2026-12-08"
+    },
+    "notes": "Added 2026-11-08 (ADR 0114 known gap). `gh api repos/ka9q/ka9q-radio/compare/8c50dbbe...main`: ahead_by 4, files debian/changelog, docs/PREVIEW.txt, src/radio.c, src/rtp.c."
   }
 }

@@ -230,6 +230,8 @@ STEP_META = {
     "check_gdpr_erasure_uses_service_utility": {"suffixes": _PY},
     # night_shift_history.py check: the night_shift_history/ directory (one markdown file per entry) and its stub file.
     "check_night_shift_history": {"suffixes": frozenset({".md"})},
+    # ADR 0114 enforcement: the relay's Rust sources, its installers and release scripts, the ADR and dependency_watch.json.
+    "check_external_programs_documented": {"suffixes": frozenset({".rs", ".sh", ".ps1", ".md", ".json"})},
     "check_int_float_overflow": {"suffixes": _PY},
     "check_float_isfinite": {"suffixes": _PY},
     "check_untyped_utility_files": {
@@ -1948,6 +1950,14 @@ def main():
             "check",
             dir_path,
         ],
+    )
+
+    # check_external_programs_documented -- ADR 0114 decision 5: every external program the relay launches or detects is in
+    # the ADR's inventory, and every row that names an upstream repository is in dependency_watch.json and marked watched.
+    # Scans the whole checkout (a repository without the relay source, hams_open, has nothing to scan but the watch check).
+    _add(
+        "check_external_programs_documented",
+        [python_exec, os.path.join(dir_path, "tools", "check_external_programs_documented.py"), dir_path],
     )
 
     # 35. check_cargo_deny -- the Rust supply-chain/license/advisory scan
