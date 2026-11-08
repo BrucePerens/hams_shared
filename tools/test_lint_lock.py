@@ -209,7 +209,7 @@ class LoadGateTests(unittest.TestCase):
 
 class RunnerIntegrationTests(Base):
     def test_lock_status_and_help_document_the_options(self):
-        env = dict(os.environ, XDG_CACHE_HOME=self.cache)
+        env = dict(os.environ, XDG_CACHE_HOME=self.cache, HAMS_LINT_SLOTS="1")
         script = os.path.join(TOOLS, "run_linters.py")
         help_text = subprocess.run([sys.executable, script, "--help"], capture_output=True, text=True, env=env).stdout
         for flag in ("--lock-timeout", "--no-lock", "--lock-status", "--load-limit", "--load-timeout"):
@@ -363,6 +363,72 @@ class SlotTests(Base):
         busy, why = lint_lock.local_busy(self.env3, loadavg=lambda: 0.5, cpu_count=16, qdir=qdir)
         self.assertTrue(busy)
         self.assertIn("slots are busy", why)
+
+    def test_lock_status_lists_every_slot_on_a_multi_slot_machine(self):
+        self.start_holder("/wt/1\tcmd", slots="3")
+        self.start_holder("/wt/2\tcmd", slots="3")
+        lines = lint_lock.status_lines(self.env3)
+        self.assertTrue(any(line.startswith("slots: 3, 2 busy") for line in lines), lines)
+        self.assertEqual(len([line for line in lines if "/wt/" in line]), 2, lines)
+        self.assertFalse(any(line.startswith("slots:") for line in lint_lock.status_lines(self.env)), "one slot: the old format")
+
+    def test_slot_count_reads_the_setting_files_in_order(self):
+        """Tests [@ANCHOR: lint_lock:slots_files]"""
+        path = os.path.join(self.cache, "lint_slots")
+        env = {"HAMS_LINT_SLOTS_FILE": path, "HAMS_LINT_MACHINE": "mac1-vm"}
+        self.assertEqual(lint_lock.slots_files(env), [path], "the override names the only file")
+        self.assertEqual(lint_lock.slots_files({"HOME": "/h"})[-1], "/h/.config/hams-lint/slots")
+        self.assertEqual(lint_lock.slots_files({})[0], "/opt/hams/etc/lint_slots")
+        self.assertEqual(lint_lock.slot_count(env), 1, "no file: the machine's inventory entry (mac1-vm: one slot)")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("3\n# comment\n")
+        self.assertEqual(lint_lock.slot_count(env), 3)
+        self.assertEqual(lint_lock.slot_count(dict(env, HAMS_LINT_SLOTS="5")), 5, "the environment wins over the file")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("lots\n")
+        self.assertEqual(lint_lock.slot_count(dict(env, HAMS_LINT_MACHINE="devbox")), 1, "a typo is one slot, not the inventory's 4")
+
+    def test_jobs_are_shared_out_so_all_slots_together_stay_at_half_the_cpus(self):
+        """Tests [@ANCHOR: lint_lock:jobs_per_slot]"""
+        self.assertEqual(lint_lock.jobs_per_slot(32, 1), 16)
+        self.assertEqual(lint_lock.jobs_per_slot(32, 4), 4)
+        self.assertEqual(lint_lock.jobs_per_slot(8, 4), 2, "never below 2 with several slots")
+        self.assertEqual(lint_lock.jobs_per_slot(1, 1), 1)
+
+    def test_cpu_stall_reads_psi_some_avg10_and_the_gate_prefers_it_to_the_load_average(self):
+        """Tests [@ANCHOR: lint_lock:cpu_stall] [@ANCHOR: lint_lock:wait_for_stall] [@ANCHOR: lint_lock:gate]"""
+        psi = os.path.join(self.cache, "cpu")
+        with open(psi, "w", encoding="utf-8") as handle:
+            handle.write("some avg10=18.82 avg60=21.11 avg300=16.17 total=505641448\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n")
+        self.assertEqual(lint_lock.cpu_stall(psi), 18.82)
+        self.assertIsNone(lint_lock.cpu_stall(os.path.join(self.cache, "missing")))
+        with open(psi, "w", encoding="utf-8") as handle:
+            handle.write("some avg10=nan\n")
+        self.assertIsNone(lint_lock.cpu_stall(psi))
+        lines = []
+        # The load average is 86 on a box whose stall is 18 %: the gate starts the run.
+        self.assertTrue(lint_lock.gate({}, out=lines.append, stall=lambda: 18.0))
+        values = iter([80.0, 70.0, 30.0])
+        slept = []
+        self.assertTrue(lint_lock.wait_for_stall(50.0, 100, environ={}, stall=lambda: next(values), sleep=slept.append, out=lines.append))
+        self.assertEqual(len(slept), 2)
+        clock = iter(range(0, 1000, 60))
+        self.assertFalse(lint_lock.wait_for_stall(50.0, 100, environ={}, stall=lambda: 90.0, sleep=lambda s: None,
+                                                  now=lambda: next(clock), out=lines.append))
+        self.assertTrue(any("CPU stall" in line for line in lines))
+        self.assertTrue(lint_lock.wait_for_stall(50.0, 1, environ={}, stall=lambda: None), "unmeasurable: nothing to gate on")
+        self.assertTrue(lint_lock.wait_for_stall(50.0, 1, environ={"HAMS_SKIP_CI_LOAD_GATE": "1"}, stall=lambda: 99.0, out=lines.append))
+        # An explicit load limit keeps the load-average gate (the tests above and `--load-limit` rely on it).
+        calls = []
+        real = lint_lock.wait_for_load
+        lint_lock.wait_for_load = lambda *a, **k: calls.append(a) or True
+        self.addCleanup(setattr, lint_lock, "wait_for_load", real)
+        self.assertTrue(lint_lock.gate({"HAMS_LINT_LOAD_LIMIT": "10"}, out=lines.append, stall=lambda: 99.0))
+        self.assertTrue(lint_lock.gate({}, load_limit_override=5.0, out=lines.append, stall=lambda: 99.0))
+        self.assertTrue(lint_lock.gate({}, out=lines.append, stall=lambda: None), "no PSI: the load average")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(lint_lock.stall_limit({"HAMS_LINT_STALL_LIMIT": "30"}), 30.0)
+        self.assertEqual(lint_lock.stall_limit({"HAMS_LINT_STALL_LIMIT": "x"}), lint_lock.DEFAULT_STALL_LIMIT)
 
     def test_load_alone_does_not_make_a_machine_with_free_slots_busy_but_does_with_one_slot(self):
         busy, why = lint_lock.local_busy(self.env3, loadavg=lambda: 90.0, cpu_count=16)

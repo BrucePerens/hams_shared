@@ -81,15 +81,49 @@ SLOT_NICE = 10
 MACHINES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lint_machines.json")
 
 
+SLOTS_FILE = "/opt/hams/etc/lint_slots"
+
+
+# [@ANCHOR: lint_lock:slots_files]
+def slots_files(environ=None):
+    """The setting files `slot_count` reads, first match wins: `$HAMS_LINT_SLOTS_FILE` alone when set (tests), else the machine-wide
+    `/opt/hams/etc/lint_slots` (like test.py's `test_slots`), then the user's `~/.config/hams-lint/slots`. The first line holds the number.
+    Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    if environ.get("HAMS_LINT_SLOTS_FILE"):
+        return [environ["HAMS_LINT_SLOTS_FILE"]]
+    home = environ.get("HOME") or os.path.expanduser("~")
+    return [SLOTS_FILE, os.path.join(home, ".config", "hams-lint", "slots")]
+
+
+# [@ANCHOR: lint_lock:jobs_per_slot]
+def jobs_per_slot(cpu_count, slots):
+    """Parallel steps (`-j`) one run starts on a machine with `slots` lint slots: half the CPUs (the default of a lone run) divided by the
+    slots, at least 2 when there are several slots, so that all slots together do not run more workers than half the CPUs. 32 CPUs
+    (16 cores) over 4 slots is 4 each. Full entry: tools/README.md."""
+    half = max(1, int(cpu_count) // 2)
+    return half if slots <= 1 else max(2, half // slots)
+
+
 # [@ANCHOR: lint_lock:slot_count]
 def slot_count(environ=None, machines_file=None):
-    """How many heavy lint runs this machine lets go at once: HAMS_LINT_SLOTS, else `lint_slots` of this machine's entry in
+    """How many heavy lint runs this machine lets go at once: HAMS_LINT_SLOTS, else the first line of the setting file (`slots_files`), else `lint_slots` of this machine's entry in
     lint_machines.json (the entry lint_cache.machine_name picks), else 1. A value that is not a whole number from 1 to
     runner_slots.MAX_SLOTS is ignored (a typo must not stop the lint, and one slot is the safe answer). Full entry: tools/README.md."""
     environ = os.environ if environ is None else environ
     if environ.get(SLOTS_ENV):
         try:
             return runner_slots.parse_slot_count(environ[SLOTS_ENV], SLOTS_ENV)
+        except runner_slots.SlotConfigError:
+            return 1
+    for path in slots_files(environ):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                first_line = handle.readline()
+        except OSError:
+            continue  # no such file (the machine has not opted in this way) or unreadable: the next source
+        try:
+            return runner_slots.parse_slot_count(first_line, path)
         except runner_slots.SlotConfigError:
             return 1
     try:
@@ -424,7 +458,7 @@ def claimed(machines, environ=None):
 def status_lines(environ=None):
     """For `--lock-status`: the holder and the queue."""
     qdir = queue_dir(environ)
-    return lock_queue.describe_queue(qdir)
+    return lock_queue.describe_queue(qdir, slots=slot_count(environ))
 
 
 def load_limit(environ=None, cpu_count=None, override=None):
@@ -465,6 +499,35 @@ def load_timeout(environ=None, override=None):
     return DEFAULT_LOAD_TIMEOUT_SECONDS
 
 
+PSI_CPU = "/proc/pressure/cpu"
+DEFAULT_STALL_LIMIT = 50.0
+
+
+# [@ANCHOR: lint_lock:cpu_stall]
+def cpu_stall(path=PSI_CPU):
+    """The measured CPU stall of this machine: `some avg10` of /proc/pressure/cpu, the percentage of the last ten seconds in which at
+    least one runnable task waited for a CPU. None when the kernel does not provide it. Unlike the load average (86 on the 32-thread dev box
+    at 18 % stall, 2026-11-08: it counts every runnable or disk-waiting task, niced cargo builds included) it says whether more work would
+    only wait. Full entry: tools/README.md."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("some "):
+                    for field in line.split()[1:]:
+                        if field.startswith("avg10="):
+                            value = float(field[len("avg10="):])
+                            return value if math.isfinite(value) else None
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def stall_limit(environ=None):
+    """HAMS_LINT_STALL_LIMIT (percent, default 50): the CPU stall above which a heavy run waits to start."""
+    environ = os.environ if environ is None else environ
+    return _finite(environ.get("HAMS_LINT_STALL_LIMIT"), DEFAULT_STALL_LIMIT)
+
+
 def wait_for_load(limit, timeout, environ=None, loadavg=None, sleep=time.sleep, now=time.monotonic, out=print):
     """Block until the 1-minute load average is at or below `limit`. True when the run may start,
     False when `timeout` seconds passed first. HAMS_SKIP_CI_LOAD_GATE=1 skips the wait."""
@@ -502,6 +565,44 @@ def wait_for_load(limit, timeout, environ=None, loadavg=None, sleep=time.sleep, 
     return False
 
 
+# [@ANCHOR: lint_lock:wait_for_stall]
+def wait_for_stall(limit, timeout, environ=None, stall=cpu_stall, sleep=time.sleep, now=time.monotonic, out=print):
+    """Block until the CPU stall (`cpu_stall`, percent) is at or below `limit`. True when the run may start, False when `timeout`
+    seconds passed first; True at once when HAMS_SKIP_CI_LOAD_GATE=1 or the stall cannot be measured. Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    if environ.get("HAMS_SKIP_CI_LOAD_GATE") == "1":
+        out("[*] Skipping the lint load gate (HAMS_SKIP_CI_LOAD_GATE=1).")
+        return True
+    current = stall()
+    if current is None or current <= limit:
+        return True
+    deadline = now() + timeout
+    out("[*] The CPU stall is %.0f %% (some runnable task waited for a CPU), above the lint limit of %.0f %%: waiting up to %d s for it to "
+        "fall (HAMS_LINT_STALL_LIMIT changes it, HAMS_SKIP_CI_LOAD_GATE=1 skips this)." % (current, limit, int(timeout)))
+    while now() < deadline:
+        sleep(min(POLL_SECONDS, max(0.0, deadline - now())))
+        current = stall()
+        if current is None or current <= limit:
+            out("[*] CPU stall %s %%: starting." % ("%.0f" % current if current is not None else "unknown"))
+            return True
+    out("ERROR: the CPU stall is still %.0f %% (limit %.0f %%) after %d s. Not starting a heavy lint run: its timing tests would fail "
+        "for contention, not for code. Run again when the box is quieter, raise --load-timeout, or set HAMS_SKIP_CI_LOAD_GATE=1."
+        % (current, limit, int(timeout)))
+    return False
+
+
+# [@ANCHOR: lint_lock:gate]
+def gate(environ, load_limit_override=None, load_timeout_override=None, out=print, stall=cpu_stall):
+    """The load gate of a heavy lint run: the measured CPU stall (`wait_for_stall`) when the kernel reports it and nobody set a load
+    limit explicitly (`--load-limit`, HAMS_LINT_LOAD_LIMIT, HAMS_CI_LOAD_GATE_RATIO), else the 1-minute load average against
+    `load_limit`, as before. True when the run may start. Full entry: tools/README.md."""
+    explicit = (load_limit_override is not None or environ.get("HAMS_LINT_LOAD_LIMIT") or environ.get("HAMS_CI_LOAD_GATE_RATIO"))
+    timeout = load_timeout(environ, load_timeout_override)
+    if not explicit and stall() is not None:
+        return wait_for_stall(stall_limit(environ), timeout, environ=environ, stall=stall, out=out)
+    return wait_for_load(load_limit(environ, override=load_limit_override), timeout, environ=environ, out=out)
+
+
 def begin_heavy_run(environ, pending_names, durations, worktree, command, lock_timeout=None,
                     load_limit_override=None, load_timeout_override=None, out=print, residue=False):
     """Everything run_linters.py does before it starts steps. Returns (ok, RunLock or None); on
@@ -513,8 +614,7 @@ def begin_heavy_run(environ, pending_names, durations, worktree, command, lock_t
     if take and residue and is_cheap(pending_names, durations, residue_seconds(environ)):
         out("[*] lint lock not needed: the steps left here total at most %g s (the rest of the run is on other machines)"
             % residue_seconds(environ))
-        if not wait_for_load(load_limit(environ, override=load_limit_override), load_timeout(environ, load_timeout_override),
-                             environ=environ, out=out):
+        if not gate(environ, load_limit_override, load_timeout_override, out=out):
             return False, None
         return True, None
     if not take:
@@ -525,8 +625,7 @@ def begin_heavy_run(environ, pending_names, durations, worktree, command, lock_t
     if not lock.acquire(describe_info(worktree, command), timeout=lock_timeout, out=out):
         out("ERROR: gave up waiting for the lint run lock after %g s (%s)." % (lock_timeout, lock.path))
         return False, None
-    limit = load_limit(environ, override=load_limit_override)
-    if not wait_for_load(limit, load_timeout(environ, load_timeout_override), environ=environ, out=out):
+    if not gate(environ, load_limit_override, load_timeout_override, out=out):
         lock.release()
         return False, None
     return True, lock
