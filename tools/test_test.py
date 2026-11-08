@@ -1596,6 +1596,40 @@ class HaltPreflightTests(unittest.TestCase):
         self.assertEqual(last_two, ["❌ PRE-FLIGHT FAILED: lint findings.", "   NEXT: fix them."])
 
 
+class AddTestCompanionsTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:add_test_companions]
+
+    `test.py -u ham_events` installed only ham_events' own dependency closure, so 12 to 17 tests that look up
+    ham_communications_consent's service account errored locally (to-do 3e7a9c15); the remote runner added the module."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        self.tree = os.path.join(self.tmp, "ws", "hams_com")
+        os.makedirs(os.path.join(self.tree, "devbox_tools"))
+        os.makedirs(os.path.join(self.tmp, "ws", "hams_open"))
+
+    def _gate(self, body):
+        with open(os.path.join(self.tree, "devbox_tools", "asset_gate.py"), "w") as handle:
+            handle.write(body)
+
+    def test_the_companions_of_a_tested_module_are_installed_after_its_own_install_list(self):
+        self._gate("def test_companions(module, trees):\n    return ['consent', 'base_mod'] if module == 'events' else []\n")
+        modules, note = _test_runner.add_test_companions(["events", "base_mod"], ["events"], self.tree, environ={})
+        self.assertEqual(modules, ["events", "base_mod", "consent"])
+        self.assertIn("consent", note)
+        self.assertNotIn("base_mod", note)
+
+    def test_a_module_with_a_colon_test_selector_is_looked_up_by_its_module_name(self):
+        self._gate("def test_companions(module, trees):\n    return ['consent'] if module == 'events' else []\n")
+        modules, _note = _test_runner.add_test_companions(["events"], ["events:TestX.test_y"], self.tree, environ={})
+        self.assertEqual(modules, ["events", "consent"])
+
+    def test_without_an_asset_gate_nothing_is_added(self):
+        modules, note = _test_runner.add_test_companions(["events"], ["events"], self.tree, environ={})
+        self.assertEqual((modules, note), (["events"], ""))
+
+
 class AnchorScanSiblingDirTests(unittest.TestCase):
     """Tests [@ANCHOR: test:anchor_scan_sibling_dir]
 
