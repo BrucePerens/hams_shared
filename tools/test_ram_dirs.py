@@ -33,6 +33,7 @@ Tests [@ANCHOR: ram_dirs:tree_bytes]
 Tests [@ANCHOR: ram_dirs:stop_group]
 Tests [@ANCHOR: ram_dirs:status_lines]
 Tests [@ANCHOR: ram_dirs:main]
+Tests [@ANCHOR: ram_dirs:die_with_parent]
 """
 
 import os
@@ -105,7 +106,7 @@ class HelperTest(RamTestCase):
         pol = ram_dirs.RamPolicy(root="/dev/shm")
         self.assertTrue(ram_dirs.under_ram_root("/dev/shm/hams-lint-cargo/x", pol))
         self.assertFalse(ram_dirs.under_ram_root("/dev/shmx/y", pol))
-        self.assertFalse(ram_dirs.under_ram_root("/home/u/.cache/z", pol))
+        self.assertFalse(ram_dirs.under_ram_root("/var/cache/z", pol))
 
     # Tests [@ANCHOR: ram_dirs:check_job_name]
     def test_a_good_name_is_returned_unchanged(self):
@@ -507,6 +508,7 @@ class RunJobTest(RamTestCase):
         self.assertFalse(os.path.exists(result.target))
 
     # Tests [@ANCHOR: ram_dirs:run_job]
+    # Tests [@ANCHOR: ram_dirs:die_with_parent]
     # Tests [@ANCHOR: ram_dirs:sweep]
     def test_a_killed_runner_leaves_a_directory_that_the_next_sweep_removes(self):
         """The crash case: `run` itself is SIGKILLed (no trap can run). Its directory stays, and the sweep finds it dead."""
@@ -525,7 +527,11 @@ class RunJobTest(RamTestCase):
             orphan = int(handle.read())
         runner.kill()
         runner.wait()
-        os.kill(orphan, signal.SIGKILL)
+        for _ in range(100):  # the command dies with its runner (PR_SET_PDEATHSIG)
+            if ram_dirs._start_ticks(orphan) is None:
+                break
+            time.sleep(0.1)
+        self.assertIsNone(ram_dirs._start_ticks(orphan))
         self.assertEqual(ram_dirs.owner_state(target), "dead")
         self.assertEqual(ram_dirs.sweep(environ=self.environ, say=lambda text: None), ["hams-cargo-target-crash"])
         self.assertFalse(os.path.exists(target))

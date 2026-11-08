@@ -763,6 +763,11 @@ Purpose: what `run_job` returns. A dataclass in `ram_dirs.py`, created once per 
 | `elapsed` | float | Seconds the command ran. |
 | `block_write_bytes` | int | Bytes the command and its children caused to be written to block devices (`getrusage` `ru_oublock` times 512): an upper bound that counts data later deleted unwritten; near 0 for a tmpfs. |
 
+### `[@ANCHOR: ram_dirs:die_with_parent]` `_die_with_parent()`
+
+Purpose: the child-side `preexec_fn` of `run_job`. Asks the kernel (`prctl(PR_SET_PDEATHSIG, SIGTERM)`) to send the command SIGTERM when the runner dies, so a runner killed with SIGKILL (which cannot clean up) does not leave a build
+writing into a directory the next `sweep` removes as dead. No arguments, no return value; a platform without `prctl` silently skips it. Acts on the command's first process only; its descendants end when it does.
+
 ### `[@ANCHOR: ram_dirs:stop_group]` `_stop_group(child, grace)`
 
 Purpose: ends a job's whole process group. Sends SIGTERM to `child`'s process group (the child was started in its own session) and waits up to `grace` seconds, then SIGKILL and waits 5 more. Returns when the child is gone or the group no longer exists. No return value; never raises.

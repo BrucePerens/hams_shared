@@ -33,7 +33,9 @@ Full documentation of every function: tools/README.md "Build and test scratch di
 
 import argparse
 import dataclasses
+import ctypes
 import json
+import math
 import os
 import re
 import resource
@@ -90,7 +92,7 @@ def policy(environ=None):
             value = float(environ.get(name, ""))
         except ValueError:
             return default
-        return value if value == value and 0 <= value < float("inf") else default
+        return value if math.isfinite(value) and value >= 0 else default
 
     return RamPolicy(
         mode=mode,
@@ -468,7 +470,7 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
     child = None
     previous = {}
     try:
-        child = popen(argv, env=environ, start_new_session=True)
+        child = popen(argv, env=environ, start_new_session=True, preexec_fn=_die_with_parent)
 
         def forward(signum, _frame):
             try:
@@ -507,6 +509,16 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
         f" ({'RAM' if placed.in_ram else 'disk'}), block writes {blocks / GB:.2f} GB, "
         + ("kept" if keep else "removed"))
     return result
+
+
+# [@ANCHOR: ram_dirs:die_with_parent]
+def _die_with_parent():
+    """Child-side hook of `run_job`: SIGTERM this process when the runner dies, so a SIGKILLed runner does not leave a build
+    writing into a directory the next sweep (rightly) calls dead."""
+    try:
+        ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+    except (OSError, AttributeError):
+        pass
 
 
 # [@ANCHOR: ram_dirs:stop_group]
