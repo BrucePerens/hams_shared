@@ -2398,3 +2398,65 @@ See also: tests `EslintNodeEnvTests` in `test_run_linters.py` (`# Tests [@ANCHOR
 out-of-memory cause from `daemons/*/target` is handled by `write_eslint_project()`, whose generated tsconfig now also carries
 `exclude` globs (`<repo>/**/target/**`, `<repo>/**/node_modules/**`, absolute because tsconfig patterns are relative to the
 generated file); test `test_the_generated_project_excludes_cargo_target_and_node_modules`.
+
+## External programs of the relay are inventoried, pinned and watched (`check_external_programs_documented.py`, ADR 0114)
+
+`check_external_programs_documented.py <repo_root>` is the linter step of the same name in `run_linters.py`. It reads the tables of
+`docs/adrs/0114_*.md` and `tools/dependency_watch.json` and fails when the relay's source, its installers or the watch disagree with the ADR (the list
+of checks is in the module docstring). No baseline file exists; findings go to zero and stay there. Exit 0 passes, 1 fails with one line per finding and a
+`FIX:` line, 2 is a usage error or a missing ADR. A repository without `daemons/hams_local_relay` (hams_open) is checked only for the watch rules.
+Limits: a program an installer starts without first testing for it (`cp`, `tar`, `curl`) is not scanned; a program started through a variable is covered
+only through the discovery functions (`DISCOVERY_FUNCTIONS`, constant, dict of function name to relay-relative file). Tests: `test_check_external_programs_documented.py`.
+
+### `[@ANCHOR: ext_programs:code_mask]` `code_mask(text)`
+
+Purpose: lets the other functions look for braces and keywords in Rust source without being fooled by comments and literals. Argument `text` (str): Rust source,
+borrowed. Returns a str of the same length in which comments (line, and nested block) and the inside of string, raw string and character literals are
+replaced by spaces; newlines stay, so offsets and line numbers match `text`. A lifetime (`'a`) is not a character literal. Never raises; an unterminated
+literal blanks to the end of the text. Pure, no files.
+
+### `[@ANCHOR: ext_programs:test_spans]` `test_spans(masked)`
+
+Purpose: finds the code that exists only in test builds. Argument `masked` (str): the result of `code_mask`. Returns a list of `(start, end)` offsets, one per
+`#[cfg(test)]` (or `#[cfg(all(test, ...))]`) attribute: from the attribute to the end of the item after it (the closing brace of a module, function or
+impl, or the `;` of `mod name;`), with other attributes between skipped. Never raises. Pure.
+
+### `[@ANCHOR: ext_programs:rust_launches]` `rust_launches(text)`
+
+Purpose: the programs a Rust file starts in production. Argument `text` (str): the file. Returns `(literal_names, dynamic_count)`: a `set` of the names in
+`Command::new("name")` (also as `std::process::Command::new`) and the number of `Command::new(<expression>)` calls, ignoring comments and the spans from
+`test_spans`. A name containing a backslash is not recognised. Pure, never raises.
+
+### `[@ANCHOR: ext_programs:script_dependencies]` `script_dependencies(text, powershell=False)`
+
+Purpose: the programs an installer or release script depends on. Arguments: `text` (str) the script; `powershell` (bool, default False) selects
+`Get-Command name` instead of `command -v name`. Returns a `set` of names; lines starting with `#` are ignored. Pure, never raises.
+
+### `[@ANCHOR: ext_programs:adr_tables]` `adr_tables(adr_text)`
+
+Purpose: reads the ADR's markdown tables. Argument `adr_text` (str). Returns a list of `(header_cells, rows)`; each row is a list of stripped cell strings;
+separator rows (`|---|`) are dropped; a table ends at the first line that does not start with `|`. Pure.
+
+### `[@ANCHOR: ext_programs:documented_names]` `documented_names(adr_text)`
+
+Purpose: the set of program names the ADR names. Argument `adr_text` (str). Returns a `set` of lower-case str: each word inside backticks of any table cell
+(split at whitespace, `/`, `,` and `;`, a trailing `.exe` removed) and each word of the first cell of every row (so `Pat` counts as `pat`). Pure.
+
+### `[@ANCHOR: ext_programs:watch_findings]` `watch_findings(adr_text, watch)`
+
+Purpose: keeps the ADR and the weekly watch (`check_dependency_releases.py`) in step. Arguments: `adr_text` (str); `watch` (dict) the parsed
+`dependency_watch.json`. Returns a list of finding strings: a table row that has a `Watched` column and a backticked `owner/repo` in its first cell
+needs that repo in `watch` and a `Watched` cell starting with `yes` (bold or underscore marks ignored); each `watch` entry with a `repo` must appear in the
+ADR by repo or by its key as a documented name. Pure.
+
+### `[@ANCHOR: ext_programs:find_findings]` `find_findings(repo_root, adr_path, watch_path)`
+
+Purpose: the whole check. Arguments: `repo_root` (str) the checkout; `adr_path` (str) the ADR file; `watch_path` (str) the watch JSON. Returns a list of finding
+strings, empty when all agree. Reads `src/**/*.rs` of the relay (not `vendor`, `target`, test files named `*_test(s).rs`, `tests.rs`, `test_*.rs`, or under a
+`tests` directory), the relay's `install_*.sh`, `packaging/**/*.sh`, `postinst`, `postrm`, `tools/*.sh` (not `test_*`), and `packaging/install_windows.ps1`.
+Raises `OSError` or `json.JSONDecodeError` when the ADR or the watch file cannot be read. Reads files only; no network.
+
+### `[@ANCHOR: ext_programs:main]` `main(argv=None)`
+
+Purpose: the command line. Argument `argv` (list of str, default `sys.argv[1:]`): exactly one item, the repository root. Returns 0 when there are no findings, 1
+after printing them, 2 for a wrong argument count or when no `docs/adrs/0114_*.md` is found beside `tools`.
