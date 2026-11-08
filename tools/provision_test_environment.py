@@ -14,7 +14,9 @@ PostgreSQL):
 4. apt: the MANIFEST "apt_packages" (minus odoo) plus MANIFEST "test_environment_apt_packages", pgvector;
    pip: RUNTIME_PIP_PACKAGES and TEST_PIP_PACKAGES, each only when missing;
 5. Odoo 19 as a Debian package: nightly.odoo.com where it is reachable, otherwise built from github.com/odoo/odoo;
-6. kopia (the MANIFEST's pinned release), cargo-deny, the Playwright headless Chromium, `npm ci` in hams_shared;
+6. kopia (the MANIFEST's pinned release), cargo-deny, the Playwright headless Chromium, `npm ci` in hams_shared, and
+   the browser ML assets under /var/lib/odoo/hams_ml_assets, made by production's own provisioning script
+   (hams_com ham_shack/tools/provision_ml_assets.py) so ham_shack's real-route tests find what production serves;
 7. PostgreSQL running (systemctl, or pg_ctlcluster without systemd) with the odoo and runner roles and an empty
    hams_test database; Redis and RabbitMQ enabled where systemd runs them (test.py starts its own otherwise);
 8. what `--test` provides and a HAMS_ISOLATED_NS=1 run does not (host_requirements.py): the hamsd_* accounts, the
@@ -63,6 +65,9 @@ ODOO_DIR = "/opt/odoo19"
 ODOO_KEY_URL = "https://nightly.odoo.com/odoo.key"
 # The host `playwright install` downloads its browsers from (refused by a cloud session's proxy).
 PLAYWRIGHT_CDN_URL = "https://cdn.playwright.dev/"
+ML_ASSET_ROOT = "/var/lib/odoo/hams_ml_assets"  # the root ham_shack/controllers/offline.py serves from
+ML_ASSET_SCRIPT = os.path.join("ham_shack", "tools", "provision_ml_assets.py")
+ML_ASSET_HOSTS = ("https://registry.npmjs.org/", "https://huggingface.co/")  # what that script downloads from
 LOCK_PATH = "/var/lib/hams-test-environment.lock"
 ODOO_SOURCE_LIST = "/etc/apt/sources.list.d/odoo.list"
 # Building the Odoo package from its source tree (debian/ ships in it).
@@ -603,6 +608,36 @@ def provision_user_tools(layout, run, as_user, home, report, reachable=url_reach
         report.changed("npm ci in hams_shared")
 
 
+# [@ANCHOR: provision_test_environment:provision_ml_assets]
+def provision_ml_assets(layout, run, report, plan=False, reachable=url_reachable, manifest_exists=os.path.isfile):
+    """The browser ML assets a test host serves, made the way production makes them: the root /var/lib/odoo/hams_ml_assets
+    owned by `odoo`, then hams_com's own `ham_shack/tools/provision_ml_assets.py` run as `odoo` (nice 10) when the root has
+    no `manifest.json` (the script writes it last, so a half-finished run is repeated), then `--verify-relay-pins`. No
+    test-only file or route: ham_shack's TestMlAssetsRoute serves this real root. Unreachable download hosts or a hams_com
+    checkout without the script are a reported skip (the two route tests then fail on that host). Network: npm and
+    HuggingFace, once, about 1.8 GB. Raises CalledProcessError."""
+    script = os.path.join(layout["hams_com"], ML_ASSET_SCRIPT)
+    manifest = os.path.join(ML_ASSET_ROOT, "manifest.json")
+    if manifest_exists(manifest):
+        return
+    if plan:
+        print(f"PLAN {ML_ASSET_ROOT} owned by odoo, then {script} as odoo and --verify-relay-pins", flush=True)
+        return
+    if not os.path.isfile(script):
+        report.skip(f"browser ML assets: {script} does not exist; ham_shack's TestMlAssetsRoute fails on this host")
+        return
+    down = [host for host in ML_ASSET_HOSTS if not reachable(host)]
+    if down:
+        report.skip(f"browser ML assets: {', '.join(down)} unreachable from this host; ham_shack's TestMlAssetsRoute "
+                    "fails here")
+        return
+    as_odoo = as_user_command("odoo", "/var/lib/odoo")
+    run(["install", "-d", "-o", "odoo", "-g", "odoo", ML_ASSET_ROOT])
+    run(as_odoo(["nice", "-n", "10", "python3", script]))
+    run(as_odoo(["python3", script, "--verify-relay-pins"]))
+    report.changed(f"provisioned the browser ML assets under {ML_ASSET_ROOT}")
+
+
 # [@ANCHOR: provision_test_environment:host_alias_line]
 def host_alias_line(manifest):
     """The `127.0.0.1 postgres redis ...` line of the MANIFEST's test-environment /etc/hosts template: the service
@@ -951,6 +986,7 @@ def finish(state, run, env_vars, os_id, self_check=True, plan=False):
         provision_database(run, runner_user, report)
     provision_test_host_requirements(run, report, plan)
     provision_user_tools(layout, run, as_user, home, report)
+    provision_ml_assets(layout, run, report, plan)
     values = provision_profile(layout, env_vars, home, runner_user, report, plan)
     report.note(f"{len(report.changes)} change(s) to this host; {len(report.skipped)} step(s) skipped")
     for text in report.skipped:

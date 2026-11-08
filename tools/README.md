@@ -2209,6 +2209,16 @@ has no `chromium_headless_shell-*`, reported as a skipped step (with the tests t
 is missing. `home` (str) is the runner's home. Network: crates.io, the Playwright CDN, npm. Raises
 `CalledProcessError`. Tests: `KopiaAndUserToolTests`.
 
+### `[@ANCHOR: provision_test_environment:provision_ml_assets]` `provision_ml_assets(layout, run, report, plan=False, reachable=url_reachable, manifest_exists=os.path.isfile)`
+
+Purpose: step 6, the browser ML assets `ham_shack/controllers/offline.py` serves from `/var/lib/odoo/hams_ml_assets`, which
+production provisions by hand and a test host never had (`TestMlAssetsRoute` answered 404 for `manifest.json`). Does nothing
+when the root has a `manifest.json` (the script writes it last, so an interrupted run is repeated). Otherwise creates the root
+owned by `odoo`, runs `<hams_com>/ham_shack/tools/provision_ml_assets.py` as `odoo` under `nice -n 10`, then its
+`--verify-relay-pins`: the real files, no test-only route or placeholder. A missing script, or an unreachable npm or HuggingFace,
+is a reported skip. `plan` prints and changes nothing. Network: registry.npmjs.org and huggingface.co, about 1.8 GB the first
+time. Raises `CalledProcessError`. Tests: `MlAssetsTests`.
+
 ### `[@ANCHOR: provision_test_environment:offline_clusters]` `offline_clusters(pg_lsclusters_output)`
 
 Returns `[(version, cluster)]` (str, str) of the lines of `pg_lsclusters -h` whose status column is not `online`.
