@@ -10,8 +10,10 @@ WHILE a run is in progress join the NEXT run, which then covers all of their bra
 
   * Per machine, per repository and per kind ("lint", "test") there is at most one RUNNING batch and
     one FORMING batch, kept in one JSON state file guarded by an flock (`locked`).
-  * A request with nothing running seals a batch of its own and runs at once (no added latency).
-  * A request that arrives while a batch runs joins the forming batch (`join`); when the running batch
+  * A request with a free running slot seals a batch of its own and runs at once (no added latency). The
+    number of running slots is `caps["max_running"]` (HAMS_BATCH_MAX_RUNNING, default 1; the test queue passes
+    the machine's test slot count, so a batch starts when a slot is free even while another batch runs).
+  * A request that arrives while every running slot is busy joins the forming batch (`join`); when a running batch
     ends, the OLDEST live member of the forming batch becomes the leader, seals it (`seal`) and runs it.
   * A batch is capped by number of branches and by an estimated duration (`join` returns None when
     the forming batch is full; the caller waits and tries again).
@@ -76,12 +78,27 @@ def make_member(branch, tip, scope=(), solo=False, info="", pid=None, start=None
 
 
 # [@ANCHOR: batch_queue:BatchState]
-# The state file: {"version", "next_id", "forming": Batch|None, "running": Batch|None}.
+# The state file: {"version", "next_id", "forming": Batch|None, "running": Batch|None, "running_more": [Batch]}.
+# "running" is the first running batch and "running_more" (absent in a file written before concurrent batches) the others, so a
+# leader of an older version that only knows "running" still reads a state file it shares with this one.
 # A forming Batch is {"id", "members", "solo", "created"}; a running one adds {"runner": {"pid","start"},
 # "started", "log"}. See docs/runbooks/LINT_TEST_BATCHING.md.
 def empty_state():
     """A state with nothing forming and nothing running."""
-    return {"version": STATE_VERSION, "next_id": 1, "forming": None, "running": None}
+    return {"version": STATE_VERSION, "next_id": 1, "forming": None, "running": None, "running_more": []}
+
+
+# [@ANCHOR: batch_queue:running_batches]
+def running_batches(state):
+    """Every running batch of `state`, oldest first: ``state["running"]`` then ``state["running_more"]``."""
+    first = state.get("running")
+    return ([first] if first else []) + [b for b in state.get("running_more") or [] if b]
+
+
+def _set_running(state, batches):
+    """Store `batches` (a list, oldest first) back as ``running`` plus ``running_more``."""
+    state["running"] = batches[0] if batches else None
+    state["running_more"] = list(batches[1:])
 
 
 def _cache_base(environ):
@@ -157,17 +174,21 @@ def prune(state, live=lock_queue.is_live):
         forming["members"] = [m for m in forming["members"] if _alive(m, live)]
         if not forming["members"]:
             state["forming"] = None
-    running = state.get("running")
-    if running and not live(running["runner"]["pid"], running["runner"]["start"]):
-        events.append(("runner_died", running["id"]))
-        state["running"] = None
+    alive = []
+    for running in running_batches(state):
+        if live(running["runner"]["pid"], running["runner"]["start"]):
+            alive.append(running)
+        else:
+            events.append(("runner_died", running["id"]))
+    _set_running(state, alive)
     return events
 
 
 # [@ANCHOR: batch_queue:caps_from_env]
 def caps_from_env(environ=None):
     """Batch caps: {"max_branches": int >= 1, "max_seconds": float >= 0 (0 = no duration cap)} from
-    HAMS_BATCH_MAX_BRANCHES (default 8) and HAMS_BATCH_MAX_SECONDS (default 1800). Bad values fall back."""
+    HAMS_BATCH_MAX_BRANCHES (default 8) and HAMS_BATCH_MAX_SECONDS (default 1800), plus "max_running": int >= 1, how
+    many batches may run at once, from HAMS_BATCH_MAX_RUNNING (default 1). Bad values fall back."""
     environ = os.environ if environ is None else environ
     try:
         branches = max(1, int(environ.get("HAMS_BATCH_MAX_BRANCHES", DEFAULT_MAX_BRANCHES)))
@@ -179,7 +200,11 @@ def caps_from_env(environ=None):
         seconds = DEFAULT_MAX_SECONDS
     if not math.isfinite(seconds) or seconds < 0:
         seconds = DEFAULT_MAX_SECONDS
-    return {"max_branches": branches, "max_seconds": seconds}
+    try:
+        running = max(1, int(environ.get("HAMS_BATCH_MAX_RUNNING", 1)))
+    except ValueError:
+        running = 1
+    return {"max_branches": branches, "max_seconds": seconds, "max_running": running}
 
 
 # [@ANCHOR: batch_queue:join]
@@ -226,12 +251,12 @@ def leave(state, member):
 
 
 # [@ANCHOR: batch_queue:seal]
-def seal(state, member, now=time.time, log=""):
-    """If `member` is the leader (the oldest live member of the forming batch) and nothing is running,
-    move the forming batch to running with `member` as its runner and return it; else None. Call
+def seal(state, member, now=time.time, log="", max_running=1):
+    """If `member` is the leader (the oldest live member of the forming batch) and fewer than `max_running` batches
+    are running, move the forming batch to running with `member` as its runner and return it; else None. Call
     `prune` first so a dead oldest member does not block the batch."""
     forming = state.get("forming")
-    if not forming or state.get("running") or not forming["members"]:
+    if not forming or len(running_batches(state)) >= max_running or not forming["members"]:
         return None
     lead = forming["members"][0]
     if (lead["pid"], lead["start"]) != (member["pid"], member["start"]):
@@ -239,16 +264,14 @@ def seal(state, member, now=time.time, log=""):
     running = {"id": forming["id"], "members": forming["members"], "solo": forming.get("solo", False),
                "runner": {"pid": member["pid"], "start": member["start"]}, "started": now(), "log": log}
     state["forming"] = None
-    state["running"] = running
+    _set_running(state, running_batches(state) + [running])
     return running
 
 
 # [@ANCHOR: batch_queue:finish]
 def finish(state, batch_id):
-    """Free the running slot when it still holds batch `batch_id`."""
-    running = state.get("running")
-    if running and running["id"] == batch_id:
-        state["running"] = None
+    """Free the running slot that holds batch `batch_id` (the others keep running)."""
+    _set_running(state, [b for b in running_batches(state) if b["id"] != batch_id])
 
 
 def _verdict_path(sdir, batch_id):
@@ -311,7 +334,7 @@ def coalesce(sdir, member, run_batch, caps=None, estimate=None, poll=DEFAULT_POL
     abandoned: the member joins again, at most MAX_REQUEUES times, then GAVE_UP (the caller runs alone).
     TIMEOUT: `timeout` seconds passed while waiting. A SIGTERM/SIGHUP while waiting leaves the queue
     and exits 128+signal. Prints "joined batch N with K other branches" once per join."""
-    caps = caps or caps_from_env()
+    caps = dict(caps_from_env(), **(caps or {}))
     old_handlers = {}
     if handle_signals:
         def _raise(signum, _frame):
@@ -341,9 +364,11 @@ def coalesce(sdir, member, run_batch, caps=None, estimate=None, poll=DEFAULT_POL
                     if batch_id is not None:
                         forming = state["forming"]
                         others = sorted({m["branch"] for m in forming["members"] if m["tip"] != member["tip"]})
-                        running = state.get("running")
-                        if running is None and forming["members"][0]["tip"] == member["tip"] and not others:
-                            out("[*] batch %d: nothing is running here; starting at once" % batch_id)
+                        all_running = running_batches(state)
+                        running = all_running[0] if all_running else None
+                        if len(all_running) < caps["max_running"] and forming["members"][0]["tip"] == member["tip"] and not others:
+                            out("[*] batch %d: %s; starting at once" % (batch_id, "nothing is running here" if not all_running else
+                                "%d of %d running slots are in use here" % (len(all_running), caps["max_running"])))
                         else:
                             out("[*] joined batch %d with %d other branch%s%s" % (
                                 batch_id, len(others), "" if len(others) == 1 else "es",
@@ -363,12 +388,14 @@ def coalesce(sdir, member, run_batch, caps=None, estimate=None, poll=DEFAULT_POL
                                     "doc": doc}
                         batch_id = None  # a verdict without us: join again
                     else:
-                        forming, running = state.get("forming"), state.get("running")
-                        runner_of = running
+                        forming, all_running = state.get("forming"), running_batches(state)
+                        mine_running = next((b for b in all_running if b["id"] == batch_id), None)
+                        runner_of = mine_running or (all_running[0] if all_running else None)
                         if forming and forming["id"] == batch_id:
                             lead_run = seal(state, member, now=now,
-                                            log=log_for(batch_id) if log_for else "")
-                        elif running and running["id"] == batch_id:
+                                            log=log_for(batch_id) if log_for else "",
+                                            max_running=caps["max_running"])
+                        elif mine_running:
                             pass
                         else:
                             requeues += 1

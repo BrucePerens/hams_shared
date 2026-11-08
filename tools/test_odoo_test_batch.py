@@ -28,6 +28,7 @@ Tests [@ANCHOR: odoo_test_batch:record_module_durations]
 Tests [@ANCHOR: odoo_test_batch:write_pass_record]
 Tests [@ANCHOR: odoo_test_batch:OdooTestBatch]
 Tests [@ANCHOR: odoo_test_batch:maybe_run_batched]
+Tests [@ANCHOR: odoo_test_batch:batches_that_may_run]
 """
 
 import argparse
@@ -753,6 +754,19 @@ def drive(argv):
     code = otb.lint_batch.run_member(spec["repo"], "hams_demo", spec["branch"], spec["tip"], "origin/main",
                                      [spec["modules"]], runner, timeout=60, poll=0.1, sdir=spec["sdir"], kind="test")
     print("RESULT " + json.dumps({"code": code}))
+
+
+class BatchesThatMayRunTests(unittest.TestCase):
+    """The number of test batches that may run at once is the machine's test slot count, read like test.py reads it."""
+
+    def test_it_is_the_slot_count_and_a_flag_can_only_raise_it(self):
+        args = argparse.Namespace(slots=None)
+        self.assertEqual(otb.batches_that_may_run(args, {"HAMS_TEST_SLOTS": "4"}), 4)
+        self.assertEqual(otb.batches_that_may_run(argparse.Namespace(slots="2"), {"HAMS_TEST_SLOTS": "4"}), 4)
+        self.assertEqual(otb.batches_that_may_run(argparse.Namespace(slots="6"), {"HAMS_TEST_SLOTS": "4"}), 6)
+
+    def test_a_bad_setting_means_one(self):
+        self.assertEqual(otb.batches_that_may_run(argparse.Namespace(slots=None), {"HAMS_TEST_SLOTS": "lots"}), 1)
 
 
 if __name__ == "__main__":

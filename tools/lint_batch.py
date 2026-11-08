@@ -340,17 +340,23 @@ class LintBatch:
 
 # [@ANCHOR: lint_batch:run_member]
 def run_member(repo, repo_name, branch, tip, base, scope, runner, timeout=None, out=print, environ=None,
-               poll=1.0, sdir=None, estimate=None, kind=KIND, solo_hint="run_linters.py --changed --solo", install=()):
+               poll=1.0, sdir=None, estimate=None, kind=KIND, solo_hint="run_linters.py --changed --solo", install=(),
+               max_running=None):
     """The caller's side. Joins the batch for `repo` and blocks until this branch's verdict is known.
 
     Returns an exit code (0 passed, 1 failed, 75 gave up waiting) after printing the verdict, or None
     when the caller must run alone as before (a merge conflict in the combined tree, or a batch runner
-    that kept dying). `runner` is a `LintBatch` (used only if this process becomes the leader)."""
+    that kept dying). `runner` is a `LintBatch` (used only if this process becomes the leader). `max_running`: how many
+    batches of this kind may run at once (default: HAMS_BATCH_MAX_RUNNING, else 1); the test queue passes the machine's
+    test slot count."""
     environ = os.environ if environ is None else environ
     sdir = sdir or batch_queue.state_dir(kind, batch_queue.repo_key(repo), environ)
     member = batch_queue.make_member(branch, tip, scope=scope, info=solo_hint, install=install)
+    caps = batch_queue.caps_from_env(environ)
+    if max_running:
+        caps["max_running"] = max(1, int(max_running))
     outcome = batch_queue.coalesce(
-        sdir, member, runner, caps=batch_queue.caps_from_env(environ), estimate=estimate, poll=poll,
+        sdir, member, runner, caps=caps, estimate=estimate, poll=poll,
         timeout=timeout, out=out, log_for=lambda n: os.path.join(sdir, "logs", "batch-%d.log" % n))
     status = outcome["status"]
     if status == batch_queue.TIMEOUT:

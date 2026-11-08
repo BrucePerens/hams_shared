@@ -17,7 +17,8 @@ same for all of them and the changes rarely interact. The queue was fair but its
 run.
 
 ## Decision
-1. **Coalesce.** Per machine, per repository and per kind (lint, test) there is at most one running batch and
+1. **Coalesce.** (Amended 2026-11-08, ADR 0116: local test batches may run as many at once as there are test slots; the rule below is the default of one.)
+   Per machine, per repository and per kind (lint, test) there is at most one running batch and
    one forming batch. With nothing running a request runs at once. A request that arrives while a batch runs
    joins the forming batch with its branch tip and scope (lint: the steps it needs; tests: its modules). When
    the running batch ends, the oldest live member of the forming batch seals it and runs it.

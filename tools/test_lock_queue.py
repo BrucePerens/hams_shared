@@ -666,6 +666,30 @@ class TestAcquireWithSlots(_TmpDirCase):
         for _, f in taken:
             self.held.append(f)
 
+    def test_the_load_gate_of_one_waiter_does_not_serialise_the_other_slots_behind_it(self):
+        # on_head is the load gate. With two free slots the two oldest waiters are both heads and gate at the same time;
+        # a gate that takes 1 s for each must not make the second wait for the first.
+        taken, results = [], {}
+        gates = []
+
+        def slow_gate():
+            gates.append(time.monotonic())
+            time.sleep(1.0)
+            return True
+
+        started = time.monotonic()
+        a = self.run_waiter(taken, results, "a", timeout=10, on_head=slow_gate)
+        b = self.run_waiter(taken, results, "b", timeout=10, on_head=slow_gate)
+        a.join(10)
+        b.join(10)
+        self.assertEqual({results["a"][0], results["b"][0]}, {lq.ACQUIRED})
+        self.assertLess(time.monotonic() - started, 1.8, "the two gates ran one after the other")
+        self.assertEqual(len(gates), 2)
+        self.assertLess(abs(gates[0] - gates[1]), 0.5, "both waiters reached the gate together")
+        self.assertEqual(sorted(slot for slot, _ in taken), [1, 2])
+        for _, f in taken:
+            self.held.append(f)
+
     def test_the_lowest_free_slot_is_taken(self):
         self.hold_slot(1)
         taken = []

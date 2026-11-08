@@ -3349,6 +3349,16 @@ CI_LOAD_GATE_DEFAULT_TIMEOUT_SECONDS = 900
 
 CI_LOAD_GATE_POLL_SECONDS = 15
 
+# The gate waits for CPU SATURATION, not for a high load average. The one-minute load average counts every runnable and every
+# uninterruptible task, so a box running hundreds of short-lived Chrome, PostgreSQL and test processes reads 25 to 50 on 32
+# cores while its processors are mostly idle (Bruce, 2026-11-08: a load average in the thirties is normal here). What makes
+# tours flaky is processors with no spare time, so the gate measures that: the CPU busy percentage over a short window from
+# /proc/stat and the kernel's pressure-stall figure `some avg10` from /proc/pressure/cpu, and holds only while BOTH are at or
+# above their limits. Environment overrides: HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT, HAMS_CI_LOAD_GATE_PSI_PERCENT.
+CI_LOAD_GATE_DEFAULT_CPU_BUSY_PERCENT = 92.0
+CI_LOAD_GATE_DEFAULT_PSI_PERCENT = 25.0
+CI_LOAD_GATE_SAMPLE_SECONDS = 1.0
+
 
 def find_runner_worker_processes(proc_root="/proc"):
     """Return a list of live GitHub Actions job processes, as dicts with
@@ -3419,6 +3429,97 @@ def evaluate_ci_load_gate(runner_workers, load_average_1min, cpu_count, load_rat
     return (False, "")
 
 
+# [@ANCHOR: test:read_cpu_counters]
+def read_cpu_counters(proc_root="/proc"):
+    """``(busy, total)`` CPU jiffies summed over all processors from the first line of `proc_root`/stat, or None.
+
+    `busy` is everything but idle and iowait (a processor waiting for the disk has spare time), `total` is every
+    counter on the line except guest times, which the kernel already counts inside user and nice. Returns None when the
+    file cannot be read or parsed. Reads one small file. Full entry: tools/README.md."""
+    try:
+        with open(os.path.join(proc_root, "stat"), "r", encoding="utf-8") as handle:
+            fields = handle.readline().split()
+        values = [int(v) for v in fields[1:9]]
+    except (OSError, ValueError):
+        return None
+    if fields[:1] != ["cpu"] or len(values) < 5:
+        return None
+    total = sum(values)
+    return total - values[3] - values[4], total
+
+
+# [@ANCHOR: test:read_cpu_pressure]
+def read_cpu_pressure(proc_root="/proc"):
+    """The ``some avg10`` percentage of `proc_root`/pressure/cpu (the share of the last ten seconds in which at least one
+    runnable task waited for a processor), or None when the kernel has no pressure-stall information or the file is
+    unreadable. Reads one small file. Full entry: tools/README.md."""
+    try:
+        with open(os.path.join(proc_root, "pressure", "cpu"), "r", encoding="utf-8") as handle:
+            for line in handle:
+                words = line.split()
+                if words[:1] == ["some"]:
+                    for word in words[1:]:
+                        if word.startswith("avg10="):
+                            value = float(word.split("=", 1)[1])
+                            return value if math.isfinite(value) else None
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+# [@ANCHOR: test:evaluate_cpu_saturation_gate]
+def evaluate_cpu_saturation_gate(
+    runner_workers, cpu_busy_percent, psi_some_avg10, busy_limit, psi_limit, load_average_1min=None, cpu_count=1, load_ratio=None
+):
+    """Decide whether the box's processors are saturated, which is what makes tours and url_open tests flaky. Pure.
+
+    Returns ``(busy, reason)``; `reason` is empty when not busy.
+
+    runner_workers: the list `find_runner_worker_processes` returns; any entry makes the box busy (a self-hosted CI job).
+    cpu_busy_percent: CPU busy share over a short window, 0 to 100, or None when it could not be measured.
+    psi_some_avg10: `read_cpu_pressure`, or None. busy_limit, psi_limit: the percentages at or above which each signal
+    counts as saturated.
+    With both signals the box is busy only when BOTH are at or above their limits (high busy time with no task ever waiting is
+    a full but keeping-up box; waiting tasks with idle processors are the many-short-processes case the load average
+    mistakes for load). With one signal missing the other decides alone; with neither the box is not busy.
+    load_average_1min, cpu_count, load_ratio: the legacy rule (`evaluate_ci_load_gate`: load average above cpu_count x
+    load_ratio), applied only when `load_ratio` is not None, which the caller passes when the operator set
+    HAMS_CI_LOAD_GATE_RATIO explicitly."""
+    if runner_workers:
+        pids = ", ".join(str(p["pid"]) for p in sorted(runner_workers, key=lambda p: p["pid"]))
+        return (
+            True,
+            "a self-hosted continuous-integration job is running (%s process%s: pid %s)"
+            % (CI_LOAD_GATE_RUNNER_COMM, "" if len(runner_workers) == 1 else "es", pids),
+        )
+    if load_ratio is not None:
+        busy, reason = evaluate_ci_load_gate([], load_average_1min, cpu_count, load_ratio)
+        if busy:
+            return (True, reason + " (HAMS_CI_LOAD_GATE_RATIO is set)")
+    signals = []
+    if cpu_busy_percent is not None:
+        signals.append((cpu_busy_percent >= busy_limit, "the processors are %.0f%% busy (limit %.0f%%)" % (cpu_busy_percent, busy_limit)))
+    if psi_some_avg10 is not None:
+        signals.append((psi_some_avg10 >= psi_limit, "tasks waited for a processor %.0f%% of the last 10 s (limit %.0f%%)" % (psi_some_avg10, psi_limit)))
+    if signals and all(saturated for saturated, _ in signals):
+        return (True, "the processors are saturated: " + " and ".join(text for _, text in signals))
+    return (False, "")
+
+
+# [@ANCHOR: test:measure_cpu_busy_percent]
+def measure_cpu_busy_percent(sleep_func=time.sleep, window=CI_LOAD_GATE_SAMPLE_SECONDS, read=read_cpu_counters):
+    """The processors' busy percentage (0 to 100) over `window` seconds: two `read_cpu_counters` samples with `sleep_func(window)`
+    between them. Returns None when either sample cannot be read or no time passed on the counters. Blocks for `window`."""
+    first = read()
+    if first is None:
+        return None
+    sleep_func(window)
+    second = read()
+    if second is None or second[1] <= first[1]:
+        return None
+    return 100.0 * (second[0] - first[0]) / (second[1] - first[1])
+
+
 def _ci_load_gate_settings():
     """Read the gate's three environment overrides, ignoring unparseable values.
 
@@ -3459,6 +3560,21 @@ def _ci_load_gate_settings():
     return ratio, timeout
 
 
+def _env_percent(name, default):
+    """A finite number from environment variable `name`, else `default` (a malformed value is reported and ignored)."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+        if not math.isfinite(value):
+            raise ValueError(raw)
+        return value
+    except ValueError:
+        print("[!] %s=%r is not a number; using the default %.0f" % (name, raw, default))
+        return default
+
+
 def wait_for_ci_load_to_subside(sleep_func=None, now_func=None):
     """Block until the box is quiet enough to test on, or give up.
 
@@ -3491,14 +3607,26 @@ def wait_for_ci_load_to_subside(sleep_func=None, now_func=None):
     ratio, timeout = _ci_load_gate_settings()
     cpu_count = os.cpu_count() or 1
 
+    busy_limit = _env_percent("HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT", CI_LOAD_GATE_DEFAULT_CPU_BUSY_PERCENT)
+    psi_limit = _env_percent("HAMS_CI_LOAD_GATE_PSI_PERCENT", CI_LOAD_GATE_DEFAULT_PSI_PERCENT)
+    # HAMS_CI_LOAD_GATE_RATIO keeps working: when it is set, the old rule (load average above cores x ratio) applies too.
+    explicit_ratio = ratio if os.environ.get("HAMS_CI_LOAD_GATE_RATIO") else None
+
     def measure():
         try:
             load_1min = os.getloadavg()[0]
         except OSError as e:  # no /proc/loadavg
             _logger.debug("Ignored OSError reading load average: %s", e)
             load_1min = None
-        return evaluate_ci_load_gate(
-            find_runner_worker_processes(), load_1min, cpu_count, ratio
+        workers = find_runner_worker_processes()
+        psi = read_cpu_pressure()
+        # Pressure first: when no task has been waiting for a processor, the processors are not saturated and no sampling
+        # window is needed. Without pressure information, or with pressure at the limit, measure the busy percentage.
+        busy_percent = None
+        if psi is None or psi >= psi_limit:
+            busy_percent = measure_cpu_busy_percent(sleep_func)
+        return evaluate_cpu_saturation_gate(
+            workers, busy_percent, psi, busy_limit, psi_limit, load_1min, cpu_count, explicit_ratio
         )
 
     busy, reason = measure()

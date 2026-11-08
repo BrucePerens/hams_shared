@@ -84,6 +84,13 @@ the host log directory and the host `/var/lib/odoo` tree.
 - **The namespace init reaps.** The root phase is PID 1 of the run's PID namespace and re-adopts every orphan; it never waited for
   them (150 to 170 zombies per run after hours). A reaper thread (`reap_orphans_forever`) reaps zombie children by pid, never
   `waitpid(-1)`, so the exit status of the test process is untouched.
+- **The load gate waits for CPU saturation.** The one-minute load average read 25 to 50 on 32 mostly idle cores (hundreds of short-lived
+  tasks), so the old gate (cores x ratio) held runs back with a slot free. It now holds only for a `Runner.Worker` or when the processors are
+  at least 92% busy AND the kernel's `some avg10` CPU pressure is at least 25%; `HAMS_CI_LOAD_GATE_RATIO`, when set, still adds the old rule. Each
+  run gates when it reaches the head of the queue, so several free slots gate concurrently. Reference: "The CI load gate" in `tools/README.md`.
+- **Batches may run as many at once as there are slots.** A new test batch starts when fewer batches than the slot count run (ADR 0115 allowed one);
+  when every running slot is busy new requests still coalesce into the forming batch. Attribution and splitting are per batch and unchanged. The queue
+  state keeps its first running batch under the old key, so a leader of an older version sees one running batch.
 - **One count per machine.** Every run reads `HAMS_TEST_SLOTS` / `/opt/hams/etc/test_slots`; `--slots` can only raise
   it. A run that asked for fewer slots than the machine has no longer takes slot 1 only and queues as if the others
   did not exist. To run with one slot, set `HAMS_TEST_SLOTS=1`.

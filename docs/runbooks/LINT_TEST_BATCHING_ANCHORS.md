@@ -90,13 +90,15 @@ block short (no waiting, no running, no printing); an exception inside the block
 by the kernel if the process dies. Creates `sdir`. A missing, unreadable or other-version state file yields `empty_state()`.
 
 ### `batch_queue:prune`
-Removes dead waiters from the forming batch (an emptied batch disappears) and frees the running slot when its runner is
-dead. `prune(state, live=lock_queue.is_live)` returns a list of events (`("runner_died", batch_id)`); mutates `state`; call
+Removes dead waiters from the forming batch (an emptied batch disappears) and frees the running slot of every running batch whose
+runner is dead (the other running batches are untouched). `prune(state, live=lock_queue.is_live)` returns a list of events (`("runner_died", batch_id)`); mutates `state`; call
 inside `locked` at every poll. `live(pid, start)` must be cheap (two `/proc` reads). Idempotent.
 
 ### `batch_queue:caps_from_env`
 Reads `HAMS_BATCH_MAX_BRANCHES` (int, at least 1, default 8) and `HAMS_BATCH_MAX_SECONDS` (finite float, at least 0, 0 = no
-duration cap, default 1800) from `environ`; bad values fall back to the defaults. Returns `{"max_branches", "max_seconds"}`.
+duration cap, default 1800) and `HAMS_BATCH_MAX_RUNNING` (int, at least 1, default 1: how many batches of this kind may run at once) from
+`environ`; bad values fall back to the defaults. Returns `{"max_branches", "max_seconds", "max_running"}`. The test queue raises
+`max_running` to the machine's test slot count (`odoo_test_batch:batches_that_may_run`); lint batches keep 1.
 
 ### `batch_queue:join`
 Adds a member to the forming batch, creating it when none exists.
@@ -119,12 +121,18 @@ Removes the member (same pid and start) from the forming batch; an emptied batch
 No effect once the batch is sealed.
 
 ### `batch_queue:seal`
-`seal(state, member, now, log)`: when nothing is running and `member` is the oldest member of the forming batch (call
+`seal(state, member, now, log, max_running=1)`: when fewer than `max_running` batches are running and `member` is the oldest member of the forming batch (call
 `prune` first), moves the batch to `running` with `member` as runner and returns it; otherwise None. `log` is the batch log
 path stored for status output. The sealed member list is final: later requests form the next batch.
 
 ### `batch_queue:finish`
-`finish(state, batch_id)` frees the running slot if it still holds that batch. Call after the verdict file is written.
+`finish(state, batch_id)` frees the running slot that holds that batch; the other running batches keep running (the first remaining one is
+promoted to the `running` key). Call after the verdict file is written.
+
+### `batch_queue:running_batches`
+`running_batches(state) -> list` of every running batch, oldest first: `state["running"]` followed by `state["running_more"]`. The state file keeps the
+first running batch under the key an older leader knows (`running`) and the others under `running_more` (absent in a file written before
+concurrent batches), so a leader of an older version that shares the file sees one running batch and never starts a second. Pure.
 
 ### `batch_queue:write_verdicts`
 `write_verdicts(sdir, batch_id, doc, now)` publishes `{verdicts, log, members, batch, finished}` as `verdicts/<id>.json`
@@ -435,6 +443,13 @@ odoo user; `filtered_test.txt` from it is appended to the batch log. Owners are 
 a module own it. `collect`: exit 0 passes the union; otherwise each implicated module becomes a failure naming its lines; no implicated
 module means one failure `test.py` with the text tail, which is unattributable and splits the batch. Records durations after every run.
 Concurrency: leader only; the box-wide test lock is taken by the nested test.py exactly as for a single run.
+
+### `odoo_test_batch:batches_that_may_run`
+`batches_that_may_run(args, environ) -> int`: how many local test batches may run at once: the machine's test slot count
+(`runner_slots.configured_slot_count(args.slots, environ)`; `--slots` can only raise it), 1 when the setting is unreadable or invalid. Each
+batch's nested `test.py` takes a slot like any run, so a new batch starts as soon as fewer batches than slots run, even while another batch
+runs; when every running slot is busy, new requests still join the forming batch and run together. Failure attribution and splitting
+(ADR 0115) are per batch and unchanged.
 
 ### `odoo_test_batch:maybe_run_batched`
 `maybe_run_batched(args, environ=None, cwd=None, out=print)`, called by `test.py`'s `main()` right after the argument check and
