@@ -105,8 +105,13 @@ build hosts: the dev box has 32 cores and the remote hosts are far less powerful
 <committed worktree> daemons/hams_local_relay`; exit 0 passed, 1 failed, 75 could not run; a filter goes after the crate,
 `... daemons/hams_local_relay -- updater::`) remain for what this box cannot do: arm64 and macOS-specific checks, or overflow
 when this box is saturated). Cargo you do run on the dev box goes under `nice` with a
-`CARGO_TARGET_DIR` of its own per concurrent job (e.g. `~/.cache/hams-cargo-target-<job>`),
-deleted when the job is done. Do not share one target directory between worktrees building at the
+`CARGO_TARGET_DIR` of its own per concurrent job, deleted when the job is done, and **in RAM, not on the SSD** (a build writes
+5-12 GB it throws away): `python3 hams_shared/tools/ram_dirs.py run <job> -- nice -n 10 cargo clippy --all-targets -- -D warnings`
+sets `CARGO_TARGET_DIR=/dev/shm/hams-cargo-target-<job>`, stops the job if that directory passes 30 GB or `/dev/shm` runs low, removes
+it when the command ends (signals included), and at its next start removes the directories of jobs that crashed. When `/dev/shm` has
+under 20 GB free it prints a warning and uses `~/.cache/hams-cargo-target-<job>` instead; it never falls back silently. From a shell
+that cannot wrap the command: `export CARGO_TARGET_DIR=$(python3 hams_shared/tools/ram_dirs.py path <job> --owner-pid $$)` and
+`trap 'python3 hams_shared/tools/ram_dirs.py release <job>' EXIT`. The lint steps do this themselves (`tools/lint_cache.py`). Do not share one target directory between worktrees building at the
 same time: they overwrite each other's test binary, so a "pass" can come from another branch's
 build (found 2026-10-03). Never a per-worktree `target/` either; those filled /home, and record the commands and results in the commit or PR. Do not wait
 for, re-enable, or restructure merges around CI ("don't munge things for a CI problem"). The
