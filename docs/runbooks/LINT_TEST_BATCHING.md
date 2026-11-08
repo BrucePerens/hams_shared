@@ -73,8 +73,11 @@ branch). `HAMS_LINT_BATCH=off` disables batching for a session. The line `[*] li
 
 ## Known limits and follow-ups
 
-* One running batch per repository on the dev box for lint (and remote test batches), even when its run is shipped to another machine; local TEST batches may run as many at once as there are test slots (`HAMS_BATCH_MAX_RUNNING` / ADR 0116: a new batch starts when fewer batches than slots run, and requests coalesce only while every running slot is busy); per-target-machine
-  batches would let a second batch run on a second idle machine. To-do filed.
+* Local TEST batches may run as many at once as there are test slots (`HAMS_BATCH_MAX_RUNNING` / ADR 0116) and so may LINT batches, up to the
+  machine's lint slots (`lint_batch.batches_that_may_run`; the dev box 4, a small machine 1): a request starts a batch of its own at once while
+  fewer batches than that run, and coalesces with others only while every running slot is busy. The slot is the machine, not a per-target
+  claim: the dev box is the primary lint runner and a whole run reaches another machine only as overflow (lint_lock `local_busy`), so there is
+  no machine to claim before the batch seals. Remote test batches (`rtest`) keep one running batch, since one batch splits over every idle host.
 * The stamp of a batched branch vouches for "main plus the batch" and names the other tips it was checked with
   (`batch=N with=<12 hex>,...`), and a cross-branch interaction is blamed on the branch
   whose file the finding names. `--solo` repeats a run alone.
@@ -120,4 +123,4 @@ Odoo tests for a branch run on a remote host through hams_com's `devbox_tools/re
 * `--solo` (or `--env`, `--test-tags`, a `:Class` selector) tests the tip alone on one host without the queue (no merge with main).
 * Hosts: `HAMS_TEST_MACHINES` (default `yoga,mac1`). One running batch at a time per repository on the dev box; a batch uses all the hosts, waiting for any that is busy.
 
-Not done: per-target-machine running slots (to-do `batches-per-target-machine-8e2c4b17`).
+Not done: a second remote test batch on the hosts the first did not take (a small batch's split leaves hosts unused).

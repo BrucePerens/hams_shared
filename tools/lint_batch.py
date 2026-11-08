@@ -21,6 +21,7 @@ import subprocess
 import sys
 
 import batch_queue
+import lint_lock
 import lock_queue
 
 KIND = "lint"
@@ -336,6 +337,19 @@ class LintBatch:
             if verdict.get("status") == batch_queue.PASSED:
                 self.stamp_writer(member["tip"], self.last_selected, batch_id, verdict.get("with") or [])
         return {"verdicts": verdicts, "log": log_path}
+
+
+# [@ANCHOR: lint_batch:batches_that_may_run]
+def batches_that_may_run(environ=None):
+    """How many lint batches of one repository may run at once: this machine's lint slot count (`lint_lock.slot_count`; the dev
+    box 4, a small machine 1), because each batch's combined run takes a lint slot like any run. None when `HAMS_BATCH_MAX_RUNNING`
+    is set, so the explicit number (`batch_queue.caps_from_env`) wins. Passed as `run_member(max_running=...)` by `run_linters.main`.
+    A request that arrives while fewer batches than that run starts a batch of its own at once instead of waiting for the running
+    one; when every slot has a batch it joins the forming batch. Reads `lint_machines.json`; takes no lock."""
+    environ = os.environ if environ is None else environ
+    if environ.get("HAMS_BATCH_MAX_RUNNING"):
+        return None
+    return lint_lock.slot_count(environ)
 
 
 # [@ANCHOR: lint_batch:run_member]
