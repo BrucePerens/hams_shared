@@ -295,38 +295,35 @@ in a fixed order, and ends with a per-step timing table.
   `HAMS_CI_LOAD_GATE_RATIO` and `HAMS_CI_LOAD_GATE_TIMEOUT` as `test.py`'s CI load gate. Do not start a
   second heavy run by other means (no `nohup` loops around `pgrep`): queue, and spend the wait on something
   else. `docs/LINT_STEP_ANALYSIS.md` lists what each step costs and overlaps.
-  **Runs do not wait for the dev box while another machine is idle** (2026-11-03). Ten agents behind one lock
-  meant 30 minute to 2.5 hour waits while mac1-vm and bruce-yoga sat idle. A run that would queue here (a run
-  holds or waits for the lock, or the load is above the limit) ships the *whole* run to the best idle runner
-  (the one that can run the most of its steps; least loaded on a tie): every step that machine can run,
-  however short, under that machine's own lock and load gate, with output as `[host] ...`. Only the steps
-  that need this checkout (`check_summation_bias`, `check_pip_audit`, `check_claims_freshness`,
-  `check_cargo_deny`, `check_noupdate_edits`, `pytest tools/[host-bound]`, and whatever the machine lacks) stay;
-  when those total at most `HAMS_LINT_RESIDUE_SECONDS` (240) they skip the queue and wait only for the load gate.
-  A machine with a run in progress or in line (probed: the machine's lock is held, or live tickets exist) is
-  never chosen; a per-machine claim (`~/.cache/hams-lint/claims/HOST.lock`, an flock) keeps two runs on this box
-  from choosing the same idle machine. If every machine is busy or unreachable the run queues here exactly as
-  before. Steps that come back from a machine (it could not run them, or they failed there and are confirmed
-  here) take the lock and the gate if the run holds none. `--distribute off` (or `HAMS_LINT_DISTRIBUTE=off`)
-  is the older plan (spread only steps of 60 s or more when the dev box is free, queue for the rest);
-  `--distribute always` ships whole runs even when this box is free; `--where` shows the plan.
+  **The dev box is the primary lint runner** (Bruce, 2026-11-08: 32 cores and 125 GB are not limited by the smaller machines). Every
+  step runs here, including `check_cargo_fmt`, `check_cargo_clippy` and `check_cargo_deny` (rustup's pinned toolchain with rustfmt and
+  clippy is in `~/.cargo/bin`, which `run_linters.py` puts first on PATH; `/etc/profile.d/hams_test_environment.sh` does the same for
+  shells). `lint_slots` in `lint_machines.json` (4 on the dev box) lets that many heavy runs go at once, each in a lock file of its own
+  (`~/.cache/hams-lint/run.lock`, `run.lock.slot-K`), at `nice` 10, with its own TMPDIR (slots above 1: `$TMPDIR/s<K>`) and its own warm Cargo
+  target directory (`hams-lint-cargo/<repo>-<toolchain>-sK`); a run beyond the last slot queues in the one FIFO (`--lock-status` lists
+  the slots and the queue). A run is shipped to another machine **only as overflow**: when every slot is taken (or a run waits) or the load is
+  above the limit, the *whole* run goes to the best idle runner (the one that can run the most of its steps; least loaded on a tie), under
+  that machine's own lock and gate, with output as `[host] ...`; the steps that need this checkout (`check_summation_bias`, `check_pip_audit`,
+  `check_claims_freshness`, `check_cargo_deny`, `check_noupdate_edits`, `pytest tools/[host-bound]`) stay and, when they total at most
+  `HAMS_LINT_RESIDUE_SECONDS` (240), wait only for the load gate. A per-machine claim (`~/.cache/hams-lint/claims/HOST.lock`) keeps two runs here from
+  choosing the same idle machine; if every machine is claimed, busy or unreachable the run waits for a slot here, so it always ends with
+  a real result and a pass stamp (the old "claimed host, fall back without clippy, no stamp" path is gone: this box has the full
+  toolchain). Nothing is sent away merely because a machine is idle (the spreading of 60 s steps and `--distribute always` were removed);
+  `--distribute off` (or `HAMS_LINT_DISTRIBUTE=off`) never ships; `--remote HOST` names a machine; `--where` shows the plan.
 * Steps over several test directories are merged where that is provably safe (one daemon, one interpreter:
   `pytest daemons/hams_local_relay`); the old step names are aliases that `--only` still accepts. The repository-pair
   checkers (`check_async_lock_scope`, `check_fake_network_listener`, `check_int_float_overflow`,
   `check_float_isfinite`, `check_window_fetch_reassignment`) are one step each over hams_com and hams_open.
   `tools/lint_step_inventory.py compare` proves a restructuring kept every test (`docs/LINT_STEP_ANALYSIS.md`).
 * **Remote execution** (`--remote auto|HOST|local`, `--where`; `tools/lint_remote.py`,
-  `tools/lint_machines.json`). The dev box is not the only machine: `--remote auto` probes the lint runners
-  in `lint_machines.json` over ssh (read-only: cores, load, which of python3, flake8, pytest, xdist, node,
-  eslint, cargo with clippy and rustfmt, chrome, odoo exist), sends each heavy step that a machine can run
-  (>= 60 s; never a step that needs git history, the network, this checkout or this login session:
-  `check_summation_bias`, `check_pip_audit`, `check_claims_freshness`, `check_cargo_deny`, the
-  `pytest tools/[host-bound]` step ...) to the least-loaded capable machine, and runs the rest here.
-  `--where` prints that routing plan and runs nothing. Machines (versions are recorded in the inventory):
+  `tools/lint_machines.json`). `--remote auto` runs everything on the dev box and uses the other lint runners only as overflow (above);
+  `--remote HOST` sends each heavy step that machine can run (>= 60 s; never a step that needs git history, the network, this
+  checkout or this login session) there. Runners are probed over ssh (read-only: cores, load, which of python3, flake8, pytest, xdist, node,
+  eslint, cargo with clippy and rustfmt, chrome, odoo exist). `--where` prints the routing plan and runs nothing. Machines (versions are recorded in the inventory):
   **bruce-yoga** (Debian x86-64 build server, 8 cores, 4 workers at nice 10; ssh with `-o
   HostName=bruce-yoga.lan`; stays awake on AC, on battery it may suspend and shows as unreachable),
   **mac1-vm** (the Debian arm64 Lima VM on mac1, 3 workers at nice 19; it also runs the production FCC ULS
-  sync, never started by the linter). Not runners, with reasons in the inventory: mac1 itself (Bruce's Mac,
+  sync, never started by the linter), **bruce17** (Debian x86-64 laptop, 4 threads, 7.6 GiB; ssh as `ai@bruce17.lan` with the key path named in the inventory; cargo uses the git command line, `CARGO_NET_GIT_FETCH_WITH_CLI`, because libgit2 ignores the `github-hams_shared` Host alias). Not runners, with reasons in the inventory: mac1 itself (Bruce's Mac,
   python 3.9), `bruce-yoga-win` and `Bruce_Thinkpad` (Windows), and **hams1 and the router (`never`)**.
   * **Provisioning is a script, not hand work**: `python3 tools/lint_remote.py provision HOST` prints the
     plan, `--apply` installs what is missing (`tools/provision_build_host.sh`, run on the machine; apt

@@ -11,6 +11,9 @@ warm directory it is the crates of the checkout only.
   `~/.cache/hams-lint-cargo/<repo>-<rustc release>-<8 hex of rustc -vV>` (`hams_open-1.98.1-778fbc64`).
   Registry dependencies are keyed by version and features, not by checkout, so every worktree reuses them; only the
   workspace's own crates (whose unit hash contains the path) are rebuilt in a new worktree.
+* **One directory per lint slot (2026-11-08).** A machine with several lint slots (`lint_slots` in `lint_machines.json`; the dev box has 4) keeps one directory per slot: slot 1 as above, slot K above 1 as
+  `<repo>-<toolchain>-sK`, so runs side by side never wait for one another's exclusive lock on one directory nor build in the same one. Each is pruned to the same `cargo_gb` budget (the 14-day unused rule
+  applies per directory); with 4 slots, 2 repositories and one toolchain that is at most 8 directories of `cargo_gb` (25 GB on the dev box). `lint_remote.py caches` and `run_linters.py --lint-caches show` list them all.
 * **Incremental compilation is off** (`CARGO_INCREMENTAL=0`) for these builds. Measured on the old shared directory
   (`~/.cache/hams-cargo-target-lint`, 2026-11-03): **31 GB, of which `incremental/` 26 GB** (1,448 sessions, one per
   worktree path, never reused), dependencies 4 GB, build scripts 2.5 GB.

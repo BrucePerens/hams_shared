@@ -141,8 +141,22 @@ def toolchain_id(environ=None):
     return f"{release}-{hashlib.sha256(res.stdout.encode()).hexdigest()[:8]}"
 
 
+def lint_slot(environ=None):
+    """The lint run slot (lint_lock.RunLock) this process runs in, 1 when it holds none."""
+    environ = os.environ if environ is None else environ
+    try:
+        return max(1, int(environ.get("HAMS_LINT_SLOT") or 1))
+    except ValueError:
+        return 1
+
+
+# [@ANCHOR: lint_cache:cargo_target_dir]
 def cargo_target_dir(repo_name, environ=None):
-    return os.path.join(cargo_base(environ), f"{repo_name}-{toolchain_id(environ)}")
+    """`<cache>/hams-lint-cargo/<repo>-<toolchain>`, with `-sK` appended for a run in lint slot K above 1: concurrent runs on a
+    machine with several slots each build in a directory of their own (they would only wait for one another's exclusive lock
+    on one shared directory, and a build directory is not safe to share between branches that build at the same time)."""
+    slot = lint_slot(environ)
+    return os.path.join(cargo_base(environ), f"{repo_name}-{toolchain_id(environ)}" + (f"-s{slot}" if slot > 1 else ""))
 
 
 # [@ANCHOR: lint_cache:legacy_cargo_dirs]

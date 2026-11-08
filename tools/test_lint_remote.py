@@ -125,45 +125,62 @@ class RequirementTests(unittest.TestCase):
 
 
 class PlanTests(unittest.TestCase):
-    def plan(self, mode="auto", probes=None, names=None, local_load=0.0):
+    def plan(self, mode="auto", probes=None, names=None, local_load=0.0, whole=False):
         names = names or ["pytest daemons/a", "pytest daemons/b", "check_x", "eslint", "check_summation_bias"]
         probes = probes if probes is not None else {"big": FULL, "small": FULL}
-        return lr.make_plan(names, set(), DURATIONS, INVENTORY, probes, mode, 16, local_load)
+        return lr.make_plan(names, set(), DURATIONS, INVENTORY, probes, mode, 16, local_load, whole=whole)
 
     def test_local_mode_keeps_everything(self):
         plan = self.plan("local")
         self.assertEqual(len(plan.local), 5)
         self.assertEqual(plan.remote, {})
 
-    def test_auto_sends_heavy_capable_steps_away_and_keeps_cheap_and_local_only_steps(self):
-        plan = self.plan(local_load=40.0)
-        self.assertIn("check_x", plan.local)
-        self.assertIn("check_summation_bias", plan.local)
+    def test_auto_keeps_every_step_on_the_dev_box_even_when_it_is_loaded_and_the_runners_are_idle(self):
+        """Tests [@ANCHOR: lint_remote:prefer_user_toolchain]: the dev box is the primary lint runner (2026-11-08); an idle remote
+        is no reason to send a step there. Only a named machine (--remote HOST) or a whole-run overflow leaves it."""
+        for load in (0.0, 40.0):
+            plan = self.plan(local_load=load)
+            self.assertEqual(plan.remote, {}, "load %s" % load)
+            self.assertEqual(sorted(plan.local), sorted(DURATIONS))
+            self.assertIn("every step runs here", " ".join(plan.notes))
+
+    def test_a_named_machine_still_spreads_heavy_steps_away_from_the_dev_box(self):
+        plan = self.plan("big", probes={"big": FULL}, local_load=40.0)
         sent = {n for names in plan.remote.values() for n in names}
         self.assertTrue({"pytest daemons/a", "pytest daemons/b", "eslint"} & sent)
+        self.assertIn("check_summation_bias", plan.local)
         self.assertEqual(sorted(plan.local + [n for names in plan.remote.values() for n in names]), sorted(DURATIONS))
 
+    def test_prefer_user_toolchain_puts_rustup_first_once(self):
+        with tempfile.TemporaryDirectory() as home:
+            env = {"HOME": home, "PATH": "/usr/bin:/bin"}
+            self.assertFalse(lr.prefer_user_toolchain(env), "no ~/.cargo/bin/cargo: PATH unchanged")
+            self.assertEqual(env["PATH"], "/usr/bin:/bin")
+            os.makedirs(os.path.join(home, ".cargo", "bin"))
+            write(os.path.join(home, ".cargo", "bin", "cargo"), "#!/bin/sh\n")
+            self.assertTrue(lr.prefer_user_toolchain(env))
+            self.assertEqual(env["PATH"], os.path.join(home, ".cargo", "bin") + ":/usr/bin:/bin")
+            self.assertFalse(lr.prefer_user_toolchain(env), "already first")
+            env["PATH"] = "/usr/bin:%s:/bin" % os.path.join(home, ".cargo", "bin")
+            self.assertTrue(lr.prefer_user_toolchain(env))
+            self.assertEqual(env["PATH"].count(".cargo/bin"), 1)
+
     def test_every_step_is_in_exactly_one_place(self):
-        plan = self.plan(local_load=40.0)
+        plan = self.plan(local_load=40.0, whole=True)
         everything = plan.local + [n for names in plan.remote.values() for n in names]
         self.assertEqual(len(everything), len(set(everything)))
 
     def test_least_loaded_machine_gets_the_work(self):
         busy = lr.Probe("big", True, cores=8, load1=6.0, caps=FULL.caps)
         idle = lr.Probe("small", True, cores=8, load1=0.0, caps=FULL.caps)
-        # The dev box itself is loaded (this is why --remote exists), so the step leaves it, for the idle machine.
-        plan = self.plan(probes={"big": busy, "small": idle}, names=["pytest daemons/a"], local_load=40.0)
+        # Overflow: this machine has no free slot, so the whole run goes to the idle machine, not the busy one.
+        plan = self.plan(probes={"big": busy, "small": idle}, names=["pytest daemons/a"], local_load=40.0, whole=True)
         self.assertEqual(list(plan.remote), ["small"])
-        calm = self.plan(probes={"big": busy, "small": idle}, names=["pytest daemons/a"], local_load=0.0)
-        self.assertEqual(list(calm.remote), ["small"], "a heavy step leaves an idle dev box too: it is shared")
-        slow = lr.Probe("small", True, cores=8, load1=4.0, queued=3, caps=FULL.caps)
-        stay = self.plan(probes={"small": slow}, names=["pytest daemons/a"], local_load=0.0)
-        self.assertEqual(stay.remote, {}, "a machine that would finish much later than the dev box does not get it")
 
     def test_a_machine_above_its_load_ratio_or_unreachable_is_skipped_with_a_reason(self):
         overloaded = lr.Probe("big", True, cores=8, load1=7.5, caps=FULL.caps)
         down = lr.Probe("small", False, error="timed out")
-        plan = self.plan(probes={"big": overloaded, "small": down})
+        plan = self.plan(probes={"big": overloaded, "small": down}, whole=True)
         self.assertEqual(plan.remote, {})
         text = " ".join(plan.notes)
         self.assertIn("busy", text)
@@ -404,11 +421,16 @@ class DispatchWholeRunTests(unittest.TestCase):
             )
             self.assertEqual((len(local), jobs), (3, []), "whole=%s" % whole)
 
-    def test_without_whole_the_old_spreading_plan_is_used_and_a_lost_claim_does_not_stop_it(self):
-        local, jobs = self.dispatch({"big": WFULL, "small": WFULL}, False, claim=lambda host: None)
-        self.assertEqual([s.name for s in local], ["check_x", "check_summation_bias"])
-        self.assertEqual([j.names for j in jobs], [["pytest daemons/a"]])
-        self.assertIsNone(jobs[0].claim)
+    def test_without_whole_nothing_leaves_this_machine_and_no_machine_is_probed_or_claimed(self):
+        claims = []
+        local, jobs = lr.dispatch(
+            "auto", self.steps, [s.name for s in self.steps], DURATIONS, self.dicts, self.roots, "hams_open", 16, 0.0,
+            inventory=INVENTORY, probes=None, transports=None, out=self.out.append, whole=False,
+            claim=lambda host: claims.append(host), claimed=lambda hosts: set(),
+        )
+        self.assertEqual(([s.name for s in local], jobs), ([s.name for s in self.steps], []))
+        self.assertEqual(claims, [], "no claim is taken, so no other run is kept from a machine, and no stamp-less fallback can follow")
+        self.assertTrue(any("every step runs here" in line for line in self.out), self.out)
 
     def test_a_job_releases_its_claim_when_it_ends(self):
         handle = io.StringIO()
@@ -636,7 +658,7 @@ class EndToEndTests(unittest.TestCase):
         make_repo(self.shared, {"README": "shared\n"})
         os.makedirs(os.path.join(self.shared, "tools"))
         for name in ("run_linters.py", "lint_layout.py", "lint_exec.py", "lint_lock.py", "lock_queue.py", "lint_remote.py", "lint_cache.py", "lint_test_durations.py",
-                     "lint_batch.py", "batch_queue.py"):
+                     "lint_batch.py", "batch_queue.py", "runner_slots.py"):
             shutil.copy(os.path.join(TOOLS, name), os.path.join(self.shared, "tools", name))
         git(self.shared, "add", "-A")
         git(self.shared, "commit", "-q", "-m", "tools")
@@ -766,7 +788,7 @@ class ProvisionTests(unittest.TestCase):
     def test_the_non_interactive_ssh_command_puts_user_level_toolchains_on_the_path(self):
         transport = lr.SshTransport("m", {"ssh": {"target": "ai@h", "args": []}})
         command = transport.argv("cargo --version")[-1]
-        self.assertTrue(command.startswith('export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"; '))
+        self.assertTrue(command.startswith('export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH" CARGO_NET_GIT_FETCH_WITH_CLI=true; '))
         self.assertTrue(command.endswith("cargo --version"))
 
     def test_the_rust_pin_is_read_from_the_toolchain_files(self):

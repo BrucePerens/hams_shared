@@ -525,6 +525,15 @@ class TestMayTry(_SlotHolderMixin, _TmpDirCase):
         waiter = lq.take_ticket(self.qdir)
         self.assertFalse(lq.may_try(self.qdir, self.tickets(), waiter, slots=2))
 
+    def test_a_holder_of_an_older_checkout_names_no_ticket_and_its_pid_s_ticket_is_still_a_running_run(self):
+        """Tests [@ANCHOR: lock_queue:may_try]: lint runs started by an older checkout write a holder record without `ticket`."""
+        child = self.write(1)  # that run: a live process, a holder record, no ticket field
+        older = lq.take_ticket(self.qdir, pid=child.pid, start=lq.proc_start_time(child.pid))
+        waiter = lq.take_ticket(self.qdir)
+        self.assertIn(older, {t["name"] for t in self.tickets()})
+        self.assertTrue(lq.may_try(self.qdir, self.tickets(), waiter, slots=2),
+                        "the older run's ticket is not ahead of the waiter: that run holds a slot")
+
     def test_a_run_without_a_ticket_still_takes_a_slot(self):
         self.write(1)  # a fail-fast run: a holder record and no ticket
         waiter = lq.take_ticket(self.qdir)

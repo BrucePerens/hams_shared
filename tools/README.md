@@ -590,6 +590,67 @@ The mac1 VM (`hams-test-debian`) and bruce17 run Odoo browser tests (Odoo, Postg
 `cargo test` hosts. On 2026-11-04 a relay build overlapped an Odoo browser test in the 11 GiB VM and test.py's OOM watchdog killed the
 Odoo run (exit 247). `remote_cargo_test.py` now takes the host's Odoo-test lock; the lint runner takes it too, through the entries below.
 
+## The dev box is the primary lint runner: slots
+
+Bruce, 2026-11-08: "we aren't limited by those less powerful machines." The dev box (32 cores, 125 GB) runs the lint itself, every step
+including `check_cargo_fmt`, `check_cargo_clippy` and `check_cargo_deny`, with several heavy runs side by side. Its toolchain is the
+repositories' pinned Rust (rustup, user level, `provision_build_host.sh apply-user`: rustfmt, clippy, the `wasm32-unknown-unknown` target).
+`lint_machines.json` gives it `"lint_slots": 4`: four runs at once, one lock file per slot (`lint_lock.py`), each run at `nice` 10 with its own
+TMPDIR (slots above 1: `<TMPDIR>/s<K>`) and its own warm Cargo target directory (`-sK`). A fifth run queues in the same FIFO. The other machines
+keep one slot. `--remote auto` no longer spreads steps to idle machines: another machine takes a **whole** run only as overflow, when every slot
+is taken (or a run waits) or the load is above the lint limit, and a run whose overflow machine is claimed or unreachable simply waits for a
+slot here: it always ends with a real result and a stamp.
+
+### `[@ANCHOR: lint_lock:slot_count]` `slot_count(environ=None, machines_file=None)`
+
+Purpose: how many heavy lint runs this machine lets go at once. `RunLock` and `local_busy` ask it.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `environ` | dict or `None` | Environment to read (`HAMS_LINT_SLOTS`, `HAMS_LINT_MACHINE`, `XDG_CACHE_HOME`); `None` means `os.environ`. |
+| `machines_file` | str or `None` | The inventory to read; `None` means `lint_machines.json` beside the module. |
+
+Returns an int from 1 to `runner_slots.MAX_SLOTS` (15): `HAMS_LINT_SLOTS` when set and valid, else `lint_slots` of the machine's entry
+(`lint_cache.machine_name`: the entry whose `hostnames` hold this host's name, else `devbox`), else 1. A value that is not a whole number in range
+gives 1 rather than an error (a typo must not stop the lint). Special concerns: reads one small file, no other side effects. Tests: `SlotTests` in `test_lint_lock.py`.
+
+### `[@ANCHOR: lint_lock:slot_lock_path]` `slot_lock_path(slot, environ=None)`
+
+Purpose: the lock file of one slot. Slot 1 is `~/.cache/hams-lint/run.lock`, the file a checkout without slots takes, so old and new runs exclude
+each other on it; slot K is `run.lock.slot-K` beside it. `slot` is the 1-based number; `environ` as in `slot_count`. Returns the path (str); creates nothing.
+Tests: `SlotTests` in `test_lint_lock.py`.
+
+### `[@ANCHOR: lint_lock:enter_slot]` `enter_slot(lock, environ=None, base_tmp=None)`
+
+Purpose: gives a run that holds a slot of a multi-slot machine its own working space. `run_linters.py` calls it right after `begin_heavy_run`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `lock` | `RunLock` or `None` | The lock the run holds; `None` (no lock taken) changes nothing. |
+| `environ` | dict or `None` | Source of `TMPDIR`; `None` means `os.environ`. |
+| `base_tmp` | str or `None` | Replaces the TMPDIR base (tests). |
+
+Returns the environment changes as a dict (`HAMS_LINT_SLOT`, `TMPDIR`), `{}` for a run with no lock or a single-slot machine. Special concerns: calls
+`os.nice(10)` (children inherit it), creates `<TMPDIR or /tmp>/s<K>` for K above 1 (slot 1 keeps TMPDIR; the name is short because Chrome's singleton socket path must stay under 107 bytes), and updates `os.environ`; the caller passes the dict on to steps
+whose environment was captured earlier. Tests: `test_a_run_in_a_later_slot_gets_its_own_tmpdir_and_environment` in `test_lint_lock.py`.
+
+### `[@ANCHOR: lint_lock:running_count]` `running_count(qdir)`
+
+Purpose: how many runs hold a slot now, counted from the live holder records of the queue directory `qdir` (`lint_lock.queue_dir()`). Returns an int; records of dead
+processes are ignored and removed. Tests: `test_three_runs_hold_three_slots_at_once_and_the_fourth_waits` in `test_lint_lock.py`.
+
+### `[@ANCHOR: lint_cache:cargo_target_dir]` `cargo_target_dir(repo_name, environ=None)`
+
+Purpose: the persistent Cargo target directory of a repository on this machine: `~/.cache/hams-lint-cargo/<repo>-<rustc release>-<8 hex of rustc -vV>`, with `-sK`
+appended in lint slot K above 1 (`HAMS_LINT_SLOT`, set by `RunLock.acquire`), so runs side by side never share a build directory. Returns the path (str); creates
+nothing. The directory is pruned to the machine's budget (`cache_budgets`) as before. Tests: `test_a_run_in_a_later_slot_gets_its_own_tmpdir_and_environment` in `test_lint_lock.py`.
+
+### `[@ANCHOR: lint_remote:prefer_user_toolchain]` `prefer_user_toolchain(environ=None)`
+
+Purpose: puts `~/.cargo/bin` (rustup's cargo, rustfmt and clippy at the pinned version) first on PATH when it holds a `cargo`, so the lint uses it and not the distribution's
+component-less `/usr/bin/cargo`. `run_linters.main()` calls it first. Argument `environ`: dict or `None` for `os.environ`. Returns True when PATH changed. Tests:
+`test_prefer_user_toolchain_puts_rustup_first_once` in `test_lint_remote.py`.
+
 ### `[@ANCHOR: lint_lock:held_locks]` `HeldLocks`
 
 Purpose: a handle that stands for several open lock files at once, so a lint run's claim on a machine and its hold on that machine's

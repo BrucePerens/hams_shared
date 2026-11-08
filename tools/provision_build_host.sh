@@ -7,6 +7,8 @@
 #
 #   provision_build_host.sh plan     what would be installed (default; changes nothing)
 #   provision_build_host.sh apply    install what is missing; idempotent, safe to repeat
+#   provision_build_host.sh apply-user   only the user-level parts (rustup toolchain with rustfmt and clippy, createdb role, pip wheels):
+#                                    for the dev box, which already has its apt packages and services
 #   provision_build_host.sh verify   prove the machine can cargo test, run node tests, run
 #                                    pytest -n and take a headless Chrome screenshot
 #   provision_build_host.sh versions print the versions for tools/lint_machines.json
@@ -180,6 +182,13 @@ do_rust() {
   if ! rustup_has_toolchain; then
     rustup toolchain install "$TOOLCHAIN" --profile minimal -c rustfmt -c clippy || return 1
   fi
+  # cargo's own git client ignores ~/.ssh/config Host aliases (the `url.<alias>:...insteadOf` rewrite of the hams_shared submodule URL
+  # then fails as "failed to resolve address for github-hams_shared"); the git command line honours them.
+  local cfg="$HOME/.cargo/config.toml"
+  grep -qs 'git-fetch-with-cli' "$cfg" || { mkdir -p "$HOME/.cargo"; printf '[net]\ngit-fetch-with-cli = true\n' >>"$cfg"; }
+  # shack_console's tools/build_wasm.py (and its byte-for-byte rebuild test) compile hams_core for WebAssembly.
+  rustup target list --installed --toolchain "$TOOLCHAIN" 2>/dev/null | grep -qx wasm32-unknown-unknown \
+    || rustup target add wasm32-unknown-unknown --toolchain "$TOOLCHAIN" || return 1
   rustup default "$TOOLCHAIN" >/dev/null 2>&1 || true
 }
 
@@ -361,6 +370,18 @@ do_apply() {
   return $rc
 }
 
+# The user-level part only (no sudo, no apt, no service, no download but rustup and pip wheels): what the dev box itself needs to be a full lint
+# runner (2026-11-08): the pinned Rust toolchain with rustfmt and clippy, the lint user's createdb role where PostgreSQL already runs, and the
+# pytest wheels. `apply` on a machine that is also somebody's workstation or server would install brokers and a database; this does not.
+do_apply_user() {
+  local rc=0
+  do_pgrole
+  do_rust || rc=1
+  do_pip || rc=1
+  do_versions
+  return $rc
+}
+
 do_versions() {
   say "versions on $(hostname):"
   say "  os: $(. /etc/os-release && echo "$PRETTY_NAME") $(uname -m), $(nproc) cores, $(awk '/MemTotal/ {printf "%.0f GiB", $2/1048576}' /proc/meminfo)"
@@ -448,8 +469,9 @@ do_undo() {
 case "${1:-plan}" in
   plan) do_plan ;;
   apply) do_apply ;;
+  apply-user) do_apply_user ;;
   verify) do_verify ;;
   versions) do_versions ;;
   undo) do_undo ;;
-  *) say "usage: $0 plan|apply|verify|versions|undo"; exit 2 ;;
+  *) say "usage: $0 plan|apply|apply-user|verify|versions|undo"; exit 2 ;;
 esac

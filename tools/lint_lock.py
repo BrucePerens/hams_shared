@@ -33,6 +33,13 @@ fails, and each run takes 20-40 minutes instead of 5. So heavy runs queue:
     other runs either when its known durations total at most HAMS_LINT_RESIDUE_SECONDS (default 240): it
     waits only for the load gate. `local_busy` is that decision; `claim` keeps two runs on this machine from picking the same
     idle machine at the same moment (an flock per machine, held while the run's share is executing).
+  * SLOTS (2026-11-08). The dev box has 32 cores and 125 GB: it is the primary lint runner and lets several heavy runs go at
+    once, side by side. `slot_count` is the number of runs (HAMS_LINT_SLOTS, else the machine's `lint_slots` in
+    lint_machines.json, else 1: the small remote machines keep one). Slot 1 is the lock file above; slot K is
+    `run.lock.slot-K`. The FIFO queue stays one line in front of all slots (lock_queue.py `slots`), the holder records name
+    their slot, and a run in slot K gets its own Cargo target directory (lint_cache.cargo_target_dir adds `-sK`) and its
+    own TMPDIR (slots above 1: `<TMPDIR>/s<K>`), so concurrent runs never share a build directory or a scratch file. The load gate still applies to every
+    run, and runs under slots go on at `nice` 10 so a saturated box stays usable.
   * OVERRIDES. HAMS_LINT_NO_LOCK=1 (CI, a machine that is used by one run at a time) takes no lock;
     the gate has its own switch above. The holder exports HAMS_LINT_LOCK_HELD so the runs it
     starts itself (tests that call run_linters.py) never queue behind their own parent.
@@ -42,11 +49,13 @@ import fcntl
 import json
 import math
 import os
+import re
 import statistics
 import sys
 import time
 
 import lock_queue
+import runner_slots
 
 DEFAULT_CHEAP_SECONDS = 60.0
 DEFAULT_RESIDUE_SECONDS = 240.0
@@ -64,6 +73,40 @@ def cache_dir(environ=None):
 
 def lock_path(environ=None):
     return os.path.join(cache_dir(environ), "run.lock")
+
+
+SLOTS_ENV = "HAMS_LINT_SLOTS"
+SLOT_ENV = "HAMS_LINT_SLOT"
+SLOT_NICE = 10
+MACHINES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lint_machines.json")
+
+
+# [@ANCHOR: lint_lock:slot_count]
+def slot_count(environ=None, machines_file=None):
+    """How many heavy lint runs this machine lets go at once: HAMS_LINT_SLOTS, else `lint_slots` of this machine's entry in
+    lint_machines.json (the entry lint_cache.machine_name picks), else 1. A value that is not a whole number from 1 to
+    runner_slots.MAX_SLOTS is ignored (a typo must not stop the lint, and one slot is the safe answer). Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    if environ.get(SLOTS_ENV):
+        try:
+            return runner_slots.parse_slot_count(environ[SLOTS_ENV], SLOTS_ENV)
+        except runner_slots.SlotConfigError:
+            return 1
+    try:
+        import lint_cache
+
+        name = lint_cache.machine_name(environ, machines_file)
+        with open(machines_file or MACHINES_FILE, encoding="utf-8") as handle:
+            entry = json.load(handle).get("machines", {}).get(name, {})
+        return runner_slots.parse_slot_count(entry.get("lint_slots", 1), "lint_slots")
+    except (OSError, ValueError, AttributeError, runner_slots.SlotConfigError):
+        return 1
+
+
+# [@ANCHOR: lint_lock:slot_lock_path]
+def slot_lock_path(slot, environ=None):
+    """The lock file of `slot`: run.lock for slot 1 (so a checkout without slots excludes the slotted runs on it), run.lock.slot-K."""
+    return runner_slots.slot_lock_path(lock_path(environ), slot)
 
 
 def queue_dir(environ=None):
@@ -147,13 +190,14 @@ def _split_info(info):
     return worktree or "?", command
 
 
-def waiting_message(qdir, pid=None):
+def waiting_message(qdir, pid=None, slots=1):
     """'waiting for the lint run in <worktree> (pid N), position K'."""
     pid = os.getpid() if pid is None else pid
     holder = lock_queue.read_holder(qdir)
     # The running holder keeps its own ticket (lock_queue keeps it for the whole run); it is not ahead
-    # of anyone in the waiting line.
-    tickets = [t for t in lock_queue.live_tickets(qdir, clean=False) if not (holder and t["pid"] == holder.get("pid"))]
+    # of anyone in the waiting line. With slots every running holder's ticket is one of those.
+    running_pids = {h.get("pid") for h in lock_queue.read_holders(qdir)} if slots > 1 else {holder.get("pid")} if holder else set()
+    tickets = [t for t in lock_queue.live_tickets(qdir, clean=False) if t["pid"] not in running_pids]
     position = len(tickets) + 1
     for index, ticket in enumerate(tickets, 1):
         if ticket["pid"] == pid:
@@ -166,25 +210,33 @@ def waiting_message(qdir, pid=None):
 
 
 class RunLock:
-    """The machine-wide run lock. `acquire` returns True when held, False on timeout."""
+    """The machine-wide run lock. `acquire` returns True when held, False on timeout. With `slots` > 1 (see `slot_count`)
+    that many runs hold one lock file each at the same time; `slot` is the number taken (1 when there is one slot)."""
 
-    def __init__(self, environ=None):
+    def __init__(self, environ=None, slots=None):
         self.environ = os.environ if environ is None else environ
         self.path = lock_path(self.environ)
         self.qdir = queue_dir(self.environ)
+        self.slots = slot_count(self.environ) if slots is None else slots
         self.fd = None
+        self.slot = None
         self.ticket = None
 
     def _try_flock(self):
-        try:
-            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        """One non-blocking pass over the slot files, lowest first; keeps the first one it locks open in self.fd."""
+        for slot in range(1, self.slots + 1):
+            fd = os.open(slot_lock_path(slot, self.environ), os.O_CREAT | os.O_RDWR, 0o666)  # not inheritable: steps never hold it
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(fd)
+                continue
+            self.fd, self.slot = fd, slot
             return True
-        except OSError:
-            return False
+        return False
 
     def acquire(self, info, timeout=None, out=print, report_every=30.0, poll=1.5, sleep=time.sleep, now=time.time):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o666)  # not inheritable: steps never hold it
         status, ticket = lock_queue.acquire(
             self.qdir,
             self._try_flock,
@@ -194,16 +246,19 @@ class RunLock:
             report_every=report_every,
             sleep=sleep,
             now=now,
-            out=lambda _line: out("[*] " + waiting_message(self.qdir)),
+            out=lambda _line: out("[*] " + waiting_message(self.qdir, slots=self.slots)),
+            slots=self.slots,
         )
         if status != lock_queue.ACQUIRED:
-            os.close(self.fd)
-            self.fd = None
             return False
         self.ticket = ticket
-        lock_queue.write_holder(self.qdir, info)
+        if self.slots > 1:
+            lock_queue.write_holder(self.qdir, info, slot=self.slot, ticket=ticket)
+        else:
+            lock_queue.write_holder(self.qdir, info)
         # Runs started by this one (tests that call run_linters.py) must not queue behind us.
         os.environ[HELD_ENV] = str(os.getpid())
+        os.environ[SLOT_ENV] = str(self.slot)
         return True
 
     def release(self):
@@ -223,27 +278,72 @@ class RunLock:
                 pass
             self.fd = None
         os.environ.pop(HELD_ENV, None)
+        os.environ.pop(SLOT_ENV, None)
 
 
-def local_busy(environ=None, loadavg=None, cpu_count=None, qdir=None):
-    """(busy, reason): True when a heavy run started now would wait here, because a lint run holds or waits
-    for the lock, or the 1-minute load average is above the limit. Takes no lock; reads the queue only."""
+# [@ANCHOR: lint_lock:enter_slot]
+def enter_slot(lock, environ=None, base_tmp=None):
+    """Give a run that holds a slot of a machine with several its own working space: it runs at nice SLOT_NICE, and with
+    a slot above 1 its TMPDIR is `<TMPDIR or /tmp>/s<K>` (created; short, see below). Returns the environment changes
+    ({} for a run without a lock or with a single slot) so the caller can pass them on to steps whose environment was
+    captured earlier. Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    if lock is None or lock.slot is None or lock.slots <= 1:
+        return {}
+    try:
+        os.nice(SLOT_NICE)
+    except OSError:
+        pass
+    base = base_tmp or environ.get("TMPDIR") or "/tmp"
+    # Slot 1 keeps the caller's TMPDIR; a later slot gets `<TMPDIR>/s<K>`. The name is deliberately short: Chrome's profile
+    # directory lives under TMPDIR and its singleton socket path must stay under the 107 bytes of a unix socket address
+    # (`<TMPDIR>/hams-lint-slot-1/owl_template_check_x/com.google.Chrome.x/SingletonSocket` was 119 and failed 2026-11-08).
+    if lock.slot > 1:
+        if re.fullmatch(r"s\d+", os.path.basename(base)):
+            base = os.path.dirname(base)
+        base = os.path.join(base, "s%d" % lock.slot)
+        os.makedirs(base, exist_ok=True)
+    changes = {SLOT_ENV: str(lock.slot), "TMPDIR": base}
+    os.environ.update(changes)
+    return changes
+
+
+# [@ANCHOR: lint_lock:running_count]
+def running_count(qdir):
+    """How many runs hold a slot right now (live holder records, one per slot)."""
+    return len(lock_queue.read_holders(qdir))
+
+
+def local_busy(environ=None, loadavg=None, cpu_count=None, qdir=None, slots=None):
+    """(busy, reason): True when a heavy run started now would wait here: every slot is taken or a run waits for one, or the
+    1-minute load average is above the limit. With a single slot that is "a lint run holds or waits for the lock", as before.
+    Takes no lock; reads the queue only."""
     environ = os.environ if environ is None else environ
     qdir = qdir or queue_dir(environ)
+    slots = slot_count(environ) if slots is None else slots
     tickets = lock_queue.live_tickets(qdir, clean=False)
-    holder = lock_queue.read_holder(qdir)
-    if tickets or holder:
-        return True, "%d lint run(s) hold or wait for the lock here" % max(len(tickets), 1)
+    holders = lock_queue.read_holders(qdir)
+    if slots <= 1:
+        if tickets or lock_queue.read_holder(qdir):
+            return True, "%d lint run(s) hold or wait for the lock here" % max(len(tickets), 1)
+    else:
+        running = {h.get("ticket") for h in holders if h.get("ticket")}
+        running_pids = {h.get("pid") for h in holders}  # a holder written by an older checkout names no ticket
+        waiting = [t for t in tickets if t["name"] not in running and t["pid"] not in running_pids]
+        if len(holders) >= slots:
+            return True, "all %d lint slots are busy here (%d waiting)" % (slots, len(waiting))
+        if waiting:
+            return True, "%d lint run(s) wait for a slot here (%d of %d slots running)" % (len(waiting), len(holders), slots)
     if environ.get("HAMS_SKIP_CI_LOAD_GATE") == "1":
-        return False, "the lock is free"
+        return False, "a lint slot is free"
     try:
         current = (loadavg or (lambda: os.getloadavg()[0]))()
     except OSError:
-        return False, "the lock is free"
+        return False, "a lint slot is free"
     limit = load_limit(environ, cpu_count=cpu_count)
     if current > limit:
         return True, "load %.1f is above the lint limit %.1f" % (current, limit)
-    return False, "the lock is free and the load is %.1f" % current
+    return False, "a lint slot is free and the load is %.1f" % current
 
 
 def claim_dir(environ=None):
