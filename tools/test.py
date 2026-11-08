@@ -1008,11 +1008,59 @@ _CHROME_KILL_PATTERN = runner_slots.DEFAULT_CHROME_PATTERN
 _CHROME_PROFILE_GLOBS = runner_slots.DEFAULT_CHROME_GLOBS
 
 
+def _profile_directory_of(cmdline):
+    """The `--user-data-dir=` path of a Chrome command line, or None."""
+    for argument in cmdline:
+        if str(argument).startswith("--user-data-dir="):
+            return str(argument).split("=", 1)[1]
+    return None
+
+
+# [@ANCHOR: test:chrome_processes_of_this_run]
+def chrome_processes_of_this_run(pattern, uid=None, own_pids=None, processes=None):
+    """The Chrome processes that belong to THIS run and match `pattern`, as psutil.Process objects.
+
+    A process counts when its effective uid is `uid` (default: the `odoo` account; none if there is no such account),
+    its command line matches the regular expression `pattern` (`_CHROME_KILL_PATTERN`) and it is this run's own: a
+    descendant of this process (`own_pids`, default: `psutil.Process().children(recursive=True)`), or an orphan whose
+    `--user-data-dir` is a directory that exists in this process's own view of the filesystem. The second rule finds the
+    leftovers of a Chrome whose parent died, and is why another run's browsers do not count: a run in its own PID and
+    mount namespace is seen from the host's process table, but its profile directories are in a private overlay, and a
+    flat run's profile directories are not visible from inside a namespace at all. `pkill -u odoo -f` used instead killed
+    the browsers of every other run on the machine whose profile path matched. `processes` is a test seam (default
+    `psutil.process_iter`). Full entry: tools/README.md."""
+    if uid is None:
+        try:
+            uid = pwd.getpwnam("odoo").pw_uid
+        except KeyError:  # burn-ignore-os-account-probe
+            return []
+    if own_pids is None:
+        own_pids = {child.pid for child in psutil.Process().children(recursive=True)}
+    matcher = re.compile(pattern)
+    found = []
+    for process in (processes or psutil.process_iter)(["pid", "uids", "cmdline"]):
+        try:
+            uids = process.info.get("uids")
+            cmdline = process.info.get("cmdline") or []
+            if uids is None or uids.effective != uid or not matcher.search(" ".join(cmdline)):
+                continue
+            profile = _profile_directory_of(cmdline)
+            if process.info["pid"] in own_pids or (profile and os.path.isdir(profile)):
+                found.append(process)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, KeyError) as e:
+            _logger.debug("Ignored %s while looking for this run's Chrome", e)
+    return found
+
+
 def kill_test_chrome(signal_name):
-    """Send `signal_name` ('TERM' or 'KILL') to this run's headless Chrome processes (the odoo user's)."""
-    subprocess.run(
-        ["pkill", "-u", "odoo", f"-{signal_name}", "-f", _CHROME_KILL_PATTERN], check=False, timeout=2
-    )
+    """Send `signal_name` ('TERM' or 'KILL') to this run's headless Chrome processes (the odoo user's); see
+    chrome_processes_of_this_run for which those are. A process that is already gone is ignored."""
+    sig = getattr(signal, "SIG" + signal_name)
+    for process in chrome_processes_of_this_run(_CHROME_KILL_PATTERN):
+        try:
+            process.send_signal(sig)
+        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+            _logger.debug("Ignored %s signalling Chrome pid %s", e, process.pid)
 
 
 def robust_reap(pid):

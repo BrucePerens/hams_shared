@@ -908,6 +908,25 @@ Returns the slot whose flock was taken (kept in `_single_instance_lock` for the 
 limit: another run took it in the moment the invoking process had let go (an older `test.py`, which has no holder-record reservation, can). The
 caller then prints `_no_slot_message` and exits 1. Blocking; polls every 0.2 s; never takes a slot other than `only_slot` when that is given.
 
+### `[@ANCHOR: test:chrome_processes_of_this_run]` `chrome_processes_of_this_run(pattern, uid=None, own_pids=None, processes=None)`
+
+Purpose: which headless Chrome processes `kill_test_chrome()` may signal (hang recovery in `run_cmd`, `robust_reap`, the end-of-run clean-up). It replaced
+`pkill -u odoo -f <pattern>`, which signalled every `odoo` Chrome on the machine whose command line matched, including the browsers of other
+runs: a run in its own PID namespace is visible in the host's process table, and a slot 1 run's pattern (`<TMPDIR>/[^/ ]*_chrome_odoo`)
+matched their profile directories. The symptom was a tour in a full-pipeline run whose Chrome died with exit code 9 (SIGKILL) a fraction of a second
+after it started, with `CancelledError` in `Page.navigate` or a tour that stalled at a step.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `pattern` | str | Regular expression searched in the space-joined command line (`_CHROME_KILL_PATTERN`). |
+| `uid` | int or `None` | Effective uid of the processes; default the `odoo` account (no such account: empty result). |
+| `own_pids` | set of int or `None` | Pids of this process's descendants; default `psutil.Process().children(recursive=True)`. |
+| `processes` | callable or `None` | Test seam; default `psutil.process_iter`. |
+
+Returns a list of `psutil.Process` with `info` holding pid, uids and cmdline. A process belongs to this run when it is a descendant of this process, or an
+orphan whose `--user-data-dir` is a directory that exists in this process's own view of the filesystem (a leftover of a dead parent of this run;
+another run's profile directories are in its private overlay, or on the host where a namespaced run cannot see them). Reads `/proc`; sends no signal.
+
 ### `[@ANCHOR: test:slot_handoff_args]` `slot_handoff_args(slots, held_slot)`
 
 Purpose: the command-line words that give a re-exec'd phase the slot of its parent. Returns `[]` when `slots` is 1 (the command line stays

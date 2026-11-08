@@ -22,6 +22,7 @@ import io
 import inspect
 import itertools
 import os
+import re
 import resource
 import shutil
 import signal
@@ -30,6 +31,7 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -817,17 +819,61 @@ class SlotFilesAndKillTests(unittest.TestCase):
         self.assertEqual(self._flush_command(), ["redis-cli", "-n", "0", "flushdb"])
         self.assertEqual(self._flush_command(redis_flush_db=3), ["redis-cli", "-n", "3", "flushdb"])
 
-    def test_the_chrome_kill_uses_the_runs_own_pattern(self):
-        calls = []
-        with patch.object(_test_runner.subprocess, "run", side_effect=lambda cmd, **kw: calls.append(cmd)):
-            _test_runner.kill_test_chrome("TERM")
-            with patch.object(_test_runner, "_CHROME_KILL_PATTERN", "/var/lib/odoo/tmp/slot\\-2/[^/ ]*_chrome_odoo"):
-                _test_runner.kill_test_chrome("KILL")
-        self.assertEqual(calls[0], ["pkill", "-u", "odoo", "-TERM", "-f", "_chrome_odoo"])
-        self.assertEqual(
-            calls[1],
-            ["pkill", "-u", "odoo", "-KILL", "-f", "/var/lib/odoo/tmp/slot\\-2/[^/ ]*_chrome_odoo"],
-        )
+    def test_the_chrome_kill_signals_only_this_runs_matching_browsers(self):
+        """Tests [@ANCHOR: test:chrome_processes_of_this_run] with real processes: stand-ins named `chrome` (a script that sleeps)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = os.path.join(tmp, "chrome")
+            with open(binary, "w") as handle:
+                handle.write("#!/usr/bin/python3\nimport time\ntime.sleep(60)\n")
+            os.chmod(binary, 0o755)
+            slot2 = os.path.join(tmp, "slot-2")
+            mine = os.path.join(tmp, "mine_chrome_odoo")
+            orphan_here = os.path.join(slot2, "o_chrome_odoo")
+            elsewhere = os.path.join(tmp, "other_runs_chrome_odoo")        # a profile directory only another run has
+            for directory in (mine, orphan_here):
+                os.makedirs(directory)
+            spawned = []
+
+            def start(profile, orphan):
+                argv = [binary, "60", f"--user-data-dir={profile}", "--headless=new"]
+                process = subprocess.Popen((["setsid", "-f"] if orphan else []) + argv)   # setsid -f: reparented to init
+                spawned.append(process)
+
+            def alive(profile):
+                return subprocess.run(["pgrep", "-f", "--", f"--user-data-dir={profile}"], capture_output=True).returncode == 0
+
+            self.addCleanup(subprocess.run, ["pkill", "-f", f"{binary} 60"], check=False)
+            start(mine, orphan=False)                  # a descendant of this process
+            start(orphan_here, orphan=True)            # an orphan whose profile directory exists here
+            start(elsewhere, orphan=True)              # an orphan of another run: no such directory in this view
+            for profile in (mine, orphan_here, elsewhere):
+                for _ in range(100):
+                    if alive(profile):
+                        break
+                    time.sleep(0.1)
+                self.assertTrue(alive(profile))
+            me = os.getuid()
+            found = _test_runner.chrome_processes_of_this_run("_chrome_odoo", uid=me)
+            profiles = sorted(_test_runner._profile_directory_of(p.info["cmdline"]) for p in found)
+            self.assertEqual(profiles, sorted([mine, orphan_here]))
+            narrowed = _test_runner.chrome_processes_of_this_run(re.escape(slot2) + "/[^/ ]*_chrome_odoo", uid=me)
+            self.assertEqual([_test_runner._profile_directory_of(p.info["cmdline"]) for p in narrowed], [orphan_here])
+            self.assertEqual(_test_runner.chrome_processes_of_this_run("_chrome_odoo", uid=me + 12345), [])
+            self.assertEqual(_test_runner.chrome_processes_of_this_run("nothing_matches_this", uid=me), [])
+            with patch.object(_test_runner, "_CHROME_KILL_PATTERN", "_chrome_odoo"), \
+                 patch.object(_test_runner.pwd, "getpwnam", return_value=SimpleNamespace(pw_uid=me)):
+                _test_runner.kill_test_chrome("TERM")
+            for profile in (mine, orphan_here):
+                for _ in range(100):
+                    if not alive(profile):
+                        break
+                    time.sleep(0.1)
+                self.assertFalse(alive(profile), "this run's browser is signalled")
+            self.assertTrue(alive(elsewhere), "another run's browser is left alone")
+
+    def test_no_odoo_account_means_no_chrome_to_kill(self):
+        with patch.object(_test_runner.pwd, "getpwnam", side_effect=KeyError("odoo")):
+            self.assertEqual(_test_runner.chrome_processes_of_this_run("x"), [])
 
 
 class NoTestsRanTests(unittest.TestCase):
