@@ -2877,3 +2877,290 @@ Purpose: the decision for one command. Returns `None` (allow, print nothing), th
 ### `[@ANCHOR: guard_signals:main]` `main(stdin=None, stdout=None, environ=None)`
 
 Purpose: the hook entry point. Reads the hook JSON (`tool_name`, `tool_input.command`, `session_id`) from `stdin`, prints the decision JSON on `stdout`, returns 0 always. Anything that is not a Bash call with a text command (or not JSON) is allowed.
+
+## Template-database benchmark (`benchmark_template_db.py`)
+
+Measures whether a pre-built template database speeds up an Odoo test run (Bruce, 2026-11-08). It imports `test.py`'s own
+`main()` and changes nothing in it; the clone arms replace exactly two things (`rebuild_db` and the `-i` argument). Findings and the
+design of a production implementation: `docs/TEMPLATE_DATABASE_FOR_TEST_RUNS.md`. Tests: `test_benchmark_template_db.py`.
+Every entry below is for `benchmark_template_db.py`; arguments not listed are not used. Nothing here blocks except `run_measured`,
+`timed_clone`, `RamTablespace`, `clone_for_run`, `stub_main`, `Bench` and `run_command`, which run subprocesses or SQL and take a test slot
+(`run_command` only) for the length of a measurement. No function handles a secret; `HAMS_CRYPTO_KEY` enters the key only as a
+double-hashed fingerprint.
+
+### `[@ANCHOR: tools:template_db_identifier]` `SAFE_IDENTIFIER_RE`
+
+Constant: the regular expression `^[A-Za-z_][A-Za-z0-9_]*$` (the rule of `test.py`'s `_SAFE_DB_NAME_RE`). Read only by `check_identifier`;
+every database, template and tablespace name interpolated into SQL goes through it, because PostgreSQL has no placeholder for an identifier.
+
+### `[@ANCHOR: tools:template_db_check_identifier]` `check_identifier(name)`
+
+Purpose: the one gate in front of every identifier put in SQL. Returns `name` if it is a `str` matching `SAFE_IDENTIFIER_RE` and at most
+63 bytes (PostgreSQL's limit, longer names are silently truncated and could collide). Raises `ValueError` otherwise, including for `None`.
+Pure, idempotent. Tests: `IdentifierAndListTests`.
+
+### `[@ANCHOR: tools:template_db_parse_module_list]` `parse_module_list(text)`
+
+Purpose: reads a module list such as `~/workspace/tmp/wholesys/modules.txt`. `text`: str or `None`; separators are commas and any whitespace.
+Returns a list of names in first-seen order without duplicates (`[]` for empty or `None`). Pure.
+
+### `[@ANCHOR: tools:template_db_find_modules]` `find_module_dirs(addons_dirs)`
+
+Purpose: maps module names to directories. `addons_dirs`: iterable of directory paths (the runner's addons path); unreadable ones are skipped.
+Returns `{name: realpath}` for every `<dir>/<name>/__manifest__.py`; the first directory wins on a duplicate name. Reads directory listings only.
+
+### `[@ANCHOR: tools:template_db_dependency_closure]` `dependency_closure(names, module_dirs)`
+
+Purpose: the modules whose files decide a template's content. `names`: starting modules; `module_dirs`: result of `find_module_dirs`. Returns a
+sorted list of `names` and everything they transitively `depends` on that is in `module_dirs`; dependencies outside it are Odoo's own addons,
+covered by the Odoo version in the key. Raises `SyntaxError`/`ValueError` for a manifest that is not a Python literal: a key must never be
+built from a guess. Reads manifests; pure otherwise.
+
+### `[@ANCHOR: tools:template_db_hash_sources]` `hash_module_sources(module_dirs, names, include_tests=True)`
+
+Purpose: the source-tree part of the key. Returns the sha256 hex over, for each module in sorted order, the relative path and the bytes of every
+file (data XML/CSV, Python, migrations, static files), walked in sorted order so directory order never matters; a symbolic link is hashed by its
+target text and never followed. Skips `__pycache__`, `.git`, `.pytest_cache`, `node_modules`, `*.pyc`, `*.pyo`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `module_dirs` | dict | `find_module_dirs` result. |
+| `names` | iterable of str | Modules to hash, normally the `dependency_closure`. |
+| `include_tests` | bool | `True` (default, safest): a test edit changes the key. `False`: a module's top-level `tests` directory is skipped; only safe while `tests_define_models` is empty. |
+
+Cost: reads every byte; about 0.5 s for the 45 modules of the `parking` closure on this box, one pass per run. Not a lock holder.
+
+### `[@ANCHOR: tools:template_db_tests_define_models]` `tests_define_models(module_dirs, names)`
+
+Purpose: finds modules whose tests define ORM models. Such a model's table is only created when the module is installed with tests enabled, so a
+template built without tests would lack it. Returns a sorted-by-module list of names (empty = the key may ignore test files). A heuristic: a
+file under `tests/` that mentions `models.Model`, `TransientModel` or `AbstractModel` and has an `_name =` line.
+
+### `[@ANCHOR: tools:template_db_key]` `TemplateKey`
+
+Frozen dataclass: everything a template's content depends on. Lives in `benchmark_template_db.py`; created by `Bench.build_key`, read by `verify_template` and `run_command`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `modules` | tuple of str | The install list the runner passes to `-i` (`base` plus the targets and their test companions), in order. |
+| `source_hash` | str | `hash_module_sources` of the dependency closure. |
+| `odoo_version` | str | `odoo.release.version` (a Debian package version such as `19.0-20261107`; it stands for Odoo's own addons). |
+| `postgres_major` | str | Major version from `server_version_num`. |
+| `vector_version` | str | Highest available `vector` extension version (the runner creates the extension before installing). |
+| `options` | tuple of str | Install options that change data, e.g. `("demo",)`. |
+| `crypto_key_fingerprint` | str | First 16 hex digits of `sha256(sha256(HAMS_CRYPTO_KEY))`: data encrypted with the key is in the template. Never the key. |
+
+Methods: `canonical()` (sorted-key compact JSON), `digest()` (sha256 hex of it), `database_name()` (`hams_tpl_` + first 16 digits), `comment()`
+(the text stored with `COMMENT ON DATABASE`: `{"hams_template_db": 1, "digest": ..., "key": {...}}`). Invariant: equal fields give an equal name; any
+field change gives a different name, so a changed key cannot find an old template. Immutable, safe to share between threads.
+
+### `[@ANCHOR: tools:template_db_verify_template]` `verify_template(comment, key)`
+
+Purpose: the second line of defence behind the content-addressed name. `comment`: the template database's comment or `None`. Returns `(True, "")`
+if it was written for exactly `key`, else `(False, reason)` for a missing comment (a build that did not finish writes none), a comment that is not
+JSON, not a template comment, or carries another digest. Pure.
+
+### `[@ANCHOR: tools:template_db_summarize]` `summarize(values)`
+
+Purpose: the statistics of repeated measurements. `values`: iterable of numbers; `None` entries are ignored. Returns a dict `n, median, min, max,
+mean, stdev, cv_percent` (sample standard deviation, 0.0 for one value; the coefficient of variation in percent), all `None` except `n=0` for no
+values. Pure.
+
+### `[@ANCHOR: tools:template_db_parse_loadscreen]` `parse_loadscreen(text)`
+
+Purpose: turns `/dev/shm/loadscreen/stats.txt` into numbers so every measurement carries the box state. Returns a dict with any of `recommendation`
+(HOLD, GO...), `cpu_busy_1min/_5min`, `io_wait_1min/_5min`, `postgres_1min/_5min`, `load1`, `test_slots_busy`, `tests_waiting`, `mem_avail_gb`;
+fields not found are left out and unexpected text gives `{}`. Never raises. Pure.
+
+### `[@ANCHOR: tools:template_db_read_loadscreen]` `read_loadscreen(path="/dev/shm/loadscreen/stats.txt")`
+
+Reads the file and returns `parse_loadscreen` of it, `{}` if it cannot be read. One small file read.
+
+### `[@ANCHOR: tools:template_db_log_milestones]` `LogMilestones`
+
+Dataclass returned by `parse_odoo_log`. Times are epoch seconds (Odoo logs UTC), `None` when the event did not occur.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `first_line`, `last_line` | float | First and last Odoo log line. |
+| `modules_loaded` | float | The `Modules loaded.` line: install or load finished. |
+| `post_tests_start` | float | `Starting post tests`. |
+| `first_test` | float | First `Starting Class.test ...` of any kind (an at_install test counts). |
+| `first_post_install_test` | float | First such line after `post_tests_start`. |
+| `tests_started` | list of str | `Class.test` per start, in order. |
+| `failed` | set of str | `Class.test` named in a `FAIL:`/`ERROR:` line. |
+| `result` | tuple or `None` | `(failed, errors, tests)` from the `odoo.tests.result` line, the only authority on counts. |
+| `install_seconds` | float | The largest `N modules loaded in X s` figure. |
+| `error_lines` | int | Count of ERROR/CRITICAL lines. |
+
+### `[@ANCHOR: tools:template_db_parse_odoo_log]` `parse_odoo_log(lines)`
+
+Purpose: reads the runner's output. `lines`: iterable of str. Lines that are not Odoo log lines (banners, traceback continuations) are ignored.
+Returns a `LogMilestones`. Pure; one pass.
+
+### `[@ANCHOR: tools:template_db_compare_outcomes]` `compare_outcomes(reference, other, only_post_install=True, post_install_names=None)`
+
+Purpose: "a clone must not change test outcomes". Both arguments are `LogMilestones`. Returns `{"same", "only_in_reference", "only_in_other",
+"failed_differ"}`; the lists are sorted test names. `post_install_names`, when given, restricts both sides to those names. Same means: the same
+tests started and the same tests failed. (`only_post_install` is reserved for callers that pass no explicit name set; the harness passes the names.)
+
+### `[@ANCHOR: tools:template_db_equality_lines]` `equality_lines(records)`
+
+Purpose: the "a clone must not change test outcomes" check. `records`: list of dicts with `set_name`, `arm`, `rep`, `outcome_names`, `failed_names`, `result`. Returns Markdown bullets, one per
+non-reference run, comparing it with the set's first `fresh_ssd` run: `SAME outcome` when the `odoo.tests.result` triple and the sets of started and failed tests (including `setUpClass (...)` errors) are equal, else
+`DIFFERENT` with the counts. Sets without a `fresh_ssd` run give no lines; `build` runs are skipped. A `clone_i` run reports DIFFERENT with 0 tests, which is the point of that arm. Pure.
+
+### `[@ANCHOR: tools:template_db_clone_sql]` `clone_database_sql(name, template, tablespace=None, strategy=None)`
+
+Returns one `CREATE DATABASE "name" TEMPLATE "template" [TABLESPACE "ts"] [STRATEGY = WAL_LOG|FILE_COPY];` statement. All names go through `check_identifier`; `strategy`
+must be `wal_log` or `file_copy` (case-insensitive) or `None` (server default). Raises `ValueError`. `FILE_COPY` forces a checkpoint but is the only strategy
+`file_copy_method = clone` (reflink) applies to. The statement fails if anyone is connected to the template.
+
+### `[@ANCHOR: tools:template_db_rekey_sql]` `rekey_sql()`
+
+Returns the SQL that gives a clone its own `database.uuid`, `database.secret`, `form_shield.signing_key` and `database.create_date` (`SECRET_PARAMETERS`), the
+`ir_config_parameter` rows an install fills from a random source. Test databases only (`gen_random_uuid`, `md5(random())`). Idempotent in effect. Run on the clone, never on the template.
+
+### `[@ANCHOR: tools:template_db_proc_cpu_seconds]` `proc_cpu_seconds(stat_text, clock_ticks=100)`
+
+Returns user plus system CPU seconds from the text of `/proc/<pid>/stat` (fields 14 and 15, counted after the last `)` because the command name may contain spaces and
+parentheses, as `postgres: odoo db (x)` does), or `None` if the text does not parse. `clock_ticks`: `SC_CLK_TCK`.
+
+### `[@ANCHOR: tools:template_db_postgres_cpu_sampler]` `PostgresCpuSampler(database, interval=0.25, proc_root="/proc", clock_ticks=None)`
+
+Context manager: a thread samples `proc_root` every `interval` seconds for processes whose command line is `postgres: <user> <database> ...` and keeps the largest CPU total per pid.
+`cpu_seconds` (after exit) is the sum: a lower bound, it misses the last fraction of a second of each backend and the checkpointer, WAL writer and I/O workers. `sample_once()` does one pass.
+Daemon thread; read-only on `/proc`.
+
+### `[@ANCHOR: tools:template_db_as_odoo]` `as_odoo(argv, env=None)`
+
+Returns `argv` prefixed with `sudo -n -u odoo` (and `env K=V ...` when `env` is a dict, since sudo resets the rest). The measured runs execute as `odoo`, like the dev box's documented
+`sudo -n -u odoo env HAMS_ISOLATED_NS=1 ...` invocation: `daemon_key_manager` chmods `/opt/hams/etc/keys`, which only its owner may do, and as another user the registry fails to load. Never prompts. Pure.
+
+### `[@ANCHOR: tools:template_db_filestore_bytes]` `filestore_bytes(name)`
+
+Apparent size in bytes of database `name`'s directory under `FILESTORE_ROOT` (`sudo -n -u odoo du -sb`); 0 when absent or unreadable. `name` is checked by `check_identifier`.
+
+### `[@ANCHOR: tools:template_db_remove_filestore]` `remove_filestore(name)`
+
+Removes the filestore directory of a template database (`sudo -n -u odoo rm -rf --`). Refuses any name that does not start with `hams_tpl_` (`ValueError`), so it can never delete a run's or another session's filestore.
+Best effort: a failing `rm` is not an error.
+
+### `[@ANCHOR: tools:template_db_arm_plan]` `ArmPlan`
+
+Frozen dataclass: how an arm differs from today's run. `arm` (name), `clone` (replace `rebuild_db` with a clone), `drop_install` (remove `-i <modules>`: a plain load), `update`
+(use `-u`), `build` (template build: database named after the key, no tests), `ram` (database in the tmpfs tablespace), `tests` (keep `--test-enable --test-tags`). Built only by `arm_plan`.
+
+### `[@ANCHOR: tools:template_db_arm_plan_for]` `arm_plan(arm)`
+
+Returns the `ArmPlan` for one of `ARMS` (`fresh_ssd`, `fresh_ram`, `build`, `clone_ssd`, `clone_ram`, `clone_update`, `clone_i`); raises `ValueError` for any other name.
+
+### `[@ANCHOR: tools:template_db_transform_command]` `transform_odoo_command(cmd, plan, database=None)`
+
+Purpose: the second of the two replacements. `cmd`: the Odoo command (list) `test.py` built; not modified. Returns a new list: `-d` value replaced when `database` is given; `-i LIST` removed
+(`drop_install`) or turned into `-u LIST` without `base` (`update`); `--test-enable` and the `--test-tags` pair removed when `plan.tests` is false. Other arguments keep their order. Raises
+`ValueError` if `-i` is absent when it has to be removed.
+
+### `[@ANCHOR: tools:template_db_run_record]` `RunRecord`
+
+Dataclass, one measured run, stored with `dataclasses.asdict` in `results_<set>.json`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `set_name`, `arm`, `rep` | str, str, int | Identity. |
+| `wall_total` | float s | Rebuild start to Odoo exit. |
+| `wall_prepare` | float s | `rebuild_db` or the clone step. |
+| `wall_to_modules_loaded`, `wall_to_first_test`, `wall_to_first_post_install_test` | float s or `None` | From rebuild start. |
+| `odoo_seconds` | float | Odoo's own module-load figure. |
+| `cpu_runner_seconds` | float | User+system CPU of the runner process tree (`wait4`). |
+| `cpu_postgres_seconds` | float | Sampled PostgreSQL backend CPU (lower bound). |
+| `load_before`, `load_after` | dict | `parse_loadscreen` at both ends. |
+| `result` | list or `None` | `odoo.tests.result` triple. |
+| `outcome_names`, `failed_names` | lists | For `compare_outcomes`. |
+| `error_lines` | int | Lines logged at ERROR or CRITICAL; a build with any is not trusted. |
+| `exit_code`, `notes` | int, str | Exit status; `NO odoo.tests.result LINE` when a test arm printed no result (the run proves nothing). |
+
+### `[@ANCHOR: tools:template_db_record_from_run]` `record_from_run(set_name, arm, rep, events, milestones, cpu_runner, cpu_postgres, load_before, load_after, exit_code)`
+
+Builds a `RunRecord`. `events`: `{"rebuild_start", "rebuild_end", "odoo_end"}` epoch seconds from the stub; log-derived times are measured from `rebuild_start`
+so all arms share a clock; missing events give `None` fields. Pure.
+
+### `[@ANCHOR: tools:template_db_build_succeeded]` `build_succeeded(record)`
+
+Purpose: decides whether a `build` run made a trustworthy template. The runner exits 1 for a run with no `odoo.tests.result` line, and a build runs no tests, so the exit
+status is not the test. Returns True when Odoo logged `Modules loaded.` (`wall_to_modules_loaded` is not `None`) and `error_lines` is 0 (no ERROR or CRITICAL line). `record`: a `RunRecord`. Pure.
+
+### `[@ANCHOR: tools:template_db_valid_records]` `valid_records(records)`
+
+Returns the records (`RunRecord`s or dicts) as dicts, without those whose `notes` start with `INVALID`. A run that something outside the benchmark disturbed (the shared PostgreSQL crash-restarting under it) is marked
+by editing its `notes` to `INVALID: <reason>`; it stays in the results file for the record and is left out of `render_report` and `equality_lines`. Pure.
+
+### `[@ANCHOR: tools:template_db_render_report]` `render_report(records)`
+
+Returns Markdown: per set a table of rows (arm, repetitions) and columns (`METRICS`) each `median [min-max]`, `-` when no run has the metric, then the `load1` range over all
+runs of the set. `records`: `RunRecord`s or dicts. Sets are ordered small, medium, large. Pure.
+
+### `[@ANCHOR: tools:template_db_load_runner]` `load_runner_module(repo_root)`
+
+Imports `<repo_root>/hams_shared/tools/test.py` (or `<repo_root>/tools/test.py`) as `hams_test_runner` (never `import test`: that is the standard library's), puts its directory first on
+`sys.path` and changes the working directory to `repo_root`, which `main()` requires. Importing `test.py` starts its resource-monitor thread. Raises `FileNotFoundError`.
+
+### `[@ANCHOR: tools:template_db_stub_main]` `stub_main(argv)`
+
+The child process of every measured run. `argv` = `[arm, repo_root, template_name, *test.py arguments]`. Loads the runner, replaces `rebuild_db` (a `clone_for_run` for clone arms; the original, then
+`ALTER DATABASE ... SET TABLESPACE` for `fresh_ram`; the original on the template's name for `build`) and `run_cmd` (command through `transform_odoo_command`), appends `rebuild_start`, `rebuild_end`,
+`odoo_start`, `odoo_end` JSON lines to the file in `HAMS_BENCH_EVENTS`, sets `sys.argv` and calls the runner's `main()`, which ends in `sys.exit`. Run with `HAMS_ISOLATED_NS=1` and
+`HAMS_TEST_LOCK_HELD=1` by the parent, which holds the slot.
+
+### `[@ANCHOR: tools:template_db_clone_for_run]` `clone_for_run(runner, db_name, template, plan, redis_flush_db)`
+
+`rebuild_db` for a clone arm: the runner's own production-host refusal and Redis flush; terminate connections and `DROP DATABASE IF EXISTS ... WITH (FORCE)`;
+`SET file_copy_method` (`HAMS_BENCH_COPY_METHOD`, default `copy`); `CREATE DATABASE ... TEMPLATE` in `pg_default` or the RAM tablespace (strategy from `HAMS_BENCH_STRATEGY`); the slot marker comment;
+`remove_stale_filestore`; `cp -a --reflink=auto` of the template's filestore; `rekey_sql` on the clone. Raises `RuntimeError` when the template does not exist (a clone arm never falls back to a fresh install) and
+`ValueError` for an unsafe name, both before any change.
+
+### `[@ANCHOR: tools:template_db_ram_tablespace]` `RamTablespace(directory, size, sql, shell, name=BENCH_TABLESPACE)`
+
+Context manager for the private tmpfs and its tablespace. Enter: refuses an existing tablespace or a directory that is already a mount point; `sudo -n mount -t tmpfs -o size=<size> tmpfs <directory>`,
+`chown postgres:postgres`, `chmod 700`, `CREATE TABLESPACE`. Exit: drops every database still in the tablespace, `DROP TABLESPACE`, `sudo -n umount`. `sql(text)` returns stdout, `shell(argv)` returns a
+`CompletedProcess` (injectable). Never touches `/etc/fstab` or PostgreSQL configuration. Raises `RuntimeError`.
+
+### `[@ANCHOR: tools:template_db_timed_clone]` `timed_clone(connect, statement, drop_sql, backend_cpu)`
+
+Times one `CREATE DATABASE`. `connect()`: a DB-API autocommit connection to `postgres`; `backend_cpu(pid)`: CPU seconds of a backend or `None`. Returns `{"wall": s, "cpu": s or None}` (`cpu` is the
+session's own backend only, not checkpointer or I/O workers), then runs `drop_sql` untimed and closes the connection.
+
+### `[@ANCHOR: tools:template_db_run_measured]` `run_measured(cmd, env, cwd, log_path, database, sampler_factory=PostgresCpuSampler)`
+
+Runs `cmd` to the end; returns `(lines, returncode, cpu_runner_seconds, cpu_postgres_seconds)`. Output (stdout and stderr merged) goes to `log_path` and `lines`. Runner CPU is the `wait4` rusage of the child
+and the descendants it waited for. Blocks. Raises `OSError` if the command cannot start.
+
+### `[@ANCHOR: tools:template_db_bench]` `Bench(args)`
+
+One benchmark session against a checkout: loads the runner, `build_key()` (the `TemplateKey` of the set's install list), `run_arm(arm, rep, slot, slots, template, test_tags=None)` (one measured run, appended to
+`records` and saved to `results_<set>.json`), `build_template(key, slot, slots, rep)` (a `build` arm run, the key comment, sizes), `clone_microbenchmark(template, ram_template, reps)` (CREATE DATABASE timings per
+combination, the filestore copy, the re-key). `args` is the `run` command line. Not thread safe. The parent holds the test slot (`run_command`); children run with `HAMS_TEST_LOCK_HELD=1` and the slot handed over as
+`--slots N --slot-held K`, the mechanism the full pipeline itself uses.
+
+### `[@ANCHOR: tools:template_db_run_command]` `run_command(args)`
+
+`run`: builds the key, takes one test slot through the runner's own queue (`_acquire_lock_via_queue`, so it waits its turn behind other sessions), mounts the RAM tablespace if an arm needs it, builds the template
+`--build-reps` times, verifies its comment, copies it into RAM, runs the clone micro-benchmark, then `--reps` rounds of the `--arms` interleaved (so box-load drift hits all arms alike). Always drops the templates, their filestores
+and the tablespace, and unmounts. Returns 0; raises on a failed build.
+
+### `[@ANCHOR: tools:template_db_key_command]` `key_command(args)`
+
+`key`: prints the template database name, digest, hashing time, closure size and `tests_define_models` for `--modules`. Needs the runner and two version queries; changes nothing.
+
+### `[@ANCHOR: tools:template_db_report_command]` `report_command(args)`
+
+`report`: prints `render_report` of the given results files and, per set, the build sizes and times, the CREATE DATABASE timings per combination, the filestore copy and re-key times. Returns 0.
+
+### `[@ANCHOR: tools:template_db_build_parser]` `build_parser()`
+
+The `argparse` parser: sub-commands `run` (`--repo-root`, `--set small|medium|large`, `--reps`, `--build-reps`, `--arms`, `--test-tags`, `--tmpfs-dir`, `--tmpfs-size`, `--out-dir`, `--strategy`, `--copy-method`,
+`--no-clone-micro`, `--keep-template`), `key` and `report`.
+
+### `[@ANCHOR: tools:template_db_main]` `main(argv=None)`
+
+Entry point: `_stub ...` goes to `stub_main` (internal), anything else is parsed and dispatched to `run_command`, `key_command` or `report_command`. Returns the exit status.
