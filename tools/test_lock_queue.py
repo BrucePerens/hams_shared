@@ -43,6 +43,44 @@ import runner_slots as rs  # noqa: E402
 
 _TEST_PY = os.path.join(_HERE, "test.py")
 
+# Tests that run the real test.py must never touch the shared default database: another run on the machine may
+# own `hams_test` (and Redis, and the HTTP port) while a private HAMS_TEST_LOCK_PATH here says nobody does.
+# test.py runs `DROP DATABASE hams_test WITH (FORCE)` once it has a module to test, whatever lock it holds, so
+# every such run gets (1) its own scratch database name, checked by `_test_py_argv`, and (2) stand-ins for the
+# commands that reach PostgreSQL, Redis and sudo, which record their use and do nothing.
+SCRATCH_DB = "hams_locktest_scratch"
+_DEFAULT_DB = "hams_test"
+# test.py finds psql by absolute path (infrastructure.get_pg_bin), which a PATH stand-in cannot intercept, so the
+# environment also points every PostgreSQL client at a socket directory that does not exist: even a run that
+# got past the scratch-name check could not connect, let alone drop anything.
+NO_POSTGRES_ENV = {"PGHOST": "/nonexistent_hams_locktest", "PGPORT": "1", "PGCONNECT_TIMEOUT": "2",
+                   "REDIS_DB": "15"}
+_DB_COMMANDS = ("psql", "createdb", "dropdb", "pg_dump", "pg_isready", "redis-cli", "sudo")
+
+
+def _test_py_argv(*words):
+    """argv for a real test.py run: always `--db SCRATCH_DB` first; refuses a command line that names the
+    default database (a later --db would win in argparse)."""
+    argv = [sys.executable, _TEST_PY, "--preflight-done", "--db", SCRATCH_DB, *words]
+    given = [argv[i + 1] for i, w in enumerate(argv[:-1]) if w in ("-d", "--db")]
+    if given[-1] == _DEFAULT_DB or any(w.startswith("--db=") and w.split("=", 1)[1] == _DEFAULT_DB
+                                       for w in words):
+        raise AssertionError("a test must not run test.py against the shared database %r" % _DEFAULT_DB)
+    return argv
+
+
+def _install_db_stand_ins(directory):
+    """Write recording stand-ins for the database commands into `directory`; returns (PATH value, log path)."""
+    bin_dir = os.path.join(directory, "stand_in_bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    log = os.path.join(directory, "db_commands.log")
+    for name in _DB_COMMANDS:
+        path = os.path.join(bin_dir, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write('#!/bin/sh\necho "%s $*" >> "%s"\nexit 0\n' % (name, log))
+        os.chmod(path, 0o755)
+    return bin_dir + os.pathsep + os.environ.get("PATH", ""), log
+
 
 def _dead_pid_and_start():
     """pid and start time of a child that has been killed and reaped."""
@@ -691,13 +729,14 @@ class TestTestPyWiring(_TmpDirCase):
                   "HAMS_TEST_LOCK_HELD", "HAMS_TEST_SLOTS"):
             env.pop(k, None)
         env.update(extra_env or {})
+        env["PATH"], self.db_log = _install_db_stand_ins(self._tmp.name)
+        env.update(NO_POSTGRES_ENV)
         # --preflight-done: these tests are about the single-instance lock, which test.py takes after its pre-flight lint
         # pass; without the flag a lint finding anywhere in the surrounding repo (or a worktree without the sibling repo) stops
         # test.py before the lock and fails the tests for a reason that has nothing to do with the lock.
         # --slots 1: the command line outranks HAMS_TEST_SLOTS and /opt/hams/etc/test_slots, so these tests of
         # the one-slot lock mean the same on a machine that has opted in to more slots.
-        return subprocess.run([sys.executable, _TEST_PY, "--preflight-done", "--slots", "1", "-u",
-                               "nonexistent_module", *args], env=env,
+        return subprocess.run(_test_py_argv("--slots", "1", "-u", "nonexistent_module", *args), env=env,
                               capture_output=True, text=True, timeout=timeout, cwd=os.path.dirname(_HERE))
 
     def hold(self):
@@ -730,10 +769,10 @@ class TestTestPyWiring(_TmpDirCase):
 
     def test_waiter_takes_over_when_the_holder_releases(self):
         holder = self.hold()
-        p = subprocess.Popen([sys.executable, _TEST_PY, "--preflight-done", "--slots", "1", "-u",
-                              "nonexistent_module", "--wait"],
+        p = subprocess.Popen(_test_py_argv("--slots", "1", "-u", "nonexistent_module", "--wait"),
                              env=dict(os.environ, HAMS_TEST_LOCK_PATH=self.lock_path,
-                                      HAMS_SKIP_CI_LOAD_GATE="1", HAMS_ISOLATED_NS="1"),
+                                      HAMS_SKIP_CI_LOAD_GATE="1", HAMS_ISOLATED_NS="1",
+                                      PATH=_install_db_stand_ins(self._tmp.name)[0], **NO_POSTGRES_ENV),
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                              cwd=os.path.dirname(_HERE))
         try:
@@ -779,10 +818,12 @@ class TestSlotsWiring(_TmpDirCase):
                   "HAMS_TEST_LOCK_HELD", "HAMS_TEST_SLOTS"):
             env.pop(k, None)
         env.update(extra)
+        env["PATH"], self.db_log = _install_db_stand_ins(self._tmp.name)
+        env.update(NO_POSTGRES_ENV)
         return env
 
     def argv(self, *args):
-        return [sys.executable, _TEST_PY, "--preflight-done", "-u", "nonexistent_module", *args]
+        return _test_py_argv("-u", "nonexistent_module", *args)
 
     def run_test_py(self, *args, timeout=60, **extra_env):
         return subprocess.run(self.argv(*args), env=self.env(**extra_env), capture_output=True, text=True,
@@ -824,8 +865,8 @@ class TestSlotsWiring(_TmpDirCase):
 
     def test_the_slot_database_is_derived_from_the_slot(self):
         self.hold_slot(1)
-        r = self.run_test_py("--db", "hams_test_relay", HAMS_TEST_SLOTS="2")
-        self.assertIn("Test slot 2 of 2: database hams_test_relay_s2", r.stdout, r.stdout + r.stderr)
+        r = self.run_test_py("--db", "hams_locktest_relay", HAMS_TEST_SLOTS="2")
+        self.assertIn("Test slot 2 of 2: database hams_locktest_relay_s2", r.stdout, r.stdout + r.stderr)
 
     def test_every_slot_held_fails_fast_and_names_the_slots(self):
         self.hold_slot(1)
@@ -927,6 +968,49 @@ class TestSlotsWiring(_TmpDirCase):
         # refusal, which runs before any escalation.
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("--pause-on-fail pins Chrome's debugging port 9222", r.stdout)
+
+
+class TestGuardAgainstTheSharedDatabase(_TmpDirCase):
+    """The tests above run the real test.py; this proves they cannot reach the shared database, and that a
+    command line test.py rejects is rejected before any database or Redis command (argument validation
+    comes first in main(): a rejected run must not drop, create or flush anything)."""
+
+    def test_the_helper_refuses_the_default_database(self):
+        for words in (("--db", "hams_test"), ("-d", "hams_test"), ("--db=hams_test",)):
+            with self.assertRaises(AssertionError, msg=words):
+                _test_py_argv(*words)
+        self.assertEqual(_test_py_argv()[3:5], ["--db", SCRATCH_DB])
+
+    def test_the_stand_ins_record_and_succeed(self):
+        path, log = _install_db_stand_ins(self._tmp.name)
+        out = subprocess.run(["dropdb", "x"], env=dict(os.environ, PATH=path), capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0)
+        with open(log, encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), "dropdb x")
+
+    def test_a_rejected_invocation_touches_no_database(self):
+        env = dict(os.environ, HAMS_TEST_LOCK_PATH=self.lock_path, HAMS_SKIP_CI_LOAD_GATE="1",
+                   HAMS_ISOLATED_NS="1")
+        for k in ("HAMS_TEST_WAIT", "HAMS_TEST_QUEUE_DIR", "HAMS_TEST_QUEUE_TICKET", "HAMS_TEST_LOCK_HELD",
+                  "HAMS_TEST_SLOTS"):
+            env.pop(k, None)
+        env["PATH"], log = _install_db_stand_ins(self._tmp.name)
+        env.update(NO_POSTGRES_ENV)
+        cases = [
+            (["--slots", "99"], {}),
+            (["--slots", "0"], {}),
+            (["--slots", "lots"], {}),
+            (["--slots", "2", "--slot-held", "3"], {}),
+            ([], {"HAMS_TEST_SLOTS": "lots"}),
+            ([], {"HAMS_TEST_SLOTS": "16"}),
+        ]
+        for words, extra in cases:
+            r = subprocess.run(_test_py_argv("-u", "nonexistent_module", *words), env=dict(env, **extra),
+                               capture_output=True, text=True, timeout=60, cwd=os.path.dirname(_HERE))
+            self.assertEqual(r.returncode, 2, (words, extra, r.stdout, r.stderr))
+            self.assertFalse(os.path.exists(log) and open(log, encoding="utf-8").read(),
+                             "a rejected command line ran a database command: %r %r" % (words, extra))
+
 
 
 if __name__ == "__main__":
