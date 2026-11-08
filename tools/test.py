@@ -2509,7 +2509,7 @@ def root_phase_database_cleanup(run_args, slot, pg):
 
 
 # [@ANCHOR: test:reap_orphans_forever]
-def reap_orphans_forever(protected_pids, stop, interval=1.0, min_age=3.0, clock=time.monotonic):
+def reap_orphans_forever(protected_pids, stop, interval=0.2, min_age=0.3, clock=time.monotonic):
     """Reap the zombie children that nobody waits for; the loop of the reaper thread of the namespace's init.
 
     The root phase of the full pipeline is PID 1 of its PID namespace (`unshare -p -f`), so every process orphaned
@@ -2520,9 +2520,13 @@ def reap_orphans_forever(protected_pids, stop, interval=1.0, min_age=3.0, clock=
     `protected_pids`: a set of pids this process waits for itself (Redis, RabbitMQ), which are never reaped here because
     their exit status is wanted. `stop`: a threading.Event; the loop ends when it is set. A zombie child is reaped
     with `os.waitpid(pid, WNOHANG)` on its own pid only (never `waitpid(-1)`, which would steal the status of the test
-    process that `subprocess.run` waits for), and only after it has been seen as a zombie for `min_age` seconds, so a
+    process that `run_protected` waits for), and only after it has been seen as a zombie for `min_age` seconds, so a
     child whose parent code is about to wait for it is left to that code. `interval` is the scan period in seconds,
-    `clock` a test seam. Returns the number of zombies reaped. Full entry: tools/README.md."""
+    `clock` a test seam. The defaults (0.2 s and 0.3 s) are short on purpose: Chrome's `unshare` wrapper of every
+    browser test is a zombie that Odoo waits up to 5 s to see vanish, so the old 1 s and 3 s cost each browser test
+    about 3 s (5.1 s against 2.3 s per test measured). Only a child that is already a zombie is ever reaped: a live
+    process is never touched, and a process of another run is not a child of this namespace's init. Returns the number
+    of zombies reaped. Full entry: tools/README.md."""
     first_seen = {}
     reaped = 0
     while not stop.is_set():
@@ -2551,6 +2555,22 @@ def reap_orphans_forever(protected_pids, stop, interval=1.0, min_age=3.0, clock=
                 del first_seen[pid]
         stop.wait(interval)
     return reaped
+
+
+# [@ANCHOR: test:run_protected]
+def run_protected(cmd, protected_pids, **popen_kwargs):
+    """`subprocess.run(cmd).returncode`, but the child's pid is added to `protected_pids` (the set that
+    `reap_orphans_forever` is given) before this returns control to anything else, so the reaper thread can never take
+    the exit status of the test process even with a very short `min_age`. Like `subprocess.run`, any exception while
+    waiting (a signal turned into `sys.exit`, Ctrl-C) kills the child and waits for it before it propagates.
+    Returns the child's return code. Full entry: tools/README.md."""
+    with subprocess.Popen(cmd, **popen_kwargs) as process:
+        protected_pids.add(process.pid)
+        try:
+            return process.wait()
+        except BaseException:
+            process.kill()
+            raise
 
 
 def setup_namespace_and_run_tests(real_log_dir, sys_args):
@@ -2981,12 +3001,13 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     _install_exit_signal_handlers()
     # This process is PID 1 of the run's PID namespace: reap what is orphaned under it (see reap_orphans_forever).
     reaper_stop = threading.Event()
+    protected_pids = {redis_proc.pid, rmq_proc.pid}
     threading.Thread(
-        target=reap_orphans_forever, args=({redis_proc.pid, rmq_proc.pid}, reaper_stop), daemon=True, name="namespace-init-reaper"
+        target=reap_orphans_forever, args=(protected_pids, reaper_stop), daemon=True, name="namespace-init-reaper"
     ).start()
     try:
         test_cmd = [sys.executable, os.path.abspath(__file__)] + sys_args
-        ret = subprocess.run(test_cmd, preexec_fn=preexec_odoo).returncode
+        ret = run_protected(test_cmd, protected_pids, preexec_fn=preexec_odoo)
     finally:
         if offline_ns_cleanup is not None:
             try:
