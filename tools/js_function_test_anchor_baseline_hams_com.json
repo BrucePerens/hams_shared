@@ -379,7 +379,6 @@
   "daemons/shack_console/console/src/log/offline_store.js::OfflineStore.init",
   "daemons/shack_console/console/src/log/offline_store.js::OfflineStore.saveLog",
   "daemons/shack_console/console/src/main.js::applyTheme",
-  "daemons/shack_console/console/src/main.js::consoleVersion",
   "daemons/shack_console/console/src/main.js::loadTheme",
   "daemons/shack_console/console/src/main.js::readSetting",
   "daemons/shack_console/console/src/main.js::registerServiceWorker",
