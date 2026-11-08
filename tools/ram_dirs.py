@@ -26,6 +26,7 @@ CLI (all output on standard error except `path`, which prints the directory):
                                                        parent process); remove it with `release JOB`
   ram_dirs.py release JOB                              remove the job's directory
   ram_dirs.py sweep                                    remove the directories of dead jobs
+  ram_dirs.py usage                                    print the usage JSON and write /dev/shm/hams-ram-usage.json
   ram_dirs.py status                                   free space and every directory with its owner and size
 
 Full documentation of every function: tools/README.md "Build and test scratch directories in RAM".
@@ -34,6 +35,7 @@ Full documentation of every function: tools/README.md "Build and test scratch di
 import argparse
 import dataclasses
 import ctypes
+import fcntl
 import json
 import math
 import os
@@ -55,6 +57,8 @@ OWNER_FILE = ".hams-ram-owner"
 DEFAULT_MIN_FREE_GB = 20.0
 DEFAULT_JOB_MAX_GB = 30.0
 DEFAULT_HARD_FREE_GB = 5.0
+DEFAULT_LINT_BUDGET_GB = 24.0
+USAGE_FILE = "hams-ram-usage.json"
 MIN_RAM_GB = 64.0
 UNMARKED_HOURS = 24.0
 TEST_TMP_STALE_HOURS = 12.0
@@ -75,13 +79,14 @@ class RamPolicy:
     job_max_gb: float = DEFAULT_JOB_MAX_GB
     hard_free_gb: float = DEFAULT_HARD_FREE_GB
     min_ram_gb: float = MIN_RAM_GB
+    lint_budget_gb: float = DEFAULT_LINT_BUDGET_GB
     require_tmpfs: bool = True
 
 
 # [@ANCHOR: ram_dirs:policy]
 def policy(environ=None):
     """The `RamPolicy` the environment asks for: HAMS_RAM_DIRS (0/off/no, 1/on/yes, else auto), HAMS_RAM_ROOT (another tmpfs or
-    directory; naming one turns the tmpfs check off), HAMS_RAM_MIN_FREE_GB, HAMS_RAM_JOB_MAX_GB, HAMS_RAM_HARD_FREE_GB. A number that is missing, not finite or negative
+    directory; naming one turns the tmpfs check off), HAMS_RAM_MIN_FREE_GB, HAMS_RAM_JOB_MAX_GB, HAMS_RAM_HARD_FREE_GB, HAMS_RAM_LINT_GB. A number that is missing, not finite or negative
     keeps its default."""
     environ = os.environ if environ is None else environ
     word = (environ.get("HAMS_RAM_DIRS") or "auto").strip().lower()
@@ -100,6 +105,7 @@ def policy(environ=None):
         min_free_gb=number("HAMS_RAM_MIN_FREE_GB", DEFAULT_MIN_FREE_GB),
         job_max_gb=number("HAMS_RAM_JOB_MAX_GB", DEFAULT_JOB_MAX_GB),
         hard_free_gb=number("HAMS_RAM_HARD_FREE_GB", DEFAULT_HARD_FREE_GB),
+        lint_budget_gb=number("HAMS_RAM_LINT_GB", DEFAULT_LINT_BUDGET_GB),
         require_tmpfs=not environ.get("HAMS_RAM_ROOT"),
     )
 
@@ -406,6 +412,131 @@ def tree_bytes(path):
     return total
 
 
+def _dir_in_use(path):
+    """True when a live lint run holds the exclusive flock on `<path>.lock` (lint_cache takes it for a whole build), or when
+    the lock cannot be examined (then the directory is treated as in use)."""
+    try:
+        handle = open(path.rstrip(os.sep) + ".lock", "a+")
+    except OSError:
+        return True
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        handle.close()
+
+
+def _last_used(path):
+    """When a lint Cargo directory was last used: the mtime of its `.last_used` stamp, else of the directory."""
+    for candidate in (os.path.join(path, ".last_used"), path):
+        try:
+            return os.stat(candidate).st_mtime
+        except OSError:
+            continue
+    return 0.0
+
+
+# [@ANCHOR: ram_dirs:prune_lint_cache]
+def prune_lint_cache(base, keep=None, pol=None, environ=None, say=None, remove=remove_tree):
+    """Keep the lint Cargo caches under `base` (in RAM) within `pol.lint_budget_gb` in total. Returns `[(name, bytes)]` removed.
+
+    Whole directories, least recently used first (`.last_used`), never `keep` (the directory about to be built in) and never one a
+    live run holds: each candidate's lock `<dir>.lock` is taken without waiting, so a directory with a build running in it is
+    skipped, and the removal happens while the lock is held. Stops when the total is within the budget or nothing unused is left
+    (the caller's own directory may still exceed it; the per-directory `cargo_gb` budget deals with that). Never raises."""
+    pol = pol or policy(environ)
+    say = say or (lambda text: print(f"ram_dirs: {text}", file=sys.stderr, flush=True))
+    removed = []
+    try:
+        names = [n for n in os.listdir(base) if os.path.isdir(os.path.join(base, n)) and not os.path.islink(os.path.join(base, n))]
+    except OSError:
+        return removed
+    sizes = {n: tree_bytes(os.path.join(base, n)) for n in names}
+    total = sum(sizes.values())
+    limit = pol.lint_budget_gb * GB
+    for name in sorted(names, key=lambda n: _last_used(os.path.join(base, n))):
+        if total <= limit:
+            break
+        full = os.path.join(base, name)
+        if keep and os.path.abspath(full) == os.path.abspath(keep):
+            continue
+        if _dir_in_use(full):
+            continue
+        try:
+            lock = open(full + ".lock", "a+")
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            continue
+        try:
+            if remove(full):
+                total -= sizes[name]
+                removed.append((name, sizes[name]))
+                say(f"lint cache: removed {name} ({sizes[name] / GB:.1f} GB, least recently used) to stay within the {pol.lint_budget_gb:g} GB RAM budget")
+        finally:
+            lock.close()
+    return removed
+
+
+# [@ANCHOR: ram_dirs:usage]
+def usage(pol=None, environ=None, now=time.time):
+    """A dictionary describing the RAM root for a display: `time`, `root`, `total_gb`, `used_gb`, `free_gb`, `min_free_gb`,
+    `hard_free_gb`, `lint_cache` (`budget_gb`, `used_gb`, `dirs`: name, gb, in_use), `jobs` (name, gb, owner), `test_tmp_gb`."""
+    pol = pol or policy(environ)
+    try:
+        stat = os.statvfs(pol.root)
+        total = stat.f_blocks * stat.f_frsize / GB
+        free = stat.f_bavail * stat.f_frsize / GB
+    except OSError:
+        total = free = 0.0
+    lint_base = os.path.join(pol.root, LINT_CARGO_NAME)
+    dirs, jobs = [], []
+    try:
+        for name in sorted(os.listdir(lint_base)):
+            full = os.path.join(lint_base, name)
+            if os.path.isdir(full):
+                dirs.append({"name": name, "gb": round(tree_bytes(full) / GB, 2), "in_use": _dir_in_use(full)})
+    except OSError:
+        pass
+    try:
+        for name in sorted(os.listdir(pol.root)):
+            if name.startswith(CARGO_PREFIX):
+                full = os.path.join(pol.root, name)
+                jobs.append({"name": name, "gb": round(tree_bytes(full) / GB, 2), "owner": owner_state(full)})
+    except OSError:
+        pass
+    return {
+        "time": int(now()), "root": pol.root, "total_gb": round(total, 1), "used_gb": round(total - free, 1), "free_gb": round(free, 1),
+        "min_free_gb": pol.min_free_gb, "hard_free_gb": pol.hard_free_gb,
+        "lint_cache": {"budget_gb": pol.lint_budget_gb, "used_gb": round(sum(d["gb"] for d in dirs), 1), "dirs": dirs},
+        "jobs": jobs, "test_tmp_gb": round(tree_bytes(os.path.join(pol.root, TEST_TMP_NAME)) / GB, 2),
+    }
+
+
+# [@ANCHOR: ram_dirs:write_usage]
+def write_usage(pol=None, environ=None):
+    """Write `usage()` as JSON to `<root>/hams-ram-usage.json` (mode 0644, atomically through a temporary file) for a status
+    display. Returns the path, or None when it cannot be written (another account owns the existing file, the root is missing): a
+    display file must never fail a build."""
+    pol = pol or policy(environ)
+    path = os.path.join(pol.root, USAGE_FILE)
+    temporary = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(usage(pol), handle)
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+        return path
+    except OSError:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        return None
+
+
 # [@ANCHOR: ram_dirs:guard_verdict]
 def guard_verdict(size_bytes, free_now_gb, pol, in_ram):
     """Why a running job must be stopped, or None. For a job whose directory is in RAM: its size above `pol.job_max_gb`,
@@ -464,6 +595,8 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
             return JobResult(EX_TEMPFAIL, target, placed.in_ram)
         remove_tree(target)
     claim(target)
+    if placed.in_ram:
+        write_usage(pol)
     environ["CARGO_TARGET_DIR"] = target
     say(f"job {job}: target {target} ({'RAM' if placed.in_ram else 'disk'}: {placed.reason})")
     started = time.monotonic()
@@ -503,6 +636,8 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
             _stop_group(child, grace)
         if not keep:
             remove_tree(target)
+        if placed.in_ram:
+            write_usage(pol)
     elapsed = time.monotonic() - started
     blocks = (resource.getrusage(resource.RUSAGE_CHILDREN).ru_oublock - before) * 512
     code = returncode if returncode >= 0 else 128 - returncode
@@ -570,6 +705,7 @@ def main(argv=None):
     release.add_argument("job")
     sub.add_parser("sweep")
     sub.add_parser("status")
+    sub.add_parser("usage")
     args = parser.parse_args(argv)
     try:
         if args.command == "run":
@@ -595,6 +731,9 @@ def main(argv=None):
         if args.command == "sweep":
             sweep()
             return 0
+        if args.command == "usage":
+            print(json.dumps(usage(), indent=1))
+            return 0 if write_usage() else 1
         print("\n".join(status_lines()))
         return 0
     except ValueError as error:

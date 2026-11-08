@@ -453,6 +453,12 @@ def prepare_cargo_target(target_dir, environ=None, log=None, budget=None):
         pass
     if in_ram(target_dir, environ):
         ram_dirs.sweep(environ=environ, say=lambda text: say(f"lint cache: {text}"))  # crashed jobs' directories free their memory first
+        ram_dirs.prune_lint_cache(os.path.dirname(target_dir), keep=target_dir, environ=environ, say=lambda text: say(text))
+        pol = ram_dirs.policy(environ)
+        used = ram_dirs.tree_bytes(os.path.dirname(target_dir)) / GB
+        say(f"lint cache: RAM cache {used:.1f} GB of {pol.lint_budget_gb:g} GB budget in {os.path.dirname(target_dir)}, "
+            f"{(ram_dirs.free_gb(pol.root) or 0):.0f} GB free in {pol.root}")
+        ram_dirs.write_usage(pol)
     days = ram_dirs.LINT_UNUSED_DAYS if in_ram(target_dir, environ) else UNUSED_DAYS
     for name in drop_unused_dirs(os.path.dirname(target_dir), keep=target_dir, days=days):
         say(f"lint cache: removed {name} (unused for {days} days)")
@@ -560,6 +566,10 @@ def named_cargo_session(name, environ=None, log=None):
         yield environ["CARGO_TARGET_DIR"]
         return
     target = cargo_target_dir(name, environ)
+    if in_ram(target, environ):
+        # In RAM one directory serves every slot: the exclusive lock below already makes concurrent builds take turns, and four
+        # copies of a 4.5 GB dependency build cost 13.5 GB of memory (measured 2026-11-08).
+        target = cargo_target_dir(name, dict(environ, HAMS_LINT_SLOT="1"))
     with locked(target, exclusive=True):
         prepare_cargo_target(target, environ, log)
         yield target
