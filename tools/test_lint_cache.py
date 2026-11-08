@@ -184,7 +184,8 @@ class CargoBudgetTest(unittest.TestCase):
     # Tests [@ANCHOR: lint_cache:other_caches]
     def test_unbudgeted_caches_are_reported_with_sizes(self):
         home = os.path.join(self._tmp.name, "home")
-        for relative, size in (("hams-lint-mirror/repo/file", 3000), (".cache/ms-playwright/chromium/file", 2000)):
+        for relative, size in (("hams-lint-mirror/repo/file", 3000), (".cache/ms-playwright/chromium/file", 2000),
+                               ("ctest-target/debug/file", 1000), ("ctest-src/tree/file", 1000)):
             path = os.path.join(home, relative)
             os.makedirs(os.path.dirname(path))
             with open(path, "wb") as handle:
@@ -192,10 +193,14 @@ class CargoBudgetTest(unittest.TestCase):
         environ = {"HOME": home, "XDG_CACHE_HOME": os.path.join(home, ".cache")}
         paths = {entry[1] for entry in lint_cache.other_caches(environ)}
         self.assertEqual(paths, {os.path.join(home, "hams-lint-mirror"), "/opt/hams-testsrc",
-                                 os.path.join(home, ".cache", "ms-playwright"), "/var/lib/machines"})
+                                 os.path.join(home, ".cache", "ms-playwright"), "/var/lib/machines",
+                                 os.path.join(home, "ctest-target"), os.path.join(home, "ctest-src")})
         text = "\n".join(lint_cache.show_lines(environ))
         self.assertIn(f"other {os.path.join(home, 'hams-lint-mirror')}: 0.00 GB (not budgeted:", text)
         self.assertIn("ms-playwright", text)
+        self.assertIn(f"other {os.path.join(home, 'ctest-target')}: 0.00 GB (not budgeted: relay test target", text)
+        self.assertIn(f"other {os.path.join(home, 'ctest-src')}: 0.00 GB (not budgeted: relay test sources", text)
+        self.assertIn("pruned by remote_cargo_test.py", text)
 
     # Tests [@ANCHOR: lint_cache:legacy_cargo_dirs]
     def test_old_export_test_directory_is_reported_and_cleared_with_the_cargo_caches(self):

@@ -166,6 +166,10 @@ def other_caches(environ=None):
         ("test sources", "/opt/hams-testsrc", "the sources of the Odoo test hosts' test trees"),
         ("playwright", os.path.join(home, ".cache", "ms-playwright"), "browsers for the browser tests, downloaded once"),
         ("machines", "/var/lib/machines", "root file systems for the arm64 Pi builds; needed"),
+        ("relay test target", os.path.join(home, "ctest-target"),
+         "Cargo target of the relay tests, pruned by remote_cargo_test.py (ctest_prune), not here"),
+        ("relay test sources", os.path.join(home, "ctest-src"),
+         "source copies for the relay tests, pruned by remote_cargo_test.py (ctest_prune), not here"),
     ]
 
 
