@@ -4,7 +4,10 @@
     "devbox": {
       "local": true,
       "os": "linux",
-      "note": "This development machine. Always capable (it has the full toolchain); all other machines are optional."
+      "lint_slots": 4,
+      "nice": 10,
+      "max_load_ratio": 1.0,
+      "note": "This development machine (32 cores, 125 GB): the PRIMARY lint runner (Bruce, 2026-11-08), with the full toolchain (rustup 1.98.1 with rustfmt and clippy, cargo-deny, the pytest stack). `lint_slots` heavy lint runs go at once (tools/lint_lock.py), each in its own Cargo target directory and TMPDIR at nice 10; the other machines take a whole run only as overflow when every slot is busy or the load is above the limit. All other machines are optional."
     },
     "mac1-vm": {
       "ssh": {
@@ -49,7 +52,7 @@
       }
     },
     "bruce17": {
-      "ssh": {"target": "bruce17", "args": ["-o", "HostName=bruce17.lan"]},
+      "ssh": {"target": "ai@bruce17.lan", "args": ["-i", "~/.secrets/bruce17/ai_ed25519", "-o", "IdentitiesOnly=yes"]},
       "os": "linux",
       "workdir": "~/hams-lint-mirror",
       "jobs": 2,

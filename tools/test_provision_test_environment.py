@@ -742,6 +742,16 @@ class ProfileTests(unittest.TestCase):
         values = {"HAMS_CRYPTO_KEY": "ab+/=", "HAMS_BATCH_TREE_DIR": "/a b/c"}
         self.assertEqual(pte.parse_profile(pte.profile_text(values)), values)
 
+    def test_the_profile_puts_the_user_level_toolchains_first_once(self):
+        text = pte.profile_text({"HAMS_CRYPTO_KEY": "k"})
+        self.assertEqual(pte.parse_profile(text), {"HAMS_CRYPTO_KEY": "k"}, "the PATH lines are not read as variables")
+        home = self.tmp
+        os.makedirs(os.path.join(home, ".cargo", "bin"))
+        script = text + 'echo "$PATH"\n. /dev/stdin <<<"' + text.split("\n", 2)[2].replace('"', '\\"') + '"\necho "$PATH"\n'
+        out = subprocess.run(["bash", "-c", script], env={"HOME": home, "PATH": "/usr/bin:/bin"}, capture_output=True, text=True).stdout.split()
+        self.assertEqual(out[0], os.path.join(home, ".cargo", "bin") + ":/usr/bin:/bin", "only an existing directory is added")
+        self.assertEqual(out[1], out[0], "sourcing it again adds nothing")
+
     def test_new_key_is_32_random_bytes_and_an_existing_key_is_kept(self):
         first = pte.profile_values({}, {}, self.layout, 0o755)["HAMS_CRYPTO_KEY"]
         self.assertEqual(len(base64.b64decode(first)), 32)

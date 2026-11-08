@@ -363,11 +363,11 @@ def _parse_args(argv):
     )
     parser.add_argument(
         "--distribute",
-        choices=("auto", "off", "always"),
+        choices=("auto", "off"),
         default=os.environ.get("HAMS_LINT_DISTRIBUTE", "auto"),
-        help="with --remote auto: auto = when this machine's lint lock is busy (or the load is above the limit), ship the "
-        "whole run to an idle machine instead of queueing; off = only spread heavy steps (the 2026-11-02 behaviour); "
-        "always = ship the whole run even when this machine is free ($HAMS_LINT_DISTRIBUTE)",
+        help="with --remote auto: auto = this machine (the primary lint runner, several runs side by side) runs everything; only when "
+        "every lint slot is taken or the load is above the limit is the whole run shipped to an idle machine instead of "
+        "queueing; off = never ship, queue here ($HAMS_LINT_DISTRIBUTE; the 'always' mode of 2026-11-03 is gone)",
     )
     parser.add_argument(
         "--where", action="store_true", help="with --remote: print the routing plan and the probes, run nothing"
@@ -1013,6 +1013,7 @@ HOST_BOUND_TOOL_TESTS = frozenset(
 
 
 def main():
+    lint_remote.prefer_user_toolchain()
     if "--run-bundle" in sys.argv:
         sys.exit(run_bundle(sys.argv[1:]))
     dir_path = invocation_root(__file__)
@@ -2412,6 +2413,8 @@ def main():
             sys.exit(batch_code)
     elif batch_reason and options.changed is not None:
         print(f"[*] lint batch: running alone ({batch_reason})")
+    if options.distribute == "off" and options.remote == "auto" and not options.where:
+        options.remote = "local"
     if options.remote and options.remote != "local" or options.where:
         if os.path.realpath(dir_path) == real_shared_dir and layout is None:
             print("[*] --remote: not supported when started from a hams_shared checkout; running everything here")
@@ -2423,9 +2426,9 @@ def main():
             if options.distribute != "off" and (options.remote or "auto") == "auto":
                 takes_lock, _why = lint_lock.lock_decision(os.environ, pending, durations_known)
                 busy, busy_why = lint_lock.local_busy(os.environ)
-                whole_run = takes_lock and (busy or options.distribute == "always")
+                whole_run = takes_lock and busy
                 if whole_run:
-                    print(f"[*] --remote: {busy_why if busy else '--distribute always'}: looking for an idle machine to take the whole run")
+                    print(f"[*] --remote: {busy_why}: looking for an idle machine to take the whole run (overflow)")
             steps, remote_jobs = lint_remote.dispatch(
                 options.remote or "auto",
                 steps,
@@ -2466,6 +2469,10 @@ def main():
         import atexit
 
         atexit.register(run_lock.release)
+        slot_env = lint_lock.enter_slot(run_lock)
+        for step in steps:
+            if slot_env and step.env is not None:  # steps whose environment was captured before the slot was known
+                step.env = dict(step.env, **slot_env)
     results = lint_exec.execute(steps, options.jobs, cache=cache, fingerprints=fingerprints)
     fallback_lock = [run_lock]
 

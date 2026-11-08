@@ -171,7 +171,26 @@ def cargo_jobs_shell(share=1):
     )
 
 
-REMOTE_PATH_PREFIX = 'export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"; '
+# CARGO_NET_GIT_FETCH_WITH_CLI: cargo's built-in git client (libgit2) does not read ~/.ssh/config, so the machines' `url.git@github-hams_shared:...insteadOf`
+# rewrite of the hams_shared submodule URL (a Host alias with its deploy key) failed there as "failed to resolve address for github-hams_shared"
+# (bruce17, clippy, 2026-11-08). The git command line honours the alias. provision_build_host.sh also writes it to ~/.cargo/config.toml.
+REMOTE_PATH_PREFIX = 'export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH" CARGO_NET_GIT_FETCH_WITH_CLI=true; '
+
+# [@ANCHOR: lint_remote:prefer_user_toolchain]
+def prefer_user_toolchain(environ=None):
+    """Put `~/.cargo/bin` (rustup's cargo, rustfmt and clippy at the repositories' pinned version) in front of PATH when it has a
+    `cargo` and is not first already, so the lint steps on this machine use it instead of the distribution's older, component-less
+    /usr/bin/cargo (the dev box had 1.96.0 without rustfmt or clippy until 2026-11-08). The same prefix REMOTE_PATH_PREFIX
+    gives the other machines. Returns True when PATH changed. Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    home = environ.get("HOME") or os.path.expanduser("~")
+    cargo_bin = os.path.join(home, ".cargo", "bin")
+    parts = [p for p in environ.get("PATH", "").split(os.pathsep) if p]
+    if not os.path.isfile(os.path.join(cargo_bin, "cargo")) or (parts and parts[0] == cargo_bin):
+        return False
+    environ["PATH"] = os.pathsep.join([cargo_bin] + [p for p in parts if p != cargo_bin])
+    return True
+
 
 PROBE_SCRIPT = r"""
 echo "os=$(uname -s)"
@@ -385,6 +404,16 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
                 skipped[name] = f"busy: {max(probe.queued, 1)} lint run(s) hold or wait for its lock"
                 continue
         candidates[name] = (probe, jobs)
+    if mode == "auto" and not whole:
+        # The dev box is the primary lint runner (Bruce, 2026-11-08): 32 cores, 125 GB, several runs side by side (lint_lock slots).
+        # A run goes to another machine only (a) when Bruce names one (--remote HOST), (b) as a WHOLE run when this machine has no free
+        # slot or is above its load limit (`whole`, make_whole_plan), or (c) for a step this machine cannot run (a probe says which;
+        # none today). Until 2026-11-08 `auto` also sent every step of 60 s or more to an idle runner, which made the 4-10 core
+        # machines the bottleneck for runs the dev box would have finished sooner.
+        for name, reason in skipped.items():
+            notes.append(f"{name}: skipped, {reason}")
+        notes.append("--remote auto: this machine has a free lint slot, so every step runs here")
+        return Plan(list(step_names), {}, notes, {LOCAL: sum(_est(n, durations) for n in step_names)}, skipped)
     if whole and mode == "auto":
         return make_whole_plan(step_names, static_names, durations, candidates, skipped, notes, local_cores, unfit or {})
     assigned = {LOCAL: []}
@@ -1025,6 +1054,9 @@ def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cor
         out("[*] --remote: needs a hams_open checkout with its hams_shared; running everything here")
         return list(steps), []
     wanted = runners(inventory) if mode == "auto" else {mode: inventory[mode]} if mode in inventory and inventory[mode].get("ssh") else {}
+    if mode == "auto" and not whole and not where:
+        out("[*] --remote auto: this machine has a free lint slot; every step runs here (no machine is probed)")
+        return list(steps), []
     transports = transports if transports is not None else make_transports(inventory, wanted)
     probes = probes if probes is not None else probe_all(inventory, {n: t for n, t in transports.items() if n in wanted})
     pending_set = set(pending)

@@ -784,6 +784,13 @@ def profile_text(values):
     lines = ["# Written by hams_shared/tools/provision.py --test-environment. Re-running it keeps HAMS_CRYPTO_KEY.",
              "# HAMS_CRYPTO_KEY is a random per-host key for test databases: never a real secret, never copy it."]
     lines += [f"export {name}={shlex.quote(value)}" for name, value in sorted(values.items())]
+    # The user-level toolchains (rustup's cargo, rustfmt and clippy at the pinned version; pip --user scripts) come before the distribution's older
+    # /usr/bin/cargo, which has neither rustfmt nor clippy (agents' shells lacked them until 2026-11-08). Not an `export NAME=value` line: parse_profile
+    # ignores it, and it holds no per-host value.
+    lines += ['for d in "$HOME/.local/bin" "$HOME/.cargo/bin"; do',
+              '  [ -d "$d" ] && case ":$PATH:" in *":$d:"*) ;; *) PATH="$d:$PATH" ;; esac',
+              "done",
+              "export PATH"]
     return "\n".join(lines) + "\n"
 
 

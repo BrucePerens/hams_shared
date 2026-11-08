@@ -22,7 +22,7 @@ HOLDER_SCRIPT = textwrap.dedent(
     import os, sys, time
     sys.path.insert(0, {tools!r})
     import lint_lock
-    lock = lint_lock.RunLock({{"XDG_CACHE_HOME": {cache!r}}})
+    lock = lint_lock.RunLock({{"XDG_CACHE_HOME": {cache!r}, "HAMS_LINT_SLOTS": {slots!r}}})
     assert lock.acquire({info!r}), "child could not take the lock"
     print("held", flush=True)
     time.sleep(120)
@@ -33,7 +33,7 @@ HOLDER_SCRIPT = textwrap.dedent(
 class Base(unittest.TestCase):
     def setUp(self):
         self.cache = tempfile.mkdtemp(prefix="lintlock-")
-        self.env = {"XDG_CACHE_HOME": self.cache}
+        self.env = {"XDG_CACHE_HOME": self.cache, "HAMS_LINT_SLOTS": "1"}  # one slot: the dev box's own lint_slots must not leak in
         self.children = []
         self.addCleanup(self._cleanup)
 
@@ -47,9 +47,9 @@ class Base(unittest.TestCase):
         shutil.rmtree(self.cache, ignore_errors=True)
         os.environ.pop(lint_lock.HELD_ENV, None)
 
-    def start_holder(self, info="/work/tree/A\trun_linters.py --changed"):
+    def start_holder(self, info="/work/tree/A\trun_linters.py --changed", slots="1"):
         child = subprocess.Popen(
-            [sys.executable, "-c", HOLDER_SCRIPT.format(tools=TOOLS, cache=self.cache, info=info)],
+            [sys.executable, "-c", HOLDER_SCRIPT.format(tools=TOOLS, cache=self.cache, info=info, slots=slots)],
             stdout=subprocess.PIPE,
             text=True,
         )
@@ -308,5 +308,99 @@ class DistributionTests(Base):
         reopened.close()
 
 
-if __name__ == "__main__":
+class SlotTests(Base):
+    """Tests [@ANCHOR: lint_lock:slot_count] [@ANCHOR: lint_lock:slot_lock_path] [@ANCHOR: lint_lock:enter_slot]
+    [@ANCHOR: lint_lock:running_count] [@ANCHOR: lint_cache:cargo_target_dir]: several heavy runs side by side on one machine."""
+
+    def setUp(self):
+        super().setUp()
+        self.env3 = dict(self.env, HAMS_LINT_SLOTS="3")
+
+    def test_slot_count_comes_from_the_environment_then_the_machine_entry_then_one(self):
+        table = os.path.join(self.cache, "machines.json")
+        with open(table, "w", encoding="utf-8") as handle:
+            json.dump({"machines": {"devbox": {"lint_slots": 4}, "other": {}}}, handle)
+        self.assertEqual(lint_lock.slot_count({"HAMS_LINT_SLOTS": "6"}, table), 6)
+        self.assertEqual(lint_lock.slot_count({}, table), 4)  # devbox is what an unknown host name resolves to
+        self.assertEqual(lint_lock.slot_count({"HAMS_LINT_MACHINE": "other"}, table), 1)
+        for bad in ("0", "99", "x", "-1", "2.5"):
+            self.assertEqual(lint_lock.slot_count({"HAMS_LINT_SLOTS": bad}, table), 1, bad)
+        self.assertEqual(lint_lock.slot_count({}, os.path.join(self.cache, "missing.json")), 1)
+
+    def test_the_committed_inventory_gives_the_dev_box_several_slots_and_the_small_machines_one(self):
+        self.assertGreaterEqual(lint_lock.slot_count({"HAMS_LINT_MACHINE": "devbox"}), 4)
+        for name in ("mac1-vm", "bruce17", "bruce-yoga"):
+            self.assertEqual(lint_lock.slot_count({"HAMS_LINT_MACHINE": name}), 1, name)
+
+    def test_slot_one_is_the_original_lock_file(self):
+        self.assertEqual(lint_lock.slot_lock_path(1, self.env), lint_lock.lock_path(self.env))
+        self.assertTrue(lint_lock.slot_lock_path(3, self.env).endswith("run.lock.slot-3"))
+
+    def test_three_runs_hold_three_slots_at_once_and_the_fourth_waits(self):
+        # Separate processes: a holder record is named by pid, so one process can hold one slot.
+        children = [self.start_holder("/wt/%d\tcmd" % n, slots="3") for n in range(3)]
+        qdir = lint_lock.queue_dir(self.env3)
+        self.assertEqual(sorted(h["slot"] for h in lock_queue.read_holders(qdir)), [1, 2, 3])
+        self.assertEqual(lint_lock.running_count(qdir), 3)
+        fourth = lint_lock.RunLock(self.env3)
+        self.assertFalse(fourth.acquire("/wt\tcmd", timeout=0.5, out=lambda _l: None, poll=0.1))
+        children[1].kill()
+        children[1].wait()
+        again = lint_lock.RunLock(self.env3)
+        self.assertTrue(again.acquire("/wt\tcmd", timeout=10, out=lambda _l: None, poll=0.1))
+        self.assertEqual(again.slot, 2)  # the slot that was freed
+        again.release()
+
+    def test_local_busy_only_when_every_slot_is_taken(self):
+        qdir = lint_lock.queue_dir(self.env3)
+        self.start_holder("/wt/1\tcmd", slots="3")
+        busy, why = lint_lock.local_busy(self.env3, loadavg=lambda: 0.5, cpu_count=16, qdir=qdir)
+        self.assertFalse(busy, why)
+        self.start_holder("/wt/2\tcmd", slots="3")
+        self.start_holder("/wt/3\tcmd", slots="3")
+        busy, why = lint_lock.local_busy(self.env3, loadavg=lambda: 0.5, cpu_count=16, qdir=qdir)
+        self.assertTrue(busy)
+        self.assertIn("slots are busy", why)
+
+    def test_local_busy_when_the_load_is_over_the_limit_even_with_a_free_slot(self):
+        busy, why = lint_lock.local_busy(self.env3, loadavg=lambda: 40.0, cpu_count=16)
+        self.assertTrue(busy)
+        self.assertIn("load", why)
+
+    def test_a_run_in_a_later_slot_gets_its_own_tmpdir_and_environment(self):
+        first = lint_lock.RunLock(self.env3)
+        second = lint_lock.RunLock(self.env3)
+        self.assertTrue(first.acquire("/wt\tcmd", timeout=5, out=lambda _l: None))
+        self.assertTrue(second.acquire("/wt\tcmd", timeout=5, out=lambda _l: None))
+        saved = {k: os.environ.get(k) for k in ("TMPDIR", lint_lock.SLOT_ENV)}
+        self.addCleanup(lambda: [os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v) for k, v in saved.items()])
+        niced = []
+        real_nice = os.nice
+        os.nice = lambda n: niced.append(n) or 0
+        self.addCleanup(setattr, os, "nice", real_nice)
+        base = os.path.join(self.cache, "tmp")
+        os.makedirs(base)
+        changes = lint_lock.enter_slot(second, {"TMPDIR": base}, base_tmp=base)
+        self.assertEqual(changes[lint_lock.SLOT_ENV], "2")
+        self.assertEqual(changes["TMPDIR"], os.path.join(base, "s2"))
+        self.assertTrue(os.path.isdir(changes["TMPDIR"]))
+        self.assertEqual(niced, [lint_lock.SLOT_NICE])
+        again = lint_lock.enter_slot(second, {"TMPDIR": changes["TMPDIR"]}, base_tmp=changes["TMPDIR"])
+        self.assertEqual(again["TMPDIR"], changes["TMPDIR"], "entering twice does not nest")
+        self.assertEqual(lint_lock.enter_slot(first, {"TMPDIR": base}, base_tmp=base)["TMPDIR"], base, "slot 1 keeps the caller's TMPDIR")
+        self.assertEqual(lint_lock.enter_slot(None), {})
+        single = lint_lock.RunLock(self.env)
+        self.assertEqual(lint_lock.enter_slot(single), {})  # one slot: nothing changes
+        # The Cargo target directory follows the slot.
+        import lint_cache
+
+        one = lint_cache.cargo_target_dir("hams_com", {"XDG_CACHE_HOME": self.cache})
+        two = lint_cache.cargo_target_dir("hams_com", {"XDG_CACHE_HOME": self.cache, "HAMS_LINT_SLOT": "2"})
+        self.assertEqual(two, one + "-s2")
+        self.assertEqual(lint_cache.cargo_target_dir("hams_com", {"XDG_CACHE_HOME": self.cache, "HAMS_LINT_SLOT": "1"}), one)
+        for lock in (first, second):
+            lock.release()
+
+
+if __name__ == "__main__":  # pragma: no cover
     unittest.main()
