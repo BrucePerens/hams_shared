@@ -283,7 +283,7 @@ each one that exists, so none can grow unseen. They are reported, never pruned b
 |---|---|---|
 | `environ` | mapping or `None` | Environment to read `HOME` from (else `~` is expanded); `None` means `os.environ`. |
 
-Returns a list of `(label, path, why)` tuples (all str), always these four:
+Returns a list of `(label, path, why)` tuples (all str), always these six:
 
 | Label | Path | Why it is kept |
 |---|---|---|
@@ -291,6 +291,8 @@ Returns a list of `(label, path, why)` tuples (all str), always these four:
 | test sources | `/opt/hams-testsrc` | Sources of the Odoo test hosts' test trees (26 GB on `mac1-vm`). |
 | playwright | `~/.cache/ms-playwright` | Browsers for the browser tests, downloaded once (0.6 GB). |
 | machines | `/var/lib/machines` | Root file systems for the arm64 Pi builds (7 GB on `mac1-vm`); needed. |
+| relay test target | `~/ctest-target` | The Cargo target directory of `remote_cargo_test.py` relay test runs. Reported only: `devbox_tools/ctest_prune.py` prunes it at the end of each run (the lint cache's policy), not this code. |
+| relay test sources | `~/ctest-src` | The source copies `remote_cargo_test.py` makes for those runs. Reported only; `ctest_prune` owns pruning. |
 
 Special concerns: no side effects; sizing walks the tree (tens of seconds for `/opt/hams-testsrc`) and skips files it
 cannot read (`/var/lib/machines` is root-only, so its size is what the running user can see).
