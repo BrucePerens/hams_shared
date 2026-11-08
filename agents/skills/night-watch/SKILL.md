@@ -29,7 +29,7 @@ make. A `status: blocked` to-do points into it.
 
 ## A run, in order
 
-1. **Orient.** Read `/home/bruce/workspace/hams_com/CLAUDE.md` and
+1. **Orient.** Read `~/workspace/hams_com/CLAUDE.md` and
    `hams_shared/docs/adrs/0102_concurrent_session_isolation_and_merge_gating.md` (per-session git
    worktrees and branch protection; every PR, this run's own included, waits for Bruce's review --
    replaces ADR-0099, which no longer exists). Run `ListAgents`: interactive sessions Bruce runs
@@ -97,7 +97,7 @@ tell whether a session is alive -- only `ListAgents` can -- so every liveness de
 caller's, made against the live list.
 
 ```bash
-python3 /home/bruce/workspace/hams_open/hams_shared/tools/night_watch_agent.py show
+python3 ~/workspace/hams_open/hams_shared/tools/night_watch_agent.py show
 python3 .../night_watch_agent.py claim --name <name> --ref <ref> [--force]   # exit 3: someone else is recorded
 python3 .../night_watch_agent.py heartbeat --ref <ref> --state working|idle  # exit 4: you were replaced
 python3 .../night_watch_agent.py release --ref <ref>
@@ -245,13 +245,13 @@ workflow_dispatch to verify `65bc44e2`, so for a while nothing was going to veri
 declining by judgment only. If the permission system *denied* you an action, never ask a peer to do
 it instead. That bypasses Bruce's permission decision, so record it for Bruce.
 
-The three real repos: `/home/bruce/workspace/hams_com` (GitHub `BrucePerens/hams_com`),
-`/home/bruce/workspace/hams_open` (`BrucePerens/hams_open`), and
-`/home/bruce/workspace/hams_open/hams_shared` (a git submodule of `hams_open`, physically checked
+The three real repos: `~/workspace/hams_com` (GitHub `BrucePerens/hams_com`),
+`~/workspace/hams_open` (`BrucePerens/hams_open`), and
+`~/workspace/hams_open/hams_shared` (a git submodule of `hams_open`, physically checked
 out there, but its own separate GitHub repo, `BrucePerens/hams_shared`). `hams_shared` has no GitHub Actions
 workflows (`gh api repos/BrucePerens/hams_shared/actions/workflows --jq .total_count` is 0, checked
 2026-09-15), so an empty `gh run list` there is expected, not an access problem. Read
-`/home/bruce/workspace/hams_com/CLAUDE.md` first for this project's standing engineering
+`~/workspace/hams_com/CLAUDE.md` first for this project's standing engineering
 conventions (env-var ordering for `sudo -u odoo` test runs, worktree symlink gotchas,
 secret-handling rules) before doing anything else -- they apply to any fix you make here.
 
@@ -1067,7 +1067,7 @@ high, medium, low." This skill is the resulting convention.
 
 ### Where it lives
 
-`/home/bruce/workspace/hams_com/night_shift_todo/`, with four subdirectories:
+`~/workspace/hams_com/night_shift_todo/`, with four subdirectories:
 
 ```
 night_shift_todo/
@@ -1246,7 +1246,7 @@ Odoo run in the background, then work items that never need the lock. On 2026-09
 `night-shift-todo-worker`'s three items were verified without it while the third's run waited:
 - `hams_shared/tools/`: `python3 -m pytest test_<name>.py` from that directory.
 - `hams_com/daemons/<name>/`: `pytest` from the daemon's own directory with
-  `PYTHONPATH=/home/bruce/workspace/hams_com/daemons`, because `hams_config.py` lives there.
+  `PYTHONPATH=$HOME/workspace/hams_com/daemons`, because `hams_config.py` lives there.
   `pdns_sync` also needs dummy `PDNS_API_URL`/`PDNS_API_KEY`, which it reads at import.
 - Lint: `check_burn_list.py --scan-daemons-and-tools <dir>`.
 
@@ -1441,7 +1441,7 @@ skips everything under `docs/bug_hunt_claims/` by design, because its freshness 
 claim and the anchored code share one git repo. Pointed at `hams_com` it reported over 1100
 false "orphaned claim" lines the first time anyone tried. The tool for the centralized store is
 `python3 agents/skills/bug-hunt/check_claims.py --claims-dir docs/bug_hunt_claims/hams_open
---source-root /home/bruce/workspace/hams_open`, run from the `hams_com` root. Its console output
+--source-root $HOME/workspace/hams_open`, run from the `hams_com` root. Its console output
 truncates hashes to 12 characters; to get a full `code_hash` to paste into a claim's frontmatter,
 import that module and call `_build_cross_repo_anchor_hash_index(source_root)` -- note its keys
 strip the `COMM_` prefix, so the anchor `user_websites:COMM_res_users_write` is stored as
@@ -2156,7 +2156,7 @@ Concretely, at the end of every run:
    fixed, tested, committed, and pushed -- all three, per Part 2's "what done
    means" -- with nothing left open): append that summary -- what was wrong, what you changed, the
    real commit hash(es), and how you verified it -- directly to
-   `/home/bruce/workspace/hams_com/night_shift_history.md` (re-read fresh immediately before
+   `~/workspace/hams_com/night_shift_history.md` (re-read fresh immediately before
    editing, append at the end, purely additive). This is a completed action, which is exactly what
    that file is for.
 3. **Something genuinely still needs attention** -- a real alert or failure you couldn't safely fix
@@ -2208,7 +2208,7 @@ would genuinely benefit from knowing. Never write a real secret here: hams_share
 ## Relationship to the scheduled task
 
 One scheduled task serves this skill: `night-shift-todo-worker`
-(`/home/bruce/.claude/scheduled-tasks/night-shift-todo-worker/SKILL.md`, titled "Night watch alarm").
+(`~/.claude/scheduled-tasks/night-shift-todo-worker/SKILL.md`, titled "Night watch alarm").
 Its prompt only performs "What the cron-fired session does" above and points here; this file is
 authoritative. Keep the two consistent when the wake-up protocol changes. The former
 `dependabot-and-ci-watch` task's prompt file may still sit on disk under
