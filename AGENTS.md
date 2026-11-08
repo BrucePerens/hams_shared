@@ -300,9 +300,8 @@ in a fixed order, and ends with a per-step timing table.
   clippy is in `~/.cargo/bin`, which `run_linters.py` puts first on PATH; `/etc/profile.d/hams_test_environment.sh` does the same for
   shells). `lint_slots` in `lint_machines.json` (4 on the dev box) lets that many heavy runs go at once, each in a lock file of its own
   (`~/.cache/hams-lint/run.lock`, `run.lock.slot-K`), at `nice` 10, with its own TMPDIR (slots above 1: `$TMPDIR/s<K>`) and its own warm Cargo
-  target directory (`hams-lint-cargo/<repo>-<toolchain>-sK`); a run beyond the last slot queues in the one FIFO (`--lock-status` lists
-  the slots and the queue). A run is shipped to another machine **only as overflow**: when every slot is taken (or a run waits) or the load is
-  above the limit, the *whole* run goes to the best idle runner (the one that can run the most of its steps; least loaded on a tie), under
+  target directory (`hams-lint-cargo/<repo>-<toolchain>-sK`); a run beyond the last slot queues in the one FIFO, and the load gate (`lint_load_ratio`, 1.5 per core here) still delays a start while the box is saturated (`--lock-status` lists
+  the slots and the queue). A run is shipped to another machine **only as overflow**: when every slot is taken (or a run waits), the *whole* run goes to the best idle runner (the one that can run the most of its steps; least loaded on a tie), under
   that machine's own lock and gate, with output as `[host] ...`; the steps that need this checkout (`check_summation_bias`, `check_pip_audit`,
   `check_claims_freshness`, `check_cargo_deny`, `check_noupdate_edits`, `pytest tools/[host-bound]`) stay and, when they total at most
   `HAMS_LINT_RESIDUE_SECONDS` (240), wait only for the load gate. A per-machine claim (`~/.cache/hams-lint/claims/HOST.lock`) keeps two runs here from

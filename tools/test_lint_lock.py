@@ -195,7 +195,9 @@ class LoadGateTests(unittest.TestCase):
         self.assertTrue(lint_lock.wait_for_load(1, 1, environ={"HAMS_SKIP_CI_LOAD_GATE": "1"}, loadavg=lambda: 99.0, out=lambda _l: None))
 
     def test_limit_and_timeout_precedence(self):
-        self.assertEqual(lint_lock.load_limit({}, cpu_count=16), 16.0)
+        self.assertEqual(lint_lock.load_limit({"HAMS_LINT_MACHINE": "mac1-vm"}, cpu_count=16), 16.0)
+        self.assertEqual(lint_lock.load_limit({"HAMS_LINT_MACHINE": "devbox"}, cpu_count=32), 48.0, "Tests [@ANCHOR: lint_lock:machine_load_ratio]: 1.5 per core")
+        self.assertEqual(lint_lock.load_limit({"HAMS_LINT_MACHINE": "devbox", "HAMS_CI_LOAD_GATE_RATIO": "1"}, cpu_count=32), 32.0)
         self.assertEqual(lint_lock.load_limit({"HAMS_CI_LOAD_GATE_RATIO": "0.5"}, cpu_count=16), 8.0)
         self.assertEqual(lint_lock.load_limit({"HAMS_LINT_LOAD_LIMIT": "12", "HAMS_CI_LOAD_GATE_RATIO": "0.5"}, cpu_count=16), 12.0)
         self.assertEqual(lint_lock.load_limit({"HAMS_LINT_LOAD_LIMIT": "12"}, cpu_count=16, override=3), 3.0)
@@ -362,8 +364,10 @@ class SlotTests(Base):
         self.assertTrue(busy)
         self.assertIn("slots are busy", why)
 
-    def test_local_busy_when_the_load_is_over_the_limit_even_with_a_free_slot(self):
-        busy, why = lint_lock.local_busy(self.env3, loadavg=lambda: 40.0, cpu_count=16)
+    def test_load_alone_does_not_make_a_machine_with_free_slots_busy_but_does_with_one_slot(self):
+        busy, why = lint_lock.local_busy(self.env3, loadavg=lambda: 90.0, cpu_count=16)
+        self.assertFalse(busy, why)  # the run waits at the load gate here; a smaller machine would be slower
+        busy, why = lint_lock.local_busy(self.env, loadavg=lambda: 90.0, cpu_count=16)
         self.assertTrue(busy)
         self.assertIn("load", why)
 

@@ -598,7 +598,7 @@ repositories' pinned Rust (rustup, user level, `provision_build_host.sh apply-us
 `lint_machines.json` gives it `"lint_slots": 4`: four runs at once, one lock file per slot (`lint_lock.py`), each run at `nice` 10 with its own
 TMPDIR (slots above 1: `<TMPDIR>/s<K>`) and its own warm Cargo target directory (`-sK`). A fifth run queues in the same FIFO. The other machines
 keep one slot. `--remote auto` no longer spreads steps to idle machines: another machine takes a **whole** run only as overflow, when every slot
-is taken (or a run waits) or the load is above the lint limit, and a run whose overflow machine is claimed or unreachable simply waits for a
+is taken or a run waits (a high load alone does not send it away: the run waits at the load gate, whose limit is 1.5 per core here), and a run whose overflow machine is claimed or unreachable simply waits for a
 slot here: it always ends with a real result and a stamp.
 
 ### `[@ANCHOR: lint_lock:slot_count]` `slot_count(environ=None, machines_file=None)`
@@ -613,6 +613,13 @@ Purpose: how many heavy lint runs this machine lets go at once. `RunLock` and `l
 Returns an int from 1 to `runner_slots.MAX_SLOTS` (15): `HAMS_LINT_SLOTS` when set and valid, else `lint_slots` of the machine's entry
 (`lint_cache.machine_name`: the entry whose `hostnames` hold this host's name, else `devbox`), else 1. A value that is not a whole number in range
 gives 1 rather than an error (a typo must not stop the lint). Special concerns: reads one small file, no other side effects. Tests: `SlotTests` in `test_lint_lock.py`.
+
+### `[@ANCHOR: lint_lock:machine_load_ratio]` `machine_load_ratio(environ=None, machines_file=None)`
+
+Purpose: the load-per-core ratio of this machine's lint load gate. `load_limit()` multiplies it by the core count unless `HAMS_LINT_LOAD_LIMIT`, `--load-limit` or
+`HAMS_CI_LOAD_GATE_RATIO` says otherwise. Returns the `lint_load_ratio` of the machine's `lint_machines.json` entry (the dev box: 1.5, because with several lint slots and
+niced cargo tests its load runs above the core count by design), else 1.0 (also for a missing or unreadable file, or a value that is not a positive number). Special
+concerns: reads one small file; no side effects. Tests: `test_limit_and_timeout_precedence` in `test_lint_lock.py`.
 
 ### `[@ANCHOR: lint_lock:slot_lock_path]` `slot_lock_path(slot, environ=None)`
 
