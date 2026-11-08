@@ -621,7 +621,8 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
     Also, never stop your own watcher with `pkill -f <script name>`: the CLAUDE.md self-match trap
     applies to this exactly, because your `bash -c` command line contains the pattern, so the
     `pkill` kills the shell running it and whatever else was chained after it never executes. Give
-    the watcher its own deadline, or use `TaskStop`.
+    the watcher its own deadline, or use `TaskStop`; for a process you started, `agent_procs.py run NAME -- ...`
+    and `agent_procs.py stop NAME` (skill `process-watching`; the guard hook denies `pkill`).
   - Record what you cancelled in a `night_shift_history/` entry (it's a completed action) or file a
     `night_shift_todo/` entry if cancelling it leaves something still needing a real re-run.
 - **A transport tool's version-probe flag is part of what a pin bump can break.** The relay finds
@@ -1231,9 +1232,13 @@ long stretches. On 2026-09-16 `night-shift-todo-worker` queued a run behind them
 `while pgrep -f "tools/test.py"; do sleep 3; done; test.py ...`. That loop can never exit:
 `pgrep -f` matches the loop's own `bash -c` command line, which contains the same string. It sat
 for over an hour without launching, until a peer session noticed. Anchor the pattern to the real
-process instead: `pgrep -u odoo -f "^python3 hams_shared/tools/test.py"`. The same trap applies to
-any `pgrep -f` that waits on a command whose name also appears in the waiting script. To check
-that a queued run actually started, look for its log file, not for the waiter process.
+process instead: use `test.py --wait` (the queue), or `agent_procs.py wait --pid P --start-time T`. An anchored
+`pgrep -f` pattern is no longer recommended: since 2026-11-08 the Bash guard hook denies every `pgrep -f`, `pkill`,
+`kill -9` and pid list built by command substitution (a `[x]yz` pattern matched a PostgreSQL backend and a SIGKILL of
+it crashed the shared cluster). The same trap applies to any `pgrep -f` that waits on a command whose name also
+appears in the waiting script. To check that a queued run actually started, look for its log file, not for the waiter
+process. Everything about waiting for and stopping processes: `hams_shared/agents/skills/process-watching/SKILL.md`
+(tool: `hams_shared/tools/agent_procs.py`: `find`, `wait`, `run`, `jobs`, `stop`, `kill-pid`).
 
 **A waiter can lose the race.** Several sessions often queue behind the same run, and whichever
 polls first after it ends gets the lock. On 2026-09-15 a 20-second `sleep` lost to another
@@ -2132,8 +2137,9 @@ Two related traps from the same item:
   403 in HTTP tests. Read them with parameterized SQL, as `event.event.action_handoff_ncs()` does.
 
 And one about waiting: `pkill -f "<your waiter script name>"` matches the shell running `pkill` itself,
-the same trap this file documents for `pgrep -f`. It killed its own shell with exit 144. Stop a
-waiter by its PID, or use `pkill -f` with a pattern anchored the way the `pgrep` section describes.
+the same trap this file documents for `pgrep -f`. It killed its own shell with exit 144. Start a waiter as a
+named job (`agent_procs.py run NAME -- ...`) and stop it with `agent_procs.py stop NAME`, or wait with
+`agent_procs.py wait`; never `pkill`/`pgrep -f` (see skill `process-watching`; the Bash guard hook denies them).
 
 ## Recording
 

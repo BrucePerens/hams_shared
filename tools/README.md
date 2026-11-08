@@ -2489,3 +2489,358 @@ Raises `OSError` or `json.JSONDecodeError` when the ADR or the watch file cannot
 
 Purpose: the command line. Argument `argv` (list of str, default `sys.argv[1:]`): exactly one item, the repository root. Returns 0 when there are no findings, 1
 after printing them, 2 for a wrong argument count or when no `docs/adrs/0114_*.md` is found beside `tools`.
+
+## Watching and stopping processes (`agent_procs.py`)
+
+Bruce, 2026-11-08: "Should we make utilities for agents to watch processes and kill things, so that they don't make their common mistakes like
+watching the watcher?" Four mistakes happened that night. (1) `sudo kill -9 $(pgrep -f "[h]ams_pf_probe")` also matched a PostgreSQL backend whose
+process title held the database name; SIGKILL of one backend crashed the shared cluster and cost the whole-system gate about 100 minutes. (2) Waiters
+such as `until ! pgrep -f "tools/test.py"; do sleep 3; done` inside `bash -c '...'` match their own shell and never end, or kill their own shell
+(exit 144). (3) A pid list from an earlier command named a different process later. (4) Background output was polled instead of waiting on the exact
+process or exit marker.
+
+`agent_procs.py` is the replacement (pure `/proc`, standard library only; guide for agents: `agents/skills/process-watching/SKILL.md`). A process is named by its **pid and
+start time** (`ticks=` in `find` output, field 22 of `/proc/PID/stat`), so a reused pid is detected. A long job is a **named job** in its own session with a record in
+`~/.cache/hams-jobs/NAME.json` (`HAMS_JOBS_DIR` overrides the directory). A search never lists the searcher, its ancestors or its descendants.
+
+```bash
+python3 hams_shared/tools/agent_procs.py find --cmd-contains hams_pf_probe          # lists, flags PROTECTED ones; never signals
+python3 hams_shared/tools/agent_procs.py run build --tag agent-7 -- nice -n 10 cargo build   # named job, log in ~/.cache/hams-jobs/build.log
+python3 hams_shared/tools/agent_procs.py wait --job build --timeout 1800              # 0 job exited 0, 1 failed, 75 timeout
+python3 hams_shared/tools/agent_procs.py wait --pid 4242 --start-time 98765           # 0 gone (or reused pid), 75 timeout
+python3 hams_shared/tools/agent_procs.py wait --file out.log --contains 'RESULT=' --fail-contains FATAL --while-pid 4242
+python3 hams_shared/tools/agent_procs.py stop build            # SIGTERM to the job's process group; --force adds SIGKILL on that verified group
+python3 hams_shared/tools/agent_procs.py kill-pid 4242 --start-time 98765     # one exact pid, never a list or a pattern
+```
+
+Exit codes: 0 done, 1 failed (or nothing found, for `find`), 2 usage, 3 REFUSED (a protected process, a reused pid, your own ancestry), 75 timeout.
+**Protected, always refused** (no flag lifts it except `--i-am-the-owner-and-checked` for your own recorded job): a process of another user, root or `postgres`; a command containing
+`postgres postmaster redis-server rabbitmq beam.smp epmd systemd sshd gdm gnome claude-desktop`; the `claude` application; a `test.py` run whose directory is not under your
+own worktree; a chrome/chromium whose `--user-data-dir` (or directory) is not under your `TMPDIR` (no `TMPDIR`: all chrome); pid 1; your own ancestry. Tests: `test_agent_procs.py` (real processes: a
+decoy whose arguments hold the pattern, `exec -a postgres sleep` as the fake PostgreSQL, a wrong start time as pid reuse, a waiter loop whose own text holds the pattern).
+
+### `[@ANCHOR: agent_procs:ProcInfo]` `ProcInfo`
+
+Purpose: one process as read from `/proc` at one instant; returned by `read_proc`, `snapshot`, used by every check. A frozen dataclass in `agent_procs.py`; never refreshed, read again to see a change.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `pid`, `ppid`, `pgid`, `sid` | int | Process, parent, process-group and session ids. |
+| `uid`, `user` | int, str | Owner (`stat` of `/proc/PID`) and its login name (the number as text when unknown). |
+| `state` | str | `R S D T Z X ...` from `/proc/PID/stat`; `Z` (zombie) and `X` count as ended. |
+| `start_ticks` | int | Field 22: start time in clock ticks since boot. With `pid` it identifies a process; a reused pid has a different value. |
+| `comm` | str | Kernel command name (15 characters). |
+| `argv` | tuple of str | Full command line (a kernel thread: `("[comm]",)`). PostgreSQL backends set a title here that contains the database name. |
+| `cwd` | str or None | Working directory; `None` when unreadable. |
+
+### `[@ANCHOR: agent_procs:JobRecord]` `JobRecord`
+
+Purpose: the file `<jobs dir>/<name>.json` of a named job. Written by `start_job` (before the command runs), completed by the wrapper when the command ends, marked by `stop_job`. A mutable dataclass; serialized as JSON with the same field names; adding a field must keep old files loadable (a file with unknown fields is ignored as unreadable).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | str | The job name (`check_job_name`); also the file name. |
+| `tag` | str | The owning agent, from `run --tag`; free text. |
+| `pid`, `pgid`, `sid` | int | The wrapper's pid, its process group and session (all equal: it is the session leader). |
+| `start_ticks` | int | The wrapper's start time; with `pid` it proves the record still names that process. |
+| `cwd`, `argv`, `log` | str, list, str | Directory the command ran in, the command, the log path. |
+| `started_at`, `ended_at` | float, float or None | Epoch seconds. |
+| `user` | str | The owner. |
+| `exit_code` | int or None | `None` while running; the command's code, 128+N after signal N, 127 when the program was not found. |
+| `stopped` | str or None | `"term"` or `"kill"` when `stop` ended it. |
+
+Invariants: the wrapper writes `exit_code` only while the record's `pid` is its own (a newer job of the same name is never overwritten). Concurrency: `start_job` holds `<name>.lock` (flock) while checking and starting.
+
+### `[@ANCHOR: agent_procs:WaitResult]` `WaitResult`
+
+Purpose: the outcome of `wait_pid`, `wait_job` and `wait_file`. Frozen dataclass: `code` (int: the process exit code to use) and `message` (str: one line for a person).
+
+### `[@ANCHOR: agent_procs:user_name]` `user_name(uid)`
+
+Purpose: login name for a uid. Returns the name, or the number as text when the account is unknown. Never raises; reads the password database.
+
+### `[@ANCHOR: agent_procs:boot_time]` `boot_time()`
+
+Purpose: lets `format_start` turn clock ticks into a date. Returns the epoch seconds of boot (`btime` of `/proc/stat`) as float, `0.0` when unreadable. Reads one file.
+
+### `[@ANCHOR: agent_procs:format_start]` `format_start(start_ticks)`
+
+Purpose: the human start time printed by `find`, `jobs` and the ps line. Argument `start_ticks` int from `ProcInfo`. Returns `YYYY-MM-DDTHH:MM:SS` in local time. The ticks, not this text, are what is compared.
+
+### `[@ANCHOR: agent_procs:read_proc]` `read_proc(pid)`
+
+Purpose: read one process. Argument `pid` int. Returns a `ProcInfo`, or `None` when the process does not exist, vanished while being read or cannot be parsed. The start time is taken after the **last** `)` of `/proc/PID/stat` because the command name may itself contain parentheses. Never raises; reads four `/proc` entries; works for other users' processes (cwd is `None` when unreadable).
+
+### `[@ANCHOR: agent_procs:snapshot]` `snapshot()`
+
+Purpose: a consistent-enough table for family and group questions. Returns `{pid: ProcInfo}` for every readable process; processes that exit during the pass are omitted. Cost: one `/proc` pass (a few thousand small reads).
+
+### `[@ANCHOR: agent_procs:ancestry]` `ancestry(table, pid)`
+
+Purpose: the pids that must never be signalled or waited for. Arguments: `table` from `snapshot`, `pid` int. Returns the set holding `pid` and each parent up to pid 1 (stops at a pid missing from the table or a loop).
+
+### `[@ANCHOR: agent_procs:descendants]` `descendants(table, pid)`
+
+Purpose: the other half of "watching the watcher". Returns the set of all children, grandchildren, ... of `pid` in `table`, not `pid` itself.
+
+### `[@ANCHOR: agent_procs:self_family]` `self_family(table, me=None)`
+
+Purpose: the exclusion set of `find`: `ancestry(me) | descendants(me)`, `me` defaulting to this process. The `bash -c '...'` that holds a search pattern is an ancestor of the process that searches, so it is never listed. Returns a set of pids.
+
+### `[@ANCHOR: agent_procs:is_under]` `is_under(path, root)`
+
+Purpose: the "inside this directory" test of `--cwd-under`, the worktree rule and the TMPDIR rule. Returns True when `realpath(path)` equals or is inside `realpath(root)`; False when either is empty or `None`. A sibling with a common prefix (`/a/bc` for `/a/b`) is not inside.
+
+### `[@ANCHOR: agent_procs:caller_worktree]` `caller_worktree(environ=None, cwd=None)`
+
+Purpose: what "the caller's own worktree" means for the `test.py` rule. Returns `HAMS_AGENT_WORKTREE` if set, else the nearest directory at or above `cwd` (default the current directory) that holds `.git` (a worktree has a `.git` file), else `None` (then every `test.py` run counts as someone else's).
+
+### `[@ANCHOR: agent_procs:chrome_data_dir]` `chrome_data_dir(argv)`
+
+Purpose: where a chrome keeps its profile, to tell a test run's chrome from anyone else's. Returns the value of the `--user-data-dir=` argument, or `None`.
+
+### `[@ANCHOR: agent_procs:protected_reason]` `protected_reason(info, caller_uid=None, worktree=None, tmpdir=None, family=())`
+
+Purpose: the single place that says "an agent must never signal this". Called by `find` (flag), `stop_job` (every group member) and `kill_pid`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `info` | `ProcInfo` | The process to judge. |
+| `caller_uid` | int | The signalling user; default the real uid. |
+| `worktree` | str or None | The caller's worktree root (`caller_worktree`); `None` protects every test.py run. |
+| `tmpdir` | str or None | The caller's `TMPDIR`; `None` protects every chrome. |
+| `family` | set of int | The caller's ancestry (`ancestry`). |
+
+Returns a sentence naming the rule, or `None` when it is the caller's ordinary process. Order of the rules: pid 1; own ancestry; another user, root, or the `postgres` account; a command or name containing `postgres postmaster redis-server rabbitmq beam.smp epmd systemd sshd gdm gnome claude-desktop`;
+the `claude` application; a `test.py` run whose directory is not under `worktree`; a chrome/chromium whose profile or directory is not under `tmpdir`. Pure function of its arguments.
+
+### `[@ANCHOR: agent_procs:ps_line]` `ps_line(info)`
+
+Purpose: the verification print before any signal, and the `find` output. Returns one line: `pid= user= start= ticks= pgid= cwd= args=` (full arguments).
+
+### `[@ANCHOR: agent_procs:find_procs]` `find_procs(table, me=None, user=None, any_user=False, cwd_under=None, contains=None, regex=None, pids=None, caller_uid=None, worktree=None, tmpdir=None)`
+
+Purpose: the search behind `find`. Returns `[(ProcInfo, protected_reason_or_None), ...]` sorted by pid.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `table` | dict | From `snapshot`. |
+| `me` | int or None | The searcher; it, its ancestors and descendants are never returned. Default this process. |
+| `user`, `any_user` | str, bool | Default: only the caller's own processes. Another user's name needs `any_user=True`, which lists all owners (they are flagged protected). |
+| `cwd_under` | str | Keep processes whose directory is under it. |
+| `contains` | str | A LITERAL substring of the space-joined command line (no pattern characters). |
+| `regex` | str | A regular expression searched in the command line. |
+| `pids` | dict | `{pid: start_ticks or None}` (see `read_pid_file`); a given start time must match. |
+
+All filters must hold. Errors: `ProcError` (code 2) for a bad regex or another user without `any_user`. It never signals anything and prints nothing.
+
+### `[@ANCHOR: agent_procs:read_pid_file]` `read_pid_file(path)`
+
+Purpose: the `--pid-file` of `find`. Lines are `PID` or `PID:START_TICKS`; blank lines and `#` comments are ignored. Returns `{pid: ticks or None}`. Errors: `ProcError` for an unreadable file or a malformed line. A `PID:TICKS` entry whose process now has other ticks matches nothing (pid reuse).
+
+### `[@ANCHOR: agent_procs:jobs_dir]` `jobs_dir(environ=None)`
+
+Purpose: where records, logs and locks live. Returns `HAMS_JOBS_DIR` or `~/.cache/hams-jobs`, created with mode 0700. Side effect: creates the directory.
+
+### `[@ANCHOR: agent_procs:check_job_name]` `check_job_name(name)`
+
+Purpose: a job name becomes a file name, so it is validated. Returns `name` when it is letters, digits, `.`, `_`, `-`, 1 to 64 characters, alphanumeric first; else raises `ProcError` (code 2). No `/`, no leading dot.
+
+### `[@ANCHOR: agent_procs:record_path]` `record_path(name, directory=None)`
+
+Purpose: `<jobs dir>/<name>.json`, validating `name` (raises as `check_job_name`).
+
+### `[@ANCHOR: agent_procs:write_record]` `write_record(rec, directory=None)`
+
+Purpose: persist a `JobRecord`. Writes a temporary file in the same directory, then `os.replace`, so a reader never sees half a file. Raises `OSError` when the directory is not writable. Several processes may call it for different jobs at once; two writers of the same job (the wrapper and `stop`) both write whole, valid files.
+
+### `[@ANCHOR: agent_procs:read_record]` `read_record(name, directory=None)`
+
+Purpose: load a job. Returns the `JobRecord`, or `None` when the file is missing, not JSON or has unexpected fields.
+
+### `[@ANCHOR: agent_procs:list_records]` `list_records(directory=None)`
+
+Purpose: every readable record (`jobs`, and the "recorded job" proof of `kill_pid`). Returns a list sorted by `started_at`. Ignores unreadable files.
+
+### `[@ANCHOR: agent_procs:pid_alive]` `pid_alive(pid, start_ticks)`
+
+Purpose: the pid-reuse-safe liveness test used by every wait and stop. Returns True only when the process exists, is not a zombie or dead, and its start time equals `start_ticks`; a reused pid is False.
+
+### `[@ANCHOR: agent_procs:job_state]` `job_state(rec)`
+
+Purpose: classify a job. Returns `"exited"` (an exit code was recorded; it has priority), `"running"` (the recorded pid is alive with the recorded start time) or `"lost"` (gone without an exit code: SIGKILLed or the machine restarted).
+
+### `[@ANCHOR: agent_procs:forward_signal]` `forward_signal(holder, signum, _frame)`
+
+Purpose: the wrapper's signal handler (installed with `functools.partial(forward_signal, holder)` for SIGTERM, SIGINT, SIGHUP). `holder[0]` is the `Popen` of the command or `None`; the signal is passed to the command if it still runs, errors from a command that just ended are ignored. The wrapper itself keeps running, so it always records the exit code. Runs in signal-handler context; touches no lock.
+
+### `[@ANCHOR: agent_procs:wrapper_main]` `wrapper_main(name, argv, directory=None)`
+
+Purpose: the tiny process that leads a job's session (`agent_procs.py _wrap NAME -- COMMAND...`, started only by `start_job`). Waits for the line `go` on standard input (so the record exists before the command runs; EOF or anything else returns 126 without running it), runs `argv` with standard input from `/dev/null` and its output inherited (the log), waits, writes `exit_code` and `ended_at` into the record if the record still names this process, and returns the code (128+N after signal N, 127 when the program cannot be run, the reason on standard error). A job killed with SIGKILL leaves no exit code (`lost`).
+
+### `[@ANCHOR: agent_procs:start_job]` `start_job(name, argv, tag="", cwd=None, directory=None)`
+
+Purpose: start a named job; the engine of `run`. Returns the `JobRecord` (pid, process group and session of the wrapper, log path). Side effects: creates `<name>.lock`, truncates and writes `<name>.log`, starts `python3 agent_procs.py _wrap` with `start_new_session=True` (its own session and process group, so `stop` can signal the group and a signal to your shell cannot reach it), sets `AGENT_PROCS_JOB=<name>` in its environment, writes the record. Locks: an exclusive `flock` on `<name>.lock` while checking and starting. Errors: `ProcError` code 2 for a bad name or empty command, code 1 when a job of that name is still running.
+
+### `[@ANCHOR: agent_procs:wait_pid]` `wait_pid(pid, start_ticks=None, timeout=1800, interval=0.5, sleep=time.sleep, clock=time.monotonic, table=None)`
+
+Purpose: wait for one exact process, never by pattern. Returns a `WaitResult`: code 0 when it ended, was already gone, or the pid now belongs to a different process (start time differs from `start_ticks`: reuse); 75 on timeout; 3 when `pid` is this command's own ancestry (watching the watcher). `start_ticks=None` reads the start time at the first look. A plain pid's exit status is not knowable (it is not our child), so 0 means "done", not "succeeded": use `wait_job` or a marker file when success matters. Blocking; polls `/proc` every `interval` seconds; `sleep` and `clock` are for tests.
+
+### `[@ANCHOR: agent_procs:wait_job]` `wait_job(name, timeout=1800, interval=0.5, sleep=..., clock=..., directory=None)`
+
+Purpose: wait for a named job. Returns code 0 when its recorded exit code is 0, 1 for any other code or for a job that vanished without one (`lost`; the message names the log), 75 on timeout. Errors: `ProcError` code 2 for an unknown job. Blocking; reads the record each poll.
+
+### `[@ANCHOR: agent_procs:wait_file]` `wait_file(path, contains=None, fail_contains=None, while_pid=None, timeout=1800, interval=0.5, sleep=..., clock=...)`
+
+Purpose: wait for an output file or exit marker. Code 0 when `path` exists and (if `contains`, a regular expression, is given) matches; 1 when `fail_contains` matches first or when `while_pid` (a pid, or `(pid, ticks)`) ends before the condition holds; 75 on timeout. The file is read whole at each poll: keep it a log or marker, not a data file.
+
+### `[@ANCHOR: agent_procs:group_members]` `group_members(table, pgid, sid)`
+
+Purpose: the verified membership of a job's group. Returns the live (not zombie) processes with that process group **and** session. A reused pid cannot be a member, because a process-group id cannot be reused while the group has members.
+
+### `[@ANCHOR: agent_procs:stop_job]` `stop_job(name, grace=10, force=False, owner_checked=False, out=sys.stdout, directory=None, sleep=..., clock=...)`
+
+Purpose: stop a NAMED job and nothing else.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `name` | str | A job with a record. |
+| `grace` | float | Seconds to wait after SIGTERM. |
+| `force` | bool | Send SIGKILL to the verified group if SIGTERM was not enough. |
+| `owner_checked` | bool | `--i-am-the-owner-and-checked`: skip the protected-process refusal for your own job. |
+
+Order: read the record; find members by group and session (none: "not running", return 0); refuse a group that holds the caller's own shell; print the ps line of every member; refuse (code 3) a member of another user or a protected one; `killpg(SIGTERM)`; wait up to `grace`; only with `force`, re-verify the members and `killpg(SIGKILL)`. Returns 0 when the group is gone, 1 when it is still running (the message says `--force`). The record gets `stopped = term/kill`. Side effects: signals, record write. Errors: `ProcError` code 2 for an unknown job, 3 for a refusal.
+
+### `[@ANCHOR: agent_procs:authorize_kill]` `authorize_kill(info, start_ticks, cwd_under, directory=None)`
+
+Purpose: the identity proof for `kill_pid`. Returns `"recorded job"` (a record names this pid and start time), `"start time confirmed"` (the caller's `start_ticks` equals the process's) or `"cwd under <path>"`. Raises `ProcError` code 3 when `start_ticks` differs (the pid was reused) or when there is no proof at all.
+
+### `[@ANCHOR: agent_procs:kill_pid]` `kill_pid(pid, start_ticks=None, cwd_under=None, grace=10, force=False, owner_checked=False, sig="TERM", out=sys.stdout, directory=None, sleep=..., clock=...)`
+
+Purpose: signal one exact process. Never a list, never a pattern. Order: refuse `pid <= 1` and the caller's ancestry; a process that does not exist is "already gone" (0); refuse another user's process; `authorize_kill`; refuse a protected process (`owner_checked` lifts this only for a recorded job); print the ps line; send `sig` (TERM INT HUP QUIT USR1 USR2) to that pid only; wait up to `grace`; with `force` and the same process (same start time) still alive, SIGKILL it. Returns 0 when gone, 1 when still alive. Errors: `ProcError` code 3 for refusals, 2 for a bad signal name.
+
+### `[@ANCHOR: agent_procs:cmd_find]` `cmd_find(args, out=sys.stdout)`
+
+Purpose: the `find` subcommand. Prints one `ps_line` per match, with `  PROTECTED: <reason>` appended when a signal would be refused, or JSON (`--json`: ProcInfo fields plus `protected`), or nothing (`--quiet`). Returns 0 when something matched, 1 when not (so `until ! agent_procs.py find --quiet --cmd-contains X; do sleep 3; done` is a safe waiter: the shell holding X is the searcher's ancestor and is excluded). It prints no bare pid list on purpose.
+
+### `[@ANCHOR: agent_procs:cmd_wait]` `cmd_wait(args, out=sys.stdout)`
+
+Purpose: the `wait` subcommand: exactly one of `--pid [--start-time]`, `--job`, `--file [--contains --fail-contains --while-pid]`, with `--timeout` (default 1800 s) and `--interval`. Prints the result message; returns its code. Raises `ProcError` code 2 when not exactly one target.
+
+### `[@ANCHOR: agent_procs:cmd_run]` `cmd_run(args, out=sys.stdout)`
+
+Purpose: the `run` subcommand: `run NAME [--tag AGENT] [--cwd DIR] -- COMMAND...`. Prints the job's pid, process group, log path and the wait and stop commands. Returns 0.
+
+### `[@ANCHOR: agent_procs:cmd_jobs]` `cmd_jobs(args, out=sys.stdout)`
+
+Purpose: the `jobs` subcommand: one line per record (`name state [code=N] pid= started= tag= cwd= cmd=`), or JSON with `--json`. Returns 0.
+
+### `[@ANCHOR: agent_procs:cmd_stop]` `cmd_stop(args, out=sys.stdout)`
+
+Purpose: the `stop` subcommand (`stop NAME [--grace S] [--force] [--i-am-the-owner-and-checked]`); returns `stop_job`'s code.
+
+### `[@ANCHOR: agent_procs:cmd_kill_pid]` `cmd_kill_pid(args, out=sys.stdout)`
+
+Purpose: the `kill-pid` subcommand (`kill-pid PID [--start-time T | --cwd-under P] [--signal NAME] [--grace S] [--force] [--i-am-the-owner-and-checked]`). Exactly one pid is accepted (argparse refuses a second one with code 2); returns `kill_pid`'s code.
+
+### `[@ANCHOR: agent_procs:build_parser]` `build_parser()`
+
+Purpose: the argparse parser: subcommands `find wait run jobs stop kill-pid` and the internal `_wrap`. It does not know the command after `--`; `parse_args` splits that off. Returns the `ArgumentParser`.
+
+### `[@ANCHOR: agent_procs:parse_args]` `parse_args(argv=None)`
+
+Purpose: parse the command line, giving `run` and `_wrap` everything after the first `--` as `args.command` (a list) so that a command's own options (`-c`, `--tag`) are never taken for ours. Exits with argparse status 2 on a usage error.
+
+### `[@ANCHOR: agent_procs:main]` `main(argv=None)`
+
+Purpose: the command-line entry. Returns the exit code (0 done, 1 failed or nothing found, 2 usage, 3 refused, 75 timeout); a `ProcError` prints `agent_procs: <message>` on standard error.
+
+## Guard hook for signals (`claude_hooks/guard_signals.py`)
+
+A `PreToolUse` hook for the Bash tool, wired in the `.claude/settings.json` of `hams_com` and `hams_open`. It reads the hook JSON on standard input, parses the command text into
+commands (so a word inside a quoted string, a commit message, a data heredoc or a `grep` pattern is not a command) and **denies**: `kill -9` and every other spelling of SIGKILL, `pkill`, `killall`,
+`skill`, `fuser -k`, `systemctl kill`, `pgrep -f` / `--full` (the `[x]yz` trick does not help: it matched a PostgreSQL backend), `kill` whose pids are not literal numbers (`$(...)`, backticks, variables, `xargs`),
+and the same inside `bash -c`, `ssh host '...'`, `eval`, `find -exec`, `watch`, shell heredocs and `python -c` one-liners. It **allows** `kill -TERM 123`, `kill 123`, `kill -0 123`, `pgrep NAME` (name only), `ps`, `grep`, `cargo`, `git`, sleep loops
+and `agent_procs.py`. A denial prints JSON `permissionDecision: deny` whose reason tells the agent to use `agent_procs.py`. The escape **for a human** is `HAMS_ALLOW_SIGNALS=1` inside the command itself;
+it is logged with the command to `~/.cache/hams-jobs/guard.log`, as is every denial and hook error. A crash inside the hook allows a command without a signal-looking word and denies one with such a word; the command in
+settings.json also allows everything when the script file is missing. The hook always exits 0. Tests: `test_guard_signals.py` (a table of about 130 commands, the exact command of 2026-11-08 12:18:33, the real script on standard input).
+
+### `[@ANCHOR: guard_signals:Word]` `Word`
+
+Purpose: one shell word after quote removal. Frozen dataclass: `text` (str, without quotes or backslashes) and `expands` (bool: an unquoted or double-quoted `$` expansion or a backtick was seen, so its value is unknown when the hook runs).
+
+### `[@ANCHOR: guard_signals:Command]` `Command`
+
+Purpose: one simple command. Dataclass: `words` (list of `Word`, including leading assignments and wrappers) and `bodies` (list of str: heredoc bodies attached to it; only parsed when the command is a shell or an interpreter).
+
+### `[@ANCHOR: guard_signals:Verdict]` `Verdict`
+
+Purpose: what `analyze` found. Dataclass: `reasons` (list of str; empty means allowed) and `notes` (list of str: reminders for allowed constructs, such as a literal-pid kill).
+
+### `[@ANCHOR: guard_signals:find_paren_end]` `find_paren_end(text, start)`
+
+Purpose: find the end of `$( ... )`. Returns the index of the `)` that closes the `(` before `start`, scanning from `start` and honouring nesting, single and double quotes and backslashes; `len(text)` when never closed (the rest is taken as the inside). Pure.
+
+### `[@ANCHOR: guard_signals:find_backtick_end]` `find_backtick_end(text, start)`
+
+Purpose: find the end of a backtick substitution. Returns the index of the closing backtick (a backslash escapes the next character) or `len(text)`.
+
+### `[@ANCHOR: guard_signals:read_heredoc]` `read_heredoc(text, start, delimiter, strip_tabs)`
+
+Purpose: consume a heredoc body that starts at `text[start]`. Returns `(body, next_index)`: the lines before the line equal to `delimiter` (leading tabs ignored when `strip_tabs`, the `<<-` form), and the index after that line. An unterminated heredoc takes the rest of the text.
+
+### `[@ANCHOR: guard_signals:tokenize]` `tokenize(text, commands, depth=0)`
+
+Purpose: the shell reader. Splits `text` into simple commands and appends them (`Command`) to the list `commands`, including those inside `$(...)`, backticks, `<(...)` and `>(...)` (parsed recursively). Handles single and double quotes, backslashes, `#` comments, the boundaries `; & | && || ( )` and newline, redirections (the file word and a leading fd digit are dropped) and heredocs. Returns `commands`. Raises `ValueError` when nesting is deeper than 8 (the caller then fails according to the crash policy). Pure; not a full shell parser: it errs towards seeing more commands, never fewer.
+
+### `[@ANCHOR: guard_signals:skip_options]` `skip_options(words, start, value_options)`
+
+Purpose: step over a wrapper's options (`sudo -n -u odoo`). Returns the index of the first word at or after `start` that is not an option; words starting with `-` are options, those in `value_options` also consume the next word, `--` ends the options.
+
+### `[@ANCHOR: guard_signals:resolve]` `resolve(words)`
+
+Purpose: find the real command behind assignments, reserved words (`until`, `do`, `!`, `{`) and wrappers (`sudo env nice ionice timeout stdbuf nohup setsid command exec chrt taskset flock xargs time`). Returns `(name, rest, via_xargs)`: the program's base name, its words (name first), and whether an `xargs` took the arguments from a pipe. `name` is `None` when nothing is left, or for `command -v NAME` (only a lookup).
+
+### `[@ANCHOR: guard_signals:signal_is_kill]` `signal_is_kill(spec)`
+
+Purpose: recognise SIGKILL. True for `9`, `KILL` and `SIGKILL` in any case with or without a leading `-`.
+
+### `[@ANCHOR: guard_signals:check_kill]` `check_kill(words, via_xargs, verdict)`
+
+Purpose: judge a `kill` command (`words[0]` is kill). Adds a reason to `verdict` for SIGKILL in any option form (`-9 -KILL -s KILL -n 9 --signal=9`), for a pid that is not a literal number (or `%job`, or `$!`) and for pids supplied by `xargs`. `kill -l` and a `kill` with no pid are fine. A literal pid adds the note to print its ps line first.
+
+### `[@ANCHOR: guard_signals:check_pgrep]` `check_pgrep(words, verdict)`
+
+Purpose: deny `pgrep -f` (also in a cluster such as `-af` or `-lf`) and `pgrep --full`; the pattern would be matched against every command line, including the shell that holds it. `pgrep NAME` (name only) passes.
+
+### `[@ANCHOR: guard_signals:shell_script]` `shell_script(words)`
+
+Purpose: the script text of `sh -c SCRIPT`, `bash -lc SCRIPT`, `su -c SCRIPT`; `None` when there is no `-c` word.
+
+### `[@ANCHOR: guard_signals:check_command]` `check_command(command, verdict, depth)`
+
+Purpose: judge one `Command`: names `pkill killall skill killall5`, `kill`, `pgrep`, `fuser -k`, `systemctl kill`; recurses (`depth` guards recursion) into `bash -c`, `su -c`, shell heredoc bodies, `eval`, `ssh` and `watch` (every suffix of the words, since options precede the command), `find -exec`, and interpreter (`python perl ruby node php`) `-c`/`-e` strings and heredoc bodies that use SIGKILL, `os.killpg` or call `pkill`, `killall` or `pgrep -f`. Adds reasons to `verdict`.
+
+### `[@ANCHOR: guard_signals:analyze]` `analyze(text, depth=0, verdict=None)`
+
+Purpose: parse and judge a whole command text. Returns the `Verdict` (the object passed in, or a new one). Raises `ValueError` for nesting deeper than 8.
+
+### `[@ANCHOR: guard_signals:log_path]` `log_path(environ=None)`
+
+Purpose: `<jobs dir>/guard.log` (`HAMS_JOBS_DIR` or `~/.cache/hams-jobs`).
+
+### `[@ANCHOR: guard_signals:log_event]` `log_event(kind, command, detail, session_id="", environ=None)`
+
+Purpose: append one JSON line (`time kind session detail command`, the command cut to 2000 characters) for an `override`, a `denied` command or an `error`. Creates the directory with mode 0700. Never raises: a log that cannot be written must not block or crash the hook.
+
+### `[@ANCHOR: guard_signals:deny_message]` `deny_message(reasons)`
+
+Purpose: the text an agent reads on a denial: the reasons (deduplicated), the replacements (`wait --pid/--job/--file`, `run`, `stop`, `kill-pid`, `find`, with the absolute path of `agent_procs.py`) and the statement that only a human may use `HAMS_ALLOW_SIGNALS=1`.
+
+### `[@ANCHOR: guard_signals:decide]` `decide(command, session_id="", environ=None)`
+
+Purpose: the decision for one command. Returns `None` (allow, print nothing), the deny JSON (`hookSpecificOutput.permissionDecision = deny` with `deny_message`), or an `additionalContext` reminder for a literal-pid kill (no permission decision, so the normal permission flow is untouched). `HAMS_ALLOW_SIGNALS=1` as a word of the command allows a would-be denial and logs `override`. A crash in `analyze` is logged; a command without a signal-looking word (`kill pgrep pidof xargs -9 SIGKILL fuser`) is then allowed, one with such a word is denied.
+
+### `[@ANCHOR: guard_signals:main]` `main(stdin=None, stdout=None, environ=None)`
+
+Purpose: the hook entry point. Reads the hook JSON (`tool_name`, `tool_input.command`, `session_id`) from `stdin`, prints the decision JSON on `stdout`, returns 0 always. Anything that is not a Bash call with a text command (or not JSON) is allowed.

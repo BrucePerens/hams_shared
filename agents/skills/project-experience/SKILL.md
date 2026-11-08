@@ -172,7 +172,7 @@ session.
 
 ### Odoo `hams_shared/tools/test.py` Silent Background Crashes (Port 8069)
 **Trap**: When running `hams_shared/tools/test.py` in isolated `unshare` namespaces, if the test is forcefully killed or times out, it abandons orphaned Chromium instances and leaves `odoo-bin` running in the background, locking `8069`. Future test runs fail with "Another instance of test.py is already running" or port binding errors.
-**Solution**: Manually clear the `odoo_test_runner.lock` file in `/var/tmp/` and execute `pkill -f chrome` and `pkill -f odoo` to release the locked processes before re-running the test framework.
+**Solution**: Manually clear the `odoo_test_runner.lock` file in `/var/tmp/` and release the locked processes before re-running the test framework by stopping them by name with `hams_shared/tools/agent_procs.py` (`find`, then `stop NAME` or `kill-pid PID --start-time T`; `pkill -f` is denied by the Bash guard hook, see skill `process-watching`).
 
 ### Odoo Headless Chrome OOM & Process Leak Trap (NoSuchProcess)
 **Trap**: Repeatedly instantiating `ChromeBrowser(self)` inside helpers like `navigate_and_screenshot` creates a new Chrome instance per call without cleaning up previous instances, because `self.browser` only tracks the most recent one for teardown. This causes massive memory exhaustion, random `psutil.NoSuchProcess` test runner crashes, and `Fetch API Error` watchdog alarms as the Odoo Werkzeug backend fails under OOM pressure.
