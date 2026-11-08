@@ -83,6 +83,11 @@ def _matching_chromes(real_profile):
             print(f"[*] Skipping a process that vanished mid-scan: {e}", file=sys.stderr)
 
 
+# How long to wait for a killed Chrome to disappear. One second was enough on an idle box; with several lint slots and a load
+# of 50 to 100 a SIGKILLed Chrome with many children took longer, and the tests below failed in most full lint runs (2026-11-08).
+REAP_WAIT_SECONDS = 15.0
+
+
 def reap_headless_chromes(user_data_dir):
     """Kill the Chrome processes of this UID that use user_data_dir as profile.
 
@@ -100,7 +105,7 @@ def reap_headless_chromes(user_data_dir):
     for p in _matching_chromes(real_profile):
         try:
             p.kill()
-            p.wait(timeout=1.0)
+            p.wait(timeout=REAP_WAIT_SECONDS)
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, psutil.TimeoutExpired) as e:
             # Same benign race as above -- the process can exit or fail to
             # reap within the timeout between the scan and this inspection.

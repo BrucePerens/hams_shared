@@ -107,14 +107,14 @@ class ReapHeadlessChromesTests(unittest.TestCase):
         # Scoped to this test's own profile, so other sessions' Chromes survive.
         rhc.reap_headless_chromes(profile)
         try:
-            proc.wait(timeout=5.0)
+            proc.wait(timeout=30.0)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait(timeout=5.0)
+            proc.wait(timeout=30.0)
 
     def _assert_exits(self, proc):
         try:
-            exit_code = proc.wait(timeout=5.0)
+            exit_code = proc.wait(timeout=30.0)
         except subprocess.TimeoutExpired:
             exit_code = None
         self.assertIsNotNone(
