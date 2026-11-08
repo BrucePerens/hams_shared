@@ -52,6 +52,7 @@ import infrastructure
 import lock_queue
 import odoo_test_batch
 import offline_browser_ns
+import runner_slots
 
 import argparse
 import atexit
@@ -495,14 +496,20 @@ class FailureExtractor:
     cpu_limit_line = None
     # Set by run_cmd when the Odoo process was killed by a signal (signal_exit_verdict): the line printed in the summary.
     signal_line = None
+    # Set by run_cmd to the exit status it returns for the Odoo process (None until a process ran).
+    child_exit_status = None
 
 
-    def __init__(self, log_dir, disable_atexit=False, mcp_mode=False):
+    def __init__(self, log_dir, disable_atexit=False, mcp_mode=False, slot=1):
         base_dir = os.environ.get("HAMS_REAL_LOG_DIRECTORY") or os.path.abspath(
             os.path.expanduser(log_dir)
         )
         self.mcp_mode = mcp_mode
-        self.display_path = os.path.join(base_dir, "filtered_test.txt")
+        # A run in a slot above 1 writes its own files (runner_slots.slot_file_name): slot 1 and every
+        # run without slots keep the original names.
+        report_name = runner_slots.slot_file_name("filtered_test.txt", slot)
+        progress_name = runner_slots.slot_file_name("test_progress.txt", slot)
+        self.display_path = os.path.join(base_dir, report_name)
 
         # Bug-hunt fix (2026-09-09): HAMS_ISOLATED_NS=="1" alone does NOT prove
         # /mnt/real_tmp is a real, bind-mounted directory pointing back to the
@@ -528,7 +535,7 @@ class FailureExtractor:
         # the real isolated pipeline's behavior unchanged (there, this
         # directory is always present by the time this constructor runs).
         if os.environ.get("HAMS_ISOLATED_NS") == "1" and os.path.isdir("/mnt/real_tmp"):
-            self.output_path = "/mnt/real_tmp/filtered_test.txt"
+            self.output_path = os.path.join("/mnt/real_tmp", report_name)
         else:
             self.output_path = self.display_path
             os.makedirs(base_dir, exist_ok=True)
@@ -583,9 +590,9 @@ class FailureExtractor:
         # silently no-op the entire live progress-tracking feature with
         # zero signal to the user -- a textbook silent-failure gate.
         if os.environ.get("HAMS_ISOLATED_NS") == "1" and os.path.isdir("/mnt/real_tmp"):
-            self.progress_path = "/mnt/real_tmp/test_progress.txt"
+            self.progress_path = os.path.join("/mnt/real_tmp", progress_name)
         else:
-            self.progress_path = os.path.expanduser("~/tmp/test_progress.txt")
+            self.progress_path = os.path.join(os.path.expanduser("~/tmp"), progress_name)
             os.makedirs(os.path.dirname(self.progress_path), exist_ok=True)
         self.passed_tests = 0
         self.failed_tests = 0
@@ -938,7 +945,14 @@ class FailureExtractor:
                     f"affect the pass/fail result above -- saved to: {path_note}"
                 )
         elif num_failures == 0:
-            print("🎉 TEST RUN COMPLETE: No test failures or system crashes detected.")
+            # No `odoo.tests.result:` line means no test ran to a verdict: Odoo died before the tests
+            # (port already in use, database authentication failed, an import error) or was never started.
+            # "No failures" is then not a pass; the exit status says the same (exit_status_for_run).
+            print(
+                "🚨 TEST RUN FAILED: no tests ran -- Odoo printed no odoo.tests.result line, so there is no "
+                f"verdict (Odoo's exit status: {self.child_exit_status}). Read the start of the output above "
+                "for the cause (for example 'Address already in use' or a database authentication error)."
+            )
         else:
             print(
                 f"🚨 TEST RUN COMPLETE: {num_failures} issue(s) detected (test failures or "
@@ -947,6 +961,8 @@ class FailureExtractor:
                 "only."
             )
             print(f"📄 Failure details extracted and saved to: {path_note}")
+        if self.child_exit_status not in (None, 0) and not (a or self.cpu_limit_line or self.signal_line):
+            print(f"🛑 Odoo exited with status {self.child_exit_status}: this run is a failure.")
         print("==========================================================\n")
 
 
@@ -981,6 +997,21 @@ def _process_reaped(pid):
         return False
 
 
+# The `pkill -f` pattern that finds this run's headless Chrome. With one slot, or inside the private
+# process table of the full pipeline, every `_chrome_odoo` process is this run's. Only a run on the host
+# that shares it with other slots narrows it to the Chrome profiles under its own TMPDIR (main() sets it
+# from runner_slots.slot_resources); otherwise a hang recovery in one slot would kill the others' browsers.
+_CHROME_KILL_PATTERN = runner_slots.DEFAULT_CHROME_PATTERN
+_CHROME_PROFILE_GLOBS = runner_slots.DEFAULT_CHROME_GLOBS
+
+
+def kill_test_chrome(signal_name):
+    """Send `signal_name` ('TERM' or 'KILL') to this run's headless Chrome processes (the odoo user's)."""
+    subprocess.run(
+        ["pkill", "-u", "odoo", f"-{signal_name}", "-f", _CHROME_KILL_PATTERN], check=False, timeout=2
+    )
+
+
 def robust_reap(pid):
     """
     Process reaper that targets the process group with SIGTERM,
@@ -988,9 +1019,7 @@ def robust_reap(pid):
     """
     print(f"\n[*] [REAPER] Initiating robust reaper for PID {pid}...")
     try:
-        subprocess.run(
-            ["pkill", "-u", "odoo", "-TERM", "-f", "_chrome_odoo"], check=False, timeout=2
-        )
+        kill_test_chrome("TERM")
         # Chromium is caught by the _chrome_odoo filter above.
 
         pgid = os.getpgid(pid)
@@ -1022,9 +1051,7 @@ def robust_reap(pid):
             os.killpg(pgid, signal.SIGKILL)
         except OSError as e:
             print(f"[*] [REAPER] SIGKILL to Process Group {pgid} failed: {e}")
-        subprocess.run(
-            ["pkill", "-u", "odoo", "-KILL", "-f", "_chrome_odoo"], check=False, timeout=2
-        )
+        kill_test_chrome("KILL")
         # Chromium is caught by the _chrome_odoo filter above.
     except OSError as e:
         print(f"[*] [REAPER] Error during reap: {e}")
@@ -1355,11 +1382,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                     print(
                         "[*] [DEBUG-RUNNER] Killing headless chrome to un-hang the test framework..."
                     )
-                    subprocess.run(
-                        ["pkill", "-u", "odoo", "-TERM", "-f", "_chrome_odoo"],
-                        check=False,
-                        timeout=2,
-                    )
+                    kill_test_chrome("TERM")
                     last_output_time = time.time()
     except KeyboardInterrupt:
         print("\n[!] CTRL-C detected! Forcefully terminating the test process...")
@@ -1372,9 +1395,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
             f"[*] [DEBUG-RUNNER] Ensuring all child processes are reaped for PID {process.pid}..."
         )
         try:
-            subprocess.run(
-                ["pkill", "-u", "odoo", "-TERM", "-f", "_chrome_odoo"], check=False, timeout=2
-            )
+            kill_test_chrome("TERM")
             # Chromium is caught by the _chrome_odoo filter above.
             process.terminate()
         except OSError as e:
@@ -1433,7 +1454,26 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         _logger.error(signal_line)
         if extractor is not None:
             extractor.signal_line = signal_line
+    if extractor is not None:
+        extractor.child_exit_status = exit_status
     return exit_status
+
+
+# [@ANCHOR: test:exit_status_for_run]
+def exit_status_for_run(returncode, extractor, results_before=0):
+    """The exit status of one Odoo test process: `returncode` if it is not 0, else 1 when Odoo printed no
+    `odoo.tests.result:` line (no test ran to a verdict), else 0. Full entry: tools/README.md.
+
+    A child that dies before the tests (port 8075 in use, a failed database login) exits non-zero and is
+    reported as that; a child that exits 0 without a verdict is a failure too, never a pass.
+    `results_before`: how many verdict lines the extractor held before this process (individual mode runs
+    one process per module and the extractor keeps them all)."""
+    if returncode != 0:
+        return returncode
+    if len(getattr(extractor, "odoo_result_lines", ())) > results_before:
+        return 0
+    print("🛑 Odoo exited 0 but printed no odoo.tests.result line: no test ran, so this run is a failure.")
+    return 1
 
 
 def is_git_checkout_root(path):
@@ -1985,7 +2025,7 @@ def core_daemons_to_start(isolated):
     return list(_HOST_CORE_DAEMONS)
 
 
-def rebuild_db(db_name):
+def rebuild_db(db_name, redis_flush_db=None):
     # Bug-hunt fix (2026-09-10, bug class 47 candidate: raw SQL built by
     # string interpolation with no parameterization): `db_name` below is
     # interpolated directly into double-quoted SQL identifiers
@@ -2025,7 +2065,10 @@ def rebuild_db(db_name):
     refuse_to_run_on_production_host(database_names=list_database_names(psql_cmd, env))
 
     print("[*] Flushing persistent daemons (Redis / RabbitMQ)...")
-    redis_db = os.environ.get("REDIS_DB", "0")
+    # `redis_flush_db` is given only by a run on the host that shares Redis with other slots
+    # (runner_slots.SlotResources.scoped): it flushes the one database its slot uses. Everything else
+    # flushes what it always flushed.
+    redis_db = os.environ.get("REDIS_DB", "0") if redis_flush_db is None else str(redis_flush_db)
     subprocess.run(["redis-cli", "-n", redis_db, "flushdb"], check=False, env=env)
 
     # Get the working directory where data is saved
@@ -2121,6 +2164,9 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     Pure-Python OS-level namespace bootstrapping.
     Executes entirely without Bash wrappers, leveraging `os.setuid` for micro-privileges.
     """
+    # The slot this run holds (main() passed `--slot-held` down; absent means slot 1). Everything in
+    # the host log directory that this run writes is named per slot, so concurrent runs share none of it.
+    slot = parse_runner_args(sys_args).slot_held or 1
     # 1. Ephemeral OverlayFS File System
     subprocess.run(["mount", "--make-rprivate", "/"], check=True)
     subprocess.run(["mount", "-t", "tmpfs", "tmpfs", "/mnt"], check=True)
@@ -2162,7 +2208,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     subprocess.run(["mount", "--bind", host_tmp_dir, "/mnt/real_tmp"], check=True)
 
     # Explicitly prepare the host log directory (~/tmp/log) before overlay
-    host_log_dir = os.path.join(host_tmp_dir, "log")
+    host_log_dir = os.path.join(host_tmp_dir, runner_slots.slot_file_name("log", slot))
     os.makedirs(host_log_dir, exist_ok=True)
     try:
         os.chown(host_log_dir, 0, 0)
@@ -2525,7 +2571,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     if "--offline-isolation" in sys_args:
         print("[*] Setting up the nested offline browser namespace...")
         offline_env, offline_ns_cleanup = offline_browser_ns.setup(
-            os.path.join(os.path.expanduser("~/tmp"), "offline_ns"),
+            os.path.join(os.path.expanduser("~/tmp"), runner_slots.slot_file_name("offline_ns", slot)),
             odoo_user="odoo",
         )
         os.environ.update(offline_env)
@@ -3112,35 +3158,113 @@ def _try_flock_once(lock_file):
         return False
 
 
-def _record_lock_holder(lock_file_path):
+def _open_lock_file(lock_file_path):
+    """Open (creating if needed) the lock file; the open file object is returned, not yet locked.
+
+    The lock is a single systemwide path, in a world-writable, sticky directory (/tmp) that can be
+    shared across UIDs -- e.g. this file may already be owned by `odoo` from a prior run when `bruce`'s
+    own Process A tries to open it next, or vice versa. Two real risks that creates, both addressed
+    explicitly here rather than left to this box's current sysctl defaults:
+      1. A malicious or stale symlink planted at this path in /tmp could otherwise turn the
+         os.chmod(0o777) below into "chmod 0o777 an arbitrary file elsewhere" when run as root --
+         opened with O_NOFOLLOW so a symlink here is always rejected (independent of this box's
+         fs.protected_symlinks sysctl, which happens to already be 1 -- the safe default -- but this
+         shouldn't depend on that).
+      2. fs.protected_regular (this box: 2, i.e. enforced even for root) rejects opening an existing
+         regular file for writing/creation in a sticky world-writable directory when the opener
+         neither owns the file nor owns the directory -- e.g. `bruce` opening a lock file `odoo`
+         created earlier. The except-fallback below already existed for this before this fix (it's
+         not new), and still works: flock() locks are independent of the fd's own read/write open
+         mode, so a read-only fd is just as capable of holding LOCK_EX.
+    """
+    try:
+        fd = os.open(
+            lock_file_path,
+            os.O_CREAT | os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW,
+            0o666,
+        )
+        lock_file = os.fdopen(fd, "a")
+        try:
+            os.chmod(lock_file_path, 0o777)
+        except OSError as e:
+            # Not the file's owner (e.g. a prior run by a different user already created it) -- fine,
+            # we only need to flock it, not own or widen its permissions.
+            _logger.debug("Ignored OSError: %s", e)
+        return lock_file
+    except OSError:  # audit-ignore-catch-all
+        fd = os.open(lock_file_path, os.O_RDONLY | os.O_NOFOLLOW)
+        return os.fdopen(fd, "r")
+
+
+# [@ANCHOR: test:try_slot_locks]
+def _try_slot_locks(lock_base_path, slots, only_slot=None):
+    """One non-blocking pass over the slot locks: returns the slot number taken, or None if none is free.
+
+    Slots are tried in order, so a run takes the lowest free one. `only_slot` restricts the pass to that
+    slot (a re-exec'd child taking back the slot its parent held). The open, locked file is kept in
+    `_single_instance_lock` for the life of the process; a lock file that was not taken is closed."""
+    global _single_instance_lock
+    candidates = [only_slot] if only_slot else range(1, slots + 1)
+    for slot in candidates:
+        lock_file = _open_lock_file(runner_slots.slot_lock_path(lock_base_path, slot))
+        if _try_flock_once(lock_file):
+            _single_instance_lock = lock_file
+            return slot
+        lock_file.close()
+    return None
+
+
+def _no_slot_message(slots, only_slot):
+    if slots == 1 or only_slot:
+        return "🛑 ERROR: Another instance of test.py is already running. Exiting."
+    return (
+        f"🛑 ERROR: All {slots} test.py slots are busy (test.py --queue-status shows them). Exiting."
+    )
+
+
+def _record_lock_holder(lock_file_path, slot=None, ticket=None):
     """Best effort: note who holds the lock so queue lines and --queue-status can name it.
-    Never allowed to affect the test run."""
+    Never allowed to affect the test run. `slot` and `ticket` are given only when the machine has more
+    than one slot (the queue then tells running runs from waiting ones by them)."""
     qdir = lock_queue.queue_dir_for_lock(lock_file_path)
-    name = lock_queue.write_holder(qdir, " ".join(["test.py"] + sys.argv[1:])[:200])
+    name = lock_queue.write_holder(
+        qdir, " ".join(["test.py"] + sys.argv[1:])[:200], slot=slot, ticket=ticket
+    )
     if name:
         atexit.register(lock_queue.release_ticket, qdir, name)
-        ticket = os.environ.get("HAMS_TEST_QUEUE_TICKET")
-        if ticket:
-            atexit.register(lock_queue.release_ticket, qdir, ticket)
+        queued_ticket = os.environ.get("HAMS_TEST_QUEUE_TICKET")
+        if queued_ticket:
+            atexit.register(lock_queue.release_ticket, qdir, queued_ticket)
 
 
 # [@ANCHOR: test:acquire_lock_via_queue]
-def _acquire_lock_via_queue(lock_file_path, timeout):
-    """--wait / HAMS_TEST_WAIT=1: queue FIFO for the lock instead of failing fast.
+def _acquire_lock_via_queue(lock_file_path, timeout, slots=1, only_slot=None):
+    """--wait / HAMS_TEST_WAIT=1: queue FIFO for the lock instead of failing fast; returns the slot taken.
 
-    The lock itself is still the same flock on `_single_instance_lock`; the queue only decides who
+    The lock itself is still a flock (one per slot, `_try_slot_locks`); the queue only decides who
     may try for it (see lock_queue.py). A re-exec'd child (sudo -> systemd-run -> unshare) adopts
-    its parent's ticket from HAMS_TEST_QUEUE_TICKET, which the parent's pid keeps live."""
+    its parent's ticket from HAMS_TEST_QUEUE_TICKET, which the parent's pid keeps live, and takes
+    back only `only_slot`, the slot its parent held. Full entry: tools/README.md."""
     qdir = lock_queue.queue_dir_for_lock(lock_file_path)
     os.environ.setdefault("HAMS_TEST_QUEUE_DIR", qdir)
     adopted = os.environ.get("HAMS_TEST_QUEUE_TICKET")
+    taken = []
+
+    def try_lock():
+        slot = _try_slot_locks(lock_file_path, slots, only_slot)
+        if slot is None:
+            return False
+        taken.append(slot)
+        return True
+
     status, ticket = lock_queue.acquire(
         qdir,
-        lambda: _try_flock_once(_single_instance_lock),
+        try_lock,
         info=" ".join(["test.py"] + sys.argv[1:])[:200],
         ticket=adopted,
         timeout=timeout,
         on_head=None if adopted else wait_for_ci_load_to_subside,
+        slots=slots,
     )
     if status == lock_queue.GATE_FAILED:
         sys.exit(1)
@@ -3149,7 +3273,8 @@ def _acquire_lock_via_queue(lock_file_path, timeout):
         sys.exit(lock_queue.EXIT_WAIT_TIMEOUT)
     os.environ["HAMS_TEST_QUEUE_TICKET"] = ticket
     atexit.register(lock_queue.release_ticket, qdir, ticket)
-    _record_lock_holder(lock_file_path)
+    _record_lock_holder(lock_file_path, taken[-1] if slots > 1 else None, ticket if slots > 1 else None)
+    return taken[-1]
 
 
 def module_arg_for(args):
@@ -3318,6 +3443,14 @@ def build_arg_parser():
         help="Print the current lock holder and the --wait queue, then exit (read-only).",
     )
     parser.add_argument(
+        "--slots",
+        default=None,
+        metavar="N",
+        help="Allow N test.py runs at once on this machine (1..%d), each in its own slot with its own "
+        "database, ports, Redis database and files. Also HAMS_TEST_SLOTS=N, or a one-line "
+        "/opt/hams/etc/test_slots. Default 1: one run per machine, as always." % runner_slots.MAX_SLOTS,
+    )
+    parser.add_argument(
         "--coverage",
         action="store_true",
         help="Wrap the odoo test process(es) in coverage.py (ADR 0090 / "
@@ -3369,6 +3502,7 @@ def build_arg_parser():
         help="Run alone: never join a coalesced batch of other branches' `-u MODULES` runs "
         "(docs/runbooks/LINT_TEST_BATCHING.md; HAMS_TEST_BATCH=off does the same).",
     )
+    parser.add_argument("--slot-held", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--internal-ns-init", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--preflight-done", action="store_true", help=argparse.SUPPRESS)
     return parser
@@ -3378,6 +3512,13 @@ def parse_runner_args(argv=None):
     """Parse and cross-check the command line; exits 2 with the cause as the last line."""
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+    if args.slots is not None:
+        try:
+            args.slots = runner_slots.parse_slot_count(args.slots, "--slots")
+        except runner_slots.SlotConfigError as e:
+            parser.error(str(e))
+    if args.slot_held is not None and not 1 <= args.slot_held <= (args.slots or 1):
+        parser.error(f"--slot-held {args.slot_held} is outside the --slots range 1..{args.slots or 1}")
     if args.test_tags is not None:
         if args.mode != "standard":
             parser.error(f"--test-tags needs --mode standard (got {args.mode}); the other modes pick tests themselves.")
@@ -3407,6 +3548,76 @@ def tag_spec_modules(test_tags):
     return modules
 
 
+# [@ANCHOR: test:slot_handoff_args]
+def slot_handoff_args(slots, held_slot):
+    """The command-line words that hand this run's slot to its re-exec'd phases: none with one slot
+    (the command line is then exactly what it always was), else `--slots N --slot-held K`.
+
+    They travel in argv rather than the environment because sudo, systemd-run and unshare each decide
+    for themselves which environment variables survive; a child that lost the slot would have taken
+    slot 1 and shared its database with the run that holds it. Full entry: tools/README.md."""
+    if slots <= 1:
+        return []
+    return ["--slots", str(slots), "--slot-held", str(held_slot)]
+
+
+# [@ANCHOR: test:enforce_slot_refusals]
+def enforce_slot_refusals(resources, args, broker_users=()):
+    """Exit 1, naming every reason, if this run cannot use its slot (runner_slots.slot_refusals).
+    Slot 1 and a machine with one slot never exit here. `broker_users`: the modules under test that
+    use a RabbitMQ shared with the other slots (see broker_users_sharing_the_host). Full entry:
+    tools/README.md."""
+    reasons = runner_slots.slot_refusals(
+        resources,
+        args.pause_on_fail or os.environ.get("HAMS_PAUSE_ON_FAIL") == "1",
+        args.mcp,
+        list(broker_users),
+    )
+    if not reasons:
+        return
+    print(f"❌ ERROR: test slot {resources.slot} of {resources.slots} cannot run this:")
+    for reason in reasons:
+        print(f"   - {reason}")
+    print("NEXT: run it in slot 1 (while no other run holds it), or fix the cause above.")
+    sys.exit(1)
+
+
+# [@ANCHOR: test:broker_users_sharing_the_host]
+def broker_users_sharing_the_host(resources, target_modules, addons_path):
+    """The modules under test that use a RabbitMQ their run would share with the other slots: [] unless
+    the run is on the host in a slot above 1, a RabbitMQ is listening there, and a module's Python mentions
+    it (runner_slots.modules_mentioning_broker). Opens one TCP connection and reads the modules' source
+    only in that case. Full entry: tools/README.md."""
+    if resources.slot == 1 or resources.private_network:
+        return []
+    if not runner_slots.broker_listening():
+        return []
+    directories = {}
+    for module in target_modules:
+        for entry in addons_path.split(","):
+            if os.path.isdir(os.path.join(entry, module)):
+                directories[module] = os.path.join(entry, module)
+                break
+    return runner_slots.modules_mentioning_broker(directories)
+
+
+# [@ANCHOR: test:apply_slot_resources]
+def apply_slot_resources(resources):
+    """Make the process-wide choices a slot needs. A no-op unless the run shares the host with other slots.
+
+    Points TMPDIR at the slot's own directory (created, world-writable like the shared one) so the
+    Chrome profiles of this run are the only ones under it, and narrows the Chrome kill pattern and the
+    end-of-run profile clean-up to that directory. Full entry: tools/README.md."""
+    global _CHROME_KILL_PATTERN, _CHROME_PROFILE_GLOBS
+    if not resources.scoped:
+        return
+    os.makedirs(resources.tmpdir, exist_ok=True)
+    os.chmod(resources.tmpdir, 0o777)
+    os.environ["TMPDIR"] = resources.tmpdir
+    _CHROME_KILL_PATTERN = resources.chrome_kill_pattern
+    _CHROME_PROFILE_GLOBS = resources.chrome_profile_globs
+
+
 def main():
     global _single_instance_lock
     # First thing, before any lock, namespace, daemon or database work. rebuild_db() repeats the check
@@ -3415,9 +3626,24 @@ def main():
     # Reject a bad command line before anything else: not after the lock queue or a long build.
     early_args = parse_runner_args()
     queue_opts = lock_queue.wait_options_from_argv(sys.argv[1:])
+    # How many runs this machine allows at once. Only a fresh invocation reads the configuration
+    # (--slots, HAMS_TEST_SLOTS, /opt/hams/etc/test_slots); the re-exec'd phases (the root process and the
+    # final test process) take the count and the slot from the `--slots N --slot-held K` this process
+    # appends to their command line, so a layer that drops the environment can never move a run into
+    # another slot. Without opt-in the count is 1 and nothing below differs from a run without slots.
+    handed_over = early_args.internal_ns_init or os.environ.get("HAMS_TEST_LOCK_HELD") == "1"
+    try:
+        if handed_over:
+            slots = early_args.slots or 1
+        else:
+            slots = runner_slots.configured_slot_count(early_args.slots)
+    except (runner_slots.SlotConfigError, OSError) as e:
+        print(f"❌ ERROR: cannot determine the test slot count: {e}")
+        sys.exit(2)
     if queue_opts["status"]:
         # Read-only: never opens, probes or takes the lock itself.
-        print("\n".join(lock_queue.describe_queue(lock_queue.queue_dir_for_lock(_test_runner_lock_path()))))
+        print("\n".join(lock_queue.describe_queue(
+            lock_queue.queue_dir_for_lock(_test_runner_lock_path()), slots=slots)))
         return
     # Coalescing batch (ADR 0115): a plain committed `-u MODULES` run that starts while another run is in progress
     # joins the next batch, which tests the union of the members' modules once over a combined tree; this caller
@@ -3483,6 +3709,7 @@ def main():
     # happens to fall inside Process C's own private overlay, it would
     # otherwise be a guaranteed self-deadlock against its own parent's
     # still-held, non-blocking exclusive lock.
+    held_slot = early_args.slot_held or 1
     if os.environ.get("HAMS_TEST_LOCK_HELD") == "1":
         _single_instance_lock = None
     else:
@@ -3506,55 +3733,27 @@ def main():
             sys.exit(1)
         lock_file_path = _test_runner_lock_path()
         os.environ.setdefault("HAMS_TEST_LOCK_PATH", lock_file_path)
-        # Making this a single systemwide path (instead of the old per-user
-        # ~/tmp one) moves it into a world-writable, sticky directory
-        # (/tmp) that can be shared across UIDs -- e.g. this file may
-        # already be owned by `odoo` from a prior run when `bruce`'s own
-        # Process A tries to open it next, or vice versa. Two real risks
-        # that creates, both addressed explicitly here rather than left to
-        # this box's current sysctl defaults:
-        #   1. A malicious or stale symlink planted at this path in /tmp
-        #      could otherwise turn the os.chmod(0o777) below into "chmod
-        #      0o777 an arbitrary file elsewhere" when run as root -- opened
-        #      with O_NOFOLLOW so a symlink here is always rejected
-        #      (independent of this box's fs.protected_symlinks sysctl,
-        #      which happens to already be 1 -- the safe default -- but this
-        #      shouldn't depend on that).
-        #   2. fs.protected_regular (this box: 2, i.e. enforced even for
-        #      root) rejects opening an existing regular file for
-        #      writing/creation in a sticky world-writable directory when
-        #      the opener neither owns the file nor owns the directory --
-        #      e.g. `bruce` opening a lock file `odoo` created earlier. The
-        #      except-fallback below already existed for this before this
-        #      fix (it's not new), and still works: flock() locks are
-        #      independent of the fd's own read/write open mode, so a
-        #      read-only fd is just as capable of holding LOCK_EX.
-        try:
-            fd = os.open(
-                lock_file_path,
-                os.O_CREAT | os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW,
-                0o666,
-            )
-            _single_instance_lock = os.fdopen(fd, "a")
-            try:
-                os.chmod(lock_file_path, 0o777)
-            except OSError as e:
-                # Not the file's owner (e.g. a prior run by a different
-                # user already created it) -- fine, we only need to flock
-                # it, not own or widen its permissions.
-                _logger.debug("Ignored OSError: %s", e)
-        except OSError:  # audit-ignore-catch-all
-            fd = os.open(lock_file_path, os.O_RDONLY | os.O_NOFOLLOW)
-            _single_instance_lock = os.fdopen(fd, "r")
+        # The lock file is opened with the symlink and sticky-directory protections described in
+        # _open_lock_file()'s docstring. One lock file per slot; slot 1 is the original path.
         if use_queue:
-            _acquire_lock_via_queue(lock_file_path, queue_opts["timeout"])
+            held_slot = _acquire_lock_via_queue(
+                lock_file_path, queue_opts["timeout"], slots, early_args.slot_held
+            )
         else:
-            try:
-                fcntl.flock(_single_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except IOError:
-                print("🛑 ERROR: Another instance of test.py is already running. Exiting.")
+            held_slot = _try_slot_locks(lock_file_path, slots, early_args.slot_held)
+            if held_slot is None:
+                print(_no_slot_message(slots, early_args.slot_held))
                 sys.exit(1)
-            _record_lock_holder(lock_file_path)
+            if slots > 1:
+                _record_lock_holder(lock_file_path, held_slot)
+            else:
+                _record_lock_holder(lock_file_path)
+        if slots > 1:
+            print(f"[*] Holding test slot {held_slot} of {slots} (lock {runner_slots.slot_lock_path(lock_file_path, held_slot)}).")
+            if os.environ.get("HAMS_ISOLATED_NS") != "1":
+                # The full pipeline will run in a private network namespace: only the slot-wide
+                # refusals can apply, and they apply now, before the minutes of provisioning.
+                enforce_slot_refusals(runner_slots.slot_resources(held_slot, slots, True, None), early_args)
 
     cwd = os.getcwd()
     if not is_git_checkout_root(cwd) or not (
@@ -3603,7 +3802,8 @@ def main():
         os.makedirs(real_log_dir, exist_ok=True)
         user_tmp = os.path.expanduser("~/tmp")
         os.makedirs(user_tmp, exist_ok=True)
-        symlink_target = os.path.join(user_tmp, "test_progress.txt")
+        progress_name = runner_slots.slot_file_name("test_progress.txt", held_slot)
+        symlink_target = os.path.join(user_tmp, progress_name)
         if os.path.lexists(symlink_target) and os.path.islink(symlink_target):
             os.remove(symlink_target)
         # When the log directory IS ~/tmp (the default, and always the case for the odoo account
@@ -3613,7 +3813,7 @@ def main():
         # link is needed.
         if os.path.realpath(user_tmp) != os.path.realpath(real_log_dir):
             try:
-                os.symlink(os.path.join(real_log_dir, "test_progress.txt"), symlink_target)
+                os.symlink(os.path.join(real_log_dir, progress_name), symlink_target)
             except OSError as e:
                 _logger.debug("Ignored OSError: %s", e)
         try:
@@ -3634,6 +3834,7 @@ def main():
             os.path.abspath(__file__),
             "--internal-ns-init",
         ] + sys.argv[1:] + ["--preflight-done"]
+        exec_cmd += slot_handoff_args(slots, held_slot)
 
         if os.geteuid() != 0:
             print(
@@ -3739,7 +3940,25 @@ def main():
         sys.exit(1)
 
     # Before anything is spawned, so every child (Odoo, its headless Chrome profiles) inherits it in every mode, namespaced or flat.
-    apply_default_test_tmpdir(os.environ)
+    base_tmpdir = apply_default_test_tmpdir(os.environ)
+    try:
+        resources = runner_slots.slot_resources(
+            held_slot, slots, runner_slots.in_private_network(os.environ), base_tmpdir
+        )
+        args.db = runner_slots.slot_database_name(args.db, held_slot)
+    except runner_slots.SlotConfigError as e:
+        print(f"❌ ERROR: test slot {held_slot} of {slots} cannot be set up: {e}")
+        sys.exit(1)
+    if slots > 1:
+        print(
+            f"[*] Test slot {held_slot} of {slots}: database {args.db}, HTTP port {resources.http_port}, "
+            f"Redis db {resources.redis_db}, log files tagged '{runner_slots.slot_suffix(held_slot)}'."
+        )
+    enforce_slot_refusals(resources, args)
+    apply_slot_resources(resources)
+    odoo_http_port = str(resources.http_port)
+    odoo_url = f"http://127.0.0.1:{odoo_http_port}"
+    flush_db = resources.redis_db if resources.scoped else None
     apply_skip_google_fonts_download(os.environ)
     apply_block_psk_transport(os.environ)
 
@@ -3769,6 +3988,10 @@ def main():
     if not target_modules:
         print("❌ ERROR: No modules found.")
         sys.exit(1)
+
+    enforce_slot_refusals(
+        resources, args, broker_users_sharing_the_host(resources, target_modules, addons_path)
+    )
 
     mod_string = "base," + ",".join(install_modules)
     test_tags = args.test_tags or ",".join([f"/{m}" for m in target_modules])
@@ -3807,9 +4030,9 @@ def main():
     # (or crash trying to create it) instead of the intended, persistent
     # ~/tmp/coverage_report location.
     coverage_data_dir = (
-        "/mnt/real_tmp/coverage_report"
+        os.path.join("/mnt/real_tmp", runner_slots.slot_file_name("coverage_report", held_slot))
         if os.environ.get("HAMS_ISOLATED_NS") == "1" and os.path.isdir("/mnt/real_tmp")
-        else os.path.join(os.path.expanduser("~/tmp"), "coverage_report")
+        else os.path.join(os.path.expanduser("~/tmp"), runner_slots.slot_file_name("coverage_report", held_slot))
     )
     coverage_data_file = os.path.join(coverage_data_dir, ".coverage")
     coverage_rcfile = os.path.join(coverage_data_dir, "coveragerc")
@@ -3833,7 +4056,7 @@ def main():
                     "-m",
                     "cProfile",
                     "-o",
-                    f"{os.path.expanduser('~/tmp')}/odoo_test{suffix}.pro",
+                    f"{os.path.expanduser('~/tmp')}/odoo_test{runner_slots.slot_suffix(held_slot)}{suffix}.pro",
                 ]
             )
         elif args.coverage:
@@ -3864,7 +4087,7 @@ def main():
             )
         return cmd
 
-    extractor = FailureExtractor(args.log_directory, mcp_mode=args.mcp)
+    extractor = FailureExtractor(args.log_directory, mcp_mode=args.mcp, slot=held_slot)
     print(
         f"==========================================================\n 🧪 ODOO TEST RUNNER [{args.mode.upper()} MODE]\n=========================================================="
     )
@@ -3875,11 +4098,11 @@ def main():
     final_rc = 0
 
     if args.mcp:
-        rebuild_db(args.db)
+        rebuild_db(args.db, flush_db)
 
-        os.environ["ODOO_URL"] = "http://127.0.0.1:8075"
+        os.environ["ODOO_URL"] = odoo_url
         os.environ["DB_NAME"] = args.db
-        os.environ["REDIS_DB"] = "1"
+        os.environ["REDIS_DB"] = str(resources.redis_db)
         os.environ["ODOO_USER"] = "admin"
         os.environ["ODOO_PASSWORD"] = "admin"
 
@@ -3898,7 +4121,7 @@ def main():
             "--http-interface",
             "127.0.0.1",
             "--http-port",
-            "8075",
+            odoo_http_port,
             "--limit-memory-soft",
             "0",
             "--limit-memory-hard",
@@ -3909,12 +4132,12 @@ def main():
         sys.exit(rc)
 
     if args.mode == "standard":
-        rebuild_db(args.db)
+        rebuild_db(args.db, flush_db)
 
         # Inject environment variables for daemons spawned securely by tests
-        os.environ["ODOO_URL"] = "http://127.0.0.1:8075"
+        os.environ["ODOO_URL"] = odoo_url
         os.environ["DB_NAME"] = args.db
-        os.environ["REDIS_DB"] = "1"
+        os.environ["REDIS_DB"] = str(resources.redis_db)
         os.environ["ODOO_USER"] = "admin"
         os.environ["ODOO_PASSWORD"] = "admin"
 
@@ -3936,26 +4159,26 @@ def main():
             "--http-interface",
             "127.0.0.1",
             "--http-port",
-            "8075",
+            odoo_http_port,
             "--limit-memory-soft",
             "0",
             "--limit-memory-hard",
             "0",
         ]
 
-        rc_odoo = run_cmd(cmd, extractor)
+        rc_odoo = exit_status_for_run(run_cmd(cmd, extractor), extractor)
         if rc_odoo != 0:
             final_rc = rc_odoo
 
     elif args.mode == "individual":
-        os.environ["ODOO_URL"] = "http://127.0.0.1:8075"
+        os.environ["ODOO_URL"] = odoo_url
         os.environ["DB_NAME"] = args.db
-        os.environ["REDIS_DB"] = "1"
+        os.environ["REDIS_DB"] = str(resources.redis_db)
         os.environ["ODOO_USER"] = "admin"
         os.environ["ODOO_PASSWORD"] = "admin"
 
         for mod in target_modules:
-            rebuild_db(args.db)
+            rebuild_db(args.db, flush_db)
             cmd = get_odoo_test_cmd(f"_{mod}") + [
                 odoo_bin,
                 "--load=base,web,zero_sudo",
@@ -3974,14 +4197,15 @@ def main():
                 "--http-interface",
                 "127.0.0.1",
                 "--http-port",
-                "8075",
+                odoo_http_port,
                 "--limit-memory-soft",
                 "0",
                 "--limit-memory-hard",
                 "0",
             ]
 
-            rc = run_cmd(cmd, extractor)
+            before = len(extractor.odoo_result_lines)
+            rc = exit_status_for_run(run_cmd(cmd, extractor), extractor, before)
             if rc != 0:
                 final_rc = 1
 
@@ -4056,7 +4280,7 @@ def main():
 
     print("[*] Cleaning up Chrome temporary directories...")
     subprocess.run(
-        ["sh", "-c", "rm -rf /tmp/*_chrome_odoo /var/tmp/*_chrome_odoo"],
+        ["sh", "-c", "rm -rf " + " ".join(_CHROME_PROFILE_GLOBS)],
         capture_output=True,
     )
 

@@ -707,6 +707,32 @@ class MaybeRunBatchedTests(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "cache", "hams-test", "passed", tip)))
 
 
+class TestCollectReadsTheReportOfAnySlot(unittest.TestCase):
+    """The nested test.py may run in a slot above 1 (ADR 0116), which names its report
+    filtered_test.slot-K.txt; the batch log directory is its own, so it reads the one report there."""
+
+    def collect(self, report_name):
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = os.path.join(tmp, "logs")
+            os.makedirs(logs)
+            with open(os.path.join(logs, report_name), "w", encoding="utf-8") as handle:
+                handle.write("these modules are implicated in the failures:\n  - ham_shack\nham_shack boom\n")
+            runner = otb.OdooTestBatch.__new__(otb.OdooTestBatch)
+            runner.sdir = None
+            runner.current_members = [{"scope": ["ham_shack"]}]
+            runner._log = None
+            return runner.collect(tmp, os.path.join(tmp, "results"), "", 1)
+
+    def test_slot_one_report(self):
+        union, failures = self.collect("filtered_test.txt")
+        self.assertEqual(union, ["ham_shack"])
+        self.assertEqual(list(failures), ["module ham_shack"])
+
+    def test_higher_slot_report(self):
+        union, failures = self.collect("filtered_test.slot-2.txt")
+        self.assertEqual(list(failures), ["module ham_shack"])
+
+
 def drive(argv):
     spec = json.loads(argv[0])
 

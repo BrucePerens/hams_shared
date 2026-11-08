@@ -32,6 +32,13 @@ WHO is allowed to try for it next:
 Callers that do not pass --wait still fail fast and can still barge in ahead of the queue; that is
 the point of keeping the default. Holder records (``holder-<pid>-<starttime>``) exist only so that
 queue lines and ``--queue-status`` can say who holds the lock and what it is running.
+
+Slots (ADR 0116). A machine that opts in lets N runs hold N separate locks at once, and the queue stays
+ONE FIFO in front of all of them. With ``slots`` > 1 a holder record also carries its ``slot`` and the
+``ticket`` its run waited with. A ticket named by a live holder record is a running run, not a waiter, so
+the head of the queue is the oldest ticket that is not running, and it may try the locks only while fewer
+than N slots are busy. With ``slots`` == 1 (the default, and what lint_lock.py uses) none of that applies:
+the head is the lowest live ticket, running holders included, exactly as before slots existed.
 """
 
 import json
@@ -196,9 +203,10 @@ def release_ticket(qdir, name):
 
 
 # [@ANCHOR: lock_queue:write_holder]
-def write_holder(qdir, info, pid=None, now=time.time):
+def write_holder(qdir, info, pid=None, now=time.time, slot=None, ticket=None):
     """Record that this process holds the lock; returns the record name (or None on failure,
-    which must never stop a test run)."""
+    which must never stop a test run). `slot` (the slot number held) and `ticket` (the queue
+    ticket the run waited with) are stored only when given."""
     pid = os.getpid() if pid is None else pid
     start = proc_start_time(pid)
     if start is None:
@@ -208,20 +216,25 @@ def write_holder(qdir, info, pid=None, now=time.time):
         name = "holder-%d-%d" % (pid, start)
         path = os.path.join(qdir, name)
         _unlink_quiet(path)
-        _write_atomic(qdir, name, {"pid": pid, "start": start, "since": now(), "info": info})
+        record = {"pid": pid, "start": start, "since": now(), "info": info}
+        if slot is not None:
+            record["slot"] = slot
+        if ticket:
+            record["ticket"] = ticket
+        _write_atomic(qdir, name, record)
         return name
     except OSError:
         return None
 
 
-# [@ANCHOR: lock_queue:read_holder]
-def read_holder(qdir):
-    """Newest live holder record as a dict (pid/start/since/info), or None."""
-    best = None
+def _live_holder_records(qdir):
+    """Every live holder record as a dict (pid/start/since/info and, when written, slot/ticket).
+    Records of dead processes are removed."""
+    records = []
     try:
         names = os.listdir(qdir)
     except OSError:
-        return None
+        return records
     for name in names:
         if not name.startswith("holder-"):
             continue
@@ -236,9 +249,32 @@ def read_holder(qdir):
         payload = _read_payload(os.path.join(qdir, name))
         payload.setdefault("pid", pid)
         payload.setdefault("start", start)
+        records.append(payload)
+    return records
+
+
+# [@ANCHOR: lock_queue:read_holder]
+def read_holder(qdir):
+    """Newest live holder record as a dict (pid/start/since/info), or None."""
+    best = None
+    for payload in _live_holder_records(qdir):
         if best is None or (payload.get("since") or 0) > (best.get("since") or 0):
             best = payload
     return best
+
+
+# [@ANCHOR: lock_queue:read_holders]
+def read_holders(qdir):
+    """The live holder of each slot, ordered by slot number: one dict per slot (the newest live
+    record of that slot; a record without a ``slot`` is slot 1). A re-exec'd run leaves its
+    parent's record and writes its own for the same slot, so the older one is dropped here."""
+    newest = {}
+    for payload in _live_holder_records(qdir):
+        slot = payload.get("slot") or 1
+        current = newest.get(slot)
+        if current is None or (payload.get("since") or 0) >= (current.get("since") or 0):
+            newest[slot] = payload
+    return [dict(newest[slot], slot=slot) for slot in sorted(newest)]
 
 
 # [@ANCHOR: lock_queue:format_duration]
@@ -254,18 +290,24 @@ def format_duration(seconds):
 
 
 # [@ANCHOR: lock_queue:describe_queue]
-def describe_queue(qdir, my_ticket=None, now=time.time):
-    """Human-readable status lines: the holder, then each live ticket in order. Read-only apart
-    from dead-record cleanup."""
+def describe_queue(qdir, my_ticket=None, now=time.time, slots=1):
+    """Human-readable status lines: the holder (with `slots` > 1 a header and one line per slot),
+    then each live ticket in order. Read-only apart from dead-record cleanup."""
     lines = []
-    holder = read_holder(qdir)
-    if holder:
-        lines.append("holder: pid %s running %s for %s" % (
-            holder.get("pid"), holder.get("info") or "?",
-            format_duration(_age(holder, now))))
+    if slots > 1:
+        lines.extend(_slot_lines(qdir, slots, now))
     else:
-        lines.append("holder: none recorded")
+        holder = read_holder(qdir)
+        if holder:
+            lines.append("holder: pid %s running %s for %s" % (
+                holder.get("pid"), holder.get("info") or "?",
+                format_duration(_age(holder, now))))
+        else:
+            lines.append("holder: none recorded")
     tickets = live_tickets(qdir)
+    if slots > 1:
+        held = {h.get("ticket") for h in read_holders(qdir) if h.get("ticket")}
+        tickets = [t for t in tickets if t["name"] not in held]
     if not tickets:
         lines.append("queue: empty")
     for i, t in enumerate(tickets, 1):
@@ -275,15 +317,40 @@ def describe_queue(qdir, my_ticket=None, now=time.time):
     return lines
 
 
+def _slot_lines(qdir, slots, now):
+    """'slots: N, B busy' and one line per slot (a slot above N that is still held is listed too)."""
+    holders = {h["slot"]: h for h in read_holders(qdir)}
+    numbers = sorted(set(range(1, slots + 1)) | set(holders))
+    lines = ["slots: %d, %d busy" % (slots, len(holders))]
+    for number in numbers:
+        holder = holders.get(number)
+        if holder is None:
+            lines.append("slot %d: free" % number)
+            continue
+        lines.append("slot %d: pid %s running %s for %s%s" % (
+            number, holder.get("pid"), holder.get("info") or "?",
+            format_duration(_age(holder, now)),
+            "" if number <= slots else " (beyond the configured %d)" % slots))
+    return lines
+
+
 def _age(holder, now):
     since = holder.get("since")
     return 0 if since is None else now() - since
 
 
-def _queue_line(qdir, ticket, now):
+def _queue_line(qdir, ticket, now, slots=1):
     tickets = live_tickets(qdir, clean=False)
-    names = [t["name"] for t in tickets]
+    holders = read_holders(qdir) if slots > 1 else []
+    held = {h.get("ticket") for h in holders if h.get("ticket")}
+    names = [t["name"] for t in tickets if t["name"] == ticket or t["name"] not in held]
     position = names.index(ticket) + 1 if ticket in names else len(names) + 1
+    if slots > 1:
+        who = "%d of %d slots busy: %s" % (len(holders), slots, "; ".join(
+            "slot %d pid %s running %s for %s" % (
+                h["slot"], h.get("pid"), h.get("info") or "?", format_duration(_age(h, now)))
+            for h in holders) or "none recorded")
+        return "queued: position %d of %d, %s" % (position, max(len(names), position), who)
     holder = read_holder(qdir)
     if holder:
         who = "holder pid %s running %s for %s" % (
@@ -294,6 +361,25 @@ def _queue_line(qdir, ticket, now):
     return "queued: position %d of %d, %s" % (position, max(len(names), position), who)
 
 
+# [@ANCHOR: lock_queue:may_try]
+def may_try(qdir, tickets, ticket, slots=1):
+    """True if the waiter holding `ticket` may try the lock(s) now. `tickets` is the live ticket
+    list, lowest first, and contains `ticket`.
+
+    slots == 1: the lowest live ticket may try (a running holder's ticket is lowest, so nobody
+    else tries while it runs). slots > 1: tickets named by a live holder record are running
+    runs, not waiters; `ticket` must be the oldest waiter, and fewer than `slots` slots may be
+    busy, not counting the record of the run that `ticket` was adopted from (a re-exec'd child
+    takes back the slot its parent held)."""
+    if slots <= 1:
+        return tickets[0]["name"] == ticket
+    holders = read_holders(qdir)
+    running = {h.get("ticket") for h in holders if h.get("ticket")}
+    waiting = [t["name"] for t in tickets if t["name"] == ticket or t["name"] not in running]
+    others = [h for h in holders if h.get("ticket") != ticket]
+    return waiting[0] == ticket and len(others) < slots
+
+
 class _Interrupted(BaseException):
     pass
 
@@ -301,11 +387,12 @@ class _Interrupted(BaseException):
 # [@ANCHOR: lock_queue:acquire]
 def acquire(qdir, try_lock, info="", ticket=None, timeout=None, poll=DEFAULT_POLL_SECONDS,
             report_every=DEFAULT_REPORT_SECONDS, on_head=None, sleep=time.sleep,
-            now=time.time, out=print, handle_signals=True):
+            now=time.time, out=print, handle_signals=True, slots=1):
     """Wait in line, then take the lock.
 
-    `try_lock()` makes ONE non-blocking attempt at the real lock and returns True on success; it
-    is only called while this waiter holds the lowest live ticket. `ticket` adopts a ticket that
+    `try_lock()` makes ONE non-blocking attempt at the real lock (with `slots` > 1, at the lock of
+    every slot in turn) and returns True on success; it is only called while `may_try` says this
+    waiter is at the head (see there for what the head is with more than one slot). `ticket` adopts a ticket that
     was already taken (a re-exec'd child of the process that queued); `on_head()` runs once when
     the waiter first reaches the front, before the lock is tried, and returns False to give up.
 
@@ -333,7 +420,7 @@ def acquire(qdir, try_lock, info="", ticket=None, timeout=None, poll=DEFAULT_POL
             if not any(t["name"] == ticket for t in tickets):
                 ticket = take_ticket(qdir, info=info, now=now)  # lost our file: rejoin at the back
                 continue
-            if tickets[0]["name"] == ticket:
+            if may_try(qdir, tickets, ticket, slots):
                 if not gated:
                     if not on_head():
                         return GATE_FAILED, ticket
@@ -342,7 +429,7 @@ def acquire(qdir, try_lock, info="", ticket=None, timeout=None, poll=DEFAULT_POL
                     done = True
                     return ACQUIRED, ticket
             if now() >= next_report:
-                out("[*] " + _queue_line(qdir, ticket, now))
+                out("[*] " + _queue_line(qdir, ticket, now, slots))
                 next_report = now() + report_every
             if timeout is not None and now() - started >= timeout:
                 out("[*] gave up waiting for the test lock after %s." % format_duration(timeout))
@@ -394,5 +481,7 @@ def wait_options_from_argv(argv, environ=None):
 
 
 if __name__ == "__main__":  # pragma: no cover
+    import runner_slots
     print("\n".join(describe_queue(queue_dir_for_lock(os.environ.get(
-        "HAMS_TEST_LOCK_PATH") or "/tmp/hams_odoo_test_runner.lock"))), file=sys.stdout)
+        "HAMS_TEST_LOCK_PATH") or "/tmp/hams_odoo_test_runner.lock"),
+        slots=runner_slots.configured_slot_count())), file=sys.stdout)

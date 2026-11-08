@@ -16,6 +16,7 @@ main(), not an exhaustive suite of the whole file.
 """
 
 import contextlib
+import fcntl
 import importlib.util
 import io
 import inspect
@@ -381,6 +382,367 @@ class MainModeDispatchTests(unittest.TestCase):
         mock_check_linters.assert_called_once()
         mock_rebuild_db.assert_called_once()
         mock_run_cmd.assert_called_once()
+
+
+class SlotWiringMainTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:slot_handoff_args]
+    Tests [@ANCHOR: test:enforce_slot_refusals]
+    Tests [@ANCHOR: test:broker_users_sharing_the_host]
+    Tests [@ANCHOR: test:apply_slot_resources]
+    Tests [@ANCHOR: test:try_slot_locks]
+
+    main() with the heavy steps mocked (as MainModeDispatchTests does): what a run in a given slot hands
+    to rebuild_db(), Odoo's command line, its environment and the failure extractor, with the default
+    (one slot) asserted to be what it was before slots existed."""
+
+    def _run_main(self, argv, env_overrides, hold_slots=(), broker=False):
+        calls = {"rebuild": [], "cmd": [], "env": [], "extractor": []}
+
+        def fake_run_cmd(cmd, extractor=None, **kwargs):
+            calls["cmd"].append(list(cmd))
+            calls["env"].append(dict(os.environ))
+            return 0
+
+        def fake_extractor(*args, **kwargs):
+            calls["extractor"].append(kwargs)
+            extractor = MagicMock()
+            extractor.odoo_result_lines = [{"failed": 0, "errors": 0, "total": 1}]
+            return extractor
+
+        fake_repo = tempfile.mkdtemp()
+        lock_dir = tempfile.mkdtemp()
+        held = []
+        try:
+            os.makedirs(os.path.join(fake_repo, ".git"))
+            os.makedirs(os.path.join(fake_repo, "tools"))
+            open(os.path.join(fake_repo, "tools", "test.py"), "w").close()
+            lock_path = os.path.join(lock_dir, "test.lock")
+            for slot in hold_slots:
+                handle = open(f"{lock_path}.slot-{slot}" if slot > 1 else lock_path, "a")
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.append(handle)
+            env = {"HAMS_ISOLATED_NS": "1", "HAMS_TEST_LOCK_PATH": lock_path, "HAMS_SKIP_CI_LOAD_GATE": "1"}
+            env.update(env_overrides)
+            orig_cwd = os.getcwd()
+            os.chdir(fake_repo)
+            try:
+                with patch.dict(os.environ, env), \
+                     patch.object(_test_runner, "_CHROME_KILL_PATTERN", _test_runner._CHROME_KILL_PATTERN), \
+                     patch.object(_test_runner, "_CHROME_PROFILE_GLOBS", _test_runner._CHROME_PROFILE_GLOBS), \
+                     patch.object(sys, "argv", ["test.py", "-u", "dummy_mod", *argv]), \
+                     patch.object(_test_runner.runner_slots, "broker_listening", return_value=broker), \
+                     patch.object(_test_runner.runner_slots, "modules_mentioning_broker",
+                                  return_value=["dummy_mod"]), \
+                     patch.object(_test_runner, "get_addons_path", return_value="/dummy/addons"), \
+                     patch.object(_test_runner, "load_ignore_file", return_value=[]), \
+                     patch.object(_test_runner, "get_local_modules", return_value=["dummy_mod"]), \
+                     patch.object(_test_runner, "FailureExtractor", side_effect=fake_extractor), \
+                     patch.object(_test_runner, "check_linters"), \
+                     patch.object(_test_runner, "rebuild_db",
+                                  side_effect=lambda *a, **k: calls["rebuild"].append((a, k))), \
+                     patch.object(_test_runner, "run_cmd", side_effect=fake_run_cmd), \
+                     contextlib.redirect_stdout(io.StringIO()) as out:
+                    with self.assertRaises(SystemExit) as ctx:
+                        _test_runner.main()
+                    chrome = (_test_runner._CHROME_KILL_PATTERN, _test_runner._CHROME_PROFILE_GLOBS)
+            finally:
+                os.chdir(orig_cwd)
+        finally:
+            for handle in held:
+                handle.close()
+            shutil.rmtree(fake_repo, ignore_errors=True)
+            shutil.rmtree(lock_dir, ignore_errors=True)
+        return ctx.exception.code, calls, out.getvalue(), chrome
+
+    @staticmethod
+    def _flag(cmd, name):
+        return cmd[cmd.index(name) + 1]
+
+    def test_one_slot_hands_over_exactly_what_it_always_did(self):
+        code, calls, _, chrome = self._run_main(
+            ["--slots", "1"], {}
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(calls["rebuild"], [(("hams_test", None), {})])
+        cmd = calls["cmd"][0]
+        self.assertEqual(self._flag(cmd, "-d"), "hams_test")
+        self.assertEqual(self._flag(cmd, "--http-port"), "8075")
+        self.assertEqual(calls["env"][0]["ODOO_URL"], "http://127.0.0.1:8075")
+        self.assertEqual(calls["env"][0]["REDIS_DB"], "1")
+        self.assertEqual(calls["env"][0]["DB_NAME"], "hams_test")
+        self.assertEqual(calls["extractor"][0]["slot"], 1)
+        self.assertEqual(chrome, ("_chrome_odoo", ("/tmp/*_chrome_odoo", "/var/tmp/*_chrome_odoo")))
+
+    def test_a_host_run_in_slot_two_has_its_own_database_port_redis_and_tmpdir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, calls, out, chrome = self._run_main(
+                ["--slots", "2", "--db", "hams_test_relay"], {"TMPDIR": tmp}, hold_slots=(1,)
+            )
+            self.assertEqual(code, 0, out)
+            self.assertTrue(os.path.isdir(os.path.join(tmp, "slot-2")))
+            self.assertEqual(calls["env"][0]["TMPDIR"], os.path.join(tmp, "slot-2"))
+            self.assertEqual(chrome[1], (os.path.join(tmp, "slot-2") + "/*_chrome_odoo",))
+        self.assertIn("Holding test slot 2 of 2", out)
+        self.assertEqual(calls["rebuild"], [(("hams_test_relay_s2", 2), {})])
+        cmd = calls["cmd"][0]
+        self.assertEqual(self._flag(cmd, "-d"), "hams_test_relay_s2")
+        self.assertEqual(self._flag(cmd, "--http-port"), "8076")
+        self.assertEqual(calls["env"][0]["ODOO_URL"], "http://127.0.0.1:8076")
+        self.assertEqual(calls["env"][0]["REDIS_DB"], "2")
+        self.assertEqual(calls["env"][0]["DB_NAME"], "hams_test_relay_s2")
+        self.assertEqual(calls["extractor"][0]["slot"], 2)
+
+    def test_two_runs_on_one_host_share_no_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, first, _, _ = self._run_main(["--slots", "2"], {"TMPDIR": tmp})
+            _, second, _, _ = self._run_main(["--slots", "2"], {"TMPDIR": tmp}, hold_slots=(1,))
+        pairs = {
+            "database": (first["rebuild"][0][0][0], second["rebuild"][0][0][0]),
+            "port": (self._flag(first["cmd"][0], "--http-port"), self._flag(second["cmd"][0], "--http-port")),
+            "redis": (first["env"][0]["REDIS_DB"], second["env"][0]["REDIS_DB"]),
+            "tmpdir": (first["env"][0]["TMPDIR"], second["env"][0]["TMPDIR"]),
+        }
+        for name, (one, two) in pairs.items():
+            with self.subTest(resource=name):
+                self.assertNotEqual(one, two)
+
+    def test_the_final_phase_of_the_full_pipeline_keeps_its_ports_and_takes_the_db_of_its_slot(self):
+        # HAMS_TEST_LOCK_HELD=1 plus the slot words the root phase passes down: the namespace is private,
+        # so only the database (and the log file names) depend on the slot.
+        code, calls, _, chrome = self._run_main(
+            ["--slots", "3", "--slot-held", "3"], {"HAMS_TEST_LOCK_HELD": "1"}
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(calls["rebuild"], [(("hams_test_s3", None), {})])
+        self.assertEqual(self._flag(calls["cmd"][0], "--http-port"), "8075")
+        self.assertEqual(calls["env"][0]["REDIS_DB"], "1")
+        self.assertEqual(calls["extractor"][0]["slot"], 3)
+        self.assertEqual(chrome[0], "_chrome_odoo")
+
+    def test_a_host_run_above_slot_one_refuses_a_shared_broker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, calls, out, _ = self._run_main(
+                ["--slots", "2"], {"TMPDIR": tmp}, hold_slots=(1,), broker=True
+            )
+            self.assertEqual(code, 1, out)
+            self.assertIn("dummy_mod use RabbitMQ and one is listening on 127.0.0.1:5672", out)
+            self.assertEqual((calls["rebuild"], calls["cmd"]), ([], []))
+            # Slot 1 is never refused: it is what a run always was.
+            code, _, out, _ = self._run_main(["--slots", "2"], {"TMPDIR": tmp}, broker=True)
+            self.assertEqual(code, 0, out)
+
+    def test_pause_on_fail_is_refused_above_slot_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, calls, out, _ = self._run_main(
+                ["--slots", "2", "--pause-on-fail"], {"TMPDIR": tmp}, hold_slots=(1,)
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("--pause-on-fail pins Chrome's debugging port 9222", out)
+        self.assertEqual((calls["rebuild"], calls["cmd"]), ([], []))
+
+    def _invoke_and_capture_exec(self, argv, hold_slots=(), keep_slots_env=False):
+        """main() as the invoking process of the full pipeline (no HAMS_ISOLATED_NS): everything up to the
+        exec of the privileged phase runs for real; the exec itself is captured."""
+
+        class Exec(Exception):
+            pass
+
+        captured = {}
+
+        def fake_exec(program, command, environ):
+            captured["command"] = list(command)
+            raise Exec()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_repo = os.path.join(tmp, "repo")
+            os.makedirs(os.path.join(fake_repo, ".git"))
+            os.makedirs(os.path.join(fake_repo, "tools"))
+            open(os.path.join(fake_repo, "tools", "test.py"), "w").close()
+            lock_path = os.path.join(tmp, "test.lock")
+            held = []
+            for slot in hold_slots:
+                handle = open(f"{lock_path}.slot-{slot}" if slot > 1 else lock_path, "a")
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.append(handle)
+            env = {"HAMS_TEST_LOCK_PATH": lock_path, "HAMS_SKIP_CI_LOAD_GATE": "1", "HOME": tmp}
+            orig_cwd = os.getcwd()
+            os.chdir(fake_repo)
+            try:
+                with patch.dict(os.environ, env), \
+                     patch.object(sys, "argv", ["test.py", "-u", "dummy_mod", "--solo", "-l",
+                                                os.path.join(tmp, "logs"), *argv]), \
+                     patch.object(_test_runner, "check_host_apt_packages"), \
+                     patch.object(_test_runner, "get_default_audio_sink_name", return_value=None), \
+                     patch.object(_test_runner.os, "execvpe", side_effect=fake_exec), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    os.environ.pop("HAMS_ISOLATED_NS", None)
+                    if not keep_slots_env:
+                        os.environ.pop("HAMS_TEST_SLOTS", None)
+                    with self.assertRaises(Exec):
+                        _test_runner.main()
+            finally:
+                os.chdir(orig_cwd)
+                for handle in held:
+                    handle.close()
+        return captured["command"]
+
+    def test_the_invoking_process_hands_its_slot_to_the_root_phase(self):
+        command = self._invoke_and_capture_exec(["--preflight-done", "--slots", "3"], hold_slots=(1,))
+        self.assertEqual(
+            command[-5:], ["--preflight-done", "--slots", "3", "--slot-held", "2"]
+        )
+        self.assertLess(command.index("unshare"), command.index("--internal-ns-init"))
+
+    def test_the_slot_is_handed_down_even_when_only_the_environment_chose_the_count(self):
+        # No --slots on the command line: the invoking process still writes the count and the slot
+        # into the command line of the next phase, so that phase never has to read the environment.
+        with patch.dict(os.environ, {"HAMS_TEST_SLOTS": "2"}):
+            command = self._invoke_and_capture_exec(["--preflight-done"], keep_slots_env=True)
+        self.assertEqual(command[-5:], ["--preflight-done", "--slots", "2", "--slot-held", "1"])
+
+    def test_with_one_slot_the_root_phase_command_line_is_what_it_always_was(self):
+        command = self._invoke_and_capture_exec(["--preflight-done", "--slots", "1"])
+        self.assertEqual(command[-1], "--preflight-done")
+        self.assertNotIn("--slot-held", command)
+        self.assertEqual(command.count("--slots"), 1)  # only the user's own
+
+    def test_broker_users_are_looked_up_only_for_a_host_run_above_slot_one_with_a_listening_broker(self):
+        slots = _test_runner.runner_slots
+        with tempfile.TemporaryDirectory() as addons:
+            for name, text in (("uses_broker", "import pika\n"), ("plain", "x = 1\n")):
+                os.makedirs(os.path.join(addons, name, "tests"))
+                with open(os.path.join(addons, name, "tests", "test_a.py"), "w") as handle:
+                    handle.write(text)
+            host2 = slots.slot_resources(2, 2, False, "/var/lib/odoo/tmp")
+            host1 = slots.slot_resources(1, 2, False, "/var/lib/odoo/tmp")
+            private2 = slots.slot_resources(2, 2, True, "/var/lib/odoo/tmp")
+            modules = ["uses_broker", "plain", "absent"]
+            use = _test_runner.broker_users_sharing_the_host
+            with patch.object(slots, "broker_listening", return_value=True):
+                self.assertEqual(use(host2, modules, addons), ["uses_broker"])
+                self.assertEqual(use(host1, modules, addons), [])
+                self.assertEqual(use(private2, modules, addons), [])
+            with patch.object(slots, "broker_listening", return_value=False):
+                self.assertEqual(use(host2, modules, addons), [])
+
+    def test_the_handoff_words_are_empty_for_one_slot_and_explicit_otherwise(self):
+        self.assertEqual(_test_runner.slot_handoff_args(1, 1), [])
+        self.assertEqual(_test_runner.slot_handoff_args(4, 3), ["--slots", "4", "--slot-held", "3"])
+
+    def test_the_root_phase_gets_the_slot_words_in_its_command_line(self):
+        source = io.open(_TEST_PY_PATH, encoding="utf-8").read()
+        self.assertIn("exec_cmd += slot_handoff_args(slots, held_slot)", source)
+        self.assertLess(
+            source.index("] + sys.argv[1:] + [\"--preflight-done\"]"),
+            source.index("exec_cmd += slot_handoff_args(slots, held_slot)"),
+        )
+
+
+class SlotFilesAndKillTests(unittest.TestCase):
+    """What a slot writes to the log directory, which Redis database it flushes, and which Chrome it kills."""
+
+    def test_slot_one_writes_the_original_report_and_progress_files(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"HOME": tmp}):
+            os.environ.pop("HAMS_REAL_LOG_DIRECTORY", None)
+            extractor = _test_runner.FailureExtractor(tmp, disable_atexit=True)
+            self.assertEqual(extractor.display_path, os.path.join(tmp, "filtered_test.txt"))
+            self.assertEqual(extractor.progress_path, os.path.join(tmp, "tmp", "test_progress.txt"))
+
+    def test_a_higher_slot_writes_files_of_its_own(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"HOME": tmp}):
+            os.environ.pop("HAMS_REAL_LOG_DIRECTORY", None)
+            first = _test_runner.FailureExtractor(tmp, disable_atexit=True, slot=1)
+            second = _test_runner.FailureExtractor(tmp, disable_atexit=True, slot=2)
+            self.assertEqual(second.display_path, os.path.join(tmp, "filtered_test.slot-2.txt"))
+            self.assertEqual(second.progress_path, os.path.join(tmp, "tmp", "test_progress.slot-2.txt"))
+            self.assertNotEqual(first.display_path, second.display_path)
+            self.assertNotEqual(first.progress_path, second.progress_path)
+            self.assertTrue(os.path.exists(second.progress_path))
+
+    def _flush_command(self, **kwargs):
+        calls = []
+
+        def fake_run(cmd, *args, **kw):
+            calls.append(list(cmd))
+            if "-At" in cmd:
+                return MagicMock(returncode=0, stdout="postgres\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch.dict(os.environ, {"HAMS_ISOLATED_NS": "1"}), \
+             patch.object(_test_runner.subprocess, "run", side_effect=fake_run), \
+             patch.object(_test_runner.infrastructure, "get_pg_bin", return_value="psql"), \
+             patch.object(_test_runner, "PRODUCTION_HOST_MARKER_FILES", ()), \
+             patch.object(_test_runner, "remove_stale_filestore"), \
+             contextlib.redirect_stdout(io.StringIO()):
+            os.environ.pop("REDIS_DB", None)
+            _test_runner.rebuild_db("hams_test", **kwargs)
+        return [c for c in calls if c[:1] == ["redis-cli"] and "flushdb" in c][0]
+
+    def test_rebuild_db_flushes_what_it_always_flushed_unless_told_a_slot_database(self):
+        self.assertEqual(self._flush_command(), ["redis-cli", "-n", "0", "flushdb"])
+        self.assertEqual(self._flush_command(redis_flush_db=3), ["redis-cli", "-n", "3", "flushdb"])
+
+    def test_the_chrome_kill_uses_the_runs_own_pattern(self):
+        calls = []
+        with patch.object(_test_runner.subprocess, "run", side_effect=lambda cmd, **kw: calls.append(cmd)):
+            _test_runner.kill_test_chrome("TERM")
+            with patch.object(_test_runner, "_CHROME_KILL_PATTERN", "/var/lib/odoo/tmp/slot\\-2/[^/ ]*_chrome_odoo"):
+                _test_runner.kill_test_chrome("KILL")
+        self.assertEqual(calls[0], ["pkill", "-u", "odoo", "-TERM", "-f", "_chrome_odoo"])
+        self.assertEqual(
+            calls[1],
+            ["pkill", "-u", "odoo", "-KILL", "-f", "/var/lib/odoo/tmp/slot\\-2/[^/ ]*_chrome_odoo"],
+        )
+
+
+class NoTestsRanTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:exit_status_for_run]
+
+    An Odoo process that dies before the tests ("Port 8075 is in use", a database login failure) used to
+    end with the banner "No test failures or system crashes detected", and one that exited 0 without a
+    verdict counted as a pass. Real child processes, the real extractor and the real banner."""
+
+    def _run(self, child_code):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"HOME": tmp}):
+            os.environ.pop("HAMS_REAL_LOG_DIRECTORY", None)
+            extractor = _test_runner.FailureExtractor(tmp, disable_atexit=True)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                returned = _test_runner.run_cmd([sys.executable, "-c", child_code], extractor)
+                status = _test_runner.exit_status_for_run(returned, extractor)
+                extractor.finish_and_write()
+        return status, out.getvalue()
+
+    def test_a_child_that_dies_before_the_tests_is_a_failure_with_a_failure_banner(self):
+        status, text = self._run("import sys; print('Port 8075 is in use by another program.'); sys.exit(1)")
+        self.assertEqual(status, 1)
+        self.assertIn("TEST RUN FAILED: no tests ran", text)
+        self.assertIn("exit status: 1", text)
+        self.assertNotIn("No test failures or system crashes detected", text)
+        self.assertNotIn("the suite passed", text)
+
+    def test_a_child_that_exits_zero_without_a_verdict_is_a_failure(self):
+        status, text = self._run("print('started and stopped')")
+        self.assertEqual(status, 1)
+        self.assertIn("Odoo exited 0 but printed no odoo.tests.result line", text)
+        self.assertIn("TEST RUN FAILED: no tests ran", text)
+
+    def test_a_child_with_a_passing_verdict_still_passes(self):
+        verdict = "2026-11-08 07:54:03,979 1 INFO db odoo.tests.result: 0 failed, 0 error(s) of 7 tests when loading database 'db'"
+        status, text = self._run(f"print({verdict!r})")
+        self.assertEqual(status, 0)
+        self.assertIn("the suite passed", text)
+        self.assertNotIn("TEST RUN FAILED", text)
+
+    def test_a_verdict_from_an_earlier_module_does_not_vouch_for_a_later_process(self):
+        extractor = MagicMock()
+        extractor.odoo_result_lines = [{"failed": 0, "errors": 0, "total": 3}]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(_test_runner.exit_status_for_run(0, extractor, results_before=1), 1)
+            self.assertEqual(_test_runner.exit_status_for_run(0, extractor, results_before=0), 0)
+
+    def test_a_non_zero_status_is_passed_through(self):
+        self.assertEqual(_test_runner.exit_status_for_run(137, MagicMock()), 137)
 
 
 class ProductionHostRefusalTests(unittest.TestCase):
@@ -1348,7 +1710,7 @@ class CiLoadGateOrderingTests(unittest.TestCase):
         # callback, which runs only once this invocation is first in line and strictly before
         # try_lock() (asserted in test_lock_queue.py's gate tests).
         gate_at = source.index("if not use_queue and not wait_for_ci_load_to_subside():")
-        lock_at = source.index("fcntl.flock(_single_instance_lock")
+        lock_at = source.index("held_slot = _try_slot_locks(lock_file_path, slots, early_args.slot_held)")
         self.assertIn("on_head=None if adopted else wait_for_ci_load_to_subside", source)
         self.assertLess(
             gate_at,
