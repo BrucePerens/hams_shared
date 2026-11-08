@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 from types import SimpleNamespace
@@ -973,6 +974,113 @@ class NamespaceInitReaperTests(unittest.TestCase):
         self.assertLessEqual(int(words[3]), 1, done.stdout)
         self.assertEqual(words[5], "3", done.stdout)
         self.assertEqual(words[7], "False", done.stdout)
+
+
+class ReaperPromptAndSafeTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:reap_orphans_forever] (prompt defaults, only old-enough zombies) and
+    [@ANCHOR: test:run_protected] (the test process's pid is protected, its status and kill-on-exception kept)."""
+
+    def test_the_defaults_are_prompt_so_a_browser_test_does_not_wait_seconds_for_chromes_zombie(self):
+        defaults = inspect.signature(_test_runner.reap_orphans_forever).parameters
+        self.assertLessEqual(defaults["interval"].default, 0.2)
+        self.assertLessEqual(defaults["min_age"].default, 0.3)
+        self.assertGreater(defaults["min_age"].default, 0, "a zombie must be seen once before it is reaped")
+
+    def run_loop_over(self, children, ticks, protected=()):
+        """Run the loop with fake children (pid, status) and a fake clock; the loop ends after len(ticks) scans."""
+        waited = []
+        stop = threading.Event()
+        clock_values = iter(ticks)
+        scans = []
+
+        class Child:
+            def __init__(self, pid, status):
+                self.pid, self._status = pid, status
+
+            def status(self):
+                return self._status
+
+        def fake_clock():
+            value = next(clock_values)
+            scans.append(value)
+            if len(scans) >= len(ticks):
+                stop.set()
+            return value
+
+        class FakeProcess:
+            def children(self):
+                return [Child(pid, status) for pid, status in children]
+
+        def fake_waitpid(pid, flags):
+            waited.append((pid, flags))
+            return (pid, 0)
+
+        with patch.object(_test_runner.psutil, "Process", FakeProcess), patch.object(
+            _test_runner.os, "waitpid", fake_waitpid
+        ):
+            reaped = _test_runner.reap_orphans_forever(set(protected), stop, 0, 0.3, fake_clock)
+        return reaped, waited
+
+    def test_only_a_zombie_seen_for_min_age_is_reaped_and_only_by_its_own_pid_without_blocking(self):
+        zombie = _test_runner.psutil.STATUS_ZOMBIE
+        reaped, waited = self.run_loop_over([(11, zombie)], [0.0, 0.1, 0.35])
+        self.assertEqual(reaped, 1)
+        self.assertEqual(waited, [(11, os.WNOHANG)])
+
+    def test_a_zombie_younger_than_min_age_is_left_alone(self):
+        zombie = _test_runner.psutil.STATUS_ZOMBIE
+        reaped, waited = self.run_loop_over([(11, zombie)], [0.0, 0.1, 0.2])
+        self.assertEqual((reaped, waited), (0, []))
+
+    def test_a_live_child_and_a_protected_zombie_are_never_waited_for(self):
+        zombie, running = _test_runner.psutil.STATUS_ZOMBIE, _test_runner.psutil.STATUS_RUNNING
+        reaped, waited = self.run_loop_over([(11, running), (12, zombie)], [0.0, 1.0, 2.0, 3.0], protected={12})
+        self.assertEqual((reaped, waited), (0, []))
+
+    def test_run_protected_returns_the_exit_status_and_protects_the_pid_while_it_runs(self):
+        protected = set()
+        code = _test_runner.run_protected(
+            [sys.executable, "-c", "import sys; sys.exit(7)"], protected
+        )
+        self.assertEqual(code, 7)
+        self.assertEqual(len(protected), 1)
+
+    def test_the_real_reaper_cannot_take_the_exit_status_of_a_protected_child_even_at_zero_min_age(self):
+        script = textwrap.dedent("""
+            import ctypes, importlib.util, sys, threading
+            ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)   # PR_SET_CHILD_SUBREAPER
+            spec = importlib.util.spec_from_file_location("hams_runner_protected", %r)
+            runner = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(runner)
+            protected, stop = set(), threading.Event()
+            thread = threading.Thread(target=runner.reap_orphans_forever, args=(protected, stop, 0.01, 0.0))
+            thread.start()
+            codes = [runner.run_protected([sys.executable, "-c", "import sys; sys.exit(5)"], protected) for _ in range(20)]
+            stop.set()
+            thread.join(10)
+            print(sorted(set(codes)), flush=True)
+        """ % _TEST_PY_PATH)
+        done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.strip(), "[5]")
+
+    def test_run_protected_kills_and_waits_for_the_child_when_interrupted(self):
+        protected = set()
+        started = []
+
+        real_wait = subprocess.Popen.wait
+
+        def wait_once(process, *args, **kwargs):
+            if not started:
+                started.append(process.pid)
+                raise KeyboardInterrupt
+            return real_wait(process, *args, **kwargs)
+
+        with patch.object(subprocess.Popen, "wait", wait_once):
+            with self.assertRaises(KeyboardInterrupt):
+                _test_runner.run_protected([sys.executable, "-c", "import time; time.sleep(60)"], protected)
+        self.assertEqual(protected, set(started))
+        self.assertFalse(_test_runner.psutil.pid_exists(started[0]), "the child was killed and reaped")
 
 
 class TakeBackSlotLockTests(unittest.TestCase):

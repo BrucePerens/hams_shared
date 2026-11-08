@@ -1355,7 +1355,7 @@ Returns a list of `psutil.Process` with `info` holding pid, uids and cmdline. A 
 orphan whose `--user-data-dir` is a directory that exists in this process's own view of the filesystem (a leftover of a dead parent of this run;
 another run's profile directories are in its private overlay, or on the host where a namespaced run cannot see them). Reads `/proc`; sends no signal.
 
-### `[@ANCHOR: test:reap_orphans_forever]` `reap_orphans_forever(protected_pids, stop, interval=1.0, min_age=3.0, clock=time.monotonic)`
+### `[@ANCHOR: test:reap_orphans_forever]` `reap_orphans_forever(protected_pids, stop, interval=0.2, min_age=0.3, clock=time.monotonic)`
 
 Purpose: the loop of the reaper thread of the root phase, which is PID 1 of its PID namespace (`unshare -p -f`). Every process orphaned anywhere in the run
 (Chrome helpers, shell wrappers, the processes of `rabbitmq-server`) is re-parented to it, and a Python init that only waits for its one test process never
@@ -1370,8 +1370,21 @@ reaped them: 150 to 170 zombies per run were seen after a few hours, and a multi
 | `clock` | callable | Test seam, `time.monotonic`. |
 
 Returns the number of zombies reaped. Reaps with `os.waitpid(pid, WNOHANG)` on the zombie's own pid only: `waitpid(-1)` would steal the exit status of the test
-process that `subprocess.run` waits for, and the run's exit code would read 0. Started by `setup_namespace_and_run_tests` as a daemon thread before the test
+process that `run_protected` waits for, and the run's exit code would read 0. Started by `setup_namespace_and_run_tests` as a daemon thread before the test
 process starts and stopped in its `finally`.
+
+Why the defaults are 0.2 s and 0.3 s (they were 1.0 s and 3.0 s): Chrome of every browser test runs under `setsid -w unshare ...`; at teardown Odoo waits up to
+5 s for the browser tree to vanish, and the exited `unshare` is a zombie child of this init until it is reaped, so every browser test of the full pipeline paid
+the `min_age`. The same 15 `ham_relay_bridge` tests took 5.1 s each with the old values and 2.3 s each with the new ones. Safety does not depend on the age: only
+a child that is already a zombie is waited for, with its own pid and `WNOHANG` (a live process is never touched), only direct children of this namespace's init
+are looked at (another run's processes are in another PID namespace), and the test process is in `protected_pids` through `run_protected`.
+
+### `[@ANCHOR: test:run_protected]` `run_protected(cmd, protected_pids, **popen_kwargs)`
+
+Purpose: run the test process of the root phase and return its return code, like `subprocess.run(cmd, ...).returncode`, but with the child's pid added to `protected_pids`
+(the set the reaper thread was given) right after it starts, so the reaper can never steal its exit status however short `min_age` is. Extra keyword arguments go to
+`subprocess.Popen` (the root phase passes `preexec_fn`). Any exception while waiting (a signal turned into `sys.exit`, Ctrl-C) kills the child and waits for it before the
+exception propagates, as `subprocess.run` does.
 
 ### `[@ANCHOR: test:run_preflight_in_slot]` `run_preflight_in_slot(args, lock_file_path, held_slot, slots, preflight=None)`
 
