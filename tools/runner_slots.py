@@ -85,26 +85,26 @@ def configured_slot_count(
 ):
     """How many concurrent runs this machine allows.
 
-    Precedence: the --slots value, then HAMS_TEST_SLOTS, then the
-    first line of `slots_file`, then 1. A file that does not exist
-    means 1 (the machine has not opted in). A file that exists and
-    cannot be read, or any value that is not a whole number in
-    1..MAX_SLOTS, raises SlotConfigError or OSError: a typo must not
-    quietly turn into one slot or into a different machine-wide
-    setting.
+    The machine's setting is HAMS_TEST_SLOTS, else the first line of `slots_file`, else 1. Every run reads it,
+    so every run on one machine agrees on the count. `--slots` (`cli_value`) can only RAISE the count: a run
+    that asked for fewer slots than the machine has would take slot 1 and queue as if the others did not
+    exist, and a waiter that cannot take a free slot is what once left three of four slots idle. To run with
+    one slot set HAMS_TEST_SLOTS=1. A file that does not exist means 1 (the machine has not opted in). A file
+    that exists and cannot be read, or any value that is not a whole number in 1..MAX_SLOTS, raises
+    SlotConfigError or OSError: a typo must not quietly turn into one slot or into a different
+    machine-wide setting.
     """
     environ = os.environ if environ is None else environ
-    if cli_value is not None:
-        return parse_slot_count(cli_value, "--slots")
+    requested = parse_slot_count(cli_value, "--slots") if cli_value is not None else 1
     from_env = environ.get(SLOTS_ENV)
     if from_env not in (None, ""):
-        return parse_slot_count(from_env, SLOTS_ENV)
+        return max(requested, parse_slot_count(from_env, SLOTS_ENV))
     try:
         with open(slots_file, "r", encoding="utf-8") as handle:
             first_line = handle.readline()
     except FileNotFoundError:
-        return 1
-    return parse_slot_count(first_line, slots_file)
+        return requested
+    return max(requested, parse_slot_count(first_line, slots_file))
 
 
 # [@ANCHOR: runner_slots:slot_lock_path]
@@ -310,41 +310,50 @@ def modules_mentioning_broker(module_dirs):
 def slot_refusals(resources, pause_on_fail, mcp, broker_users):
     """Why this run cannot use its slot (empty list: it can).
 
-    Slot 1 is never refused: it is what a run has always been. A run
-    in a slot above 1 is refused when:
+    Slot 1 is never refused: it is what a run has always been. The full pipeline (a private network
+    namespace, own Redis and RabbitMQ, the same ports in every run: ``resources.private_network``) has only
+    one limit above slot 1:
 
-      * --pause-on-fail / HAMS_PAUSE_ON_FAIL: the harness pins Chrome's
-        debugging port to 9222 (zero_sudo/tests/common.py), one port
-        for the whole host outside a private network;
-      * --mcp: the MCP clients are configured for port 8075 and test.py
-        serves the derived port in that slot;
-      * the run is on the host (no private network) and `broker_users`
-        is not empty: those modules use RabbitMQ and one is listening
-        on the host, so their queues would be shared with the other
-        slots, and a vhost cannot be created as the odoo user. The
-        caller passes the modules from ``modules_mentioning_broker``
-        only when a RabbitMQ is listening, and [] otherwise. The full
-        pipeline starts a private RabbitMQ per run.
+      * --mcp: the MCP clients are configured for one server on port 8075, and a server in a private
+        namespace cannot be reached from outside at all.
+
+    A run on the host (HAMS_ISOLATED_NS=1 set by hand, which skips the namespace) shares the machine's
+    network with the other slots and adds, above slot 1:
+
+      * --pause-on-fail / HAMS_PAUSE_ON_FAIL: the harness pins Chrome's debugging port to 9222
+        (zero_sudo/tests/common.py), one port for the whole host;
+      * `broker_users` not empty: those modules use RabbitMQ and one is listening on the host, so their
+        queues would be shared with the other slots, and a vhost cannot be created as the odoo user. The
+        caller passes the modules from ``modules_mentioning_broker`` only when a RabbitMQ is listening,
+        and [] otherwise.
+
+    Every host-only reason names HAMS_ISOLATED_NS=1 and says to leave it out.
     """
     if resources.slot == 1:
         return []
     reasons = []
-    if pause_on_fail:
-        reasons.append(
-            "--pause-on-fail pins Chrome's debugging port 9222, which "
-            "only slot 1 may use"
-        )
     if mcp:
         reasons.append(
             "--mcp serves the port its clients are configured for "
             f"({BASE_HTTP_PORT}), which only slot 1 uses"
         )
-    if not resources.private_network and broker_users:
+    if resources.private_network:
+        return reasons
+    if pause_on_fail:
+        reasons.append(
+            "--pause-on-fail pins Chrome's debugging port 9222, one port for the whole host; "
+            f"this run is on the host because HAMS_ISOLATED_NS=1 is set, so it shares the network. {_FULL_PIPELINE_HINT}"
+        )
+    if broker_users:
         reasons.append(
             f"{', '.join(broker_users)} use RabbitMQ and one is "
-            f"listening on 127.0.0.1:{BROKER_PORT}; a run on the host "
-            "shares it with the other slots. Run these modules in "
-            "slot 1, or without HAMS_ISOLATED_NS=1 so test.py starts "
-            "a private one"
+            f"listening on 127.0.0.1:{BROKER_PORT}; this run is on the host because HAMS_ISOLATED_NS=1 "
+            f"is set, so it shares that broker with the other slots. {_FULL_PIPELINE_HINT}"
         )
     return reasons
+
+
+_FULL_PIPELINE_HINT = (
+    "Leave HAMS_ISOLATED_NS=1 out: the full pipeline gives every run its own network namespace, Redis "
+    "and RabbitMQ, so these runs do not collide"
+)

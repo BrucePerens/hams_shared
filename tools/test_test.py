@@ -22,14 +22,17 @@ import io
 import inspect
 import itertools
 import os
+import re
 import resource
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -397,7 +400,7 @@ class SlotWiringMainTests(unittest.TestCase):
     (one slot) asserted to be what it was before slots existed."""
 
     def _run_main(self, argv, env_overrides, hold_slots=(), broker=False):
-        calls = {"rebuild": [], "cmd": [], "env": [], "extractor": []}
+        calls = {"rebuild": [], "cmd": [], "env": [], "extractor": [], "sweep": [], "cleanup": []}
 
         def fake_run_cmd(cmd, extractor=None, **kwargs):
             calls["cmd"].append(list(cmd))
@@ -422,7 +425,8 @@ class SlotWiringMainTests(unittest.TestCase):
                 handle = open(f"{lock_path}.slot-{slot}" if slot > 1 else lock_path, "a")
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 held.append(handle)
-            env = {"HAMS_ISOLATED_NS": "1", "HAMS_TEST_LOCK_PATH": lock_path, "HAMS_SKIP_CI_LOAD_GATE": "1"}
+            env = {"HAMS_ISOLATED_NS": "1", "HAMS_TEST_LOCK_PATH": lock_path, "HAMS_SKIP_CI_LOAD_GATE": "1",
+                   "HAMS_TEST_SLOTS": "1"}
             env.update(env_overrides)
             orig_cwd = os.getcwd()
             os.chdir(fake_repo)
@@ -440,6 +444,11 @@ class SlotWiringMainTests(unittest.TestCase):
                      patch.object(_test_runner, "FailureExtractor", side_effect=fake_extractor), \
                      patch.object(_test_runner.host_requirements, "require_test_host"), \
                      patch.object(_test_runner, "check_linters"), \
+                     patch.object(_test_runner, "default_postgres_access", return_value="PG"), \
+                     patch.object(_test_runner, "sweep_slot_leftovers",
+                                  side_effect=lambda *a, **k: calls["sweep"].append(a)), \
+                     patch.object(_test_runner, "install_run_cleanup",
+                                  side_effect=lambda *a, **k: calls["cleanup"].append(a)), \
                      patch.object(_test_runner, "rebuild_db",
                                   side_effect=lambda *a, **k: calls["rebuild"].append((a, k))), \
                      patch.object(_test_runner, "run_cmd", side_effect=fake_run_cmd), \
@@ -493,6 +502,68 @@ class SlotWiringMainTests(unittest.TestCase):
         self.assertEqual(calls["env"][0]["REDIS_DB"], "2")
         self.assertEqual(calls["env"][0]["DB_NAME"], "hams_test_relay_s2")
         self.assertEqual(calls["extractor"][0]["slot"], 2)
+
+    def test_a_slot_mode_run_sweeps_then_arms_its_cleanup_and_one_slot_does_neither(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, calls, _, _ = self._run_main(["--slots", "2", "--keep-db"], {"TMPDIR": tmp}, hold_slots=(1,))
+            self.assertEqual(len(calls["sweep"]), 1)
+            pg, held_slot, lock_path, base_tmpdir = calls["sweep"][0]
+            self.assertEqual((pg, held_slot, base_tmpdir), ("PG", 2, tmp))
+            self.assertTrue(lock_path.endswith("test.lock"))
+            self.assertEqual(calls["cleanup"], [("hams_test_s2", 2, True, os.path.join(tmp, "slot-2"))])
+            _, calls, _, _ = self._run_main(["--slots", "2"], {"TMPDIR": tmp}, hold_slots=(1,))
+            self.assertEqual(calls["cleanup"], [("hams_test_s2", 2, False, os.path.join(tmp, "slot-2"))])
+            # slot 1 of a slot-mode run has the shared TMPDIR, which is never removed
+            _, calls, _, _ = self._run_main(["--slots", "2"], {"TMPDIR": tmp})
+            self.assertEqual(calls["cleanup"], [("hams_test", 1, False, None)])
+            self.assertEqual(len(calls["sweep"]), 1)
+        _, calls, _, _ = self._run_main(["--slots", "1"], {})
+        self.assertEqual((calls["sweep"], calls["cleanup"]), ([], []))
+
+    def test_the_final_phase_arms_its_cleanup_without_a_slot_directory_and_does_not_sweep(self):
+        _, calls, _, _ = self._run_main(["--slots", "3", "--slot-held", "3"], {"HAMS_TEST_LOCK_HELD": "1"})
+        self.assertEqual(calls["cleanup"], [("hams_test_s3", 3, False, None)])
+        self.assertEqual(calls["sweep"], [])
+
+    def test_a_slot_directory_that_exists_with_mode_0777_is_not_chmodded(self):
+        # The odoo account created it; another account cannot chmod it (EPERM) and need not.
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = os.path.join(tmp, "slot-2")
+            os.makedirs(directory)
+            os.chmod(directory, 0o777)
+            resources = _test_runner.runner_slots.slot_resources(2, 2, False, tmp)
+            with patch.object(_test_runner.os, "chmod", side_effect=PermissionError("EPERM")) as chmod, \
+                 patch.dict(os.environ, {}), \
+                 patch.object(_test_runner, "_CHROME_KILL_PATTERN", "x"), \
+                 patch.object(_test_runner, "_CHROME_PROFILE_GLOBS", ()):
+                _test_runner.apply_slot_resources(resources)
+            chmod.assert_not_called()
+
+    def test_a_slot_directory_that_is_not_0777_and_cannot_be_changed_fails_clearly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = os.path.join(tmp, "slot-2")
+            os.makedirs(directory)
+            os.chmod(directory, 0o755)
+            resources = _test_runner.runner_slots.slot_resources(2, 2, False, tmp)
+            with patch.object(_test_runner.os, "chmod", side_effect=PermissionError("EPERM")), \
+                 patch.dict(os.environ, {}), contextlib.redirect_stdout(io.StringIO()) as out:
+                with self.assertRaises(SystemExit) as caught:
+                    _test_runner.apply_slot_resources(resources)
+            self.assertEqual(caught.exception.code, 1)
+            self.assertIn("mode 0755, not 0777", out.getvalue())
+            self.assertIn(f"sudo chmod 0777 {directory}", out.getvalue())
+
+    def test_a_slot_directory_with_another_mode_is_changed_to_0777(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = os.path.join(tmp, "slot-2")
+            os.makedirs(directory)
+            os.chmod(directory, 0o755)
+            resources = _test_runner.runner_slots.slot_resources(2, 2, False, tmp)
+            with patch.dict(os.environ, {}), \
+                 patch.object(_test_runner, "_CHROME_KILL_PATTERN", "x"), \
+                 patch.object(_test_runner, "_CHROME_PROFILE_GLOBS", ()):
+                _test_runner.apply_slot_resources(resources)
+            self.assertEqual(os.stat(directory).st_mode & 0o777, 0o777)
 
     def test_two_runs_on_one_host_share_no_name(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -576,10 +647,13 @@ class SlotWiringMainTests(unittest.TestCase):
                      patch.object(_test_runner, "check_host_apt_packages"), \
                      patch.object(_test_runner, "get_default_audio_sink_name", return_value=None), \
                      patch.object(_test_runner.os, "execvpe", side_effect=fake_exec), \
+                     patch.object(_test_runner, "default_postgres_access", return_value="PG"), \
+                     patch.object(_test_runner, "sweep_slot_leftovers"), \
                      contextlib.redirect_stdout(io.StringIO()):
                     os.environ.pop("HAMS_ISOLATED_NS", None)
                     if not keep_slots_env:
-                        os.environ.pop("HAMS_TEST_SLOTS", None)
+                        # the machine's own /opt/hams/etc/test_slots must not decide these tests' slot count
+                        os.environ["HAMS_TEST_SLOTS"] = "1"
                     with self.assertRaises(Exec):
                         _test_runner.main()
             finally:
@@ -640,6 +714,113 @@ class SlotWiringMainTests(unittest.TestCase):
         )
 
 
+class NamespaceInitReaperTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:reap_orphans_forever] with real processes: a child that is a subreaper, as PID 1 of the run's
+    namespace is, receives orphaned grandchildren; without the reaper they stay zombies, with it none remain."""
+
+    def test_orphans_are_reaped_and_a_protected_childs_status_survives(self):
+        script = textwrap.dedent("""
+            import ctypes, importlib.util, os, subprocess, sys, threading, time
+            import psutil
+            ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)   # PR_SET_CHILD_SUBREAPER
+            spec = importlib.util.spec_from_file_location("hams_runner_reaper", %r)
+            runner = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(runner)
+
+            def zombies():
+                return [c.pid for c in psutil.Process().children() if c.status() == psutil.STATUS_ZOMBIE]
+
+            def orphans(n):
+                for _ in range(n):
+                    subprocess.run(["sh", "-c", "sleep 0.1 & exit 0"])   # the sleep is re-parented to this process
+
+            orphans(5)
+            time.sleep(0.8)
+            before = len(zombies())
+            tracked = subprocess.Popen(["sh", "-c", "exit 3"])
+            stop = threading.Event()
+            thread = threading.Thread(target=runner.reap_orphans_forever, args=({tracked.pid}, stop, 0.1, 0.3))
+            thread.start()
+            orphans(5)
+            time.sleep(2.0)
+            during = zombies()
+            status = tracked.wait()          # protected: the reaper must not have taken its exit status
+            stop.set()
+            thread.join(10)
+            print("before", before, "during", len(during), "tracked", status, "alive", thread.is_alive(), flush=True)
+        """ % _TEST_PY_PATH)
+        done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        words = done.stdout.split()
+        self.assertGreaterEqual(int(words[1]), 1, "control: without the reaper the orphans stay zombies: " + done.stdout)
+        # only the protected, not yet waited-for child may still be a zombie while the reaper runs
+        self.assertLessEqual(int(words[3]), 1, done.stdout)
+        self.assertEqual(words[5], "3", done.stdout)
+        self.assertEqual(words[7], "False", done.stdout)
+
+
+class TakeBackSlotLockTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:take_back_slot_lock] with real lock files: the root phase of the full pipeline takes back the
+    slot its invoking process held, riding out the moment in which that process has let go of its flock."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.lock = os.path.join(self.tmp, "t.lock")
+        self.addCleanup(setattr, _test_runner, "_single_instance_lock", None)
+
+    def hold(self, slot):
+        handle = open(self.lock if slot == 1 else f"{self.lock}.slot-{slot}", "a")
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.addCleanup(handle.close)
+        return handle
+
+    def test_takes_the_slot_as_soon_as_the_parent_has_let_go(self):
+        parent = self.hold(2)
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            parent.close()                      # the exec closes the parent's descriptor
+
+        ticks = itertools.count()
+        slot = _test_runner.take_back_slot_lock(self.lock, 3, 2, sleep=sleep, clock=lambda: next(ticks), environ={})
+        self.assertEqual(slot, 2)
+        self.assertEqual(len(sleeps), 1)
+
+    def test_gives_up_when_another_run_keeps_the_slot_and_never_takes_another_slot(self):
+        self.hold(2)
+        ticks = itertools.count()
+        slot = _test_runner.take_back_slot_lock(
+            self.lock, 3, 2, sleep=lambda _s: None, clock=lambda: next(ticks) * 10.0,
+            environ={"HAMS_TEST_TAKE_BACK_SECONDS": "25"},
+        )
+        self.assertIsNone(slot)
+        self.assertFalse(os.path.exists(self.lock), "slot 1 must not even have been opened")
+
+    def test_a_bad_wait_setting_falls_back_to_the_default(self):
+        self.hold(2)
+        calls = []
+        _test_runner.take_back_slot_lock(
+            self.lock, 3, 2, sleep=lambda _s: calls.append(1), clock=lambda: len(calls) * 10.0,
+            environ={"HAMS_TEST_TAKE_BACK_SECONDS": "soon"},
+        )
+        self.assertEqual(len(calls), 3)         # 30 s default, 10 s per fake tick
+
+
+class HolderRecordTests(unittest.TestCase):
+    """Every run writes its slot and its queue ticket into its holder record, also with one slot."""
+
+    def test_record_lock_holder_always_carries_slot_and_ticket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = os.path.join(tmp, "x.lock")
+            with patch.dict(os.environ, {}, clear=False), patch.object(_test_runner.atexit, "register"):
+                _test_runner._record_lock_holder(lock, 1, "0000000001-1-1")
+            import lock_queue
+            records = lock_queue.read_holders(lock + ".queue.d")
+            self.assertEqual([(r["slot"], r["ticket"]) for r in records], [(1, "0000000001-1-1")])
+
+
 class SlotFilesAndKillTests(unittest.TestCase):
     """What a slot writes to the log directory, which Redis database it flushes, and which Chrome it kills."""
 
@@ -684,17 +865,61 @@ class SlotFilesAndKillTests(unittest.TestCase):
         self.assertEqual(self._flush_command(), ["redis-cli", "-n", "0", "flushdb"])
         self.assertEqual(self._flush_command(redis_flush_db=3), ["redis-cli", "-n", "3", "flushdb"])
 
-    def test_the_chrome_kill_uses_the_runs_own_pattern(self):
-        calls = []
-        with patch.object(_test_runner.subprocess, "run", side_effect=lambda cmd, **kw: calls.append(cmd)):
-            _test_runner.kill_test_chrome("TERM")
-            with patch.object(_test_runner, "_CHROME_KILL_PATTERN", "/var/lib/odoo/tmp/slot\\-2/[^/ ]*_chrome_odoo"):
-                _test_runner.kill_test_chrome("KILL")
-        self.assertEqual(calls[0], ["pkill", "-u", "odoo", "-TERM", "-f", "_chrome_odoo"])
-        self.assertEqual(
-            calls[1],
-            ["pkill", "-u", "odoo", "-KILL", "-f", "/var/lib/odoo/tmp/slot\\-2/[^/ ]*_chrome_odoo"],
-        )
+    def test_the_chrome_kill_signals_only_this_runs_matching_browsers(self):
+        """Tests [@ANCHOR: test:chrome_processes_of_this_run] with real processes: stand-ins named `chrome` (a script that sleeps)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = os.path.join(tmp, "chrome")
+            with open(binary, "w") as handle:
+                handle.write("#!/usr/bin/python3\nimport time\ntime.sleep(60)\n")
+            os.chmod(binary, 0o755)
+            slot2 = os.path.join(tmp, "slot-2")
+            mine = os.path.join(tmp, "mine_chrome_odoo")
+            orphan_here = os.path.join(slot2, "o_chrome_odoo")
+            elsewhere = os.path.join(tmp, "other_runs_chrome_odoo")        # a profile directory only another run has
+            for directory in (mine, orphan_here):
+                os.makedirs(directory)
+            spawned = []
+
+            def start(profile, orphan):
+                argv = [binary, "60", f"--user-data-dir={profile}", "--headless=new"]
+                process = subprocess.Popen((["setsid", "-f"] if orphan else []) + argv)   # setsid -f: reparented to init
+                spawned.append(process)
+
+            def alive(profile):
+                return subprocess.run(["pgrep", "-f", "--", f"--user-data-dir={profile}"], capture_output=True).returncode == 0
+
+            self.addCleanup(subprocess.run, ["pkill", "-f", f"{binary} 60"], check=False)
+            start(mine, orphan=False)                  # a descendant of this process
+            start(orphan_here, orphan=True)            # an orphan whose profile directory exists here
+            start(elsewhere, orphan=True)              # an orphan of another run: no such directory in this view
+            for profile in (mine, orphan_here, elsewhere):
+                for _ in range(100):
+                    if alive(profile):
+                        break
+                    time.sleep(0.1)
+                self.assertTrue(alive(profile))
+            me = os.getuid()
+            found = _test_runner.chrome_processes_of_this_run("_chrome_odoo", uid=me)
+            profiles = sorted(_test_runner._profile_directory_of(p.info["cmdline"]) for p in found)
+            self.assertEqual(profiles, sorted([mine, orphan_here]))
+            narrowed = _test_runner.chrome_processes_of_this_run(re.escape(slot2) + "/[^/ ]*_chrome_odoo", uid=me)
+            self.assertEqual([_test_runner._profile_directory_of(p.info["cmdline"]) for p in narrowed], [orphan_here])
+            self.assertEqual(_test_runner.chrome_processes_of_this_run("_chrome_odoo", uid=me + 12345), [])
+            self.assertEqual(_test_runner.chrome_processes_of_this_run("nothing_matches_this", uid=me), [])
+            with patch.object(_test_runner, "_CHROME_KILL_PATTERN", "_chrome_odoo"), \
+                 patch.object(_test_runner.pwd, "getpwnam", return_value=SimpleNamespace(pw_uid=me)):
+                _test_runner.kill_test_chrome("TERM")
+            for profile in (mine, orphan_here):
+                for _ in range(100):
+                    if not alive(profile):
+                        break
+                    time.sleep(0.1)
+                self.assertFalse(alive(profile), "this run's browser is signalled")
+            self.assertTrue(alive(elsewhere), "another run's browser is left alone")
+
+    def test_no_odoo_account_means_no_chrome_to_kill(self):
+        with patch.object(_test_runner.pwd, "getpwnam", side_effect=KeyError("odoo")):
+            self.assertEqual(_test_runner.chrome_processes_of_this_run("x"), [])
 
 
 class NoTestsRanTests(unittest.TestCase):
@@ -1711,7 +1936,7 @@ class CiLoadGateOrderingTests(unittest.TestCase):
         # The fail-fast path gates inline; the --wait path gates through lock_queue.acquire's on_head
         # callback, which runs only once this invocation is first in line and strictly before
         # try_lock() (asserted in test_lock_queue.py's gate tests).
-        gate_at = source.index("if not use_queue and not wait_for_ci_load_to_subside():")
+        gate_at = source.index("if not use_queue and not root_phase and not wait_for_ci_load_to_subside():")
         lock_at = source.index("held_slot = _try_slot_locks(lock_file_path, slots, early_args.slot_held)")
         self.assertIn("on_head=None if adopted else wait_for_ci_load_to_subside", source)
         self.assertLess(

@@ -657,8 +657,17 @@ See also the test class `SignalExitVerdictTests` in `test_test.py`, `OOMWatchdog
 one numbered **slot**, taken with a flock of its own, and everything two runs would otherwise share is derived from the slot number. Without
 the opt-in the count is 1, slot 1 is derived, and every value equals what `test.py` used before slots existed.
 
-Opt in with `--slots N`, `HAMS_TEST_SLOTS=N`, or the first line of `/opt/hams/etc/test_slots` (the command line outranks the environment,
-which outranks the file). `test.py --queue-status` shows each slot. The values below are for a run in slot K of N.
+Opt in with `HAMS_TEST_SLOTS=N` or the first line of `/opt/hams/etc/test_slots` (the environment outranks the file); `--slots N` can only
+RAISE that count. Every run reads the machine's setting, so every run on one machine agrees on N and queues in the same way: a run that
+asked for fewer slots than the machine has once took slot 1 only, and the slotted runs behind it sat idle with three of four slots free.
+To run with one slot set `HAMS_TEST_SLOTS=1`. `test.py --queue-status` shows each slot. The values below are for a run in slot K of N.
+
+**The supported way to run slots is the full pipeline** (what `python3 hams_shared/tools/test.py ...` does with no `HAMS_ISOLATED_NS`): every
+run gets its own mount, PID and network namespace with its own Redis and RabbitMQ and the same ports (8075, 6379, 5672) in every run, so
+nothing but the database name differs, broker modules run in any slot, and `--pause-on-fail` has a debugging port of its own. Set
+`HAMS_ISOLATED_NS=1` only to skip the namespace on purpose; such a run shares the host's network and is limited above slot 1 (the
+messages say so and say to leave it out). The one limit of the full pipeline above slot 1 is `--mcp`: its clients are configured for one
+server and a server in a private namespace cannot be reached from outside.
 
 | Resource | Slot 1 (and every machine with one slot) | Slot K > 1 |
 |---|---|---|
@@ -667,10 +676,11 @@ which outranks the file). `test.py --queue-status` shows each slot. The values b
 | PostgreSQL database (`--db`, default `hams_test`) | `--db` | `<db>_sK`, for example `hams_test_relay_s2`; Odoo's filestore directory is named after the database, so it differs too |
 | Odoo HTTP port | 8075 | on the host: 8075 + K - 1; in the private namespace: 8075 |
 | Redis database | tests use 1 (the flush is `$REDIS_DB`, default 0) | on the host: K, flushed and used; in the private namespace: unchanged |
-| RabbitMQ | the host's, or the private one the full pipeline starts | the private one; a run on the host is refused when a RabbitMQ listens on 5672 and a module under test mentions it (`pika`, `amqp`, `rabbitmq` in its Python); other modules run |
+| RabbitMQ | the host's, or the private one the full pipeline starts | the private one the full pipeline starts, for any module; only a `HAMS_ISOLATED_NS=1` run on the host is refused when a RabbitMQ listens on 5672 and a module under test mentions it (`pika`, `amqp`, `rabbitmq` in its Python); other modules run |
 | `TMPDIR` (Chrome profiles) and the Chrome kill and clean-up patterns | `/var/lib/odoo/tmp`; every `*_chrome_odoo` | on the host with several slots: `<TMPDIR>/slot-K` (slot 1: `<TMPDIR>`), patterns limited to the run's own directory |
 | Log directory files | `filtered_test.txt`, `test_progress.txt`, `coverage_report`, `odoo_test.pro`, `offline_ns`, `log` | `filtered_test.slot-K.txt`, `test_progress.slot-K.txt`, `coverage_report.slot-K`, `odoo_test.slot-K.pro`, `offline_ns.slot-K`, `log.slot-K` |
-| Chrome debugging port | 9222 only with `--pause-on-fail` | `--pause-on-fail` and `--mcp` are refused above slot 1 |
+| Chrome debugging port | 9222 only with `--pause-on-fail` | private in the full pipeline; `--pause-on-fail` on the host (`HAMS_ISOLATED_NS=1`) and `--mcp` anywhere are refused above slot 1 |
+| What the run removes when it ends | nothing (a run with one slot keeps `hams_test`; the next run drops and rebuilds it) | in slot mode (more than one slot), on every slot including 1: its database (dropped WITH (FORCE)), its Odoo filestore and its slot TMPDIR, whether it passed, failed or was stopped, unless `--keep-db` (see "Clean-up in slot mode") |
 
 "On the host" means a `HAMS_ISOLATED_NS=1` run, which skips the namespace; "private namespace" is the final process of the full pipeline
 (`HAMS_ISOLATED_NS=1` and `HAMS_TEST_LOCK_HELD=1`), whose ports, Redis, RabbitMQ, process table and `/tmp` belong to that run alone. Not
@@ -697,11 +707,12 @@ Purpose: how many runs this machine allows at once; the only place the opt-in is
 
 | Argument | Type | Meaning |
 |---|---|---|
-| `cli_value` | str, int or None | The `--slots` value; wins over everything when not None. |
+| `cli_value` | str, int or None | The `--slots` value; it can only raise the count (the result is the larger of it and the machine's setting). |
 | `environ` | mapping or None | Where `HAMS_TEST_SLOTS` is read; default `os.environ`. An empty value counts as unset. |
 | `slots_file` | str | A file whose first line is the count. |
 
-Returns the count (1 to 15). A missing `slots_file` means 1: the machine has not opted in. Raises `SlotConfigError` for an invalid value from
+Returns the count (1 to 15): the larger of `cli_value` (1 when None) and the machine's setting, which is `HAMS_TEST_SLOTS`, else the first line of
+`slots_file`. A missing `slots_file` means 1: the machine has not opted in. Raises `SlotConfigError` for an invalid value from
 any source and `OSError` for a file that exists and cannot be read; `test.py` prints the cause and exits 2, it never falls back to 1. One file
 read, no locks, no side effects. Only a fresh `test.py` invocation calls it; the phases it re-execs take the count from `--slots`.
 
@@ -778,11 +789,21 @@ within `timeout` seconds, False on any `OSError` (refused, unreachable, timed ou
 
 ### `[@ANCHOR: runner_slots:slot_refusals]` `slot_refusals(resources, pause_on_fail, mcp, broker_users)`
 
-Purpose: why a run cannot use its slot. Slot 1 is never refused (returns `[]`). Above slot 1 it returns one sentence per reason:
-`--pause-on-fail` or `HAMS_PAUSE_ON_FAIL` (the harness pins Chrome's debugging port to 9222, `zero_sudo/tests/common.py`); `--mcp` (the MCP
-clients are configured for port 8075); a run on the host (not `private_network`) with a non-empty `broker_users`, the modules under test that use a RabbitMQ that is listening (their
-queues would be shared with the other slots, and a vhost cannot be created as the `odoo` user; the full pipeline starts a private RabbitMQ
-instead). `broker_users` is `[]` when nothing is listening or no module under test mentions the broker. Pure.
+Purpose: why a run cannot use its slot. Slot 1 is never refused (returns `[]`).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `resources` | `SlotResources` | The run's slot and whether it is in the private namespace (`private_network`). |
+| `pause_on_fail` | bool | `--pause-on-fail` or `HAMS_PAUSE_ON_FAIL=1`. |
+| `mcp` | bool | `--mcp`. |
+| `broker_users` | list of str | Modules under test that use a RabbitMQ listening on the host; `[]` when nothing listens or no module mentions it. |
+
+Returns one sentence per reason, as a list. In the full pipeline (`private_network` true: own namespace, Redis, RabbitMQ, same ports in every
+run) the only reason is `--mcp` (its clients are configured for port 8075 and a server in a private namespace cannot be reached from
+outside). A run on the host (`HAMS_ISOLATED_NS=1` set by hand) shares the network and adds `--pause-on-fail` (the harness pins Chrome's
+debugging port to 9222, `zero_sudo/tests/common.py`) and `broker_users` (their queues would be shared with the other slots, and a vhost
+cannot be created as the `odoo` user). Every host-only sentence says the run is on the host because `HAMS_ISOLATED_NS=1` is set and to leave
+it out. Pure.
 
 ### `[@ANCHOR: lock_queue:write_holder]` `write_holder(qdir, info, pid=None, now=time.time, slot=None, ticket=None)`
 
@@ -794,8 +815,8 @@ Purpose: records that a process holds the lock, so queue lines and `--queue-stat
 | `info` | str | What the holder runs (`test.py` and its arguments, at most 200 characters). |
 | `pid` | int or None | The holder; default this process. Its start time is read from `/proc` and is part of the record's name. |
 | `now` | callable | Clock for `since`; default `time.time`. |
-| `slot` | int or None | The slot held. Written only when given, i.e. only on a machine with more than one slot. |
-| `ticket` | str or None | The queue ticket the run waited with. Written only when given. |
+| `slot` | int or None | The slot held. `test.py` passes it in every mode, also on a machine with one slot; a record without it counts as slot 1. |
+| `ticket` | str or None | The queue ticket the run waited with (or inherited from its parent). `test.py` passes it in every mode; a record without it (an older `test.py`) still marks the run's ticket as running, see `may_try`. |
 
 Returns the record name `holder-<pid>-<start>`, or None if the process has no readable start time or the directory is unwritable (it must
 never stop a test run). Rewrites an existing record of the same process. The record is JSON written to a temporary file and linked into
@@ -824,9 +845,13 @@ Purpose: whether the waiter holding `ticket` is at the head of the queue and may
 | `slots` | int | The machine's slot count. |
 
 Returns a bool. `slots` of 1: True for the lowest live ticket, including a running holder's ticket, exactly as before slots (so nobody else
-tries while the holder runs). `slots` above 1: tickets named by a live holder record are running runs, not waiters; True when `ticket` is the
-oldest waiter and fewer than `slots` slots are busy, not counting the record that names `ticket` itself (a re-exec'd child takes back the slot
-its parent held). A fail-fast run holds a slot with no ticket and counts as busy. Reads the directory each call; no locks.
+tries while the holder runs). `slots` above 1: a ticket is a running run, not a waiter, when a live holder record names it or when a live holder
+record has the same pid and start time as the ticket (a run of an older `test.py`, or one that wrote its record without the ticket: record and
+ticket belong to one process; counting that ticket as the oldest waiter once blocked the whole queue with three of four slots free). The
+waiters, oldest first, may try while slots are free: the waiter at position p (0 is the oldest) may try when p is less than the number of free
+slots (`slots` minus the busy slots, not counting the record that names `ticket` itself: a re-exec'd child takes back the slot its parent held),
+so a head that is slow (the load gate) or loses a race does not stop the others from taking the other free slots. A fail-fast run holds a slot
+with no ticket and counts as busy. Reads the directory each call; no locks.
 
 ### `[@ANCHOR: lock_queue:describe_queue]` `describe_queue(qdir, my_ticket=None, now=time.time, slots=1)`
 
@@ -858,9 +883,67 @@ writes the holder record with the slot and the ticket.
 
 Purpose: one non-blocking pass over the slot locks. Tries slot 1 up to `slots` in order (only `only_slot` when given) and returns the slot
 number whose flock it took, or None when none is free. The open, locked file lives in the module global `_single_instance_lock` for the life
-of the process (the lock goes with the process, however it ends); a file whose lock was not taken is closed. The lock file is opened with
+of the process (the lock goes with the process, however it ends); without `only_slot`, a slot named by a live run's holder record (another pid, written less than 120 s ago: `SLOT_RESERVATION_SECONDS`) is skipped even when its flock is free, because the invoking process of the full pipeline lets go of its flock when it execs into `sudo` / `systemd-run` / `unshare` and the root phase takes the slot back a moment later (a run that took the slot in that window shared its database); a file whose lock was not taken is closed. The lock file is opened with
 `O_NOFOLLOW`, falling back to read-only when `fs.protected_regular` refuses a write open (`_open_lock_file`). With `slots` of 1 this is the
 single flock `test.py` always took.
+
+### `[@ANCHOR: test:take_back_slot_lock]` `take_back_slot_lock(lock_base_path, slots, only_slot, sleep=time.sleep, clock=time.monotonic, environ=None)`
+
+Purpose: the root phase of the full pipeline (`--internal-ns-init`, the process inside the new PID namespace) takes back the slot its invoking
+process held. It replaces the queue acquisition that phase used to do, which was wrong inside the namespace: `/proc` shows only the namespace,
+so the invoking process's ticket looked dead and was deleted, and the ticket and holder record the phase wrote carried namespace pids that
+the host took for dead. The effect was that a full-pipeline run was invisible to `--queue-status` and to the queue (0 slots busy while four
+ran). Now the phase writes nothing in the queue directory; the invoking process's holder record and ticket (its pid lives as long as `sudo`
+does) describe the run for its whole life.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `lock_base_path` | str | Base lock path. |
+| `slots` | int | The machine's slot count. |
+| `only_slot` | int or `None` | `--slot-held` of the command line; `None` takes any free slot. |
+| `sleep`, `clock` | callables | Test seams: `time.sleep` and `time.monotonic`. |
+| `environ` | mapping or `None` | Where `HAMS_TEST_TAKE_BACK_SECONDS` is read (default 30; a bad value means 30). |
+
+Returns the slot whose flock was taken (kept in `_single_instance_lock` for the process's life), or `None` when the slot stayed taken until the
+limit: another run took it in the moment the invoking process had let go (an older `test.py`, which has no holder-record reservation, can). The
+caller then prints `_no_slot_message` and exits 1. Blocking; polls every 0.2 s; never takes a slot other than `only_slot` when that is given.
+
+### `[@ANCHOR: test:chrome_processes_of_this_run]` `chrome_processes_of_this_run(pattern, uid=None, own_pids=None, processes=None)`
+
+Purpose: which headless Chrome processes `kill_test_chrome()` may signal (hang recovery in `run_cmd`, `robust_reap`, the end-of-run clean-up). It replaced
+`pkill -u odoo -f <pattern>`, which signalled every `odoo` Chrome on the machine whose command line matched, including the browsers of other
+runs: a run in its own PID namespace is visible in the host's process table, and a slot 1 run's pattern (`<TMPDIR>/[^/ ]*_chrome_odoo`)
+matched their profile directories. The symptom was a tour in a full-pipeline run whose Chrome died with exit code 9 (SIGKILL) a fraction of a second
+after it started, with `CancelledError` in `Page.navigate` or a tour that stalled at a step.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `pattern` | str | Regular expression searched in the space-joined command line (`_CHROME_KILL_PATTERN`). |
+| `uid` | int or `None` | Effective uid of the processes; default the `odoo` account (no such account: empty result). |
+| `own_pids` | set of int or `None` | Pids of this process's descendants; default `psutil.Process().children(recursive=True)`. |
+| `processes` | callable or `None` | Test seam; default `psutil.process_iter`. |
+
+Returns a list of `psutil.Process` with `info` holding pid, uids and cmdline. A process belongs to this run when it is a descendant of this process, or an
+orphan whose `--user-data-dir` is a directory that exists in this process's own view of the filesystem (a leftover of a dead parent of this run;
+another run's profile directories are in its private overlay, or on the host where a namespaced run cannot see them). Reads `/proc`; sends no signal.
+
+### `[@ANCHOR: test:reap_orphans_forever]` `reap_orphans_forever(protected_pids, stop, interval=1.0, min_age=3.0, clock=time.monotonic)`
+
+Purpose: the loop of the reaper thread of the root phase, which is PID 1 of its PID namespace (`unshare -p -f`). Every process orphaned anywhere in the run
+(Chrome helpers, shell wrappers, the processes of `rabbitmq-server`) is re-parented to it, and a Python init that only waits for its one test process never
+reaped them: 150 to 170 zombies per run were seen after a few hours, and a multi-hour run could exhaust the PID limit.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `protected_pids` | set of int | Children this process waits for itself (Redis, RabbitMQ); never reaped here, their exit status is wanted. |
+| `stop` | `threading.Event` | The loop ends when it is set. |
+| `interval` | float | Seconds between scans. |
+| `min_age` | float | Seconds a child must have been seen as a zombie before it is reaped, so a child whose parent code is about to wait for it is left to that code. |
+| `clock` | callable | Test seam, `time.monotonic`. |
+
+Returns the number of zombies reaped. Reaps with `os.waitpid(pid, WNOHANG)` on the zombie's own pid only: `waitpid(-1)` would steal the exit status of the test
+process that `subprocess.run` waits for, and the run's exit code would read 0. Started by `setup_namespace_and_run_tests` as a daemon thread before the test
+process starts and stopped in its `finally`.
 
 ### `[@ANCHOR: test:slot_handoff_args]` `slot_handoff_args(slots, held_slot)`
 
@@ -894,11 +977,204 @@ verdict exists (it used to print "No test failures or system crashes detected") 
 
 ### `[@ANCHOR: test:apply_slot_resources]` `apply_slot_resources(resources)`
 
-Purpose: makes the process-wide choices a scoped slot needs; does nothing for a run that is not scoped. Creates `resources.tmpdir` (mode
-0777, as the shared one is) and sets `TMPDIR` to it, so Odoo's Chrome profiles (`tempfile` under `TMPDIR`, suffix `_chrome_odoo`) are the only
+Purpose: makes the process-wide choices a scoped slot needs; does nothing for a run that is not scoped. Creates `resources.tmpdir` (changing its
+mode to 0777 only when the mode is not already 0777: a directory another account created, such as the `odoo` account's earlier
+`/var/lib/odoo/tmp/slot-K`, cannot be `chmod`ed by anyone else, and needs no change; when the mode differs and `chmod` fails, the run prints the
+directory, its mode, the owner's uid and `sudo chmod 0777 <dir>` and exits 1) and sets `TMPDIR` to it, so Odoo's Chrome profiles (`tempfile` under `TMPDIR`, suffix `_chrome_odoo`) are the only
 ones there, and narrows the module globals `_CHROME_KILL_PATTERN` and `_CHROME_PROFILE_GLOBS`, which `kill_test_chrome()` (hang recovery,
 `robust_reap`) and the end-of-run clean-up read. Called once, before Odoo or any child is started. Raises `OSError` if the directory cannot
 be created; the run stops there.
+
+## Clean-up in slot mode (ADR 0116)
+
+In slot mode (the machine has more than one slot) a run owns, in its slot K, a PostgreSQL database (`<db>_sK`, slot 1: `<db>`), Odoo's filestore
+directory of that name, and, on the host, `<TMPDIR>/slot-K`. They used to be removed only when the next run in the same slot started, so each
+one outlived its run and a crashed or killed run left them for good. Now:
+
+* **At the end of every run** (pass, fail, `sys.exit`, an uncaught exception, SIGTERM, SIGHUP) `run_cleanup_at_exit` drops the database WITH
+  (FORCE) and removes the filestore and the slot directory. In the full pipeline the root phase repeats the drop after the test process ends
+  (`root_phase_database_cleanup`), because the database lives on the host's PostgreSQL even though the filestore, Redis and RabbitMQ lived in
+  the private overlay and went with it; it covers a test process killed by the out-of-memory watchdog or SIGKILL.
+* **`--keep-db`** keeps all three and prints `Database NAME (slot K) KEPT; drop it when done: sudo -u postgres dropdb --force NAME` as the last
+  line, for triage of a failure. The next run in the same slot replaces it; the sweep never removes it. A run is not batched with `--keep-db`.
+* **At the start of every run in slot mode**, under the slot lock it just took, `sweep_slot_leftovers` removes the leftovers of runs that are
+  gone, in every slot from 1 to 15: databases carrying this runner's marker, databases an older `test.py` left under the slot naming
+  (`hams_test..._sK`, K from 2), orphan filestores of that naming, and `slot-K` directories. A slot is swept only while the sweeper holds that
+  slot's flock and no live holder record names it, so a database a live run holds is never touched. It refuses (exit 2) on a production host
+  (`hams_prod` exists, or the deploy marker files), and never drops `hams_prod`, `postgres`, `template0`, `template1`, a kept database or a name that is
+  not a plain identifier.
+* **The marker** is a PostgreSQL comment on the database, `hams_test_runner:v1 slot=K kept=0|1` (`database_marker`). It is written in the same
+  `psql` session that creates the database and goes away with it; no second record exists to lose, and no file permission to trip over
+  between the accounts that run `test.py`. A database without a marker is dropped by a run only in the older naming case above, never
+  by guessing: slot 1's bare name (`hams_test`) is also the database of a run without slots, so it is removed only when a slot-mode run made it.
+* **With one slot** nothing changes: no marker, no clean-up, no sweep, `hams_test` is kept and rebuilt by the next run.
+* **What a full-pipeline run leaves outside its namespace**: its log files in the log directory (`filtered_test.slot-K.txt` is the
+  verdict; they are never removed), the `postgres` roles `odoo` and the invoking user (created if missing, shared by every run), and the
+  lock and queue files. Its mounts, processes, Redis, RabbitMQ, filestore and `/var/lib/odoo/tmp` contents go with the namespace.
+
+### `[@ANCHOR: runner_cleanup:database_marker]` `database_marker(slot, kept)`
+
+Purpose: the comment `rebuild_db()` puts on a database it creates in slot mode: `hams_test_runner:v1 slot=2 kept=0`. `slot` is an int (1 to 15),
+`kept` a bool (`--keep-db`). Returns the string. Pure. See also `parse_database_marker`, `comment_database_sql`.
+
+### `[@ANCHOR: runner_cleanup:parse_database_marker]` `parse_database_marker(comment)`
+
+Purpose: reads a marker back. `comment` is a database comment (str, `None` or ""). Returns `(slot, kept)` for a comment that is exactly a marker, else
+`None` (any other text, including the marker followed by more text). Pure.
+
+### `[@ANCHOR: runner_cleanup:is_droppable_name]` `is_droppable_name(name)`
+
+Purpose: the one gate in front of every `DROP DATABASE` and `COMMENT ON DATABASE` this runner builds. True for a plain identifier
+(`[A-Za-z_][A-Za-z0-9_]*`, so it is safe inside double quotes) that is not `hams_prod`, `postgres`, `template0` or `template1`. Pure.
+
+### `[@ANCHOR: runner_cleanup:drop_database_sql]` `drop_database_sql(name)`
+
+Purpose: returns `DROP DATABASE IF EXISTS "name" WITH (FORCE);` (FORCE ends the sessions a killed Odoo left open). Raises `ValueError` for a name
+`is_droppable_name` refuses. Pure.
+
+### `[@ANCHOR: runner_cleanup:comment_database_sql]` `comment_database_sql(name, slot, kept)`
+
+Purpose: returns `COMMENT ON DATABASE "name" IS '<marker>';`, which `rebuild_db()` runs right after `CREATE DATABASE` in the same `psql` session.
+Raises `ValueError` for a name `is_droppable_name` refuses. Pure.
+
+### `[@ANCHOR: runner_cleanup:owned_slot]` `owned_slot(name, comment)`
+
+Purpose: which slot's run owns database `name`, the question the sweep asks of every database on the server. Returns the marker's slot (1 to 15) when
+`comment` is a marker; else K when `name` is `hams_test`, any `[a-z0-9_]*`, then `_sK` with K from 2 to 15 (what an older `test.py` produced);
+else `None` (not ours: slot 1's bare name, every other name, every protected or unsafe name, a marker whose slot is out of range). Pure.
+
+### `[@ANCHOR: runner_cleanup:SlotLeftovers]` `SlotLeftovers`
+
+A dataclass built by `leftovers`, read by `sweep`; it lives for one sweep.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `slot` | int | The slot, 1 to 15. |
+| `databases` | list of str | Databases to drop (never kept ones). |
+| `filestores` | list of str | Names of Odoo filestore directories to remove: those of the databases and orphans of the older naming with no database. |
+| `tmpdir` | bool | True when `<TMPDIR>/slot-K` exists and is to be removed; never set for slot 1, whose TMPDIR is the shared one. |
+
+### `[@ANCHOR: runner_cleanup:leftovers]` `leftovers(rows, filestore_names, slot_directory_names)`
+
+Purpose: decides what to sweep, from what is on the server and the disk.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `rows` | list of `(name, comment)` | Every database on the server. |
+| `filestore_names` | list of str | The entries of Odoo's filestore directory. |
+| `slot_directory_names` | list of str | The entries of the base TMPDIR; only `slot-2` to `slot-15` count. |
+
+Returns a list of `SlotLeftovers` in slot order, empty slots omitted. A kept database (marker `kept=1`) and its filestore are skipped, as is every name
+`owned_slot` does not own. Pure: it does not look at which slots are still held; `sweep` does.
+
+### `[@ANCHOR: runner_cleanup:SweepOperations]` `SweepOperations`
+
+A dataclass of the side effects `sweep` performs, so that the rules can be tested without touching the machine.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `claim_slot` | callable(slot) | Tries to take the slot's lock without waiting; returns a release function, or `None` when a live run holds the slot. The slot the sweeper's own run holds returns a function that does nothing. |
+| `drop_database` | callable(name) | Returns True when the database is gone. |
+| `remove_filestore` | callable(name) | Returns True when the directory is gone. |
+| `remove_slot_tmpdir` | callable(slot) | Returns True when `<TMPDIR>/slot-K` is gone. |
+| `say` | callable(text) | Reports a line. |
+
+The three removal callables must not raise.
+
+### `[@ANCHOR: runner_cleanup:sweep]` `sweep(plan, operations)`
+
+Purpose: removes the leftovers in `plan` (a list of `SlotLeftovers`), slot by slot, each only while `operations.claim_slot` holds that slot's lock; the
+lock is released after the slot, also when a removal fails. A slot whose lock cannot be taken is skipped and reported.
+Returns `{"removed": [...], "skipped": [...], "failed": [...]}` of item names (`database NAME`, `filestore NAME`, `tmpdir slot-K`, `slot K`). Not
+re-entrant across processes: two sweepers claiming one slot exclude each other through its flock.
+
+### `[@ANCHOR: runner_cleanup:finish_run]` `finish_run(database, slot, keep, read_comment, drop_database, remove_filestore, remove_slot_tmpdir, say)`
+
+Purpose: the end-of-run decision for one run's database; called by the test process at exit and again by the root phase of the full pipeline.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `database` | str | The run's slot-derived database. |
+| `slot` | int | The slot the caller holds (holding its lock is what makes the removal safe). |
+| `keep` | bool | `--keep-db`. |
+| `read_comment` | callable(name) | The database's comment, or `None` when it does not exist. |
+| `drop_database`, `remove_filestore` | callable(name) | Return True when gone. |
+| `remove_slot_tmpdir` | callable() or `None` | Takes no argument; `None` when there is no directory to remove (slot 1, a private namespace). |
+| `say` | callable(text) | Reports a line. |
+
+Returns `"kept"` (with `keep`, or a marker with `kept=1`; prints `Database NAME (slot K) KEPT; drop it when done: ...` when the database exists, nothing is
+removed), `"dropped"` (marker names this slot and is not kept: dropped, then the filestore and directory), `"absent"` (no database: only the
+filestore and directory are removed), `"foreign"` (a database of that name exists with no marker for this slot, so it was not made by this run:
+left alone with a warning) or `"failed"` (the drop failed: files kept). Idempotent: the second call finds `"absent"`.
+
+### `[@ANCHOR: test:PostgresAccess]` `PostgresAccess(psql_cmd, connection_args=(), env=None, preexec_fn=None)`
+
+A small class: the PostgreSQL operations clean-up needs, through `psql -X -q -At` (unaligned, tab separated, `ON_ERROR_STOP`).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `psql_cmd` | str | Path of `psql` (`infrastructure.get_pg_bin("psql")`). |
+| `connection_args` | list of str | Extra arguments, e.g. `["-h", "/var/run/postgresql"]`. |
+| `env` | dict or `None` | Environment for `psql`; `None` is this process's. |
+| `preexec_fn` | callable or `None` | Runs in the child first; the root phase uses it to become the `postgres` account. |
+
+Methods: `run(sql, **variables)` (the `CompletedProcess`; variables become `-v name=value`), `database_rows()` (`[(name, comment)]` or `None` when
+the server cannot be asked), `database_comment(name)` (the comment, `""` for none, `None` when the database does not exist or the server cannot be asked),
+`drop_database(name)` (True when gone; raises `ValueError` for a name `is_droppable_name` refuses). Nothing exits or raises on a `psql` failure.
+`default_postgres_access()` builds one for the invoking process with the runner's defaults (host `localhost`, role `odoo`, password `odoo`).
+
+### `[@ANCHOR: test:remove_directory_tree]` `remove_directory_tree(path)`
+
+Purpose: removes a directory tree on behalf of the sweep and the end-of-run clean-up. Returns True when the path is gone (a missing path counts). Plain
+`shutil.rmtree` first; on a `PermissionError` the non-interactive `sudo -n rm -rf --` that `remove_stale_filestore` uses. A symbolic link is refused (False,
+warning), so a planted link is never followed. Never raises.
+
+### `[@ANCHOR: test:sweep_slot_leftovers]` `sweep_slot_leftovers(pg, held_slot, lock_base_path, base_tmpdir, filestore_base=ODOO_FILESTORE_BASE, say=print)`
+
+Purpose: the start-up sweep. Called by `main()` once per run in slot mode, in the invoking process (the flat process of a `HAMS_ISOLATED_NS=1` run),
+right after the slot lock was taken and before anything is built.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `pg` | `PostgresAccess` | The server to sweep. |
+| `held_slot` | int | The slot the caller holds; swept too, without a second lock. |
+| `lock_base_path` | str | Base lock path; slot K's lock is `runner_slots.slot_lock_path`, the queue directory `lock_queue.queue_dir_for_lock`. |
+| `base_tmpdir` | str or `None` | The TMPDIR whose `slot-K` directories are swept. |
+| `filestore_base` | str | Odoo's filestore directory. |
+| `say` | callable | Reports a line. |
+
+Returns the `runner_cleanup.sweep` outcome (`{"removed", "skipped", "failed"}`), or `None` after printing `Sweep skipped` when the databases cannot be listed. Exits 2
+with the production-host message when the server has `hams_prod`. A slot is claimed with a non-blocking flock on a lock file opened like the runner's
+own (`_open_lock_file`) and only if it has something to sweep, so the sweep creates no lock files for idle slots; a slot named by a live holder record is skipped
+even if its flock looks free. Takes and releases one slot lock at a time; the slow part is `DROP DATABASE`.
+
+### `[@ANCHOR: test:install_run_cleanup]` `install_run_cleanup(database, slot, keep, tmpdir)`
+
+Purpose: arms the end-of-run clean-up in the process that runs Odoo, in slot mode only.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `database` | str | The slot-derived database. |
+| `slot` | int | The slot. |
+| `keep` | bool | `--keep-db`. |
+| `tmpdir` | str or `None` | The slot's own TMPDIR to remove at the end; `None` for slot 1 and for a private namespace. |
+
+Sets the module state `_RUN_CLEANUP` (which `rebuild_db()` reads to mark the database), registers `run_cleanup_at_exit` with `atexit` and installs SIGTERM and
+SIGHUP handlers that print a line and `sys.exit(128 + signal)`. Main thread only. SIGKILL and a power cut cannot be handled: the next run's sweep removes
+those leftovers.
+
+### `[@ANCHOR: test:run_cleanup_at_exit]` `run_cleanup_at_exit(pg=None)`
+
+Purpose: the exit hook. Runs once (a second call, or a call before `install_run_cleanup`, returns `None`). Kills the run's remaining Chrome
+(`kill_test_chrome("KILL")`; limited to the run's own TMPDIR on the host), then `runner_cleanup.finish_run` with `pg` (default `default_postgres_access()`). Returns
+`finish_run`'s word, or `"failed"` after a warning when `psql`, `pkill` or the disk raised: the run's verdict is already decided and is never changed by clean-up.
+
+### `[@ANCHOR: test:root_phase_database_cleanup]` `root_phase_database_cleanup(run_args, slot, pg)`
+
+Purpose: the backstop in the root phase of the full pipeline, which outlives the test process and still holds the slot's lock. Does nothing (returns `None`) with one slot, with
+`--keep-db`, or when the slot-derived name is too long or unsafe. Otherwise `finish_run` on `slot_database_name(run_args.db, slot)` through `pg`, a
+`PostgresAccess` running `psql` as the `postgres` account over the host socket; its filestore is in the discarded overlay, so only the database is dropped. `run_args` is the
+parsed command line (`slots`, `db`, `keep_db`).
 
 ## Staged-file size check
 

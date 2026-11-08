@@ -34,10 +34,9 @@ the point of keeping the default. Holder records (``holder-<pid>-<starttime>``) 
 queue lines and ``--queue-status`` can say who holds the lock and what it is running.
 
 Slots (ADR 0116). A machine that opts in lets N runs hold N separate locks at once, and the queue stays
-ONE FIFO in front of all of them. With ``slots`` > 1 a holder record also carries its ``slot`` and the
-``ticket`` its run waited with. A ticket named by a live holder record is a running run, not a waiter, so
-the head of the queue is the oldest ticket that is not running, and it may try the locks only while fewer
-than N slots are busy. With ``slots`` == 1 (the default, and what lint_lock.py uses) none of that applies:
+ONE FIFO in front of all of them. A holder record carries its ``slot`` and the ``ticket`` its run waited with
+in every mode. A ticket named by a live holder record (or whose process has one) is a running run, not a
+waiter, and the oldest waiters, as many as there are free slots, may try the locks. With ``slots`` == 1 (the default, and what lint_lock.py uses) none of that applies:
 the head is the lowest live ticket, running holders included, exactly as before slots existed.
 """
 
@@ -367,17 +366,29 @@ def may_try(qdir, tickets, ticket, slots=1):
     list, lowest first, and contains `ticket`.
 
     slots == 1: the lowest live ticket may try (a running holder's ticket is lowest, so nobody
-    else tries while it runs). slots > 1: tickets named by a live holder record are running
-    runs, not waiters; `ticket` must be the oldest waiter, and fewer than `slots` slots may be
-    busy, not counting the record of the run that `ticket` was adopted from (a re-exec'd child
-    takes back the slot its parent held)."""
+    else tries while it runs). slots > 1: a ticket is a running run, not a waiter, when a live holder
+    record names it OR when a live holder record has the same pid and start time (the holder of an
+    older test.py, or of a run that wrote its record without the ticket: the ticket and the record
+    belong to one process). The waiters, oldest first, may try while there are free slots: the waiter
+    at position p (0 is the oldest) may try when p is less than the number of free slots, so a head
+    that is slow to start (the load gate) or loses a race never stops the waiters behind it from
+    taking the other free slots. The record of the run `ticket` was adopted from does not count as
+    busy (a re-exec'd child takes back the slot its parent held)."""
     if slots <= 1:
         return tickets[0]["name"] == ticket
     holders = read_holders(qdir)
-    running = {h.get("ticket") for h in holders if h.get("ticket")}
+    holder_processes = {(h.get("pid"), h.get("start")) for h in holders}
+    named = {h.get("ticket") for h in holders if h.get("ticket")}
+    running = named | {t["name"] for t in tickets if (t["pid"], t["start"]) in holder_processes}
+    mine = next((t for t in tickets if t["name"] == ticket), None)
+    my_process = (mine["pid"], mine["start"]) if mine else None
     waiting = [t["name"] for t in tickets if t["name"] == ticket or t["name"] not in running]
-    others = [h for h in holders if h.get("ticket") != ticket]
-    return waiting[0] == ticket and len(others) < slots
+    others = [
+        h for h in holders
+        if h.get("ticket") != ticket and (h.get("pid"), h.get("start")) != my_process
+    ]
+    free = slots - len(others)
+    return free > 0 and waiting.index(ticket) < free
 
 
 class _Interrupted(BaseException):
