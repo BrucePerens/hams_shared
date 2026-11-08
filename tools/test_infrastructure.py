@@ -31,6 +31,7 @@ import stat
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import MagicMock, patch
@@ -486,25 +487,21 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
         return {"tc": bool(flags & 0x200), "ra": bool(flags & 0x80), "rcode": flags & 15,
                 "answers": struct.unpack("!H", data[6:8])[0], "size": len(data)}
 
-    @staticmethod
-    def _wait_seconds(base):
-        """The wait for a reply from the server under test, longer when the machine is busy: at load 20 on 16 cores
-        (2026-11-03) PowerDNS answered a loopback query after more than the fixed 3 s. Twice the 1-minute load per core,
-        at least `base`, at most 8 times it."""
-        try:
-            per_core = os.getloadavg()[0] / (os.cpu_count() or 1)
-        except OSError:
-            per_core = 1.0
-        return base * min(8.0, max(1.0, 2.0 * per_core))
+    # [@ANCHOR: test_infrastructure:pdns_hang_seconds]
+    _PDNS_HANG_SECONDS = 90
+    _PDNS_READY_LINE = "ready to distribute questions"
 
+    # [@ANCHOR: test_infrastructure:pdns_udp]
     def _udp(self, port, packet):
+        """One query, and the reply. A reply is certain to come, so wait for it for as long as only a hung server
+        takes (`_PDNS_HANG_SECONDS`) instead of guessing how slow a busy machine is."""
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.settimeout(self._wait_seconds(3))
+            sock.settimeout(self._PDNS_HANG_SECONDS)
             sock.sendto(packet, ("127.0.0.1", port))
             return self._reply_fields(sock.recv(65535)) | {}
 
     def _tcp(self, port, packet):
-        with socket.create_connection(("127.0.0.1", port), timeout=self._wait_seconds(3)) as sock:
+        with socket.create_connection(("127.0.0.1", port), timeout=self._PDNS_HANG_SECONDS) as sock:
             sock.sendall(struct.pack("!H", len(packet)) + packet)
             size = struct.unpack("!H", sock.recv(2))[0]
             data = b""
@@ -530,14 +527,33 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
         conn.commit()
         conn.close()
 
-    def _udp_or_none(self, port, packet):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.settimeout(1)
-                sock.sendto(packet, ("127.0.0.1", port))
-                return self._reply_fields(sock.recv(65535))
-        except socket.timeout:
-            return None
+    # [@ANCHOR: test_infrastructure:pdns_udp_dropped]
+    def _udp_dropped(self, port, packet):
+        """True when the server answers `packet` with nothing. A missing reply cannot be waited for, so the absence is
+        shown by ordering instead of by a timeout: after `packet` the same socket sends three control queries (id
+        0x4321) and waits for all three replies, each of which needs the server's threads to run, then 0.3 s more for a
+        straggler; any reply that does not carry the control id is the answer to `packet`."""
+        control = bytearray(self._packet("alias.u.example.org", self.TYPE_TXT))
+        struct.pack_into("!H", control, 0, 0x4321)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(self._PDNS_HANG_SECONDS)
+            sock.sendto(packet, ("127.0.0.1", port))
+            answered = False
+            for _ in range(3):
+                sock.sendto(bytes(control), ("127.0.0.1", port))
+                while True:
+                    data = sock.recv(65535)
+                    if struct.unpack("!H", data[:2])[0] == 0x4321:
+                        break
+                    answered = True
+            sock.settimeout(0.3)
+            try:
+                while True:
+                    if struct.unpack("!H", sock.recv(65535)[:2])[0] != 0x4321:
+                        answered = True
+            except socket.timeout:
+                pass
+            return not answered
 
     @staticmethod
     def _txt(*strings):
@@ -583,17 +599,18 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
                  f"--config-dir={config_dir}", "--config-name=shipped", f"--socket-dir={sockdir}",
                  "--local-address=127.0.0.1", f"--local-port={dns_port}", f"--webserver-port={web_port}"],
                 stdout=log, stderr=subprocess.STDOUT)
-            self.addCleanup(lambda proc=proc, log=log: (proc.terminate(), proc.wait(10), log.close()))
-            deadline = time.time() + 15
-            while True:
-                try:
-                    self._udp(dns_port, self._packet("alias.u.example.org", self.TYPE_TXT))
-                    return dns_port
-                except OSError:
-                    pass
-                if proc.poll() is not None or time.time() > deadline:
-                    break
-                time.sleep(0.2)
+            self.addCleanup(lambda proc=proc, log=log: (proc.terminate(), proc.wait(self._PDNS_HANG_SECONDS), log.close()))
+            # Ready is what pdns says in its log, not an answer inside a guessed time: with 100 CPU hogs on 16 cores
+            # (2026-11-07) the start took longer than the old fixed 15 s. Wait while the process lives, up to the
+            # hang limit.
+            deadline = time.time() + self._PDNS_HANG_SECONDS
+            while proc.poll() is None and time.time() < deadline:
+                log.flush()
+                with open(os.path.join(self.tmp, "pdns.log")) as fh:
+                    if self._PDNS_READY_LINE in fh.read():
+                        self._udp(dns_port, self._packet("alias.u.example.org", self.TYPE_TXT))
+                        return dns_port
+                time.sleep(0.1)
             log.flush()
             with open(os.path.join(self.tmp, "pdns.log")) as fh:
                 tail = fh.read()[-800:]
@@ -702,16 +719,76 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
         # Opcodes IQUERY, STATUS and 3 and a reply sent as a query are dropped without any answer; NOTIFY and
         # UPDATE are answered with an error (FORMERR/NOTIMP/REFUSED) no larger than the query.
         for opcode in (1, 2, 3):
-            self.assertIsNone(self._udp_or_none(port, self._query_with(opcode=opcode)), opcode)
+            self.assertTrue(self._udp_dropped(port, self._query_with(opcode=opcode)), opcode)
         for opcode in (4, 5):
-            reply = self._udp_or_none(port, self._query_with(opcode=opcode))
+            reply = self._udp(port, self._query_with(opcode=opcode))
             self.assertIn(reply["rcode"], (1, 4, 5), opcode)
             self.assertEqual(reply["answers"], 0)
             self.assertLessEqual(reply["size"], len(self._query_with(opcode=opcode)))
-        self.assertIsNone(self._udp_or_none(port, self._query_with(flags=0x8100)), "a packet with the response bit set")
+        self.assertTrue(self._udp_dropped(port, self._query_with(flags=0x8100)), "a packet with the response bit set")
         # Malformed packets are dropped by PowerDNS itself: a truncated header, a question count with no question.
-        self.assertIsNone(self._udp_or_none(port, b"\x12\x34\x01"))
-        self.assertIsNone(self._udp_or_none(port, b"\x12\x34\x01\x00\x00\x05\x00\x00\x00\x00\x00\x00"))
+        self.assertTrue(self._udp_dropped(port, b"\x12\x34\x01"))
+        self.assertTrue(self._udp_dropped(port, b"\x12\x34\x01\x00\x00\x05\x00\x00\x00\x00\x00\x00"))
+
+    # ---- the query helpers themselves, against a stub server (no pdns_server needed) ----
+    def _stub_dns(self, behaviour):
+        """A UDP server on loopback; `behaviour(sock, data, addr)` runs for every datagram. Returns its port."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.settimeout(0.1)
+        stop = threading.Event()
+
+        def serve():
+            while not stop.is_set():
+                try:
+                    data, addr = sock.recvfrom(65535)
+                except socket.timeout:
+                    continue
+                behaviour(sock, data, addr)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        self.addCleanup(lambda: (stop.set(), thread.join(5), sock.close()))
+        return sock.getsockname()[1]
+
+    @staticmethod
+    def _reply_to(data):
+        return bytes([data[0], data[1], 0x81, 0x80]) + data[4:]
+
+    def test_a_reply_that_takes_longer_than_the_old_fixed_wait_is_still_received(self):
+        """Tests [@ANCHOR: test_infrastructure:pdns_udp] and [@ANCHOR: test_infrastructure:pdns_hang_seconds]:
+        a server that is only slow (3.6 s, longer than the 3 s the helper once allowed) is not a failure."""
+        def slow(sock, data, addr):
+            time.sleep(3.6)
+            sock.sendto(self._reply_to(data), addr)
+        port = self._stub_dns(slow)
+        reply = self._udp(port, self._packet("alias.u.example.org", self.TYPE_TXT))
+        self.assertEqual(reply["rcode"], 0)
+
+    def test_a_server_that_never_answers_still_fails_the_helper(self):
+        """Tests [@ANCHOR: test_infrastructure:pdns_hang_seconds]: the wait is bounded, so a hung server fails."""
+        port = self._stub_dns(lambda sock, data, addr: None)
+        self.safe_patch("test_infrastructure.PdnsPublicConfigTests._PDNS_HANG_SECONDS", 0.5)
+        with self.assertRaises(socket.timeout):
+            self._udp(port, self._packet("alias.u.example.org", self.TYPE_TXT))
+
+    def test_dropped_is_true_for_a_packet_the_server_ignores_even_when_replies_are_slow(self):
+        """Tests [@ANCHOR: test_infrastructure:pdns_udp_dropped]: only the control queries are answered, each after 0.4 s."""
+        def answer_control_only(sock, data, addr):
+            if data[:2] == b"\x43\x21":
+                time.sleep(0.4)
+                sock.sendto(self._reply_to(data), addr)
+        port = self._stub_dns(answer_control_only)
+        self.assertTrue(self._udp_dropped(port, self._query_with(opcode=1)))
+
+    def test_dropped_is_false_when_the_server_does_answer_the_packet(self):
+        """Tests [@ANCHOR: test_infrastructure:pdns_udp_dropped]: a reply to the probe, however slow, is not a drop."""
+        def answer_everything(sock, data, addr):
+            time.sleep(0.2)
+            sock.sendto(self._reply_to(data), addr)
+        port = self._stub_dns(answer_everything)
+        self.assertFalse(self._udp_dropped(port, self._query_with(opcode=1)))
+
 
     def _query_with(self, opcode=0, flags=0x0100):
         packet = bytearray(self._packet("alias.u.example.org", self.TYPE_TXT))

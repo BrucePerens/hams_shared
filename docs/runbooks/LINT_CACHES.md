@@ -211,9 +211,10 @@ import (Odoo `registry.category(...)` lookups carry no types), which the type-aw
 `test_verify_anchors.py` runs `verify_anchors.py` as a subprocess (10 s alone). With ten agents' lint runs on 16 cores (load 20) the
 fixed 30 s limit failed three of them, while the script was only slow. The limit is now `_timeout(base)`: the base limit times
 twice the 1-minute load per core, at least the base and at most 8 times it (30 s becomes 75 s at load 20 on 16 cores, 240 s at most),
-so a script that really hangs still fails. Pinned by `SubprocessTimeoutFollowsLoadTests`. The same rule now bounds the wait for
-a loopback reply from the PowerDNS under test in `test_infrastructure.py` (`PdnsPublicConfigTests._wait_seconds`): a 3 s `recv`
-timed out at load 14-23 (`test_unusual_query_types_are_refused...`, 2026-11-03) while the server was only slow. Hypothesis's 200 ms
+so a script that really hangs still fails. Pinned by `SubprocessTimeoutFollowsLoadTests`. The PowerDNS tests in `test_infrastructure.py` used the same rule for
+their loopback waits and it was not enough: the 1-minute load average lags a sudden load, so with 96 CPU hogs on 16 cores five of the ten
+`PdnsPublicConfigTests` failed (a 15 s start deadline, 3 s replies, a 1 s "dropped" wait; 2026-11-07). They now wait for the server's own
+ready line and for replies up to a hang limit, and show a dropped packet by ordering (`tools/README.md`, "PowerDNS test helpers"). Hypothesis's 200 ms
 per-example deadline failed `test_check_async_lock_scope.py` the same way (251 ms, then 0.92 ms on the retry); `tools/conftest.py`
 turns the deadline off for the tools tests (two files already did, per test), the properties are still checked in full.
 
