@@ -532,6 +532,47 @@ class XdistTests(unittest.TestCase):
         self.assertEqual(lint_exec.with_xdist(self.step, 3), self.step.argv)
         self.assertFalse(lint_exec.xdist_available("/nonexistent/python3"))
 
+class MachineWideLockTests(unittest.TestCase):
+    """Tests [@ANCHOR: lint_exec:machine_wide_lock]: a step that reads machine-wide state runs one at a time across lint runs."""
+
+    def test_two_holders_of_the_same_step_exclude_each_other_and_other_steps_pass(self):
+        import fcntl
+        import tempfile
+        import threading
+
+        with tempfile.TemporaryDirectory() as directory:
+            order = []
+            ready = threading.Event()
+
+            def first():
+                with lint_exec.machine_wide_lock("pytest devbox_tools/", directory):
+                    order.append("first in")
+                    ready.set()
+                    time.sleep(0.4)
+                    order.append("first out")
+
+            thread = threading.Thread(target=first)
+            thread.start()
+            ready.wait(5)
+            with lint_exec.machine_wide_lock("flake8", directory):
+                order.append("another step passes at once")
+            with lint_exec.machine_wide_lock("pytest devbox_tools/", directory):
+                order.append("second in")
+            thread.join()
+            self.assertEqual(order, ["first in", "another step passes at once", "first out", "second in"])
+            # The lock file is a real flock: a non-blocking attempt while held fails.
+            with lint_exec.machine_wide_lock("pytest devbox_tools/", directory):
+                probe = open(os.path.join(directory, "pytest_devbox_tools_.lock"), "a+")
+                self.addCleanup(probe.close)
+                with self.assertRaises(OSError):
+                    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_an_unusable_lock_directory_runs_the_step_unserialised(self):
+        with lint_exec.machine_wide_lock("pytest devbox_tools/", "/proc/no/such/dir"):
+            ran = True
+        self.assertTrue(ran)
+
+
 
 if __name__ == "__main__":
     unittest.main()

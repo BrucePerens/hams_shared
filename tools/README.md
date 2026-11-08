@@ -621,6 +621,47 @@ Purpose: the load-per-core ratio of this machine's lint load gate. `load_limit()
 niced cargo tests its load runs above the core count by design), else 1.0 (also for a missing or unreadable file, or a value that is not a positive number). Special
 concerns: reads one small file; no side effects. Tests: `test_limit_and_timeout_precedence` in `test_lint_lock.py`.
 
+### `[@ANCHOR: lint_lock:slots_files]` `slots_files(environ=None)`
+
+Purpose: the setting files `slot_count` reads for the number of lint slots, so an administrator can change it without editing the repository, as test.py's `/opt/hams/etc/test_slots` does.
+Returns a list of paths, first match wins: `[$HAMS_LINT_SLOTS_FILE]` alone when that is set (tests), else `["/opt/hams/etc/lint_slots", "<HOME>/.config/hams-lint/slots"]`. The first
+line of the file is the number (1 to 15). A file that does not exist is skipped; one whose first line is not a whole number in range means one slot (a typo must not become the inventory's
+default). Argument `environ`: dict or `None` for `os.environ`. No side effects. Tests: `test_slot_count_reads_the_setting_files_in_order` in `test_lint_lock.py`.
+
+### `[@ANCHOR: lint_lock:jobs_per_slot]` `jobs_per_slot(cpu_count, slots)`
+
+Purpose: the default `-j` of a lint run. A lone run starts half the CPUs of parallel steps; with several slots each run takes its share, so that all slots together do not start more
+workers than half the CPUs (the dev box: 32 threads, 4 slots, 4 each). Arguments: `cpu_count` int, `slots` int. Returns an int, at least 2 with several slots, at least 1 always.
+`$HAMS_LINT_JOBS` and `-j` still override. Pure. Tests: `test_jobs_are_shared_out_so_all_slots_together_stay_at_half_the_cpus` in `test_lint_lock.py`.
+
+### `[@ANCHOR: lint_lock:cpu_stall]` `cpu_stall(path="/proc/pressure/cpu")`
+
+Purpose: one input of the lint load gate, the same figure test.py's CI load gate reads (`read_cpu_pressure`, #438). Returns `some avg10` of the kernel's pressure file as a float
+percentage (the share of the last ten seconds in which a runnable task waited for a CPU), or `None` when the file is missing, unreadable or not a finite number. No side effects. The load
+average is not used because it counts every runnable or disk-waiting task: it was 86 on the dev box at 18 % stall (2026-11-08). Argument `path`: tests pass a temporary file.
+Tests: `test_cpu_stall_reads_psi_some_avg10_and_the_gate_prefers_it_to_the_load_average` in `test_lint_lock.py`.
+
+### `[@ANCHOR: lint_lock:cpu_busy_percent]` `cpu_busy_percent(window=1.0, path="/proc/stat", sleep=time.sleep)`
+
+Purpose: the second input, the processors' busy percentage (0 to 100) over `window` seconds from two samples of /proc/stat's first line (everything but idle and iowait). Returns a float, or
+`None` when the file cannot be parsed or the counters did not move. Blocks for `window` seconds. Same test.
+
+### `[@ANCHOR: lint_lock:saturated]` `saturated(busy, psi, busy_limit, psi_limit)`
+
+Purpose: test.py's rule (`evaluate_cpu_saturation_gate`) for the lint gate. Returns `(bool, reason)`: saturated only when BOTH `busy` and `psi` are at or above their limits (92 % busy and 25 % pressure
+by default); a missing signal leaves the other to decide alone; neither means not saturated. Pure. Limits come from `saturation_limits()`: `HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT`, `HAMS_CI_LOAD_GATE_PSI_PERCENT`.
+Same test.
+
+### `[@ANCHOR: lint_lock:wait_for_stall]` `wait_for_stall(timeout, environ=None, busy=cpu_busy_percent, psi=cpu_stall, sleep=..., now=..., out=print)`
+
+Purpose: block until the processors are not saturated. Returns True when the run may start (also at once when `HAMS_SKIP_CI_LOAD_GATE=1` or nothing can be measured), False after `timeout`
+seconds (it prints why). Polls every 15 s. Same test.
+
+### `[@ANCHOR: lint_lock:gate]` `gate(environ, load_limit_override=None, load_timeout_override=None, out=print, stall=cpu_stall, measurable_busy=...)`
+
+Purpose: the one load gate `begin_heavy_run` applies. Uses `wait_for_stall` when the saturation can be measured and nobody set a load limit (`--load-limit`, `HAMS_LINT_LOAD_LIMIT`,
+`HAMS_CI_LOAD_GATE_RATIO`); otherwise the 1-minute load average against `load_limit`, as before. Returns True when the run may start. Same test.
+
 ### `[@ANCHOR: lint_lock:slot_lock_path]` `slot_lock_path(slot, environ=None)`
 
 Purpose: the lock file of one slot. Slot 1 is `~/.cache/hams-lint/run.lock`, the file a checkout without slots takes, so old and new runs exclude

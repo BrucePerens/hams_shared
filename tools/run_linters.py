@@ -293,13 +293,14 @@ def _parse_args(argv):
         default="",
         help="comma-separated modules to scope the per-module checkers to (default: all)",
     )
-    default_jobs = int(os.environ.get("HAMS_LINT_JOBS", "0")) or max(1, (os.cpu_count() or 2) // 2)
+    # Half the CPUs for a lone run; with several lint slots each run takes its share, so that all slots together stay at half the CPUs.
+    default_jobs = int(os.environ.get("HAMS_LINT_JOBS", "0")) or lint_lock.jobs_per_slot(os.cpu_count() or 2, lint_lock.slot_count())
     parser.add_argument(
         "-j",
         "--jobs",
         type=int,
         default=default_jobs,
-        help="parallel steps (default: half the cores, or $HAMS_LINT_JOBS); 1 = sequential",
+        help="parallel steps (default: half the cores divided by the lint slots, or $HAMS_LINT_JOBS); 1 = sequential",
     )
     parser.add_argument(
         "--only",
