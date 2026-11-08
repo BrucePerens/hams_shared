@@ -12,6 +12,8 @@ that file, like flake8 would) in place of run_linters.py.
 Tests [@ANCHOR: lint_batch:ineligible_reason]
 Tests [@ANCHOR: lint_batch:changed_paths]
 Tests [@ANCHOR: lint_batch:batches_that_may_run]
+
+Tests [@ANCHOR: lint_batch:batching_tools_changed]
 Tests [@ANCHOR: lint_batch:path_finder]
 Tests [@ANCHOR: lint_batch:owners_of]
 Tests [@ANCHOR: lint_batch:changed_anchors]
@@ -44,6 +46,9 @@ results = sys.argv[1]
 with open(os.environ["FAKE_CALLS"], "a") as calls:
     heads = subprocess.run(["git", "log", "--merges", "--format=%s", "-n", "20"], capture_output=True, text=True).stdout
     calls.write(json.dumps(sorted(l.replace("batch: merge ", "") for l in heads.splitlines())) + "\n")
+if os.environ.get("FAKE_CWD_LOG"):
+    with open(os.environ["FAKE_CWD_LOG"], "a") as cwd_log:
+        cwd_log.write(os.path.basename(os.getcwd()) + "\n")
 time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
 text, rc = "", 0
 for root, dirs, files in os.walk("."):
@@ -73,12 +78,13 @@ def drive(argv):
             handle.write("changed steps=%d names=%s batch=%s%s\n" % (
                 len(names), ",".join(names), batch_id, batch_queue.with_field(with_tips)))
 
+    name = spec.get("name", "hams_demo")
     runner = lint_batch.LintBatch(
-        spec["repo"], "hams_demo", "origin/main", [], stamp_writer,
+        spec["repo"], name, "origin/main", [], stamp_writer,
         command=lambda tree, results: [sys.executable, spec["fake"], results], prepare=lambda tree: None,
         environ=dict(os.environ), fetch=False)
-    code = lint_batch.run_member(spec["repo"], "hams_demo", spec["branch"], spec["tip"], "origin/main", ["fake"],
-                                 runner, timeout=60, poll=0.1, sdir=spec["sdir"], max_running=spec.get("max_running"))
+    code = lint_batch.run_member(spec["repo"], name, spec["branch"], spec["tip"], "origin/main", ["fake"],
+                                 runner, timeout=60, poll=0.1, sdir=spec.get("sdir"), max_running=spec.get("max_running"))
     print("RESULT " + json.dumps({"code": code}))
 
 
@@ -150,6 +156,16 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(lint_batch.batches_that_may_run(dict(base, HAMS_LINT_SLOTS="1")), 1)
             self.assertIsNone(lint_batch.batches_that_may_run(dict(base, HAMS_LINT_SLOTS="3", HAMS_BATCH_MAX_RUNNING="2")))
             self.assertEqual(lint_batch.batches_that_may_run(dict(base, HAMS_LINT_SLOTS="bad")), 1)  # a typo is one slot
+
+    def test_a_hams_shared_branch_changing_the_batching_tools_runs_alone(self):
+        self.assertEqual(lint_batch.batching_tools_changed(["docs/x.md", "tools/foo.py"]), [])
+        self.assertEqual(lint_batch.batching_tools_changed(["tools/run_linters.py", "x", "tools/batch_queue.py"]),
+                         ["tools/batch_queue.py", "tools/run_linters.py"])
+        self.assertEqual(lint_batch.batching_tools_changed([]), [])
+        self.assertIsNone(self.reason(batching_tools=[]))
+        why = self.reason(batching_tools=["tools/batch_queue.py"])
+        self.assertIn("changes the batching tools", why)
+        self.assertIn("tools/batch_queue.py", why)
 
     def test_a_foreign_hams_shared_runs_alone(self):
         self.assertIsNone(self.reason(foreign_shared=False))
@@ -412,6 +428,77 @@ class EndToEndTests(unittest.TestCase):
         outs = r1[1] + r2[1]
         self.assertIn("conflicts with another branch", outs)
         self.assertEqual(sorted(("passed" if "PASSED" in out else "solo") for out in (r1[1], r2[1])), ["passed", "solo"])
+
+
+class SharedBranchEndToEndTests(unittest.TestCase):
+    """Branches of hams_shared (a submodule worktree each) coalesce through the queue of the submodule's git directory,
+    and the combined tree is a worktree named `SHARED_TREE_NAME` (a directory named hams_shared would be taken for a link)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        for name in ("sup", "sub"):
+            os.makedirs(os.path.join(self.tmp, name))
+        sup = helpers.make_repo(os.path.join(self.tmp, "sup"))
+        sub = helpers.make_repo(os.path.join(self.tmp, "sub"))
+        helpers.git(sup, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "hams_shared")
+        self.shared = os.path.join(sup, "hams_shared")
+        self.fake = os.path.join(self.tmp, "fake_linter.py")
+        with open(self.fake, "w") as handle:
+            handle.write(FAKE_LINTER)
+        self.calls = os.path.join(self.tmp, "calls.log")
+        self.cwd_log = os.path.join(self.tmp, "cwd.log")
+        self.stamps = os.path.join(self.tmp, "stamps")
+        os.makedirs(self.stamps)
+        self.env = dict(os.environ, HAMS_BATCH_TREE_DIR=os.path.join(self.tmp, "trees"), FAKE_CALLS=self.calls,
+                        FAKE_CWD_LOG=self.cwd_log, FAKE_SLEEP="2", HAMS_BATCH_DIR=os.path.join(self.tmp, "b"))
+        for name in ("HAMS_LINT_LOCK_HELD", lint_batch.RUNNER_ENV):
+            self.env.pop(name, None)
+
+    def branch(self, name, files):
+        """A branch of hams_shared made in a worktree of its own, as each agent has one. Returns (worktree, tip)."""
+        tree = os.path.join(self.tmp, "wt_" + name)
+        helpers.git(self.shared, "worktree", "add", "-q", "-B", name, tree, "origin/main")
+        for file_name, text in files.items():
+            with open(os.path.join(tree, file_name), "w") as handle:
+                handle.write(text)
+            helpers.git(tree, "add", file_name)
+        helpers.git(tree, "commit", "-q", "-m", name)
+        return tree, helpers.git(tree, "rev-parse", "HEAD")
+
+    def start(self, tree, name, tip):
+        spec = {"repo": tree, "branch": name, "tip": tip, "stamps": self.stamps, "fake": self.fake,
+                "name": lint_batch.SHARED_TREE_NAME}
+        return subprocess.Popen([sys.executable, os.path.abspath(__file__), "--drive", json.dumps(spec)],
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    def test_branches_in_separate_worktrees_share_one_queue_and_one_combined_tree_named_for_the_run(self):
+        first_tree, first = self.branch("first", {"f1.txt": "ok\n"})
+        a_tree, tip_a = self.branch("shared-a", {"a1.txt": "ok\n"})
+        b_tree, tip_b = self.branch("shared-b", {"b1.txt": "BAD\n"})
+        p0 = self.start(first_tree, "first", first)
+        deadline = time.time() + 30
+        while time.time() < deadline and not (os.path.exists(self.calls) and open(self.calls).read().strip()):
+            time.sleep(0.05)
+        self.assertTrue(os.path.exists(self.calls), "the first run never started")
+        pa, pb = self.start(a_tree, "shared-a", tip_a), self.start(b_tree, "shared-b", tip_b)
+        outs = {}
+        for name, proc in (("first", p0), ("a", pa), ("b", pb)):
+            out, _ = proc.communicate(timeout=120)
+            result = [line for line in out.splitlines() if line.startswith("RESULT ")]
+            self.assertTrue(result, out)
+            outs[name] = (json.loads(result[0][7:])["code"], out)
+        self.assertEqual((outs["first"][0], outs["a"][0], outs["b"][0]), (0, 0, 1), outs)
+        runs = [json.loads(line) for line in open(self.calls).read().splitlines()]
+        self.assertEqual(runs, [["first"], ["shared-a", "shared-b"]], runs)  # two runs for three requests: one queue
+        self.assertIn("joined batch 2", outs["a"][1])
+        self.assertEqual(open(self.cwd_log).read().split(), [lint_batch.SHARED_TREE_NAME] * 2)
+        self.assertIn("b1.txt:1: BAD word", outs["b"][1])
+        self.assertTrue(os.path.exists(os.path.join(self.stamps, tip_a)))
+        self.assertFalse(os.path.exists(os.path.join(self.stamps, tip_b)))
+        trees = os.path.join(self.tmp, "trees")
+        self.assertEqual(os.listdir(trees) if os.path.isdir(trees) else [], [])
+        self.assertNotIn("batch_lint", helpers.git(self.shared, "worktree", "list"))
 
 
 if __name__ == "__main__":

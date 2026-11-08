@@ -108,15 +108,20 @@ def _cache_base(environ):
 # [@ANCHOR: batch_queue:repo_key]
 def repo_key(repo_root):
     """Identity of the repository behind a checkout or worktree: the real path of the main checkout
-    (the parent of `git rev-parse --git-common-dir`), so every worktree of one repository shares one
+    (the parent of `git rev-parse --git-common-dir`; for a submodule's worktree, whose git directory is
+    `<superproject>/.git/modules/<name>`, that directory itself), so every worktree of one repository shares one
     queue and two repositories never do. Falls back to the real path of `repo_root`."""
     try:
         out = subprocess.run(["git", "-C", repo_root, "rev-parse", "--git-common-dir"], capture_output=True,
                              text=True, check=True).stdout.strip()
     except (subprocess.CalledProcessError, OSError):
         return os.path.realpath(repo_root)
-    common = out if os.path.isabs(out) else os.path.join(repo_root, out)
-    return os.path.realpath(os.path.dirname(os.path.normpath(common)))
+    common = os.path.normpath(out if os.path.isabs(out) else os.path.join(repo_root, out))
+    if os.path.basename(os.path.dirname(common)) == "modules" and os.path.basename(os.path.dirname(os.path.dirname(common))) == ".git":
+        # A submodule's git directory (hams_shared: `<hams_open>/.git/modules/hams_shared`) is not inside a checkout:
+        # its parent is shared with every other submodule, so the directory itself is the identity.
+        return os.path.realpath(common)
+    return os.path.realpath(os.path.dirname(common))
 
 
 # [@ANCHOR: batch_queue:state_dir]

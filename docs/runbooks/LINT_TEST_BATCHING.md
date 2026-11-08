@@ -27,7 +27,8 @@ A failing branch prints the findings that name its files and the log path. The l
 ## How a batch works
 
 1. The caller computes its steps as before. If the run is heavy (it would take the lint lock) and plain (below), it
-   joins the queue for its repository (`batch_queue.state_dir("lint", repo_key)`; the key is the main checkout).
+   joins the queue for its repository (`batch_queue.state_dir("lint", repo_key)`; the key is the main checkout, or for a
+   hams_shared worktree the submodule's own git directory, `<hams_open>/.git/modules/hams_shared`).
 2. State is one JSON file under an flock: `forming`, `running`, `next_id`. `join` adds the caller to the forming batch
    (or creates it). The oldest live member of the forming batch is the leader. It seals the batch only when nothing is
    running, so the batch keeps absorbing requests for as long as the previous batch runs.
@@ -48,8 +49,10 @@ A failing branch prints the findings that name its files and the log path. The l
 
 `--solo`; a dirty tree (only committed tips are batched); `--only`, `--skip` or module names; a cheap or fully cached run
 (it takes no lock); `HAMS_LINT_NO_LOCK=1`; runs started by another lint run (`HAMS_LINT_LOCK_HELD`); the combined run
-itself; runs started from a hams_shared checkout (its tools are the linter, so a batch cannot test them against another
-branch). `HAMS_LINT_BATCH=off` disables batching for a session. The line `[*] lint batch: running alone (<reason>)` says why.
+itself; runs started from the main hams_shared checkout; and a hams_shared branch that changes the batching tools
+(`lint_batch.BATCHING_TOOLS`: `batch_queue.py`, `lint_batch.py`, `lint_layout.py`, `lint_lock.py`, `lock_queue.py`,
+`odoo_test_batch.py`, `run_linters.py`, `runner_slots.py`), since the leader that runs the batch may be that branch.
+`HAMS_LINT_BATCH=off` disables batching for a session. The line `[*] lint batch: running alone (<reason>)` says why.
 
 ## Knobs
 
@@ -82,7 +85,11 @@ branch). `HAMS_LINT_BATCH=off` disables batching for a session. The line `[*] li
   (`batch=N with=<12 hex>,...`), and a cross-branch interaction is blamed on the branch
   whose file the finding names. `--solo` repeats a run alone.
 * A failure that names no file (anchor and documentation cross-reference checks name anchors, not files) always splits.
-* hams_shared tips are not batched.
+* hams_shared branches are batched since 2026-11-08 (hams_shared worktrees only, not the main checkout). The combined tree is a
+  worktree of hams_shared named `hams_shared_wt` (a directory named `hams_shared` is taken for a link into hams_open), and
+  the combined run is ITS `run_linters.py`, so the branches are linted by main's tools plus all the branches' changes. Each
+  member has already built its sibling layout (about 660 MB: clones of hams_open and hams_com) before it joins and keeps it
+  while it waits; a solo fallback reuses it.
 * The leader runs the whole test union on this machine; splitting it across machines is stubbed (see Tests below).
 
 ## Tests (test.py)

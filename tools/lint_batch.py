@@ -12,7 +12,12 @@ stamp file prmerge.sh and lint_stamp_gate.py read for a single run). Every calle
 verdict and exits with its own code.
 
 Only a committed branch tip is batched. A dirty tree, `--only`/`--skip`/module names, `--solo`, the cheap
-bypass, HAMS_LINT_NO_LOCK, a run started by another run, and a hams_shared checkout run alone as before.
+bypass, HAMS_LINT_NO_LOCK, a run started by another run, the main hams_shared checkout, and a hams_shared branch that
+changes the batching tools themselves run alone as before.
+
+A branch of hams_shared is batched like any other (2026-11-08): its queue is the one of the hams_shared git directory,
+the combined tree is a worktree of hams_shared (origin/main plus every member's branch) named `SHARED_TREE_NAME`, and
+the combined run is that tree's own `run_linters.py`, which builds the sibling layout for it (lint_layout.py).
 """
 
 import os
@@ -29,15 +34,24 @@ KIND = "lint"
 ANCHOR_TAG = re.compile(r"\[@ANCHOR(?:-BEGIN|-END)?:\s*([A-Za-z0-9_:]+)\s*\]")
 WORD = re.compile(r"[A-Za-z0-9_:]+")
 RUNNER_ENV = "HAMS_LINT_BATCH_RUNNER"
+# The directory name of a hams_shared combined tree. `run_linters._resolve_repo_root` treats a directory NAMED
+# `hams_shared` as a link into hams_open and steps up to its parent, which would lint an empty directory.
+SHARED_TREE_NAME = "hams_shared_wt"
+# Tools whose change makes a hams_shared branch run alone: they ARE the batching, so the leader (which may be that
+# branch) must not run a batch of other branches with them.
+BATCHING_TOOLS = ("tools/batch_queue.py", "tools/lint_batch.py", "tools/lint_layout.py", "tools/lint_lock.py",
+                  "tools/lock_queue.py", "tools/odoo_test_batch.py", "tools/run_linters.py", "tools/runner_slots.py")
 MAX_OUTPUT_PER_STEP = 200000
 
 
 # [@ANCHOR: lint_batch:ineligible_reason]
 def ineligible_reason(changed, only, skip, modules, solo, bundle, environ, dirty, is_shared_checkout,
-                      lock_needed, foreign_shared=False):
+                      lock_needed, foreign_shared=False, batching_tools=()):
     """Why this run must NOT join a batch (a short sentence), or None when it may. The run is
     eligible only as a plain committed `--changed` run that would take the lint lock (a heavy run).
-    `foreign_shared` is True when the tree's `hams_shared` is not the main checkout's (see `foreign_shared_checkout`)."""
+    `is_shared_checkout` is True for the main hams_shared checkout itself (a branch worktree of hams_shared is batched).
+    `foreign_shared` is True when the tree's `hams_shared` is not the main checkout's (see `foreign_shared_checkout`).
+    `batching_tools` lists the `BATCHING_TOOLS` the branch changed (see `batching_tools_changed`)."""
     if solo:
         return "--solo"
     if environ.get(RUNNER_ENV):
@@ -57,7 +71,9 @@ def ineligible_reason(changed, only, skip, modules, solo, bundle, environ, dirty
     if dirty:
         return "uncommitted changes in the tree (only committed tips are batched)"
     if is_shared_checkout:
-        return "hams_shared runs alone (its tools are the linter)"
+        return "the main hams_shared checkout runs alone (only a branch worktree of it is batched)"
+    if batching_tools:
+        return "the branch changes the batching tools itself (%s)" % ", ".join(batching_tools)
     if foreign_shared:
         return "this tree's hams_shared is not the main checkout's (the combined tree would lint with the main one)"
     if not lock_needed:
@@ -91,6 +107,14 @@ def changed_paths(repo, base, tip):
     if result.returncode != 0:
         return []
     return [line for line in result.stdout.splitlines() if line]
+
+
+# [@ANCHOR: lint_batch:batching_tools_changed]
+def batching_tools_changed(paths):
+    """The entries of `BATCHING_TOOLS` that `paths` (repository-relative, as `changed_paths` returns them) contain, in
+    the order of `BATCHING_TOOLS`. A hams_shared branch with any of them runs alone (`ineligible_reason`)."""
+    changed = set(paths)
+    return [tool for tool in BATCHING_TOOLS if tool in changed]
 
 
 # [@ANCHOR: lint_batch:path_finder]
