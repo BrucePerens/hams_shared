@@ -5939,18 +5939,22 @@ def main():
                                 # this check only flags an actual misplaced source-level shebang.
                                 string_literal_lines = set()
                                 try:
-                                    for node in ast.walk(
-                                        ast.parse("".join(lines), filename=filepath)
-                                    ):
-                                        if isinstance(node, ast.Constant) and isinstance(
-                                            node.value, str
+                                    # Parse only a file that has a later `#!` line at all: the set is only
+                                    # consulted for those lines, and parsing and walking every file's tree a
+                                    # second time was 7 of the 59 s of a hams_com scan (2026-11-08).
+                                    if any(line.startswith("#!") for line in lines[1:]):
+                                        for node in ast.walk(
+                                            ast.parse("".join(lines), filename=filepath)
                                         ):
-                                            string_literal_lines.update(
-                                                range(
-                                                    node.lineno,
-                                                    getattr(node, "end_lineno", node.lineno) + 1,
+                                            if isinstance(node, ast.Constant) and isinstance(
+                                                node.value, str
+                                            ):
+                                                string_literal_lines.update(
+                                                    range(
+                                                        node.lineno,
+                                                        getattr(node, "end_lineno", node.lineno) + 1,
+                                                    )
                                                 )
-                                            )
                                 except SyntaxError:
                                     pass
                                 for idx, line in enumerate(lines[1:], start=2):
