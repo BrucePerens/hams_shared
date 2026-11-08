@@ -466,7 +466,7 @@ class SlotWiringMainTests(unittest.TestCase):
     (one slot) asserted to be what it was before slots existed."""
 
     def _run_main(self, argv, env_overrides, hold_slots=(), broker=False):
-        calls = {"rebuild": [], "cmd": [], "env": [], "extractor": [], "sweep": [], "cleanup": []}
+        calls = {"rebuild": [], "cmd": [], "env": [], "extractor": [], "sweep": [], "cleanup": [], "preflight": []}
 
         def fake_run_cmd(cmd, extractor=None, **kwargs):
             calls["cmd"].append(list(cmd))
@@ -497,30 +497,28 @@ class SlotWiringMainTests(unittest.TestCase):
             orig_cwd = os.getcwd()
             os.chdir(fake_repo)
             try:
-                with patch.dict(os.environ, env), \
-                     patch.object(_test_runner, "_CHROME_KILL_PATTERN", _test_runner._CHROME_KILL_PATTERN), \
-                     patch.object(_test_runner, "_CHROME_PROFILE_GLOBS", _test_runner._CHROME_PROFILE_GLOBS), \
-                     patch.object(sys, "argv", ["test.py", "-u", "dummy_mod", *argv]), \
-                     patch.object(_test_runner.runner_slots, "broker_listening", return_value=broker), \
-                     patch.object(_test_runner.runner_slots, "modules_mentioning_broker",
-                                  return_value=["dummy_mod"]), \
-                     patch.object(_test_runner, "get_addons_path", return_value="/dummy/addons"), \
-                     patch.object(_test_runner, "load_ignore_file", return_value=[]), \
-                     patch.object(_test_runner, "get_local_modules", return_value=["dummy_mod"]), \
-                     patch.object(_test_runner, "FailureExtractor", side_effect=fake_extractor), \
-                     patch.object(_test_runner.host_requirements, "require_test_host"), \
-                     patch.object(_test_runner, "check_linters"), \
-                     patch.object(_test_runner, "default_postgres_access", return_value="PG"), \
-                     patch.object(_test_runner, "sweep_slot_leftovers",
-                                  side_effect=lambda *a, **k: calls["sweep"].append(a)), \
-                     patch.object(_test_runner, "install_run_cleanup",
-                                  side_effect=lambda *a, **k: calls["cleanup"].append(a)), \
-                     patch.object(_test_runner, "rebuild_db",
-                                  side_effect=lambda *a, **k: calls["rebuild"].append((a, k))), \
-                     patch.object(_test_runner, "run_cmd", side_effect=fake_run_cmd), \
-                     contextlib.redirect_stdout(io.StringIO()) as out:
-                    with self.assertRaises(SystemExit) as ctx:
-                        _test_runner.main()
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(patch.dict(os.environ, env))
+                    stack.enter_context(patch.object(_test_runner, "_CHROME_KILL_PATTERN", _test_runner._CHROME_KILL_PATTERN))
+                    stack.enter_context(patch.object(_test_runner, "_CHROME_PROFILE_GLOBS", _test_runner._CHROME_PROFILE_GLOBS))
+                    stack.enter_context(patch.object(sys, "argv", ["test.py", "-u", "dummy_mod", *argv]))
+                    stack.enter_context(patch.object(_test_runner.runner_slots, "broker_listening", return_value=broker))
+                    stack.enter_context(patch.object(_test_runner.runner_slots, "modules_mentioning_broker", return_value=["dummy_mod"]))
+                    stack.enter_context(patch.object(_test_runner, "get_addons_path", return_value="/dummy/addons"))
+                    stack.enter_context(patch.object(_test_runner, "load_ignore_file", return_value=[]))
+                    stack.enter_context(patch.object(_test_runner, "get_local_modules", return_value=["dummy_mod"]))
+                    stack.enter_context(patch.object(_test_runner, "FailureExtractor", side_effect=fake_extractor))
+                    stack.enter_context(patch.object(_test_runner.host_requirements, "require_test_host"))
+                    stack.enter_context(patch.object(_test_runner, "check_linters"))
+                    stack.enter_context(patch.object(_test_runner, "default_postgres_access", return_value="PG"))
+                    stack.enter_context(patch.object(_test_runner, "sweep_slot_leftovers", side_effect=lambda *a, **k: calls["sweep"].append(a)))
+                    stack.enter_context(patch.object(_test_runner, "run_preflight_in_slot", side_effect=lambda *a, **k: calls["preflight"].append((a[2], a[3]))))
+                    stack.enter_context(patch.object(_test_runner, "install_run_cleanup", side_effect=lambda *a, **k: calls["cleanup"].append(a)))
+                    stack.enter_context(patch.object(_test_runner, "rebuild_db", side_effect=lambda *a, **k: calls["rebuild"].append((a, k))))
+                    stack.enter_context(patch.object(_test_runner, "run_cmd", side_effect=fake_run_cmd))
+                    with contextlib.redirect_stdout(io.StringIO()) as out:
+                        with self.assertRaises(SystemExit) as ctx:
+                            _test_runner.main()
                     chrome = (_test_runner._CHROME_KILL_PATTERN, _test_runner._CHROME_PROFILE_GLOBS)
             finally:
                 os.chdir(orig_cwd)
@@ -585,6 +583,28 @@ class SlotWiringMainTests(unittest.TestCase):
             self.assertEqual(len(calls["sweep"]), 1)
         _, calls, _, _ = self._run_main(["--slots", "1"], {})
         self.assertEqual((calls["sweep"], calls["cleanup"]), ([], []))
+
+    def test_the_preflight_runs_once_inside_the_slot_and_never_in_the_re_exec_d_phases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, calls, _, _ = self._run_main(["--slots", "2"], {"TMPDIR": tmp}, hold_slots=(1,))
+            self.assertEqual(calls["preflight"], [(2, 2)], "once, in the slot the run took (slot 2 of 2)")
+            _, calls, _, _ = self._run_main(["--slots", "2", "--preflight-done"], {"TMPDIR": tmp}, hold_slots=(1,))
+            self.assertEqual(calls["preflight"], [], "--preflight-done: the invoking process already did it")
+        _, calls, _, _ = self._run_main(["--slots", "1"], {})
+        self.assertEqual(calls["preflight"], [(1, 1)], "also with one slot")
+        _, calls, _, _ = self._run_main(["--slots", "3", "--slot-held", "3"], {"HAMS_TEST_LOCK_HELD": "1"})
+        self.assertEqual(calls["preflight"], [], "the final test process never runs it")
+
+    def test_the_preflight_comes_after_the_slot_refusals_and_before_the_sweep(self):
+        source = io.open(_TEST_PY_PATH, encoding="utf-8").read()
+        lock = source.index("held_slot = _try_slot_locks(lock_file_path, slots, early_args.slot_held)")
+        refusals = source.index("enforce_slot_refusals(runner_slots.slot_resources(held_slot, slots, True, None), early_args)")
+        preflight = source.index("run_preflight_in_slot(early_args, lock_file_path, held_slot, slots)")
+        sweep = source.index("sweep_slot_leftovers(\n                    default_postgres_access()")
+        self.assertLess(lock, refusals)
+        self.assertLess(refusals, preflight)
+        self.assertLess(preflight, sweep)
+        self.assertNotIn("        run_preflight(early_args)\n        preflight_done = True", source, "no pre-flight before the slot")
 
     def test_the_final_phase_arms_its_cleanup_without_a_slot_directory_and_does_not_sweep(self):
         _, calls, _, _ = self._run_main(["--slots", "3", "--slot-held", "3"], {"HAMS_TEST_LOCK_HELD": "1"})
@@ -780,6 +800,136 @@ class SlotWiringMainTests(unittest.TestCase):
         )
 
 
+class PreflightInSlotTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:run_preflight_in_slot]
+    Tests [@ANCHOR: lock_queue:set_holder_phase]
+
+    The pre-flight of a run happens inside the slot it holds: real lock files, real queue files, real processes."""
+
+    HARNESS = textwrap.dedent("""
+        import importlib.util, os, sys, time
+        sys.path.insert(0, %r)
+        spec = importlib.util.spec_from_file_location("hams_runner_preflight", %r)
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        import lock_queue
+        name, mode, marks = sys.argv[1], sys.argv[2], sys.argv[3]
+        lock = os.environ["HAMS_TEST_LOCK_PATH"]
+        runner._HOLDER_PHASE = "preflight"
+
+        def mark(text):
+            with open(os.path.join(marks, name + "." + text), "w") as handle:
+                handle.write("%%.3f" %% time.time())
+
+        slot = runner._acquire_lock_via_queue(lock, None, 1, None)
+        mark("slot")
+
+        def preflight(args):
+            mark("preflight_start")
+            record = lock_queue.read_holders(lock_queue.queue_dir_for_lock(lock))
+            with open(os.path.join(marks, name + ".phase_during"), "w") as handle:
+                handle.write(",".join(str(r.get("phase")) for r in record))
+            time.sleep(float(os.environ.get("PREFLIGHT_SECONDS", "1.0")))
+            if mode == "fail":
+                print("PRE-FLIGHT FAILED: findings here", flush=True)
+                sys.exit(1)
+            mark("preflight_end")
+
+        runner.run_preflight_in_slot(None, lock, slot, 1, preflight=preflight)
+        record = lock_queue.read_holders(lock_queue.queue_dir_for_lock(lock))
+        with open(os.path.join(marks, name + ".phase_after"), "w") as handle:
+            handle.write(",".join(str(r.get("phase")) for r in record))
+        mark("running")
+        time.sleep(float(os.environ.get("RUN_SECONDS", "0.0")))
+    """)
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.lock = os.path.join(self.tmp, "t.lock")
+        self.marks = os.path.join(self.tmp, "marks")
+        os.makedirs(self.marks)
+        self.env = dict(os.environ, HAMS_TEST_LOCK_PATH=self.lock, HAMS_SKIP_CI_LOAD_GATE="1", HAMS_TEST_SLOTS="1")
+        for key in ("HAMS_TEST_QUEUE_TICKET", "HAMS_TEST_QUEUE_DIR", "HAMS_TEST_LOCK_HELD"):
+            self.env.pop(key, None)
+        self.script = self.HARNESS % (_HERE, _TEST_PY_PATH)
+
+    def start(self, name, mode="ok", **env):
+        process = subprocess.Popen([sys.executable, "-c", self.script, name, mode, self.marks],
+                                   env=dict(self.env, **env), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        return process
+
+    def mark(self, name, what):
+        try:
+            with open(os.path.join(self.marks, f"{name}.{what}")) as handle:
+                return handle.read()
+        except OSError:
+            return None
+
+    def wait_mark(self, name, what, timeout=30):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            value = self.mark(name, what)
+            if value is not None:
+                return value
+            time.sleep(0.05)
+        self.fail(f"{name}.{what} never appeared")
+
+    def test_the_second_run_waits_for_the_slot_and_does_not_preflight_until_it_holds_it(self):
+        first = self.start("a", PREFLIGHT_SECONDS="1.5", RUN_SECONDS="0.5")
+        self.wait_mark("a", "preflight_start")
+        second = self.start("b")
+        time.sleep(0.6)
+        self.assertIsNone(self.mark("b", "slot"), "one slot: the second run must still be waiting")
+        self.assertIsNone(self.mark("b", "preflight_start"), "and must not have started its pre-flight")
+        self.assertIn("preflight", (self.wait_mark("a", "phase_during")), "the holder record shows the slot in pre-flight")
+        first.communicate(timeout=60)
+        second.communicate(timeout=60)
+        self.assertEqual(first.returncode, 0)
+        self.assertEqual(second.returncode, 0)
+        a_end = float(self.mark("a", "running"))
+        self.assertGreaterEqual(float(self.mark("b", "preflight_start")), float(self.mark("a", "preflight_end")))
+        self.assertGreaterEqual(float(self.mark("b", "slot")), float(self.mark("a", "preflight_end")) - 0.01)
+        self.assertEqual(self.mark("a", "phase_after"), "running", "after the pre-flight the record says running")
+        self.assertGreater(a_end, 0)
+
+    def test_a_failing_preflight_releases_the_slot_at_once_and_exits_with_its_status(self):
+        failing = self.start("f", mode="fail", PREFLIGHT_SECONDS="0.2")
+        out, _ = failing.communicate(timeout=60)
+        self.assertEqual(failing.returncode, 1)
+        self.assertIn("PRE-FLIGHT FAILED: findings here", out)
+        self.assertIn("Pre-flight failed: slot 1 of 1 released.", out)
+        qdir = lock_queue_dir(self.lock)
+        self.assertEqual([n for n in os.listdir(qdir) if n.startswith("holder-")], [], "the holder record is gone")
+        handle = open(self.lock, "a")
+        self.addCleanup(handle.close)
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)        # raises if the slot were still held
+        # the next run takes the slot without waiting
+        after = self.start("n", PREFLIGHT_SECONDS="0.1")
+        handle.close()
+        after.communicate(timeout=60)
+        self.assertEqual(after.returncode, 0)
+
+    def test_a_phase_label_without_a_record_changes_nothing(self):
+        import lock_queue
+        with tempfile.TemporaryDirectory() as qdir:
+            self.assertFalse(lock_queue.set_holder_phase(qdir, "running"))
+            self.assertEqual(os.listdir(qdir), [])
+            self.assertTrue(lock_queue.write_holder(qdir, "test.py x", slot=1, ticket="t", phase="preflight"))
+            before = lock_queue.read_holders(qdir)[0]
+            self.assertEqual(before["phase"], "preflight")
+            self.assertTrue(lock_queue.set_holder_phase(qdir, "running"))
+            after = lock_queue.read_holders(qdir)[0]
+            self.assertEqual((after["phase"], after["since"], after["slot"], after["ticket"]),
+                             ("running", before["since"], 1, "t"))
+            self.assertIn("phase_since", after)
+
+
+def lock_queue_dir(lock):
+    return lock + ".queue.d"
+
+
 class NamespaceInitReaperTests(unittest.TestCase):
     """Tests [@ANCHOR: test:reap_orphans_forever] with real processes: a child that is a subreaper, as PID 1 of the run's
     namespace is, receives orphaned grandchildren; without the reaper they stay zombies, with it none remain."""
@@ -853,6 +1003,18 @@ class TakeBackSlotLockTests(unittest.TestCase):
         slot = _test_runner.take_back_slot_lock(self.lock, 3, 2, sleep=sleep, clock=lambda: next(ticks), environ={})
         self.assertEqual(slot, 2)
         self.assertEqual(len(sleeps), 1)
+
+    def test_the_root_phase_never_reads_the_holder_records_because_in_its_namespace_they_look_dead(self):
+        # One slot: no --slot-held, so only_slot is None. Reading the records from inside the PID namespace deleted the
+        # invoking process's record (its host pid is not visible there). A record of a pid that is not alive stands for it.
+        import lock_queue
+        qdir = lock_queue.queue_dir_for_lock(self.lock)
+        os.makedirs(qdir)
+        record = os.path.join(qdir, "holder-4194303-1")
+        with open(record, "w") as handle:
+            handle.write('{"pid": 4194303, "start": 1, "since": 1.0, "info": "invoking process", "slot": 1}')
+        self.assertEqual(_test_runner.take_back_slot_lock(self.lock, 1, None, environ={}), 1)
+        self.assertTrue(os.path.exists(record), "the root phase must leave the invoking process's holder record alone")
 
     def test_gives_up_when_another_run_keeps_the_slot_and_never_takes_another_slot(self):
         self.hold(2)

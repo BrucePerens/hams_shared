@@ -492,6 +492,15 @@ class TestSlotHolders(_SlotHolderMixin, _TmpDirCase):
         self.assertIn("slot 4: pid", text)
         self.assertIn("(beyond the configured 2)", text)
 
+    def test_a_slot_in_its_preflight_is_shown_as_busy_with_the_phase(self):
+        lq.write_holder(self.qdir, "test.py -u ham_shack", slot=2, phase="preflight", now=lambda: 0.0)
+        child = self.write(1, since=0.0, info="test.py -u parking")           # a record without a phase is running
+        lines = lq.describe_queue(self.qdir, now=lambda: 120.0, slots=3)
+        self.assertEqual(lines[0], "slots: 3, 2 busy")
+        self.assertEqual(lines[1], "slot 1: pid %d running test.py -u parking for 2 min" % child.pid)
+        self.assertEqual(lines[2], "slot 2: pid %d pre-flight of test.py -u ham_shack for 2 min" % os.getpid())
+        self.assertEqual(lines[3], "slot 3: free")
+
     def test_one_slot_status_is_the_original_text(self):
         self.assertEqual(lq.describe_queue(self.qdir, slots=1), ["holder: none recorded", "queue: empty"])
 

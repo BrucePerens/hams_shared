@@ -1350,6 +1350,35 @@ Returns the number of zombies reaped. Reaps with `os.waitpid(pid, WNOHANG)` on t
 process that `subprocess.run` waits for, and the run's exit code would read 0. Started by `setup_namespace_and_run_tests` as a daemon thread before the test
 process starts and stopped in its `finally`.
 
+### `[@ANCHOR: test:run_preflight_in_slot]` `run_preflight_in_slot(args, lock_file_path, held_slot, slots, preflight=None)`
+
+Purpose: the pre-flight (semantic anchor scan, burn-list and audit linters, init-import and JavaScript syntax checks, and for a `HAMS_ISOLATED_NS=1` run the test-host check) runs
+INSIDE the slot the run holds, not before it. It used to run first: up to eight runs scanned about 18,000 anchors at the same time outside any slot accounting, the
+slot count read free, and `--queue-status` showed busy runs as waiting. Now the order is: cheap checks (command line, repository root), load gate and queue wait, slot taken, slot
+refusals, **pre-flight**, start-up sweep, Odoo. What the pre-flight checks is unchanged.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `args` | namespace | The parsed command line (`parse_runner_args`). |
+| `lock_file_path` | str | Base lock path; the queue directory is derived from it. |
+| `held_slot`, `slots` | int | The slot held and the machine's slot count (for the message). |
+| `preflight` | callable or `None` | Test seam; default `run_preflight`. |
+
+Called once per run by the invoking process (the flat process of a `HAMS_ISOLATED_NS=1` run), right after it took its slot. The re-exec'd phases (`--internal-ns-init`, and the final
+test process) carry `--preflight-done` and never run it, so it runs exactly once however many `sudo` / `systemd-run` / `unshare` layers follow. While it runs the holder record says
+`phase: preflight` (`--queue-status`: `slot K: pid P pre-flight of test.py ... for 40 s`); when it returns the record becomes `running` (`lock_queue.set_holder_phase`). If it ends
+the run (`sys.exit(1)` with the findings printed), the slot is released at once: the slot lock is closed, the holder record and the queue ticket are removed, `Pre-flight failed: slot K of N
+released.` is printed and the exit propagates unchanged, so the findings and status are exactly what they were. Nothing else is dropped: no database exists yet. A run that cannot get a slot
+therefore does not pre-flight until it has one (a failing pre-flight is now reported after the wait for a slot, not before it). A batch leader holds no slot while a batch forms; its nested
+`test.py` pre-flights in its own slot like any run. Not cached: the pre-flight took about 6 s for one module (`-u parking`), the inputs (both repositories' trees, the sibling checkout, tool
+versions, installed Odoo stubs, the module list) are not all in one hashable place, and a stale pass would skip real checks; the saving does not justify the risk.
+
+### `[@ANCHOR: lock_queue:set_holder_phase]` `set_holder_phase(qdir, phase, pid=None, now=time.time)`
+
+Purpose: moves this process's holder record from `preflight` to `running`, keeping its `since`, and stamps `phase_since`. Returns True when it rewrote the record, False (nothing written)
+when the process has no live record or the directory is unwritable (a label must never stop a run). The rewrite is atomic (temporary file, rename over the record). `write_holder` takes the same
+`phase`; a record without one is a running run. `describe_queue` shows `running` or `pre-flight of` per slot, and no longer lists a running holder's ticket as a waiter with one slot.
+
 ### `[@ANCHOR: test:slot_handoff_args]` `slot_handoff_args(slots, held_slot)`
 
 Purpose: the command-line words that give a re-exec'd phase the slot of its parent. Returns `[]` when `slots` is 1 (the command line stays
