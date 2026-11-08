@@ -78,6 +78,8 @@ def check_absolute_paths(repo_dir):
         "ham_auxcomm_training",
         # Frozen night-shift logs: a historical record of what ran where, rewriting it would make it inaccurate.
         "night_shift_history_archive",
+        # The same log since it became one file per entry (night_shift_history/); the archive moved into it.
+        "night_shift_history",
         # Matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/site-packages/
         # subdirectory regardless of the venv's own outer directory name -- "venv"/".venv" alone
         # missed a real stray "whisper_venv/" (see check_float_isfinite.py's own comment/test).
@@ -145,6 +147,7 @@ def check_absolute_paths(repo_dir):
 
             # night_shift_history.md is the append-only log of past runs (same reasoning as
             # night_shift_history_archive/ above): it records real paths and is not edited afterwards.
+            # (Once the log is the night_shift_history/ directory, this file is only a stub.)
             if file == "night_shift_history.md":
                 continue
 

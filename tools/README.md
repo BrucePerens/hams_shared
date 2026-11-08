@@ -920,6 +920,184 @@ anything under a `target/` directory.
 - **Tests:** `tools/test_check_staged_files.py`,
   `test_the_named_opus_archive_may_exceed_the_limit_but_the_same_name_elsewhere_may_not`.
 
+## Night-shift history: one file per entry
+
+Bruce, 2026-11-08: "Convert night shift history into a directory." The completed-work log of the night-shift agents was
+one file, `night_shift_history.md` (about 1 MB, newest entry at the top, older entries in
+`night_shift_history_archive/part_NN/`), and every agent edited it at the top. Every pull request therefore conflicted
+with every other, the conflict was resolved by hand (keep both sides) in nearly every pull request, and a conflicting
+branch is dropped to a solo run by the lint and test batching (ADR 0115). The log is now the directory
+`night_shift_history/` in the repository that keeps it, **one file per entry**. A new entry is a new file with a name no
+other agent picks, so two branches never touch the same path.
+
+`night_shift_history.py` is the whole tool: `latest` prints entries, `new` creates one, `check` lints the layout and is the
+`check_night_shift_history` step of `run_linters.py`. The step runs on the repository under lint only; `hams_open` and
+`hams_shared` have no such directory and are not judged.
+
+```bash
+python3 hams_shared/tools/night_shift_history.py latest -n 5       # the 5 newest entries, newest first (default 5)
+python3 hams_shared/tools/night_shift_history.py latest --titles   # one line per entry: file name, tab, heading
+python3 hams_shared/tools/night_shift_history.py new --title "Short title" <<'TEXT'
+- what was wrong, what you changed (commit or PR), how you verified it
+TEXT
+python3 hams_shared/tools/night_shift_history.py check             # the layout and every entry file; exit 1 on a problem
+```
+
+**The layout, and the two-step rollout.** Without `night_shift_history/` the repository has the old single-file layout and
+`check` judges nothing (`latest` then reads the top of the old file; `new` refuses and says to add the entry at the top of
+the old file). With the directory, `night_shift_history.md` must be exactly the stub (`STUB_TEXT`), the archive directory
+must not exist, and every file in the directory is an entry or this directory's `README.md`. So tooling that knows both
+layouts lands first, then one pull request creates the directory, replaces the old file with the stub and deletes the
+archive. A branch that was started earlier and still appends to the old file conflicts with the stub when it is merged, and
+if the conflict is "resolved" by keeping its text, `check` fails with the instruction to move the entry into a new file.
+
+### `[@ANCHOR: tools:night_shift_history_entry_format]` `NAME_PATTERN`, `STRICT_HEADING`, `LEGACY_THROUGH`, `SLUG_MAX`
+
+- **What it is:** the format of one entry file. The name is `YYYY-MM-DD-HHMMSS-<slug>-<6 hex>.md`: a calendar date and
+  a time of day (the local time of the machine that wrote it), a slug of at most `SLUG_MAX` (60) characters, and six random
+  lower-case hex digits (`secrets.token_hex(3)`, 24 bits). Plain string order of the names is time order, so `ls` is the
+  history and the last name is the newest entry. Two agents never pick the same name: the date, second, slug and random
+  digits would all have to agree. The text is UTF-8 with `\n` line ends and ends with exactly one newline, and it starts with
+  the heading `### YYYY-MM-DD -- <title>` (`STRICT_HEADING`), a blank line, then the body, which is free-form Markdown
+  (bullets of what was wrong, what changed, the commit or pull request, how it was verified).
+- **Fields of the name:** `date` (`YYYY-MM-DD`; equals the date in the heading), `time` (`HHMMSS`, 00-23, 00-59, 00-59),
+  `slug` (`[a-z0-9]+` words joined by single hyphens, made by `slugify()` from the title), `rand` (`[0-9a-f]{6}`).
+- **One entry per file:** the body must not contain a line that `split_entries()` would take as the start of another entry
+  (a `## ` heading, or a `### ` heading that starts with a date), outside a code fence. Use `#### ` for sub-headings.
+- **Entries migrated from the old files (dated `LEGACY_THROUGH`, 2026-11-08, or earlier):** the text is the old entry
+  byte for byte, so its heading is whatever the old file had (`## ...`, wrapped over several lines, no date) and is
+  only required to be one entry heading. Their file names use the date of the heading (else of the nearest dated entry
+  before it in the same old file) and, in place of a time of day, `00` and a four digit number that keeps the order the
+  old files had on that day; the random digits come from a hash of the entry. `check` does not require a real time of day,
+  the dated heading or the blank line for them. Every entry dated later must follow the format exactly.
+- **Invariants and concerns:** the constants are read-only. Do not rename or edit an existing entry file to "correct" it
+  after the pull request that added it is merged: the history is the record of what was true when it was written. The name
+  is not a secret and carries no identity; put the branch or pull request number in the text.
+- **Tests:** `tools/test_night_shift_history.py`, `EntryProblemsTests`.
+
+### `[@ANCHOR: tools:night_shift_history_stub_text]` `STUB_TEXT`
+
+- **What it is:** the only content `night_shift_history.md` may have once `night_shift_history/` exists: a short Markdown
+  note saying where the history lives and how to read, add and check entries.
+- **Why exact:** a stale branch that still appends an entry to the old file, or recreates it, produces a file that differs
+  from the stub, so `check_tree()` reports it. A text that merely "starts with" the stub would let an appended entry slip by.
+- **Invariants and concerns:** a change to the stub text is a change to this constant and, in the repository that keeps the
+  log, to `night_shift_history.md`, in the same pull request, or every run of `check` fails there.
+- **Tests:** `tools/test_night_shift_history.py`, `CheckTreeTests`.
+
+### `[@ANCHOR: tools:night_shift_history_split_entries]` `split_entries(text)`
+
+- **Purpose:** cuts the text of an old-style history file into its entries. It is how the entries were migrated from the
+  single files into the directory, how `check` decides that a file is exactly one entry, and how `latest` reads the old
+  layout.
+- **Call interface:**
+
+  | name | type | meaning |
+  | --- | --- | --- |
+  | `text` | `str` | the complete text of a history file or entry file |
+  | returns | `(str, list[str])` | `(preamble, entries)` with `preamble + "".join(entries) == text` exactly: nothing is dropped, added or re-wrapped, and every entry keeps its own trailing blank lines |
+
+  No exceptions. A text without any entry heading returns `(text, [])`.
+- **The rule:** an entry starts at a line `## ...`, or `### YYYY-MM-DD...`, that is not inside a code fence (a line starting
+  with up to three spaces and then three backticks or three tildes toggles the fence). A heading line directly under a
+  heading line of the same level is the rest of a heading wrapped over several lines, not a new entry. All other headings
+  (`# `, undated `### `, `#### `) are body. The old files used `###` for newest entries and `##` for older ones, and wrapped
+  long titles by repeating the `## ` marker, which is why the rule is this one.
+- **Special concerns:** pure; reads nothing, no locks; linear in the text size.
+- **Example:** `split_entries("### 2026-11-08 -- A\n\nx\n\n## B\n\ny\n")` returns `("", ["### 2026-11-08 -- A\n\nx\n\n", "## B\n\ny\n"])`.
+- **See also:** `heading_text()`, `entry_problems()`. **Tests:** `SplitEntriesTests`.
+
+### `[@ANCHOR: tools:night_shift_history_heading_text]` `heading_text(entry)`
+
+- **Purpose:** the title of an entry on one line, for `latest --titles`, for file-name slugs and for the date of an
+  old entry.
+- **Call interface:** `entry` (`str`, text that starts with an entry heading, as returned by `split_entries()`). Returns a
+  `str`: the heading line and its wrapped continuation lines (same `#` marks) without the marks, stripped and joined by a
+  single space; `""` when the text does not start with a heading. No exceptions. Pure.
+- **See also:** `split_entries()`, `slugify()`. **Tests:** `SplitEntriesTests`.
+
+### `[@ANCHOR: tools:night_shift_history_slug]` `slugify(title)`
+
+- **Purpose:** the slug part of an entry file name, so a directory listing says what each entry is about.
+- **Call interface:** `title` (`str`, heading text; a leading `YYYY-MM-DD` is dropped). Returns a `str`: lower case ASCII
+  letters and digits, runs of anything else collapsed into one hyphen, no leading or trailing hyphen, at most `SLUG_MAX`
+  characters (cut at a hyphen when there is one in the second half), `"entry"` when nothing is left (all punctuation or all
+  non-ASCII). No exceptions. Pure.
+- **Example:** `slugify("2026-11-08 -- Fix the foo() bug")` is `"fix-the-foo-bug"`. **Tests:** `SlugTests`.
+
+### `[@ANCHOR: tools:night_shift_history_entry_problems]` `entry_problems(name, text)`
+
+- **Purpose:** the rules for one entry file, shared by `check_tree()` (every file) and `new_entry()` (before it writes).
+- **Call interface:**
+
+  | name | type | meaning |
+  | --- | --- | --- |
+  | `name` | `str` | the file name only, no directory |
+  | `text` | `str` | the file contents, read with `newline=""` so a carriage return is seen |
+  | returns | `list[str]` | one message per problem, each starting with the file name; empty when the entry is well formed |
+
+  What it reports: a name that does not match `NAME_PATTERN`; a date that is not on the calendar; (entries dated after
+  `LEGACY_THROUGH`) a time of day that is not one; a carriage return or NUL byte; a text that does not end with exactly one
+  newline; text before the heading; more or fewer than one entry in the file; (entries dated after `LEGACY_THROUGH`) a
+  first line that is not `### <date> -- <title>` with the date of the name, or a heading not followed by a blank line and
+  a first line of text. No exceptions. Pure.
+- **See also:** `NAME_PATTERN`, `split_entries()`. **Tests:** `EntryProblemsTests`.
+
+### `[@ANCHOR: tools:night_shift_history_check_tree]` `check_tree(root)`
+
+- **Purpose:** the linter. Decides which layout `root` has and reports everything that makes it invalid.
+- **Call interface:** `root` (`str`, repository root). Returns `list[str]` of messages, empty when fine. With no
+  `root/night_shift_history/` directory it returns `[]` whatever else exists (the old layout, or a repository that keeps no
+  log). With the directory: the old file must equal `STUB_TEXT` (missing, edited or appended-to are all reported, with
+  the command that adds an entry), `root/night_shift_history_archive` must not exist, and every entry in the
+  directory (except `README.md`) must pass `entry_problems()`; a subdirectory, a symbolic link, a file that is not
+  UTF-8 text or a name that is not an entry name is reported. Messages name the path from `root`. Reads the directory, never
+  writes.
+- **Special concerns:** reads every entry file (about 1,900 at the migration), well under a second; no locks.
+- **See also:** `STUB_TEXT`, `entry_problems()`. **Tests:** `CheckTreeTests`, `CommandLineTests`.
+
+### `[@ANCHOR: tools:night_shift_history_latest]` `latest_entries(root, count)`
+
+- **Purpose:** the "what happened recently" read of the log, for an agent that starts work or writes a report.
+- **Call interface:** `root` (`str`, repository root), `count` (`int`, at least 1). Returns `list[(str, str)]` of
+  `(label, text)`, newest first: the last `count` file names of `night_shift_history/` that match `NAME_PATTERN` (label =
+  the file name), or, in the old layout, the first `count` entries of `night_shift_history.md` (label = the file name and
+  the entry number). Raises `ValueError` when `count < 1`, `FileNotFoundError` when there is neither layout.
+- **Special concerns:** "newest" is the last name in string order, which is the newest date and time in the name; a
+  migrated entry sorts by the date of its heading. Reads only the entries it returns.
+- **Tests:** `LatestEntriesTests`.
+
+### `[@ANCHOR: tools:night_shift_history_new_entry]` `new_entry(root, title, body, now=None, date=None)`
+
+- **Purpose:** the one correct way to add an entry: it picks the name, writes the heading and refuses a malformed entry
+  before anything is on disk.
+- **Call interface:**
+
+  | name | type | meaning |
+  | --- | --- | --- |
+  | `root` | `str` | repository root; `root/night_shift_history/` must exist |
+  | `title` | `str` | heading text without the date; whitespace is collapsed to single spaces |
+  | `body` | `str` | the text of the entry; leading and trailing blank lines are removed; must not be empty or contain a line that starts another entry |
+  | `now` | `datetime` or `None` | the clock used for the file name; default the local time now (tests pass a fixed value) |
+  | `date` | `str` or `None` | `YYYY-MM-DD` for the heading and the name instead of today |
+  | returns | `str` | the path of the new file |
+
+  Raises `FileNotFoundError` when the directory does not exist (old layout), `ValueError` (message from
+  `entry_problems()`) when the entry would be malformed, `OSError` on a write failure. Writes with mode `x`, so it never
+  replaces an existing file; it re-draws the random digits when the name is taken.
+- **Special concerns:** touches nothing else; does not run git. Add the file with `git add night_shift_history/<name>`.
+- **Example:** see the command line at the top of this section. **Tests:** `NewEntryTests`.
+
+### `[@ANCHOR: tools:night_shift_history_main]` `main(argv=None)`
+
+- **Purpose:** the command line: `latest [-n N] [--titles] [--root DIR]`, `new --title T [--body-file F] [--date D] [--root DIR]`
+  (text from standard input without `--body-file`), `check [ROOT]`. `--root` and `ROOT` default to the git top level of the
+  current directory, else the current directory.
+- **Returns:** the exit status. 0 success; 1 `check` found problems (printed to standard error, one per line) or `latest`/`new`
+  could not do the work (message on standard error); 2 bad usage (`argparse`). `new` prints the path of the file it made,
+  relative to the root; `latest` prints each entry preceded by a comment line with its file name.
+- **Tests:** `CommandLineTests`.
+
 ## `provision.py --test-environment`: a whole test host in one command
 
 Bruce, 2026-11-06/07: one command that turns any test host (a LAN machine, a fresh Debian 13 VM, the lima VM, a Claude

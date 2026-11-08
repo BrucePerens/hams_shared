@@ -26,7 +26,7 @@ call chain. Follow this order instead.
 
 This exact bug (`ham_shack.web_shack` never mounting) had already been investigated across at
 least two prior sessions before this one found the real cause -- not just the "several iterations"
-a proposal doc's own status header mentioned in passing. A `grep` of `night_shift_history.md` for
+a proposal doc's own status header mentioned in passing. A `grep -r` of `night_shift_history/` (formerly the single file `night_shift_history.md`) for
 the component/file names involved turned up a 2026-09-03 session that had already ruled out *six*
 separate hypotheses (a QWeb context-key collision, a plain JS syntax error, a `DuplicatedKeyError`,
 the wrong DOM scan root, a `KeyNotFoundError` from a missing registration, and a lazy-bundle
@@ -40,7 +40,7 @@ root) from scratch, instead of going straight to the one lead the prior session 
 at.
 
 **Before forming a single hypothesis of your own, grep the project's own accumulated history
-(`night_shift_history.md`, or wherever this project's own session-to-session institutional memory
+(`night_shift_history/`, or wherever this project's own session-to-session institutional memory
 lives) for the component/file/symptom names involved.** A prior session's own honest "still open,
 here's exactly what to check next" note is not narrative color -- it is often the single fastest
 path to the real answer, and skipping it is how the same ground gets re-covered by session after

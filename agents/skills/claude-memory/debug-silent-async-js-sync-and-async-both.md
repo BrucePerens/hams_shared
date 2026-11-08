@@ -25,7 +25,7 @@ worth debugging.
 
 **Before instrumenting anything, search this project's own accumulated history for prior attempts
 at the same symptom.** A prior session's own honest "still open, here's exactly what to check next"
-note (in `night_shift_history.md` on this project, or wherever a given project's own session-to-
+note (in `night_shift_history/` on this project, or wherever a given project's own session-to-
 session institutional memory lives) is not narrative color — it can name the exact next diagnostic
 step, and skipping past it is how the same ground gets re-covered session after session. Grep for
 the component/file/symptom names involved before forming a single hypothesis of your own.

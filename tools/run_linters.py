@@ -227,6 +227,8 @@ STEP_META = {
     "check_self_writeable_field_tests": {"suffixes": _PY},
     "check_registry_test_cr_usage": {"suffixes": _PY},
     "check_gdpr_erasure_uses_service_utility": {"suffixes": _PY},
+    # night_shift_history.py check: the night_shift_history/ directory (one markdown file per entry) and its stub file.
+    "check_night_shift_history": {"suffixes": frozenset({".md"})},
     "check_int_float_overflow": {"suffixes": _PY},
     "check_float_isfinite": {"suffixes": _PY},
     "check_untyped_utility_files": {
@@ -1928,6 +1930,20 @@ def main():
         os.path.join(dir_path, "tools", "check_gdpr_erasure_uses_service_utility.py"),
         dir_path,
     ],
+    )
+
+    # check_night_shift_history -- the night-shift log is one markdown file per entry in night_shift_history/ (so that two
+    # agents' pull requests never edit the same path). Once that directory exists, the old night_shift_history.md must be
+    # the stub and every entry file must be well formed; a stale branch that appends to the old file fails here instead of
+    # silently re-creating the conflict. A repository without the directory (hams_open, hams_shared) is not judged.
+    _add(
+        "check_night_shift_history",
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "night_shift_history.py"),
+            "check",
+            dir_path,
+        ],
     )
 
     # 35. check_cargo_deny -- the Rust supply-chain/license/advisory scan

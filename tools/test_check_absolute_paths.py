@@ -106,10 +106,12 @@ class CheckAbsolutePathsTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "archive", "run_1", "meta.json"), f'"{_HOME}"')
         self.assertEqual(chk.check_absolute_paths(self.tmp), [])
 
-    def test_the_night_shift_history_log_and_its_archive_are_excluded(self):
+    def test_the_night_shift_history_log_its_directory_and_its_archive_are_excluded(self):
         # Append-only logs of past runs record real paths; rewriting them would make them inaccurate.
         _write(os.path.join(self.tmp, "night_shift_history.md"), f"ran in {_HOME}/x\n")
         _write(os.path.join(self.tmp, "night_shift_history_archive", "part_01", "night_shift_history.md"), f"{_HOME}/y\n")
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+        _write(os.path.join(self.tmp, "night_shift_history", "2026-10-01-000001-entry-aaaaaa.md"), f"{_HOME}/w\n")
         self.assertEqual(chk.check_absolute_paths(self.tmp), [])
         _write(os.path.join(self.tmp, "night_shift_todo", "x.md"), f"{_HOME}/z\n")
         self.assertEqual(len(chk.check_absolute_paths(self.tmp)), 1)
