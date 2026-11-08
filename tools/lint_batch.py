@@ -24,6 +24,9 @@ import batch_queue
 import lock_queue
 
 KIND = "lint"
+# An anchor tag in a diff line. Written so that this file's own source is not itself read as an anchor.
+ANCHOR_TAG = re.compile(r"\[@ANCHOR(?:-BEGIN|-END)?:\s*([A-Za-z0-9_:]+)\s*\]")
+WORD = re.compile(r"[A-Za-z0-9_:]+")
 RUNNER_ENV = "HAMS_LINT_BATCH_RUNNER"
 MAX_OUTPUT_PER_STEP = 200000
 
@@ -106,6 +109,47 @@ def path_finder(paths):
                     hits.append(path)
                     break
                 at = line.find(path, at + 1)
+        return hits
+
+    return find
+
+
+# [@ANCHOR: lint_batch:changed_anchors]
+def changed_anchors(repo, base, tip):
+    """Anchor ids on lines the branch added or removed against `base` (``git diff -U0 base...tip``): the set of
+    ids the branch defines, cites or deletes. Empty when git cannot say.
+
+    The anchor checks (`verify_anchors`, `check_function_test_anchors`) name anchors, not files, so a failure
+    there names no changed path; the ids found here let `anchor_finder` attribute it."""
+    result = subprocess.run(["git", "-C", repo, "diff", "-U0", "--no-color", "%s...%s" % (base, tip)],
+                            capture_output=True, text=True, errors="replace")
+    if result.returncode != 0:
+        return set()
+    ids = set()
+    in_header = True
+    for line in result.stdout.splitlines():
+        if line.startswith("diff --git "):
+            in_header = True
+        elif line.startswith("@@"):
+            in_header = False
+        elif not in_header and line[:1] in ("+", "-"):
+            ids.update(ANCHOR_TAG.findall(line))
+    return ids
+
+
+# [@ANCHOR: lint_batch:anchor_finder]
+def anchor_finder(ids):
+    """Return `find_tokens(line)` for `blame_by_tokens`: the entries of `ids` (anchor ids) that a line of linter
+    output names as a whole word. A word is a run of letters, digits, `_` and `:`; quotes, brackets and
+    punctuation around it, and a trailing `:`, are ignored (`'m:feature'` and `m:feature:` both find `m:feature`)."""
+    known = set(ids)
+
+    def find(line):
+        hits = []
+        for word in WORD.findall(line):
+            word = word.strip(":")
+            if word in known and word not in hits:
+                hits.append(word)
         return hits
 
     return find
@@ -240,12 +284,13 @@ class LintBatch:
         return read_results(results)
 
     def tokens(self, members):
-        """(owners {token: [tips]}, find_tokens(line)) for attribution. Lint: changed files by path."""
+        """(owners {token: [tips]}, find_tokens(line)) for attribution. Lint: changed files by path, and anchor ids on changed lines."""
         files = {}
         for member in members:
             if member["tip"] not in files:
                 files[member["tip"]] = changed_paths(self.repo, self.base, member["tip"])
         owners = owners_of(files)
+        anchors = owners_of({tip: sorted(changed_anchors(self.repo, self.base, tip)) for tip in files})
         # Some checkers name a file by its base name and its directory separately (`File 'x.py' in '<dir>'`):
         # a base name that only one changed path has is a token of its own.
         names = {}
@@ -254,7 +299,13 @@ class LintBatch:
         for name, paths in names.items():
             if len(paths) == 1 and len(name) >= 6 and name not in owners:
                 owners[name] = owners[paths[0]]
-        return owners, path_finder(sorted(owners))
+        path_find, anchor_find = path_finder(sorted(owners)), anchor_finder(anchors)
+        owners.update({anchor: tips for anchor, tips in anchors.items() if anchor not in owners})
+
+        def find(line):
+            return path_find(line) + anchor_find(line)
+
+        return owners, find
 
     def __call__(self, batch_id, members, log_path):
         batch_queue.reap_orphan_trees(self.repo, self.kind, self.repo_name, environ=self.environ)

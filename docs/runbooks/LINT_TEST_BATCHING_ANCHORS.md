@@ -214,6 +214,24 @@ diff); `[]` if git fails. These are the tokens that own findings.
 character is not a file-name character, so `a.py` does not match `data.py`; absolute paths into the combined tree match by
 their suffix. A line can name several owners' paths (a shared file); all are returned.
 
+### `lint_batch:changed_anchors`
+`changed_anchors(repo, base, tip) -> set[str]`: the anchor ids written on lines the branch added or removed, read from
+`git -C repo diff -U0 base...tip` (the merge-base diff). A line counts when it starts with `+` or `-` after the file header
+(a content line that begins with dashes is not mistaken for a header); every anchor tag on it contributes its id (base, `Tests`,
+`Verified by`, `Triggers`, and the `-BEGIN`/`-END` forms). An anchor on an unchanged line is not included, so a branch is
+only blamed for anchors it touched. Returns an empty set when git fails (bad ref); it never raises. It runs one `git diff` per
+member of the batch and has no side effects. Why: `verify_anchors` and `check_function_test_anchors` print anchor ids, not
+file names, so before this a failure there named no changed path, was unattributable and split the batch (b47d90e3). Test:
+`test_changed_anchors_are_the_ids_on_added_and_removed_lines_only`.
+
+### `lint_batch:anchor_finder`
+`anchor_finder(ids)` returns `find(line) -> [ids]` for `blame_by_tokens`: the entries of `ids` that a line of output names as
+a whole word. A word is a run of letters, digits, `_` and `:`; surrounding quotes, brackets and punctuation and a trailing
+`:` are ignored, so `'m:feature'` and `m:feature:` both find `m:feature` while `xm:feature` and `m:feature_two` do not. Each id
+is reported once per line. Test: `test_anchor_finder_finds_whole_anchor_ids_in_checker_output`, and
+`test_a_failure_that_names_only_an_anchor_is_blamed_on_the_branch_that_changed_it` for the whole path through
+`LintBatch.tokens` and `blame_by_tokens`.
+
 ### `lint_batch:owners_of`
 `owners_of({tip: [paths]})` returns `{path: [tips]}`, the `owners` argument of `blame_by_tokens`.
 
@@ -241,7 +259,7 @@ The leader's runner; an instance is the `run_batch` argument of `coalesce`.
 | `out`, `environ`, `fetch` | printer, environment for the run, whether to `git fetch origin` first |
 
 Class attributes `kind` ("lint"), `runner_env` (marker exported to the run) and the methods `collect(tree, results, output, code)`
-(what a run reports: lint reads the results file) and `tokens(members)` (owners and finder) are what `OdooTestBatch` replaces;
+(what a run reports: lint reads the results file) and `tokens(members)` (owners and finder; for lint the owners are the changed file paths, plus the anchor ids on changed lines) are what `OdooTestBatch` replaces;
 `current_members` is the group of the run in progress. Calling the instance fetches, computes each member's changed paths, then `settle`s: each run builds a combined tree, runs the
 command with output teed to the leader's terminal and the batch log, reads the results file and always removes the tree.
 Stamps are written for every `passed` verdict from the step names of the last run. Exit code 75 from the run (lock or load

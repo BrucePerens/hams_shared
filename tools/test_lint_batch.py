@@ -13,6 +13,8 @@ Tests [@ANCHOR: lint_batch:ineligible_reason]
 Tests [@ANCHOR: lint_batch:changed_paths]
 Tests [@ANCHOR: lint_batch:path_finder]
 Tests [@ANCHOR: lint_batch:owners_of]
+Tests [@ANCHOR: lint_batch:changed_anchors]
+Tests [@ANCHOR: lint_batch:anchor_finder]
 Tests [@ANCHOR: lint_batch:default_command]
 Tests [@ANCHOR: lint_batch:read_results]
 Tests [@ANCHOR: lint_batch:LintBatch]
@@ -190,6 +192,47 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(owners["demo_batch_x.py"], [tip])  # unique and long enough
             self.assertNotIn("a.py", owners)  # too short to be a token of its own
             self.assertEqual(find("File 'demo_batch_x.py' in '/t/ham_x'"), ["demo_batch_x.py"])
+
+    def test_changed_anchors_are_the_ids_on_added_and_removed_lines_only(self):
+        tag = lambda name: "[@ANCH" + "OR: %s]" % name  # noqa: E731 - keeps this file's source free of literal tags
+        with tempfile.TemporaryDirectory() as tmp:
+            work = helpers.make_repo(tmp)
+            base = helpers.commit_branch(work, "seed", {"c.py": "# %s\n# %s\nx = 1\n" % (tag("demo:kept"), tag("demo:gone"))})
+            helpers.git(work, "push", "-q", "origin", "seed:main")
+            helpers.git(work, "fetch", "-q", "origin")
+            tip = helpers.commit_branch(work, "x", {
+                "c.py": "# %s\n# %s\nx = 2\n" % (tag("demo:kept"), tag("demo:fresh")),
+                "t.py": "# Tests %s\n# Tests %s\n" % (tag("demo:fresh"), tag("demo:other_module:x")),
+                "notes.txt": "--- a line that starts with dashes and names no anchor\n"})
+            self.assertEqual(lint_batch.changed_anchors(work, "origin/main", tip),
+                             {"demo:gone", "demo:fresh", "demo:other_module:x"})  # `demo:kept` is on an unchanged line
+            self.assertEqual(lint_batch.changed_anchors(work, "no-such", tip), set())
+            self.assertTrue(base)
+
+    def test_anchor_finder_finds_whole_anchor_ids_in_checker_output(self):
+        find = lint_batch.anchor_finder(["m:feature", "m:feature_two"])
+        self.assertEqual(find("    - Code Feature 'm:feature' has no active test linkage coverage."), ["m:feature"])
+        self.assertEqual(find("Missing Cross-Reference Target: m:feature_two:"), ["m:feature_two"])
+        self.assertEqual(find("m:feature_twoo and m:featur and xm:feature"), [])  # whole ids only
+        self.assertEqual(find("'m:feature' again 'm:feature'"), ["m:feature"])  # once per line
+        self.assertEqual(find("nothing"), [])
+
+    def test_a_failure_that_names_only_an_anchor_is_blamed_on_the_branch_that_changed_it(self):
+        import batch_queue
+        tag = lambda name: "[@ANCH" + "OR: %s]" % name  # noqa: E731
+        with tempfile.TemporaryDirectory() as tmp:
+            work = helpers.make_repo(tmp)
+            mine = helpers.commit_branch(work, "mine", {"a.txt": "# Tests %s\n" % tag("demo:feat")})
+            other = helpers.commit_branch(work, "other", {"b.txt": "b2\n"})
+            batch = lint_batch.LintBatch(work, "hams_demo", "origin/main", [], lambda *a: None, fetch=False)
+            owners, find = batch.tokens([{"tip": mine, "branch": "mine"}, {"tip": other, "branch": "other"}])
+            self.assertEqual(owners["demo:feat"], [mine])
+            failures = {"verify_anchors": "    - Code Feature 'demo:feat' has no active test linkage coverage.\n",
+                        "unrelated": "something with no token\n"}
+            blamed, unattributed = batch_queue.blame_by_tokens(failures, owners, find)
+            self.assertEqual(list(blamed), [mine])  # only the branch that touched the anchor
+            self.assertTrue(blamed[mine][0].startswith("verify_anchors: "))
+            self.assertEqual(unattributed, ["unrelated"])
 
     def test_write_batch_stamp_format_is_accepted_by_the_stamp_gate(self):
         import lint_stamp_gate
