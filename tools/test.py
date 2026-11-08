@@ -53,9 +53,9 @@ import infrastructure
 import lock_queue
 import odoo_test_batch
 import offline_browser_ns
-import ram_dirs
 import runner_cleanup
 import runner_slots
+import ram_dirs
 
 import argparse
 import atexit
