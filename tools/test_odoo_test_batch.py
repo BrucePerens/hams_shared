@@ -120,7 +120,7 @@ class UnitTests(unittest.TestCase):
         self.assertIn("internal", self.reason(namespace(internal_ns_init=True)))
         self.assertIn("internal", self.reason(namespace(preflight_done=True)))
         self.assertIn("mode xml", self.reason(namespace(mode="xml")))
-        for flag in ("test_tags", "coverage", "mcp", "pause_on_fail", "offline_isolation", "profile", "build_daemons"):
+        for flag in ("test_tags", "coverage", "mcp", "pause_on_fail", "offline_isolation", "profile", "build_daemons", "keep_db"):
             self.assertIn("--" + flag.replace("_", "-"), self.reason(namespace(**{flag: "x" if flag == "test_tags" else True})))
         self.assertIn("whole-module", self.reason(namespace(module=None)))
         self.assertIn("whole-module", self.reason(namespace(module="ham_a:TestX")))

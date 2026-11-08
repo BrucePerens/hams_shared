@@ -53,6 +53,7 @@ import infrastructure
 import lock_queue
 import odoo_test_batch
 import offline_browser_ns
+import runner_cleanup
 import runner_slots
 
 import argparse
@@ -86,6 +87,7 @@ import shutil
 # post-fork is a plain global name lookup, not a real import.
 import resource
 import signal
+import stat
 import socket
 import subprocess
 
@@ -2076,10 +2078,18 @@ def rebuild_db(db_name, redis_flush_db=None):
     subprocess.run(["redis-cli", "CONFIG", "GET", "dir"], check=False, env=env)
     subprocess.run(["redis-cli", "CONFIG", "GET", "dbfilename"], check=False, env=env)
 
+    # A run in slot mode marks the database it creates (runner_cleanup.database_marker), which is what lets
+    # the end-of-run clean-up and the next run's sweep prove the database is this runner's and not kept.
+    marker_sql = (
+        runner_cleanup.comment_database_sql(db_name, _RUN_CLEANUP["slot"], _RUN_CLEANUP["keep"])
+        if _RUN_CLEANUP
+        else ""
+    )
     sql_input = f"""
 SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :'dbname';
 DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE);
 CREATE DATABASE "{db_name}";
+{marker_sql}
 \\c "{db_name}"
 CREATE EXTENSION IF NOT EXISTS vector;
 """
@@ -2158,6 +2168,264 @@ def remove_stale_filestore(db_name, filestore_base=ODOO_FILESTORE_BASE):
             )
     except OSError as e:
         print(f"⚠️  WARNING: could not remove stale filestore {filestore_dir}: {e}")
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Slot-mode clean-up (ADR 0116): what a run in a slot of a multi-slot machine removes when it ends, and what the
+# next run sweeps up after a run that never got to. The rules are in runner_cleanup.py; this is the part that
+# touches PostgreSQL, the disk and the lock files. Full entries: tools/README.md.
+# ---------------------------------------------------------------------------------------------------------
+
+# Set by install_run_cleanup() in the process that runs Odoo, in slot mode only: {"database", "slot", "keep", "tmpdir"}.
+# rebuild_db() reads it to mark the database it creates; run_cleanup_at_exit() reads it at the end.
+_RUN_CLEANUP = None
+_run_cleanup_done = False
+
+
+# [@ANCHOR: test:PostgresAccess]
+class PostgresAccess:
+    """The few PostgreSQL operations slot clean-up needs, through the `psql` client.
+
+    psql_cmd: path of psql. connection_args: extra psql arguments (for example `["-h", "/var/run/postgresql"]`).
+    env: environment for psql (None: this process's). preexec_fn: run in the child before psql starts (the root
+    phase of the full pipeline drops to the `postgres` account with it). Methods return data or True/False and
+    never exit; a psql failure is False or None, so clean-up reports it and carries on. Full entry: tools/README.md."""
+
+    def __init__(self, psql_cmd, connection_args=(), env=None, preexec_fn=None):
+        self.psql_cmd = psql_cmd
+        self.connection_args = list(connection_args)
+        self.env = env
+        self.preexec_fn = preexec_fn
+
+    def run(self, sql, **variables):
+        """Run `sql` in the `postgres` database; returns the CompletedProcess (stdout is the unaligned rows)."""
+        command = [self.psql_cmd, *self.connection_args, "-X", "-q", "-At", "-F", "\t", "-v", "ON_ERROR_STOP=1"]
+        for name, value in variables.items():
+            command += ["-v", f"{name}={value}"]
+        command.append("postgres")
+        return subprocess.run(
+            command,
+            input=sql,
+            capture_output=True,
+            text=True,
+            env=self.env,
+            preexec_fn=self.preexec_fn,
+        )
+
+    def database_rows(self):
+        """``[(name, comment)]`` for every database, or None when the server cannot be asked."""
+        result = self.run("SELECT datname, coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database;")
+        if result.returncode != 0:
+            return None
+        rows = []
+        for line in result.stdout.splitlines():
+            name, _, comment = line.partition("\t")
+            if name:
+                rows.append((name, comment))
+        return rows
+
+    def database_comment(self, name):
+        """The comment of database `name` ("" if it has none), or None when the database does not exist (or
+        the server cannot be asked: the caller then leaves everything alone)."""
+        if not _SAFE_DB_NAME_RE.match(name):
+            return None
+        result = self.run(
+            "SELECT 'x' || coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = :'dbname';",
+            dbname=name,
+        )
+        first = result.stdout.splitlines()[0] if result.returncode == 0 and result.stdout.strip() else None
+        return first[1:] if first else None
+
+    def drop_database(self, name):
+        """DROP DATABASE ... WITH (FORCE); True when the database is gone afterwards. Raises ValueError for a name
+        runner_cleanup.is_droppable_name refuses (hams_prod, postgres, templates, anything not a plain identifier)."""
+        statement = runner_cleanup.drop_database_sql(name)
+        if self.run(statement).returncode != 0:
+            return False
+        return self.database_comment(name) is None
+
+
+def default_postgres_access(env=None):
+    """PostgresAccess for a process that has not yet set the runner's PostgreSQL environment (the invoking
+    process, before the lock hand-over): the same server and role `rebuild_db()` reaches later (host
+    `localhost`, role `odoo`, password `odoo` unless the environment says otherwise)."""
+    env = dict(os.environ if env is None else env)
+    env.setdefault("PGHOST", "localhost")
+    env.setdefault("PGUSER", "odoo")
+    env.setdefault("PGPASSWORD", "odoo")
+    return PostgresAccess(infrastructure.get_pg_bin("psql"), env=env)
+
+
+# [@ANCHOR: test:remove_directory_tree]
+def remove_directory_tree(path):
+    """Remove directory `path` and everything in it; True when it is gone. Never raises.
+
+    Plain removal first; on a PermissionError (files left by the `odoo` account, removed by another user) the same
+    non-interactive `sudo -n rm -rf` that `remove_stale_filestore` uses. A symbolic link is never followed: it is
+    refused (returns False). A path that does not exist counts as gone. Full entry: tools/README.md."""
+    if os.path.islink(path):
+        print(f"⚠️  WARNING: refusing to remove {path}: it is a symbolic link.")
+        return False
+    if not os.path.lexists(path):
+        return True
+    try:
+        shutil.rmtree(path)
+    except PermissionError:
+        subprocess.run(["sudo", "-n", "rm", "-rf", "--", path], capture_output=True, text=True)
+    except OSError as e:
+        print(f"⚠️  WARNING: could not remove {path}: {e}")
+    return not os.path.lexists(path)
+
+
+# [@ANCHOR: test:sweep_slot_leftovers]
+def sweep_slot_leftovers(pg, held_slot, lock_base_path, base_tmpdir, filestore_base=ODOO_FILESTORE_BASE, say=print):
+    """Start-up sweep: remove what runs that are gone left in slots this machine can have.
+
+    Called once per run in slot mode, by the process that has just taken slot `held_slot`'s lock (so the sweep
+    runs under a slot lock, before any rebuild). `pg` is a PostgresAccess; `lock_base_path` the base lock path
+    (slot K's lock is `runner_slots.slot_lock_path`); `base_tmpdir` the TMPDIR whose `slot-K` directories are
+    swept; `filestore_base` Odoo's filestore directory. Refuses to run on a production host (exit 2, the
+    `refuse_to_run_on_production_host` message). Returns the `runner_cleanup.sweep` outcome, or None when the
+    server could not be asked (a warning is printed; the run goes on and `rebuild_db` will fail loudly if
+    PostgreSQL is really down). Full entry: tools/README.md."""
+    rows = pg.database_rows()
+    if rows is None:
+        say("⚠️  Sweep skipped: could not list the databases.")
+        return None
+    refuse_to_run_on_production_host(database_names=[name for name, _ in rows])
+    filestores = sorted(os.listdir(filestore_base)) if os.path.isdir(filestore_base) else []
+    slot_dirs = sorted(os.listdir(base_tmpdir)) if base_tmpdir and os.path.isdir(base_tmpdir) else []
+    plan = runner_cleanup.leftovers(rows, filestores, slot_dirs)
+    if not plan:
+        return {"removed": [], "skipped": [], "failed": []}
+    queue_dir = lock_queue.queue_dir_for_lock(lock_base_path)
+
+    def claim_slot(slot):
+        if slot == held_slot:
+            return lambda: None
+        if any(holder.get("slot") == slot for holder in lock_queue.read_holders(queue_dir)):
+            return None
+        try:
+            lock_file = _open_lock_file(runner_slots.slot_lock_path(lock_base_path, slot))
+        except OSError:
+            return None
+        if _try_flock_once(lock_file):
+            return lock_file.close
+        lock_file.close()
+        return None
+
+    def remove_filestore(name):
+        remove_stale_filestore(name, filestore_base)
+        return not os.path.isdir(os.path.join(filestore_base, name))
+
+    return runner_cleanup.sweep(
+        plan,
+        runner_cleanup.SweepOperations(
+            claim_slot=claim_slot,
+            drop_database=pg.drop_database,
+            remove_filestore=remove_filestore,
+            remove_slot_tmpdir=lambda slot: remove_directory_tree(os.path.join(base_tmpdir, f"slot-{slot}")),
+            say=say,
+        ),
+    )
+
+
+# The process that installed the SIGTERM/SIGHUP handlers. A fork of it (the out-of-memory watchdog is a multiprocessing child that
+# `run_cmd` ends with `terminate()`) inherits them, and must die by the signal as it always did, not run the run's clean-up.
+_SIGNAL_HANDLER_PID = None
+
+
+def _exit_on_signal(signum, _frame):
+    if os.getpid() != _SIGNAL_HANDLER_PID:
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+        return
+    print(f"[*] Received {signal.Signals(signum).name}: ending the run and cleaning up.", flush=True)
+    sys.exit(128 + signum)
+
+
+def _install_exit_signal_handlers():
+    global _SIGNAL_HANDLER_PID
+    _SIGNAL_HANDLER_PID = os.getpid()
+    signal.signal(signal.SIGTERM, _exit_on_signal)
+    signal.signal(signal.SIGHUP, _exit_on_signal)
+
+
+# [@ANCHOR: test:install_run_cleanup]
+def install_run_cleanup(database, slot, keep, tmpdir):
+    """Arm the end-of-run clean-up of a run in slot mode; called once, by the process that runs Odoo.
+
+    `database`: the run's database (slot-derived). `slot`: its slot. `keep`: --keep-db. `tmpdir`: the slot's own
+    TMPDIR to remove at the end, or None (slot 1, a private namespace, anything not scoped). Registers
+    `run_cleanup_at_exit` with atexit (which runs after a normal end, `sys.exit`, an uncaught exception and a
+    signal turned into `sys.exit`) and installs handlers for SIGTERM and SIGHUP that print a line and `sys.exit(128 +
+    signal)`; SIGINT already raises KeyboardInterrupt. Only the main thread may call it. SIGKILL and a power cut
+    cannot be handled: the next run's sweep (`sweep_slot_leftovers`) removes those leftovers. Registered before the
+    failure extractor, so the clean-up (and the `KEPT` line) comes after the verdict banner."""
+    global _RUN_CLEANUP, _run_cleanup_done
+    _RUN_CLEANUP = {"database": database, "slot": slot, "keep": keep, "tmpdir": tmpdir}
+    _run_cleanup_done = False
+    atexit.register(run_cleanup_at_exit)
+    _install_exit_signal_handlers()
+
+
+# [@ANCHOR: test:run_cleanup_at_exit]
+def run_cleanup_at_exit(pg=None):
+    """Remove (or keep, and name) what the run in slot mode owns; runs once, at exit. Nothing happens unless
+    `install_run_cleanup` armed it, and a second call does nothing.
+
+    Kills this run's remaining Chrome (the pattern is limited to its own TMPDIR on the host, and the process
+    table is private in the namespace), then `runner_cleanup.finish_run`: with `--keep-db` the database name is
+    printed and nothing is removed; otherwise the database is dropped WITH (FORCE) if its marker names this slot and
+    is not kept, then its filestore and the slot's TMPDIR. `pg` defaults to a PostgresAccess built from the
+    runner's environment. Never raises: a failure is a warning line, since the verdict of the run is already
+    decided. Full entry: tools/README.md."""
+    global _run_cleanup_done
+    if not _RUN_CLEANUP or _run_cleanup_done or os.getpid() != _SIGNAL_HANDLER_PID:
+        return None
+    _run_cleanup_done = True
+    state = _RUN_CLEANUP
+    try:
+        kill_test_chrome("KILL")
+        pg = pg or default_postgres_access()
+        tmpdir = state["tmpdir"]
+        return runner_cleanup.finish_run(
+            state["database"],
+            state["slot"],
+            state["keep"],
+            pg.database_comment,
+            pg.drop_database,
+            lambda name: remove_stale_filestore(name) or True,
+            (lambda: remove_directory_tree(tmpdir)) if tmpdir else None,
+            print,
+        )
+    except (OSError, subprocess.SubprocessError, FileNotFoundError) as e:
+        print(f"⚠️  WARNING: end-of-run clean-up of {state['database']} failed: {e}")
+        return "failed"
+
+# [@ANCHOR: test:root_phase_database_cleanup]
+def root_phase_database_cleanup(run_args, slot, pg):
+    """Backstop in the root phase of the full pipeline: drop the run's slot database after the test process ended.
+
+    The final test process drops its own database (`run_cleanup_at_exit`), but it can be killed outright (the
+    out-of-memory watchdog, the CPU limit, SIGKILL), and its database lives on the HOST's PostgreSQL even though
+    its filestore, Redis and RabbitMQ lived in the private overlay and went with it. The root phase outlives it
+    and still holds the slot's lock, so it removes the database once more, as the `postgres` account (`pg`).
+    Only in slot mode (`run_args.slots` above 1), never with `--keep-db`, and only a database whose marker names
+    this slot and is not kept (`runner_cleanup.finish_run`). Returns finish_run's word, or None when it did nothing.
+    Never raises on a bad database name: a name the slot naming rejects was already refused by the test process.
+    Full entry: tools/README.md."""
+    if (run_args.slots or 1) <= 1 or run_args.keep_db:
+        return None
+    try:
+        database = runner_slots.slot_database_name(run_args.db, slot)
+    except runner_slots.SlotConfigError:
+        return None
+    if not _SAFE_DB_NAME_RE.match(database):
+        return None
+    return runner_cleanup.finish_run(
+        database, slot, False, pg.database_comment, pg.drop_database, lambda name: True, None, print
+    )
 
 
 def setup_namespace_and_run_tests(real_log_dir, sys_args):
@@ -2582,6 +2850,10 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         )
 
     ret = 1
+    # A SIGTERM or SIGHUP (the process above was told to stop) ends this phase through the `finally` below, which
+    # stops Redis and RabbitMQ and drops the slot database. As the first process of its PID namespace this one
+    # would otherwise ignore those signals: the kernel delivers only the ones it has a handler for.
+    _install_exit_signal_handlers()
     try:
         test_cmd = [sys.executable, os.path.abspath(__file__)] + sys_args
         ret = subprocess.run(test_cmd, preexec_fn=preexec_odoo).returncode
@@ -2620,6 +2892,16 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
                     _logger.warning("Failed to fully reap %s (PID %s) during teardown: %s", proc_name, proc.pid, e)
             except Exception as e:  # audit-ignore-catch-all
                 _logger.warning("Unexpected error tearing down %s (PID %s): %s", proc_name, proc.pid, e)
+        root_phase_database_cleanup(
+            run_args,
+            slot,
+            PostgresAccess(
+                psql_cmd,
+                ["-h", pg_sock],
+                env={k: v for k, v in os.environ.items() if not k.startswith("PG")},
+                preexec_fn=preexec_pg,
+            ),
+        )
 
     # Explicitly kill Erlang Port Mapper Daemon (epmd) spawned by RabbitMQ
     subprocess.run(
@@ -3225,8 +3507,9 @@ def _no_slot_message(slots, only_slot):
 
 def _record_lock_holder(lock_file_path, slot=None, ticket=None):
     """Best effort: note who holds the lock so queue lines and --queue-status can name it.
-    Never allowed to affect the test run. `slot` and `ticket` are given only when the machine has more
-    than one slot (the queue then tells running runs from waiting ones by them)."""
+    Never allowed to affect the test run. `slot` and `ticket` are written in every mode (also on a machine
+    with one slot): the queue tells running runs from waiting ones by them, and a record without the ticket once
+    made a slotted waiter count the running holder as the oldest waiter."""
     qdir = lock_queue.queue_dir_for_lock(lock_file_path)
     name = lock_queue.write_holder(
         qdir, " ".join(["test.py"] + sys.argv[1:])[:200], slot=slot, ticket=ticket
@@ -3274,7 +3557,7 @@ def _acquire_lock_via_queue(lock_file_path, timeout, slots=1, only_slot=None):
         sys.exit(lock_queue.EXIT_WAIT_TIMEOUT)
     os.environ["HAMS_TEST_QUEUE_TICKET"] = ticket
     atexit.register(lock_queue.release_ticket, qdir, ticket)
-    _record_lock_holder(lock_file_path, taken[-1] if slots > 1 else None, ticket if slots > 1 else None)
+    _record_lock_holder(lock_file_path, taken[-1], ticket)
     return taken[-1]
 
 
@@ -3452,7 +3735,11 @@ def build_arg_parser():
         metavar="N",
         help="Allow N test.py runs at once on this machine (1..%d), each in its own slot with its own "
         "database, ports, Redis database and files. Also HAMS_TEST_SLOTS=N, or a one-line "
-        "/opt/hams/etc/test_slots. Default 1: one run per machine, as always." % runner_slots.MAX_SLOTS,
+        "/opt/hams/etc/test_slots (every run reads the machine's setting, and --slots can only raise it: set "
+        "HAMS_TEST_SLOTS=1 to run with one slot). Default 1: one run per machine, as always. The supported way to "
+        "run slots is the full pipeline, which gives every run its own network namespace, Redis and RabbitMQ; "
+        "do not set HAMS_ISOLATED_NS=1 for normal runs (it shares the host's network and limits slots above 1)."
+        % runner_slots.MAX_SLOTS,
     )
     parser.add_argument(
         "--coverage",
@@ -3505,6 +3792,14 @@ def build_arg_parser():
         action="store_true",
         help="Run alone: never join a coalesced batch of other branches' `-u MODULES` runs "
         "(docs/runbooks/LINT_TEST_BATCHING.md; HAMS_TEST_BATCH=off does the same).",
+    )
+    parser.add_argument(
+        "--keep-db",
+        action="store_true",
+        help="Slot mode (more than one slot): keep this run's database, filestore and slot directory when the run "
+        "ends, and print the database name, for triage of a failure. Without it a run in slot mode drops them "
+        "at the end, whether it passed, failed or was stopped (ADR 0116). The kept database is replaced by the next "
+        "run in the same slot; drop it yourself when done. No effect with one slot, which keeps its database as before.",
     )
     parser.add_argument("--slot-held", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--internal-ns-init", action="store_true", help=argparse.SUPPRESS)
@@ -3609,14 +3904,27 @@ def broker_users_sharing_the_host(resources, target_modules, addons_path):
 def apply_slot_resources(resources):
     """Make the process-wide choices a slot needs. A no-op unless the run shares the host with other slots.
 
-    Points TMPDIR at the slot's own directory (created, world-writable like the shared one) so the
+    Points TMPDIR at the slot's own directory (created; made world-writable only if it is not already 0777; refused clearly if that is impossible) so the
     Chrome profiles of this run are the only ones under it, and narrows the Chrome kill pattern and the
     end-of-run profile clean-up to that directory. Full entry: tools/README.md."""
     global _CHROME_KILL_PATTERN, _CHROME_PROFILE_GLOBS
     if not resources.scoped:
         return
     os.makedirs(resources.tmpdir, exist_ok=True)
-    os.chmod(resources.tmpdir, 0o777)
+    # chmod only when the mode differs: a directory another account created (the odoo account's earlier run) that is
+    # already 0777 is exactly what is wanted, and chmod on it fails with EPERM for everyone but its owner.
+    mode = stat.S_IMODE(os.stat(resources.tmpdir).st_mode)
+    if mode != 0o777:
+        try:
+            os.chmod(resources.tmpdir, 0o777)
+        except OSError as e:
+            owner = os.stat(resources.tmpdir).st_uid
+            print(
+                f"❌ ERROR: the slot directory {resources.tmpdir} has mode {mode:04o}, not 0777, and this account "
+                f"(uid {os.getuid()}) cannot change it ({e}); it belongs to uid {owner}. "
+                f"Fix it once with: sudo chmod 0777 {resources.tmpdir}"
+            )
+            sys.exit(1)
     os.environ["TMPDIR"] = resources.tmpdir
     _CHROME_KILL_PATTERN = resources.chrome_kill_pattern
     _CHROME_PROFILE_GLOBS = resources.chrome_profile_globs
@@ -3748,15 +4056,21 @@ def main():
             if held_slot is None:
                 print(_no_slot_message(slots, early_args.slot_held))
                 sys.exit(1)
-            if slots > 1:
-                _record_lock_holder(lock_file_path, held_slot)
-            else:
-                _record_lock_holder(lock_file_path)
+            _record_lock_holder(lock_file_path, held_slot, os.environ.get("HAMS_TEST_QUEUE_TICKET"))
         if slots > 1:
             print(f"[*] Holding test slot {held_slot} of {slots} (lock {runner_slots.slot_lock_path(lock_file_path, held_slot)}).")
+            if "--internal-ns-init" not in sys.argv:
+                # Under the slot lock just taken, before anything is built: remove what runs that are gone left behind.
+                try:
+                    sweep_slot_leftovers(
+                        default_postgres_access(), held_slot, lock_file_path, apply_default_test_tmpdir(dict(os.environ))
+                    )
+                except FileNotFoundError as e:
+                    print(f"❌ ERROR: {e}")
+                    sys.exit(1)
             if os.environ.get("HAMS_ISOLATED_NS") != "1":
-                # The full pipeline will run in a private network namespace: only the slot-wide
-                # refusals can apply, and they apply now, before the minutes of provisioning.
+                # The full pipeline will run in a private network namespace: only the refusals that hold there
+                # (--mcp) can apply, and they apply now, before the minutes of provisioning.
                 enforce_slot_refusals(runner_slots.slot_resources(held_slot, slots, True, None), early_args)
 
     cwd = os.getcwd()
@@ -3960,6 +4274,10 @@ def main():
         )
     enforce_slot_refusals(resources, args)
     apply_slot_resources(resources)
+    if slots > 1:
+        install_run_cleanup(
+            args.db, held_slot, args.keep_db, resources.tmpdir if resources.scoped and held_slot > 1 else None
+        )
     odoo_http_port = str(resources.http_port)
     odoo_url = f"http://127.0.0.1:{odoo_http_port}"
     flush_db = resources.redis_db if resources.scoped else None

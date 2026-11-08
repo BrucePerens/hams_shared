@@ -71,12 +71,13 @@ class TestConfiguredSlotCount(unittest.TestCase):
             rs.configured_slot_count(None, {}, self.path), 4
         )
 
-    def test_precedence_flag_then_environment_then_file(self):
+    def test_environment_then_file_and_the_flag_can_only_raise_the_count(self):
         self.write("4\n")
         env = {rs.SLOTS_ENV: "3"}
         self.assertEqual(
-            rs.configured_slot_count(2, env, self.path), 2
+            rs.configured_slot_count(2, env, self.path), 3
         )
+        self.assertEqual(rs.configured_slot_count(6, env, self.path), 6)
         self.assertEqual(
             rs.configured_slot_count(None, env, self.path), 3
         )
@@ -391,13 +392,21 @@ class TestSlotRefusals(unittest.TestCase):
                 [],
             )
 
-    def test_pause_on_fail_and_mcp_are_slot_one_only(self):
+    def test_on_the_host_pause_on_fail_and_mcp_are_slot_one_only_and_name_the_shortcut(self):
         reasons = rs.slot_refusals(
-            self.resources(2, True), True, True, []
+            self.resources(2, False), True, True, []
         )
         self.assertEqual(len(reasons), 2)
-        self.assertIn("9222", reasons[0])
-        self.assertIn("8075", reasons[1])
+        self.assertIn("8075", reasons[0])
+        self.assertIn("9222", reasons[1])
+        self.assertIn("HAMS_ISOLATED_NS=1", reasons[1])
+        self.assertIn("Leave HAMS_ISOLATED_NS=1 out", reasons[1])
+
+    def test_the_full_pipeline_limits_only_mcp_above_slot_one(self):
+        reasons = rs.slot_refusals(self.resources(2, True), True, True, ["backup_management"])
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("--mcp", reasons[0])
+        self.assertEqual(rs.slot_refusals(self.resources(3, True), True, False, ["hams_rabbitmq"]), [])
 
     def test_a_shared_host_broker_refuses_only_on_the_host(self):
         on_host = rs.slot_refusals(

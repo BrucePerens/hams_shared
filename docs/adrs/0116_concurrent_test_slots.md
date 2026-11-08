@@ -17,8 +17,8 @@ network namespace with its own Redis and RabbitMQ, and the only things the runs 
 the host log directory and the host `/var/lib/odoo` tree.
 
 ## Decision
-1. **Opt in, default one.** `--slots N`, `HAMS_TEST_SLOTS=N` or the first line of `/opt/hams/etc/test_slots` (in that
-   order of precedence), N from 1 to 15. Without the opt-in the count is 1 and every derived value equals the old one
+1. **Opt in, default one.** `HAMS_TEST_SLOTS=N` or the first line of `/opt/hams/etc/test_slots` (in that order of
+   precedence), N from 1 to 15. `--slots N` can only raise the count (amended 2026-11-08, see "Amendments"). Without the opt-in the count is 1 and every derived value equals the old one
    (lock file, database, port 8075, Redis database 1, file names, Chrome patterns, command line of the re-exec'd
    phases). A bad value is an error (exit 2), never a quiet 1.
 2. **One lock per slot; slot 1 is the original file.** A run takes the lowest free slot with a non-blocking flock on
@@ -30,21 +30,57 @@ the host log directory and the host `/var/lib/odoo` tree.
    the Redis database (K), `TMPDIR` (`<TMPDIR>/slot-K`) and the patterns that kill and clean up that run's Chrome
    (`pkill -f _chrome_odoo` matched every slot's browsers). In the full pipeline the network namespace already makes
    ports, Redis, RabbitMQ and the process table private, so nothing but the database and the file names changes there.
-4. **Refuse what cannot be made per slot, fail fast.** Above slot 1: `--pause-on-fail` (the harness pins Chrome's port
-   9222), `--mcp` (clients are configured for 8075), and a run on the host whose modules under test mention RabbitMQ
-   (`pika`, `amqp`, `rabbitmq` in their Python) while a RabbitMQ listens on 5672: its queues would be shared, and a vhost
-   cannot be created as the `odoo` user. Modules that never touch the broker run in any slot. The full pipeline starts a
-   private RabbitMQ and has none of these problems. The refusal names every reason and says what to do.
+4. **Refuse what cannot be made per slot, fail fast.** Above slot 1: `--mcp` (clients are configured for one server on
+   8075, which a private namespace cannot offer to the outside), and, only for a run on the host (`HAMS_ISOLATED_NS=1` set
+   by hand, no private namespace): `--pause-on-fail` (the harness pins Chrome's port 9222) and modules under test that
+   mention RabbitMQ (`pika`, `amqp`, `rabbitmq` in their Python) while a RabbitMQ listens on 5672 (its queues would be shared,
+   and a vhost cannot be created as the `odoo` user). The full pipeline, which is the supported way to run slots, gives
+   every run its own network namespace, Redis and RabbitMQ on the same ports, and has neither host-only limit. The
+   refusal names every reason, and a host-only reason says the run is on the host because `HAMS_ISOLATED_NS=1` is set and
+   to leave it out.
 5. **The wait queue stays one FIFO.** The queue directory is derived from the base lock path. A ticket named by a live
-   holder record is a running run; the head of the queue is the oldest waiter and may try the slot locks while fewer
-   than N slots are busy, so the head takes the first free slot. With one slot the head rule is the old one (the lowest
-   live ticket, running holder included), so `lint_lock.py` and default runs wait exactly as before.
+   holder record, or whose process has one, is a running run; the oldest waiters, as many as there are free slots, may
+   try the slot locks, so a slow or unlucky head never stops the others from taking the other free slots. With one slot
+   the head rule is the old one (the lowest live ticket, running holder included), so `lint_lock.py` and default runs
+   wait exactly as before.
 6. **The slot travels in the command line.** The invoking process appends `--slots N --slot-held K` to the command it
    re-execs (sudo, systemd-run, unshare). The root phase takes back only slot K, with the ticket it adopted, and the
    final test process takes the database and file names from it. An environment variable might not survive a layer,
    and a child that lost its slot would have taken slot 1.
-7. **Visible.** Holder records carry the slot and ticket; `--queue-status` lists each slot; a run prints the slot,
+7. **Visible.** Holder records carry the slot and ticket in every mode; `--queue-status` lists each slot; a run prints the slot,
    database, port and Redis database it uses.
+
+8. **A run in slot mode removes what it owns (amended 2026-11-08).** On a machine with more than one slot, every run, in
+   any slot including 1, drops its database WITH (FORCE), removes its Odoo filestore and its slot TMPDIR when it ends,
+   whether it passed, failed or was stopped (exit hook, SIGTERM and SIGHUP handlers; in the full pipeline the root phase
+   repeats the drop after the test process, which may have been killed outright). `--keep-db` keeps all three and prints
+   the database name last, for triage. The database is marked with a PostgreSQL comment
+   (`hams_test_runner:v1 slot=K kept=0|1`) written when it is created, and only a database whose marker names the run's
+   slot and is not kept is dropped. Before building anything, every run in slot mode sweeps the leftovers of runs that
+   are gone (SIGKILL, power cut, an older `test.py`), slot by slot, only while it holds that slot's flock and no live
+   holder record names it; it refuses on a production host and never touches `hams_prod`, a kept database, or a name
+   that is not this runner's. With one slot nothing changes: `hams_test` is kept and rebuilt by the next run.
+   Reference: "Clean-up in slot mode" in `tools/README.md`.
+
+## Amendments, 2026-11-08 (Bruce: "remove all single-slot-only issues from the test pipeline")
+- **Queue head-of-line block.** A run started with one slot wrote its holder record without its ticket, so a slotted
+  waiter counted the running holder's ticket as the oldest waiter and never tried although three of four slots were
+  free. Holder records now always carry slot and ticket, a ticket whose process has a holder record is a running run
+  even if the record lacks the ticket (older `test.py`), and the waiters at positions below the number of free slots
+  may try.
+- **One count per machine.** Every run reads `HAMS_TEST_SLOTS` / `/opt/hams/etc/test_slots`; `--slots` can only raise
+  it. A run that asked for fewer slots than the machine has no longer takes slot 1 only and queues as if the others
+  did not exist. To run with one slot, set `HAMS_TEST_SLOTS=1`.
+- **The full pipeline is the supported way.** The RabbitMQ and `--pause-on-fail` limits exist only for a
+  `HAMS_ISOLATED_NS=1` run, which shares the host's network; they are removed for the full pipeline (decision 4).
+  `HAMS_ISOLATED_NS=1` keeps working, is not needed for normal runs, and its messages say so.
+- **Batching (ADR 0115) composes with slots.** The batch leader is a `test.py` that holds no slot while the batch
+  forms; its nested `test.py -u <union> --solo --wait` queues in the one FIFO and takes a slot like any run, while the
+  members wait on the leader's verdict in the batch queue, which holds no slot or lock: no cycle. One combined run per
+  repository and kind still runs at a time, so a request arriving during a running batch joins the next batch instead of
+  taking a free slot. Not batched: `--solo`, `HAMS_TEST_BATCH=off`, a dirty tree, a hand-linked `hams_shared`,
+  `-u mod:Class`, no `-u`, `--test-tags`, a mode other than standard, `--coverage`, `--mcp`, `--pause-on-fail`,
+  `--offline-isolation`, `--profile`, `--build-daemons`, `--keep-db`, a working directory that is not a repository root.
 
 ## Related fix in the same change
 A run in which no test ran used to end with "No test failures or system crashes detected" (Odoo died on "Port 8075 is
@@ -57,7 +93,8 @@ and the closing banner says `TEST RUN FAILED: no tests ran`.
   (9 GB per run in the full pipeline).
 - Known limits, each stated in the README: a flat `HAMS_ISOLATED_NS=1` run shares the host's Redis server (one database
   per slot), PostgreSQL roles and the host's ports, so a test that binds a fixed port collides with the same test in
-  another slot (the full pipeline has no such collision); the "possible browser leak" advisory counts browsers box-wide;
+  another slot (the full pipeline has no such collision); a full-pipeline run leaves behind only its log files, the
+  shared `postgres` roles and the lock and queue files; the "possible browser leak" advisory counts browsers box-wide;
   the coalescing batch queue still runs one combined run per repository at a time; `remote_odoo_test.py` keeps its
   one-job-per-remote-host lock and so uses slot 1 there.
 - The window in which a re-exec'd phase re-takes its parent's flock (the exec closes the descriptor; sudo closes it

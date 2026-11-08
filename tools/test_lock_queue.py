@@ -27,6 +27,7 @@ Tests [@ANCHOR: test:slot_handoff_args]
 """
 
 import fcntl
+import json
 import os
 import signal
 import subprocess
@@ -538,11 +539,37 @@ class TestMayTry(_SlotHolderMixin, _TmpDirCase):
         self.write(1, ticket=other)
         self.assertTrue(lq.may_try(self.qdir, self.tickets(), mine, slots=2))
 
-    def test_a_ticket_ahead_that_is_waiting_blocks_us(self):
+    def test_a_ticket_ahead_that_is_waiting_blocks_us_only_when_slots_are_scarce(self):
+        busy = lq.take_ticket(self.qdir)
+        self.write(1, ticket=busy)
         ahead = lq.take_ticket(self.qdir)
         mine = lq.take_ticket(self.qdir)
         self.assertFalse(lq.may_try(self.qdir, self.tickets(), mine, slots=2))
         self.assertTrue(lq.may_try(self.qdir, self.tickets(), ahead, slots=2))
+
+    def test_two_free_slots_let_two_waiters_try_so_a_stuck_head_blocks_nobody(self):
+        ahead = lq.take_ticket(self.qdir)
+        mine = lq.take_ticket(self.qdir)
+        third = lq.take_ticket(self.qdir)
+        self.assertTrue(lq.may_try(self.qdir, self.tickets(), ahead, slots=2))
+        self.assertTrue(lq.may_try(self.qdir, self.tickets(), mine, slots=2))
+        self.assertFalse(lq.may_try(self.qdir, self.tickets(), third, slots=2))
+
+    def test_a_holder_record_without_its_ticket_still_makes_that_ticket_a_running_run(self):
+        # What a run started with one slot used to write: the record has the pid and no ticket, while the
+        # same process waited with a ticket. The slotted waiter behind it counted that ticket as the oldest
+        # waiter and never tried although three of four slots were free.
+        child = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(child.kill)
+        self.addCleanup(child.wait)
+        start = lq.proc_start_time(child.pid)
+        running = lq.take_ticket(self.qdir, pid=child.pid, start=start)
+        lq._write_atomic(self.qdir, "holder-%d-%d" % (child.pid, start),
+                         {"pid": child.pid, "start": start, "since": 1.0, "info": "old style"})  # no slot, no ticket
+        waiter = lq.take_ticket(self.qdir)                # this process
+        self.assertEqual(self.tickets()[0]["name"], running)
+        self.assertTrue(lq.may_try(self.qdir, self.tickets(), waiter, slots=4))
+        self.assertFalse(lq.may_try(self.qdir, self.tickets(), waiter, slots=1))   # single slot: as it always was
 
 
 class TestAcquireWithSlots(_TmpDirCase):
@@ -734,9 +761,10 @@ class TestTestPyWiring(_TmpDirCase):
         # --preflight-done: these tests are about the single-instance lock, which test.py takes after its pre-flight lint
         # pass; without the flag a lint finding anywhere in the surrounding repo (or a worktree without the sibling repo) stops
         # test.py before the lock and fails the tests for a reason that has nothing to do with the lock.
-        # --slots 1: the command line outranks HAMS_TEST_SLOTS and /opt/hams/etc/test_slots, so these tests of
-        # the one-slot lock mean the same on a machine that has opted in to more slots.
-        return subprocess.run(_test_py_argv("--slots", "1", "-u", "nonexistent_module", *args), env=env,
+        # HAMS_TEST_SLOTS=1: the environment outranks /opt/hams/etc/test_slots (and --slots can only raise the count),
+        # so these tests of the one-slot lock mean the same on a machine that has opted in to more slots.
+        env["HAMS_TEST_SLOTS"] = "1"
+        return subprocess.run(_test_py_argv("-u", "nonexistent_module", *args), env=env,
                               capture_output=True, text=True, timeout=timeout, cwd=os.path.dirname(_HERE))
 
     def hold(self):
@@ -769,8 +797,8 @@ class TestTestPyWiring(_TmpDirCase):
 
     def test_waiter_takes_over_when_the_holder_releases(self):
         holder = self.hold()
-        p = subprocess.Popen(_test_py_argv("--slots", "1", "-u", "nonexistent_module", "--wait"),
-                             env=dict(os.environ, HAMS_TEST_LOCK_PATH=self.lock_path,
+        p = subprocess.Popen(_test_py_argv("-u", "nonexistent_module", "--wait"),
+                             env=dict(os.environ, HAMS_TEST_SLOTS="1", HAMS_TEST_LOCK_PATH=self.lock_path,
                                       HAMS_SKIP_CI_LOAD_GATE="1", HAMS_ISOLATED_NS="1",
                                       PATH=_install_db_stand_ins(self._tmp.name)[0], **NO_POSTGRES_ENV),
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -878,11 +906,14 @@ class TestSlotsWiring(_TmpDirCase):
         self.assertLess(time.time() - started, 30)
         self.assertEqual(lq.live_tickets(self.qdir), [], "fail-fast must not queue")
 
-    def test_the_command_line_slot_count_outranks_the_environment(self):
+    def test_the_command_line_can_only_raise_the_slot_count(self):
+        # An explicit --slots 1 on a machine set to 4 is a 4-slot run: it takes the free slot 2 instead of
+        # fighting for slot 1 and queueing as if the others did not exist.
         self.hold_slot(1)
         r = self.run_test_py("--slots", "1", HAMS_TEST_SLOTS="4")
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("Another instance of test.py is already running", r.stdout)
+        self.assertIn("Holding test slot 2 of 4", r.stdout, r.stdout + r.stderr)
+        r = self.run_test_py("--slots", "3", HAMS_TEST_SLOTS="2")
+        self.assertIn("of 3", r.stdout, r.stdout + r.stderr)
 
     def test_a_bad_slot_count_is_an_error_not_one_slot(self):
         r = self.run_test_py(HAMS_TEST_SLOTS="lots")
@@ -961,13 +992,35 @@ class TestSlotsWiring(_TmpDirCase):
         self.assertEqual(lines[-1], "queue: empty")
         self.assertTrue(self.slot_is_free(1) and self.slot_is_free(3), "--queue-status must not take a lock")
 
-    def test_pause_on_fail_is_slot_one_only(self):
+    def test_pause_on_fail_above_slot_one_is_refused_on_the_host_and_names_the_shortcut(self):
         self.hold_slot(1)
-        r = self.run_test_py("--pause-on-fail", HAMS_TEST_SLOTS="2", HAMS_ISOLATED_NS="")
-        # Not the flat path: the full pipeline would escalate to sudo, so this only checks the early
-        # refusal, which runs before any escalation.
+        r = self.run_test_py("--pause-on-fail", HAMS_TEST_SLOTS="2")   # HAMS_ISOLATED_NS=1: a run on the host
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("--pause-on-fail pins Chrome's debugging port 9222", r.stdout)
+        self.assertIn("this run is on the host because HAMS_ISOLATED_NS=1 is set", r.stdout)
+
+    def test_mixed_one_slot_and_slotted_runs_share_one_queue(self):
+        # The case that left slots 2-4 idle: a run started with one slot (an older test.py, or HAMS_TEST_SLOTS=1)
+        # holds slot 1 with a record that has no ticket and waited with a ticket of its own; a slotted run
+        # queued behind it must start in slot 2 at once, with real lock files and a real test.py process.
+        holder = self.hold_slot(1)
+        ticket = lq.take_ticket(self.qdir, pid=self.pids[1], start=lq.proc_start_time(self.pids[1]))
+        self.assertTrue(ticket)
+        for record in os.listdir(self.qdir):                 # rewrite the holder record the old way: no slot, no ticket
+            if record.startswith("holder-"):
+                path = os.path.join(self.qdir, record)
+                with open(path, encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                payload.pop("slot", None)
+                payload.pop("ticket", None)
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle)
+        started = time.time()
+        r = self.run_test_py("--wait", "--wait-timeout", "30", HAMS_TEST_SLOTS="4")
+        self.assertIn("Holding test slot 2 of 4", r.stdout, r.stdout + r.stderr)
+        self.assertNotEqual(r.returncode, lq.EXIT_WAIT_TIMEOUT)
+        self.assertLess(time.time() - started, 25)
+        holder.close()
 
 
 class TestGuardAgainstTheSharedDatabase(_TmpDirCase):

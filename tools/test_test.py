@@ -397,7 +397,7 @@ class SlotWiringMainTests(unittest.TestCase):
     (one slot) asserted to be what it was before slots existed."""
 
     def _run_main(self, argv, env_overrides, hold_slots=(), broker=False):
-        calls = {"rebuild": [], "cmd": [], "env": [], "extractor": []}
+        calls = {"rebuild": [], "cmd": [], "env": [], "extractor": [], "sweep": [], "cleanup": []}
 
         def fake_run_cmd(cmd, extractor=None, **kwargs):
             calls["cmd"].append(list(cmd))
@@ -422,7 +422,8 @@ class SlotWiringMainTests(unittest.TestCase):
                 handle = open(f"{lock_path}.slot-{slot}" if slot > 1 else lock_path, "a")
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 held.append(handle)
-            env = {"HAMS_ISOLATED_NS": "1", "HAMS_TEST_LOCK_PATH": lock_path, "HAMS_SKIP_CI_LOAD_GATE": "1"}
+            env = {"HAMS_ISOLATED_NS": "1", "HAMS_TEST_LOCK_PATH": lock_path, "HAMS_SKIP_CI_LOAD_GATE": "1",
+                   "HAMS_TEST_SLOTS": "1"}
             env.update(env_overrides)
             orig_cwd = os.getcwd()
             os.chdir(fake_repo)
@@ -440,6 +441,11 @@ class SlotWiringMainTests(unittest.TestCase):
                      patch.object(_test_runner, "FailureExtractor", side_effect=fake_extractor), \
                      patch.object(_test_runner.host_requirements, "require_test_host"), \
                      patch.object(_test_runner, "check_linters"), \
+                     patch.object(_test_runner, "default_postgres_access", return_value="PG"), \
+                     patch.object(_test_runner, "sweep_slot_leftovers",
+                                  side_effect=lambda *a, **k: calls["sweep"].append(a)), \
+                     patch.object(_test_runner, "install_run_cleanup",
+                                  side_effect=lambda *a, **k: calls["cleanup"].append(a)), \
                      patch.object(_test_runner, "rebuild_db",
                                   side_effect=lambda *a, **k: calls["rebuild"].append((a, k))), \
                      patch.object(_test_runner, "run_cmd", side_effect=fake_run_cmd), \
@@ -493,6 +499,68 @@ class SlotWiringMainTests(unittest.TestCase):
         self.assertEqual(calls["env"][0]["REDIS_DB"], "2")
         self.assertEqual(calls["env"][0]["DB_NAME"], "hams_test_relay_s2")
         self.assertEqual(calls["extractor"][0]["slot"], 2)
+
+    def test_a_slot_mode_run_sweeps_then_arms_its_cleanup_and_one_slot_does_neither(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, calls, _, _ = self._run_main(["--slots", "2", "--keep-db"], {"TMPDIR": tmp}, hold_slots=(1,))
+            self.assertEqual(len(calls["sweep"]), 1)
+            pg, held_slot, lock_path, base_tmpdir = calls["sweep"][0]
+            self.assertEqual((pg, held_slot, base_tmpdir), ("PG", 2, tmp))
+            self.assertTrue(lock_path.endswith("test.lock"))
+            self.assertEqual(calls["cleanup"], [("hams_test_s2", 2, True, os.path.join(tmp, "slot-2"))])
+            _, calls, _, _ = self._run_main(["--slots", "2"], {"TMPDIR": tmp}, hold_slots=(1,))
+            self.assertEqual(calls["cleanup"], [("hams_test_s2", 2, False, os.path.join(tmp, "slot-2"))])
+            # slot 1 of a slot-mode run has the shared TMPDIR, which is never removed
+            _, calls, _, _ = self._run_main(["--slots", "2"], {"TMPDIR": tmp})
+            self.assertEqual(calls["cleanup"], [("hams_test", 1, False, None)])
+            self.assertEqual(len(calls["sweep"]), 1)
+        _, calls, _, _ = self._run_main(["--slots", "1"], {})
+        self.assertEqual((calls["sweep"], calls["cleanup"]), ([], []))
+
+    def test_the_final_phase_arms_its_cleanup_without_a_slot_directory_and_does_not_sweep(self):
+        _, calls, _, _ = self._run_main(["--slots", "3", "--slot-held", "3"], {"HAMS_TEST_LOCK_HELD": "1"})
+        self.assertEqual(calls["cleanup"], [("hams_test_s3", 3, False, None)])
+        self.assertEqual(calls["sweep"], [])
+
+    def test_a_slot_directory_that_exists_with_mode_0777_is_not_chmodded(self):
+        # The odoo account created it; another account cannot chmod it (EPERM) and need not.
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = os.path.join(tmp, "slot-2")
+            os.makedirs(directory)
+            os.chmod(directory, 0o777)
+            resources = _test_runner.runner_slots.slot_resources(2, 2, False, tmp)
+            with patch.object(_test_runner.os, "chmod", side_effect=PermissionError("EPERM")) as chmod, \
+                 patch.dict(os.environ, {}), \
+                 patch.object(_test_runner, "_CHROME_KILL_PATTERN", "x"), \
+                 patch.object(_test_runner, "_CHROME_PROFILE_GLOBS", ()):
+                _test_runner.apply_slot_resources(resources)
+            chmod.assert_not_called()
+
+    def test_a_slot_directory_that_is_not_0777_and_cannot_be_changed_fails_clearly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = os.path.join(tmp, "slot-2")
+            os.makedirs(directory)
+            os.chmod(directory, 0o755)
+            resources = _test_runner.runner_slots.slot_resources(2, 2, False, tmp)
+            with patch.object(_test_runner.os, "chmod", side_effect=PermissionError("EPERM")), \
+                 patch.dict(os.environ, {}), contextlib.redirect_stdout(io.StringIO()) as out:
+                with self.assertRaises(SystemExit) as caught:
+                    _test_runner.apply_slot_resources(resources)
+            self.assertEqual(caught.exception.code, 1)
+            self.assertIn("mode 0755, not 0777", out.getvalue())
+            self.assertIn(f"sudo chmod 0777 {directory}", out.getvalue())
+
+    def test_a_slot_directory_with_another_mode_is_changed_to_0777(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = os.path.join(tmp, "slot-2")
+            os.makedirs(directory)
+            os.chmod(directory, 0o755)
+            resources = _test_runner.runner_slots.slot_resources(2, 2, False, tmp)
+            with patch.dict(os.environ, {}), \
+                 patch.object(_test_runner, "_CHROME_KILL_PATTERN", "x"), \
+                 patch.object(_test_runner, "_CHROME_PROFILE_GLOBS", ()):
+                _test_runner.apply_slot_resources(resources)
+            self.assertEqual(os.stat(directory).st_mode & 0o777, 0o777)
 
     def test_two_runs_on_one_host_share_no_name(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -576,10 +644,13 @@ class SlotWiringMainTests(unittest.TestCase):
                      patch.object(_test_runner, "check_host_apt_packages"), \
                      patch.object(_test_runner, "get_default_audio_sink_name", return_value=None), \
                      patch.object(_test_runner.os, "execvpe", side_effect=fake_exec), \
+                     patch.object(_test_runner, "default_postgres_access", return_value="PG"), \
+                     patch.object(_test_runner, "sweep_slot_leftovers"), \
                      contextlib.redirect_stdout(io.StringIO()):
                     os.environ.pop("HAMS_ISOLATED_NS", None)
                     if not keep_slots_env:
-                        os.environ.pop("HAMS_TEST_SLOTS", None)
+                        # the machine's own /opt/hams/etc/test_slots must not decide these tests' slot count
+                        os.environ["HAMS_TEST_SLOTS"] = "1"
                     with self.assertRaises(Exec):
                         _test_runner.main()
             finally:
@@ -638,6 +709,19 @@ class SlotWiringMainTests(unittest.TestCase):
             source.index("] + sys.argv[1:] + [\"--preflight-done\"]"),
             source.index("exec_cmd += slot_handoff_args(slots, held_slot)"),
         )
+
+
+class HolderRecordTests(unittest.TestCase):
+    """Every run writes its slot and its queue ticket into its holder record, also with one slot."""
+
+    def test_record_lock_holder_always_carries_slot_and_ticket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = os.path.join(tmp, "x.lock")
+            with patch.dict(os.environ, {}, clear=False), patch.object(_test_runner.atexit, "register"):
+                _test_runner._record_lock_holder(lock, 1, "0000000001-1-1")
+            import lock_queue
+            records = lock_queue.read_holders(lock + ".queue.d")
+            self.assertEqual([(r["slot"], r["ticket"]) for r in records], [(1, "0000000001-1-1")])
 
 
 class SlotFilesAndKillTests(unittest.TestCase):
