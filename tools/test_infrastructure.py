@@ -8409,3 +8409,18 @@ class ProvisionUnitsTests(_SafePatchTestCase):
         self.assertTrue(kinds <= {"write", "link", "run", "skip", "copy"}, kinds)
         self.assertEqual(commands, [])
         self.assertEqual(sum(1 for a in plan.actions if a[0] == "run" and "daemon-reload" in a[1]), 1)
+
+    def test_plan_without_db_name_in_the_environment_does_not_crash_and_names_the_default_database(self):
+        """`--plan --units` on hams1 died with KeyError: 'DB_NAME' (2026-11-07): the daemon-key unit's ExecStart names the database."""
+        for environment, expected in (("prod", "hams_prod"), ("test", "hams_test")):
+            with self.subTest(environment=environment):
+                env_vars = {"DOMAIN": "example.test"}
+                with infra.planning():
+                    infra.provision_units(lambda cmd, **kw: None, env_vars, environment)
+                self.assertEqual(env_vars["DB_NAME"], expected)
+
+    def test_a_database_name_the_operator_set_is_kept(self):
+        env_vars = {"DOMAIN": "example.test", "DB_NAME": "hams_other"}
+        with infra.planning():
+            infra.provision_units(lambda cmd, **kw: None, env_vars)
+        self.assertEqual(env_vars["DB_NAME"], "hams_other")
