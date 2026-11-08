@@ -40,7 +40,11 @@ Why: a lint run's builds are written and deleted, and the SSD is shared with eve
 build per slot and repository: about 3.5 GB each, 4 to 20 minutes on a loaded box), `/dev/shm` is capped at half of the memory (63 GB), so the
 free-space floor of a RAM directory is the RAM minimum (`HAMS_RAM_MIN_FREE_GB`, 20) and not `free_floor_gb`, and a RAM directory unused for 2 days
 (not 14) is removed. The legacy single directory is not adopted into RAM. `XDG_CACHE_HOME` set, or `HAMS_RAM_DIRS=0`, keeps the disk locations. `show`,
-`prune` and `clear` list both places. Documentation of every function: `tools/README.md`, "Build and test scratch directories in RAM".
+`prune` and `clear` list both places. **Total budget (2026-11-08):** the RAM cache as a whole is held to `HAMS_RAM_LINT_GB` (default 24 GB) by `ram_dirs.prune_lint_cache`, before every
+lint build: least recently used whole directories go first, never one a live run holds (its `<dir>.lock`) nor the one about to be built. The 37 GB seen that day was
+four `relay-export-test` copies (4.5 GB each, all `debug/deps` and `build/`; incremental was already off), four `hams_com` slots (3.5 GB) and three `hams_open` (up to 3.7 GB);
+in RAM the relay export test now uses one directory for every slot (its lock already makes builds take turns). Each lint run prints `lint cache: RAM cache X GB of Y GB budget`
+and `/dev/shm/hams-ram-usage.json` carries the same numbers (`ram_dirs.py usage`). Documentation of every function: `tools/README.md`, "Build and test scratch directories in RAM".
 
 ### Budgets
 

@@ -34,8 +34,13 @@ Tests [@ANCHOR: ram_dirs:stop_group]
 Tests [@ANCHOR: ram_dirs:status_lines]
 Tests [@ANCHOR: ram_dirs:main]
 Tests [@ANCHOR: ram_dirs:die_with_parent]
+Tests [@ANCHOR: ram_dirs:prune_lint_cache]
+Tests [@ANCHOR: ram_dirs:usage]
+Tests [@ANCHOR: ram_dirs:write_usage]
 """
 
+import fcntl
+import json
 import os
 import signal
 import subprocess
@@ -408,6 +413,77 @@ class SweepTest(RamTestCase):
     # Tests [@ANCHOR: ram_dirs:sweep]
     def test_a_missing_root_is_nothing_to_do(self):
         self.assertEqual(ram_dirs.sweep(environ=dict(self.environ, HAMS_RAM_ROOT=os.path.join(self.root, "none"))), [])
+
+
+class LintBudgetTest(RamTestCase):
+    def make(self, name, size, age_days):
+        path = os.path.join(self.root, "hams-lint-cargo", name)
+        os.makedirs(path)
+        with open(os.path.join(path, "f"), "wb") as handle:
+            handle.write(b"x" * size)
+        stamp = os.path.join(path, ".last_used")
+        open(stamp, "w").close()
+        past = time.time() - age_days * 86400
+        os.utime(stamp, (past, past))
+        return path
+
+    def pol(self, budget_bytes):
+        return ram_dirs.RamPolicy(root=self.root, require_tmpfs=False, lint_budget_gb=budget_bytes / ram_dirs.GB)
+
+    # Tests [@ANCHOR: ram_dirs:prune_lint_cache]
+    def test_oldest_unused_directories_go_first_until_the_total_fits(self):
+        old = self.make("old", 1000, 5)
+        mid = self.make("mid", 1000, 3)
+        new = self.make("new", 1000, 1)
+        said = []
+        removed = ram_dirs.prune_lint_cache(os.path.join(self.root, "hams-lint-cargo"), pol=self.pol(2500), say=said.append)
+        self.assertEqual([name for name, _ in removed], ["old"])
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(mid) and os.path.exists(new))
+        self.assertIn("RAM budget", said[0])
+
+    # Tests [@ANCHOR: ram_dirs:prune_lint_cache]
+    def test_a_directory_a_live_run_holds_and_the_one_about_to_be_built_are_never_removed(self):
+        busy = self.make("busy", 1000, 9)
+        keep = self.make("keep", 1000, 8)
+        idle = self.make("idle", 1000, 1)
+        with open(busy + ".lock", "a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            removed = ram_dirs.prune_lint_cache(os.path.join(self.root, "hams-lint-cargo"), keep=keep, pol=self.pol(1), say=lambda t: None)
+        self.assertEqual([name for name, _ in removed], ["idle"])
+        self.assertTrue(os.path.exists(busy) and os.path.exists(keep))
+        self.assertFalse(os.path.exists(idle))
+
+    # Tests [@ANCHOR: ram_dirs:prune_lint_cache]
+    def test_within_the_budget_nothing_is_removed_and_a_missing_base_is_fine(self):
+        self.make("a", 1000, 9)
+        self.assertEqual(ram_dirs.prune_lint_cache(os.path.join(self.root, "hams-lint-cargo"), pol=self.pol(10 ** 6), say=lambda t: None), [])
+        self.assertEqual(ram_dirs.prune_lint_cache(os.path.join(self.root, "none"), pol=self.pol(1)), [])
+
+    # Tests [@ANCHOR: ram_dirs:usage]
+    # Tests [@ANCHOR: ram_dirs:write_usage]
+    def test_the_usage_file_describes_the_cache_and_the_jobs(self):
+        self.make("a", 2000, 1)
+        ram_dirs.claim(os.path.join(self.root, "hams-cargo-target-j1"))
+        path = ram_dirs.write_usage(self.pol(5 * ram_dirs.GB))
+        self.assertEqual(path, os.path.join(self.root, "hams-ram-usage.json"))
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        self.assertEqual(data["lint_cache"]["budget_gb"], 5.0)
+        self.assertEqual([d["name"] for d in data["lint_cache"]["dirs"]], ["a"])
+        self.assertEqual(data["jobs"][0]["name"], "hams-cargo-target-j1")
+        self.assertEqual(data["jobs"][0]["owner"], "alive")
+        self.assertIn("free_gb", data)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o644)
+
+    # Tests [@ANCHOR: ram_dirs:write_usage]
+    def test_an_unwritable_root_is_not_an_error(self):
+        self.assertIsNone(ram_dirs.write_usage(ram_dirs.RamPolicy(root=os.path.join(self.root, "missing"))))
+
+    # Tests [@ANCHOR: ram_dirs:policy]
+    def test_the_budget_is_configurable(self):
+        self.assertEqual(ram_dirs.policy({}).lint_budget_gb, 24.0)
+        self.assertEqual(ram_dirs.policy({"HAMS_RAM_LINT_GB": "10"}).lint_budget_gb, 10.0)
 
 
 class GuardTest(RamTestCase):

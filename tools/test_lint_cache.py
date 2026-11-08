@@ -88,6 +88,17 @@ class RamCargoBaseTest(unittest.TestCase):
         self.assertTrue(any("(floor 20 GB)" in line for line in lines), lines)
         self.assertFalse(any("pruned" in line or "cleared" in line for line in lines), lines)
 
+    # Tests [@ANCHOR: lint_cache:named_cargo_session]
+    def test_in_ram_a_named_session_is_one_directory_for_every_slot_and_says_how_full_the_ram_cache_is(self):
+        environ = dict(self.environ, HAMS_LINT_SLOT="3", HAMS_RAM_LINT_GB="9")
+        lines = []
+        with unittest.mock.patch.object(self.ram_dirs, "free_gb", return_value=50), unittest.mock.patch.object(lint_cache, "toolchain_id", return_value="t1"):
+            with lint_cache.named_cargo_session("relay-export-test", environ, log=lines.append) as target:
+                pass
+        self.assertEqual(target, os.path.join(self.root, "hams-lint-cargo", "relay-export-test-t1"))
+        self.assertTrue(any("RAM cache" in line and "of 9 GB budget" in line for line in lines), lines)
+        self.assertTrue(os.path.exists(os.path.join(self.root, "hams-ram-usage.json")))
+
     # Tests [@ANCHOR: lint_cache:cargo_base]
     def test_a_lint_build_in_ram_first_removes_the_directories_of_dead_jobs(self):
         finished = subprocess.Popen([sys.executable, "-c", "pass"])

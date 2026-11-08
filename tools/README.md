@@ -601,7 +601,7 @@ Rules, all in one module: **never silent** (a refusal prints the free space and 
 quietly (`HAMS_RAM_DIRS=1` forces RAM, `HAMS_RAM_DIRS=0` forbids it); every per-job directory carries an owner marker so the sweep can tell a crashed job's from a
 live one; `run_job` stops a job that outgrows its limit or squeezes the free memory. Settings (environment): `HAMS_RAM_DIRS` (`0`, `1`, else auto),
 `HAMS_RAM_ROOT` (another tmpfs or directory; naming one turns the tmpfs check off), `HAMS_RAM_MIN_FREE_GB` (20), `HAMS_RAM_JOB_MAX_GB` (30),
-`HAMS_RAM_HARD_FREE_GB` (5). What does not move: anything that must outlive a reboot, and the PostgreSQL data of the test databases. The full pipeline of `test.py`
+`HAMS_RAM_HARD_FREE_GB` (5), `HAMS_RAM_LINT_GB` (24: the whole lint cache in RAM). What does not move: anything that must outlive a reboot, and the PostgreSQL data of the test databases. The full pipeline of `test.py`
 (its private namespace) already keeps `/var` and `/tmp` on a memory overlay, so it needs nothing; the move helps the `HAMS_ISOLATED_NS=1` runs on the host.
 Command line: `ram_dirs.py run JOB -- COMMAND...` (the job-end trap), `path JOB` / `release JOB` (a shell's own job), `sweep`, `status`.
 Tests: `test_ram_dirs.py`, `RamCargoBaseTest` in `test_lint_cache.py`, `RamTestTmpdirTests` in `test_test.py`.
@@ -618,6 +618,7 @@ Purpose: the settings every decision reads; built by `policy`. A frozen dataclas
 | `job_max_gb` | float | The size at which `run_job` stops a job whose directory is in RAM; default 30. |
 | `hard_free_gb` | float | The free space of `root` under which `run_job` stops a RAM job; default 5. |
 | `min_ram_gb` | float | Memory size below which `auto` keeps the disk quietly; default 64. |
+| `lint_budget_gb` | float | Total size of `hams-lint-cargo` in RAM; `prune_lint_cache` removes least recently used unused directories above it; default 24 (`HAMS_RAM_LINT_GB`). |
 | `require_tmpfs` | bool | `root` must be a tmpfs; default True, False when `HAMS_RAM_ROOT` names the root. |
 
 Invariants: a policy never changes after it is built. The settings are read from the environment only by `policy`.
@@ -745,6 +746,28 @@ user's) is reported with the `sudo rm -rf` line and the sweep goes on. Never rai
 
 Purpose: the size measure of the guard. Returns the sum of the file sizes under `path` in bytes (links not followed; files that vanish while walking are skipped), 0 if it does not exist. Cost: one `lstat` per file, about 0.1 s for a relay target; called every `interval` seconds by `run_job`.
 
+### `[@ANCHOR: ram_dirs:prune_lint_cache]` `prune_lint_cache(base, keep=None, pol=None, environ=None, say=None, remove=remove_tree)`
+
+Purpose: the total budget of the lint Cargo caches in RAM. Four lint slots, two repositories and the relay export test once made 11 directories and 37 GB (2026-11-08); the per-directory `cargo_gb` cap does not bound the sum.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `base` | str | `/dev/shm/hams-lint-cargo`. |
+| `keep` | str or `None` | The directory about to be built in; never removed. |
+| `pol`, `environ` | | As in `place`; the budget is `pol.lint_budget_gb`. |
+| `say` | callable | Receives one `lint cache: removed ...` line per directory. |
+| `remove` | callable | The removal (default `remove_tree`). |
+
+Returns `[(name, bytes)]` removed. Directories go whole, least recently used first (`.last_used`), until the total is within the budget. A directory is skipped when a live lint run holds its exclusive lock `<dir>.lock` (lint_cache takes it for a whole build; the prune takes it without waiting and holds it during the removal), so a build in progress is never touched, and the lock is the liveness test. May leave the total above the budget when everything else is in use. Called by `lint_cache.prepare_cargo_target` before every build. Never raises.
+
+### `[@ANCHOR: ram_dirs:usage]` `usage(pol=None, environ=None, now=time.time)`
+
+Purpose: the numbers a status display shows. Returns a dict: `time` (epoch seconds), `root`, `total_gb`, `used_gb`, `free_gb`, `min_free_gb`, `hard_free_gb`, `lint_cache` (`budget_gb`, `used_gb`, `dirs`: list of `{name, gb, in_use}`), `jobs` (list of `{name, gb, owner}` for `hams-cargo-target-*`), `test_tmp_gb`. Walks the cache (about a second for 24 GB); never raises.
+
+### `[@ANCHOR: ram_dirs:write_usage]` `write_usage(pol=None, environ=None)`
+
+Purpose: publishes `usage()` as `/dev/shm/hams-ram-usage.json` (mode 0644, written through a temporary file and renamed, so a reader never sees half a file). Called after each lint prune, and at the start and end of `run_job`; `ram_dirs.py usage` prints it and writes it. Returns the path or `None` when it cannot be written (another account owns the existing file, the root is missing): a display file never fails a build.
+
 ### `[@ANCHOR: ram_dirs:guard_verdict]` `guard_verdict(size_bytes, free_now_gb, pol, in_ram)`
 
 Purpose: the per-job size and memory guard as a pure function. Returns a sentence saying why the job must be stopped, or `None`. Only for a RAM job (`in_ram`): `size_bytes` above `pol.job_max_gb` GiB, or `free_now_gb` (the free space of the root; `None` means unknown and never stops) below
@@ -810,7 +833,7 @@ Purpose: the disk location of the lint Cargo caches, `<cache>/hams-lint-cargo` (
 ### `[@ANCHOR: lint_cache:cargo_base]` `cargo_base(environ=None)`
 
 Purpose: where the lint Cargo caches live now (`cargo_target_dir`, `named_cargo_session` and the budget all use it). Returns `/dev/shm/hams-lint-cargo` when `ram_dirs.lint_cargo_base` allows it, else `disk_cargo_base`. `lint_cache.py` run alone (`lint_remote.py caches` sends it over standard input)
-has no `ram_dirs` and always answers with the disk path. The budget, the prune and the exclusive lock work the same in RAM; a RAM directory unused for 2 days (not 14) is removed, and a legacy directory is never adopted into RAM.
+has no `ram_dirs` and always answers with the disk path. The budget, the prune and the exclusive lock work the same in RAM; a RAM directory unused for 2 days (not 14) is removed, the whole cache is held to `HAMS_RAM_LINT_GB` (24) by `prune_lint_cache` and reported by a `lint cache: RAM cache X GB of Y GB budget` line, and a legacy directory is never adopted into RAM.
 
 ### `[@ANCHOR: lint_cache:cargo_bases]` `cargo_bases(environ=None)`
 
