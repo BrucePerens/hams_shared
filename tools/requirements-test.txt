@@ -19,6 +19,10 @@
 # av (PyAV) is deliberately NOT installed: the dev box does not have it, and mypy then type-checks every `import av` against PyAV's
 # own annotations (check_untyped_utility_files failed on mac1-vm that way); hams_simulated_bots' tests need it and fail to collect on the
 # dev box too.
+# scipy 1.18.1 (manylinux_2_28 wheels, both architectures) is listed because numpy 2.5.0 below is newer than the <2.5 that Debian's
+# python3-scipy 1.15.3 accepts: with numpy alone, every `import scipy.signal` on a host provisioned from this file warns "A NumPy version
+# >=1.23.5 and <2.5.0 is required" (the dev box did, again, on 2026-11-07, after a sudo install of this file replaced /usr/local's scipy).
+# It is the pairing recorded in hams_com devbox_tools/lima/README.md ("Python numpy and scipy"); check: python3 -W error -c 'import scipy.signal'.
 # pyopenssl 26.4.0 is the dev box's too: Debian's 25.0.0 cannot import against cryptography 50.
 #
 # Regenerate: for each platform, `pip download --no-deps --only-binary :all: --python-version 3.13 --implementation cp
@@ -128,6 +132,9 @@ referencing==0.37.0 \
 rpds-py==2026.5.1 \
     --hash=sha256:b1b964e3ab599e718dc46c018d104b1ebc007cbc6567d827c94a687fca56d77e \
     --hash=sha256:b5c30f3f04eef4fbd362226a6f31d7c8895ca4fbb6e0b790f6890a98d8da8559
+scipy==1.18.1 \
+    --hash=sha256:d416b16cccfd70fbf62400e84d0bb2f4e6af519a45557f1692c749b37f14b315 \
+    --hash=sha256:fdaf5ea890a6183d0565f51a61799d67081bd5b1cf03c5f4b3fd3732108625c9
 sortedcontainers==2.4.0 \
     --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
 sse-starlette==3.4.5 \
