@@ -3479,6 +3479,11 @@ def _open_lock_file(lock_file_path):
         return os.fdopen(fd, "r")
 
 
+# How long a holder record keeps its slot reserved while the slot's flock is free: the exec window of the full pipeline lasts
+# seconds, and a record that old with a free flock belongs to a run that is stuck or gone.
+SLOT_RESERVATION_SECONDS = 120.0
+
+
 # [@ANCHOR: test:try_slot_locks]
 def _try_slot_locks(lock_base_path, slots, only_slot=None):
     """One non-blocking pass over the slot locks: returns the slot number taken, or None if none is free.
@@ -3495,7 +3500,7 @@ def _try_slot_locks(lock_base_path, slots, only_slot=None):
     reserved = set() if only_slot else {
         holder["slot"]
         for holder in lock_queue.read_holders(lock_queue.queue_dir_for_lock(lock_base_path))
-        if holder.get("pid") != os.getpid()
+        if holder.get("pid") != os.getpid() and time.time() - (holder.get("since") or 0) < SLOT_RESERVATION_SECONDS
     }
     for slot in candidates:
         if slot in reserved:
@@ -3526,6 +3531,8 @@ def take_back_slot_lock(lock_base_path, slots, only_slot, sleep=time.sleep, cloc
     try:
         limit = float(environ.get(TAKE_BACK_SECONDS_ENV, DEFAULT_TAKE_BACK_SECONDS))
     except ValueError:
+        limit = DEFAULT_TAKE_BACK_SECONDS
+    if not math.isfinite(limit):
         limit = DEFAULT_TAKE_BACK_SECONDS
     deadline = clock() + limit
     while True:

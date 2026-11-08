@@ -770,7 +770,7 @@ class TestTestPyWiring(_TmpDirCase):
     def hold(self):
         f = self.open_lock()
         self.assertTrue(self.try_flock(f))
-        lq.write_holder(self.qdir, "test.py -u held_module")
+        self.holder_record = lq.write_holder(self.qdir, "test.py -u held_module")
         return f
 
     def test_default_stays_fail_fast(self):
@@ -811,6 +811,7 @@ class TestTestPyWiring(_TmpDirCase):
             time.sleep(0.5)
             self.assertIsNone(p.poll(), "must still be waiting while the lock is held")
             holder.close()  # releases the flock
+            lq.release_ticket(self.qdir, self.holder_record)  # a finished run removes its holder record
             out, _ = p.communicate(timeout=120)
         finally:
             if p.poll() is None:

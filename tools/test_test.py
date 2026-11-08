@@ -1844,7 +1844,7 @@ class CiLoadGateOrderingTests(unittest.TestCase):
         # The fail-fast path gates inline; the --wait path gates through lock_queue.acquire's on_head
         # callback, which runs only once this invocation is first in line and strictly before
         # try_lock() (asserted in test_lock_queue.py's gate tests).
-        gate_at = source.index("if not use_queue and not wait_for_ci_load_to_subside():")
+        gate_at = source.index("if not use_queue and not root_phase and not wait_for_ci_load_to_subside():")
         lock_at = source.index("held_slot = _try_slot_locks(lock_file_path, slots, early_args.slot_held)")
         self.assertIn("on_head=None if adopted else wait_for_ci_load_to_subside", source)
         self.assertLess(

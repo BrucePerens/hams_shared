@@ -883,7 +883,7 @@ writes the holder record with the slot and the ticket.
 
 Purpose: one non-blocking pass over the slot locks. Tries slot 1 up to `slots` in order (only `only_slot` when given) and returns the slot
 number whose flock it took, or None when none is free. The open, locked file lives in the module global `_single_instance_lock` for the life
-of the process (the lock goes with the process, however it ends); without `only_slot`, a slot named by a live run's holder record (another pid) is skipped even when its flock is free, because the invoking process of the full pipeline lets go of its flock when it execs into `sudo` / `systemd-run` / `unshare` and the root phase takes the slot back a moment later (a run that took the slot in that window shared its database); a file whose lock was not taken is closed. The lock file is opened with
+of the process (the lock goes with the process, however it ends); without `only_slot`, a slot named by a live run's holder record (another pid, written less than 120 s ago: `SLOT_RESERVATION_SECONDS`) is skipped even when its flock is free, because the invoking process of the full pipeline lets go of its flock when it execs into `sudo` / `systemd-run` / `unshare` and the root phase takes the slot back a moment later (a run that took the slot in that window shared its database); a file whose lock was not taken is closed. The lock file is opened with
 `O_NOFOLLOW`, falling back to read-only when `fs.protected_regular` refuses a write open (`_open_lock_file`). With `slots` of 1 this is the
 single flock `test.py` always took.
 
