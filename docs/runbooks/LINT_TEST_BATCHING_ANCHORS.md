@@ -98,7 +98,7 @@ inside `locked` at every poll. `live(pid, start)` must be cheap (two `/proc` rea
 Reads `HAMS_BATCH_MAX_BRANCHES` (int, at least 1, default 8) and `HAMS_BATCH_MAX_SECONDS` (finite float, at least 0, 0 = no
 duration cap, default 1800) and `HAMS_BATCH_MAX_RUNNING` (int, at least 1, default 1: how many batches of this kind may run at once) from
 `environ`; bad values fall back to the defaults. Returns `{"max_branches", "max_seconds", "max_running"}`. The test queue raises
-`max_running` to the machine's test slot count (`odoo_test_batch:batches_that_may_run`); lint batches keep 1.
+`max_running` to the machine's test slot count (`odoo_test_batch:batches_that_may_run`) and the lint queue to its lint slot count (`lint_batch:batches_that_may_run`).
 
 ### `batch_queue:join`
 Adds a member to the forming batch, creating it when none exists.
@@ -277,6 +277,14 @@ Class attributes `kind` ("lint"), `runner_env` (marker exported to the run) and 
 command with output teed to the leader's terminal and the batch log, reads the results file and always removes the tree.
 Stamps are written for every `passed` verdict from the step names of the last run. Exit code 75 from the run (lock or load
 gate gave up) is `fatal` for the batch. Concurrency: only the leader runs this, and only after sealing.
+
+### `lint_batch:batches_that_may_run`
+`batches_that_may_run(environ=None) -> int | None`: how many lint batches of one repository may run at once, the machine's lint slot count
+(`lint_lock.slot_count`: `HAMS_LINT_SLOTS`, else `lint_slots` in `lint_machines.json`, else 1; the dev box 4). None when `HAMS_BATCH_MAX_RUNNING`
+is set, so that explicit number (`batch_queue.caps_from_env`) wins. `run_linters.main` passes it as `run_member(max_running=...)`: each batch's
+combined run takes a lint slot like any run, so a request starts a batch of its own at once while fewer batches than slots run, and joins the
+forming batch only while every slot has a batch. Reads `lint_machines.json`; takes no lock. Test: `tools/test_lint_batch.py` (the count, the
+override, and two real processes with a real queue directory: the second run starts beside the first, the third waits).
 
 ### `lint_batch:run_member`
 The caller's side, used by `run_linters.main`. `run_member(repo, repo_name, branch, tip, base, scope, runner, timeout, out,

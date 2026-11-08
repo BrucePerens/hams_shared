@@ -44,6 +44,10 @@ run.
 8. **Remote machines.** The leader's combined run goes through `run_linters.py --remote auto` like any run, so
    a whole batch may be shipped to an idle machine, which has its own lock and queue. One running batch per
    dev box and repository is the limit; per-target-machine batches are a follow-up.
+   *Amended 2026-11-08:* the dev box is now the primary lint runner and runs several lint runs at once in slots (4 there); a whole run
+   goes to another machine only as overflow. The limit for lint is therefore the slot count (`lint_batch.batches_that_may_run`, as the test
+   queue's is the test slot count), not one, and "per target machine" is not a separate claim: the leader's run takes a slot of the machine it
+   runs on.
 
 9. **Remote test hosts (2026-11-04).** Odoo tests for hams_com / hams_open branches run on bruce-yoga and the mac1 VM from real git
    clones with their own `origin/main` (deploy keys), never from copied sources. The batch is formed in a queue on the dev box (kind

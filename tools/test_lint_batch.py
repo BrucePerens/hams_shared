@@ -11,6 +11,7 @@ that file, like flake8 would) in place of run_linters.py.
 
 Tests [@ANCHOR: lint_batch:ineligible_reason]
 Tests [@ANCHOR: lint_batch:changed_paths]
+Tests [@ANCHOR: lint_batch:batches_that_may_run]
 Tests [@ANCHOR: lint_batch:path_finder]
 Tests [@ANCHOR: lint_batch:owners_of]
 Tests [@ANCHOR: lint_batch:changed_anchors]
@@ -77,7 +78,7 @@ def drive(argv):
         command=lambda tree, results: [sys.executable, spec["fake"], results], prepare=lambda tree: None,
         environ=dict(os.environ), fetch=False)
     code = lint_batch.run_member(spec["repo"], "hams_demo", spec["branch"], spec["tip"], "origin/main", ["fake"],
-                                 runner, timeout=60, poll=0.1, sdir=spec["sdir"])
+                                 runner, timeout=60, poll=0.1, sdir=spec["sdir"], max_running=spec.get("max_running"))
     print("RESULT " + json.dumps({"code": code}))
 
 
@@ -141,6 +142,14 @@ class UnitTests(unittest.TestCase):
         self.assertIn("uncommitted", self.reason(dirty=True))
         self.assertIn("hams_shared", self.reason(is_shared_checkout=True))
         self.assertIn("cheap", self.reason(lock_needed=False))
+
+    def test_the_lint_batches_that_may_run_are_the_lint_slots_unless_the_batch_variable_says_otherwise(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = {"XDG_CACHE_HOME": tmp}
+            self.assertEqual(lint_batch.batches_that_may_run(dict(base, HAMS_LINT_SLOTS="3")), 3)
+            self.assertEqual(lint_batch.batches_that_may_run(dict(base, HAMS_LINT_SLOTS="1")), 1)
+            self.assertIsNone(lint_batch.batches_that_may_run(dict(base, HAMS_LINT_SLOTS="3", HAMS_BATCH_MAX_RUNNING="2")))
+            self.assertEqual(lint_batch.batches_that_may_run(dict(base, HAMS_LINT_SLOTS="bad")), 1)  # a typo is one slot
 
     def test_a_foreign_hams_shared_runs_alone(self):
         self.assertIsNone(self.reason(foreign_shared=False))
@@ -305,9 +314,9 @@ class EndToEndTests(unittest.TestCase):
         for name in ("HAMS_LINT_LOCK_HELD", lint_batch.RUNNER_ENV):
             self.env.pop(name, None)
 
-    def start(self, branch, tip):
+    def start(self, branch, tip, **extra):
         spec = {"repo": self.work, "branch": branch, "tip": tip, "stamps": self.stamps, "fake": self.fake,
-                "sdir": self.sdir}
+                "sdir": self.sdir, **extra}
         return subprocess.Popen([sys.executable, os.path.abspath(__file__), "--drive", json.dumps(spec)],
                                 env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
@@ -368,6 +377,25 @@ class EndToEndTests(unittest.TestCase):
         trees = os.path.join(self.tmp, "trees")
         self.assertEqual(os.listdir(trees) if os.path.isdir(trees) else [], [])
         self.assertNotIn("batch_lint", helpers.git(self.work, "worktree", "list"))
+
+    def test_with_two_batches_allowed_a_second_run_starts_beside_the_first_and_the_third_waits(self):
+        self.env["FAKE_SLEEP"] = "3"
+        first = helpers.commit_branch(self.work, "first", {"f1.txt": "ok\n"})
+        second = helpers.commit_branch(self.work, "second", {"s1.txt": "ok\n"})
+        third = helpers.commit_branch(self.work, "third", {"t1.txt": "ok\n"})
+        p1 = self.start("first", first, max_running=2)
+        self.wait_for_calls(1)
+        p2 = self.start("second", second, max_running=2)
+        self.wait_for_calls(2)  # batch 2 started while batch 1 is still inside its fake linter
+        self.assertIsNone(p1.poll())
+        p3 = self.start("third", third, max_running=2)
+        outs = [self.finish(proc) for proc in (p1, p2, p3)]
+        self.assertEqual([code for code, _out in outs], [0, 0, 0], outs)
+        self.assertIn("1 of 2 running slots are in use here; starting at once", outs[1][1])
+        runs = [json.loads(line) for line in open(self.calls).read().splitlines()]
+        self.assertEqual(sorted(runs), [["first"], ["second"], ["third"]], runs)
+        for tip in (first, second, third):
+            self.assertTrue(os.path.exists(os.path.join(self.stamps, tip)))
 
     def test_conflicting_branch_runs_alone_and_unattributable_failure_splits(self):
         self.env["FAKE_SLEEP"] = "1"
