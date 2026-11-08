@@ -12211,6 +12211,9 @@ def provision_units(run_cmd_func, env_vars=None, environment="prod"):
     env_vars.setdefault("HAMS_COMMUNITY_DIR", open_dir)
     env_vars.setdefault("HAMS_COM_DIR", os.path.join(os.path.dirname(open_dir), "hams_com"))
     env_vars.setdefault("DOMAIN", "hams.com")
+    # The daemon-key unit's ExecStart names the database ({DB_NAME}); the full path sets it in load_and_prompt_env, this path
+    # does not run that. Same defaults as there. Found on hams1, 2026-11-07: `--plan --units` died with KeyError: 'DB_NAME'.
+    env_vars.setdefault("DB_NAME", "hams_test" if environment == "test" else "hams_prod")
     with only_units():
         provision_static_files(run_cmd_func, env_vars, environment)
         for spec in MANIFEST["static_files"]:
