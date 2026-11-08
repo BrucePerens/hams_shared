@@ -15,3 +15,21 @@ except ImportError:  # hypothesis is only needed by the tests that use it
 if settings is not None:
     settings.register_profile("hams_lint", deadline=None)
     settings.load_profile("hams_lint")
+
+
+import os
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_sibling_tree_override(monkeypatch):
+    """A test never sees the caller's `HAMS_COM_TREE` / `HAMS_OPEN_TREE`.
+
+    `lint_exec.sibling_repo_root` takes those variables ahead of every directory it would find, so a developer who
+    exported one to run the anchor scan made 24 tests of the cargo, pip-audit and dependency-cycle checkers fail (they
+    build a throw-away repository and expect no sibling; the real hams_open was found instead, 2026-11-07). A test that
+    needs the override sets it itself, after this fixture."""
+    for name in ("HAMS_COM_TREE", "HAMS_OPEN_TREE"):
+        if name in os.environ:
+            monkeypatch.delenv(name)
