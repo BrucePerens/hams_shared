@@ -2058,11 +2058,13 @@ def main():
     if devbox_test_files:
         _add(
             "pytest devbox_tools/",
-            [python_exec, "-m", "pytest", "-q", "-p", "no:cacheprovider"] + devbox_test_files,
+            [python_exec, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider"] + devbox_test_files,
             cwd=os.path.join(repo_root, "devbox_tools"),
             fail_header="❌ devbox_tools/ unit test failures:",
             # A lint batch holds hams_com in a directory of its own, with no hams_open beside it: the tests that read
             # the other repository look at HAMS_OPEN_TREE first (verify_anchors gets it the same way).
+            # `-rs` lists every skipped test with its reason in the output: a lint host without a tool (chromium, nginx) skips
+            # the tests that need it, and that must show in the run, not pass silently (2026-11-07).
             env=dict(os.environ, HAMS_OPEN_TREE=os.path.realpath(community_dir)) if community_dir else None,
         )
 
