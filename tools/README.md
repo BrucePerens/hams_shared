@@ -453,8 +453,9 @@ cited an anchor in a form the scanner reports as missing); its fix #412 could no
 and the coordinator linted it in a layout built by hand. Now `run_linters.py` builds that layout itself, for every run started from a
 hams_shared worktree (`shared_worktree_root` is true), before it computes any path, and deletes it at exit. Local and `--remote` runs
 use it alike: `lint_remote.repo_roles` takes the layout's hams_open and hams_com and the worktree as hams_shared, and the machines'
-mirror (`hams_open/hams_shared` synced from the worktree) is the same shape. Batching (`lint_batch.py`) stays off for hams_shared
-(`is_shared_checkout`): a combined tree of hams_shared would be linted by the same code, one tree per run.
+mirror (`hams_open/hams_shared` synced from the worktree) is the same shape. A hams_shared branch worktree is batched like a hams_com
+branch (`lint_batch.py`, since 2026-11-08: the combined tree is a hams_shared worktree named `hams_shared_wt`, linted by its own tools in a
+layout of its own); the main hams_shared checkout and a branch that changes the batching tools run alone.
 
 ### `[@ANCHOR: lint_layout:Layout]` `Layout(parent, hams_open, hams_com, shared_source, shared_copy)`
 

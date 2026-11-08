@@ -123,6 +123,21 @@ class StateMachineTests(unittest.TestCase):
             self.assertNotEqual(bq.repo_key(one), bq.repo_key(two))
             self.assertEqual(bq.repo_key(os.path.join(tmp, "nogit")), os.path.realpath(os.path.join(tmp, "nogit")))
 
+    def test_repo_key_of_a_submodule_is_its_own_git_directory_and_shared_by_its_worktrees(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "sup"))
+            os.makedirs(os.path.join(tmp, "sub"))
+            sup = make_repo(os.path.join(tmp, "sup"))
+            sub = make_repo(os.path.join(tmp, "sub"))
+            git(sup, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "hams_shared")
+            inside = os.path.join(sup, "hams_shared")
+            module_dir = os.path.realpath(os.path.join(sup, ".git", "modules", "hams_shared"))
+            self.assertEqual(bq.repo_key(inside), module_dir)  # not `.git/modules`, which every submodule would share
+            wt = os.path.join(tmp, "wt")
+            git(inside, "worktree", "add", "-q", "--detach", wt, "HEAD")
+            self.assertEqual(bq.repo_key(wt), module_dir)
+            self.assertNotEqual(bq.repo_key(sup), module_dir)
+
     def test_state_dir_per_kind_and_repo(self):
         env = {"HAMS_BATCH_DIR": "/x/b"}
         self.assertEqual(bq.state_dir("lint", "/srv/a/hams_com", env), "/x/b/lint-srv_a_hams_com")

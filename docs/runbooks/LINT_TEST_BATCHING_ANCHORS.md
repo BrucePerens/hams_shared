@@ -63,7 +63,9 @@ conflicted: run alone" (the caller falls back to the normal path). Written by th
 ## batch_queue
 
 ### `batch_queue:repo_key`
-Identifies a repository for queueing so that worktrees share a queue and repositories never do. Called by `run_member`.
+Identifies a repository for queueing so that worktrees share a queue and repositories never do. Called by `run_member`. The
+key is the real path of the main checkout (the parent of the common git directory); for a submodule's worktree (hams_shared)
+the common directory is `<superproject>/.git/modules/<name>`, whose parent every submodule shares, so the directory itself is the key.
 
 | Argument | Type | Meaning |
 |---|---|---|
@@ -207,9 +209,17 @@ branch with its status in capitals, tip prefix, `<- you` for the caller and the 
 Decides whether a run may join a batch. Keyword arguments: `changed` (the `--changed` base or None), `only`, `skip`,
 `modules` (selection options), `solo`, `bundle`, `environ`, `dirty` (uncommitted changes), `is_shared_checkout`,
 `lock_needed` (the run is heavy), `foreign_shared` (optional, default False: the tree's `hams_shared` is not the main
-checkout's). Returns a short reason string when the run must run alone, None when it may batch.
+checkout's), `batching_tools` (optional: the `BATCHING_TOOLS` the branch changed, from `batching_tools_changed`).
+`is_shared_checkout` is true only for the main hams_shared checkout; a hams_shared branch worktree is batched. Returns a short reason string when the run must run alone, None when it may batch.
 Pure; checked in the order solo, runner marker, `HAMS_LINT_NO_LOCK`, lock held, `HAMS_LINT_BATCH=off`, not changed,
-selection, bundle, dirty, hams_shared, foreign hams_shared, cheap.
+selection, bundle, dirty, main hams_shared checkout, batching tools changed, foreign hams_shared, cheap.
+
+### `lint_batch:batching_tools_changed`
+`batching_tools_changed(paths) -> [str]`: the entries of `lint_batch.BATCHING_TOOLS` (repository-relative paths of the
+batching, locking and layout tools) that `paths` contains, in that tuple's order; empty for none. `run_linters.main` passes the
+paths of a hams_shared branch (`changed_paths(dir, base, "HEAD")`) and the result to `ineligible_reason`: such a branch runs
+alone, because the leader of a batch may be that branch and would run the other branches' batch with its modified queue code.
+Pure. Test: `tools/test_lint_batch.py`.
 
 ### `lint_batch:foreign_shared_checkout`
 `foreign_shared_checkout(tree_root, main_root) -> bool`: True when `<tree_root>/hams_shared` and `<main_root>/hams_shared`

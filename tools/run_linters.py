@@ -2382,32 +2382,38 @@ def main():
     # instead of queueing alone; the leader runs one combined tree, every member gets its own verdict.
     batch_durations = lint_lock.known_durations() if pending else {}
     batch_lock_needed, _batch_why = lint_lock.lock_decision(os.environ, pending, batch_durations)
-    status_lines = _git_lines(repo_root, "status", "--porcelain")
+    # A hams_shared branch worktree (`layout` is set) is batched through its own repository, not the layout's
+    # hams_open that `repo_root` names then; its combined tree is a hams_shared worktree (lint_batch.py).
+    member_repo = dir_path if layout is not None else repo_root
+    member_name = lint_batch.SHARED_TREE_NAME if layout is not None else os.path.basename(main_checkout_root.rstrip(os.sep))
+    member_head = _git_lines(member_repo, "rev-parse", "HEAD") if layout is not None else head_before
+    status_lines = _git_lines(member_repo, "status", "--porcelain")
     batch_reason = lint_batch.ineligible_reason(
         changed=options.changed, only=options.only, skip=options.skip, modules=target_modules_str,
         solo=options.solo, bundle=options.run_bundle, environ=os.environ,
         dirty=status_lines is None or bool(status_lines),
-        is_shared_checkout=os.path.realpath(dir_path) == real_shared_dir,
+        is_shared_checkout=os.path.realpath(dir_path) == real_shared_dir and layout is None,
         lock_needed=batch_lock_needed,
-        foreign_shared=lint_batch.foreign_shared_checkout(repo_root, main_checkout_root),
+        foreign_shared=layout is None and lint_batch.foreign_shared_checkout(repo_root, main_checkout_root),
+        batching_tools=lint_batch.batching_tools_changed(
+            lint_batch.changed_paths(member_repo, options.changed, "HEAD")) if layout is not None and options.changed else (),
     )
-    if batch_reason is None and head_before:
-        branch_lines = _git_lines(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
-        branch_name = branch_lines[0] if branch_lines and branch_lines[0] != "HEAD" else head_before[0][:10]
+    if batch_reason is None and member_head:
+        branch_lines = _git_lines(member_repo, "rev-parse", "--abbrev-ref", "HEAD")
+        branch_name = branch_lines[0] if branch_lines and branch_lines[0] != "HEAD" else member_head[0][:10]
         passthrough = ["-j", str(options.jobs)]
         for flag, value in (("--lock-timeout", options.lock_timeout), ("--load-limit", options.load_limit),
                             ("--load-timeout", options.load_timeout)):
             if value is not None:
                 passthrough += [flag, str(value)]
         batch_code = lint_batch.run_member(
-            repo_root,
-            os.path.basename(main_checkout_root.rstrip(os.sep)),
+            member_repo,
+            member_name,
             branch_name,
-            head_before[0],
+            member_head[0],
             options.changed,
             pending,
-            lint_batch.LintBatch(repo_root, os.path.basename(main_checkout_root.rstrip(os.sep)), options.changed,
-                                 passthrough, write_batch_stamp),
+            lint_batch.LintBatch(member_repo, member_name, options.changed, passthrough, write_batch_stamp),
             timeout=options.lock_timeout,
             max_running=lint_batch.batches_that_may_run(os.environ),
             # Steps run `-j` at a time and many have no record: estimate from the known ones, spread over the jobs.
