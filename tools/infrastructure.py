@@ -13078,6 +13078,106 @@ def _retire_pgbackrest_repo1(conf_path=None):
     return True
 
 
+PGBACKREST_ENV_PATH = "/opt/hams/etc/pgbackrest.env"
+PGBACKREST_B2_CONFIG_PATH = "/opt/hams/etc/b2_backup/config.json"
+# The plaintext repository (ADR 0117). A repository's cipher cannot be changed in place, so the unencrypted
+# repository is a NEW one: number 3, path /hams_prod_plain. Every host uses the same number, so
+# backup.config.pgbackrest_repo is 3 everywhere. repo2 (/hams_prod_enc, encrypted) stays configured on hams1 for
+# restoring the old history; pgBackRest accepts a configuration that has only repo3.
+PGBACKREST_PLAIN_REPO = 3
+PGBACKREST_PLAIN_REPO_PATH = "/hams_prod_plain"
+PGBACKREST_PLAIN_REPO_RETENTION_FULL = 30
+PGBACKREST_STANZA = "hams_prod"
+
+
+# [@ANCHOR: infrastructure:render_pgbackrest_plain_repo_conf]
+def render_pgbackrest_plain_repo_conf(bucket, endpoint, region, key, secret, pg_data_dir):
+    """
+    Returns the text of an /etc/pgbackrest/pgbackrest.conf whose only repository is the plaintext
+    repo3 on Backblaze B2 (path /hams_prod_plain), and which carries no `cipher` line at all.
+
+    Bruce decided on 2026-11-08 that every new backup on B2 is stored in the clear (ADR 0117), so
+    this is the configuration a fresh host gets. The B2 key and secret are written into the file
+    (mode 0640 root:postgres), as on hams1, because `archive-push` runs inside the postgres
+    process, whose environment cannot be changed without a PostgreSQL restart.
+    """
+    return (
+        "[global]\n"
+        f"repo{PGBACKREST_PLAIN_REPO}-type=s3\n"
+        f"repo{PGBACKREST_PLAIN_REPO}-s3-bucket={bucket}\n"
+        f"repo{PGBACKREST_PLAIN_REPO}-s3-endpoint={endpoint}\n"
+        f"repo{PGBACKREST_PLAIN_REPO}-s3-region={region}\n"
+        f"repo{PGBACKREST_PLAIN_REPO}-s3-key={key}\n"
+        f"repo{PGBACKREST_PLAIN_REPO}-s3-key-secret={secret}\n"
+        f"repo{PGBACKREST_PLAIN_REPO}-path={PGBACKREST_PLAIN_REPO_PATH}\n"
+        f"repo{PGBACKREST_PLAIN_REPO}-retention-full={PGBACKREST_PLAIN_REPO_RETENTION_FULL}\n"
+        "\n"
+        f"[{PGBACKREST_STANZA}]\n"
+        f"pg1-path={pg_data_dir}\n"
+    )
+
+
+def _read_env_assignments(path):
+    """NAME=value pairs of a systemd EnvironmentFile (quotes around a value are removed)."""
+    values = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, _, value = line.partition("=")
+            values[name.strip()] = value.strip().strip("'\"")
+    return values
+
+
+# [@ANCHOR: infrastructure:_configure_pgbackrest_plain_repo]
+def _configure_pgbackrest_plain_repo(conf_path=None, env_path=None, b2_config_path=None, pg_data_dirs=None):
+    """
+    Writes a fresh host's /etc/pgbackrest/pgbackrest.conf with the plaintext repo3, and returns True
+    when it wrote the file.
+
+    It acts only on a host that has no pgbackrest.conf yet, has the B2 key in `pgbackrest.env`
+    (PGBACKREST_REPO3_S3_KEY / _S3_KEY_SECRET, or the REPO1 names hams1 uses) and the bucket and
+    endpoint in `b2_backup/config.json` (the hams_shared MANIFEST writes it), and has exactly one
+    PostgreSQL cluster. Anything else returns False and writes nothing. An existing file is never
+    touched: hams1's file holds repo2's passphrase and a repository added to it is added by hand in
+    the order docs/runbooks/PLAINTEXT_BACKUP_REPO_SWITCH.md gives (the stanza must exist in the new
+    repository before archive-push is told to use it). It does not run `stanza-create` or set
+    `archive_command`; both stay manual steps of that runbook.
+    """
+    path = conf_path or PGBACKREST_CONF_PATH
+    env_file = env_path or PGBACKREST_ENV_PATH
+    b2_file = b2_config_path or PGBACKREST_B2_CONFIG_PATH
+    if os.path.exists(path) or not os.path.isfile(env_file) or not os.path.isfile(b2_file):
+        return False
+    env = _read_env_assignments(env_file)
+    key = env.get(f"PGBACKREST_REPO{PGBACKREST_PLAIN_REPO}_S3_KEY") or env.get("PGBACKREST_REPO1_S3_KEY")
+    secret = env.get(f"PGBACKREST_REPO{PGBACKREST_PLAIN_REPO}_S3_KEY_SECRET") or env.get("PGBACKREST_REPO1_S3_KEY_SECRET")
+    with open(b2_file, "r", encoding="utf-8") as f:
+        backend = json.load(f).get("backend", {})
+    bucket, endpoint = backend.get("bucket"), backend.get("endpoint")
+    if pg_data_dirs is None:
+        pg_data_dirs = [
+            os.path.dirname(p).replace("/etc/postgresql/", "/var/lib/postgresql/", 1)
+            for p in sorted(glob.glob("/etc/postgresql/*/main/postgresql.conf"))
+        ]
+    if not (key and secret and bucket and endpoint) or len(pg_data_dirs) != 1:
+        return False
+    text = render_pgbackrest_plain_repo_conf(
+        bucket, endpoint, backend.get("region") or "us-east-1", key, secret, pg_data_dirs[0]
+    )
+    if _plan("write", f"{path} (plaintext pgBackRest repo{PGBACKREST_PLAIN_REPO}, no cipher; root:postgres 0640)"):
+        return True
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(path, 0o640)
+    if os.geteuid() == 0:
+        os.chown(path, 0, grp.getgrnam("postgres").gr_gid)
+    return True
+
+
 # [@ANCHOR: infrastructure:_create_odoo_role_if_missing]
 def _create_odoo_role_if_missing(run_cmd_func, db_pass, is_test=False):
     """
@@ -14507,6 +14607,7 @@ def provision_environment(
 
             postgresql_reload_needed = _apply_postgresql_archive_timeout()
             _retire_pgbackrest_repo1()
+            _configure_pgbackrest_plain_repo()
 
             if not is_isolated_ns:
                 # Only when a lockdown setting's effective value changed: restarting PostgreSQL
