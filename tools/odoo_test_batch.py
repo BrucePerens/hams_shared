@@ -334,9 +334,10 @@ def record_module_durations(sdir, durations):
 
 
 # [@ANCHOR: odoo_test_batch:write_pass_record]
-def write_pass_record(tip, modules, batch_id, environ=None):
+def write_pass_record(tip, modules, batch_id, environ=None, with_tips=()):
     """Record that the modules passed for commit `tip` in a batch: ``~/.cache/hams-test/passed/<tip>``, one line
-    ``tests <time> modules=a,b batch=N``. Nothing is written when `modules` is empty. Returns the path or None."""
+    ``tests <time> modules=a,b batch=N`` and, when other branches were in the run, `` with=<12 hex>,..`` (what the tip was
+    checked with, `batch_queue.with_field`). Nothing is written when `modules` is empty. Returns the path or None."""
     environ = os.environ if environ is None else environ
     base = environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
     directory = os.path.join(base, "hams-test", "passed")
@@ -346,7 +347,8 @@ def write_pass_record(tip, modules, batch_id, environ=None):
         os.makedirs(directory, exist_ok=True)
         path = os.path.join(directory, tip)
         with open(path, "w", encoding="utf-8") as handle:
-            handle.write("tests %s modules=%s batch=%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), ",".join(modules), batch_id))
+            handle.write("tests %s modules=%s batch=%s%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), ",".join(modules), batch_id,
+                                                              batch_queue.with_field(with_tips)))
         return path
     except OSError:
         return None
@@ -454,7 +456,7 @@ def maybe_run_batched(args, environ=None, cwd=None, out=print):
         passthrough += ["--wait-timeout", str(args.wait_timeout)]
     runner = OdooTestBatch(
         cwd, os.path.basename(key), "origin/main", passthrough,
-        lambda tip, modules, batch_id: write_pass_record(tip, modules, batch_id, environ),
+        lambda tip, modules, batch_id, with_tips: write_pass_record(tip, modules, batch_id, environ, with_tips),
         sdir=sdir, environ=environ)
     return lint_batch.run_member(
         cwd, os.path.basename(key), branch, head, "origin/main", scope, runner, timeout=args.wait_timeout, out=out,
@@ -611,7 +613,7 @@ def run_remote_member(tree, repo_name, branch, tip, modules_arg, machines, drive
     durations = load_durations(sdir)
     runner = RemoteTestBatch(
         tree, os.path.basename(key), "origin/main", [],
-        lambda sha, modules, batch_id: write_pass_record(sha, modules, batch_id, environ),
+        lambda sha, modules, batch_id, with_tips: write_pass_record(sha, modules, batch_id, environ, with_tips),
         sdir, machines, driver, out=out, environ=environ)
     return lint_batch.run_member(
         tree, os.path.basename(key), branch, tip, "origin/main", scope, runner, timeout=timeout, out=out,

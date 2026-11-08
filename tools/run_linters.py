@@ -18,6 +18,7 @@ import sys
 import subprocess
 import time
 
+import batch_queue
 import lint_cache
 import lint_exec
 import lint_batch
@@ -469,9 +470,10 @@ def stamp_text(mode, step_names, hosts=()):
     return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}\n"
 
 
-def write_batch_stamp(tip, step_names, batch_id):
+def write_batch_stamp(tip, step_names, batch_id, with_tips=()):
     """Pass stamp for one branch tip that passed in a coalesced batch (lint_batch.py): the same file and line
-    format `_write_pass_stamps` writes, plus ` batch=N`. Nothing is written when no step names are known (the
+    format `_write_pass_stamps` writes, plus ` batch=N` and, when other branches were in the run, ` with=a,b` (their
+    first 12 hex digits: what this tip was checked with). Nothing is written when no step names are known (the
     gate refuses a stamp that selected zero steps)."""
     if not step_names:
         print(f"(pass stamp for {tip[:10]} not written: the combined run did not report its steps)", file=sys.stderr)
@@ -479,7 +481,7 @@ def write_batch_stamp(tip, step_names, batch_id):
     try:
         os.makedirs(pass_stamp_dir(), exist_ok=True)
         with open(os.path.join(pass_stamp_dir(), tip), "w", encoding="utf-8") as handle:
-            handle.write(stamp_text("changed", step_names).rstrip("\n") + f" batch={batch_id}\n")
+            handle.write(stamp_text("changed", step_names).rstrip("\n") + f" batch={batch_id}{batch_queue.with_field(with_tips)}\n")
     except OSError as error:
         print(f"(pass stamp not written: {error})", file=sys.stderr)
 

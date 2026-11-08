@@ -49,9 +49,14 @@ What one run over a group of members returns to `settle`: `{"exit_code": int, "f
 members dropped for a merge conflict. `fatal` means the run could not start (lock timeout, tree creation failed): every live
 member fails with `exit_code`, no splitting. Produced by the runner callable (`LintBatch._run_once`), consumed by `settle`.
 
+### `batch_queue:other_tips` and `batch_queue:with_field`
+`_other_tips(group, member)` lists the tips of the run's group other than the member's own, each once. `with_field(tips)` renders them as
+` with=` and the first 12 hex digits of each, or an empty string for none. Test: `test_batch_queue.py`, `test_lint_batch.py`.
+
 ### `batch_queue:Verdict`
 One branch's answer, stored in the verdict file under its tip: `{"status": "passed"|"failed"|"solo", "exit_code": int,
-"findings": [str] (at most 40 lines naming the branch), "detail": str, "log": path, "batch": id}`. `solo` means "your merge
+"findings": [str] (at most 40 lines naming the branch), "detail": str, "log": path, "batch": id}` and, on a `passed` one, `"with": [tip]`
+(the other branches of the run it passed in, `batch_queue:other_tips`; after a split only its own half). `solo` means "your merge
 conflicted: run alone" (the caller falls back to the normal path). Written by the leader once per batch
 (`write_verdicts`), read by every member (`read_verdicts`), kept one day.
 
@@ -253,7 +258,7 @@ The leader's runner; an instance is the `run_batch` argument of `coalesce`.
 | `repo`, `repo_name` | a checkout or worktree of the repository for git commands; the tree directory name (`hams_com`) |
 | `base` | ref the trees start from (the `--changed` base, `origin/main`) |
 | `passthrough` | options copied to the combined run |
-| `stamp_writer(tip, step_names, batch_id)` | writes the pass stamp of one passed tip (`run_linters.write_batch_stamp`) |
+| `stamp_writer(tip, step_names, batch_id, with_tips)` | writes the pass stamp of one passed tip (`run_linters.write_batch_stamp`); `with_tips` are the other tips of the run it passed in |
 | `command(tree, results)` | argv of the run (tests substitute a fake linter) |
 | `prepare(tree)` | links the tree for linting; default runs `fix_worktree_symlinks.py` when the tree has one |
 | `out`, `environ`, `fetch` | printer, environment for the run, whether to `git fetch origin` first |
@@ -276,8 +281,9 @@ runner kept dying (`gave_up`). For a failure it prints the findings naming the b
 ## run_linters
 
 ### `run_linters:write_batch_stamp`
-`write_batch_stamp(tip, step_names, batch_id)` writes `~/.cache/hams-lint/passed/<tip>` in the format of `stamp_text` plus
-` batch=N` (mode `changed`, the number and names of the combined run's steps). `lint_stamp_gate.py` ignores the extra field.
+`write_batch_stamp(tip, step_names, batch_id, with_tips=())` writes `~/.cache/hams-lint/passed/<tip>` in the format of `stamp_text` plus
+` batch=N` and, when other branches were in the run, ` with=<12 hex>,<12 hex>` (`batch_queue:with_field`: what the tip was checked with; the
+test pass record of `odoo_test_batch:write_pass_record` has the same field). `lint_stamp_gate.py` ignores the extra fields.
 Writes nothing, and says so on stderr, when `step_names` is empty (the gate refuses a stamp that selected zero steps).
 Called only by the batch leader for tips whose verdict is `passed`.
 

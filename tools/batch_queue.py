@@ -519,7 +519,8 @@ def reap_orphan_trees(repo, kind, repo_name, environ=None, live=lock_queue.is_li
 # "detail": str}. exit_code 0 means every selected check passed.
 # [@ANCHOR: batch_queue:Verdict]
 # One branch's answer: {"status": PASSED|FAILED|SOLO, "exit_code": int, "detail": str, "findings": [str],
-# "log": path, "batch": id}. SOLO means "the merge conflicted: run alone".
+# "log": path, "batch": id} and, on a PASSED one, "with": [tips] (the other branches of the run it passed in; a pass
+# stamp names them). SOLO means "the merge conflicted: run alone".
 
 
 # [@ANCHOR: batch_queue:blame_by_tokens]
@@ -544,6 +545,23 @@ def blame_by_tokens(failures, owners, find_tokens):
         if not hit:
             unattributed.append(name)
     return blamed, unattributed
+
+
+# [@ANCHOR: batch_queue:other_tips]
+def _other_tips(group, member):
+    """The tips of `group` other than `member`'s own, in order, each once: the branches the run that passed `member`
+    covered. A pass stamp names them (`with=`) so a reader can see what the branch was checked with."""
+    seen = []
+    for other in group:
+        if other["tip"] != member["tip"] and other["tip"] not in seen:
+            seen.append(other["tip"])
+    return seen
+
+
+# [@ANCHOR: batch_queue:with_field]
+def with_field(with_tips):
+    """` with=<12 hex>,<12 hex>` naming the other tips a batched pass covered, or "" when there are none."""
+    return " with=" + ",".join(tip[:12] for tip in with_tips) if with_tips else ""
 
 
 # [@ANCHOR: batch_queue:settle]
@@ -581,7 +599,8 @@ def settle(members, run_once, attribute, budget=MAX_SETTLE_RUNS, log=print):
             return verdicts
         if result.get("exit_code", 1) == 0:
             for m in live:
-                verdicts[m["tip"]] = {"status": PASSED, "exit_code": 0, "findings": [], "detail": ""}
+                verdicts[m["tip"]] = {"status": PASSED, "exit_code": 0, "findings": [], "detail": "",
+                                      "with": _other_tips(live, m)}
             return verdicts
         blamed, unattributed = attribute(result.get("failures", {}), live)
         if not unattributed and blamed:
@@ -590,7 +609,8 @@ def settle(members, run_once, attribute, budget=MAX_SETTLE_RUNS, log=print):
                 verdicts[m["tip"]] = ({"status": FAILED, "exit_code": 1, "findings": lines[:40],
                                        "detail": "%d finding(s) name this branch's files or modules" % len(lines)}
                                       if lines else {"status": PASSED, "exit_code": 0, "findings": [],
-                                                     "detail": "checked clean (the failures belong to other branches)"})
+                                                     "detail": "checked clean (the failures belong to other branches)",
+                                                     "with": _other_tips(live, m)})
             return verdicts
         if len(live) == 1:
             only = live[0]

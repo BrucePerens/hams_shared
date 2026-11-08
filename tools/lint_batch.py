@@ -195,8 +195,8 @@ class LintBatch:
 
     Fields: `repo` (a checkout or worktree of the repository, used for git commands), `repo_name`
     (directory name of the tree, e.g. hams_com), `base` (ref the trees start from), `passthrough`
-    (options copied to the combined run), `stamp_writer(tip, step_names, batch_id)` (writes the pass
-    stamp of one tip), `command(tree, results_json)` (argv; tests replace it with a fake linter),
+    (options copied to the combined run), `stamp_writer(tip, step_names, batch_id, with_tips)` (writes the pass
+    stamp of one tip; `with_tips`: the other tips of the run it passed in), `command(tree, results_json)` (argv; tests replace it with a fake linter),
     `prepare(tree)` (links the tree for linting; default: run fix_worktree_symlinks.py when present),
     `out` (print function), `environ`. `__call__(batch_id, members, log_path)` is the `run_batch`
     callable of `batch_queue.coalesce`.
@@ -334,7 +334,7 @@ class LintBatch:
             verdict["log"] = log_path
             verdict["batch"] = batch_id
             if verdict.get("status") == batch_queue.PASSED:
-                self.stamp_writer(member["tip"], self.last_selected, batch_id)
+                self.stamp_writer(member["tip"], self.last_selected, batch_id, verdict.get("with") or [])
         return {"verdicts": verdicts, "log": log_path}
 
 

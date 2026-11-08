@@ -45,6 +45,7 @@ import unittest.mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
+import batch_queue  # noqa: E402
 import odoo_test_batch as otb  # noqa: E402
 import test_batch_queue as helpers  # noqa: E402
 
@@ -198,6 +199,8 @@ class UnitTests(unittest.TestCase):
             self.assertTrue(text.startswith("tests "))
             self.assertTrue(text.rstrip().endswith("modules=ham_a,ham_b batch=4"))
             self.assertIsNone(otb.write_pass_record("none", [], 4, {"XDG_CACHE_HOME": tmp}))
+            other = otb.write_pass_record("def", ["ham_a"], 4, {"XDG_CACHE_HOME": tmp}, with_tips=["f" * 40])
+            self.assertTrue(open(other).read().rstrip().endswith("modules=ham_a batch=4 with=" + "f" * 12))
 
     def test_test_py_has_the_solo_option_and_the_hook(self):
         spec = importlib.util.spec_from_file_location("_hams_test_py_for_batch_tests", os.path.join(_HERE, "test.py"))
@@ -340,7 +343,7 @@ class RemoteTests(unittest.TestCase):
 
     def batch(self, runner, machines=("yoga", "mac1")):
         return otb.RemoteTestBatch(
-            self.work, "hams_demo", "origin/main", [], lambda tip, modules, bid: self.stamps.append((tip, modules)),
+            self.work, "hams_demo", "origin/main", [], lambda tip, modules, bid, with_tips: self.stamps.append((tip, modules)),
             self.sdir, list(machines), ["driver"], work_base=self.tmp, probe=lambda names: list(names),
             runner=runner, out=self.lines.append)
 
@@ -736,9 +739,9 @@ class TestCollectReadsTheReportOfAnySlot(unittest.TestCase):
 def drive(argv):
     spec = json.loads(argv[0])
 
-    def record(tip, modules, batch_id):
+    def record(tip, modules, batch_id, with_tips):
         with open(os.path.join(spec["records"], tip), "w") as handle:
-            handle.write("tests modules=%s batch=%s\n" % (",".join(modules), batch_id))
+            handle.write("tests modules=%s batch=%s%s\n" % (",".join(modules), batch_id, batch_queue.with_field(with_tips)))
 
     runner = otb.OdooTestBatch(
         spec["repo"], "hams_demo", "origin/main", [], record, sdir=spec["sdir"], prepare=lambda tree: None,

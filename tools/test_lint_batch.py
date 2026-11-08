@@ -20,6 +20,7 @@ Tests [@ANCHOR: lint_batch:read_results]
 Tests [@ANCHOR: lint_batch:LintBatch]
 Tests [@ANCHOR: lint_batch:run_member]
 Tests [@ANCHOR: run_linters:write_batch_stamp]
+Tests [@ANCHOR: batch_queue:with_field]
 """
 
 import json
@@ -32,6 +33,7 @@ import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
+import batch_queue  # noqa: E402
 import lint_batch  # noqa: E402
 import test_batch_queue as helpers  # noqa: E402
 
@@ -65,9 +67,10 @@ def drive(argv):
     spec = json.loads(argv[0])
     stamps = spec["stamps"]
 
-    def stamp_writer(tip, names, batch_id):
+    def stamp_writer(tip, names, batch_id, with_tips):
         with open(os.path.join(stamps, tip), "w") as handle:
-            handle.write("changed steps=%d names=%s batch=%s\n" % (len(names), ",".join(names), batch_id))
+            handle.write("changed steps=%d names=%s batch=%s%s\n" % (
+                len(names), ",".join(names), batch_id, batch_queue.with_field(with_tips)))
 
     runner = lint_batch.LintBatch(
         spec["repo"], "hams_demo", "origin/main", [], stamp_writer,
@@ -253,8 +256,30 @@ class UnitTests(unittest.TestCase):
                     os.environ["XDG_CACHE_HOME"] = old
         self.assertTrue(text.startswith("changed "))
         self.assertTrue(text.rstrip().endswith("batch=7"))
+        self.assertNotIn("with=", text)
         self.assertEqual(lint_stamp_gate.parse_stamp(text)[0], "changed")
         self.assertEqual(lint_stamp_gate.parse_stamp(text)[1], 2)
+        self.assertIsNone(lint_stamp_gate.refusal(text, ["a.py"]))
+
+    def test_batch_stamp_names_the_tips_it_was_checked_with_and_the_gate_still_accepts_it(self):
+        import lint_stamp_gate
+        import run_linters
+        self.assertEqual(batch_queue.with_field([]), "")
+        self.assertEqual(batch_queue.with_field(["a" * 40, "b" * 40]), " with=" + "a" * 12 + "," + "b" * 12)
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.environ.get("XDG_CACHE_HOME")
+            os.environ["XDG_CACHE_HOME"] = tmp
+            try:
+                run_linters.write_batch_stamp("t1", ["flake8", "check_cargo_clippy[x]"], 7, ["c" * 40, "d" * 40])
+                with open(os.path.join(tmp, "hams-lint", "passed", "t1")) as handle:
+                    text = handle.read()
+            finally:
+                if old is None:
+                    del os.environ["XDG_CACHE_HOME"]
+                else:
+                    os.environ["XDG_CACHE_HOME"] = old
+        self.assertTrue(text.rstrip().endswith("batch=7 with=" + "c" * 12 + "," + "d" * 12), text)
+        self.assertEqual(lint_stamp_gate.parse_stamp(text), ("changed", 2, {"flake8", "check_cargo_clippy"}))
         self.assertIsNone(lint_stamp_gate.refusal(text, ["a.py"]))
 
     def test_run_linters_accepts_solo(self):
@@ -334,6 +359,11 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.stamps, first)))
         self.assertFalse(os.path.exists(os.path.join(self.stamps, bad_b)))
         self.assertIn("batch=2", open(os.path.join(self.stamps, good_a)).read())
+        # The stamp of a batched pass names the other tips it was checked with (not its own).
+        stamp_a = open(os.path.join(self.stamps, good_a)).read()
+        self.assertIn(" with=", stamp_a)
+        self.assertIn(good_c[:12], stamp_a)
+        self.assertNotIn(good_a[:12], stamp_a)
         # No combined tree is left behind.
         trees = os.path.join(self.tmp, "trees")
         self.assertEqual(os.listdir(trees) if os.path.isdir(trees) else [], [])
