@@ -2476,6 +2476,51 @@ def root_phase_database_cleanup(run_args, slot, pg):
     )
 
 
+# [@ANCHOR: test:reap_orphans_forever]
+def reap_orphans_forever(protected_pids, stop, interval=1.0, min_age=3.0, clock=time.monotonic):
+    """Reap the zombie children that nobody waits for; the loop of the reaper thread of the namespace's init.
+
+    The root phase of the full pipeline is PID 1 of its PID namespace (`unshare -p -f`), so every process orphaned
+    anywhere in the run (Chrome helpers, shell wrappers, the processes of `rabbitmq-server`) is re-parented to it, and
+    a Python init that only waits for its one test process never reaps them: 150 to 170 zombies per run were seen after
+    a few hours, and a multi-hour run could reach the PID limit.
+
+    `protected_pids`: a set of pids this process waits for itself (Redis, RabbitMQ), which are never reaped here because
+    their exit status is wanted. `stop`: a threading.Event; the loop ends when it is set. A zombie child is reaped
+    with `os.waitpid(pid, WNOHANG)` on its own pid only (never `waitpid(-1)`, which would steal the status of the test
+    process that `subprocess.run` waits for), and only after it has been seen as a zombie for `min_age` seconds, so a
+    child whose parent code is about to wait for it is left to that code. `interval` is the scan period in seconds,
+    `clock` a test seam. Returns the number of zombies reaped. Full entry: tools/README.md."""
+    first_seen = {}
+    reaped = 0
+    while not stop.is_set():
+        now = clock()
+        zombies = set()
+        try:
+            for child in psutil.Process().children():
+                try:
+                    if child.pid not in protected_pids and child.status() == psutil.STATUS_ZOMBIE:
+                        zombies.add(child.pid)
+                except psutil.NoSuchProcess:
+                    continue
+        except psutil.Error as e:
+            _logger.debug("Ignored %s while looking for zombies", e)
+        for pid in list(first_seen):
+            if pid not in zombies:
+                del first_seen[pid]
+        for pid in zombies:
+            started = first_seen.setdefault(pid, now)
+            if now - started >= min_age:
+                try:
+                    if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                        reaped += 1
+                except ChildProcessError:
+                    pass  # something else already waited for it
+                del first_seen[pid]
+        stop.wait(interval)
+    return reaped
+
+
 def setup_namespace_and_run_tests(real_log_dir, sys_args):
     """
     Pure-Python OS-level namespace bootstrapping.
@@ -2902,6 +2947,11 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     # stops Redis and RabbitMQ and drops the slot database. As the first process of its PID namespace this one
     # would otherwise ignore those signals: the kernel delivers only the ones it has a handler for.
     _install_exit_signal_handlers()
+    # This process is PID 1 of the run's PID namespace: reap what is orphaned under it (see reap_orphans_forever).
+    reaper_stop = threading.Event()
+    threading.Thread(
+        target=reap_orphans_forever, args=({redis_proc.pid, rmq_proc.pid}, reaper_stop), daemon=True, name="namespace-init-reaper"
+    ).start()
     try:
         test_cmd = [sys.executable, os.path.abspath(__file__)] + sys_args
         ret = subprocess.run(test_cmd, preexec_fn=preexec_odoo).returncode
@@ -2940,6 +2990,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
                     _logger.warning("Failed to fully reap %s (PID %s) during teardown: %s", proc_name, proc.pid, e)
             except Exception as e:  # audit-ignore-catch-all
                 _logger.warning("Unexpected error tearing down %s (PID %s): %s", proc_name, proc.pid, e)
+        reaper_stop.set()
         root_phase_database_cleanup(
             run_args,
             slot,

@@ -29,6 +29,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
 from types import SimpleNamespace
@@ -711,6 +712,51 @@ class SlotWiringMainTests(unittest.TestCase):
             source.index("] + sys.argv[1:] + [\"--preflight-done\"]"),
             source.index("exec_cmd += slot_handoff_args(slots, held_slot)"),
         )
+
+
+class NamespaceInitReaperTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:reap_orphans_forever] with real processes: a child that is a subreaper, as PID 1 of the run's
+    namespace is, receives orphaned grandchildren; without the reaper they stay zombies, with it none remain."""
+
+    def test_orphans_are_reaped_and_a_protected_childs_status_survives(self):
+        script = textwrap.dedent("""
+            import ctypes, importlib.util, os, subprocess, sys, threading, time
+            import psutil
+            ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)   # PR_SET_CHILD_SUBREAPER
+            spec = importlib.util.spec_from_file_location("hams_runner_reaper", %r)
+            runner = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(runner)
+
+            def zombies():
+                return [c.pid for c in psutil.Process().children() if c.status() == psutil.STATUS_ZOMBIE]
+
+            def orphans(n):
+                for _ in range(n):
+                    subprocess.run(["sh", "-c", "sleep 0.1 & exit 0"])   # the sleep is re-parented to this process
+
+            orphans(5)
+            time.sleep(0.8)
+            before = len(zombies())
+            tracked = subprocess.Popen(["sh", "-c", "exit 3"])
+            stop = threading.Event()
+            thread = threading.Thread(target=runner.reap_orphans_forever, args=({tracked.pid}, stop, 0.1, 0.3))
+            thread.start()
+            orphans(5)
+            time.sleep(2.0)
+            during = zombies()
+            status = tracked.wait()          # protected: the reaper must not have taken its exit status
+            stop.set()
+            thread.join(10)
+            print("before", before, "during", len(during), "tracked", status, "alive", thread.is_alive(), flush=True)
+        """ % _TEST_PY_PATH)
+        done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        words = done.stdout.split()
+        self.assertGreaterEqual(int(words[1]), 1, "control: without the reaper the orphans stay zombies: " + done.stdout)
+        # only the protected, not yet waited-for child may still be a zombie while the reaper runs
+        self.assertLessEqual(int(words[3]), 1, done.stdout)
+        self.assertEqual(words[5], "3", done.stdout)
+        self.assertEqual(words[7], "False", done.stdout)
 
 
 class TakeBackSlotLockTests(unittest.TestCase):

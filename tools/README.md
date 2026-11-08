@@ -927,6 +927,24 @@ Returns a list of `psutil.Process` with `info` holding pid, uids and cmdline. A 
 orphan whose `--user-data-dir` is a directory that exists in this process's own view of the filesystem (a leftover of a dead parent of this run;
 another run's profile directories are in its private overlay, or on the host where a namespaced run cannot see them). Reads `/proc`; sends no signal.
 
+### `[@ANCHOR: test:reap_orphans_forever]` `reap_orphans_forever(protected_pids, stop, interval=1.0, min_age=3.0, clock=time.monotonic)`
+
+Purpose: the loop of the reaper thread of the root phase, which is PID 1 of its PID namespace (`unshare -p -f`). Every process orphaned anywhere in the run
+(Chrome helpers, shell wrappers, the processes of `rabbitmq-server`) is re-parented to it, and a Python init that only waits for its one test process never
+reaped them: 150 to 170 zombies per run were seen after a few hours, and a multi-hour run could exhaust the PID limit.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `protected_pids` | set of int | Children this process waits for itself (Redis, RabbitMQ); never reaped here, their exit status is wanted. |
+| `stop` | `threading.Event` | The loop ends when it is set. |
+| `interval` | float | Seconds between scans. |
+| `min_age` | float | Seconds a child must have been seen as a zombie before it is reaped, so a child whose parent code is about to wait for it is left to that code. |
+| `clock` | callable | Test seam, `time.monotonic`. |
+
+Returns the number of zombies reaped. Reaps with `os.waitpid(pid, WNOHANG)` on the zombie's own pid only: `waitpid(-1)` would steal the exit status of the test
+process that `subprocess.run` waits for, and the run's exit code would read 0. Started by `setup_namespace_and_run_tests` as a daemon thread before the test
+process starts and stopped in its `finally`.
+
 ### `[@ANCHOR: test:slot_handoff_args]` `slot_handoff_args(slots, held_slot)`
 
 Purpose: the command-line words that give a re-exec'd phase the slot of its parent. Returns `[]` when `slots` is 1 (the command line stays
