@@ -90,7 +90,7 @@ sudo -H -u odoo env \
   ODOO_USER=admin ODOO_PASSWORD=admin \
   /usr/bin/python3 /usr/bin/odoo \
   --load=base,web,zero_sudo \
-  --addons-path /usr/lib/python3/dist-packages/odoo/addons,/home/bruce/workspace/hams_com,/home/bruce/workspace/hams_open \
+  --addons-path /usr/lib/python3/dist-packages/odoo/addons,$HOME/workspace/hams_com,$HOME/workspace/hams_open \
   --dev=xml -d hams_test -i base,<module_name> \
   --test-enable --test-tags /<module_name> --stop-after-init \
   --workers=0 --max-cron-threads=0 \

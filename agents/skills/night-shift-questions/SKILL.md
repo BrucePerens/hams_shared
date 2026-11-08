@@ -30,7 +30,7 @@ on it, and let Bruce answer on his own schedule from a queue that's always curre
 
 ## Where it lives
 
-`/home/bruce/workspace/hams_com/night_shift_questions/`, with two subdirectories:
+`~/workspace/hams_com/night_shift_questions/`, with two subdirectories:
 
 ```
 night_shift_questions/
