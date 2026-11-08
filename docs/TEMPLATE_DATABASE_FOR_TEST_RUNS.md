@@ -197,7 +197,33 @@ A genuine quiet-slot comparison needs the box idle and is not claimed.
 
 ## Sharding one module list across slots
 
-@@SHARDING@@
+Each shard installs the whole list once and runs its share of the test classes. Measured with the real runner in the full pipeline
+(`test.py --solo --wait -u ham_onboarding --test-tags <classes>`), the same 68 `ham_onboarding` browser tests (four classes of 20, 20, 15 and 13 tests) as
+one run, as two concurrent runs and as four concurrent runs, **once each** (the queue at 8 slots and the other agents' gate runs did not allow repeats):
+
+| shards | classes per shard | install, per shard | slowest shard, modules loaded to result | wall, first module load to last result | against one run |
+|---|---|---|---|---|---|
+| 1 | all four | 101 s | 438 s | 539 s | 1.00 |
+| 2 | 20+13 and 20+15 tests | 95 s | 233 s | 328 s | 1.64 |
+| 4 | 20, 20, 15, 13 tests | 124-127 s | 160 s | 286 s | 1.88 |
+
+The shards started within 11 s of each other (slots were free), every shard passed (0 failed, 0 errors; 33+35 and
+20+20+15+13 tests, 68 in each total, the same count as the single run). Two shards give 1.88 times on the tests alone and 1.64 times
+on the wall clock; four shards 2.74 and 1.88. Reasons it is less than N: every shard pays the install (4 concurrent installs took
+125 s each against 101 s alone: they compete for the same cores), the longest class sets the pace (a class of 20 tests took
+about 160 s), and each shard pays the 30 s of asset bundles. The CPU cost is N installs and N asset generations
+(about 170 runner CPU-seconds and 40 PostgreSQL CPU-seconds per install for the whole-system list, see the large set).
+
+For the whole-system list, balancing the 18 modules that have tests by their recorded seconds (`odoo_test_batch.plan_machine_split`, the
+durations of `rerun1.log`, 4478 s of tests; the box has no `module_durations.json` for them yet) gives, before any load effect:
+2 shards 2240 s of tests (1.94 times), 4 shards 1123 s (3.67 times), 8 shards 996 s (4.09 times, one module, `ham_onboarding`, is 996 s
+alone and a single test class, `zero_sudo` `TestIntegrationFacility`, is 600 s). That is a model; only the 68-test measurement above is measured.
+
+**What sharding does not do on this box.** The box was at a load average of 26 to 74 on 32 threads with 5 to 8 of 8 slots in use by
+other runs. A shard needs a free slot and free cores; with no spare capacity, N shards of one run take N slots from other
+sessions, add N-1 installs, and finish in roughly the time they would have taken one after the other. The gain exists when slots and
+cores are idle (nights, between gate runs) and for the latency of one important run; it is not a throughput gain. Sharding by class,
+not by module, is needed for the big modules to balance.
 
 ## What a minimal production implementation would be, if it is built anyway
 
@@ -218,4 +244,6 @@ Only worth doing after the reaper change, and its value is larger if the asset b
    time of every full-pipeline run, so the largest gain by far.
 2. Do not build the template database for speed. If it is built later, it is a 50 s saving per run for small module sets (large relative
    to a 90 s run, 2 percent of a whole-system run), and it adds a stale-state class of failure that the key above only mostly prevents.
-3. Measure one-Chrome-per-class before anything else is considered for the per-test cost.
+3. Shard a big run across idle slots by test class (not module), when the box has idle slots: measured 1.64 times with two shards and
+   1.88 times with four on the wall clock. It buys latency, not throughput, on a box that is already full.
+4. Measure one-Chrome-per-class before anything else is considered for the per-test cost.
