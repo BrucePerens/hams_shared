@@ -764,6 +764,7 @@ class TestTestPyWiring(_TmpDirCase):
         # HAMS_TEST_SLOTS=1: the environment outranks /opt/hams/etc/test_slots (and --slots can only raise the count),
         # so these tests of the one-slot lock mean the same on a machine that has opted in to more slots.
         env["HAMS_TEST_SLOTS"] = "1"
+        env["HOME"] = self._tmp.name   # the report and progress files go here, not into the real ~/tmp (an account that cannot write them later)
         return subprocess.run(_test_py_argv("-u", "nonexistent_module", *args), env=env,
                               capture_output=True, text=True, timeout=timeout, cwd=os.path.dirname(_HERE))
 
@@ -798,7 +799,7 @@ class TestTestPyWiring(_TmpDirCase):
     def test_waiter_takes_over_when_the_holder_releases(self):
         holder = self.hold()
         p = subprocess.Popen(_test_py_argv("-u", "nonexistent_module", "--wait"),
-                             env=dict(os.environ, HAMS_TEST_SLOTS="1", HAMS_TEST_LOCK_PATH=self.lock_path,
+                             env=dict(os.environ, HAMS_TEST_SLOTS="1", HOME=self._tmp.name, HAMS_TEST_LOCK_PATH=self.lock_path,
                                       HAMS_SKIP_CI_LOAD_GATE="1", HAMS_ISOLATED_NS="1",
                                       PATH=_install_db_stand_ins(self._tmp.name)[0], **NO_POSTGRES_ENV),
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -847,6 +848,7 @@ class TestSlotsWiring(_TmpDirCase):
                   "HAMS_TEST_LOCK_HELD", "HAMS_TEST_SLOTS"):
             env.pop(k, None)
         env["HAMS_TEST_TAKE_BACK_SECONDS"] = "1"
+        env["HOME"] = self._tmp.name   # see TestTestPyWiring.run_test_py
         env.update(extra)
         env["PATH"], self.db_log = _install_db_stand_ins(self._tmp.name)
         env.update(NO_POSTGRES_ENV)
