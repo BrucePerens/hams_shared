@@ -5,6 +5,7 @@
       "local": true,
       "os": "linux",
       "lint_slots": 4,
+      "lint_load_ratio": 1.5,
       "nice": 10,
       "max_load_ratio": 1.0,
       "note": "This development machine (32 cores, 125 GB): the PRIMARY lint runner (Bruce, 2026-11-08), with the full toolchain (rustup 1.98.1 with rustfmt and clippy, cargo-deny, the pytest stack). `lint_slots` heavy lint runs go at once (tools/lint_lock.py), each in its own Cargo target directory and TMPDIR at nice 10; the other machines take a whole run only as overflow when every slot is busy or the load is above the limit. All other machines are optional."

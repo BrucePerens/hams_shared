@@ -25,8 +25,8 @@ fails, and each run takes 20-40 minutes instead of 5. So heavy runs queue:
     bounds the wait; HAMS_LINT_LOAD_LIMIT / HAMS_LINT_LOAD_TIMEOUT (or --load-limit /
     --load-timeout) override those for lint only. The runner-process check of test.py's gate is not
     used here: a lint run does not need the box free of CI, only not overloaded.
-  * DISTRIBUTION (2026-11-03). A run that would have to queue here, because a run holds or waits for the
-    lock or the load is above the limit, does not wait while another machine is idle: run_linters.py
+  * DISTRIBUTION (2026-11-03, narrowed 2026-11-08: overflow only). A run that would have to queue here, because every slot is
+    taken or a run waits for one (on a single-slot machine also: the load is above the limit), does not wait while another machine is idle: run_linters.py
     --remote auto ships the whole run (every step the machine can run) to the least-loaded capable
     machine, which has its own lock and gate, and takes this lock only for the steps that must stay
     here. That remainder (git history, network, this checkout: about 75 s in all) does not queue behind
@@ -315,9 +315,10 @@ def running_count(qdir):
 
 
 def local_busy(environ=None, loadavg=None, cpu_count=None, qdir=None, slots=None):
-    """(busy, reason): True when a heavy run started now would wait here: every slot is taken or a run waits for one, or the
-    1-minute load average is above the limit. With a single slot that is "a lint run holds or waits for the lock", as before.
-    Takes no lock; reads the queue only."""
+    """(busy, reason): True when a heavy run started now would wait here for a slot: every slot is taken or a run waits for one.
+    With a single slot that is "a lint run holds or waits for the lock", as before, and also a 1-minute load average above the
+    limit; with several slots the load does not count (the run waits at the load gate instead, which `load_limit` sizes for the
+    machine). Takes no lock; reads the queue only."""
     environ = os.environ if environ is None else environ
     qdir = qdir or queue_dir(environ)
     slots = slot_count(environ) if slots is None else slots
@@ -334,16 +335,20 @@ def local_busy(environ=None, loadavg=None, cpu_count=None, qdir=None, slots=None
             return True, "all %d lint slots are busy here (%d waiting)" % (slots, len(waiting))
         if waiting:
             return True, "%d lint run(s) wait for a slot here (%d of %d slots running)" % (len(waiting), len(holders), slots)
+    if slots > 1:
+        # A machine with several slots (the dev box) is not "busy" because its load is high: that is its other work, mostly niced
+        # (cargo tests, the other lint runs), and a smaller machine would finish later than this run waiting at the load gate.
+        return False, "a lint slot is free (%d of %d running)" % (len(holders), slots)
     if environ.get("HAMS_SKIP_CI_LOAD_GATE") == "1":
-        return False, "a lint slot is free"
+        return False, "the lock is free"
     try:
         current = (loadavg or (lambda: os.getloadavg()[0]))()
     except OSError:
-        return False, "a lint slot is free"
+        return False, "the lock is free"
     limit = load_limit(environ, cpu_count=cpu_count)
     if current > limit:
         return True, "load %.1f is above the lint limit %.1f" % (current, limit)
-    return False, "a lint slot is free and the load is %.1f" % current
+    return False, "the lock is free and the load is %.1f" % current
 
 
 def claim_dir(environ=None):
@@ -430,8 +435,24 @@ def load_limit(environ=None, cpu_count=None, override=None):
         return float(override)
     if environ.get("HAMS_LINT_LOAD_LIMIT"):
         return _finite(environ["HAMS_LINT_LOAD_LIMIT"], float(cores))
-    ratio = _finite(environ.get("HAMS_CI_LOAD_GATE_RATIO"), 1.0)
+    ratio = _finite(environ.get("HAMS_CI_LOAD_GATE_RATIO"), machine_load_ratio(environ))
     return max(1.0, cores * ratio)
+
+
+# [@ANCHOR: lint_lock:machine_load_ratio]
+def machine_load_ratio(environ=None, machines_file=None):
+    """The load-per-core ratio of this machine's load gate for lint: `lint_load_ratio` of its entry in lint_machines.json (the dev box: 1.5,
+    because with several lint slots and niced cargo tests the load runs above the core count by design), else 1.0. Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    try:
+        import lint_cache
+
+        name = lint_cache.machine_name(environ, machines_file)
+        with open(machines_file or MACHINES_FILE, encoding="utf-8") as handle:
+            value = json.load(handle).get("machines", {}).get(name, {}).get("lint_load_ratio", 1.0)
+        return _finite(value, 1.0) if isinstance(value, (int, float)) and value > 0 else 1.0
+    except (OSError, ValueError, AttributeError):
+        return 1.0
 
 
 def load_timeout(environ=None, override=None):
