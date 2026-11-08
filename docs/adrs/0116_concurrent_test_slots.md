@@ -75,6 +75,15 @@ the host log directory and the host `/var/lib/odoo` tree.
   directory; the invoking process's ticket and holder record (its pid lives as long as `sudo`) stay valid for the whole run.
   A slot named by a live holder record is also not taken by another run while its flock is momentarily free (the exec
   window in which two runs once shared a slot).
+- **A run kills only its own Chrome.** `pkill -u odoo -f <pattern>` in `test.py` and the `zero_sudo` harness's reap of "every
+  headless Chrome of this uid" (written when one run per machine was the rule) killed the browsers of other runs: a run in its
+  own PID namespace is visible in the host's process table, and a slot 1 run's pattern matched its profile directories. Tours of
+  full-pipeline runs died with exit code 9 (`CancelledError` in `Page.navigate`, or a stalled step). Both now signal only
+  descendants of the calling process and orphans whose `--user-data-dir` is a directory in the caller's own view of the
+  filesystem (`chrome_processes_of_this_run`, `_headless_chrome_of_this_run`).
+- **The namespace init reaps.** The root phase is PID 1 of the run's PID namespace and re-adopts every orphan; it never waited for
+  them (150 to 170 zombies per run after hours). A reaper thread (`reap_orphans_forever`) reaps zombie children by pid, never
+  `waitpid(-1)`, so the exit status of the test process is untouched.
 - **One count per machine.** Every run reads `HAMS_TEST_SLOTS` / `/opt/hams/etc/test_slots`; `--slots` can only raise
   it. A run that asked for fewer slots than the machine has no longer takes slot 1 only and queues as if the others
   did not exist. To run with one slot, set `HAMS_TEST_SLOTS=1`.
