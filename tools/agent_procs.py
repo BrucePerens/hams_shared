@@ -1,0 +1,885 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""
+Find, wait for, run, list and stop processes without the mistakes agents keep making (Bruce, 2026-11-08).
+
+The mistakes, all seen on one night:
+  * `kill -9 $(pgrep -f "[x]yz")`: the pattern also matched a PostgreSQL backend whose process title held the database
+    name; SIGKILL of one backend crashed the whole shared cluster.
+  * `until ! pgrep -f "tools/test.py"; do sleep 3; done` inside `bash -c '...'`: the waiter's own command line holds the
+    pattern, so it matches itself (and its parents) and never ends, or the kill takes the agent's own shell down (exit 144).
+  * a pid copied from an earlier command named a different process by the time it was used (pids are reused).
+  * waiting on a background job by polling its output file instead of waiting on the exact process or exit marker.
+
+What this tool does instead: a process is named by its pid AND its start time (field 22 of /proc/PID/stat, so a reused pid is
+detected), a long job is started as a NAMED JOB in its own session with a record of its pid, process group and exit code, and a
+pattern search never lists the searcher, its ancestors or its descendants. Pure /proc, standard library only.
+
+    agent_procs.py find   [--cwd-under PATH] [--cmd-contains TEXT | --cmd-regex RE] [--user U] [--any-user] [--pid-file F]
+    agent_procs.py wait   (--pid N [--start-time T] | --job NAME | --file PATH [--contains RE] [--fail-contains RE])
+                          [--while-pid N] [--timeout S]       exit 0 done, 1 failed, 75 timeout, 2 usage, 3 refused
+    agent_procs.py run    NAME [--tag AGENT] [--cwd DIR] -- COMMAND...     a named job; log in ~/.cache/hams-jobs/NAME.log
+    agent_procs.py jobs   [--json]
+    agent_procs.py stop   NAME [--grace S] [--force]          SIGTERM the job's process group; SIGKILL only with --force
+    agent_procs.py kill-pid PID (--start-time T | --cwd-under PATH) [--grace S] [--force]    one exact, verified pid
+
+Refused always (exit 3, no flag overrides it except `--i-am-the-owner-and-checked` for the caller's own recorded job): a process of
+another user, root or postgres; any command containing postgres, postmaster, redis-server, rabbitmq, beam.smp, epmd, systemd, sshd,
+gdm, gnome or claude-desktop; the claude application; a test.py run outside the caller's own worktree; a chrome of a test run
+outside the caller's own TMPDIR; pid 1; the caller's own ancestry. Full documentation of every function: tools/README.md
+"Watching and stopping processes (`agent_procs.py`)".
+"""
+
+import argparse
+import dataclasses
+import datetime
+import fcntl
+import functools
+import json
+import math
+import os
+import pwd
+import re
+import signal
+import subprocess
+import sys
+import time
+
+CLK_TCK = os.sysconf("SC_CLK_TCK")
+EX_OK = 0
+EX_FAILED = 1
+EX_USAGE = 2
+EX_REFUSED = 3
+EX_TIMEOUT = 75
+DEFAULT_WAIT_TIMEOUT = 1800.0
+DEFAULT_GRACE = 10.0
+POLL_INTERVAL = 0.5
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+PROTECTED_WORDS = (
+    "postgres", "postmaster", "redis-server", "rabbitmq", "beam.smp", "epmd", "systemd", "sshd", "gdm", "gnome",
+    "claude-desktop",
+)
+PROTECTED_USERS = ("postgres", "root")
+ALLOWED_SIGNALS = {
+    "TERM": signal.SIGTERM, "INT": signal.SIGINT, "HUP": signal.SIGHUP, "QUIT": signal.SIGQUIT,
+    "USR1": signal.SIGUSR1, "USR2": signal.SIGUSR2,
+}
+OWNER_OVERRIDE_FLAG = "--i-am-the-owner-and-checked"
+
+
+class ProcError(Exception):
+    """A refusal or usage error with the exit code the CLI should use (`code`)."""
+
+    def __init__(self, message, code=EX_USAGE):
+        super().__init__(message)
+        self.code = code
+
+
+# [@ANCHOR: agent_procs:ProcInfo]
+@dataclasses.dataclass(frozen=True)
+class ProcInfo:
+    """One process as read from /proc at one instant. Never refreshed: read again to see a change."""
+
+    pid: int
+    ppid: int
+    pgid: int
+    sid: int
+    uid: int
+    user: str
+    state: str
+    start_ticks: int
+    comm: str
+    argv: tuple
+    cwd: object
+
+
+# [@ANCHOR: agent_procs:JobRecord]
+@dataclasses.dataclass
+class JobRecord:
+    """The file `<jobs dir>/<name>.json` of a named job, written by `start_job`, completed by the wrapper at the end."""
+
+    name: str
+    tag: str
+    pid: int
+    pgid: int
+    sid: int
+    start_ticks: int
+    cwd: str
+    argv: list
+    log: str
+    started_at: float
+    user: str
+    exit_code: object = None
+    ended_at: object = None
+    stopped: object = None
+
+
+# [@ANCHOR: agent_procs:WaitResult]
+@dataclasses.dataclass(frozen=True)
+class WaitResult:
+    """The outcome of a `wait_*` function: `code` is the process exit code to use, `message` one line for the human."""
+
+    code: int
+    message: str
+
+
+# [@ANCHOR: agent_procs:user_name]
+def user_name(uid):
+    """The login name of `uid`, or its number as text when the account is unknown. Never raises."""
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return str(uid)
+
+
+# [@ANCHOR: agent_procs:boot_time]
+def boot_time():
+    """Seconds since the epoch at which the machine booted (`btime` of /proc/stat); 0.0 when unreadable."""
+    try:
+        with open("/proc/stat") as handle:
+            for line in handle:
+                if line.startswith("btime "):
+                    value = float(line.split()[1])
+                    return value if math.isfinite(value) else 0.0
+    except (OSError, ValueError):
+        pass
+    return 0.0
+
+
+# [@ANCHOR: agent_procs:format_start]
+def format_start(start_ticks):
+    """The local wall-clock start time (`YYYY-MM-DDTHH:MM:SS`) of a process whose /proc start time is `start_ticks`."""
+    when = boot_time() + start_ticks / CLK_TCK
+    return datetime.datetime.fromtimestamp(when).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+# [@ANCHOR: agent_procs:read_proc]
+def read_proc(pid):
+    """Read one process from /proc. Returns a `ProcInfo`, or `None` when it does not exist or vanished while being read.
+
+    The start time is field 22 of /proc/PID/stat, parsed after the LAST `)` because the command name may hold one."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as handle:
+            raw = handle.read().decode("utf-8", "replace")
+        comm = raw[raw.index("(") + 1:raw.rindex(")")]
+        fields = raw[raw.rindex(")") + 2:].split()
+        uid = os.stat(f"/proc/{pid}").st_uid
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            parts = handle.read().decode("utf-8", "replace").split("\0")
+    except (OSError, ValueError, IndexError):
+        return None
+    argv = tuple(part for part in parts if part != "") or (f"[{comm}]",)
+    try:
+        cwd = os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        cwd = None
+    try:
+        return ProcInfo(pid, int(fields[1]), int(fields[2]), int(fields[3]), uid, user_name(uid), fields[0],
+                        int(fields[19]), comm, argv, cwd)
+    except (IndexError, ValueError):
+        return None
+
+
+# [@ANCHOR: agent_procs:snapshot]
+def snapshot():
+    """Every readable process, as `{pid: ProcInfo}`. One pass over /proc; processes that exit during it are omitted."""
+    table = {}
+    for entry in os.listdir("/proc"):
+        if entry.isdigit():
+            info = read_proc(int(entry))
+            if info is not None:
+                table[info.pid] = info
+    return table
+
+
+# [@ANCHOR: agent_procs:ancestry]
+def ancestry(table, pid):
+    """The set of `pid` and all of its ancestors (parent, grandparent, ... up to pid 1) according to `table`."""
+    seen = set()
+    while pid and pid not in seen:
+        seen.add(pid)
+        info = table.get(pid)
+        if info is None:
+            break
+        pid = info.ppid
+    return seen
+
+
+# [@ANCHOR: agent_procs:descendants]
+def descendants(table, pid):
+    """The set of all children, grandchildren, ... of `pid` according to `table` (not `pid` itself)."""
+    children = {}
+    for info in table.values():
+        children.setdefault(info.ppid, []).append(info.pid)
+    found = set()
+    todo = [pid]
+    while todo:
+        for child in children.get(todo.pop(), ()):
+            if child not in found:
+                found.add(child)
+                todo.append(child)
+    return found
+
+
+# [@ANCHOR: agent_procs:self_family]
+def self_family(table, me=None):
+    """The pids no search may list and no signal may reach: this process, its ancestors and its descendants.
+
+    This is what stops a waiter from matching itself: the `bash -c '...'` that holds the pattern in its command line is an
+    ancestor of the process that searches."""
+    me = os.getpid() if me is None else me
+    return ancestry(table, me) | descendants(table, me)
+
+
+# [@ANCHOR: agent_procs:is_under]
+def is_under(path, root):
+    """True when `path` is `root` or inside it, after `realpath` of both. False when either is empty or `None`."""
+    if not path or not root:
+        return False
+    path, root = os.path.realpath(path), os.path.realpath(root)
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+# [@ANCHOR: agent_procs:caller_worktree]
+def caller_worktree(environ=None, cwd=None):
+    """The git worktree root of the caller: `HAMS_AGENT_WORKTREE` if set, else the nearest directory holding `.git` at or
+    above `cwd` (default the current directory), else `None` (then every test.py run counts as someone else's)."""
+    environ = os.environ if environ is None else environ
+    if environ.get("HAMS_AGENT_WORKTREE"):
+        return environ["HAMS_AGENT_WORKTREE"]
+    here = os.path.realpath(cwd or os.getcwd())
+    while True:
+        if os.path.exists(os.path.join(here, ".git")):
+            return here
+        parent = os.path.dirname(here)
+        if parent == here:
+            return None
+        here = parent
+
+
+# [@ANCHOR: agent_procs:chrome_data_dir]
+def chrome_data_dir(argv):
+    """The `--user-data-dir=` value of a chrome command line, or `None`."""
+    for arg in argv:
+        if arg.startswith("--user-data-dir="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+# [@ANCHOR: agent_procs:protected_reason]
+def protected_reason(info, caller_uid=None, worktree=None, tmpdir=None, family=()):
+    """Why `info` must never be signalled by an agent, or `None` when it is the caller's own ordinary process.
+
+    Arguments: `info` a `ProcInfo`; `caller_uid` the signalling user (default the real uid); `worktree` the caller's own
+    worktree root (see `caller_worktree`); `tmpdir` the caller's `TMPDIR` (`None`: every chrome is protected); `family` pids of
+    the caller's ancestry. Returns a sentence naming the rule. The rules are in the module docstring; they are checked in the
+    order: pid 1 and ancestry, other users and system accounts, protected program names, the claude application, test.py
+    outside the worktree, chrome outside the TMPDIR."""
+    caller_uid = os.getuid() if caller_uid is None else caller_uid
+    haystack = (info.comm + " " + " ".join(info.argv)).lower()
+    base = os.path.basename(info.argv[0]).lower()
+    if info.pid == 1:
+        return "pid 1 is the init system"
+    if info.pid in family:
+        return "it is the caller's own process or one of its ancestors (the shell running this command)"
+    if info.uid != caller_uid or info.uid == 0 or info.user in PROTECTED_USERS:
+        return f"it is owned by {info.user}, not by the caller (system and other users' processes are never signalled)"
+    for word in PROTECTED_WORDS:
+        if word in haystack:
+            return f"its command contains '{word}' (a shared service; a signal can crash everyone's work)"
+    if info.comm in ("claude", "Claude") or base in ("claude", "claude-desktop"):
+        return "it is the claude application"
+    if "test.py" in haystack and not is_under(info.cwd, worktree):
+        return "it is a test.py run that is not under the caller's own worktree"
+    if "chrome" in haystack or "chromium" in haystack:
+        if not tmpdir or not (is_under(chrome_data_dir(info.argv), tmpdir) or is_under(info.cwd, tmpdir)):
+            return "it is a chrome/chromium that is not under the caller's own TMPDIR"
+    return None
+
+
+# [@ANCHOR: agent_procs:ps_line]
+def ps_line(info):
+    """One line describing `info`, printed before any signal: pid, owner, start time and ticks, group, cwd, full arguments."""
+    return (f"pid={info.pid} user={info.user} start={format_start(info.start_ticks)} ticks={info.start_ticks} "
+            f"pgid={info.pgid} cwd={info.cwd or '?'} args={' '.join(info.argv)}")
+
+
+# [@ANCHOR: agent_procs:find_procs]
+def find_procs(table, me=None, user=None, any_user=False, cwd_under=None, contains=None, regex=None, pids=None,
+               caller_uid=None, worktree=None, tmpdir=None):
+    """Search `table` and return `[(ProcInfo, protected_reason_or_None), ...]` sorted by pid.
+
+    Never returns the caller (`me`, default this process), its ancestors or its descendants. `user` (default the caller's
+    own login) restricts to one owner; any other user than the caller needs `any_user=True`, which lists every owner.
+    `cwd_under` keeps processes whose working directory is under it; `contains` is a LITERAL substring of the full argument
+    text; `regex` is a regular expression searched in that text; `pids` is a mapping `{pid: start_ticks or None}` that restricts
+    the result to those pids (a given start time must match). All filters must hold. Raises `ProcError` for a bad regex or for
+    another user without `any_user`."""
+    caller_uid = os.getuid() if caller_uid is None else caller_uid
+    family = self_family(table, me)
+    own_name = user_name(caller_uid)
+    if user is not None and user != own_name and not any_user:
+        raise ProcError(f"--user {user} would list another user's processes: add --any-user (they are shown as protected)")
+    try:
+        pattern = re.compile(regex) if regex else None
+    except re.error as error:
+        raise ProcError(f"bad --cmd-regex: {error}")
+    found = []
+    for pid, info in sorted(table.items()):
+        text = " ".join(info.argv)
+        if pid in family:
+            continue
+        if not any_user and info.uid != caller_uid:
+            continue
+        if user is not None and info.user != user:
+            continue
+        if cwd_under and not is_under(info.cwd, cwd_under):
+            continue
+        if contains and contains not in text:
+            continue
+        if pattern and not pattern.search(text):
+            continue
+        if pids is not None and (pid not in pids or (pids[pid] is not None and pids[pid] != info.start_ticks)):
+            continue
+        found.append((info, protected_reason(info, caller_uid, worktree, tmpdir, ancestry(table, me or os.getpid()))))
+    return found
+
+
+# [@ANCHOR: agent_procs:read_pid_file]
+def read_pid_file(path):
+    """Parse a pid file into `{pid: start_ticks or None}`. Each line is `PID` or `PID:START_TICKS`; blank lines and `#`
+    comments are ignored. Raises `ProcError` on an unreadable file or a malformed line."""
+    result = {}
+    try:
+        with open(path) as handle:
+            lines = handle.read().splitlines()
+    except OSError as error:
+        raise ProcError(f"cannot read --pid-file: {error}")
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = re.fullmatch(r"(\d+)(?::(\d+))?", line)
+        if not match:
+            raise ProcError(f"bad line in --pid-file: {line!r} (want PID or PID:START_TICKS)")
+        result[int(match.group(1))] = int(match.group(2)) if match.group(2) else None
+    return result
+
+
+# [@ANCHOR: agent_procs:jobs_dir]
+def jobs_dir(environ=None):
+    """The directory of job records: `HAMS_JOBS_DIR`, else `~/.cache/hams-jobs`. Created (mode 0700) when missing."""
+    environ = os.environ if environ is None else environ
+    path = environ.get("HAMS_JOBS_DIR") or os.path.join(os.path.expanduser("~"), ".cache", "hams-jobs")
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    return path
+
+
+# [@ANCHOR: agent_procs:check_job_name]
+def check_job_name(name):
+    """Return `name` when it is a safe job name (letters, digits, `.`, `_`, `-`; 1-64 chars; starts alphanumeric), else
+    raise `ProcError`. The name becomes a file name, so no `/` and no leading dot."""
+    if not _NAME_RE.match(name or ""):
+        raise ProcError(f"bad job name {name!r}: use letters, digits, '.', '_' or '-' (1-64 characters, alphanumeric first)")
+    return name
+
+
+# [@ANCHOR: agent_procs:record_path]
+def record_path(name, directory=None):
+    """The path of the record file of job `name` (validated by `check_job_name`)."""
+    return os.path.join(directory or jobs_dir(), check_job_name(name) + ".json")
+
+
+# [@ANCHOR: agent_procs:write_record]
+def write_record(rec, directory=None):
+    """Write `rec` (a `JobRecord`) atomically: a temporary file in the same directory, then `os.replace`."""
+    path = record_path(rec.name, directory)
+    temp = f"{path}.{os.getpid()}.tmp"
+    with open(temp, "w") as handle:
+        json.dump(dataclasses.asdict(rec), handle, indent=1)
+        handle.write("\n")
+    os.replace(temp, path)
+
+
+# [@ANCHOR: agent_procs:read_record]
+def read_record(name, directory=None):
+    """Load the `JobRecord` of job `name`, or `None` when there is no record or it is unreadable."""
+    try:
+        with open(record_path(name, directory)) as handle:
+            return JobRecord(**json.load(handle))
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+# [@ANCHOR: agent_procs:list_records]
+def list_records(directory=None):
+    """Every readable `JobRecord` in the jobs directory, sorted by start time."""
+    directory = directory or jobs_dir()
+    records = []
+    for entry in os.listdir(directory):
+        if entry.endswith(".json") and entry != "guard.json":
+            rec = read_record(entry[:-5], directory)
+            if rec is not None:
+                records.append(rec)
+    return sorted(records, key=lambda rec: rec.started_at)
+
+
+# [@ANCHOR: agent_procs:pid_alive]
+def pid_alive(pid, start_ticks):
+    """True when process `pid` exists, is not a zombie, and its start time is exactly `start_ticks` (so a reused pid is
+    NOT alive for this question)."""
+    info = read_proc(pid)
+    return info is not None and info.start_ticks == start_ticks and info.state not in ("Z", "X")
+
+
+# [@ANCHOR: agent_procs:job_state]
+def job_state(rec):
+    """`"exited"` when the wrapper recorded an exit code, `"running"` when the recorded pid is alive with the recorded start
+    time, else `"lost"` (the job is gone without an exit code: it was killed with SIGKILL, or the machine restarted)."""
+    if rec.exit_code is not None:
+        return "exited"
+    return "running" if pid_alive(rec.pid, rec.start_ticks) else "lost"
+
+
+# [@ANCHOR: agent_procs:forward_signal]
+def forward_signal(holder, signum, _frame):
+    """Wrapper signal handler: pass `signum` on to the job's command (`holder[0]`, a `Popen`) so that a signal sent to the
+    wrapper alone still reaches the command; the wrapper itself keeps running until the command ends, so the exit code is
+    always recorded."""
+    if holder and holder[0] is not None and holder[0].poll() is None:
+        try:
+            holder[0].send_signal(signum)
+        except OSError:
+            pass
+
+
+# [@ANCHOR: agent_procs:wrapper_main]
+def wrapper_main(name, argv, directory=None):
+    """The tiny wrapper that is the leader of a named job's session (`agent_procs.py _wrap NAME -- COMMAND...`).
+
+    Waits for the line `go` on standard input (so the record exists before the command runs), runs `argv` with standard input
+    from /dev/null and output inherited (the log), waits for it, and writes `exit_code` (128+N for death by signal N, 127 when
+    the program was not found) and `ended_at` into the job's record when the record still names this process. Returns that
+    exit code. SIGTERM/SIGINT/SIGHUP are forwarded to the command and do not stop the wrapper."""
+    if sys.stdin.readline().strip() != "go":
+        return 126
+    holder = [None]
+    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(signum, functools.partial(forward_signal, holder))
+    try:
+        holder[0] = subprocess.Popen(argv, stdin=subprocess.DEVNULL)
+        code = holder[0].wait()
+        code = 128 - code if code < 0 else code
+    except OSError as error:
+        print(f"agent_procs: cannot run {argv[0]}: {error}", file=sys.stderr, flush=True)
+        code = 127
+    rec = read_record(name, directory)
+    if rec is not None and rec.pid == os.getpid():
+        rec.exit_code = code
+        rec.ended_at = time.time()
+        write_record(rec, directory)
+    return code
+
+
+# [@ANCHOR: agent_procs:start_job]
+def start_job(name, argv, tag="", cwd=None, directory=None):
+    """Start `argv` as the named job `name` in its own session and process group; returns its `JobRecord`.
+
+    Output (standard output and error) goes to `<jobs dir>/<name>.log`, truncated. The record names the wrapper's pid,
+    process group, session and start time. Holds an exclusive lock on `<name>.lock` while checking and starting, so two
+    starts of one name cannot both succeed. Raises `ProcError` for a bad name, an empty command, or a job of that name that
+    is still running (stop it, or wait for it, first)."""
+    directory = directory or jobs_dir()
+    check_job_name(name)
+    if not argv:
+        raise ProcError("run needs a command after --")
+    with open(os.path.join(directory, name + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old = read_record(name, directory)
+        if old is not None and job_state(old) == "running":
+            raise ProcError(f"job {name} is already running (pid {old.pid}); wait for it or `stop {name}`", EX_FAILED)
+        log = os.path.join(directory, name + ".log")
+        with open(log, "w") as log_handle:
+            env = dict(os.environ, AGENT_PROCS_JOB=name)
+            child = subprocess.Popen(
+                [sys.executable, os.path.abspath(__file__), "_wrap", name, "--"] + list(argv), stdin=subprocess.PIPE,
+                stdout=log_handle, stderr=subprocess.STDOUT, cwd=cwd, start_new_session=True, env=env,
+                close_fds=True)
+        info = read_proc(child.pid)
+        rec = JobRecord(name, tag, child.pid, child.pid, child.pid, info.start_ticks if info else 0,
+                        os.path.realpath(cwd or os.getcwd()), list(argv), log, time.time(), user_name(os.getuid()))
+        write_record(rec, directory)
+        child.stdin.write(b"go\n")
+        child.stdin.close()
+    return rec
+
+
+# [@ANCHOR: agent_procs:wait_pid]
+def wait_pid(pid, start_ticks=None, timeout=DEFAULT_WAIT_TIMEOUT, interval=POLL_INTERVAL, sleep=time.sleep,
+             clock=time.monotonic, table=None):
+    """Wait until process `pid` ends. Returns a `WaitResult`: code 0 when it ended (or was already gone, or the pid now
+    belongs to a different process: start time differs from `start_ticks`), 75 on timeout, 3 when `pid` is the caller's own
+    ancestry (watching the watcher: it could never end before this command).
+
+    `start_ticks` is the /proc start time printed by `find`; when `None` it is read at the first look. Never matches on a
+    command line. The exit status of a process that is not our child is not knowable, so a plain pid is "done", not "ok";
+    wait for a named job (`wait_job`) or a marker file (`wait_file`) when the outcome matters."""
+    if pid in ancestry(snapshot() if table is None else table, os.getpid()):
+        return WaitResult(EX_REFUSED, f"refusing: pid {pid} is this command's own process or an ancestor (watching the watcher)")
+    info = read_proc(pid)
+    if info is None:
+        return WaitResult(EX_OK, f"pid {pid} is already gone")
+    if start_ticks is None:
+        start_ticks = info.start_ticks
+    elif info.start_ticks != start_ticks:
+        return WaitResult(EX_OK, f"pid {pid} now belongs to a different process (start time differs): the original is gone")
+    deadline = clock() + timeout
+    while pid_alive(pid, start_ticks):
+        if clock() >= deadline:
+            return WaitResult(EX_TIMEOUT, f"timeout after {timeout:g}s: pid {pid} is still running")
+        sleep(interval)
+    return WaitResult(EX_OK, f"pid {pid} ended")
+
+
+# [@ANCHOR: agent_procs:wait_job]
+def wait_job(name, timeout=DEFAULT_WAIT_TIMEOUT, interval=POLL_INTERVAL, sleep=time.sleep, clock=time.monotonic,
+             directory=None):
+    """Wait for the named job to end. Code 0 when its exit code is 0, 1 for any other exit code or for a job that vanished
+    without recording one (`lost`), 75 on timeout. Raises `ProcError` (usage) when there is no such job."""
+    if read_record(name, directory) is None:
+        raise ProcError(f"no job named {name}")
+    deadline = clock() + timeout
+    while True:
+        rec = read_record(name, directory)
+        state = job_state(rec)
+        if state == "exited":
+            return WaitResult(EX_OK if rec.exit_code == 0 else EX_FAILED, f"job {name} exited with code {rec.exit_code}")
+        if state == "lost":
+            return WaitResult(EX_FAILED, f"job {name} is gone without an exit code (killed?); log: {rec.log}")
+        if clock() >= deadline:
+            return WaitResult(EX_TIMEOUT, f"timeout after {timeout:g}s: job {name} is still running")
+        sleep(interval)
+
+
+# [@ANCHOR: agent_procs:wait_file]
+def wait_file(path, contains=None, fail_contains=None, while_pid=None, timeout=DEFAULT_WAIT_TIMEOUT,
+              interval=POLL_INTERVAL, sleep=time.sleep, clock=time.monotonic):
+    """Wait for `path` to exist and, when `contains` (a regular expression, `^` and `$` match at each line) is given, to contain a match.
+
+    Code 0 when the condition holds; 1 when `fail_contains` matches first, or when `while_pid` (a pid, or `(pid, ticks)`)
+    ends before the condition holds (the producer died without writing its marker); 75 on timeout. The file is read whole
+    each poll, so keep it a log or marker, not a large data file."""
+    want = re.compile(contains, re.MULTILINE) if contains else None
+    bad = re.compile(fail_contains, re.MULTILINE) if fail_contains else None
+    watch = None
+    if while_pid is not None:
+        wpid, wticks = while_pid if isinstance(while_pid, tuple) else (while_pid, None)
+        info = read_proc(wpid)
+        watch = (wpid, wticks if wticks is not None else (info.start_ticks if info else None))
+    deadline = clock() + timeout
+    while True:
+        text = None
+        if os.path.exists(path):
+            try:
+                with open(path, errors="replace") as handle:
+                    text = handle.read()
+            except OSError:
+                text = None
+        if text is not None:
+            if bad and bad.search(text):
+                return WaitResult(EX_FAILED, f"{path} contains the failure pattern {fail_contains!r}")
+            if want is None or want.search(text):
+                return WaitResult(EX_OK, f"{path} is ready")
+        if watch and (watch[1] is None or not pid_alive(*watch)):
+            return WaitResult(EX_FAILED, f"pid {watch[0]} ended before {path} was ready")
+        if clock() >= deadline:
+            return WaitResult(EX_TIMEOUT, f"timeout after {timeout:g}s waiting for {path}")
+        sleep(interval)
+
+
+# [@ANCHOR: agent_procs:group_members]
+def group_members(table, pgid, sid):
+    """The live (non-zombie) processes of process group `pgid` in session `sid`, from `table`."""
+    return [info for info in table.values() if info.pgid == pgid and info.sid == sid and info.state not in ("Z", "X")]
+
+
+# [@ANCHOR: agent_procs:stop_job]
+def stop_job(name, grace=DEFAULT_GRACE, force=False, owner_checked=False, out=sys.stdout, directory=None,
+             sleep=time.sleep, clock=time.monotonic):
+    """Stop the NAMED job `name`: SIGTERM to its process group, then (only with `force`) SIGKILL to that group.
+
+    Verifies before every signal: the job's record exists and is the caller's; the group members found in /proc have the
+    recorded process group AND session (a reused pid cannot be in them); the group is not the caller's own. Prints the ps
+    line of every member first. Refuses (raises `ProcError` code 3) when a member is protected (`protected_reason`) unless
+    `owner_checked` (the `--i-am-the-owner-and-checked` flag). Waits up to `grace` seconds after SIGTERM. Returns 0 when
+    the job is gone, 1 when it is still running (SIGTERM was not enough and `force` was not given, or even SIGKILL failed).
+    Raises `ProcError` (usage) for an unknown job."""
+    rec = read_record(name, directory)
+    if rec is None:
+        raise ProcError(f"no job named {name}")
+    table = snapshot()
+    members = group_members(table, rec.pgid, rec.sid)
+    if not members:
+        print(f"job {name} is not running (pid {rec.pid} gone); nothing to stop", file=out)
+        return EX_OK
+    me = os.getpid()
+    family = ancestry(table, me)
+    if rec.pgid in {table[p].pgid for p in family if p in table} | {os.getpgrp()}:
+        raise ProcError(f"refusing: job {name}'s process group contains the caller's own shell", EX_REFUSED)
+    worktree, tmpdir = caller_worktree(), os.environ.get("TMPDIR")
+    for info in members:
+        print(ps_line(info), file=out)
+        if info.uid != os.getuid():
+            raise ProcError(f"refusing: pid {info.pid} is owned by {info.user}", EX_REFUSED)
+        reason = None if owner_checked else protected_reason(info, os.getuid(), worktree, tmpdir, family)
+        if reason:
+            raise ProcError(f"REFUSED: pid {info.pid} in job {name}: {reason}", EX_REFUSED)
+    os.killpg(rec.pgid, signal.SIGTERM)
+    print(f"sent SIGTERM to process group {rec.pgid} of job {name}", file=out, flush=True)
+    stopped = "term"
+    deadline = clock() + grace
+    while group_members(snapshot(), rec.pgid, rec.sid) and clock() < deadline:
+        sleep(0.1)
+    left = group_members(snapshot(), rec.pgid, rec.sid)
+    if left and not force:
+        print(f"job {name} is still running after {grace:g}s: {len(left)} process(es); `stop {name} --force` sends SIGKILL "
+              f"to this verified group", file=out)
+        return EX_FAILED
+    if left:
+        left = group_members(snapshot(), rec.pgid, rec.sid)
+        if left:
+            os.killpg(rec.pgid, signal.SIGKILL)
+            stopped = "kill"
+            print(f"sent SIGKILL to process group {rec.pgid} of job {name}", file=out, flush=True)
+            deadline = clock() + 5
+            while group_members(snapshot(), rec.pgid, rec.sid) and clock() < deadline:
+                sleep(0.1)
+    current = read_record(name, directory)
+    if current is not None and current.pid == rec.pid:
+        current.stopped = stopped
+        current.ended_at = current.ended_at or time.time()
+        write_record(current, directory)
+    if group_members(snapshot(), rec.pgid, rec.sid):
+        print(f"job {name} did not end", file=out)
+        return EX_FAILED
+    print(f"job {name} stopped", file=out)
+    return EX_OK
+
+
+# [@ANCHOR: agent_procs:authorize_kill]
+def authorize_kill(info, start_ticks, cwd_under, directory=None):
+    """How a single pid is allowed to be signalled, or raises `ProcError` (code 3). Returns the reason as text:
+    `"recorded job"` when a job record names this pid and start time; `"start time confirmed"` when `start_ticks` equals the
+    process's; `"cwd under <path>"` when `cwd_under` holds. A `start_ticks` that differs means the pid was reused: refused."""
+    if start_ticks is not None and start_ticks != info.start_ticks:
+        raise ProcError(f"refusing: pid {info.pid} was reused (start time {info.start_ticks}, you named {start_ticks})",
+                        EX_REFUSED)
+    for rec in list_records(directory):
+        if rec.pid == info.pid and rec.start_ticks == info.start_ticks:
+            return "recorded job"
+    if start_ticks is not None:
+        return "start time confirmed"
+    if cwd_under and is_under(info.cwd, cwd_under):
+        return f"cwd under {cwd_under}"
+    raise ProcError(f"refusing: pid {info.pid} is neither a recorded job, nor confirmed by --start-time {info.start_ticks} "
+                    f"(as printed by `find`), nor under --cwd-under", EX_REFUSED)
+
+
+# [@ANCHOR: agent_procs:kill_pid]
+def kill_pid(pid, start_ticks=None, cwd_under=None, grace=DEFAULT_GRACE, force=False, owner_checked=False,
+             sig="TERM", out=sys.stdout, directory=None, sleep=time.sleep, clock=time.monotonic):
+    """Signal ONE exact pid, after verification. Never accepts a list and never a pattern.
+
+    Order: refuse pid <= 1 and the caller's own ancestry; refuse a process of another user; `authorize_kill`; refuse a
+    protected process (`protected_reason`; `owner_checked` lifts this for a recorded job only); print the ps line; send
+    `sig` (one of TERM INT HUP QUIT USR1 USR2; default TERM) to that pid only; wait up to `grace`; with `force` and the same
+    process (same start time) still alive, SIGKILL it. Returns 0 when the process is gone (or already was), 1 when it is
+    still alive. Raises `ProcError` code 3 for every refusal, 2 for a bad signal name."""
+    if sig not in ALLOWED_SIGNALS:
+        raise ProcError(f"signal must be one of {', '.join(ALLOWED_SIGNALS)} (SIGKILL only with --force)")
+    table = snapshot()
+    family = ancestry(table, os.getpid())
+    if pid <= 1 or pid in family:
+        raise ProcError(f"refusing: pid {pid} is pid 1 or the caller's own ancestry", EX_REFUSED)
+    info = table.get(pid) or read_proc(pid)
+    if info is None:
+        print(f"pid {pid} does not exist (already gone)", file=out)
+        return EX_OK
+    if info.uid != os.getuid():
+        raise ProcError(f"REFUSED: pid {pid} is owned by {info.user}", EX_REFUSED)
+    how = authorize_kill(info, start_ticks, cwd_under, directory)
+    reason = protected_reason(info, os.getuid(), caller_worktree(), os.environ.get("TMPDIR"), family)
+    if reason and not (owner_checked and how == "recorded job"):
+        raise ProcError(f"REFUSED: pid {pid}: {reason}", EX_REFUSED)
+    print(ps_line(info), file=out)
+    os.kill(pid, ALLOWED_SIGNALS[sig])
+    print(f"sent SIG{sig} to pid {pid} ({how})", file=out, flush=True)
+    deadline = clock() + grace
+    while pid_alive(pid, info.start_ticks) and clock() < deadline:
+        sleep(0.1)
+    if pid_alive(pid, info.start_ticks):
+        if not force:
+            print(f"pid {pid} is still running after {grace:g}s; add --force to send SIGKILL to this pid", file=out)
+            return EX_FAILED
+        os.kill(pid, signal.SIGKILL)
+        print(f"sent SIGKILL to pid {pid} (same start time)", file=out, flush=True)
+        deadline = clock() + 5
+        while pid_alive(pid, info.start_ticks) and clock() < deadline:
+            sleep(0.1)
+    return EX_FAILED if pid_alive(pid, info.start_ticks) else EX_OK
+
+
+# [@ANCHOR: agent_procs:cmd_find]
+def cmd_find(args, out=sys.stdout):
+    """`find` subcommand. Prints one `ps_line` per match (`PROTECTED:` appended when a signal would be refused) or the
+    JSON list with `--json`. Returns 0 when something matched, 1 when nothing did (like pgrep). It lists no pid list for
+    `kill`: pass pids one at a time to `kill-pid`."""
+    pids = read_pid_file(args.pid_file) if args.pid_file else None
+    found = find_procs(snapshot(), user=args.user, any_user=args.any_user, cwd_under=args.cwd_under,
+                       contains=args.cmd_contains, regex=args.cmd_regex, pids=pids, worktree=caller_worktree(),
+                       tmpdir=os.environ.get("TMPDIR"))
+    if args.json:
+        json.dump([dict(dataclasses.asdict(info), protected=why) for info, why in found], out, indent=1)
+        out.write("\n")
+    elif not args.quiet:
+        for info, why in found:
+            print(ps_line(info) + (f"  PROTECTED: {why}" if why else ""), file=out)
+    return EX_OK if found else EX_FAILED
+
+
+# [@ANCHOR: agent_procs:cmd_wait]
+def cmd_wait(args, out=sys.stdout):
+    """`wait` subcommand: exactly one of `--pid`, `--job`, `--file`. Prints the result message; returns its code."""
+    chosen = [bool(args.pid is not None), bool(args.job), bool(args.file)]
+    if sum(chosen) != 1:
+        raise ProcError("wait needs exactly one of --pid, --job, --file")
+    if args.pid is not None:
+        result = wait_pid(args.pid, args.start_time, args.timeout, args.interval)
+    elif args.job:
+        result = wait_job(args.job, args.timeout, args.interval)
+    else:
+        result = wait_file(args.file, args.contains, args.fail_contains, args.while_pid, args.timeout, args.interval)
+    print(result.message, file=out)
+    return result.code
+
+
+# [@ANCHOR: agent_procs:cmd_run]
+def cmd_run(args, out=sys.stdout):
+    """`run` subcommand: starts the named job and prints its name, pid, process group, log path and how to wait for it."""
+    rec = start_job(args.name, args.command, args.tag or "", args.cwd)
+    print(f"job {rec.name} started: pid={rec.pid} pgid={rec.pgid} log={rec.log}", file=out)
+    print(f"  wait: agent_procs.py wait --job {rec.name}    stop: agent_procs.py stop {rec.name}", file=out)
+    return EX_OK
+
+
+# [@ANCHOR: agent_procs:cmd_jobs]
+def cmd_jobs(args, out=sys.stdout):
+    """`jobs` subcommand: lists every record with its state (`running`, `exited`, `lost`), or the JSON with `--json`."""
+    rows = [(rec, job_state(rec)) for rec in list_records()]
+    if args.json:
+        json.dump([dict(dataclasses.asdict(rec), state=state) for rec, state in rows], out, indent=1)
+        out.write("\n")
+        return EX_OK
+    for rec, state in rows:
+        code = f" code={rec.exit_code}" if rec.exit_code is not None else ""
+        print(f"{rec.name} {state}{code} pid={rec.pid} started={format_start(rec.start_ticks) if state == 'running' else '-'} "
+              f"tag={rec.tag or '-'} cwd={rec.cwd} cmd={' '.join(rec.argv)}", file=out)
+    return EX_OK
+
+
+# [@ANCHOR: agent_procs:cmd_stop]
+def cmd_stop(args, out=sys.stdout):
+    """`stop` subcommand: `stop_job` with the command-line options."""
+    return stop_job(args.name, args.grace, args.force, args.i_am_the_owner_and_checked, out)
+
+
+# [@ANCHOR: agent_procs:cmd_kill_pid]
+def cmd_kill_pid(args, out=sys.stdout):
+    """`kill-pid` subcommand: `kill_pid` for the one pid on the command line."""
+    return kill_pid(args.pid, args.start_time, args.cwd_under, args.grace, args.force, args.i_am_the_owner_and_checked,
+                    args.signal, out)
+
+
+# [@ANCHOR: agent_procs:build_parser]
+def build_parser():
+    """The argparse parser of the command line, without the command after `--` (`parse_args` adds it)."""
+    parser = argparse.ArgumentParser(prog="agent_procs.py", description=__doc__.split("\n\n")[0])
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    find = sub.add_parser("find", help="list processes (never this one, its ancestors or descendants)")
+    find.add_argument("--cwd-under", metavar="PATH")
+    find.add_argument("--cmd-contains", metavar="TEXT", help="literal substring of the full command line")
+    find.add_argument("--cmd-regex", metavar="RE")
+    find.add_argument("--user", metavar="NAME", help="default: your own user")
+    find.add_argument("--any-user", action="store_true", help="also list other users' processes (shown as protected)")
+    find.add_argument("--pid-file", metavar="FILE", help="lines PID or PID:START_TICKS")
+    find.add_argument("--json", action="store_true")
+    find.add_argument("--quiet", action="store_true", help="print nothing; the exit code says whether anything matched")
+    wait = sub.add_parser("wait", help="wait for an exact pid, a named job, or a file")
+    wait.add_argument("--pid", type=int)
+    wait.add_argument("--start-time", type=int, metavar="TICKS", help="the ticks= value printed by find")
+    wait.add_argument("--job", metavar="NAME")
+    wait.add_argument("--file", metavar="PATH")
+    wait.add_argument("--contains", metavar="RE", help="with --file: the file must contain a match")
+    wait.add_argument("--fail-contains", metavar="RE", help="with --file: a match means failure (exit 1)")
+    wait.add_argument("--while-pid", type=int, metavar="PID", help="with --file: exit 1 if this pid ends first")
+    wait.add_argument("--timeout", type=float, default=DEFAULT_WAIT_TIMEOUT, metavar="SECONDS")
+    wait.add_argument("--interval", type=float, default=POLL_INTERVAL, metavar="SECONDS")
+    run = sub.add_parser("run", help="start a named job in its own session")
+    run.add_argument("name")
+    run.add_argument("--tag", metavar="AGENT", help="the owning agent, recorded in the job record")
+    run.add_argument("--cwd", metavar="DIR")
+    jobs = sub.add_parser("jobs", help="list job records")
+    jobs.add_argument("--json", action="store_true")
+    stop = sub.add_parser("stop", help="stop a named job (its process group)")
+    stop.add_argument("name")
+    stop.add_argument("--grace", type=float, default=DEFAULT_GRACE, metavar="SECONDS")
+    stop.add_argument("--force", action="store_true", help="SIGKILL the verified group if SIGTERM was not enough")
+    stop.add_argument(OWNER_OVERRIDE_FLAG, action="store_true", dest="i_am_the_owner_and_checked",
+                      help="override the protected-process refusal for your own job")
+    kill = sub.add_parser("kill-pid", help="signal one exact, verified pid")
+    kill.add_argument("pid", type=int)
+    kill.add_argument("--start-time", type=int, metavar="TICKS", help="the ticks= value printed by find")
+    kill.add_argument("--cwd-under", metavar="PATH")
+    kill.add_argument("--signal", default="TERM", metavar="NAME")
+    kill.add_argument("--grace", type=float, default=DEFAULT_GRACE, metavar="SECONDS")
+    kill.add_argument("--force", action="store_true", help="SIGKILL this pid if it survives the grace period")
+    kill.add_argument(OWNER_OVERRIDE_FLAG, action="store_true", dest="i_am_the_owner_and_checked",
+                      help="override the protected-process refusal for your own recorded job")
+    wrap = sub.add_parser("_wrap")
+    wrap.add_argument("name")
+    return parser
+
+
+# [@ANCHOR: agent_procs:parse_args]
+def parse_args(argv=None):
+    """Parse the command line. For `run` and the internal `_wrap`, everything after the first `--` is the command and is
+    returned as `args.command` (a list, possibly empty); the rest goes through `build_parser` so a command's own options can
+    never be taken for ours. Exits with status 2 (argparse) on a usage error."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    command = []
+    if argv[:1] in (["run"], ["_wrap"]) and "--" in argv:
+        index = argv.index("--")
+        argv, command = argv[:index], argv[index + 1:]
+    args = build_parser().parse_args(argv)
+    args.command = command
+    return args
+
+
+# [@ANCHOR: agent_procs:main]
+def main(argv=None):
+    """Command-line entry point. Returns the exit code: 0 done, 1 failed or nothing found, 2 usage, 3 refused (protected
+    process, reused pid, own ancestry), 75 timeout. A `ProcError` prints `agent_procs: <message>` on standard error."""
+    args = parse_args(argv)
+    try:
+        if args.cmd == "_wrap":
+            return wrapper_main(args.name, args.command)
+        handler = {"find": cmd_find, "wait": cmd_wait, "run": cmd_run, "jobs": cmd_jobs, "stop": cmd_stop,
+                   "kill-pid": cmd_kill_pid}[args.cmd]
+        return handler(args)
+    except ProcError as error:
+        print(f"agent_procs: {error}", file=sys.stderr)
+        return error.code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
