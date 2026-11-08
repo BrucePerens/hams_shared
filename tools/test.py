@@ -3484,17 +3484,55 @@ def _try_slot_locks(lock_base_path, slots, only_slot=None):
     """One non-blocking pass over the slot locks: returns the slot number taken, or None if none is free.
 
     Slots are tried in order, so a run takes the lowest free one. `only_slot` restricts the pass to that
-    slot (a re-exec'd child taking back the slot its parent held). The open, locked file is kept in
-    `_single_instance_lock` for the life of the process; a lock file that was not taken is closed."""
+    slot (a re-exec'd child taking back the slot its parent held). Without `only_slot`, a slot that a live
+    run's holder record names is skipped even when its flock is free: the invoking process of the full
+    pipeline lets go of its flock when it execs into sudo / systemd-run / unshare, and the child takes the
+    slot back a moment later, and a run that took the slot in that window ended up sharing it. The open,
+    locked file is kept in `_single_instance_lock` for the life of the process; a lock file that was not taken
+    is closed."""
     global _single_instance_lock
     candidates = [only_slot] if only_slot else range(1, slots + 1)
+    reserved = set() if only_slot else {
+        holder["slot"]
+        for holder in lock_queue.read_holders(lock_queue.queue_dir_for_lock(lock_base_path))
+        if holder.get("pid") != os.getpid()
+    }
     for slot in candidates:
+        if slot in reserved:
+            continue
         lock_file = _open_lock_file(runner_slots.slot_lock_path(lock_base_path, slot))
         if _try_flock_once(lock_file):
             _single_instance_lock = lock_file
             return slot
         lock_file.close()
     return None
+
+
+TAKE_BACK_SECONDS_ENV = "HAMS_TEST_TAKE_BACK_SECONDS"
+DEFAULT_TAKE_BACK_SECONDS = 30.0
+
+
+# [@ANCHOR: test:take_back_slot_lock]
+def take_back_slot_lock(lock_base_path, slots, only_slot, sleep=time.sleep, clock=time.monotonic, environ=None):
+    """The root phase of the full pipeline takes back the slot its invoking process held; returns the slot, or None.
+
+    The invoking process lets go of its flock when it execs into sudo / systemd-run / unshare, so the flock is free
+    for a moment before this phase starts. Retries `_try_slot_locks(lock_base_path, slots, only_slot)` every 0.2 s for up
+    to HAMS_TEST_TAKE_BACK_SECONDS (default 30; tests set a small value) and returns None if the slot stays taken, which
+    means another run took it (an older test.py has no holder-record reservation): the caller prints
+    `_no_slot_message` and exits 1. Touches no ticket and writes no holder record (see main()). `only_slot` is the
+    `--slot-held` of the command line, or None, in which case any free slot is taken. Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    try:
+        limit = float(environ.get(TAKE_BACK_SECONDS_ENV, DEFAULT_TAKE_BACK_SECONDS))
+    except ValueError:
+        limit = DEFAULT_TAKE_BACK_SECONDS
+    deadline = clock() + limit
+    while True:
+        slot = _try_slot_locks(lock_base_path, slots, only_slot)
+        if slot is not None or clock() >= deadline:
+            return slot
+        sleep(0.2)
 
 
 def _no_slot_message(slots, only_slot):
@@ -4038,16 +4076,25 @@ def main():
         # (on_head below), so a long gate wait does not forfeit the place in line.
         # A re-exec'd --internal-ns-init child with no ticket to adopt (a layer dropped the
         # environment) must not queue: its own parent's live ticket would be ahead of it forever.
-        use_queue = queue_opts["wait"] and (
-            "--internal-ns-init" not in sys.argv or bool(os.environ.get("HAMS_TEST_QUEUE_TICKET"))
-        )
-        if not use_queue and not wait_for_ci_load_to_subside():
+        # The root phase (--internal-ns-init) runs in its own PID namespace, where the invoking process's pid, ticket
+        # and holder record cannot be seen (/proc shows only the namespace): queue code there would take them for dead
+        # and delete them, and write records with namespace pids that the host takes for dead. So it takes back its
+        # slot's flock and touches nothing else; the invoking process's holder record and ticket (its pid lives as long
+        # as sudo does) describe the run for its whole life. See `take_back_slot_lock`.
+        root_phase = "--internal-ns-init" in sys.argv
+        use_queue = queue_opts["wait"] and not root_phase
+        if not use_queue and not root_phase and not wait_for_ci_load_to_subside():
             sys.exit(1)
         lock_file_path = _test_runner_lock_path()
         os.environ.setdefault("HAMS_TEST_LOCK_PATH", lock_file_path)
         # The lock file is opened with the symlink and sticky-directory protections described in
         # _open_lock_file()'s docstring. One lock file per slot; slot 1 is the original path.
-        if use_queue:
+        if root_phase:
+            held_slot = take_back_slot_lock(lock_file_path, slots, early_args.slot_held)
+            if held_slot is None:
+                print(_no_slot_message(slots, early_args.slot_held))
+                sys.exit(1)
+        elif use_queue:
             held_slot = _acquire_lock_via_queue(
                 lock_file_path, queue_opts["timeout"], slots, early_args.slot_held
             )

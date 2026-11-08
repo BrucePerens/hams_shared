@@ -68,6 +68,13 @@ the host log directory and the host `/var/lib/odoo` tree.
   free. Holder records now always carry slot and ticket, a ticket whose process has a holder record is a running run
   even if the record lacks the ticket (older `test.py`), and the waiters at positions below the number of free slots
   may try.
+- **A full-pipeline run was invisible to the queue.** The root phase (`--internal-ns-init`) ran the queue code inside
+  its new PID namespace, where the invoking process's pid is not visible: its ticket was deleted as dead and the ticket and
+  holder record it wrote carried namespace pids that the host deleted as dead, so `--queue-status` showed 0 slots busy
+  with four running. The root phase now only takes back its slot's flock (`take_back_slot_lock`) and writes nothing in the queue
+  directory; the invoking process's ticket and holder record (its pid lives as long as `sudo`) stay valid for the whole run.
+  A slot named by a live holder record is also not taken by another run while its flock is momentarily free (the exec
+  window in which two runs once shared a slot).
 - **One count per machine.** Every run reads `HAMS_TEST_SLOTS` / `/opt/hams/etc/test_slots`; `--slots` can only raise
   it. A run that asked for fewer slots than the machine has no longer takes slot 1 only and queues as if the others
   did not exist. To run with one slot, set `HAMS_TEST_SLOTS=1`.
@@ -98,6 +105,7 @@ and the closing banner says `TEST RUN FAILED: no tests ran`.
   the coalescing batch queue still runs one combined run per repository at a time; `remote_odoo_test.py` keeps its
   one-job-per-remote-host lock and so uses slot 1 there.
 - The window in which a re-exec'd phase re-takes its parent's flock (the exec closes the descriptor; sudo closes it
-  anyway) existed before slots; a run that grabs that slot in the window makes the phase fail with the usual
-  "Another instance" message.
+  anyway) is now covered: another run skips a slot named by a live holder record, and the phase retries for 30 s
+  (`HAMS_TEST_TAKE_BACK_SECONDS`). Only a run of an older `test.py` can still take the slot in the window; the phase then
+  fails with the usual "Another instance" message.
 - Raising N is a one-line change on the machine; it needs no code change and no restart.

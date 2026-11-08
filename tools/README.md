@@ -883,9 +883,30 @@ writes the holder record with the slot and the ticket.
 
 Purpose: one non-blocking pass over the slot locks. Tries slot 1 up to `slots` in order (only `only_slot` when given) and returns the slot
 number whose flock it took, or None when none is free. The open, locked file lives in the module global `_single_instance_lock` for the life
-of the process (the lock goes with the process, however it ends); a file whose lock was not taken is closed. The lock file is opened with
+of the process (the lock goes with the process, however it ends); without `only_slot`, a slot named by a live run's holder record (another pid) is skipped even when its flock is free, because the invoking process of the full pipeline lets go of its flock when it execs into `sudo` / `systemd-run` / `unshare` and the root phase takes the slot back a moment later (a run that took the slot in that window shared its database); a file whose lock was not taken is closed. The lock file is opened with
 `O_NOFOLLOW`, falling back to read-only when `fs.protected_regular` refuses a write open (`_open_lock_file`). With `slots` of 1 this is the
 single flock `test.py` always took.
+
+### `[@ANCHOR: test:take_back_slot_lock]` `take_back_slot_lock(lock_base_path, slots, only_slot, sleep=time.sleep, clock=time.monotonic, environ=None)`
+
+Purpose: the root phase of the full pipeline (`--internal-ns-init`, the process inside the new PID namespace) takes back the slot its invoking
+process held. It replaces the queue acquisition that phase used to do, which was wrong inside the namespace: `/proc` shows only the namespace,
+so the invoking process's ticket looked dead and was deleted, and the ticket and holder record the phase wrote carried namespace pids that
+the host took for dead. The effect was that a full-pipeline run was invisible to `--queue-status` and to the queue (0 slots busy while four
+ran). Now the phase writes nothing in the queue directory; the invoking process's holder record and ticket (its pid lives as long as `sudo`
+does) describe the run for its whole life.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `lock_base_path` | str | Base lock path. |
+| `slots` | int | The machine's slot count. |
+| `only_slot` | int or `None` | `--slot-held` of the command line; `None` takes any free slot. |
+| `sleep`, `clock` | callables | Test seams: `time.sleep` and `time.monotonic`. |
+| `environ` | mapping or `None` | Where `HAMS_TEST_TAKE_BACK_SECONDS` is read (default 30; a bad value means 30). |
+
+Returns the slot whose flock was taken (kept in `_single_instance_lock` for the process's life), or `None` when the slot stayed taken until the
+limit: another run took it in the moment the invoking process had let go (an older `test.py`, which has no holder-record reservation, can). The
+caller then prints `_no_slot_message` and exits 1. Blocking; polls every 0.2 s; never takes a slot other than `only_slot` when that is given.
 
 ### `[@ANCHOR: test:slot_handoff_args]` `slot_handoff_args(slots, held_slot)`
 

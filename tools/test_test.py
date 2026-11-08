@@ -711,6 +711,55 @@ class SlotWiringMainTests(unittest.TestCase):
         )
 
 
+class TakeBackSlotLockTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:take_back_slot_lock] with real lock files: the root phase of the full pipeline takes back the
+    slot its invoking process held, riding out the moment in which that process has let go of its flock."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.lock = os.path.join(self.tmp, "t.lock")
+        self.addCleanup(setattr, _test_runner, "_single_instance_lock", None)
+
+    def hold(self, slot):
+        handle = open(self.lock if slot == 1 else f"{self.lock}.slot-{slot}", "a")
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.addCleanup(handle.close)
+        return handle
+
+    def test_takes_the_slot_as_soon_as_the_parent_has_let_go(self):
+        parent = self.hold(2)
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            parent.close()                      # the exec closes the parent's descriptor
+
+        ticks = itertools.count()
+        slot = _test_runner.take_back_slot_lock(self.lock, 3, 2, sleep=sleep, clock=lambda: next(ticks), environ={})
+        self.assertEqual(slot, 2)
+        self.assertEqual(len(sleeps), 1)
+
+    def test_gives_up_when_another_run_keeps_the_slot_and_never_takes_another_slot(self):
+        self.hold(2)
+        ticks = itertools.count()
+        slot = _test_runner.take_back_slot_lock(
+            self.lock, 3, 2, sleep=lambda _s: None, clock=lambda: next(ticks) * 10.0,
+            environ={"HAMS_TEST_TAKE_BACK_SECONDS": "25"},
+        )
+        self.assertIsNone(slot)
+        self.assertFalse(os.path.exists(self.lock), "slot 1 must not even have been opened")
+
+    def test_a_bad_wait_setting_falls_back_to_the_default(self):
+        self.hold(2)
+        calls = []
+        _test_runner.take_back_slot_lock(
+            self.lock, 3, 2, sleep=lambda _s: calls.append(1), clock=lambda: len(calls) * 10.0,
+            environ={"HAMS_TEST_TAKE_BACK_SECONDS": "soon"},
+        )
+        self.assertEqual(len(calls), 3)         # 30 s default, 10 s per fake tick
+
+
 class HolderRecordTests(unittest.TestCase):
     """Every run writes its slot and its queue ticket into its holder record, also with one slot."""
 

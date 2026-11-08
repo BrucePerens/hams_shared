@@ -845,6 +845,7 @@ class TestSlotsWiring(_TmpDirCase):
         for k in ("HAMS_TEST_WAIT", "HAMS_TEST_WAIT_TIMEOUT", "HAMS_TEST_QUEUE_DIR", "HAMS_TEST_QUEUE_TICKET",
                   "HAMS_TEST_LOCK_HELD", "HAMS_TEST_SLOTS"):
             env.pop(k, None)
+        env["HAMS_TEST_TAKE_BACK_SECONDS"] = "1"
         env.update(extra)
         env["PATH"], self.db_log = _install_db_stand_ins(self._tmp.name)
         env.update(NO_POSTGRES_ENV)
@@ -941,6 +942,9 @@ class TestSlotsWiring(_TmpDirCase):
         r = self.run_test_py("--internal-ns-init", "--slots", "2", "--slot-held", "2")
         self.assertIn("Holding test slot 2 of 2", r.stdout, r.stdout + r.stderr)
         self.assertNotIn("Another instance", r.stdout)
+        # The root phase runs in its own PID namespace, where host pids cannot be seen: it must leave the queue
+        # directory (its parent's ticket and holder record) alone and write no record or ticket of its own.
+        self.assertEqual(os.listdir(self.qdir) if os.path.isdir(self.qdir) else [], [])
 
     def test_wait_reports_every_slot_and_times_out_with_75(self):
         self.hold_slot(1)
@@ -998,6 +1002,17 @@ class TestSlotsWiring(_TmpDirCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("--pause-on-fail pins Chrome's debugging port 9222", r.stdout)
         self.assertIn("this run is on the host because HAMS_ISOLATED_NS=1 is set", r.stdout)
+
+    def test_a_slot_whose_run_is_between_its_exec_and_its_relock_is_not_taken_by_another_run(self):
+        # The invoking process of the full pipeline drops its flock when it execs into sudo / systemd-run / unshare;
+        # its holder record (a live pid) stays. A run starting in that window used to take the slot as well and
+        # two runs then shared one database. Here: a live holder record for slot 1 and NO flock held.
+        holder = self.hold_slot(1)
+        holder.close()                                   # the flock is released, the record stays
+        self.assertTrue(self.slot_is_free(1))
+        r = self.run_test_py(HAMS_TEST_SLOTS="3")
+        self.assertIn("Holding test slot 2 of 3", r.stdout, r.stdout + r.stderr)
+        self.assertNotIn("Holding test slot 1 of 3", r.stdout)
 
     def test_mixed_one_slot_and_slotted_runs_share_one_queue(self):
         # The case that left slots 2-4 idle: a run started with one slot (an older test.py, or HAMS_TEST_SLOTS=1)
