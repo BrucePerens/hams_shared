@@ -564,13 +564,13 @@ def wait_job(name, timeout=DEFAULT_WAIT_TIMEOUT, interval=POLL_INTERVAL, sleep=t
 # [@ANCHOR: agent_procs:wait_file]
 def wait_file(path, contains=None, fail_contains=None, while_pid=None, timeout=DEFAULT_WAIT_TIMEOUT,
               interval=POLL_INTERVAL, sleep=time.sleep, clock=time.monotonic):
-    """Wait for `path` to exist and, when `contains` (a regular expression) is given, to contain a match.
+    """Wait for `path` to exist and, when `contains` (a regular expression, `^` and `$` match at each line) is given, to contain a match.
 
     Code 0 when the condition holds; 1 when `fail_contains` matches first, or when `while_pid` (a pid, or `(pid, ticks)`)
     ends before the condition holds (the producer died without writing its marker); 75 on timeout. The file is read whole
     each poll, so keep it a log or marker, not a large data file."""
-    want = re.compile(contains) if contains else None
-    bad = re.compile(fail_contains) if fail_contains else None
+    want = re.compile(contains, re.MULTILINE) if contains else None
+    bad = re.compile(fail_contains, re.MULTILINE) if fail_contains else None
     watch = None
     if while_pid is not None:
         wpid, wticks = while_pid if isinstance(while_pid, tuple) else (while_pid, None)

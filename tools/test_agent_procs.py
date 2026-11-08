@@ -504,6 +504,7 @@ class WaitTests(ProcTestCase):
         self.assertEqual(ap.wait_file(path, contains=r"RESULT=\w+", timeout=10, interval=0.05).code, 0)
         with open(path, "a") as handle:
             handle.write("FATAL: boom\n")
+        self.assertEqual(ap.wait_file(path, contains=r"^RESULT=ok$", timeout=5, interval=0.05).code, 0)  # per line
         self.assertEqual(ap.wait_file(path, contains="NEVER", fail_contains="FATAL", timeout=5, interval=0.05).code, 1)
         self.assertEqual(ap.wait_file(path, contains="NEVER", timeout=0.3, interval=0.05).code, 75)
         self.assertEqual(ap.wait_file(os.path.join(self.tmp, "absent"), timeout=0.3, interval=0.05).code, 75)

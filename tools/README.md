@@ -2692,7 +2692,7 @@ Purpose: wait for a named job. Returns code 0 when its recorded exit code is 0, 
 
 ### `[@ANCHOR: agent_procs:wait_file]` `wait_file(path, contains=None, fail_contains=None, while_pid=None, timeout=1800, interval=0.5, sleep=..., clock=...)`
 
-Purpose: wait for an output file or exit marker. Code 0 when `path` exists and (if `contains`, a regular expression, is given) matches; 1 when `fail_contains` matches first or when `while_pid` (a pid, or `(pid, ticks)`) ends before the condition holds; 75 on timeout. The file is read whole at each poll: keep it a log or marker, not a data file.
+Purpose: wait for an output file or exit marker. Code 0 when `path` exists and (if `contains`, a regular expression whose `^` and `$` match at every line, is given) matches; 1 when `fail_contains` matches first or when `while_pid` (a pid, or `(pid, ticks)`) ends before the condition holds; 75 on timeout. The file is read whole at each poll: keep it a log or marker, not a data file.
 
 ### `[@ANCHOR: agent_procs:group_members]` `group_members(table, pgid, sid)`
 
