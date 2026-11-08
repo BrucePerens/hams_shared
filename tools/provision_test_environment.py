@@ -17,9 +17,11 @@ PostgreSQL):
 6. kopia (the MANIFEST's pinned release), cargo-deny, the Playwright headless Chromium, `npm ci` in hams_shared;
 7. PostgreSQL running (systemctl, or pg_ctlcluster without systemd) with the odoo and runner roles and an empty
    hams_test database; Redis and RabbitMQ enabled where systemd runs them (test.py starts its own otherwise);
-8. /etc/profile.d/hams_test_environment.sh: a random per-host HAMS_CRYPTO_KEY (never a real secret) and the
+8. what `--test` provides and a HAMS_ISOLATED_NS=1 run does not (host_requirements.py): the hamsd_* accounts, the
+   MANIFEST directories, the cache_manager_ro login file, git safe.directory = *;
+9. /etc/profile.d/hams_test_environment.sh: a random per-host HAMS_CRYPTO_KEY (never a real secret) and the
    variables test.py and run_linters.py need on this host;
-9. a self-check: run_linters.py --changed on a clean hams_com tree and test.py -u zero_sudo.
+10. a self-check: run_linters.py --changed on a clean hams_com tree and test.py -u zero_sudo.
 
 No unit that fetches from third-party servers (MANIFEST external_fetch) is ever enabled or started: this path
 enables only postgresql, redis-server and rabbitmq-server. Full entries for every anchor: tools/README.md.
@@ -39,6 +41,7 @@ import time
 import urllib.error
 import urllib.request
 
+import host_requirements
 import infrastructure
 import provision_cache
 
@@ -733,6 +736,37 @@ def provision_database(run, runner_user, report):
         report.changed(f"created the empty {TEST_DATABASE} database")
 
 
+# [@ANCHOR: provision_test_environment:provision_test_host_requirements]
+def provision_test_host_requirements(run, report, plan=False):
+    """What `provision.py --test` provides and a test run inside `sudo -u odoo env HAMS_ISOLATED_NS=1` does not
+    (host_requirements.missing_requirements lists it): the MANIFEST test system accounts (the hamsd_* ones) and
+    every MANIFEST directory (/var/lib/odoo/backups, the key directories) through the same infrastructure calls
+    --test makes; the cache_manager_ro PostgreSQL role and its login file (the `DB_USER and DB_PASS must both be
+    set` failure), with the pg_hba.conf rule that lets the daemon log in over the socket; and a system-wide git
+    `safe.directory = *`, so the odoo user can read checkouts it does not own. Needs the database
+    (provision_database first). The profile's HAMS_CRYPTO_KEY is not checked here: it reaches test.py through
+    `sudo -u odoo env`. Idempotent. Raises RuntimeError when a requirement is still missing afterwards. Production
+    code in infrastructure.py is called, not changed; production never reaches this."""
+    before = host_requirements.missing_requirements(check_crypto_key=False)
+    infrastructure.provision_system_accounts(run, environment="prod")
+    infrastructure.provision_system_accounts(run, environment="test")
+    infrastructure.apply_production_directories(run, environment="prod")
+    infrastructure.apply_production_directories(run, environment="test")
+    if plan:
+        print("PLAN cache_manager_ro role and login file, its pg_hba.conf rule and git safe.directory = *", flush=True)
+        return
+    infrastructure._provision_cache_manager_role(run, TEST_DATABASE)
+    if infrastructure._allow_cache_manager_socket_password_for_test():
+        run(_psql("SELECT pg_reload_conf()"))
+    if not host_requirements.git_trusts_every_directory():
+        run(["git", "config", "--system", "--add", "safe.directory", "*"])
+    still = host_requirements.missing_requirements(check_crypto_key=False)
+    if still:
+        raise RuntimeError("the test host still lacks: " + "; ".join(text for _code, text in still))
+    if before:
+        report.changed("provisioned " + ", ".join(code for code, _text in before))
+
+
 # [@ANCHOR: provision_test_environment:parse_profile]
 def parse_profile(text):
     """{name: value} of the `export NAME=value` lines in a profile written by profile_text. Pure."""
@@ -895,7 +929,7 @@ def start(run, env_vars, orig_user, tools_dir, repo_root, workspace=None, git_ke
 
 # [@ANCHOR: provision_test_environment:finish]
 def finish(state, run, env_vars, os_id, self_check=True, plan=False):
-    """Steps 3 to 9 of the module docstring on the state start() returned. Returns the Report; exits 1 when the
+    """Steps 3 to 10 of the module docstring on the state start() returned. Returns the Report; exits 1 when the
     self-check fails. Under --plan nothing is changed and the self-check does not run."""
     report, layout, as_user = state["report"], state["layout"], state["as_user"]
     runner_user, home, systemd = state["runner_user"], state["home"], state["systemd"]
@@ -908,6 +942,7 @@ def finish(state, run, env_vars, os_id, self_check=True, plan=False):
     provision_services(run, report, systemd, plan)
     if not plan:
         provision_database(run, runner_user, report)
+    provision_test_host_requirements(run, report, plan)
     provision_user_tools(layout, run, as_user, home, report)
     values = provision_profile(layout, env_vars, home, runner_user, report, plan)
     report.note(f"{len(report.changes)} change(s) to this host; {len(report.skipped)} step(s) skipped")

@@ -48,6 +48,7 @@ if "--mcp" in sys.argv:
         _orig_print(*args, **kwargs)
     builtins.print = _mcp_print
 
+import host_requirements
 import infrastructure
 import lock_queue
 import odoo_test_batch
@@ -3384,6 +3385,9 @@ def run_preflight(args):
     """The lint, init-import, anchor and JavaScript pre-flight, run from the repository root. Runs in
     the first seconds of the host process, before the lock queue, the namespace and the daemon
     builds, so a finding is reported at once instead of after a long provisioning phase."""
+    if os.environ.get("HAMS_ISOLATED_NS") == "1":
+        # This invocation skips the provisioning `--test` does; stop at once if the host lacks what that created.
+        host_requirements.require_test_host()
     base_dir = os.getcwd()
     ignore_filepath = os.path.join(base_dir, args.config)
     target_modules, _install = select_modules(args, base_dir, load_ignore_file(ignore_filepath))
