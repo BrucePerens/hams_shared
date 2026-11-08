@@ -41,7 +41,7 @@ Because this is a standalone Open Source module that relies on an external Pytho
 4. Start the background sync daemon:
    * Execute `daemons/cache_manager.py` as a systemd service (a unit file is provided at `daemons/cache-manager.service`; it loads `/opt/hams/etc/redis.env`, so a Redis that requires a login works). Without this daemon the `global_cache_invalidation_counter` key never exists and no worker ever sees another worker's invalidation.
    * The daemon requires `/opt/hams/etc/keys/cache_manager/cache_manager_db.env`, which holds `DB_USER`/`DB_PASS` for its restricted PostgreSQL role; it refuses to start without those credentials. See `daemons/README.md` for how that file is provisioned.
-   * It also loads `/opt/hams/etc/keys/cache_manager.env` if that file exists. That file is managed automatically by the Daemon Key Manager module and holds only an Odoo login and API key, which the current daemon does not use.
+   * It does not read `/opt/hams/etc/keys/cache_manager.env`, the Odoo login the Daemon Key Manager used to keep for this service: the daemon has no use for an Odoo login, and since version 1.1 the module no longer registers one.
    * The daemon does **not** read the Redis settings saved in Odoo. It takes `REDIS_HOST`, `REDIS_PORT` and `REDIS_PASSWORD` from its own environment, defaulting to `localhost`, 6379 and no password (note that the Odoo side defaults to host `redis`), and `DB_HOST`, `DB_PORT` and `DB_NAME` likewise, defaulting to `localhost`, 5432 and `odoo`. It listens on exactly one database, `DB_NAME`. Set these for the service when your deployment differs from the defaults.
 5. Navigate to **Settings > Technical > Distributed Cache** in Odoo to verify the connection status. The menu is shown to members of the Cache Manager group, which includes the administrator by default. The status check tests only this Odoo server's own Redis connection, not the daemon. [@ANCHOR: COMM_distributed_cache_view]
 
@@ -135,7 +135,7 @@ since a compromised/misconfigured Redis instance is otherwise a remote-code-exec
 
 * **Payload Verification:** `[@ANCHOR: distributed_redis_cache:COMM_verify_and_unwrap_payload]` -- rejects any payload whose HMAC doesn't match before it ever reaches `_pickle.loads()`.
 
-* **Daemon Key Registration:** `[@ANCHOR: distributed_redis_cache:COMM_post_init_hook]` -- on install, registers the "Redis Cache Manager" daemon with `daemon.key.registry` (see [daemon_key_manager.md](daemon_key_manager.md)), which manages the daemon's `cache_manager.env` file.
+* **Daemon Key Registration (removed in 1.1):** `[@ANCHOR: distributed_redis_cache:unregister_cache_manager_key]` -- versions before 1.1 registered the "Redis Cache Manager" daemon with `daemon.key.registry` (see [daemon_key_manager.md](daemon_key_manager.md)) in a `post_init_hook`, which minted an Odoo API key for `cache_manager.env` that the daemon never used. 1.1 has no `post_init_hook`; `migrations/1.1` calls `unregister_cache_manager_key(env)`, which removes the registry row and revokes the key (idempotent; the service account and the leftover key file stay).
 
 * **Redis Connection Resolution:** `[@ANCHOR: distributed_redis_cache:COMM_get_redis_connection]` -- the connection settings come from the Settings system parameters, else the `REDIS_*` environment variables.
 
