@@ -219,7 +219,7 @@ class PlaceTest(RamTestCase):
     def test_a_missing_root_and_a_root_that_is_not_a_tmpfs_fall_back_loudly(self):
         missing = ram_dirs.place("n", "/s", pol=ram_dirs.RamPolicy(mode="on", root=os.path.join(self.root, "nope")), warn=self.warn)
         self.assertFalse(missing.in_ram)
-        with self.free(99):
+        with self.free(99), mock.patch.object(ram_dirs, "is_tmpfs", return_value=False):
             disk = ram_dirs.place("n", "/s", pol=ram_dirs.RamPolicy(mode="on", root=self.root, require_tmpfs=True), warn=self.warn)
         self.assertFalse(disk.in_ram)
         self.assertIn("does not exist", self.warnings[0])
