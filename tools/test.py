@@ -3744,7 +3744,7 @@ SLOT_RESERVATION_SECONDS = 120.0
 
 
 # [@ANCHOR: test:try_slot_locks]
-def _try_slot_locks(lock_base_path, slots, only_slot=None):
+def _try_slot_locks(lock_base_path, slots, only_slot=None, respect_reservations=True):
     """One non-blocking pass over the slot locks: returns the slot number taken, or None if none is free.
 
     Slots are tried in order, so a run takes the lowest free one. `only_slot` restricts the pass to that
@@ -3753,10 +3753,12 @@ def _try_slot_locks(lock_base_path, slots, only_slot=None):
     pipeline lets go of its flock when it execs into sudo / systemd-run / unshare, and the child takes the
     slot back a moment later, and a run that took the slot in that window ended up sharing it. The open,
     locked file is kept in `_single_instance_lock` for the life of the process; a lock file that was not taken
-    is closed."""
+    is closed. `respect_reservations=False` skips the holder-record check altogether: the root phase of the full pipeline passes it,
+    because inside its PID namespace the host pids of the records look dead and reading them DELETES them (with one slot the
+    root phase has no `only_slot`, which is how a run's holder record used to vanish when the namespace came up)."""
     global _single_instance_lock
     candidates = [only_slot] if only_slot else range(1, slots + 1)
-    reserved = set() if only_slot else {
+    reserved = set() if (only_slot or not respect_reservations) else {
         holder["slot"]
         for holder in lock_queue.read_holders(lock_queue.queue_dir_for_lock(lock_base_path))
         if holder.get("pid") != os.getpid() and time.time() - (holder.get("since") or 0) < SLOT_RESERVATION_SECONDS
@@ -3795,7 +3797,7 @@ def take_back_slot_lock(lock_base_path, slots, only_slot, sleep=time.sleep, cloc
         limit = DEFAULT_TAKE_BACK_SECONDS
     deadline = clock() + limit
     while True:
-        slot = _try_slot_locks(lock_base_path, slots, only_slot)
+        slot = _try_slot_locks(lock_base_path, slots, only_slot, respect_reservations=False)
         if slot is not None or clock() >= deadline:
             return slot
         sleep(0.2)
@@ -3809,6 +3811,11 @@ def _no_slot_message(slots, only_slot):
     )
 
 
+# The phase a run writes into its holder record when it takes its slot: "preflight" while it still has to run its pre-flight checks
+# inside the slot, "running" when they were done before (the re-exec'd phases carry --preflight-done). main() sets it.
+_HOLDER_PHASE = "running"
+
+
 def _record_lock_holder(lock_file_path, slot=None, ticket=None):
     """Best effort: note who holds the lock so queue lines and --queue-status can name it.
     Never allowed to affect the test run. `slot` and `ticket` are written in every mode (also on a machine
@@ -3816,7 +3823,7 @@ def _record_lock_holder(lock_file_path, slot=None, ticket=None):
     made a slotted waiter count the running holder as the oldest waiter."""
     qdir = lock_queue.queue_dir_for_lock(lock_file_path)
     name = lock_queue.write_holder(
-        qdir, " ".join(["test.py"] + sys.argv[1:])[:200], slot=slot, ticket=ticket
+        qdir, " ".join(["test.py"] + sys.argv[1:])[:200], slot=slot, ticket=ticket, phase=_HOLDER_PHASE
     )
     if name:
         atexit.register(lock_queue.release_ticket, qdir, name)
@@ -4234,8 +4241,39 @@ def apply_slot_resources(resources):
     _CHROME_PROFILE_GLOBS = resources.chrome_profile_globs
 
 
+# [@ANCHOR: test:run_preflight_in_slot]
+def run_preflight_in_slot(args, lock_file_path, held_slot, slots, preflight=None):
+    """Run the pre-flight of this run INSIDE the slot it holds, then mark the slot as running.
+
+    Called once per run by the invoking process (or the flat process of a HAMS_ISOLATED_NS=1 run) right after it took its slot,
+    never by the re-exec'd phases (they carry `--preflight-done`). The holder record says `preflight` meanwhile, so
+    `--queue-status` shows the slot busy; when `preflight` (default `run_preflight`) returns, the record becomes `running`. If the
+    pre-flight ends the run (it exits 1 with the findings printed), the slot is released AT ONCE, before the exit: the slot lock is closed, the holder
+    record and the queue ticket are removed, and the line `Pre-flight failed: slot K released.` is printed; the exception then
+    propagates unchanged, so the findings and the exit status are exactly what they were. Nothing else is dropped: no database
+    exists yet. Full entry: tools/README.md."""
+    global _single_instance_lock
+    preflight = preflight or run_preflight
+    qdir = lock_queue.queue_dir_for_lock(lock_file_path)
+    try:
+        preflight(args)
+    except SystemExit:
+        print(f"[*] Pre-flight failed: slot {held_slot} of {slots} released.", flush=True)
+        if _single_instance_lock is not None:
+            _single_instance_lock.close()
+            _single_instance_lock = None
+        for name in os.listdir(qdir) if os.path.isdir(qdir) else []:
+            if name.startswith("holder-%d-" % os.getpid()):
+                lock_queue.release_ticket(qdir, name)
+        ticket = os.environ.get("HAMS_TEST_QUEUE_TICKET")
+        if ticket:
+            lock_queue.release_ticket(qdir, ticket)
+        raise
+    lock_queue.set_holder_phase(qdir, "running")
+
+
 def main():
-    global _single_instance_lock, _CHROME_PROFILE_GLOBS
+    global _single_instance_lock, _CHROME_PROFILE_GLOBS, _HOLDER_PHASE
     # First thing, before any lock, namespace, daemon or database work. rebuild_db() repeats the check
     # with the database list once PostgreSQL is reachable.
     refuse_to_run_on_production_host()
@@ -4267,12 +4305,14 @@ def main():
     batch_code = odoo_test_batch.maybe_run_batched(early_args)
     if batch_code is not None:
         sys.exit(batch_code)
-    # Pre-flight in the first seconds, once per run (the re-exec'd phases carry --preflight-done).
+    # The pre-flight (anchor scan, linters, JavaScript syntax) runs ONCE per run, INSIDE the slot the run takes below, not before
+    # it: a run in its pre-flight is busy, and ran outside any slot accounting (up to eight at once, with the slots reading free).
+    # The re-exec'd phases carry --preflight-done. The cheap check that this is a repository root stays here, so a mistake
+    # in the working directory is reported at once without waiting for a slot.
     preflight_done = early_args.preflight_done
     if not early_args.internal_ns_init and not preflight_done and not early_args.queue_status:
         require_repo_root_cwd()
-        run_preflight(early_args)
-        preflight_done = True
+    _HOLDER_PHASE = "running" if (preflight_done or early_args.internal_ns_init) else "preflight"
     audio_sink_before = (
         get_default_audio_sink_name()
         if os.environ.get("HAMS_ISOLATED_NS") != "1"
@@ -4372,19 +4412,22 @@ def main():
             _record_lock_holder(lock_file_path, held_slot, os.environ.get("HAMS_TEST_QUEUE_TICKET"))
         if slots > 1:
             print(f"[*] Holding test slot {held_slot} of {slots} (lock {runner_slots.slot_lock_path(lock_file_path, held_slot)}).")
-            if "--internal-ns-init" not in sys.argv:
-                # Under the slot lock just taken, before anything is built: remove what runs that are gone left behind.
-                try:
-                    sweep_slot_leftovers(
-                        default_postgres_access(), held_slot, lock_file_path, default_test_tmpdir(dict(os.environ), create=False)
-                    )
-                except FileNotFoundError as e:
-                    print(f"❌ ERROR: {e}")
-                    sys.exit(1)
             if os.environ.get("HAMS_ISOLATED_NS") != "1":
                 # The full pipeline will run in a private network namespace: only the refusals that hold there
-                # (--mcp) can apply, and they apply now, before the minutes of provisioning.
+                # (--mcp) can apply, and they apply now, before the pre-flight and the minutes of provisioning.
                 enforce_slot_refusals(runner_slots.slot_resources(held_slot, slots, True, None), early_args)
+        if not root_phase and not preflight_done:
+            run_preflight_in_slot(early_args, lock_file_path, held_slot, slots)
+            preflight_done = True
+        if slots > 1 and not root_phase:
+            # Under the slot lock, before anything is built: remove what runs that are gone left behind.
+            try:
+                sweep_slot_leftovers(
+                    default_postgres_access(), held_slot, lock_file_path, default_test_tmpdir(dict(os.environ), create=False)
+                )
+            except FileNotFoundError as e:
+                print(f"❌ ERROR: {e}")
+                sys.exit(1)
 
     cwd = os.getcwd()
     if not is_git_checkout_root(cwd) or not (

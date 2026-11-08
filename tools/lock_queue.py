@@ -202,10 +202,11 @@ def release_ticket(qdir, name):
 
 
 # [@ANCHOR: lock_queue:write_holder]
-def write_holder(qdir, info, pid=None, now=time.time, slot=None, ticket=None):
+def write_holder(qdir, info, pid=None, now=time.time, slot=None, ticket=None, phase=None):
     """Record that this process holds the lock; returns the record name (or None on failure,
-    which must never stop a test run). `slot` (the slot number held) and `ticket` (the queue
-    ticket the run waited with) are stored only when given."""
+    which must never stop a test run). `slot` (the slot number held), `ticket` (the queue
+    ticket the run waited with) and `phase` (``"preflight"`` while the run does its pre-flight checks in the slot,
+    ``"running"`` afterwards; a record without it is a run that is running) are stored only when given."""
     pid = os.getpid() if pid is None else pid
     start = proc_start_time(pid)
     if start is None:
@@ -220,10 +221,39 @@ def write_holder(qdir, info, pid=None, now=time.time, slot=None, ticket=None):
             record["slot"] = slot
         if ticket:
             record["ticket"] = ticket
+        if phase:
+            record["phase"] = phase
         _write_atomic(qdir, name, record)
         return name
     except OSError:
         return None
+
+
+# [@ANCHOR: lock_queue:set_holder_phase]
+def set_holder_phase(qdir, phase, pid=None, now=time.time):
+    """Change the ``phase`` of this process's holder record (``"preflight"`` -> ``"running"``), keeping its ``since``;
+    returns True when a record was rewritten. The rewrite is atomic (temporary file, then rename over the record), so a
+    reader sees the old record or the new one, never a half-written one. False (and nothing written) when the process has
+    no live record or the directory is unwritable: a phase label must never stop a test run."""
+    pid = os.getpid() if pid is None else pid
+    start = proc_start_time(pid)
+    if start is None:
+        return False
+    path = os.path.join(qdir, "holder-%d-%d" % (pid, start))
+    record = _read_payload(path)
+    if not record:
+        return False
+    record["phase"] = phase
+    record["phase_since"] = now()
+    tmp = os.path.join(qdir, ".tmp-%d-%s" % (pid, uuid.uuid4().hex))
+    try:
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        _unlink_quiet(tmp)
+        return False
 
 
 def _live_holder_records(qdir):
@@ -298,15 +328,14 @@ def describe_queue(qdir, my_ticket=None, now=time.time, slots=1):
     else:
         holder = read_holder(qdir)
         if holder:
-            lines.append("holder: pid %s running %s for %s" % (
-                holder.get("pid"), holder.get("info") or "?",
+            lines.append("holder: pid %s %s %s for %s" % (
+                holder.get("pid"), _phase_word(holder), holder.get("info") or "?",
                 format_duration(_age(holder, now))))
         else:
             lines.append("holder: none recorded")
     tickets = live_tickets(qdir)
-    if slots > 1:
-        held = {h.get("ticket") for h in read_holders(qdir) if h.get("ticket")}
-        tickets = [t for t in tickets if t["name"] not in held]
+    held = {h.get("ticket") for h in read_holders(qdir) if h.get("ticket")}
+    tickets = [t for t in tickets if t["name"] not in held]   # a ticket a live holder record names is a running run, not a waiter
     if not tickets:
         lines.append("queue: empty")
     for i, t in enumerate(tickets, 1):
@@ -326,11 +355,17 @@ def _slot_lines(qdir, slots, now):
         if holder is None:
             lines.append("slot %d: free" % number)
             continue
-        lines.append("slot %d: pid %s running %s for %s%s" % (
-            number, holder.get("pid"), holder.get("info") or "?",
+        lines.append("slot %d: pid %s %s %s for %s%s" % (
+            number, holder.get("pid"), _phase_word(holder), holder.get("info") or "?",
             format_duration(_age(holder, now)),
             "" if number <= slots else " (beyond the configured %d)" % slots))
     return lines
+
+
+def _phase_word(holder):
+    """``running`` for a run that runs its tests (or whose record has no phase), ``pre-flight of`` for one that is still in its
+    pre-flight checks inside the slot."""
+    return "pre-flight of" if holder.get("phase") == "preflight" else "running"
 
 
 def _age(holder, now):
@@ -346,14 +381,14 @@ def _queue_line(qdir, ticket, now, slots=1):
     position = names.index(ticket) + 1 if ticket in names else len(names) + 1
     if slots > 1:
         who = "%d of %d slots busy: %s" % (len(holders), slots, "; ".join(
-            "slot %d pid %s running %s for %s" % (
-                h["slot"], h.get("pid"), h.get("info") or "?", format_duration(_age(h, now)))
+            "slot %d pid %s %s %s for %s" % (
+                h["slot"], h.get("pid"), _phase_word(h), h.get("info") or "?", format_duration(_age(h, now)))
             for h in holders) or "none recorded")
         return "queued: position %d of %d, %s" % (position, max(len(names), position), who)
     holder = read_holder(qdir)
     if holder:
-        who = "holder pid %s running %s for %s" % (
-            holder.get("pid"), holder.get("info") or "?",
+        who = "holder pid %s %s %s for %s" % (
+            holder.get("pid"), _phase_word(holder), holder.get("info") or "?",
             format_duration(_age(holder, now)))
     else:
         who = "holder unknown"

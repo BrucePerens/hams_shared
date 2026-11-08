@@ -91,6 +91,11 @@ the host log directory and the host `/var/lib/odoo` tree.
 - **Batches may run as many at once as there are slots.** A new test batch starts when fewer batches than the slot count run (ADR 0115 allowed one);
   when every running slot is busy new requests still coalesce into the forming batch. Attribution and splitting are per batch and unchanged. The queue
   state keeps its first running batch under the old key, so a leader of an older version sees one running batch.
+- **The pre-flight runs in the slot (Bruce, 2026-11-08: "Make the pre-flight run in the slot").** It ran before the run took its ticket and slot, so
+  several heavy pre-flights ran at once outside any slot accounting and `--queue-status` showed busy runs as waiting. A run now takes its slot (after the load
+  gate), runs the pre-flight once inside it (the holder record says `preflight`, then `running`), and releases the slot at once when the pre-flight fails. The
+  re-exec'd phases carry `--preflight-done`. The root phase also no longer reads the holder records (with one slot it has no `--slot-held`, and reading them from
+  inside the PID namespace deleted the invoking process's record). The pre-flight is not cached: about 6 s for one module, and its inputs do not form one hashable key.
 - **One count per machine.** Every run reads `HAMS_TEST_SLOTS` / `/opt/hams/etc/test_slots`; `--slots` can only raise
   it. A run that asked for fewer slots than the machine has no longer takes slot 1 only and queues as if the others
   did not exist. To run with one slot, set `HAMS_TEST_SLOTS=1`.
