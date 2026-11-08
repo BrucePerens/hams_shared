@@ -519,6 +519,7 @@ class ModuleChangeSelectionTests(SelectionFixture):
 
         step = {s["name"]: s for s in json.loads(result.stdout)}["pytest devbox_tools/"]
         self.assertEqual(os.path.realpath(step["env_delta"].get("HAMS_OPEN_TREE", "")), os.path.realpath(self.open_repo))
+        self.assertIn("-rs", step["argv"], "skipped tests (a host without chromium or nginx) must be listed with their reasons")
 
 
 class HamsSharedChangeSelectionTests(SelectionFixture):
