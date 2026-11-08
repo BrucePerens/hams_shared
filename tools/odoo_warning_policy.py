@@ -34,6 +34,13 @@ THIRD_PARTY_DEPRECATIONS_TO_IGNORE = (
         r"^(tagMap|typeMap) is deprecated\. Please use (TAG_MAP|TYPE_MAP) instead\.$",
         r"^pyasn1\.codec\.(ber|cer|der|native)\.(encoder|decoder)$",
     ),
+    # pyasn1 0.6.5 under Python 3.13 attributes the same warning to the importing module, ldap3.utils.asn1
+    # (observed 2026-11-08 on the dev box and mac1-vm; before, the shim's missing stacklevel made it pyasn1's own
+    # module). Same two messages, only from that one ldap3 module.
+    (
+        r"^(tagMap|typeMap) is deprecated\. Please use (TAG_MAP|TYPE_MAP) instead\.$",
+        r"^ldap3\.utils\.asn1$",
+    ),
 )
 
 _WRAPPERS = []  # the wrappers install() created, so a second install() does not stack another

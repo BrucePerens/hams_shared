@@ -45,6 +45,12 @@ class PolicyFilterTests(unittest.TestCase):
                 for message in (TAGMAP, TYPEMAP):
                     self.assertFalse(emitted(message, f"pyasn1.codec.{kind}.{what}"), (kind, what, message))
 
+    def test_the_aliases_are_ignored_when_attributed_to_the_importing_ldap3_module(self):
+        # pyasn1 0.6.5 on Python 3.13 reports them against ldap3.utils.asn1 (the importer), not pyasn1's codec module.
+        policy.apply_third_party_warning_policy()
+        for message in (TAGMAP, TYPEMAP):
+            self.assertFalse(emitted(message, "ldap3.utils.asn1"), message)
+
     def test_a_first_party_deprecation_with_the_same_text_is_still_shown(self):
         policy.apply_third_party_warning_policy()
         self.assertTrue(emitted(TAGMAP, "odoo.addons.pager_duty.models.incident"))
@@ -53,7 +59,8 @@ class PolicyFilterTests(unittest.TestCase):
         policy.apply_third_party_warning_policy()
         self.assertTrue(emitted("Something else is deprecated.", "pyasn1.codec.ber.encoder"))
         self.assertTrue(emitted("tagMap is deprecated. Please use TAG_MAP instead. And more.", "pyasn1.codec.ber.encoder"))
-        self.assertTrue(emitted(TAGMAP, "ldap3.utils.asn1"))
+        self.assertTrue(emitted(TAGMAP, "ldap3.core.connection"))
+        self.assertTrue(emitted("Something else is deprecated.", "ldap3.utils.asn1"))
         self.assertTrue(emitted("datetime thing is deprecated", "somelib.mod"))
 
     def test_only_deprecation_warnings_are_covered(self):
