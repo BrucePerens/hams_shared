@@ -5735,6 +5735,7 @@ class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
     def _plan(self, accounts, env_exists=True):
         commands = []
         real_exists = os.path.exists
+        real_isdir = os.path.isdir
         self.safe_patch_object(
             infra.os.path, "exists",
             side_effect=lambda p: (
@@ -5743,6 +5744,12 @@ class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
                 else False if p.startswith(("/usr/local/sbin/", "/etc/sudoers.d/", "/opt/hams/")) and not p.endswith("/common.env")
                 else real_exists(p)
             ),
+        )
+        # apply_production_directories asks isdir, not exists: a host whose /opt/hams/etc/keys exists (any host that was
+        # provisioned) printed "owner -> ..." instead of "(owner, mode)", and the sudoers test below failed there.
+        self.safe_patch_object(
+            infra.os.path, "isdir",
+            side_effect=lambda p: False if p.startswith("/opt/hams/") else real_isdir(p),
         )
         # Nothing exists on this machine for the planner to find, so every entry is "new".
         with infra.planning() as plan:
