@@ -29,6 +29,7 @@ Tests [@ANCHOR: batch_queue:RunResult]
 Tests [@ANCHOR: batch_queue:Verdict]
 Tests [@ANCHOR: batch_queue:blame_by_tokens]
 Tests [@ANCHOR: batch_queue:settle]
+Tests [@ANCHOR: batch_queue:other_tips]
 Tests [@ANCHOR: batch_queue:format_verdicts]
 """
 
@@ -535,6 +536,20 @@ class AttributionTests(unittest.TestCase):
         verdicts = bq.settle(members, self.run_once_factory(set(), calls=calls), self.attribute_factory(members))
         self.assertEqual(len(calls), 1)
         self.assertTrue(all(v["status"] == bq.PASSED for v in verdicts.values()))
+
+    def test_a_passed_verdict_names_the_other_tips_of_the_run_it_passed_in(self):
+        members = self.members(3)
+        verdicts = bq.settle(members, self.run_once_factory(set()), self.attribute_factory(members))
+        for member in members:
+            self.assertEqual(verdicts[member["tip"]]["with"], [m["tip"] for m in members if m is not member])
+        # After a split the pass names only its own half; a twin of one tip is not "another" branch.
+        twin = dict(members[0], pid=999)
+        group = [members[0], twin, members[1]]
+        self.assertEqual(bq._other_tips(group, members[0]), [members[1]["tip"]])
+        # A branch that failed has no such field; a clean branch beside a failing one is checked with it.
+        verdicts = bq.settle(members, self.run_once_factory({members[1]["tip"]}), self.attribute_factory(members))
+        self.assertNotIn("with", verdicts[members[1]["tip"]])
+        self.assertEqual(verdicts[members[0]["tip"]]["with"], [members[1]["tip"], members[2]["tip"]])
 
     def test_settle_attributed_failure_fails_only_the_owner_and_passes_the_rest_at_once(self):
         members, calls = self.members(3), []

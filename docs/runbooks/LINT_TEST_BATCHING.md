@@ -75,7 +75,8 @@ branch). `HAMS_LINT_BATCH=off` disables batching for a session. The line `[*] li
 
 * One running batch per repository on the dev box, even when its run is shipped to another machine; per-target-machine
   batches would let a second batch run on a second idle machine. To-do filed.
-* The stamp of a batched branch vouches for "main plus the batch", and a cross-branch interaction is blamed on the branch
+* The stamp of a batched branch vouches for "main plus the batch" and names the other tips it was checked with
+  (`batch=N with=<12 hex>,...`), and a cross-branch interaction is blamed on the branch
   whose file the finding names. `--solo` repeats a run alone.
 * A failure that names no file (anchor and documentation cross-reference checks name anchors, not files) always splits.
 * hams_shared tips are not batched.
