@@ -107,6 +107,12 @@ class RamTestTmpdirTests(unittest.TestCase):
         self.assertFalse(os.path.exists(dead))
 
     # Tests [@ANCHOR: test:default_test_tmpdir]
+    def test_create_false_names_the_ram_base_without_making_it(self):
+        with patch.object(self.ram_dirs, "free_gb", return_value=60):
+            self.assertEqual(_test_runner.default_test_tmpdir(dict(self.environ), self.disk, create=False), os.path.join(self.root, "hams-test-tmp"))
+        self.assertEqual(os.listdir(self.root), [])
+
+    # Tests [@ANCHOR: test:default_test_tmpdir]
     def test_a_tmpdir_the_caller_chose_and_the_private_namespace_keep_the_disk_directory(self):
         with patch.object(self.ram_dirs, "free_gb", return_value=60):
             chosen = dict(self.environ, TMPDIR="/somewhere/else")

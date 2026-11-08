@@ -688,11 +688,11 @@ Raises `ValueError` for a bad name. `release` removes whichever exists.
 Purpose: the Cargo target directory of a job: `/dev/shm/hams-cargo-target-<job>`, or `~/.cache/hams-cargo-target-<job>` when RAM is refused (the location AGENTS.md used before). Arguments: `job` (a name for `_check_job_name`),
 `pol` and `environ` as in `place`, `home` the home directory (default `~`). Returns a `Placement`; creates nothing. Raises `ValueError` for a bad job name. One name per concurrent job: two builds in one target directory overwrite each other's binaries.
 
-### `[@ANCHOR: ram_dirs:test_tmp_base]` `test_tmp_base(environ=None, pol=None)`
+### `[@ANCHOR: ram_dirs:test_tmp_base]` `test_tmp_base(environ=None, pol=None, create=True)`
 
 Purpose: the base TMPDIR of a test run that shares the host (Odoo's temporary files and the Chrome profiles; `slot-K` directories below it for slots above 1). Returns `/dev/shm/hams-test-tmp` (created, mode 1777 so the `odoo` account and the
 developer can both use it) or `None`: when the run is inside the full pipeline's private namespace (`HAMS_ISOLATED_NS=1` and `HAMS_TEST_LOCK_HELD=1`; its `/var` is a memory overlay that disappears with it, a directory in the host's `/dev/shm` would not), when `place` refuses RAM
-(with a warning), or when the directory cannot be created (warning). Called by `test.py`'s `default_test_tmpdir`.
+(with a warning), or when the directory cannot be created (warning). Called by `test.py`'s `default_test_tmpdir`. Argument `create` (bool): False only names the directory without creating it (the start-up sweep of a full-pipeline run runs on the host before its namespace and needs no directory).
 
 ### `[@ANCHOR: ram_dirs:lint_cargo_base]` `lint_cargo_base(environ=None, pol=None)`
 
@@ -819,7 +819,7 @@ Purpose: every base that may hold Cargo caches, so `show`, `prune` and `clear` s
 
 Purpose: whether `path` is below the RAM root. Returns bool; False when `ram_dirs` cannot be imported.
 
-### `[@ANCHOR: test:default_test_tmpdir]` `default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR)`
+### `[@ANCHOR: test:default_test_tmpdir]` `default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR, create=True)`
 
 Purpose: the TMPDIR of a run that shares the host: RAM when `ram_dirs.test_tmp_base` offers it, else what `apply_default_test_tmpdir` chose before. `main()` and the start-up sweep call it.
 
@@ -827,6 +827,7 @@ Purpose: the TMPDIR of a run that shares the host: RAM when `ram_dirs.test_tmp_b
 |---|---|---|
 | `environ` | dict | Mutated: `TMPDIR` is set when the caller set none. |
 | `directory` | str | The disk directory (default `/var/lib/odoo/tmp`). |
+| `create` | bool | False: do not create the RAM base (the start-up sweep). |
 
 Returns the TMPDIR in force, or `None`. A TMPDIR the caller chose is never replaced. Inside the full pipeline's private namespace the answer is the disk directory (a memory overlay there already). If RAM is refused for lack of space a warning is printed (`ram_dirs`) and the disk directory is used.
 

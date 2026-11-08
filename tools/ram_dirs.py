@@ -252,7 +252,7 @@ def cargo_target_dir(job, pol=None, environ=None, home=None):
 
 
 # [@ANCHOR: ram_dirs:test_tmp_base]
-def test_tmp_base(environ=None, pol=None):
+def test_tmp_base(environ=None, pol=None, create=True):
     """The base TMPDIR for a test run that shares the host with other runs, `/dev/shm/hams-test-tmp` (created, mode
     1777), or None to keep the caller's default. None also inside the full pipeline's private namespace
     (`HAMS_ISOLATED_NS=1` with `HAMS_TEST_LOCK_HELD=1`): there `/var` and `/tmp` already sit on a memory overlay that
@@ -263,6 +263,8 @@ def test_tmp_base(environ=None, pol=None):
     placed = place(TEST_TMP_NAME, "", pol, environ)
     if not placed.in_ram:
         return None
+    if not create:
+        return placed.path
     try:
         os.makedirs(placed.path, exist_ok=True)
         if os.stat(placed.path).st_mode & 0o7777 != 0o1777:

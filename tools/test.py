@@ -1201,7 +1201,7 @@ def apply_default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR):
 
 
 # [@ANCHOR: test:default_test_tmpdir]
-def default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR):
+def default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR, create=True):
     """`apply_default_test_tmpdir`, preferring RAM for a run on the shared host. Returns the TMPDIR in force (None if none).
 
     When the caller chose no TMPDIR and `ram_dirs.test_tmp_base` offers `/dev/shm/hams-test-tmp` (enough free memory, not the
@@ -1210,7 +1210,7 @@ def default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR):
     `/dev/shm`. Otherwise the disk directory, as before.
     A refusal because /dev/shm is short of room prints a warning (ram_dirs). Full entry: tools/README.md."""
     if not environ.get("TMPDIR"):
-        ram = ram_dirs.test_tmp_base(environ)
+        ram = ram_dirs.test_tmp_base(environ, create=create)
         if ram:
             ram_dirs.sweep(environ=environ)  # crashed jobs' directories and stale Chrome profiles free their memory first
             environ["TMPDIR"] = ram
@@ -4376,7 +4376,7 @@ def main():
                 # Under the slot lock just taken, before anything is built: remove what runs that are gone left behind.
                 try:
                     sweep_slot_leftovers(
-                        default_postgres_access(), held_slot, lock_file_path, default_test_tmpdir(dict(os.environ))
+                        default_postgres_access(), held_slot, lock_file_path, default_test_tmpdir(dict(os.environ), create=False)
                     )
                 except FileNotFoundError as e:
                     print(f"❌ ERROR: {e}")
