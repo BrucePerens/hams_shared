@@ -636,27 +636,31 @@ workers than half the CPUs (the dev box: 32 threads, 4 slots, 4 each). Arguments
 
 ### `[@ANCHOR: lint_lock:cpu_stall]` `cpu_stall(path="/proc/pressure/cpu")`
 
-Purpose: the measured CPU stall, the input of the lint load gate. Returns `some avg10` of the kernel's pressure file as a float percentage (the share of the last ten seconds in which a
-runnable task waited for a CPU), or `None` when the file is missing, unreadable or not a finite number. The load average is not used because it counts every runnable or disk-waiting
-task: it was 86 on the dev box at 18 % stall (2026-11-08). Argument `path`: tests pass a temporary file. No side effects. Tests: `test_cpu_stall_reads_psi_some_avg10_and_the_gate_prefers_it_to_the_load_average`.
+Purpose: one input of the lint load gate, the same figure test.py's CI load gate reads (`read_cpu_pressure`, #438). Returns `some avg10` of the kernel's pressure file as a float
+percentage (the share of the last ten seconds in which a runnable task waited for a CPU), or `None` when the file is missing, unreadable or not a finite number. No side effects. The load
+average is not used because it counts every runnable or disk-waiting task: it was 86 on the dev box at 18 % stall (2026-11-08). Argument `path`: tests pass a temporary file.
+Tests: `test_cpu_stall_reads_psi_some_avg10_and_the_gate_prefers_it_to_the_load_average` in `test_lint_lock.py`.
 
-### `[@ANCHOR: lint_lock:wait_for_stall]` `wait_for_stall(limit, timeout, environ=None, stall=cpu_stall, sleep=..., now=..., out=print)`
+### `[@ANCHOR: lint_lock:cpu_busy_percent]` `cpu_busy_percent(window=1.0, path="/proc/stat", sleep=time.sleep)`
 
-Purpose: block until the CPU stall is at or below `limit` percent (`HAMS_LINT_STALL_LIMIT`, default 50). Returns True when the run may start (also at once when the stall cannot be measured or
-`HAMS_SKIP_CI_LOAD_GATE=1`), False after `timeout` seconds (it prints why). Polls every 15 s. Same test as `cpu_stall`.
+Purpose: the second input, the processors' busy percentage (0 to 100) over `window` seconds from two samples of /proc/stat's first line (everything but idle and iowait). Returns a float, or
+`None` when the file cannot be parsed or the counters did not move. Blocks for `window` seconds. Same test.
 
-### `[@ANCHOR: lint_lock:gate]` `gate(environ, load_limit_override=None, load_timeout_override=None, out=print, stall=cpu_stall)`
+### `[@ANCHOR: lint_lock:saturated]` `saturated(busy, psi, busy_limit, psi_limit)`
 
-Purpose: the one load gate `begin_heavy_run` applies. Uses `wait_for_stall` when the stall is measurable and nobody set a load limit (`--load-limit`, `HAMS_LINT_LOAD_LIMIT`,
-`HAMS_CI_LOAD_GATE_RATIO`); otherwise the 1-minute load average against `load_limit`, as before. Returns True when the run may start. Same test as `cpu_stall`.
+Purpose: test.py's rule (`evaluate_cpu_saturation_gate`) for the lint gate. Returns `(bool, reason)`: saturated only when BOTH `busy` and `psi` are at or above their limits (92 % busy and 25 % pressure
+by default); a missing signal leaves the other to decide alone; neither means not saturated. Pure. Limits come from `saturation_limits()`: `HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT`, `HAMS_CI_LOAD_GATE_PSI_PERCENT`.
+Same test.
 
-### `[@ANCHOR: lint_exec:machine_wide_lock]` `machine_wide_lock(step_name, directory=None)`
+### `[@ANCHOR: lint_lock:wait_for_stall]` `wait_for_stall(timeout, environ=None, busy=cpu_busy_percent, psi=cpu_stall, sleep=..., now=..., out=print)`
 
-Purpose: a context manager that makes steps whose tests read machine-wide state run one at a time across lint runs. With lint slots two runs executed `pytest devbox_tools/` at the same
-moment and its tests, which compare every entry of `/dev/shm` and list every process called `odoo shell`, saw each other's files and processes (2 of 3 side-by-side runs failed, 2026-11-08).
-`lint_exec.run_step` wraps the step's process in it. Arguments: `step_name` (a name in `MACHINE_WIDE_STEPS`, currently `pytest devbox_tools/`; any other name passes through at once),
-`directory` (default `~/.cache/hams-lint/steplocks`; tests pass a temporary one). It takes an exclusive flock on `<directory>/<step>.lock`, waiting for another run's step to end, and
-releases it on exit (the kernel releases it if the process dies). If the directory cannot be made, the step runs without the lock. Tests: `MachineWideLockTests` in `test_lint_exec.py`.
+Purpose: block until the processors are not saturated. Returns True when the run may start (also at once when `HAMS_SKIP_CI_LOAD_GATE=1` or nothing can be measured), False after `timeout`
+seconds (it prints why). Polls every 15 s. Same test.
+
+### `[@ANCHOR: lint_lock:gate]` `gate(environ, load_limit_override=None, load_timeout_override=None, out=print, stall=cpu_stall, measurable_busy=...)`
+
+Purpose: the one load gate `begin_heavy_run` applies. Uses `wait_for_stall` when the saturation can be measured and nobody set a load limit (`--load-limit`, `HAMS_LINT_LOAD_LIMIT`,
+`HAMS_CI_LOAD_GATE_RATIO`); otherwise the 1-minute load average against `load_limit`, as before. Returns True when the run may start. Same test.
 
 ### `[@ANCHOR: lint_lock:slot_lock_path]` `slot_lock_path(slot, environ=None)`
 

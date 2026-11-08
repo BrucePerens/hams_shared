@@ -500,7 +500,11 @@ def load_timeout(environ=None, override=None):
 
 
 PSI_CPU = "/proc/pressure/cpu"
-DEFAULT_STALL_LIMIT = 50.0
+# The same two signals and limits as test.py's CI load gate (#438, `evaluate_cpu_saturation_gate`): a box is saturated only when the
+# processors are busy AND runnable tasks waited for them. test.py is too large to import here, so the few lines are repeated.
+DEFAULT_BUSY_PERCENT = 92.0
+DEFAULT_PSI_PERCENT = 25.0
+SAMPLE_SECONDS = 1.0
 
 
 # [@ANCHOR: lint_lock:cpu_stall]
@@ -522,10 +526,76 @@ def cpu_stall(path=PSI_CPU):
     return None
 
 
-def stall_limit(environ=None):
-    """HAMS_LINT_STALL_LIMIT (percent, default 50): the CPU stall above which a heavy run waits to start."""
+# [@ANCHOR: lint_lock:cpu_busy_percent]
+def cpu_busy_percent(window=SAMPLE_SECONDS, path="/proc/stat", sleep=time.sleep):
+    """The processors' busy percentage (0 to 100) over `window` seconds from two samples of the first line of /proc/stat (everything but idle and
+    iowait is busy, guest time is already inside user and nice). None when the file cannot be read or the counters did not move. Full entry: tools/README.md."""
+    def sample():
+        try:
+            with open(path, encoding="utf-8") as handle:
+                fields = handle.readline().split()
+            values = [int(v) for v in fields[1:9]]
+        except (OSError, ValueError):
+            return None
+        if fields[:1] != ["cpu"] or len(values) < 5:
+            return None
+        total = sum(values)
+        return total - values[3] - values[4], total
+
+    first = sample()
+    sleep(window)
+    second = sample()
+    if first is None or second is None or second[1] <= first[1]:
+        return None
+    return max(0.0, min(100.0, 100.0 * (second[0] - first[0]) / (second[1] - first[1])))
+
+
+def saturation_limits(environ=None):
+    """(busy percent, pressure percent) limits: HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT (92) and HAMS_CI_LOAD_GATE_PSI_PERCENT (25), the names test.py uses."""
     environ = os.environ if environ is None else environ
-    return _finite(environ.get("HAMS_LINT_STALL_LIMIT"), DEFAULT_STALL_LIMIT)
+    return (_finite(environ.get("HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT"), DEFAULT_BUSY_PERCENT),
+            _finite(environ.get("HAMS_CI_LOAD_GATE_PSI_PERCENT"), DEFAULT_PSI_PERCENT))
+
+
+# [@ANCHOR: lint_lock:saturated]
+def saturated(busy, psi, busy_limit, psi_limit):
+    """(is_saturated, reason). With both signals the box is saturated only when BOTH are at or above their limits (a full box that keeps up is
+    fine; waiting tasks on idle processors are the many-short-processes case the load average mistakes for load); with one missing the other
+    decides alone; with neither it is not saturated. Pure. Full entry: tools/README.md."""
+    signals = []
+    if busy is not None:
+        signals.append((busy >= busy_limit, "the processors are %.0f%% busy (limit %.0f%%)" % (busy, busy_limit)))
+    if psi is not None:
+        signals.append((psi >= psi_limit, "tasks waited for a processor %.0f%% of the last 10 s (limit %.0f%%)" % (psi, psi_limit)))
+    if signals and all(flag for flag, _ in signals):
+        return True, "the processors are saturated: " + " and ".join(text for _, text in signals)
+    return False, ""
+
+
+# [@ANCHOR: lint_lock:wait_for_stall]
+def wait_for_stall(timeout, environ=None, busy=cpu_busy_percent, psi=cpu_stall, sleep=time.sleep, now=time.monotonic, out=print):
+    """Block until the processors are not saturated (`saturated`). True when the run may start (also at once when HAMS_SKIP_CI_LOAD_GATE=1 or
+    nothing can be measured), False after `timeout` seconds (it prints why). Polls every 15 s. Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    if environ.get("HAMS_SKIP_CI_LOAD_GATE") == "1":
+        out("[*] Skipping the lint load gate (HAMS_SKIP_CI_LOAD_GATE=1).")
+        return True
+    busy_limit, psi_limit = saturation_limits(environ)
+    full, why = saturated(busy(), psi(), busy_limit, psi_limit)
+    if not full:
+        return True
+    deadline = now() + timeout
+    out("[*] %s: waiting up to %d s for it to ease (the same gate as test.py; HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT / _PSI_PERCENT change it, "
+        "HAMS_SKIP_CI_LOAD_GATE=1 skips it)." % (why[0].upper() + why[1:], int(timeout)))
+    while now() < deadline:
+        sleep(min(POLL_SECONDS, max(0.0, deadline - now())))
+        full, why = saturated(busy(), psi(), busy_limit, psi_limit)
+        if not full:
+            out("[*] The processors have spare time: starting.")
+            return True
+    out("ERROR: %s after %d s. Not starting a heavy lint run: its timing tests would fail for contention, not for code. Run again when the "
+        "box is quieter, raise --load-timeout, or set HAMS_SKIP_CI_LOAD_GATE=1." % (why, int(timeout)))
+    return False
 
 
 def wait_for_load(limit, timeout, environ=None, loadavg=None, sleep=time.sleep, now=time.monotonic, out=print):
@@ -565,41 +635,15 @@ def wait_for_load(limit, timeout, environ=None, loadavg=None, sleep=time.sleep, 
     return False
 
 
-# [@ANCHOR: lint_lock:wait_for_stall]
-def wait_for_stall(limit, timeout, environ=None, stall=cpu_stall, sleep=time.sleep, now=time.monotonic, out=print):
-    """Block until the CPU stall (`cpu_stall`, percent) is at or below `limit`. True when the run may start, False when `timeout`
-    seconds passed first; True at once when HAMS_SKIP_CI_LOAD_GATE=1 or the stall cannot be measured. Full entry: tools/README.md."""
-    environ = os.environ if environ is None else environ
-    if environ.get("HAMS_SKIP_CI_LOAD_GATE") == "1":
-        out("[*] Skipping the lint load gate (HAMS_SKIP_CI_LOAD_GATE=1).")
-        return True
-    current = stall()
-    if current is None or current <= limit:
-        return True
-    deadline = now() + timeout
-    out("[*] The CPU stall is %.0f %% (some runnable task waited for a CPU), above the lint limit of %.0f %%: waiting up to %d s for it to "
-        "fall (HAMS_LINT_STALL_LIMIT changes it, HAMS_SKIP_CI_LOAD_GATE=1 skips this)." % (current, limit, int(timeout)))
-    while now() < deadline:
-        sleep(min(POLL_SECONDS, max(0.0, deadline - now())))
-        current = stall()
-        if current is None or current <= limit:
-            out("[*] CPU stall %s %%: starting." % ("%.0f" % current if current is not None else "unknown"))
-            return True
-    out("ERROR: the CPU stall is still %.0f %% (limit %.0f %%) after %d s. Not starting a heavy lint run: its timing tests would fail "
-        "for contention, not for code. Run again when the box is quieter, raise --load-timeout, or set HAMS_SKIP_CI_LOAD_GATE=1."
-        % (current, limit, int(timeout)))
-    return False
-
-
 # [@ANCHOR: lint_lock:gate]
-def gate(environ, load_limit_override=None, load_timeout_override=None, out=print, stall=cpu_stall):
-    """The load gate of a heavy lint run: the measured CPU stall (`wait_for_stall`) when the kernel reports it and nobody set a load
+def gate(environ, load_limit_override=None, load_timeout_override=None, out=print, stall=cpu_stall, measurable_busy=lambda: os.path.exists("/proc/stat")):
+    """The load gate of a heavy lint run: the measured CPU saturation (`wait_for_stall`, test.py's rule) when it can be measured and nobody set a load
     limit explicitly (`--load-limit`, HAMS_LINT_LOAD_LIMIT, HAMS_CI_LOAD_GATE_RATIO), else the 1-minute load average against
     `load_limit`, as before. True when the run may start. Full entry: tools/README.md."""
     explicit = (load_limit_override is not None or environ.get("HAMS_LINT_LOAD_LIMIT") or environ.get("HAMS_CI_LOAD_GATE_RATIO"))
     timeout = load_timeout(environ, load_timeout_override)
-    if not explicit and stall() is not None:
-        return wait_for_stall(stall_limit(environ), timeout, environ=environ, stall=stall, out=out)
+    if not explicit and (stall() is not None or measurable_busy()):
+        return wait_for_stall(timeout, environ=environ, psi=stall, out=out)
     return wait_for_load(load_limit(environ, override=load_limit_override), timeout, environ=environ, out=out)
 
 
