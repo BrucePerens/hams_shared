@@ -57,6 +57,11 @@ import sys
 import tempfile
 import time
 
+try:
+    import ram_dirs
+except ImportError:  # this file alone (`lint_remote.py caches` runs it over stdin on a runner): the disk locations
+    ram_dirs = None
+
 GB = 1024 ** 3
 MB = 1024 ** 2
 UNUSED_DAYS = 14
@@ -73,8 +78,36 @@ def cache_root(environ=None):
     return environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
 
 
-def cargo_base(environ=None):
+# [@ANCHOR: lint_cache:disk_cargo_base]
+def disk_cargo_base(environ=None):
+    """`<cache>/hams-lint-cargo` on the disk: where the Cargo caches live when RAM is refused (see `cargo_base`)."""
     return os.path.join(cache_root(environ), "hams-lint-cargo")
+
+
+# [@ANCHOR: lint_cache:cargo_base]
+def cargo_base(environ=None):
+    """`/dev/shm/hams-lint-cargo` when `ram_dirs.lint_cargo_base` allows RAM (a big machine with room, no explicit
+    XDG_CACHE_HOME), else `disk_cargo_base`. A refusal prints a warning (once per process)."""
+    return (ram_dirs.lint_cargo_base(environ) if ram_dirs else None) or disk_cargo_base(environ)
+
+
+# [@ANCHOR: lint_cache:in_ram]
+def in_ram(path, environ=None):
+    """True when `path` is below the RAM root of `ram_dirs` (always False when ram_dirs is not importable)."""
+    return bool(ram_dirs and ram_dirs.under_ram_root(path, environ=environ))
+
+
+# [@ANCHOR: lint_cache:cargo_bases]
+def cargo_bases(environ=None):
+    """Every base that may hold Cargo caches: the RAM one (when it exists) and the disk one, for show/prune/clear."""
+    environ = os.environ if environ is None else environ
+    bases = []
+    if ram_dirs and not environ.get("XDG_CACHE_HOME"):
+        ram = os.path.join(ram_dirs.policy(environ).root, ram_dirs.LINT_CARGO_NAME)
+        if os.path.isdir(ram):
+            bases.append(ram)
+    bases.append(disk_cargo_base(environ))
+    return bases
 
 
 def results_base(environ=None):
@@ -418,13 +451,15 @@ def prepare_cargo_target(target_dir, environ=None, log=None, budget=None):
         os.utime(os.path.join(target_dir, ".last_used"))
     except OSError:
         pass
-    for name in drop_unused_dirs(os.path.dirname(target_dir), keep=target_dir):
-        say(f"lint cache: removed {name} (unused for {UNUSED_DAYS} days)")
+    days = ram_dirs.LINT_UNUSED_DAYS if in_ram(target_dir, environ) else UNUSED_DAYS
+    for name in drop_unused_dirs(os.path.dirname(target_dir), keep=target_dir, days=days):
+        say(f"lint cache: removed {name} (unused for {days} days)")
     max_bytes = int(budget["cargo_gb"] * GB)
-    floor = int(budget["free_floor_gb"] * GB)
+    floor_gb = ram_dirs.policy(environ).min_free_gb if in_ram(target_dir, environ) else budget["free_floor_gb"]  # RAM: its own minimum
+    floor = int(floor_gb * GB)
     size = dir_bytes(target_dir)
     free = free_bytes(target_dir)
-    say(f"lint cache: cargo target {target_dir} {size / GB:.1f} GB of {budget['cargo_gb']:g} GB budget, {(free or 0) / GB:.0f} GB free (floor {budget['free_floor_gb']:g} GB)")
+    say(f"lint cache: cargo target {target_dir} {size / GB:.1f} GB of {budget['cargo_gb']:g} GB budget, {(free or 0) / GB:.0f} GB free (floor {floor_gb:g} GB)")
     low_space = free is not None and free < floor
     if size > max_bytes or low_space:
         goal = max_bytes
@@ -495,7 +530,7 @@ def cargo_session(environ=None, log=None):
         # machine): the name is derived again here, so one toolchain on one machine is one directory.
         target = cargo_target_dir(repo, environ)
     with locked(target, exclusive=True):
-        adopted = adopt_legacy_dir(target, environ)
+        adopted = None if in_ram(target, environ) else adopt_legacy_dir(target, environ)
         if adopted and log:
             log(f"lint cache: adopted the old shared directory {adopted} as {target} (its incremental data is pruned first)")
         prepare_cargo_target(target, environ, log)
@@ -672,12 +707,12 @@ def show_lines(environ=None):
     environ = os.environ if environ is None else environ
     b = budgets(environ)
     lines = [f"machine {machine_name(environ)}: cargo budget {b['cargo_gb']:g} GB per directory, free floor {b['free_floor_gb']:g} GB, results {b['results_mb']:g} MB"]
-    base = cargo_base(environ)
-    if os.path.isdir(base):
-        for name in sorted(os.listdir(base)):
-            full = os.path.join(base, name)
-            if os.path.isdir(full):
-                lines.append(f"  cargo {name}: {dir_bytes(full) / GB:.2f} GB")
+    for base in cargo_bases(environ):
+        if os.path.isdir(base):
+            for name in sorted(os.listdir(base)):
+                full = os.path.join(base, name)
+                if os.path.isdir(full):
+                    lines.append(f"  cargo {full}: {dir_bytes(full) / GB:.2f} GB")
     for legacy in legacy_cargo_dirs(environ):
         if os.path.isdir(legacy):
             lines.append(f"  legacy {legacy}: {dir_bytes(legacy) / GB:.2f} GB (a pre-budget directory; `clear cargo` removes it)")
@@ -702,23 +737,23 @@ def main(argv=None):
         return 0
     if command == "prune":
         b = budgets()
-        base = cargo_base()
-        for name in sorted(os.listdir(base)) if os.path.isdir(base) else []:
-            full = os.path.join(base, name)
-            if os.path.isdir(full):
-                with locked(full):
-                    print("\n".join(prepare_cargo_target(full, budget=b)))
+        for base in cargo_bases():
+            for name in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+                full = os.path.join(base, name)
+                if os.path.isdir(full):
+                    with locked(full):
+                        print("\n".join(prepare_cargo_target(full, budget=b)))
         return 0
     if command == "clear":
         targets = []
         if which in ("cargo", "all"):
-            targets += [cargo_base(), *legacy_cargo_dirs()]
+            targets += [*cargo_bases(), *legacy_cargo_dirs()]
         if which in ("results", "all"):
             targets.append(results_base())
         for path in targets:
             if not os.path.isdir(path):
                 continue
-            if path == cargo_base():
+            if path in cargo_bases():
                 for name in sorted(os.listdir(path)):
                     full = os.path.join(path, name)
                     if os.path.isdir(full):

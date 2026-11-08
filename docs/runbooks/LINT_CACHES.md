@@ -32,6 +32,16 @@ warm directory it is the crates of the checkout only.
 * **Bypass.** `run_linters.py --no-cache` (or `HAMS_LINT_NO_CACHE=1`) builds in a throwaway directory deleted after the
   step. A `CARGO_TARGET_DIR` set by the caller is used as it is and never pruned.
 
+### In RAM on a big machine (2026-11-08)
+
+On a machine with at least 64 GB of memory (the dev box: 125 GB), the Cargo caches live in `/dev/shm/hams-lint-cargo` (`tools/ram_dirs.py`; the
+same names, budgets, locks and pruning) while `/dev/shm` has 20 GB free, and in `~/.cache/hams-lint-cargo` with a printed warning when it has not.
+Why: a lint run's builds are written and deleted, and the SSD is shared with everything else. Costs: the caches are gone after a reboot (one cold
+build per slot and repository: about 3.5 GB each, 4 to 20 minutes on a loaded box), `/dev/shm` is capped at half of the memory (63 GB), so the
+free-space floor of a RAM directory is the RAM minimum (`HAMS_RAM_MIN_FREE_GB`, 20) and not `free_floor_gb`, and a RAM directory unused for 2 days
+(not 14) is removed. The legacy single directory is not adopted into RAM. `XDG_CACHE_HOME` set, or `HAMS_RAM_DIRS=0`, keeps the disk locations. `show`,
+`prune` and `clear` list both places. Documentation of every function: `tools/README.md`, "Build and test scratch directories in RAM".
+
 ### Budgets
 
 | Machine | `cargo_gb` (each directory) | `free_floor_gb` | `results_mb` | Why |

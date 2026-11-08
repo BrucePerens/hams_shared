@@ -590,6 +590,230 @@ The mac1 VM (`hams-test-debian`) and bruce17 run Odoo browser tests (Odoo, Postg
 `cargo test` hosts. On 2026-11-04 a relay build overlapped an Odoo browser test in the 11 GiB VM and test.py's OOM watchdog killed the
 Odoo run (exit 247). `remote_cargo_test.py` now takes the host's Odoo-test lock; the lint runner takes it too, through the entries below.
 
+## Build and test scratch directories in RAM (`ram_dirs.py`)
+
+Bruce, 2026-11-08: "use this box's spare RAM to cut SSD writes." A Cargo build writes 5-12 GB of target data per job and throws it away; the
+lint Cargo caches and the TMPDIR of a test run (Chrome profiles) are scratch too. `ram_dirs.py` puts them under `/dev/shm` (a tmpfs, capped at
+half of the memory: 63 GB on the 125 GB dev box) when it has room, and on the disk, with a warning on standard error, when it has not.
+
+Rules, all in one module: **never silent** (a refusal prints the free space and the minimum); a machine with less than 64 GB of memory keeps its disk paths
+quietly (`HAMS_RAM_DIRS=1` forces RAM, `HAMS_RAM_DIRS=0` forbids it); every per-job directory carries an owner marker so the sweep can tell a crashed job's from a
+live one; `run_job` stops a job that outgrows its limit or squeezes the free memory. Settings (environment): `HAMS_RAM_DIRS` (`0`, `1`, else auto),
+`HAMS_RAM_ROOT` (another tmpfs or directory; naming one turns the tmpfs check off), `HAMS_RAM_MIN_FREE_GB` (20), `HAMS_RAM_JOB_MAX_GB` (30),
+`HAMS_RAM_HARD_FREE_GB` (5). What does not move: anything that must outlive a reboot, and the PostgreSQL data of the test databases. The full pipeline of `test.py`
+(its private namespace) already keeps `/var` and `/tmp` on a memory overlay, so it needs nothing; the move helps the `HAMS_ISOLATED_NS=1` runs on the host.
+Command line: `ram_dirs.py run JOB -- COMMAND...` (the job-end trap), `path JOB` / `release JOB` (a shell's own job), `sweep`, `status`.
+Tests: `test_ram_dirs.py`, `RamCargoBaseTest` in `test_lint_cache.py`, `RamTestTmpdirTests` in `test_test.py`.
+
+### `[@ANCHOR: ram_dirs:RamPolicy]` `RamPolicy`
+
+Purpose: the settings every decision reads; built by `policy`. A frozen dataclass in `ram_dirs.py`; one instance per decision, never shared state.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `mode` | str | `auto` (default: RAM on a machine with at least `min_ram_gb` of memory), `on` (RAM regardless of the memory size), `off` (never). |
+| `root` | str | The RAM directory, default `/dev/shm`. |
+| `min_free_gb` | float | Free space `root` must have before a new directory is placed there; default 20. |
+| `job_max_gb` | float | The size at which `run_job` stops a job whose directory is in RAM; default 30. |
+| `hard_free_gb` | float | The free space of `root` under which `run_job` stops a RAM job; default 5. |
+| `min_ram_gb` | float | Memory size below which `auto` keeps the disk quietly; default 64. |
+| `require_tmpfs` | bool | `root` must be a tmpfs; default True, False when `HAMS_RAM_ROOT` names the root. |
+
+Invariants: a policy never changes after it is built. The settings are read from the environment only by `policy`.
+
+### `[@ANCHOR: ram_dirs:policy]` `policy(environ=None)`
+
+Purpose: builds the `RamPolicy` the environment asks for. Argument `environ`: mapping or `None` for `os.environ`. Reads `HAMS_RAM_DIRS` (`0`, `off`, `no`, `false` mean off; `1`, `on`,
+`yes`, `true` mean on; anything else auto), `HAMS_RAM_ROOT`, `HAMS_RAM_MIN_FREE_GB`, `HAMS_RAM_JOB_MAX_GB`, `HAMS_RAM_HARD_FREE_GB`. Returns a `RamPolicy`. A number that is
+missing, not a number, not finite or negative keeps its default. Never raises, touches no file.
+
+### `[@ANCHOR: ram_dirs:total_ram_gb]` `total_ram_gb()`
+
+Purpose: the installed memory, used to decide whether a machine is a RAM-directory machine. Returns GiB (float) from `MemTotal` of `/proc/meminfo`, or `None` when it cannot be read (then
+`place` assumes a big machine). Reads one file; never raises.
+
+### `[@ANCHOR: ram_dirs:is_tmpfs]` `is_tmpfs(path)`
+
+Purpose: guards against a RAM root that is really a disk directory. Returns True when the longest mount point of `/proc/mounts` that holds `path` (after `realpath`) has type `tmpfs`. False
+when `/proc/mounts` cannot be read. Never raises.
+
+### `[@ANCHOR: ram_dirs:free_gb]` `free_gb(path)`
+
+Purpose: the space a new directory can use. Returns the unprivileged free space (`f_bavail * f_frsize`) in GiB of the file system holding `path`, measured at its nearest existing parent, or `None`
+when it cannot be read (including the empty path). Never raises.
+
+### `[@ANCHOR: ram_dirs:warn_once]` `_warn(key, text, out=None)`
+
+Purpose: the loud half of "fall back loudly". Prints `ram_dirs: WARNING: <text>` on `out` (default standard error) the first time `key` is seen in this process, nothing afterwards, so a lint run that asks
+for the Cargo base twenty times warns once. State: the module set `_warned` (cleared by the tests only). No return value.
+
+### `[@ANCHOR: ram_dirs:Placement]` `Placement`
+
+Purpose: the answer of `place`. A frozen dataclass in `ram_dirs.py`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `path` | str | The directory to use: `<root>/<name>` or the disk path the caller offered. |
+| `in_ram` | bool | True when `path` is under the RAM root. |
+| `reason` | str | One line saying why (free space, or the reason for the fallback). A fallback's reason was also printed. |
+
+### `[@ANCHOR: ram_dirs:place]` `place(name, ssd_path, pol=None, environ=None, warn=_warn)`
+
+Purpose: the one decision: RAM or disk, for every caller (Cargo target, lint cache base, test TMPDIR).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `name` | str | Directory name under the RAM root. |
+| `ssd_path` | str | The disk path returned when RAM is refused. |
+| `pol` | `RamPolicy` or `None` | The settings; `None` builds them from `environ`. |
+| `environ` | mapping or `None` | Passed to `policy`. |
+| `warn` | callable `(key, text)` | Receives the fallback warning; the default prints once per reason on standard error. |
+
+Returns a `Placement`. RAM is chosen when the mode is not `off`, the machine has the memory (auto mode), the root exists, is a tmpfs (when required) and has `min_free_gb` free. `off` and a small machine in auto mode keep
+the disk quietly; a missing root, a root that is not a tmpfs, unreadable free space and too little free space keep it with a warning that names the numbers. Never raises, creates nothing. The free space is a snapshot:
+other jobs can use it before this one writes, which is what the guard of `run_job` and the floor of the lint cache are for.
+
+### `[@ANCHOR: ram_dirs:check_job_name]` `_check_job_name(job)`
+
+Purpose: keeps a job name usable as a directory name. Returns `job` when it is 1-64 characters of `A-Za-z0-9._-` starting with a letter or digit. Raises `ValueError` otherwise (so `..`, a slash or a leading `-` can never
+reach a path or a `rm`).
+
+### `[@ANCHOR: ram_dirs:job_directories]` `job_directories(job, pol=None, environ=None)`
+
+Purpose: the two places a job's directory can be, because the free space changes between `path` and `release`. Returns `[<root>/hams-cargo-target-<job>, <cache>/hams-cargo-target-<job>]` (`<cache>` is `XDG_CACHE_HOME` or `~/.cache`).
+Raises `ValueError` for a bad name. `release` removes whichever exists.
+
+### `[@ANCHOR: ram_dirs:cargo_target_dir]` `cargo_target_dir(job, pol=None, environ=None, home=None)`
+
+Purpose: the Cargo target directory of a job: `/dev/shm/hams-cargo-target-<job>`, or `~/.cache/hams-cargo-target-<job>` when RAM is refused (the location AGENTS.md used before). Arguments: `job` (a name for `_check_job_name`),
+`pol` and `environ` as in `place`, `home` the home directory (default `~`). Returns a `Placement`; creates nothing. Raises `ValueError` for a bad job name. One name per concurrent job: two builds in one target directory overwrite each other's binaries.
+
+### `[@ANCHOR: ram_dirs:test_tmp_base]` `test_tmp_base(environ=None, pol=None)`
+
+Purpose: the base TMPDIR of a test run that shares the host (Odoo's temporary files and the Chrome profiles; `slot-K` directories below it for slots above 1). Returns `/dev/shm/hams-test-tmp` (created, mode 1777 so the `odoo` account and the
+developer can both use it) or `None`: when the run is inside the full pipeline's private namespace (`HAMS_ISOLATED_NS=1` and `HAMS_TEST_LOCK_HELD=1`; its `/var` is a memory overlay that disappears with it, a directory in the host's `/dev/shm` would not), when `place` refuses RAM
+(with a warning), or when the directory cannot be created (warning). Called by `test.py`'s `default_test_tmpdir`.
+
+### `[@ANCHOR: ram_dirs:lint_cargo_base]` `lint_cargo_base(environ=None, pol=None)`
+
+Purpose: the base of the lint Cargo caches (`lint_cache.cargo_base`). Returns `/dev/shm/hams-lint-cargo` or `None`. `None` when `XDG_CACHE_HOME` is set (the caller chose a cache location; the tests and the remote
+runners do) and when `place` refuses RAM (with a warning). Creates nothing. The caches there are budgeted like the disk ones (`lint_cache`), and a directory unused for `LINT_UNUSED_DAYS` (2) days is removed. They are lost at a reboot, which costs one cold build.
+
+### `[@ANCHOR: ram_dirs:under_ram_root]` `under_ram_root(path, pol=None, environ=None)`
+
+Purpose: says by name whether `path` is below the RAM root, without touching the file system. Returns bool. `lint_cache` uses it to skip adopting a 31 GB legacy directory into RAM and to age RAM caches faster.
+
+### `[@ANCHOR: ram_dirs:start_ticks]` `_start_ticks(pid)`
+
+Purpose: the process start time that makes an owner marker immune to pid reuse. Returns field 22 of `/proc/<pid>/stat` (clock ticks since boot, read after the last `)` so a name with spaces or parentheses is safe), or `None` when the process is gone or the file is unreadable.
+
+### `[@ANCHOR: ram_dirs:claim]` `claim(path, pid=None, now=time.time)`
+
+Purpose: marks `path` as owned by a process. Creates the directory (mode 0700) if it is missing and writes `.hams-ram-owner` in it (atomically, through a temporary file): JSON `{"pid": int, "start": int or null, "created": int}`, `start` being
+`_start_ticks(pid)`. Arguments: `pid` (default this process; `ram_dirs.py path` passes the caller's) and `now` (clock, for tests). Returns `path`. Raises `OSError` when the marker cannot be written.
+
+### `[@ANCHOR: ram_dirs:owner_state]` `owner_state(path)`
+
+Purpose: the question the sweep asks. Returns `"alive"` (the marker names a process that runs with the recorded start time), `"dead"` (the process is gone, or the pid now belongs to a process started at another time) or `"unmarked"` (no readable marker: a directory made by hand).
+A marker without a start time counts as alive while the pid exists. Reads one file and one `/proc` entry; never raises.
+
+### `[@ANCHOR: ram_dirs:newest_mtime]` `newest_mtime(path, depth=2)`
+
+Purpose: the age test for unmarked directories. Returns the latest modification time (seconds since the epoch) of `path` and of its entries down to `depth` levels (a build touches `debug/deps`, two levels down), 0.0 when `path` is missing. Does not follow symbolic links.
+
+### `[@ANCHOR: ram_dirs:remove_tree]` `remove_tree(path)`
+
+Purpose: removal that cannot be turned against us. Removes the tree at `path`; a symbolic link is only unlinked, never followed. Returns True when `path` is gone afterwards. Never raises (errors inside the tree are ignored; the return value tells).
+
+### `[@ANCHOR: ram_dirs:sweep]` `sweep(pol=None, environ=None, say=None, now=time.time, remove=remove_tree)`
+
+Purpose: the clean-up of jobs that could not clean up after themselves (SIGKILL, power cut, an agent that forgot). Called at the start of every `run_job` and `path`, and by `ram_dirs.py sweep`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `pol`, `environ` | | As in `place`. |
+| `say` | callable `(text)` | Reports each removal or failure; default prints on standard error. |
+| `now` | callable | The clock, for tests. |
+| `remove` | callable `(path) -> bool` | The removal; default `remove_tree`. |
+
+Removes under the RAM root: a `hams-cargo-target-*` directory whose `owner_state` is `dead`; an `unmarked` one in which nothing changed for 24 hours; and, in `hams-test-tmp`, entries that are not `slot-K` directories and were untouched for 12 hours (the Chrome profiles of a
+slot-1 run; `slot-K` directories are test.py's own start-up sweep, under the slot lock). Never touches other names (`hams-lint-cargo` is budgeted by `lint_cache`; `PostgreSQL.*` and the rest are not ours). Returns the sorted names removed. A directory that cannot be removed (another
+user's) is reported with the `sudo rm -rf` line and the sweep goes on. Never raises. Safe to run from several processes at once: removing a path twice is harmless.
+
+### `[@ANCHOR: ram_dirs:tree_bytes]` `tree_bytes(path)`
+
+Purpose: the size measure of the guard. Returns the sum of the file sizes under `path` in bytes (links not followed; files that vanish while walking are skipped), 0 if it does not exist. Cost: one `lstat` per file, about 0.1 s for a relay target; called every `interval` seconds by `run_job`.
+
+### `[@ANCHOR: ram_dirs:guard_verdict]` `guard_verdict(size_bytes, free_now_gb, pol, in_ram)`
+
+Purpose: the per-job size and memory guard as a pure function. Returns a sentence saying why the job must be stopped, or `None`. Only for a RAM job (`in_ram`): `size_bytes` above `pol.job_max_gb` GiB, or `free_now_gb` (the free space of the root; `None` means unknown and never stops) below
+`pol.hard_free_gb`. A job on the disk is never stopped by it.
+
+### `[@ANCHOR: ram_dirs:JobResult]` `JobResult`
+
+Purpose: what `run_job` returns. A dataclass in `ram_dirs.py`, created once per job.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `returncode` | int | The command's exit status; `128 + n` when signal `n` ended it; 75 (`EX_TEMPFAIL`) when a live job already owns the directory and nothing ran. |
+| `target` | str | The job's directory. |
+| `in_ram` | bool | Whether it was in RAM. |
+| `stopped` | str or `None` | The guard's reason when it stopped the job. |
+| `peak_bytes` | int | Largest size measured (every `interval` seconds, and once at the end). |
+| `elapsed` | float | Seconds the command ran. |
+| `block_write_bytes` | int | Bytes the command and its children caused to be written to block devices (`getrusage` `ru_oublock` times 512): an upper bound that counts data later deleted unwritten; near 0 for a tmpfs. |
+
+### `[@ANCHOR: ram_dirs:stop_group]` `_stop_group(child, grace)`
+
+Purpose: ends a job's whole process group. Sends SIGTERM to `child`'s process group (the child was started in its own session) and waits up to `grace` seconds, then SIGKILL and waits 5 more. Returns when the child is gone or the group no longer exists. No return value; never raises.
+
+### `[@ANCHOR: ram_dirs:run_job]` `run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, interval=5.0, say=None, popen=subprocess.Popen, grace=10.0)`
+
+Purpose: the job-end trap, the guard and the placement in one call. `ram_dirs.py run JOB -- COMMAND...` calls it; AGENTS.md tells agents to wrap `cargo` in it.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `job` | str | Job name (see `_check_job_name`); one name per concurrent job. |
+| `argv` | list of str | The command; it runs with `CARGO_TARGET_DIR` set to the job's directory. |
+| `keep` | bool | Leave the directory afterwards (for triage). |
+| `force_ssd` | bool | Use `~/.cache/hams-cargo-target-<job>` (`--ssd`); still removed afterwards. |
+| `pol`, `environ` | | As in `place`. `environ` is also the command's environment. |
+| `interval` | float seconds | How often the guard measures. |
+| `say` | callable | Report lines; default standard error. |
+| `popen` | callable | `subprocess.Popen` (replaceable in tests). |
+| `grace` | float seconds | SIGTERM-to-SIGKILL delay when the guard stops the job. |
+
+Returns a `JobResult`. Order of events: `sweep`; placement; refuse with `EX_TEMPFAIL` if a live job owns the directory, else remove what a dead one left; `claim`; start the command in a new session; forward SIGINT, SIGTERM and SIGHUP
+to its group (only in the main thread); every `interval` seconds measure and apply `guard_verdict` (the reason is reported, the group stopped, `JobResult.stopped` set); at the end remove the directory (in a `finally`, so an exception here cannot leave it) unless `keep`, and print one summary line (exit status,
+time, peak size, RAM or disk, block writes). Blocks until the command ends. Cost: a tree walk per interval. A runner killed with SIGKILL cannot clean up: its directory is found dead by the next `sweep`.
+
+### `[@ANCHOR: ram_dirs:status_lines]` `status_lines(pol=None, environ=None)`
+
+Purpose: the text of `ram_dirs.py status`. Returns a list of lines: the root's free space and the limits, then each `hams-cargo-target-*`, `hams-test-tmp` and `hams-lint-cargo` entry with its size and `owner_state`.
+
+### `[@ANCHOR: ram_dirs:main]` `main(argv=None)`
+
+Purpose: the command line. Subcommands `run JOB [--keep] [--ssd] -- COMMAND...` (exit status of the command, 75 if the job name is in use), `path JOB [--owner-pid PID]` (sweeps, creates and claims the directory for `PID`, default the parent
+process, and prints the path; for a shell that cannot wrap its command: `export CARGO_TARGET_DIR=$(python3 hams_shared/tools/ram_dirs.py path myjob --owner-pid $$)` and `trap 'python3 hams_shared/tools/ram_dirs.py release myjob' EXIT`),
+`release JOB` (removes the job's directory from either place), `sweep`, `status`. Returns the exit status; 2 for a bad job name.
+
+### `[@ANCHOR: lint_cache:disk_cargo_base]` `disk_cargo_base(environ=None)`
+
+Purpose: the disk location of the lint Cargo caches, `<cache>/hams-lint-cargo` (`XDG_CACHE_HOME` or `~/.cache`); where they live when RAM is refused, and where the old ones are. Returns the path (str); creates nothing.
+
+### `[@ANCHOR: lint_cache:cargo_base]` `cargo_base(environ=None)`
+
+Purpose: where the lint Cargo caches live now (`cargo_target_dir`, `named_cargo_session` and the budget all use it). Returns `/dev/shm/hams-lint-cargo` when `ram_dirs.lint_cargo_base` allows it, else `disk_cargo_base`. `lint_cache.py` run alone (`lint_remote.py caches` sends it over standard input)
+has no `ram_dirs` and always answers with the disk path. The budget, the prune and the exclusive lock work the same in RAM; a RAM directory unused for 2 days (not 14) is removed, and a legacy directory is never adopted into RAM.
+
+### `[@ANCHOR: lint_cache:cargo_bases]` `cargo_bases(environ=None)`
+
+Purpose: every base that may hold Cargo caches, so `show`, `prune` and `clear` see both. Returns a list: the RAM base when it exists (and `XDG_CACHE_HOME` is unset), then `disk_cargo_base`.
+
+### `[@ANCHOR: lint_cache:in_ram]` `in_ram(path, environ=None)`
+
+Purpose: whether `path` is below the RAM root. Returns bool; False when `ram_dirs` cannot be imported.
+
 ## The dev box is the primary lint runner: slots
 
 Bruce, 2026-11-08: "we aren't limited by those less powerful machines." The dev box (32 cores, 125 GB) runs the lint itself, every step

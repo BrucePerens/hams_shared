@@ -41,6 +41,73 @@ def locked_free(path):
         return held
 
 
+class RamCargoBaseTest(unittest.TestCase):
+    """The lint Cargo caches live in RAM (`ram_dirs`) when it has room and no cache location was chosen."""
+
+    def setUp(self):
+        import ram_dirs
+        self.ram_dirs = ram_dirs
+        ram_dirs._warned.clear()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = os.path.join(self._tmp.name, "shm")
+        os.makedirs(self.root)
+        self.environ = {"HAMS_RAM_ROOT": self.root, "HAMS_RAM_DIRS": "1", "HOME": self._tmp.name}
+
+    # Tests [@ANCHOR: lint_cache:cargo_base]
+    # Tests [@ANCHOR: lint_cache:disk_cargo_base]
+    def test_ram_with_room_the_disk_without_and_the_disk_when_a_cache_location_is_named(self):
+        with unittest.mock.patch.object(self.ram_dirs, "free_gb", return_value=50):
+            self.assertEqual(lint_cache.cargo_base(self.environ), os.path.join(self.root, "hams-lint-cargo"))
+            named = dict(self.environ, XDG_CACHE_HOME=os.path.join(self._tmp.name, "c"))
+            self.assertEqual(lint_cache.cargo_base(named), os.path.join(self._tmp.name, "c", "hams-lint-cargo"))
+        with unittest.mock.patch.object(self.ram_dirs, "free_gb", return_value=3), unittest.mock.patch("sys.stderr"):
+            self.assertEqual(lint_cache.cargo_base(self.environ), lint_cache.disk_cargo_base(self.environ))
+        self.assertTrue(lint_cache.disk_cargo_base(self.environ).endswith(os.path.join(".cache", "hams-lint-cargo")) or
+                        "hams-lint-cargo" in lint_cache.disk_cargo_base(self.environ))
+
+    # Tests [@ANCHOR: lint_cache:cargo_bases]
+    def test_show_prune_and_clear_see_the_ram_base_only_when_it_exists(self):
+        disk = lint_cache.disk_cargo_base(self.environ)
+        self.assertEqual(lint_cache.cargo_bases(self.environ), [disk])
+        os.makedirs(os.path.join(self.root, "hams-lint-cargo"))
+        self.assertEqual(lint_cache.cargo_bases(self.environ), [os.path.join(self.root, "hams-lint-cargo"), disk])
+        self.assertEqual(lint_cache.cargo_bases(dict(self.environ, XDG_CACHE_HOME="/x")), ["/x/hams-lint-cargo"])
+
+    # Tests [@ANCHOR: lint_cache:in_ram]
+    def test_a_path_below_the_ram_root_is_in_ram(self):
+        self.assertTrue(lint_cache.in_ram(os.path.join(self.root, "hams-lint-cargo", "a"), self.environ))
+        self.assertFalse(lint_cache.in_ram(os.path.join(self._tmp.name, "a"), self.environ))
+
+    # Tests [@ANCHOR: lint_cache:cargo_base]
+    def test_a_ram_directory_keeps_the_ram_free_space_minimum_not_the_disk_floor(self):
+        target = os.path.join(self.root, "hams-lint-cargo", "repo-1.0-abcd1234")
+        environ = dict(self.environ, HAMS_RAM_MIN_FREE_GB="20", HAMS_LINT_FREE_FLOOR_GB="30")
+        with unittest.mock.patch.object(lint_cache, "free_bytes", return_value=25 * lint_cache.GB):
+            lines = lint_cache.prepare_cargo_target(target, environ)
+        self.assertTrue(any("(floor 20 GB)" in line for line in lines), lines)
+        self.assertFalse(any("pruned" in line or "cleared" in line for line in lines), lines)
+
+    # Tests [@ANCHOR: lint_cache:cargo_base]
+    def test_a_ram_directory_unused_for_two_days_is_dropped_and_no_legacy_directory_is_adopted(self):
+        base = os.path.join(self.root, "hams-lint-cargo")
+        target = os.path.join(base, "repo-1.0-abcd1234")
+        stale = os.path.join(base, "repo-0.9-old")
+        for path in (target, stale):
+            os.makedirs(path)
+        three_days = time.time() - 3 * 86400
+        os.utime(stale, (three_days, three_days))
+        lines = lint_cache.prepare_cargo_target(target, self.environ)
+        self.assertFalse(os.path.exists(stale), lines)
+        self.assertTrue(any("unused for 2 days" in line for line in lines), lines)
+        legacy = os.path.join(self._tmp.name, ".cache", "hams-cargo-target-lint")
+        os.makedirs(legacy)
+        environ = dict(self.environ, HAMS_LINT_CARGO_MANAGED=target, CARGO_TARGET_DIR=target, HAMS_LINT_CARGO_REPO="")
+        with lint_cache.cargo_session(environ) as session:
+            self.assertEqual(session, target)
+        self.assertTrue(os.path.isdir(legacy), "a 31 GB legacy directory must not be renamed into RAM")
+
+
 class CargoBudgetTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
