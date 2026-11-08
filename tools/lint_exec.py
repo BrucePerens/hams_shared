@@ -18,7 +18,9 @@ Semantics kept from the old sequential orchestrator, step for step:
     they were scheduled.
 """
 
+import contextlib
 import dataclasses
+import fcntl
 import hashlib
 import json
 import os
@@ -340,6 +342,37 @@ def render_output(step, returncode, stdout, stderr):
     return "".join(parts)
 
 
+# Steps whose tests look at machine-wide state (every entry of /dev/shm, every process called `odoo shell`) and so fail when another lint run
+# executes the same tests at the same moment: with lint slots (2026-11-08) two runs did, 3 of 3 runs side by side. They run one at a time per
+# machine, across runs, under a flock in ~/.cache/hams-lint/steplocks/ (released when the step ends or the process dies).
+MACHINE_WIDE_STEPS = frozenset({"pytest devbox_tools/"})
+
+
+# [@ANCHOR: lint_exec:machine_wide_lock]
+@contextlib.contextmanager
+def machine_wide_lock(step_name, directory=None):
+    """Hold the machine-wide lock of `step_name` for the block when it is in MACHINE_WIDE_STEPS (waits for another run's step to end);
+    other steps pass straight through. `directory` replaces ~/.cache/hams-lint/steplocks (tests). Full entry: tools/README.md."""
+    if step_name.split("[")[0] not in MACHINE_WIDE_STEPS:
+        yield
+        return
+    directory = directory or os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "hams-lint", "steplocks")
+    handle = None
+    try:
+        os.makedirs(directory, exist_ok=True)
+        handle = open(os.path.join(directory, re.sub(r"[^A-Za-z0-9_.-]+", "_", step_name.split("[")[0]) + ".lock"), "a+", encoding="utf-8")  # noqa: SIM115
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    except OSError:
+        if handle is not None:
+            handle.close()
+        handle = None  # no lock directory: run unserialized, as before
+    try:
+        yield
+    finally:
+        if handle is not None:
+            handle.close()
+
+
 def run_step(step, locks):
     """Run one step; never raises for a checker failure."""
     started = time.monotonic()
@@ -352,13 +385,15 @@ def run_step(step, locks):
     started = time.monotonic()
     try:
         try:
-            res = subprocess.run(
-                with_xdist(step, _xdist_workers[0]),
-                capture_output=True,
-                text=True,
-                cwd=step.cwd,
-                env=step.env,
-            )
+            with machine_wide_lock(step.name):
+                started = time.monotonic()
+                res = subprocess.run(
+                    with_xdist(step, _xdist_workers[0]),
+                    capture_output=True,
+                    text=True,
+                    cwd=step.cwd,
+                    env=step.env,
+                )
         except FileNotFoundError:
             if step.missing_msg is None:
                 raise

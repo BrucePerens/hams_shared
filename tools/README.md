@@ -650,6 +650,14 @@ Purpose: block until the CPU stall is at or below `limit` percent (`HAMS_LINT_ST
 Purpose: the one load gate `begin_heavy_run` applies. Uses `wait_for_stall` when the stall is measurable and nobody set a load limit (`--load-limit`, `HAMS_LINT_LOAD_LIMIT`,
 `HAMS_CI_LOAD_GATE_RATIO`); otherwise the 1-minute load average against `load_limit`, as before. Returns True when the run may start. Same test as `cpu_stall`.
 
+### `[@ANCHOR: lint_exec:machine_wide_lock]` `machine_wide_lock(step_name, directory=None)`
+
+Purpose: a context manager that makes steps whose tests read machine-wide state run one at a time across lint runs. With lint slots two runs executed `pytest devbox_tools/` at the same
+moment and its tests, which compare every entry of `/dev/shm` and list every process called `odoo shell`, saw each other's files and processes (2 of 3 side-by-side runs failed, 2026-11-08).
+`lint_exec.run_step` wraps the step's process in it. Arguments: `step_name` (a name in `MACHINE_WIDE_STEPS`, currently `pytest devbox_tools/`; any other name passes through at once),
+`directory` (default `~/.cache/hams-lint/steplocks`; tests pass a temporary one). It takes an exclusive flock on `<directory>/<step>.lock`, waiting for another run's step to end, and
+releases it on exit (the kernel releases it if the process dies). If the directory cannot be made, the step runs without the lock. Tests: `MachineWideLockTests` in `test_lint_exec.py`.
+
 ### `[@ANCHOR: lint_lock:slot_lock_path]` `slot_lock_path(slot, environ=None)`
 
 Purpose: the lock file of one slot. Slot 1 is `~/.cache/hams-lint/run.lock`, the file a checkout without slots takes, so old and new runs exclude
