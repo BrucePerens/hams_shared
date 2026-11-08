@@ -819,6 +819,22 @@ Purpose: every base that may hold Cargo caches, so `show`, `prune` and `clear` s
 
 Purpose: whether `path` is below the RAM root. Returns bool; False when `ram_dirs` cannot be imported.
 
+### `[@ANCHOR: test:default_test_tmpdir]` `default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR)`
+
+Purpose: the TMPDIR of a run that shares the host: RAM when `ram_dirs.test_tmp_base` offers it, else what `apply_default_test_tmpdir` chose before. `main()` and the start-up sweep call it.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `environ` | dict | Mutated: `TMPDIR` is set when the caller set none. |
+| `directory` | str | The disk directory (default `/var/lib/odoo/tmp`). |
+
+Returns the TMPDIR in force, or `None`. A TMPDIR the caller chose is never replaced. Inside the full pipeline's private namespace the answer is the disk directory (a memory overlay there already). If RAM is refused for lack of space a warning is printed (`ram_dirs`) and the disk directory is used.
+
+### `[@ANCHOR: test:ram_chrome_profile_globs]` `ram_chrome_profile_globs(resources, tmpdir)`
+
+Purpose: keeps the end-of-run Chrome profile removal correct after TMPDIR moved. Arguments: `resources` (`SlotResources`), `tmpdir` (the TMPDIR in force). Returns a tuple of globs: `resources.chrome_profile_globs`, plus `<tmpdir>/*_chrome_odoo` when the run
+is not slot-scoped and `tmpdir` is in RAM. A scoped run's globs and kill pattern already name its own `slot-K` directory (`/dev/shm/hams-test-tmp/slot-K/...`; the characters are in the safe set, so the pattern matches only that slot's Chrome), so they are returned unchanged.
+
 ## The dev box is the primary lint runner: slots
 
 Bruce, 2026-11-08: "we aren't limited by those less powerful machines." The dev box (32 cores, 125 GB) runs the lint itself, every step
@@ -1526,7 +1542,7 @@ right after the slot lock was taken and before anything is built.
 | `pg` | `PostgresAccess` | The server to sweep. |
 | `held_slot` | int | The slot the caller holds; swept too, without a second lock. |
 | `lock_base_path` | str | Base lock path; slot K's lock is `runner_slots.slot_lock_path`, the queue directory `lock_queue.queue_dir_for_lock`. |
-| `base_tmpdir` | str or `None` | The TMPDIR whose `slot-K` directories are swept. |
+| `base_tmpdir` | str or `None` | The TMPDIR whose `slot-K` directories are swept. When it is in RAM (`/dev/shm/hams-test-tmp`), the old disk directory `/var/lib/odoo/tmp` is swept as well, so slot directories left there before TMPDIR moved are removed. |
 | `filestore_base` | str | Odoo's filestore directory. |
 | `say` | callable | Reports a line. |
 

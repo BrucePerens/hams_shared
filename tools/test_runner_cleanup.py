@@ -458,6 +458,19 @@ class SweepSlotLeftoversTests(unittest.TestCase):
         self.assertIn("database custom_db", outcome["removed"])
         self.assertIn("filestore hams_test_s9", outcome["removed"])
 
+    def test_slot_directories_left_in_the_old_disk_tmpdir_are_swept_when_tmpdir_is_in_ram(self):
+        """TMPDIR moved from /var/lib/odoo/tmp to /dev/shm/hams-test-tmp: a slot directory a run left on the disk before is removed too."""
+        legacy = os.path.join(self.tmp, "legacy")
+        os.makedirs(os.path.join(legacy, "slot-3", "y_chrome_odoo"))
+        os.makedirs(os.path.join(self.tmpbase, "slot-4"))
+        with unittest.mock.patch.dict(os.environ, {"HAMS_RAM_ROOT": self.tmp}), \
+                unittest.mock.patch.object(runner, "DEFAULT_TEST_TMPDIR", legacy):
+            outcome, _ = self.sweep(held_slot=2)
+        self.assertEqual(os.listdir(legacy), [])
+        self.assertEqual(os.listdir(self.tmpbase), [])
+        self.assertIn("tmpdir slot-3", outcome["removed"])
+        self.assertIn("tmpdir slot-4", outcome["removed"])
+
     def test_a_slot_a_live_run_holds_is_not_touched(self):
         self.make("hams_test_s3")
         self.make("hams_test_s4")

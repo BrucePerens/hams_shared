@@ -53,6 +53,7 @@ import infrastructure
 import lock_queue
 import odoo_test_batch
 import offline_browser_ns
+import ram_dirs
 import runner_cleanup
 import runner_slots
 
@@ -1199,6 +1200,32 @@ def apply_default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR):
     return environ.get("TMPDIR")
 
 
+# [@ANCHOR: test:default_test_tmpdir]
+def default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR):
+    """`apply_default_test_tmpdir`, preferring RAM for a run on the shared host. Returns the TMPDIR in force (None if none).
+
+    When the caller chose no TMPDIR and `ram_dirs.test_tmp_base` offers `/dev/shm/hams-test-tmp` (enough free memory, not the
+    full pipeline's private namespace, whose /var is already a memory overlay), that directory becomes TMPDIR: Odoo's temporary
+    files and every headless Chrome profile of the run then cost no SSD writes. Otherwise the disk directory, as before.
+    A refusal because /dev/shm is short of room prints a warning (ram_dirs). Full entry: tools/README.md."""
+    if not environ.get("TMPDIR"):
+        ram = ram_dirs.test_tmp_base(environ)
+        if ram:
+            environ["TMPDIR"] = ram
+    return apply_default_test_tmpdir(environ, directory)
+
+
+# [@ANCHOR: test:ram_chrome_profile_globs]
+def ram_chrome_profile_globs(resources, tmpdir):
+    """The Chrome profile globs to remove at the end of a run: `resources.chrome_profile_globs`, plus `<tmpdir>/*_chrome_odoo` when
+    the run is not slot-scoped and its TMPDIR is in RAM (a scoped run's globs already name its own TMPDIR). Returns a tuple.
+    A profile left in RAM by a killed Chrome would otherwise stay until `ram_dirs.sweep` ages it out. Full entry: tools/README.md."""
+    globs = tuple(resources.chrome_profile_globs)
+    if tmpdir and not resources.scoped and ram_dirs.under_ram_root(tmpdir):
+        globs += (f"{tmpdir.rstrip('/')}/*_chrome_odoo",)
+    return globs
+
+
 # Operational switch read by ham_init (Website._hams_serve_google_fonts_at_install): do not download Google's fonts while a module is
 # installed. Every test database build installs ham_init, and that download needs the network. This is a flag the runner sets for the
 # processes it starts, not a probe of Odoo's test_enable (banned): production never has it set, so it downloads there. A caller that
@@ -2342,7 +2369,10 @@ def sweep_slot_leftovers(pg, held_slot, lock_base_path, base_tmpdir, filestore_b
         return None
     refuse_to_run_on_production_host(database_names=[name for name, _ in rows])
     filestores = sorted(os.listdir(filestore_base)) if os.path.isdir(filestore_base) else []
-    slot_dirs = sorted(os.listdir(base_tmpdir)) if base_tmpdir and os.path.isdir(base_tmpdir) else []
+    # The disk directory earlier versions used for TMPDIR is swept too: slot directories a run left there before TMPDIR moved to RAM.
+    bases = [base_tmpdir] + ([DEFAULT_TEST_TMPDIR] if base_tmpdir and ram_dirs.under_ram_root(base_tmpdir) else [])
+    bases = [base for base in bases if base]
+    slot_dirs = sorted({name for base in bases if os.path.isdir(base) for name in os.listdir(base)})
     plan = runner_cleanup.leftovers(rows, filestores, slot_dirs)
     if not plan:
         return {"removed": [], "skipped": [], "failed": []}
@@ -2372,7 +2402,7 @@ def sweep_slot_leftovers(pg, held_slot, lock_base_path, base_tmpdir, filestore_b
             claim_slot=claim_slot,
             drop_database=pg.drop_database,
             remove_filestore=remove_filestore,
-            remove_slot_tmpdir=lambda slot: remove_directory_tree(os.path.join(base_tmpdir, f"slot-{slot}")),
+            remove_slot_tmpdir=lambda slot: all([remove_directory_tree(os.path.join(base, f"slot-{slot}")) for base in bases]),
             say=say,
         ),
     )
@@ -4203,7 +4233,7 @@ def apply_slot_resources(resources):
 
 
 def main():
-    global _single_instance_lock
+    global _single_instance_lock, _CHROME_PROFILE_GLOBS
     # First thing, before any lock, namespace, daemon or database work. rebuild_db() repeats the check
     # with the database list once PostgreSQL is reachable.
     refuse_to_run_on_production_host()
@@ -4344,7 +4374,7 @@ def main():
                 # Under the slot lock just taken, before anything is built: remove what runs that are gone left behind.
                 try:
                     sweep_slot_leftovers(
-                        default_postgres_access(), held_slot, lock_file_path, apply_default_test_tmpdir(dict(os.environ))
+                        default_postgres_access(), held_slot, lock_file_path, default_test_tmpdir(dict(os.environ))
                     )
                 except FileNotFoundError as e:
                     print(f"❌ ERROR: {e}")
@@ -4539,7 +4569,7 @@ def main():
         sys.exit(1)
 
     # Before anything is spawned, so every child (Odoo, its headless Chrome profiles) inherits it in every mode, namespaced or flat.
-    base_tmpdir = apply_default_test_tmpdir(os.environ)
+    base_tmpdir = default_test_tmpdir(os.environ)
     try:
         resources = runner_slots.slot_resources(
             held_slot, slots, runner_slots.in_private_network(os.environ), base_tmpdir
@@ -4555,6 +4585,7 @@ def main():
         )
     enforce_slot_refusals(resources, args)
     apply_slot_resources(resources)
+    _CHROME_PROFILE_GLOBS = ram_chrome_profile_globs(resources, os.environ.get("TMPDIR"))
     if slots > 1:
         install_run_cleanup(
             args.db, held_slot, args.keep_db, resources.tmpdir if resources.scoped and held_slot > 1 else None
