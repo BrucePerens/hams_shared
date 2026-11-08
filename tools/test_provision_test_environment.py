@@ -613,6 +613,47 @@ class KopiaAndUserToolTests(unittest.TestCase):
         self.assertTrue(any("cdn.playwright.dev" in text for text in report.skipped), report.skipped)
 
 
+class MlAssetsTests(unittest.TestCase):
+    # Tests [@ANCHOR: provision_test_environment:provision_ml_assets]
+
+    def _run(self, exists, script_exists=True, reachable=True, plan=False):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        if script_exists:
+            os.makedirs(os.path.join(tmp, "ham_shack", "tools"))
+            open(os.path.join(tmp, "ham_shack", "tools", "provision_ml_assets.py"), "w").close()
+        run, report = Recorder(), pte.Report(plan)
+        with patch.object(pte.os, "geteuid", return_value=0):
+            _quiet(pte.provision_ml_assets, {"hams_com": tmp}, run, report, plan, reachable=lambda url: reachable,
+                   manifest_exists=lambda path: exists)
+        return tmp, run, report
+
+    def test_a_host_with_the_manifest_is_left_alone(self):
+        _tmp, run, report = self._run(exists=True)
+        self.assertEqual((run.calls, report.changes), ([], []))
+
+    def test_a_host_without_it_runs_productions_script_as_odoo_then_verifies_the_pins(self):
+        tmp, run, report = self._run(exists=False)
+        script = os.path.join(tmp, "ham_shack", "tools", "provision_ml_assets.py")
+        self.assertEqual(run.calls[0], ["install", "-d", "-o", "odoo", "-g", "odoo", "/var/lib/odoo/hams_ml_assets"])
+        self.assertEqual(run.calls[1][-5:], ["nice", "-n", "10", "python3", script])
+        self.assertEqual(run.calls[2][-3:], ["python3", script, "--verify-relay-pins"])
+        self.assertTrue(all("runuser" in call for call in run.calls[1:]))
+        self.assertEqual(len(report.changes), 1)
+
+    def test_unreachable_download_hosts_or_a_missing_script_are_reported_skips(self):
+        _tmp, run, report = self._run(exists=False, reachable=False)
+        self.assertEqual(run.calls, [])
+        self.assertTrue(any("huggingface.co" in text for text in report.skipped), report.skipped)
+        _tmp, run, report = self._run(exists=False, script_exists=False)
+        self.assertEqual(run.calls, [])
+        self.assertTrue(any("does not exist" in text for text in report.skipped), report.skipped)
+
+    def test_plan_changes_nothing(self):
+        _tmp, run, report = self._run(exists=False, plan=True)
+        self.assertEqual((run.calls, report.changes), ([], []))
+
+
 class ServiceAndDatabaseTests(unittest.TestCase):
     # Tests [@ANCHOR: provision_test_environment:offline_clusters]
     # Tests [@ANCHOR: provision_test_environment:provision_services]
@@ -871,7 +912,7 @@ class StartFinishTests(unittest.TestCase):
         order = []
         names = ["provision_cloud_python", "provision_apt_packages", "provision_pip_packages", "provision_odoo",
                  "provision_kopia", "provision_host_aliases", "provision_services", "provision_database",
-                 "provision_test_host_requirements", "provision_user_tools", "provision_profile"]
+                 "provision_test_host_requirements", "provision_user_tools", "provision_ml_assets", "provision_profile"]
         patches = [patch.object(pte, n, side_effect=lambda *a, _n=n, **k: order.append(_n) or ([] if _n.endswith(
             "apt_packages") else {})) for n in names]
         patches.append(patch.object(pte, "run_self_check", return_value=["test.py -u zero_sudo"]))
@@ -888,7 +929,7 @@ class StartFinishTests(unittest.TestCase):
     def test_finish_plan_runs_no_self_check_and_no_database(self):
         names = ["provision_cloud_python", "provision_apt_packages", "provision_pip_packages", "provision_odoo",
                  "provision_kopia", "provision_host_aliases", "provision_services",
-                 "provision_test_host_requirements", "provision_user_tools", "provision_profile"]
+                 "provision_test_host_requirements", "provision_user_tools", "provision_ml_assets", "provision_profile"]
         for n in names:
             p = patch.object(pte, n, return_value=[] if n.endswith("apt_packages") else {})
             p.start()
