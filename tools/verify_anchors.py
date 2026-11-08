@@ -37,6 +37,7 @@ RULES OF TRACEABILITY:
 """
 
 import ast
+import collections
 import getpass
 import json
 import os
@@ -60,6 +61,8 @@ from lint_exec import main_worktree_of
 # tool while check_burn_list.py sees them -- group(1) always captures
 # just the anchor name, identically for all three forms.
 ANCHOR_PATTERN = re.compile(r"\[@ANCHOR(?:-BEGIN|-END)?:\s*([a-zA-Z0-9_:]+)\s*\]")
+# Every match of ANCHOR_PATTERN contains this text, so a line or file without it has no anchor (a cheap test before the regex).
+ANCHOR_TAG_START = "[@ANCHOR"
 
 # Real, first-party, tested Python source that happens to live under a
 # `docs/` subtree -- `docs/` itself is excluded from find_anchors_in_code
@@ -585,11 +588,16 @@ def _process_file_for_anchors(
     Parses code files (Python, XML, JS) to categorize anchors based on text prefixes.
     LLM NOTE: This function defines EXACTLY how you must format your comments to satisfy the linter.
     """
+    if ANCHOR_TAG_START not in content:
+        # Most files carry no anchor: skip the module lookup (a walk up the directory tree) and the per-line scan.
+        return
     mod = get_module(full_path)
     rel_path = os.path.relpath(full_path, repo_root)
     lines = content.splitlines()
 
     for line_num, line in enumerate(lines, 1):
+        if ANCHOR_TAG_START not in line:
+            continue
         matches = list(pattern.finditer(line))
         if not matches:
             continue
@@ -1279,16 +1287,31 @@ def find_dummy_test_functions(source, filename="<string>"):
 
     Anchors are comments, so a test whose only content is `# Tests [@ANCHOR: ...]` lines parses as an empty body however the
     anchors are arranged: one long line of them, or several lines. This looks at the function, not at the layout."""
+    if "def test" not in source:
+        return []  # a `test*` function is written `def test...` or `async def test...`; nothing to parse
     try:
         tree = ast.parse(source, filename=filename)
     except SyntaxError:
         return []
     found = []
-    for node in ast.walk(tree):
+    for node in _statement_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
             if all(_is_no_op_statement(stmt) for stmt in node.body):
                 found.append((node.name, node.lineno))
     return found
+
+
+def _statement_nodes(tree):
+    """Every statement of `tree` (and each except-handler and match case), nested ones included, in the breadth-first
+    order of `ast.walk`. A function definition is a statement, so a walk that never enters an expression finds every
+    one `ast.walk` would, without visiting the large majority of nodes, which are expressions."""
+    queue = collections.deque([tree])
+    while queue:
+        node = queue.popleft()
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.stmt, ast.excepthandler, ast.match_case)):
+                queue.append(child)
+                yield child
 
 
 def _report_dummy_test_bodies(tests_links, primary_dirs, repo_root, explicit_non_primary=None):

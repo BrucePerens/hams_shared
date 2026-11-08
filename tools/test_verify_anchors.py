@@ -786,6 +786,48 @@ class DummyTestBodyTests(unittest.TestCase):
         self.assertEqual(self._names("def test_c(self):\n    raise NotImplementedError\n"), [])
         self.assertEqual(self._names("def test_d(self):\n    self.assertTrue(f())\n"), [])
 
+    def test_nested_and_async_dummy_tests_are_found_in_the_order_ast_walk_gave(self):
+        source = (
+            "class A:\n"
+            "    def test_in_class(self):\n        pass\n"
+            "    async def test_async(self):\n        ...\n"
+            "    if True:\n"
+            "        def test_in_if(self):\n            pass\n"
+            "try:\n    pass\n"
+            "except Exception:\n"
+            "    def test_in_handler():\n        pass\n"
+            "match 1:\n    case 1:\n        def test_in_case():\n            pass\n"
+            "def helper():\n    def test_nested_in_function():\n        pass\n"
+            "def test_top():\n    pass\n"
+            "x = lambda: 1\n"
+        )
+        import ast
+        reference = [(n.name, n.lineno) for n in ast.walk(ast.parse(source))
+                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test")]
+        self.assertEqual(len(reference), 7)
+        self.assertEqual(va.find_dummy_test_functions(source), reference)
+        tree = ast.parse(source)
+        self.assertEqual(list(va._statement_nodes(tree)),
+                         [n for n in ast.walk(tree) if isinstance(n, (ast.stmt, ast.excepthandler, ast.match_case))])
+
+    def test_a_file_without_an_anchor_costs_no_module_lookup(self):
+        import unittest.mock
+        tables = [{} for _ in range(8)]
+        with unittest.mock.patch.object(va, "get_module", side_effect=AssertionError("looked up")):
+            va._process_file_for_anchors("/r/m/a.py", "x = 1\n# [@ANCH OR: no]\n", va.ANCHOR_PATTERN,
+                                         tables[0], tables[1], tables[2], tables[3], tables[4], tables[5], tables[6],
+                                         [], tables[7], "/r")
+        self.assertTrue(all(not table for table in tables))
+        with unittest.mock.patch.object(va, "get_module", return_value="m"):
+            va._process_file_for_anchors("/r/m/a.py", "x = 1\n# [@ANCHOR: feat]\n", va.ANCHOR_PATTERN,
+                                         tables[0], tables[1], tables[2], tables[3], tables[4], tables[5], tables[6],
+                                         [], tables[7], "/r")
+        self.assertEqual(list(tables[0]), ["m:feat"])
+
+    def test_a_source_without_a_test_function_is_not_parsed(self):
+        self.assertEqual(va.find_dummy_test_functions("this is not python ((("), [])  # no `def test`: never parsed
+        self.assertEqual(va.find_dummy_test_functions("def test_a(:\n"), [])  # a syntax error is still no finding
+
     def test_one_real_statement_among_no_ops_makes_it_a_real_test(self):
         self.assertEqual(self._names("def test_a(self):\n    pass\n    self.assertEqual(f(), 1)\n"), [])
 
