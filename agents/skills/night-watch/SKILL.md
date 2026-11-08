@@ -7,7 +7,7 @@ description: >-
   hams_com/night_shift_todo/ (critical/high/medium/low, one file per item): unblocks items whose
   night_shift_questions/ question was answered, claims and finishes a bounded number of open items,
   and escalates real judgment calls to the questions queue. Records open work in
-  night_shift_todo/, completed work in night_shift_history.md, and never a "nothing found" entry.
+  night_shift_todo/, completed work in the night_shift_history/ directory (one file per entry), and never a "nothing found" entry.
   Replaces the former dependabot-ci-watch and night-shift-todo skills. Triggers: night watch,
   night shift, dependabot, security alert, CI failure, build failure, to-do queue, claim a task,
   file a task, what's left, blocked on a question.
@@ -188,8 +188,8 @@ new, reusable fact worth knowing on every future run -- a new token/permission-s
 cause, a dependency-ecosystem quirk in one of these three repos, a faster way to check something --
 add it directly to THIS FILE as part of that run's own commit, not only to a durable-tracking file.
 See "Step 3" below for the real distinction between the `night_shift_todo/` priority queue (open,
-actionable to-dos only -- full convention in Part 2) and `night_shift_history.md`
-(the record of what already happened) -- THIS file is neither of those: it's the durable OPERATING
+actionable to-dos only -- full convention in Part 2) and `night_shift_history/`
+(one file per entry in hams_com: the record of what already happened) -- THIS file is neither of those: it's the durable OPERATING
 KNOWLEDGE the next run starts with, a third, separate purpose,
 edited directly, committed and pushed alongside whatever else that run did (matching the "keep this
 and the scheduled task's own prompt in sync" note at the bottom of this file, now "Relationship to the scheduled task"). Don't let this file
@@ -198,7 +198,7 @@ genuinely benefit from already knowing it, the same bar as any other durable-kno
 this codebase.
 
 **Three ways to act, not just one**: fix things yourself and push, record durably (a new file in
-`night_shift_todo/<priority>/` if it's still open, an appended entry in `night_shift_history.md` if
+`night_shift_todo/<priority>/` if it's still open, a new entry file in `night_shift_history/` if
 you finished it -- see "Step 3" below for the real distinction), or message another active Claude
 session directly (`ListAgents` to see what's running, `SendMessage` to reach one) if something is
 time-sensitive -- a real, currently-exploitable-shaped security exposure, or a build failure
@@ -208,7 +208,7 @@ findings -- the durable record is the right channel for those; messaging is an A
 durable record for urgent items, never a replacement for it (a chip or message alone is not durable
 -- see the `hams-durable-tracking-over-chips` convention). This does NOT mean every run's own
 findings get a to-do entry regardless of outcome -- a resolved item's durable record is
-`night_shift_history.md`, and a "nothing found" run gets no durable-file entry at all.
+a `night_shift_history/` entry, and a "nothing found" run gets no durable-file entry at all.
 
 **Check `ListAgents` before starting substantive work, not just when something urgent comes up.**
 This skill runs both as a half-hourly (every-30-minutes) scheduled task and as manual, on-demand sessions Bruce starts
@@ -232,7 +232,7 @@ sitting in the same shared index. When you do find a real overlap: don't just pi
 arbitrarily -- coordinate on who keeps working which piece (per file/module is usually a clean
 split), reuse completed work across sessions rather than redoing it (a `git worktree diff` or
 patch export both sessions can apply is often faster than re-deriving from scratch), and record the
-coordination trail in the to-do's own file under `night_shift_todo/` (or `night_shift_history.md`
+coordination trail in the to-do's own file under `night_shift_todo/` (or a `night_shift_history/` entry
 if it's already done) so it's not just two chat messages that vanish with the sessions.
 
 **When you decline to do something and another session is running, talk to that session before
@@ -622,7 +622,7 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
     applies to this exactly, because your `bash -c` command line contains the pattern, so the
     `pkill` kills the shell running it and whatever else was chained after it never executes. Give
     the watcher its own deadline, or use `TaskStop`.
-  - Record what you cancelled in `night_shift_history.md` (it's a completed action) or file a
+  - Record what you cancelled in a `night_shift_history/` entry (it's a completed action) or file a
     `night_shift_todo/` entry if cancelling it leaves something still needing a real re-run.
 - **A transport tool's version-probe flag is part of what a pin bump can break.** The relay finds
   each tool by running it and matching a banner (`mercury::probe_mercury_installed`,
@@ -1174,7 +1174,7 @@ don't assume" discipline throughout `dependabot-ci-watch` and elsewhere). If a f
 genuinely can't be pushed yet (a real, named blocker -- not just "I'll get to it"), or is pushed but
 CI hasn't confirmed it yet, the item stays `status: claimed`, not `status: done`, and its body says
 exactly what's still missing (e.g. "committed as `<hash>`, not yet pushed: needs `workflow` scope"
-or "pushed as `<hash>`, CI run `<id>` still queued"). Only move it to `night_shift_history.md` and
+or "pushed as `<hash>`, CI run `<id>` still queued"). Only move it to a `night_shift_history/` entry and
 remove the file once all three are real.
 
 **A verification run shows the fix depends on another to-do**: this happens (2026-09-15: the GDPR
@@ -1191,7 +1191,7 @@ tracking to-dos in your commit or history entry so a later reader doesn't re-inv
 
 **Completing one**: fold a real summary (what was found, what was fixed, commit hashes, test
 results -- the same standard `night_shift_todo.md` entries already held) into
-`night_shift_history.md` (append, matching that file's own existing convention), then remove the
+a new `night_shift_history/` entry file (see "Where history entries go" below), then remove the
 to-do's own file from `night_shift_todo/` (`git rm` it). The queue directory should always reflect
 only genuinely open work -- a completed item lingering there as `status: done` defeats the point of
 being able to trust a bare `ls`.
@@ -1207,8 +1207,8 @@ staged is yours on a box other sessions are actively writing to.
 - **`night_shift_todo.md` is now historical.** It holds the full record up to 2026-09-15 and stays
   as reference, but new to-dos go into this directory, not appended to that file. It carries a note
   at its own top saying so.
-- **`night_shift_history.md`** is unchanged -- still the destination for completed-work summaries,
-  from this queue same as before.
+- **`night_shift_history/`** (one file per entry; it was the single file `night_shift_history.md` until 2026-11-08) is
+  still the destination for completed-work summaries, from this queue same as before. See "Where history entries go".
 - **The `todo-list` skill** (`hams_shared/agents/skills/todo-list/SKILL.md`) is a different,
   smaller thing: a curated, checkbox-based list of project-level feature priorities, rewritten in
   place as a single file. It is not this queue and this skill doesn't change it.
@@ -1824,29 +1824,28 @@ the queue is the shared one, assume a same-schedule sibling until told otherwise
 about to take before you take it -- the message costs less than the reconciliation, which is the
 same conclusion this file already reaches for two sessions reading one checker's output.
 
-### Re-check the to-do still exists before appending its history entry
+### Re-check the to-do still exists before writing its history entry
 
-Closing an item is two writes to two shared files: append to `night_shift_history.md`, `git rm` the
+Closing an item is two writes: create the history entry file in `night_shift_history/`, `git rm` the
 to-do. Between deciding to close and actually closing, another session may have closed it already --
-and the two writes fail differently. The `git rm` fails loudly, because the file is gone. The append
-succeeds silently, because appending never conflicts with anything.
+and the two writes fail differently. The `git rm` fails loudly, because the file is gone. Creating the
+entry succeeds silently, because a new file never conflicts with anything.
 
 Hit 2026-09-15. workspace-41 verified a fix, appended a closing entry, and its `git rm` failed:
 workspace-cb had closed the same item minutes earlier, and a `git pull` in the same command had
 brought that removal in. Only the failing `rm` revealed it. Had the two writes run in the other
-order, or the append been committed on its own, `night_shift_history.md` would carry two entries for
+order, or the entry been committed on its own, `night_shift_history/` would carry two entries for
 one fix under different headings with different wording -- which reads as two separate incidents to
 anyone scanning it later, and history is exactly the artifact nobody re-derives.
 
-So: `git pull`, then confirm the to-do file is still on disk, and only then append. Better, put the
-append and the `git rm` in ONE `&&` chain so a vanished to-do aborts before the append -- the same
-gating this file already argues for between an edit and its commit. And if you find your append
-already written when the `rm` fails, discard it rather than committing it; assert the working tree
-is HEAD plus exactly your own block before truncating, since a peer may have appended concurrently
-and a blind `git checkout --` would take their entry with it.
+So: `git pull`, then confirm the to-do file is still on disk, and only then create the entry. Better, put the
+entry and the `git rm` in ONE `&&` chain so a vanished to-do aborts before the entry is written -- the same
+gating this file already argues for between an edit and its commit. And if you find your entry
+already written when the `rm` fails, delete your own new entry file rather than committing it
+(`git status` shows exactly which file it is; leave every other file in `night_shift_history/` alone).
 
-The general shape, which recurs: when closing something means writing to a shared append-only file
-AND removing a shared marker, the removal is the operation that can detect a race and the append is
+The general shape, which recurs: when closing something means writing to a shared append-only log
+AND removing a shared marker, the removal is the operation that can detect a race and the log write is
 the one that cannot. Order and gate accordingly.
 
 ### "Copy X exactly" is a snapshot of X, not a live reference
@@ -1971,7 +1970,7 @@ free of peer edits before editing began. The guard this file already recommends 
 text occurs exactly once -- would have caught it too, but only if it runs on the COMPUTED string:
 `assert old and s.count(old) == 1`. Prefer literal old text over index arithmetic.
 
-**`git add` cannot stage a deletion you have not made yet.** Closing an item is "append history,
+**`git add` cannot stage a deletion you have not made yet.** Closing an item is "write the history entry,
 remove the to-do" -- two changes, not one. Passing the to-do's path to `git add` while the file is
 still on disk stages nothing for it, and the commit goes out with the history entry but without the
 removal -- while its message says the item is closed. Delete the file from the working tree first
@@ -2139,9 +2138,9 @@ waiter by its PID, or use `pkill -f` with a pattern anchored the way the `pgrep`
 ## Recording
 
 
-`night_shift_history.md`'s role is unchanged from before: the durable record of what already
+The night-shift history's role is unchanged from before: the durable record of what already
 happened -- completed fixes, resolved alerts, closed-out investigations. Bruce's own words on the
-underlying distinction, which still holds: "the to-do list is for real to-dos, night_shift_history.md
+underlying distinction, which still holds: "the to-do list is for real to-dos, night_shift_history
 is more appropriate for completed actions... if it's an 'I woke up and found no problems', just
 delete those and tell the skill they are not worth archiving." The rules below apply to everything a run does, the queue work included.
 
@@ -2149,16 +2148,15 @@ Concretely, at the end of every run:
 
 1. **Nothing new, nothing changed, nothing to fix, nothing open** (the routine "checked, all
    clear" case -- this is most hourly runs on a healthy day): **write nothing anywhere.** No new
-   file in `night_shift_todo/`, no entry in `night_shift_history.md`. (If you want a record that
+   file in `night_shift_todo/`, no entry in `night_shift_history/`. (If you want a record that
    the check happened at all, that's what the scheduled task's own run log/notification already
    provides.)
 2. **Something was found AND fully resolved this run** (a real alert or CI failure, investigated,
    fixed, tested, committed, and pushed -- all three, per Part 2's "what done
-   means" -- with nothing left open): append that summary -- what was wrong, what you changed, the
-   real commit hash(es), and how you verified it -- directly to
-   `~/workspace/hams_com/night_shift_history.md` (re-read fresh immediately before
-   editing, append at the end, purely additive). This is a completed action, which is exactly what
-   that file is for.
+   means" -- with nothing left open): write that summary -- what was wrong, what you changed, the
+   real commit hash(es), and how you verified it -- as a NEW FILE in `night_shift_history/` of your
+   hams_com worktree (see "Where history entries go" below), in the same commit as the rest of your change.
+   This is a completed action, which is exactly what that directory is for.
 3. **Something genuinely still needs attention** -- a real alert or failure you couldn't safely fix
    yourself, something that needs Bruce's own input (named specifically: which credential, which
    decision, which tradeoff -- never vaguely), or a fix you started but couldn't finish this run:
@@ -2170,10 +2168,34 @@ Concretely, at the end of every run:
    read-through) for items this run has now confirmed are actually done (a CI run you watched go
    green, an alert that's gone from `gh`'s own listing, a "still Bruce's" item he's since handled).
    Don't leave a stale claimed-but-actually-done item sitting there -- close it yourself: fold a
-   summary into `night_shift_history.md` and `git rm` the to-do file, in the same commit as this
+   summary into a new `night_shift_history/` entry and `git rm` the to-do file, in the same commit as this
    run's other changes. This is the same failure mode the old single-file system had (entries
    sitting open long after being done, because writing and closing were treated as separate jobs) --
    the structured queue doesn't fix that on its own, the discipline still has to be applied.
+
+### Where history entries go (one file per entry, since 2026-11-08)
+
+Bruce, 2026-11-08: "Convert night shift history into a directory." The log used to be one file,
+`night_shift_history.md`, edited at the top by every agent, so every pull request conflicted with every other.
+It is now the directory `hams_com/night_shift_history/`, **one file per entry**, named
+`YYYY-MM-DD-HHMMSS-<slug>-<6 random hex>.md` so two agents never pick the same name and `ls` is chronological. The
+entry text is the same as it always was (what was wrong, what changed, commits or PR, how it was verified). Older
+entries, including the former `night_shift_history_archive/part_NN/` files, are in the same directory.
+
+- **Add an entry** (from your hams_com worktree; the text on standard input, no heading needed):
+  `python3 hams_shared/tools/night_shift_history.py new --title "Short title" <<'TEXT'` ... `TEXT`. It prints the new path;
+  `git add` that one path. The tool writes the `### YYYY-MM-DD -- title` heading, picks the name, and refuses a malformed
+  entry. Do not write the file by hand, and never edit an existing entry or `night_shift_history.md`.
+- **Read the recent history:** `python3 hams_shared/tools/night_shift_history.py latest -n 5` (add `--titles` for one line per
+  entry); search with `grep -r PATTERN night_shift_history/`.
+- **`night_shift_history.md` is a stub** that says where the history lives; the `check_night_shift_history` linter step
+  (`night_shift_history.py check`) fails a branch that changes it, so a branch started before the move that still adds its entry
+  to the old file fails loudly. Move that entry into a new file and restore the stub from `main`.
+- **Not migrated yet in your checkout?** Until the directory exists in `hams_com` (it is created in one pull request),
+  the old rule holds: add the entry at the top of `night_shift_history.md`. The tool reads and checks both layouts;
+  `new` refuses while only the old file exists.
+- Each pull request adds its own new file, so the history never conflicts; the `git rm` of the to-do and the entry go in
+  the same commit as before.
 
 Do NOT use the `spawn_task` chip mechanism for anything found here -- Bruce has explicitly asked
 that this kind of tracking go directly into the appropriate file (per the three cases above)

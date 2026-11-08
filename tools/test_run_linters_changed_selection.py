@@ -58,6 +58,7 @@ STEPS_THAT_CANNOT_READ_PYTHON = {
     "check_access_csv_group_order",
     "check_doc_images",
     "check_binary_manifest_consistency",
+    "check_night_shift_history",
     "eslint",
     # Test suites for code in other directories: their inputs are tools/, scripts/, ingest/ and devbox_tools/.
     "pytest tools/",
@@ -333,6 +334,14 @@ class DaemonChangeSelectionTests(SelectionFixture):
             "steps skipped for a daemons/ Python change that are not on the list of checkers "
             "that cannot read Python",
         )
+
+    def test_a_night_shift_history_entry_selects_the_history_check(self):
+        chosen = self.selected(("hams_com/night_shift_history/2026-11-09-101500-fix-0a1b2c.md", "### 2026-11-09 -- Fix\n\nbody\n"))
+        self.assertIn("check_night_shift_history", chosen)
+
+    def test_a_python_change_does_not_select_the_history_check(self):
+        chosen = self.selected(("hams_open/daemons/bench/tools/helper.py", "VALUE = 3\n"))
+        self.assertNotIn("check_night_shift_history", chosen)
 
     def test_the_repository_pair_scanners_are_one_step_that_a_change_in_either_repository_selects(self):
         """check_int_float_overflow, check_float_isfinite, check_fake_network_listener,
