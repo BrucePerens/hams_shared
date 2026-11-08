@@ -3177,6 +3177,41 @@ def select_modules(args, base_dir, ignore_patterns):
     return target_modules, install_modules
 
 
+# [@ANCHOR: test:add_test_companions]
+def add_test_companions(install_modules, target_modules, base_dir, environ=None):
+    """(install_modules plus the test companions of the tested modules, note). Full entry: tools/README.md.
+
+    A module's tests can need a module its manifest does not depend on (ham_communications_consent's service account, or a
+    field another module adds). `devbox_tools/asset_gate.py` in hams_com knows them and the remote runner already installs
+    them; this gives a plain `test.py -u <module>` the same install list. They are installed and not tested: the test tags
+    still name only the target modules. Without a hams_com checkout (or an asset_gate.py in it) nothing is added."""
+    environ = os.environ if environ is None else environ
+    trees = [base_dir]
+    for name in ("hams_com", "hams_open"):
+        sibling = anchor_scan_sibling_dir(base_dir, name, environ)
+        if sibling and sibling not in trees:
+            trees.append(sibling)
+    gate_path = next((os.path.join(t, "devbox_tools", "asset_gate.py") for t in trees
+                      if os.path.isfile(os.path.join(t, "devbox_tools", "asset_gate.py"))), None)
+    if gate_path is None:
+        return list(install_modules), ""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("asset_gate_for_test_py", gate_path)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    modules = list(install_modules)
+    added = []
+    for module in [m.split(":")[0] for m in target_modules]:
+        for companion in gate.test_companions(module, trees):
+            if companion not in modules:
+                modules.append(companion)
+                added.append(companion)
+    note = (f"installing {', '.join(added)} without testing them: a tested module's tests need them installed "
+            "(devbox_tools/asset_gate.py test companions)") if added else ""
+    return modules, note
+
+
 def rust_daemon_build_needed(args, base_dir, install_modules):
     """Whether this run must build the Rust daemons before Odoo starts.
 
@@ -3721,6 +3756,10 @@ def main():
     ignore_patterns = load_ignore_file(ignore_filepath)
 
     target_modules, install_modules = select_modules(args, base_dir, ignore_patterns)
+    if module_arg_for(args):
+        install_modules, companion_note = add_test_companions(install_modules, target_modules, base_dir)
+        if companion_note:
+            print(f"[*] {companion_note}")
 
     ffi_problem = check_cloudflared_ffi_library(addons_path, install_modules)
     if ffi_problem:

@@ -251,6 +251,31 @@ Special concerns: blocking, about 60 short subprocesses; read-only; no locks. Be
 so every non-isolated run on Ubuntu 24.04 stopped here even after provisioning had installed the pip `awscli`. See also
 `MissingHostAptPackagesTests` in `test_test.py`.
 
+### `[@ANCHOR: test:add_test_companions]` `add_test_companions(install_modules, target_modules, base_dir, environ=None)`
+
+Purpose: gives a plain `test.py -u <module>` run the test companions the remote runner already installs: modules a tested
+module's tests need although its manifest does not depend on them (a service account looked up by xml id, an imported test
+helper's needs, the `TEST_COMPANIONS` table in hams_com's `devbox_tools/asset_gate.py`). Before 2026-11-07 a local
+`test.py -u ham_events` or `-u ham_club_management` errored in 12 to 17 tests ("Service Account
+ham_communications_consent.user_comm_consent_supervision_service not found") because only the remote path added them. Called
+once by `main()` when the run names modules (`-u`, or a `--test-tags` selector naming modules).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `install_modules` | list of str | The modules the run would install (from `select_modules()`). |
+| `target_modules` | list of str | The modules whose tests run; a `module:Class.test` entry is looked up by its module name. |
+| `base_dir` | str | The checkout under test; it and the sibling hams_com and hams_open checkouts are the module trees searched. |
+| `environ` | mapping or `None` | Environment for the sibling lookup (`HAMS_COM_TREE`, `HAMS_OPEN_TREE`); `None` means `os.environ`. |
+
+Returns `(modules, note)`. `modules` is `install_modules` followed by each companion not already in it, in the order found;
+`note` is a one-line "installing X without testing them" message, or `""` when nothing was added. The companions are installed
+only: the test tags are still built from `target_modules`, so their tests do not run. If no checkout in the search has
+`devbox_tools/asset_gate.py` (a hams_open-only run), nothing is added and `note` is `""`.
+
+Special concerns: loads `asset_gate.py` from the tree (it is not on `sys.path` and is not part of hams_shared), so a rename
+of its `test_companions` function breaks this call; no writes; no network. See also `AddTestCompanionsTests` in
+`test_test.py` and hams_com's `asset_gate_test_companions`.
+
 ### `[@ANCHOR: test:anchor_scan_sibling_dir]` `anchor_scan_sibling_dir(base_dir, other_repo_name, environ=None)`
 
 Purpose: finds the other repository's checkout (hams_open for a hams_com run, and the reverse) so the pre-flight anchor scan
