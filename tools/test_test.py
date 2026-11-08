@@ -98,6 +98,15 @@ class RamTestTmpdirTests(unittest.TestCase):
         self.assertEqual(environ["TMPDIR"], os.path.join(self.root, "hams-test-tmp"))
 
     # Tests [@ANCHOR: test:default_test_tmpdir]
+    def test_choosing_the_ram_base_first_sweeps_the_directories_of_dead_jobs(self):
+        finished = subprocess.Popen([sys.executable, "-c", "pass"])
+        finished.wait()
+        dead = self.ram_dirs.claim(os.path.join(self.root, "hams-cargo-target-crashed"), pid=finished.pid)
+        with patch.object(self.ram_dirs, "free_gb", return_value=60):
+            _test_runner.default_test_tmpdir(dict(self.environ), self.disk)
+        self.assertFalse(os.path.exists(dead))
+
+    # Tests [@ANCHOR: test:default_test_tmpdir]
     def test_a_tmpdir_the_caller_chose_and_the_private_namespace_keep_the_disk_directory(self):
         with patch.object(self.ram_dirs, "free_gb", return_value=60):
             chosen = dict(self.environ, TMPDIR="/somewhere/else")

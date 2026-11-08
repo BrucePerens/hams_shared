@@ -1206,11 +1206,13 @@ def default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR):
 
     When the caller chose no TMPDIR and `ram_dirs.test_tmp_base` offers `/dev/shm/hams-test-tmp` (enough free memory, not the
     full pipeline's private namespace, whose /var is already a memory overlay), that directory becomes TMPDIR: Odoo's temporary
-    files and every headless Chrome profile of the run then cost no SSD writes. Otherwise the disk directory, as before.
+    files and every headless Chrome profile of the run then cost no SSD writes, and `ram_dirs.sweep` first removes what dead jobs left in
+    `/dev/shm`. Otherwise the disk directory, as before.
     A refusal because /dev/shm is short of room prints a warning (ram_dirs). Full entry: tools/README.md."""
     if not environ.get("TMPDIR"):
         ram = ram_dirs.test_tmp_base(environ)
         if ram:
+            ram_dirs.sweep(environ=environ)  # crashed jobs' directories and stale Chrome profiles free their memory first
             environ["TMPDIR"] = ram
     return apply_default_test_tmpdir(environ, directory)
 

@@ -727,7 +727,7 @@ Purpose: removal that cannot be turned against us. Removes the tree at `path`; a
 
 ### `[@ANCHOR: ram_dirs:sweep]` `sweep(pol=None, environ=None, say=None, now=time.time, remove=remove_tree)`
 
-Purpose: the clean-up of jobs that could not clean up after themselves (SIGKILL, power cut, an agent that forgot). Called at the start of every `run_job` and `path`, and by `ram_dirs.py sweep`.
+Purpose: the clean-up of jobs that could not clean up after themselves (SIGKILL, power cut, an agent that forgot). Called at the start of every `run_job` and `path`, by `ram_dirs.py sweep`, before a lint build in a RAM directory (`lint_cache.prepare_cargo_target`) and when a test run picks the RAM TMPDIR (`test.py` `default_test_tmpdir`), so any later RAM user frees what a crashed job left.
 
 | Argument | Type | Meaning |
 |---|---|---|

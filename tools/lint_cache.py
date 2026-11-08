@@ -451,6 +451,8 @@ def prepare_cargo_target(target_dir, environ=None, log=None, budget=None):
         os.utime(os.path.join(target_dir, ".last_used"))
     except OSError:
         pass
+    if in_ram(target_dir, environ):
+        ram_dirs.sweep(environ=environ, say=lambda text: say(f"lint cache: {text}"))  # crashed jobs' directories free their memory first
     days = ram_dirs.LINT_UNUSED_DAYS if in_ram(target_dir, environ) else UNUSED_DAYS
     for name in drop_unused_dirs(os.path.dirname(target_dir), keep=target_dir, days=days):
         say(f"lint cache: removed {name} (unused for {days} days)")
