@@ -369,9 +369,27 @@ def main():
     sys.exit(1 if any_failed else 0)
 
 
+# Crates whose own test code is also linted (`--all-targets`), and the features that put all of their code in
+# the build. hams_local_relay was fixed clean 2026-11-07 (to-do 9f24e10d); before that the gate never looked at
+# its `#[cfg(test)]` code or at the code behind `radioctl` / `shared_receiver`. Add a crate here once
+# `cargo clippy --all-targets` is clean for it.
+ALL_TARGETS_CRATES = {
+    os.path.join("daemons", "hams_local_relay"): ["--features", "radioctl,shared_receiver"],
+}
+
+
+def _clippy_command(crate_dir):
+    """The cargo clippy command line for `crate_dir` (all targets and features for ALL_TARGETS_CRATES)."""
+    extra = []
+    for rel, flags in ALL_TARGETS_CRATES.items():
+        if os.path.normpath(crate_dir).endswith(os.sep + rel):
+            extra = ["--all-targets"] + flags
+    return ["cargo", "clippy"] + extra + ["--", "-W", "clippy::all"]
+
+
 def _run_clippy(crate_dir):
     return subprocess.run(
-        ["cargo", "clippy", "--", "-W", "clippy::all"],
+        _clippy_command(crate_dir),
         capture_output=True,
         text=True,
         cwd=crate_dir,

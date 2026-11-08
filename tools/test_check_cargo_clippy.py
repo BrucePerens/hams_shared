@@ -588,5 +588,18 @@ class SiblingIsAnotherRepositoryTests(unittest.TestCase):
         self.assertEqual(chk._resolve_repo_roots(self.open_wt), [self.open_wt, self.com_main])
 
 
+class ClippyCommandTests(unittest.TestCase):
+    def test_the_relay_is_linted_with_all_targets_and_its_features(self):
+        cmd = chk._clippy_command("/w/daemons/hams_local_relay")
+        self.assertIn("--all-targets", cmd)
+        self.assertEqual(cmd[cmd.index("--features") + 1], "radioctl,shared_receiver")
+        self.assertEqual(cmd[-2:], ["-W", "clippy::all"])
+
+    def test_any_other_crate_keeps_the_plain_command(self):
+        self.assertEqual(
+            chk._clippy_command("/w/daemons/other"), ["cargo", "clippy", "--", "-W", "clippy::all"]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
