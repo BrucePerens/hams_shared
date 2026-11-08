@@ -73,7 +73,7 @@ branch). `HAMS_LINT_BATCH=off` disables batching for a session. The line `[*] li
 
 ## Known limits and follow-ups
 
-* One running batch per repository on the dev box, even when its run is shipped to another machine; per-target-machine
+* One running batch per repository on the dev box for lint (and remote test batches), even when its run is shipped to another machine; local TEST batches may run as many at once as there are test slots (`HAMS_BATCH_MAX_RUNNING` / ADR 0116: a new batch starts when fewer batches than slots run, and requests coalesce only while every running slot is busy); per-target-machine
   batches would let a second batch run on a second idle machine. To-do filed.
 * The stamp of a batched branch vouches for "main plus the batch", and a cross-branch interaction is blamed on the branch
   whose file the finding names. `--solo` repeats a run alone.

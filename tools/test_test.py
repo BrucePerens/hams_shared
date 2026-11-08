@@ -1607,6 +1607,117 @@ class CiLoadGateProcessScanTests(unittest.TestCase):
             self.assertEqual([p["pid"] for p in found], [2486284])
 
 
+class CpuSaturationGateTests(unittest.TestCase):
+    """Tests [@ANCHOR: test:read_cpu_counters]
+    Tests [@ANCHOR: test:read_cpu_pressure]
+    Tests [@ANCHOR: test:measure_cpu_busy_percent]
+    Tests [@ANCHOR: test:evaluate_cpu_saturation_gate]
+
+    The gate waits for saturated processors, not for a high load average: on this 32-core box the one-minute load average
+    reads 25 to 50 while the processors are mostly idle. Real files stand in for /proc."""
+
+    def write_proc(self, root, stat=None, pressure=None):
+        if stat is not None:
+            with open(os.path.join(root, "stat"), "w") as handle:
+                handle.write(stat)
+        if pressure is not None:
+            os.makedirs(os.path.join(root, "pressure"), exist_ok=True)
+            with open(os.path.join(root, "pressure", "cpu"), "w") as handle:
+                handle.write(pressure)
+
+    def test_cpu_counters_are_busy_and_total_without_idle_and_iowait(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.write_proc(root, stat="cpu  100 10 50 800 40 0 5 0 0 0\ncpu0 1 1 1 1 1 0 0 0 0 0\n")
+            # user nice system idle iowait irq softirq steal
+            self.assertEqual(_test_runner.read_cpu_counters(root), (165, 1005))
+
+    def test_unreadable_or_malformed_stat_is_none(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertIsNone(_test_runner.read_cpu_counters(root))
+            self.write_proc(root, stat="intr 5 6 7\n")
+            self.assertIsNone(_test_runner.read_cpu_counters(root))
+            self.write_proc(root, stat="cpu  a b c d e\n")
+            self.assertIsNone(_test_runner.read_cpu_counters(root))
+
+    def test_pressure_reads_the_some_avg10(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.write_proc(root, pressure="some avg10=5.48 avg60=8.06 avg300=3.80 total=343934805\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n")
+            self.assertEqual(_test_runner.read_cpu_pressure(root), 5.48)
+
+    def test_no_pressure_information_is_none(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertIsNone(_test_runner.read_cpu_pressure(root))
+            self.write_proc(root, pressure="full avg10=1.00\n")
+            self.assertIsNone(_test_runner.read_cpu_pressure(root))
+            self.write_proc(root, pressure="some avg10=nan avg60=1\n")
+            self.assertIsNone(_test_runner.read_cpu_pressure(root))
+
+    def test_busy_percent_is_measured_over_the_window_between_two_samples(self):
+        samples = iter([(0, 0), (92, 100)])
+        slept = []
+        value = _test_runner.measure_cpu_busy_percent(slept.append, 2.0, lambda: next(samples))
+        self.assertEqual(value, 92.0)
+        self.assertEqual(slept, [2.0])
+
+    def test_busy_percent_is_none_when_a_sample_fails_or_no_time_passed(self):
+        self.assertIsNone(_test_runner.measure_cpu_busy_percent(lambda s: None, 1.0, lambda: None))
+        samples = iter([(1, 10), None])
+        self.assertIsNone(_test_runner.measure_cpu_busy_percent(lambda s: None, 1.0, lambda: next(samples)))
+        samples = iter([(1, 10), (1, 10)])
+        self.assertIsNone(_test_runner.measure_cpu_busy_percent(lambda s: None, 1.0, lambda: next(samples)))
+
+    def decide(self, busy, psi, **kw):
+        return _test_runner.evaluate_cpu_saturation_gate(kw.pop("workers", []), busy, psi, 92.0, 25.0, **kw)
+
+    def test_only_both_signals_at_their_limits_make_the_box_busy(self):
+        self.assertTrue(self.decide(95.0, 40.0)[0])
+        self.assertTrue(self.decide(92.0, 25.0)[0], "the limits themselves count as saturated")
+        self.assertFalse(self.decide(80.0, 40.0)[0], "tasks wait but the processors are 20% idle")
+        self.assertFalse(self.decide(99.0, 5.0)[0], "busy but nothing waits: the box is keeping up")
+        busy, reason = self.decide(95.0, 40.0)
+        self.assertIn("95%", reason)
+        self.assertIn("40%", reason)
+
+    def test_one_missing_signal_lets_the_other_decide_and_none_means_not_busy(self):
+        self.assertTrue(self.decide(None, 40.0)[0])
+        self.assertFalse(self.decide(None, 10.0)[0])
+        self.assertTrue(self.decide(95.0, None)[0])
+        self.assertFalse(self.decide(50.0, None)[0])
+        self.assertEqual(self.decide(None, None), (False, ""))
+
+    def test_a_high_load_average_alone_is_not_busy_but_an_explicit_ratio_still_works(self):
+        # The case from the live box: load average 45 on 32 cores, processors mostly idle.
+        self.assertEqual(self.decide(20.0, 5.0, load_average_1min=45.0, cpu_count=32), (False, ""))
+        self.assertEqual(self.decide(None, None, load_average_1min=45.0, cpu_count=32), (False, ""))
+        busy, reason = self.decide(20.0, 5.0, load_average_1min=45.0, cpu_count=32, load_ratio=1.0)
+        self.assertTrue(busy)
+        self.assertIn("HAMS_CI_LOAD_GATE_RATIO is set", reason)
+        self.assertFalse(self.decide(20.0, 5.0, load_average_1min=45.0, cpu_count=32, load_ratio=3.0)[0])
+
+    def test_a_runner_worker_is_busy_whatever_the_processors_do(self):
+        busy, reason = self.decide(1.0, 0.0, workers=[{"pid": 7, "comm": "Runner.Worker", "uid": 1}])
+        self.assertTrue(busy)
+        self.assertIn("Runner.Worker", reason)
+
+    def test_the_wait_ignores_a_load_average_in_the_thirties_and_waits_for_real_saturation(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.write_proc(root, stat="cpu  100 0 50 800 40 0 5 0 0 0\n", pressure="some avg10=3.00 avg60=1 avg300=1 total=1\n")
+            real_pressure, real_counters = _test_runner.read_cpu_pressure, _test_runner.read_cpu_counters
+            sleeps = []
+            with patch.dict(os.environ, {"HAMS_CI_LOAD_GATE_TIMEOUT": "30"}, clear=False), \
+                 patch.object(_test_runner.os, "getloadavg", return_value=(45.0, 40.0, 30.0)), \
+                 patch.object(_test_runner, "find_runner_worker_processes", lambda **kw: []), \
+                 patch.object(_test_runner, "read_cpu_pressure", lambda *a: real_pressure(root)), \
+                 patch.object(_test_runner, "read_cpu_counters", lambda *a: real_counters(root)), \
+                 contextlib.redirect_stdout(io.StringIO()) as out:
+                os.environ.pop("HAMS_CI_LOAD_GATE_RATIO", None)
+                os.environ.pop("HAMS_SKIP_CI_LOAD_GATE", None)
+                ok = _test_runner.wait_for_ci_load_to_subside(sleep_func=sleeps.append, now_func=lambda: 0.0)
+            self.assertTrue(ok)
+            self.assertEqual(sleeps, [], "low pressure needs no sampling window and no wait")
+            self.assertEqual(out.getvalue(), "")
+
+
 class CiLoadGateWaitTests(unittest.TestCase):
     """`wait_for_ci_load_to_subside()` returns rather than exiting, so the
     wait loop itself is testable. Time is injected, so none of these sleep."""
@@ -1616,6 +1727,8 @@ class CiLoadGateWaitTests(unittest.TestCase):
             "HAMS_SKIP_CI_LOAD_GATE",
             "HAMS_CI_LOAD_GATE_RATIO",
             "HAMS_CI_LOAD_GATE_TIMEOUT",
+            "HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT",
+            "HAMS_CI_LOAD_GATE_PSI_PERCENT",
         ):
             os.environ.pop(var, None)
 
@@ -1635,7 +1748,7 @@ class CiLoadGateWaitTests(unittest.TestCase):
         def fake_now():
             return clock["t"]
 
-        def fake_evaluate(workers, load, cpus, ratio):
+        def fake_evaluate(*_args, **_kwargs):
             try:
                 busy = next(seq)
             except StopIteration:
@@ -1643,7 +1756,9 @@ class CiLoadGateWaitTests(unittest.TestCase):
             return (busy, "a fabricated reason") if busy else (False, "")
 
         buf = io.StringIO()
-        with patch.object(_test_runner, "evaluate_ci_load_gate", fake_evaluate), \
+        with patch.object(_test_runner, "evaluate_cpu_saturation_gate", fake_evaluate), \
+                patch.object(_test_runner, "measure_cpu_busy_percent", lambda *a, **k: None), \
+                patch.object(_test_runner, "read_cpu_pressure", lambda *a, **k: None), \
                 patch.object(_test_runner, "find_runner_worker_processes", lambda **kw: []), \
                 contextlib.redirect_stdout(buf):
             ok = _test_runner.wait_for_ci_load_to_subside(

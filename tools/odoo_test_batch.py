@@ -38,6 +38,7 @@ import time
 
 import batch_queue
 import lint_batch
+import runner_slots
 
 KIND = "test"
 RUNNER_ENV = "HAMS_TEST_BATCH_RUNNER"
@@ -418,6 +419,16 @@ class OdooTestBatch(lint_batch.LintBatch):
         return owners, module_finder(sorted(owners))
 
 
+# [@ANCHOR: odoo_test_batch:batches_that_may_run]
+def batches_that_may_run(args, environ):
+    """How many local test batches may run at once: the machine's test slot count (ADR 0116), because each batch's nested
+    `test.py` takes a slot like any run; 1 when the count cannot be read. `args.slots` (if given) can only raise it."""
+    try:
+        return runner_slots.configured_slot_count(getattr(args, "slots", None), environ)
+    except (runner_slots.SlotConfigError, OSError):
+        return 1
+
+
 # [@ANCHOR: odoo_test_batch:maybe_run_batched]
 def maybe_run_batched(args, environ=None, cwd=None, out=print):
     """Called by test.py's main() before any lock. Returns the exit code of this caller's batched run, or
@@ -459,7 +470,7 @@ def maybe_run_batched(args, environ=None, cwd=None, out=print):
     return lint_batch.run_member(
         cwd, os.path.basename(key), branch, head, "origin/main", scope, runner, timeout=args.wait_timeout, out=out,
         sdir=sdir, estimate=lambda modules: estimate_seconds(modules, durations), kind=KIND,
-        solo_hint="test.py -u %s --solo" % args.module, environ=environ)
+        solo_hint="test.py -u %s --solo" % args.module, environ=environ, max_running=batches_that_may_run(args, environ))
 
 
 # [@ANCHOR: odoo_test_batch:RemoteTestBatch]

@@ -13,6 +13,7 @@ Tests [@ANCHOR: batch_queue:repo_key]
 Tests [@ANCHOR: batch_queue:state_dir]
 Tests [@ANCHOR: batch_queue:locked]
 Tests [@ANCHOR: batch_queue:prune]
+Tests [@ANCHOR: batch_queue:running_batches]
 Tests [@ANCHOR: batch_queue:caps_from_env]
 Tests [@ANCHOR: batch_queue:join]
 Tests [@ANCHOR: batch_queue:leave]
@@ -158,11 +159,11 @@ class StateMachineTests(unittest.TestCase):
             self.assertGreater(os.path.getmtime(path), 1.0)
 
     def test_caps_from_env(self):
-        self.assertEqual(bq.caps_from_env({}), {"max_branches": 8, "max_seconds": 1800.0})
+        self.assertEqual(bq.caps_from_env({}), {"max_branches": 8, "max_seconds": 1800.0, "max_running": 1})
         self.assertEqual(bq.caps_from_env({"HAMS_BATCH_MAX_BRANCHES": "3", "HAMS_BATCH_MAX_SECONDS": "0"}),
-                         {"max_branches": 3, "max_seconds": 0.0})
+                         {"max_branches": 3, "max_seconds": 0.0, "max_running": 1})
         bad = bq.caps_from_env({"HAMS_BATCH_MAX_BRANCHES": "x", "HAMS_BATCH_MAX_SECONDS": "nan"})
-        self.assertEqual(bad, {"max_branches": 8, "max_seconds": 1800.0})
+        self.assertEqual(bad, {"max_branches": 8, "max_seconds": 1800.0, "max_running": 1})
         self.assertEqual(bq.caps_from_env({"HAMS_BATCH_MAX_BRANCHES": "0"})["max_branches"], 1)
 
     def test_join_creates_then_joins_and_dedupes(self):
@@ -255,6 +256,65 @@ class StateMachineTests(unittest.TestCase):
             self.assertFalse(os.path.exists(old))
 
 
+class ConcurrentBatchStateTests(StateMachineTests):
+    """Several batches running at once (up to caps["max_running"]); the state stays readable by a leader that only knows
+    the "running" key. Runs StateMachineTests' own tests too, which pins that max_running of 1 changed nothing."""
+
+    def sealed(self, state, n, max_running):
+        member = fake_member(n)
+        ALIVE.add((member["pid"], member["start"]))
+        self.assertIsNotNone(bq.join(state, member, self.caps))
+        return bq.seal(state, member, max_running=max_running)
+
+    def test_a_second_batch_seals_while_one_runs_up_to_the_limit_and_not_beyond(self):
+        state = bq.empty_state()
+        first = self.sealed(state, 1, 2)
+        second = self.sealed(state, 2, 2)
+        self.assertEqual([b["id"] for b in bq.running_batches(state)], [first["id"], second["id"]])
+        self.assertEqual(state["running"]["id"], first["id"], "the first running batch stays under the older key")
+        self.assertEqual([b["id"] for b in state["running_more"]], [second["id"]])
+        third = fake_member(3)
+        ALIVE.add((third["pid"], third["start"]))
+        bq.join(state, third, self.caps)
+        self.assertIsNone(bq.seal(state, third, max_running=2), "both running slots are busy: it waits in the forming batch")
+        self.assertIsNotNone(state["forming"])
+        self.assertIsNotNone(bq.seal(state, third, max_running=3))
+
+    def test_finish_frees_only_its_own_slot_and_promotes_the_rest(self):
+        state = bq.empty_state()
+        first, second = self.sealed(state, 1, 3), self.sealed(state, 2, 3)
+        bq.finish(state, first["id"])
+        self.assertEqual([b["id"] for b in bq.running_batches(state)], [second["id"]])
+        self.assertEqual(state["running"]["id"], second["id"])
+        self.assertEqual(state["running_more"], [])
+        bq.finish(state, 999)
+        self.assertEqual(len(bq.running_batches(state)), 1)
+
+    def test_prune_frees_just_the_dead_runner(self):
+        state = bq.empty_state()
+        first, second = self.sealed(state, 1, 3), self.sealed(state, 2, 3)
+        ALIVE.discard((1001, 5001))
+        events = bq.prune(state, live)
+        self.assertEqual(events, [("runner_died", first["id"])])
+        self.assertEqual([b["id"] for b in bq.running_batches(state)], [second["id"]])
+
+    def test_a_state_file_written_before_concurrent_batches_loads_and_runs_as_one(self):
+        old = {"version": bq.STATE_VERSION, "next_id": 5, "forming": None,
+               "running": {"id": 4, "members": [fake_member(1)], "solo": False,
+                           "runner": {"pid": 1001, "start": 5001}, "started": 1.0, "log": ""}}
+        ALIVE.add((1001, 5001))
+        self.assertEqual([b["id"] for b in bq.running_batches(old)], [4])
+        member = fake_member(2)
+        ALIVE.add((member["pid"], member["start"]))
+        bq.join(old, member, self.caps)
+        self.assertIsNone(bq.seal(old, member), "with the default limit of one, the old running batch blocks it")
+
+    def test_caps_from_env_reads_the_running_limit(self):
+        self.assertEqual(bq.caps_from_env({"HAMS_BATCH_MAX_RUNNING": "4"})["max_running"], 4)
+        self.assertEqual(bq.caps_from_env({"HAMS_BATCH_MAX_RUNNING": "0"})["max_running"], 1)
+        self.assertEqual(bq.caps_from_env({"HAMS_BATCH_MAX_RUNNING": "many"})["max_running"], 1)
+
+
 class CoalesceTests(unittest.TestCase):
     """Real threads with fake identities: the leader's runner blocks until released."""
 
@@ -318,6 +378,34 @@ class CoalesceTests(unittest.TestCase):
         self.assertTrue(any("joined batch 2 with 2 other branches (batch 1 running" in line for line in self.lines))
         self.assertTrue(any("nothing is running here; starting at once" in line for line in self.lines))
         self.assertFalse(any("is full" in line for line in self.lines))  # joining is not being refused
+
+    def test_with_two_running_slots_a_new_request_starts_its_own_batch_at_once_and_the_rest_coalesce(self):
+        self.caps = {"max_branches": 8, "max_seconds": 0, "max_running": 2}
+        release = threading.Event()
+        calls = []
+
+        def runner(batch_id, members, log):
+            calls.append((batch_id, sorted(m["branch"] for m in members)))
+            if batch_id in (1, 2):
+                release.wait(10)
+            return {"verdicts": {m["tip"]: {"status": "passed", "exit_code": 0} for m in members}, "log": log}
+
+        first, box1 = self.start(1, runner)
+        self.wait_for(lambda: len(calls) >= 1, "batch 1 to start")
+        second, box2 = self.start(2, runner)
+        self.wait_for(lambda: len(calls) >= 2, "batch 2 to start while batch 1 still runs")
+        self.assertEqual(calls, [(1, ["br1"]), (2, ["br2"])])
+        self.assertTrue(any("1 of 2 running slots are in use" in line for line in self.lines))
+        later = [self.start(n, runner) for n in (3, 4)]
+        self.wait_for(lambda: len([line for line in self.lines if "joined batch 3" in line]) == 2,
+                      "requests 3 and 4 to join batch 3 behind the two running batches")
+        self.assertEqual(calls, [(1, ["br1"]), (2, ["br2"])], "both running slots are busy: nothing else started")
+        release.set()
+        for thread in (first, second, *[t for t, _ in later]):
+            thread.join(10)
+        self.assertEqual(calls[2:], [(3, ["br3", "br4"])], "the waiting requests ran as ONE batch")
+        for box in (box1, box2, *[b for _, b in later]):
+            self.assertEqual(box["out"]["status"], "passed")
 
     def test_cap_makes_extra_branches_wait_for_the_next_batch(self):
         self.caps = {"max_branches": 2, "max_seconds": 0}

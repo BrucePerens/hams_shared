@@ -719,6 +719,55 @@ explains the kill.
 Special concerns: pure, no I/O, no locks. The status changed from 256 - N (247) to 128 + N, so anything that matched 247 must match 137.
 See also the test class `SignalExitVerdictTests` in `test_test.py`, `OOMWatchdog` and `cpu_limit_verdict()`.
 
+## The CI load gate (`wait_for_ci_load_to_subside`)
+
+Before a run takes a slot, `test.py` waits while the box is too busy to test on (tours and `url_open` tests fail on their own ten-second timeouts
+when the processors have no spare time). The signal is **CPU saturation**, not the load average. The one-minute load average counts every
+runnable and every uninterruptible task, so a box running hundreds of short-lived Chrome, PostgreSQL and test processes reads 25 to 50 on 32 cores while
+the processors are mostly idle (Bruce, 2026-11-08: a load average in the thirties is normal here); the old rule (cores x ratio, default 32) held runs
+back for nothing. The gate holds the run only while
+
+* a GitHub Actions `Runner.Worker` process is running (unchanged), or
+* the processors are busy at or above `HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT` (default 92) over a 1 s window of `/proc/stat` AND the kernel's pressure-stall
+  figure `some avg10` in `/proc/pressure/cpu` is at or above `HAMS_CI_LOAD_GATE_PSI_PERCENT` (default 25). With one of the two unavailable the other decides
+  alone; with neither the box is not busy. Pressure is read first: below its limit no sampling window is needed and the gate costs one file read.
+
+`HAMS_CI_LOAD_GATE_RATIO` keeps working: when it is set, the old load-average rule (load average above cores x ratio) applies as well. `HAMS_CI_LOAD_GATE_TIMEOUT`
+(default 900 s) and `HAMS_SKIP_CI_LOAD_GATE=1` are unchanged. The gate runs per run, when the run reaches the head of the wait queue, not under a lock: with
+several free slots the oldest waiters (as many as there are free slots) are all heads and gate at the same time, so one run's gate never holds the other slots
+behind it. The lint run lock (`lint_lock.py`) has its own load gate and is not changed.
+
+### `[@ANCHOR: test:read_cpu_counters]` `read_cpu_counters(proc_root="/proc")`
+
+Purpose: one sample of the processors' time. Returns `(busy, total)` jiffies summed over all processors from the first line of `<proc_root>/stat`: `busy` is everything but
+idle and iowait (a processor waiting for the disk has spare time), `total` the sum of the first eight counters (guest times are already inside user and nice). `None` when the
+file is unreadable or malformed. Reads one small file.
+
+### `[@ANCHOR: test:read_cpu_pressure]` `read_cpu_pressure(proc_root="/proc")`
+
+Purpose: the `some avg10` value of `<proc_root>/pressure/cpu`: the percentage of the last ten seconds in which at least one runnable task waited for a processor. Returns a float,
+or `None` when the kernel has no pressure-stall information, the file is unreadable, or the value is not finite.
+
+### `[@ANCHOR: test:measure_cpu_busy_percent]` `measure_cpu_busy_percent(sleep_func=time.sleep, window=1.0, read=read_cpu_counters)`
+
+Purpose: the processors' busy percentage (0 to 100) over `window` seconds: a sample, `sleep_func(window)`, a second sample. Returns `None` when either sample fails or the counters did
+not advance. Blocks for `window`.
+
+### `[@ANCHOR: test:evaluate_cpu_saturation_gate]` `evaluate_cpu_saturation_gate(runner_workers, cpu_busy_percent, psi_some_avg10, busy_limit, psi_limit, load_average_1min=None, cpu_count=1, load_ratio=None)`
+
+Purpose: the gate's decision, pure so that every boundary is testable without a loaded machine.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `runner_workers` | list | `find_runner_worker_processes()`; any entry makes the box busy. |
+| `cpu_busy_percent` | float or `None` | `measure_cpu_busy_percent()`. |
+| `psi_some_avg10` | float or `None` | `read_cpu_pressure()`. |
+| `busy_limit`, `psi_limit` | float | The percentages at or above which each signal counts as saturated. |
+| `load_average_1min`, `cpu_count`, `load_ratio` | float, int, float or `None` | The legacy rule (`evaluate_ci_load_gate`), applied only when `load_ratio` is not `None`, which `wait_for_ci_load_to_subside` passes when `HAMS_CI_LOAD_GATE_RATIO` is set. |
+
+Returns `(busy, reason)`; `reason` is the sentence printed to the operator and is empty when not busy. Busy only when both signals are at or above their limits (busy time with no waiting
+task is a box that is keeping up; waiting tasks with idle processors are the many-short-processes case the load average mistakes for load).
+
 ## Concurrent test slots (ADR 0116)
 
 `test.py` allows one run per machine unless the machine opts in. An opted-in machine runs up to N `test.py` instances at once; each holds
