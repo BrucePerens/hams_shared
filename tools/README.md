@@ -140,6 +140,56 @@ sudoers files and oneshot services are skipped. Raises nothing for odd input (mi
 locks, safe to call repeatedly. Example: `long_running_key_holders(MANIFEST)["backup.worker.service"] == {"environment_file"}`. See also the
 tests `RotatedKeyReloadPolicyTests` in `test_infrastructure.py` and `ROTATED_KEY_RELOAD_POLICY` above.
 
+## PowerDNS test helpers: waiting without guessing the load
+
+`PdnsPublicConfigTests` in `test_infrastructure.py` starts a real `pdns_server` and queries it over loopback. Two tests failed once
+under load (2026-11-07) and, reproduced with 96 CPU hogs on 16 cores, five did: the old helpers guessed how slow the machine was
+(a 15 s start deadline, a 3 s reply wait scaled by the 1-minute load average, which lags a sudden load, and a fixed 1 s wait that
+treated "no reply yet" as "dropped"). They now wait for events and bound only a real hang.
+
+### `[@ANCHOR: test_infrastructure:pdns_hang_seconds]` `_PDNS_HANG_SECONDS` and `_PDNS_READY_LINE`
+
+Purpose: the two constants of the helpers below, class attributes of `PdnsPublicConfigTests`.
+
+| Name | Type | Meaning |
+|---|---|---|
+| `_PDNS_HANG_SECONDS` | int, 90 | the longest any one wait for a reply, a connection or the start of `pdns_server` may last. Not a speed estimate: a correct server answers as soon as it is scheduled, so only a hung one reaches it. A test may patch it smaller to prove the wait is bounded |
+| `_PDNS_READY_LINE` | str | the line `pdns_server` logs when its threads are launched (`ready to distribute questions`); `_start_shipped_pdns` waits for it in `pdns.log` before the first query |
+
+Invariants: both are read only, by `_start_shipped_pdns`, `_udp`, `_tcp` and `_udp_dropped`. Tests: `test_a_server_that_never_answers_still_fails_the_helper`.
+
+### `[@ANCHOR: test_infrastructure:pdns_udp]` `PdnsPublicConfigTests._udp(port, packet)`
+
+Purpose: send one DNS query over UDP to the server under test on 127.0.0.1 and return its reply, for every test that expects an answer.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `port` | int | the UDP port of the server |
+| `packet` | bytes | the whole query, from `_packet` or `_query_with` |
+
+Returns a dict from `_reply_fields`: `tc`, `ra` (bool), `rcode`, `answers`, `size`. Raises `socket.timeout` (an `OSError`) when no reply arrives within
+`_PDNS_HANG_SECONDS`. Blocking, one socket per call, no retry (loopback UDP does not lose a datagram), no side effects. Example:
+`self._udp(port, self._packet("alias.u.example.org", self.TYPE_TXT))["rcode"] == 0`. See also `_tcp`, `_udp_dropped`; tests
+`test_a_reply_that_takes_longer_than_the_old_fixed_wait_is_still_received`, and every real-server test of the class.
+
+### `[@ANCHOR: test_infrastructure:pdns_udp_dropped]` `PdnsPublicConfigTests._udp_dropped(port, packet)`
+
+Purpose: show that the server gives NO reply to a packet (opcodes it ignores, a reply sent as a query, malformed packets). The absence of a
+reply cannot be waited for, so it is shown by ordering. Replaces `_udp_or_none`, whose 1 s wait called a slow reply "dropped" and
+whose `None` crashed the tests that expected a reply.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `port` | int | the UDP port of the server |
+| `packet` | bytes | the probe; its id must not be 0x4321 (the control id) |
+
+Returns `True` when nothing but the control replies came back, `False` when any datagram with another id arrived. Method: the probe, then three
+control queries (id 0x4321) on the same socket, each waited for up to `_PDNS_HANG_SECONDS` (each reply needs the server's threads to have run),
+then 0.3 s of straggler wait. Raises `socket.timeout` when a control query is not answered (the server is hung or dead, so a "drop" proves nothing).
+Blocking. Residual risk: a worker thread descheduled for longer than the control round trips plus 0.3 s could make a late reply look like a drop; the
+three round trips make that vanishingly rare, and it can only hide a reply, never invent one. See also `_udp`; tests
+`test_dropped_is_true_for_a_packet_the_server_ignores_even_when_replies_are_slow`, `test_dropped_is_false_when_the_server_does_answer_the_packet`.
+
 ## test.py pre-flight: host packages and the sibling repository
 
 These run in `test.py`'s pre-flight, before any lock, namespace or database work. They were changed so a fresh Ubuntu 24.04
