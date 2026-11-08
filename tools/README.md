@@ -84,6 +84,57 @@ same directory, owner and mode copied, then `os.replace`). Honours `--plan` (rec
 still required and no other role is affected; the rule does not weaken the `odoo`/`postgres` peer rules. See also the tests
 `CacheManagerSocketRuleForTestHostsTests` in `test_infrastructure.py` and `_provision_cache_manager_role`.
 
+## The plaintext pgBackRest repository on a fresh host (ADR 0117)
+
+Bruce's decision of 2026-11-08: every new backup on Backblaze B2 is stored in the clear. pgBackRest cannot change a repository's cipher
+in place, so the unencrypted repository is a new one, `repo3`, path `/hams_prod_plain`, with no cipher line. The number is the same on every
+host, so `backup.config.pgbackrest_repo` is 3 everywhere. On hams1 the encrypted `repo2` (`/hams_prod_enc`) stays configured to restore
+the old history. How hams1 itself is switched, step by step: `hams_com/docs/runbooks/PLAINTEXT_BACKUP_REPO_SWITCH.md`. The two entries
+below are what `provision.py` does for a host that has no `pgbackrest.conf` yet. The kopia file backup is a different tool and is not
+changed (`hams_com/docs/runbooks/b2_backup.md`, "Why the files stay encrypted").
+
+### `[@ANCHOR: infrastructure:render_pgbackrest_plain_repo_conf]` `render_pgbackrest_plain_repo_conf(bucket, endpoint, region, key, secret, pg_data_dir)`
+
+Purpose: builds the text of `/etc/pgbackrest/pgbackrest.conf` for a host whose only repository is the plaintext `repo3` on B2. Called by
+`_configure_pgbackrest_plain_repo`; pure, so a test can check the text without a host.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `bucket` | str | B2 bucket name (`hams-com-prod-backups` on hams1). Written to `repo3-s3-bucket`. |
+| `endpoint` | str | S3 endpoint host without a scheme (`s3.us-east-005.backblazeb2.com`). Written to `repo3-s3-endpoint`. |
+| `region` | str | S3 region; B2 accepts the placeholder `us-east-1`. Written to `repo3-s3-region`. |
+| `key` | str | B2 application key ID. Written to `repo3-s3-key`. |
+| `secret` | str | B2 application key. Written to `repo3-s3-key-secret`. |
+| `pg_data_dir` | str | The cluster's data directory, written as `pg1-path` of stanza `hams_prod`. |
+
+Returns the file text (str). It sets `repo3-path=/hams_prod_plain` and `repo3-retention-full=30`, and contains no `cipher` line, no `repo1`
+and no `repo2` line. Raises nothing. Special concerns: the secret is in the returned text, so a caller must not log it; the file that
+receives it is mode 0640 root:postgres. The key goes in the file because `archive-push` runs inside the postgres process, whose
+environment cannot change without a restart. See also `PgbackrestPlainRepoTests` in `test_infrastructure.py`.
+
+### `[@ANCHOR: infrastructure:_configure_pgbackrest_plain_repo]` `_configure_pgbackrest_plain_repo(conf_path=None, env_path=None, b2_config_path=None, pg_data_dirs=None)`
+
+Purpose: gives a freshly provisioned host a `pgbackrest.conf` with the plaintext `repo3`. `provision_environment()` calls it right after
+`_retire_pgbackrest_repo1()`, inside the PostgreSQL hook, on every provisioning run.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `conf_path` | str or `None` | The file to create. `None` means `/etc/pgbackrest/pgbackrest.conf`. |
+| `env_path` | str or `None` | systemd EnvironmentFile with the B2 key: `PGBACKREST_REPO3_S3_KEY` and `_S3_KEY_SECRET`, else the `PGBACKREST_REPO1_...` names hams1 uses. `None` means `/opt/hams/etc/pgbackrest.env`. |
+| `b2_config_path` | str or `None` | JSON with `backend.bucket`, `backend.endpoint` and optionally `backend.region`. `None` means `/opt/hams/etc/b2_backup/config.json` (written by the MANIFEST on the `b2_backup` host class). |
+| `pg_data_dirs` | list of str or `None` | Data directories of the PostgreSQL clusters. `None` means `/var/lib/postgresql/<version>/main` for each `/etc/postgresql/*/main/postgresql.conf`. Tests pass a list. |
+
+Returns `True` when it wrote the file (or, under `--plan`, would have), else `False`. It returns `False`, writing nothing, when the file
+already exists, when either input file is missing, when the key, secret, bucket or endpoint is empty, or when the number of clusters is not
+exactly one. An existing file is never edited: hams1's holds the repo2 passphrase, and adding repo3 there is a manual, ordered procedure
+(the stanza must exist in the new repository before `archive-push` is pointed at it). It does not run `stanza-create` and does not set
+`archive_command`. Raises `OSError` if the file cannot be created, `KeyError` if it runs as root and group `postgres` does not exist,
+`ValueError` if `config.json` is not valid JSON.
+
+Special concerns: blocking file I/O, no locks, no network. Idempotent: the second run sees the file and returns `False`. The file is created
+with `O_EXCL` and mode 0640 and chowned to `root:postgres` when run as root, so it is never briefly readable by others. Honours `--plan`.
+See also the tests `PgbackrestPlainRepoTests` and `_retire_pgbackrest_repo1`, which removes only `repo1-*` lines and leaves repo3 alone.
+
 ## Rotated Odoo API keys and the processes that hold them
 
 `daemon_key_manager` rotates every daemon's Odoo API key: the monthly cron, and every start of `hams.daemon.keys.service` (it runs
