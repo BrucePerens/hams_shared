@@ -600,6 +600,255 @@ explains the kill.
 Special concerns: pure, no I/O, no locks. The status changed from 256 - N (247) to 128 + N, so anything that matched 247 must match 137.
 See also the test class `SignalExitVerdictTests` in `test_test.py`, `OOMWatchdog` and `cpu_limit_verdict()`.
 
+## Concurrent test slots (ADR 0116)
+
+`test.py` allows one run per machine unless the machine opts in. An opted-in machine runs up to N `test.py` instances at once; each holds
+one numbered **slot**, taken with a flock of its own, and everything two runs would otherwise share is derived from the slot number. Without
+the opt-in the count is 1, slot 1 is derived, and every value equals what `test.py` used before slots existed.
+
+Opt in with `--slots N`, `HAMS_TEST_SLOTS=N`, or the first line of `/opt/hams/etc/test_slots` (the command line outranks the environment,
+which outranks the file). `test.py --queue-status` shows each slot. The values below are for a run in slot K of N.
+
+| Resource | Slot 1 (and every machine with one slot) | Slot K > 1 |
+|---|---|---|
+| Lock file | `/tmp/hams_odoo_test_runner.lock` (`HAMS_TEST_LOCK_PATH`) | the same path plus `.slot-K` |
+| Queue directory (`--wait`) | `<lock>.queue.d` | the same one: a single FIFO for every slot |
+| PostgreSQL database (`--db`, default `hams_test`) | `--db` | `<db>_sK`, for example `hams_test_relay_s2`; Odoo's filestore directory is named after the database, so it differs too |
+| Odoo HTTP port | 8075 | on the host: 8075 + K - 1; in the private namespace: 8075 |
+| Redis database | tests use 1 (the flush is `$REDIS_DB`, default 0) | on the host: K, flushed and used; in the private namespace: unchanged |
+| RabbitMQ | the host's, or the private one the full pipeline starts | the private one; a run on the host is refused when a RabbitMQ listens on 5672 and a module under test mentions it (`pika`, `amqp`, `rabbitmq` in its Python); other modules run |
+| `TMPDIR` (Chrome profiles) and the Chrome kill and clean-up patterns | `/var/lib/odoo/tmp`; every `*_chrome_odoo` | on the host with several slots: `<TMPDIR>/slot-K` (slot 1: `<TMPDIR>`), patterns limited to the run's own directory |
+| Log directory files | `filtered_test.txt`, `test_progress.txt`, `coverage_report`, `odoo_test.pro`, `offline_ns`, `log` | `filtered_test.slot-K.txt`, `test_progress.slot-K.txt`, `coverage_report.slot-K`, `odoo_test.slot-K.pro`, `offline_ns.slot-K`, `log.slot-K` |
+| Chrome debugging port | 9222 only with `--pause-on-fail` | `--pause-on-fail` and `--mcp` are refused above slot 1 |
+
+"On the host" means a `HAMS_ISOLATED_NS=1` run, which skips the namespace; "private namespace" is the final process of the full pipeline
+(`HAMS_ISOLATED_NS=1` and `HAMS_TEST_LOCK_HELD=1`), whose ports, Redis, RabbitMQ, process table and `/tmp` belong to that run alone. Not
+shared by design: PostgreSQL itself (one server, distinct databases), and the `odoo`/`root`-named roles every run creates if missing.
+
+The root phase of the full pipeline is started with `--slots N --slot-held K` appended to its command line (`slot_handoff_args`). A command
+line survives sudo, systemd-run and unshare; an environment variable might not, and a child that lost its slot would have taken slot 1.
+
+### `[@ANCHOR: runner_slots:parse_slot_count]` `parse_slot_count(text, source)`
+
+Purpose: validates one slot count, so that a typo is an error and never quietly one slot.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `text` | str or int | The value. Surrounding white space is ignored; only the ASCII digits `0`-`9` are accepted. |
+| `source` | str | Where it came from (`--slots`, `HAMS_TEST_SLOTS`, a file path); named in the error. |
+
+Returns the count as int, 1 to `MAX_SLOTS` (15: Redis has 16 databases and database 0 belongs to the host). Raises `SlotConfigError` (a
+`ValueError`) for an empty string, a sign, a decimal point, an exponent, a non-ASCII digit, 0, or a count above 15. Pure; no locks or I/O.
+
+### `[@ANCHOR: runner_slots:configured_slot_count]` `configured_slot_count(cli_value=None, environ=None, slots_file="/opt/hams/etc/test_slots")`
+
+Purpose: how many runs this machine allows at once; the only place the opt-in is read.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `cli_value` | str, int or None | The `--slots` value; wins over everything when not None. |
+| `environ` | mapping or None | Where `HAMS_TEST_SLOTS` is read; default `os.environ`. An empty value counts as unset. |
+| `slots_file` | str | A file whose first line is the count. |
+
+Returns the count (1 to 15). A missing `slots_file` means 1: the machine has not opted in. Raises `SlotConfigError` for an invalid value from
+any source and `OSError` for a file that exists and cannot be read; `test.py` prints the cause and exits 2, it never falls back to 1. One file
+read, no locks, no side effects. Only a fresh `test.py` invocation calls it; the phases it re-execs take the count from `--slots`.
+
+### `[@ANCHOR: runner_slots:slot_lock_path]` `slot_lock_path(base_path, slot)`
+
+Purpose: the lock file of a slot. Returns `base_path` for slot 1 and `base_path + ".slot-" + slot` otherwise (`base_path` is
+`HAMS_TEST_LOCK_PATH` or `/tmp/hams_odoo_test_runner.lock`). Slot 1 is the original file on purpose: a `test.py` without slots, or a machine
+that has not opted in, takes exactly that file, so it and a slotted run exclude each other on slot 1 instead of sharing its database and
+ports. The queue directory is always derived from the base path, never from a slot's path. Pure.
+
+### `[@ANCHOR: runner_slots:slot_database_name]` `slot_database_name(database, slot)`
+
+Purpose: the PostgreSQL database a run uses. Returns `database` unchanged for slot 1 and `database + "_s" + slot` otherwise. Odoo's filestore
+is the directory `filestore/<database>`, so distinct names also give each slot its own filestore, which `remove_stale_filestore()` then
+clears without touching a sibling's. Raises `SlotConfigError` when the name exceeds 63 bytes (PostgreSQL would truncate it silently and two
+slots could end up on one database). The caller has already validated `database` against `_SAFE_DB_NAME_RE`; the suffix keeps the name safe.
+
+### `[@ANCHOR: runner_slots:slot_file_name]` `slot_file_name(name, slot)`
+
+Purpose: names a file or directory in the log directory per slot. Slot 1 returns `name`; otherwise the tag `.slot-K` is inserted before the
+extension (`filtered_test.txt` becomes `filtered_test.slot-2.txt`, `coverage_report` becomes `coverage_report.slot-2`). Concurrent runs
+overwrote each other's report, progress file and coverage data in the shared directory before this. Pure.
+
+### `[@ANCHOR: runner_slots:in_private_network]` `in_private_network(environ)`
+
+Purpose: tells the final process of the full pipeline from a direct `HAMS_ISOLATED_NS=1` run. Returns True only when `HAMS_ISOLATED_NS` and
+`HAMS_TEST_LOCK_HELD` are both `"1"`: the root phase sets them just after it unshared the network namespace, and a direct run sets only the
+first. Pure.
+
+### `[@ANCHOR: runner_slots:SlotResources]` `SlotResources`
+
+A frozen dataclass: what a run in `slot` of `slots` uses that another slot must not. Built by `slot_resources`, read by `test.py`'s `main()`;
+it lives for one run in one process and is never serialized or versioned.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `slot`, `slots` | int | This run's slot (1 to `slots`) and the machine's slot count. |
+| `private_network` | bool | True inside `test.py`'s own network namespace (`in_private_network`). |
+| `scoped` | bool | `slots > 1 and not private_network`: the run shares the host with other slots, so the next five fields differ per slot. |
+| `http_port` | int | Odoo's `--http-port` and the port of `ODOO_URL`: 8075 + slot - 1 when scoped, else 8075. |
+| `redis_db` | int | The database number put in `REDIS_DB` for the tests: `slot` when scoped, else 1. When scoped it is also the database `rebuild_db()` flushes. |
+| `tmpdir` | str or None | `TMPDIR` for the run. Scoped: the base `TMPDIR`, with `/slot-K` added above slot 1. Else the base `TMPDIR` unchanged. |
+| `chrome_kill_pattern` | str | The `pkill -f` pattern for the run's Chrome. Scoped: `<tmpdir>/[^/ ]*_chrome_odoo` with regular-expression characters escaped. Else `_chrome_odoo`. |
+| `chrome_profile_globs` | tuple of str | Chrome profile directories removed at the end. Scoped: `<tmpdir>/*_chrome_odoo`. Else `/tmp/*_chrome_odoo` and `/var/tmp/*_chrome_odoo`. |
+
+Invariants: when `scoped` is False every field except `slot`, `slots` and `private_network` equals the value `test.py` used before slots.
+Two scoped runs with different slots never share `http_port`, `redis_db`, `tmpdir`, nor a Chrome the other's pattern matches (the profile
+directory of slot 2 lies below slot 1's `tmpdir`, and the `[^/ ]*` keeps slot 1's pattern from reaching it).
+
+### `[@ANCHOR: runner_slots:slot_resources]` `slot_resources(slot, slots, private_network, base_tmpdir)`
+
+Purpose: builds the `SlotResources` of a run.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `slot` | int | The slot held, 1 to `slots`. |
+| `slots` | int | The machine's slot count. |
+| `private_network` | bool | `in_private_network(os.environ)`, or True when the caller knows the full pipeline will run. |
+| `base_tmpdir` | str or None | The `TMPDIR` in force. Only used when scoped, where it must be an absolute path of `A-Za-z0-9_./-` (the pattern and the clean-up glob embed it). |
+
+Returns a `SlotResources`. Raises `SlotConfigError` for a slot outside `1..slots` and, when scoped, for a missing or oddly spelled `base_tmpdir`.
+Pure; `test.py` creates the directory (`apply_slot_resources`).
+
+### `[@ANCHOR: runner_slots:modules_mentioning_broker]` `modules_mentioning_broker(module_dirs)`
+
+Purpose: which modules under test can use the host's RabbitMQ. `module_dirs` maps a module name to its directory. Returns the sorted names whose
+`*.py` files (outside `.git`, `__pycache__`, `node_modules`, `target`, `static`) match `pika|amqp|rabbitmq`, any case. Deliberately broad (a comment
+counts) and limited to the modules named, not their dependencies. A missing directory is not a user. Reads the files; no side effects.
+
+### `[@ANCHOR: runner_slots:broker_listening]` `broker_listening(port=5672, host="127.0.0.1", timeout=0.5)`
+
+Purpose: whether a RabbitMQ answers on the host, which decides whether `broker_users_sharing_the_host` looks at the modules at all. Returns True if a TCP connection is accepted
+within `timeout` seconds, False on any `OSError` (refused, unreachable, timed out). Opens and closes one connection; sends nothing.
+
+### `[@ANCHOR: runner_slots:slot_refusals]` `slot_refusals(resources, pause_on_fail, mcp, broker_users)`
+
+Purpose: why a run cannot use its slot. Slot 1 is never refused (returns `[]`). Above slot 1 it returns one sentence per reason:
+`--pause-on-fail` or `HAMS_PAUSE_ON_FAIL` (the harness pins Chrome's debugging port to 9222, `zero_sudo/tests/common.py`); `--mcp` (the MCP
+clients are configured for port 8075); a run on the host (not `private_network`) with a non-empty `broker_users`, the modules under test that use a RabbitMQ that is listening (their
+queues would be shared with the other slots, and a vhost cannot be created as the `odoo` user; the full pipeline starts a private RabbitMQ
+instead). `broker_users` is `[]` when nothing is listening or no module under test mentions the broker. Pure.
+
+### `[@ANCHOR: lock_queue:write_holder]` `write_holder(qdir, info, pid=None, now=time.time, slot=None, ticket=None)`
+
+Purpose: records that a process holds the lock, so queue lines and `--queue-status` can name it.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `qdir` | str | The queue directory (created, mode 1777, if missing). |
+| `info` | str | What the holder runs (`test.py` and its arguments, at most 200 characters). |
+| `pid` | int or None | The holder; default this process. Its start time is read from `/proc` and is part of the record's name. |
+| `now` | callable | Clock for `since`; default `time.time`. |
+| `slot` | int or None | The slot held. Written only when given, i.e. only on a machine with more than one slot. |
+| `ticket` | str or None | The queue ticket the run waited with. Written only when given. |
+
+Returns the record name `holder-<pid>-<start>`, or None if the process has no readable start time or the directory is unwritable (it must
+never stop a test run). Rewrites an existing record of the same process. The record is JSON written to a temporary file and linked into
+place, so a reader never sees half of it. Removed by `release_ticket` at exit; a dead holder's record is ignored and deleted by the readers.
+
+### `[@ANCHOR: lock_queue:read_holder]` `read_holder(qdir)`
+
+Purpose: the newest live holder record, for the one-slot status line. Returns a dict (`pid`, `start`, `since`, `info`, and `slot`, `ticket`
+when written) or None. A record whose pid is gone or whose start time differs (a reused pid) is deleted. Read-only otherwise.
+
+### `[@ANCHOR: lock_queue:read_holders]` `read_holders(qdir)`
+
+Purpose: the holder of each slot. Returns a list of dicts, one per slot, ordered by slot number: the newest live record of that slot (a record
+without `slot` counts as slot 1), each with `slot` set. A re-exec'd run leaves its parent's record and writes its own for the same slot; the
+older is dropped here. Dead records are deleted. A run that failed to write its record is invisible, as before.
+
+### `[@ANCHOR: lock_queue:may_try]` `may_try(qdir, tickets, ticket, slots=1)`
+
+Purpose: whether the waiter holding `ticket` is at the head of the queue and may try the lock now.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `qdir` | str | The queue directory. |
+| `tickets` | list of dict | `live_tickets()`: lowest first; contains `ticket`. |
+| `ticket` | str | The waiter's ticket name. |
+| `slots` | int | The machine's slot count. |
+
+Returns a bool. `slots` of 1: True for the lowest live ticket, including a running holder's ticket, exactly as before slots (so nobody else
+tries while the holder runs). `slots` above 1: tickets named by a live holder record are running runs, not waiters; True when `ticket` is the
+oldest waiter and fewer than `slots` slots are busy, not counting the record that names `ticket` itself (a re-exec'd child takes back the slot
+its parent held). A fail-fast run holds a slot with no ticket and counts as busy. Reads the directory each call; no locks.
+
+### `[@ANCHOR: lock_queue:describe_queue]` `describe_queue(qdir, my_ticket=None, now=time.time, slots=1)`
+
+Purpose: the lines of `test.py --queue-status`. Read-only apart from deleting dead records; it never takes or probes a lock.
+`slots` of 1: `holder: pid P running INFO for AGE` (or `holder: none recorded`), then the queue. `slots` above 1: `slots: N, B busy`, one line
+per slot (`slot K: free` or `slot K: pid P running INFO for AGE`; a held slot above N is listed with `(beyond the configured N)`), then only
+the real waiters as `queue I: pid P INFO waiting AGE`, with `<- you` on `my_ticket`; `queue: empty` when there are none.
+
+### `[@ANCHOR: lock_queue:acquire]` `acquire(qdir, try_lock, info="", ticket=None, timeout=None, poll=1.5, report_every=60.0, on_head=None, sleep=time.sleep, now=time.time, out=print, handle_signals=True, slots=1)`
+
+Purpose: wait in the FIFO queue, then take the lock. `try_lock()` makes one non-blocking attempt (with several slots, at each slot's lock in
+turn) and returns True on success; it is called only while `may_try` says the waiter is at the head. `ticket` adopts a ticket a parent took;
+`on_head()` runs once, when the waiter first becomes the head, and returns False to give up; `timeout` is seconds or None; `slots` is passed
+to `may_try` and to the report line.
+
+Returns `(status, ticket)`: `ACQUIRED` (ticket kept, the caller releases it at exit), `TIMEOUT` or `GATE_FAILED` (ticket released). The
+ticket is also released on an exception and on SIGTERM or SIGHUP (exit 128 + signal). Polls every `poll` seconds, prints a position line every
+`report_every`. Blocking; the signal handlers are installed only on the main thread. `lint_lock.py` calls it with the default `slots=1`.
+
+### `[@ANCHOR: test:acquire_lock_via_queue]` `_acquire_lock_via_queue(lock_file_path, timeout, slots=1, only_slot=None)`
+
+Purpose: the `--wait` acquisition. Returns the slot number taken. Queues behind `lock_queue.acquire` with `try_lock` set to
+`_try_slot_locks(lock_file_path, slots, only_slot)`; a child started by `sudo`, `systemd-run` and `unshare` adopts its parent's ticket from
+`HAMS_TEST_QUEUE_TICKET` and takes back only `only_slot`. The load gate runs once the run reaches the head (not for an adopted ticket).
+Exits 1 when the gate refuses and 75 on timeout. On success it exports the ticket, registers its release at exit, and (with `slots` above 1)
+writes the holder record with the slot and the ticket.
+
+### `[@ANCHOR: test:try_slot_locks]` `_try_slot_locks(lock_base_path, slots, only_slot=None)`
+
+Purpose: one non-blocking pass over the slot locks. Tries slot 1 up to `slots` in order (only `only_slot` when given) and returns the slot
+number whose flock it took, or None when none is free. The open, locked file lives in the module global `_single_instance_lock` for the life
+of the process (the lock goes with the process, however it ends); a file whose lock was not taken is closed. The lock file is opened with
+`O_NOFOLLOW`, falling back to read-only when `fs.protected_regular` refuses a write open (`_open_lock_file`). With `slots` of 1 this is the
+single flock `test.py` always took.
+
+### `[@ANCHOR: test:slot_handoff_args]` `slot_handoff_args(slots, held_slot)`
+
+Purpose: the command-line words that give a re-exec'd phase the slot of its parent. Returns `[]` when `slots` is 1 (the command line stays
+exactly what it was) and `["--slots", "N", "--slot-held", "K"]` otherwise. `main()` appends them to the `unshare` command; the root phase
+passes its own arguments, so the final test process receives them too. They are in the command line because sudo, systemd-run and unshare
+each decide for themselves which environment variables survive. `--slot-held` is hidden from `--help`; given without `--slots` or outside
+`1..slots` it is a usage error (exit 2). Pure.
+
+### `[@ANCHOR: test:broker_users_sharing_the_host]` `broker_users_sharing_the_host(resources, target_modules, addons_path)`
+
+Purpose: the `broker_users` argument of `slot_refusals`. Returns `[]` for slot 1, for a run in the private namespace, and when no RabbitMQ accepts
+a connection on 127.0.0.1:5672; otherwise the modules among `target_modules` (found as `<entry>/<module>` for the comma-separated entries of
+`addons_path`) that `modules_mentioning_broker` names. One TCP connect and a read of the modules' Python, only in that case.
+
+### `[@ANCHOR: test:enforce_slot_refusals]` `enforce_slot_refusals(resources, args, broker_users=())`
+
+Purpose: stops a run that cannot use its slot, with every reason printed. Calls `runner_slots.slot_refusals` with `--pause-on-fail` or
+`HAMS_PAUSE_ON_FAIL=1`, `--mcp` and `broker_users`. Called by the invoking process (no broker check, the full pipeline is coming), by the process
+that runs Odoo (no broker check yet), and again once the modules under test are known (with `broker_users_sharing_the_host`). Prints
+`test slot K of N cannot run this:`, one line per reason and `NEXT: ...`, then exits 1; returns nothing otherwise. Slot 1 never exits here.
+
+### `[@ANCHOR: test:exit_status_for_run]` `exit_status_for_run(returncode, extractor, results_before=0)`
+
+Purpose: the exit status of one Odoo test process, so that a run in which no test ran is never a pass. Returns `returncode` when it is not 0 (Odoo
+died before the tests: "Address already in use" on port 8075, a database login failure; or a signal, already mapped by `signal_exit_verdict`);
+else 0 if the extractor holds more `odoo.tests.result:` lines than `results_before`; else prints `Odoo exited 0 but printed no odoo.tests.result
+line` and returns 1. `results_before` is the number of verdict lines held before this process (individual mode runs one process per module).
+`run_cmd` records its status in `FailureExtractor.child_exit_status`; `finish_and_write()` then prints `TEST RUN FAILED: no tests ran` when no
+verdict exists (it used to print "No test failures or system crashes detected") and `Odoo exited with status N` for any non-zero status.
+
+### `[@ANCHOR: test:apply_slot_resources]` `apply_slot_resources(resources)`
+
+Purpose: makes the process-wide choices a scoped slot needs; does nothing for a run that is not scoped. Creates `resources.tmpdir` (mode
+0777, as the shared one is) and sets `TMPDIR` to it, so Odoo's Chrome profiles (`tempfile` under `TMPDIR`, suffix `_chrome_odoo`) are the only
+ones there, and narrows the module globals `_CHROME_KILL_PATTERN` and `_CHROME_PROFILE_GLOBS`, which `kill_test_chrome()` (hang recovery,
+`robust_reap`) and the end-of-run clean-up read. Called once, before Odoo or any child is started. Raises `OSError` if the directory cannot
+be created; the run stops there.
+
 ## Staged-file size check
 
 `check_staged_files.py` (run by `git-hooks/pre-commit`) refuses a commit that stages a file over 5 MB (`MAX_BYTES`) or

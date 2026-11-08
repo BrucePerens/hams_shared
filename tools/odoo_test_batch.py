@@ -24,6 +24,7 @@ git clone and runs test.py there. Failures are attributed per module exactly as 
 """
 
 import fcntl
+import glob
 import json
 import math
 import os
@@ -387,11 +388,13 @@ class OdooTestBatch(lint_batch.LintBatch):
         if self.sdir:
             record_durations(self.sdir, union, time.monotonic() - self._started)
         text = ""
+        # The nested test.py may have run in a slot above 1 (ADR 0116), which names its report
+        # filtered_test.slot-K.txt; this log directory is the batch's own, so one report is in it.
+        reports = sorted(glob.glob(os.path.join(os.path.dirname(results), "logs", "filtered_test*.txt")))
         try:
-            with open(os.path.join(os.path.dirname(results), "logs", "filtered_test.txt"), encoding="utf-8",
-                      errors="replace") as handle:
+            with open(reports[0], encoding="utf-8", errors="replace") as handle:
                 text = handle.read()
-        except OSError:
+        except (IndexError, OSError):
             pass
         if text and self._log:
             self._emit("\n===== filtered_test.txt =====\n" + text[-100000:] + "\n")
