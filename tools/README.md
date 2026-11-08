@@ -1365,6 +1365,21 @@ recreates `hams_test` on every run; the empty one only proves the server and rol
 (`provision_services()` first). Raises `CalledProcessError`, `ValueError` (from `role_sql`). Tests:
 `ServiceAndDatabaseTests`.
 
+### `[@ANCHOR: provision_test_environment:provision_test_host_requirements]` `provision_test_host_requirements(run, report, plan=False)`
+
+Purpose: step 8, what `provision.py --test` provides and a test run inside `sudo -u odoo env HAMS_ISOLATED_NS=1` does not (that
+invocation skips the namespaced provisioning). It calls the production functions unchanged: `provision_system_accounts()`
+and `apply_production_directories()` for `prod` and `test` (the hamsd_* accounts; `/var/lib/odoo/backups` and the key
+directories), `_provision_cache_manager_role()` for `hams_test` (the `cache_manager_ro` role and
+`/opt/hams/etc/keys/cache_manager/cache_manager_db.env`, whose absence made tests fail with `DB_USER and DB_PASS must
+both be set`), `_allow_cache_manager_socket_password_for_test()` followed by `pg_reload_conf()` when it changed a
+pg_hba.conf, and `git config --system --add safe.directory '*'` when git does not already trust every directory (the
+odoo user does not own the checkouts). Compares `host_requirements.missing_requirements(check_crypto_key=False)` before
+and after: the codes missing before are the one `Report.changed` line, and anything still missing afterwards raises
+`RuntimeError`. The profile's HAMS_CRYPTO_KEY is not checked: it reaches test.py through `sudo -u odoo env`. Under `plan`
+it prints the account and directory plans and touches neither PostgreSQL nor git. Needs `provision_database()` first.
+Idempotent. Tests: `TestHostRequirementsTests`.
+
 ### `[@ANCHOR: provision_test_environment:parse_profile]` `parse_profile(text)`
 
 Returns `{name: value}` for each `export NAME=value` line of a profile written by `profile_text()` (the value is
@@ -1437,10 +1452,55 @@ Raises `ValueError` (bad key, occupied path; provision.py prints it and exits 1)
 
 ### `[@ANCHOR: provision_test_environment:finish]` `finish(state, run, env_vars, os_id, self_check=True, plan=False)`
 
-Purpose: steps 4 to 10, in that order, on `start()`'s state. `os_id` is `"debian"` or `"ubuntu"`. Under `plan` the
+Purpose: steps 4 to 10 (step 8 is `provision_test_host_requirements()`), in that order, on `start()`'s state. `os_id` is `"debian"` or `"ubuntu"`. Under `plan` the
 database and the self-check are not run and every change is printed as a PLAN line (provision.py wraps the call in
 `infrastructure.planning()`). Prints `<n> change(s) to this host; <m> step(s) skipped` and the skipped steps. Returns
 the `Report`; raises `SystemExit(1)` when the self-check fails. Tests: `StartFinishTests`.
+
+### `[@ANCHOR: host_requirements:constants]` `CRYPTO_KEY_VARIABLE`, `CACHE_MANAGER_LOGIN_FILE`, `BACKUPS_DIRECTORY`, `SERVICE_HOST_NAME`, `FIX_COMMAND`, `PROFILE_FILE`
+
+Module `host_requirements.py`: what a test run inside `sudo -u odoo env HAMS_ISOLATED_NS=1` needs from the host.
+
+| Name | Value | Meaning |
+|---|---|---|
+| `CRYPTO_KEY_VARIABLE` | `"HAMS_CRYPTO_KEY"` | The variable that must reach test.py through `sudo -u odoo env`. |
+| `CACHE_MANAGER_LOGIN_FILE` | `/opt/hams/etc/keys/cache_manager/cache_manager_db.env` | Holds DB_USER and DB_PASS for cache_manager.py; `_provision_cache_manager_role()` writes it. |
+| `BACKUPS_DIRECTORY` | `/var/lib/odoo/backups` | A MANIFEST directory the backup tests use. |
+| `SERVICE_HOST_NAME` | `"redis"` | Must resolve (`/etc/hosts`: `127.0.0.1 redis`). |
+| `FIX_COMMAND` | `sudo python3 hams_shared/tools/provision.py --test-environment` | What the refusal tells the operator to run. |
+| `PROFILE_FILE` | `/etc/profile.d/hams_test_environment.sh` | Where the per-host HAMS_CRYPTO_KEY is written. |
+
+Read at call time by the functions below; never written. Tests: `MissingRequirementsTests`.
+
+### `[@ANCHOR: host_requirements:test_account_names]` `test_account_names(manifest=None)`
+
+Purpose: the system accounts a test host has: the MANIFEST `system_accounts` entries for the `test` environment (an
+entry with no `environments` counts) that `infrastructure._spec_selected()` accepts for this host's classes. Returns a
+list of str, in MANIFEST order. Pure apart from reading the host classes. Tests: `TestAccountNamesTests`.
+
+### `[@ANCHOR: host_requirements:missing_requirements]` `missing_requirements(environ=None, check_crypto_key=True, ...probes)`
+
+Purpose: `[(code, text)]` of what this host lacks, in a fixed order, `[]` when it lacks nothing. Codes: `crypto_key`
+(`HAMS_CRYPTO_KEY` absent or empty in `environ`, default `os.environ`; skipped when `check_crypto_key` is False),
+`accounts` (names from `test_account_names()` that `pwd` does not know; the text lists only the missing ones),
+`backups_directory`, `cache_manager_login` (the file is unreadable by this user, or has no non-empty DB_USER or DB_PASS),
+`git_safe_directory` (`git config --get-all safe.directory` lacks `*`), `service_host` (`redis` does not resolve). The
+keyword arguments `account_exists`, `is_directory`, `login_keys`, `git_trusts_all`, `resolves` and `account_names` are the
+probes, replaced in tests. Reads only; runs one `git config` subprocess. Tests: `MissingRequirementsTests`.
+
+### `[@ANCHOR: host_requirements:refusal_text]` `refusal_text(missing)`
+
+Purpose: the message for a non-empty `missing`: a first line, one `   - <text>` line per item, then `NEXT:` lines.
+Anything but `crypto_key` gets the `FIX_COMMAND` line; `crypto_key` gets the `source /etc/profile.d/...` line with the
+`sudo -n -u odoo env HAMS_ISOLATED_NS=1 HAMS_CRYPTO_KEY="$HAMS_CRYPTO_KEY" GIT_DISCOVERY_ACROSS_FILESYSTEM=1 ...` form
+(sudo's `env_reset` drops variables placed before it). Pure. Tests: `RefusalTests`.
+
+### `[@ANCHOR: host_requirements:require_test_host]` `require_test_host(environ=None, missing=None)`
+
+Purpose: the first thing `test.py`'s `run_preflight()` does when `HAMS_ISOLATED_NS=1` (the namespaced path provisions these
+itself and is not checked): prints `refusal_text()` to stderr and exits 1 when `missing_requirements(environ)` (or the
+given `missing`) is not empty; returns None otherwise. Starts nothing and changes nothing, so it is safe before the
+lock queue. Tests: `RefusalTests`, `TestPyWiringTests`.
 
 ### `[@ANCHOR: run_linters:eslint_node_env]` `eslint_node_env(base_env)`
 

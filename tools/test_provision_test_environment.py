@@ -861,7 +861,7 @@ class StartFinishTests(unittest.TestCase):
         order = []
         names = ["provision_cloud_python", "provision_apt_packages", "provision_pip_packages", "provision_odoo",
                  "provision_kopia", "provision_host_aliases", "provision_services", "provision_database",
-                 "provision_user_tools", "provision_profile"]
+                 "provision_test_host_requirements", "provision_user_tools", "provision_profile"]
         patches = [patch.object(pte, n, side_effect=lambda *a, _n=n, **k: order.append(_n) or ([] if _n.endswith(
             "apt_packages") else {})) for n in names]
         patches.append(patch.object(pte, "run_self_check", return_value=["test.py -u zero_sudo"]))
@@ -877,8 +877,8 @@ class StartFinishTests(unittest.TestCase):
 
     def test_finish_plan_runs_no_self_check_and_no_database(self):
         names = ["provision_cloud_python", "provision_apt_packages", "provision_pip_packages", "provision_odoo",
-                 "provision_kopia", "provision_host_aliases", "provision_services", "provision_user_tools",
-                 "provision_profile"]
+                 "provision_kopia", "provision_host_aliases", "provision_services",
+                 "provision_test_host_requirements", "provision_user_tools", "provision_profile"]
         for n in names:
             p = patch.object(pte, n, return_value=[] if n.endswith("apt_packages") else {})
             p.start()
@@ -889,6 +889,54 @@ class StartFinishTests(unittest.TestCase):
             _quiet(pte.finish, state, Recorder(), {}, "ubuntu", plan=True)
         check.assert_not_called()
         database.assert_not_called()
+
+
+class TestHostRequirementsTests(unittest.TestCase):
+    """Tests [@ANCHOR: provision_test_environment:provision_test_host_requirements]"""
+
+    def _run(self, plan=False, before=(), after=(), hba_changed=False, trusts_git=False):
+        calls = []
+        report = pte.Report(plan)
+        results = iter([list(before), list(after)])
+        with patch.object(pte.host_requirements, "missing_requirements", side_effect=lambda **k: next(results)), \
+                patch.object(pte.host_requirements, "git_trusts_every_directory", return_value=trusts_git), \
+                patch.object(infrastructure, "provision_system_accounts") as accounts, \
+                patch.object(infrastructure, "apply_production_directories") as directories, \
+                patch.object(infrastructure, "_provision_cache_manager_role") as role, \
+                patch.object(infrastructure, "_allow_cache_manager_socket_password_for_test",
+                             return_value=hba_changed):
+            _quiet(pte.provision_test_host_requirements, lambda cmd, **kw: calls.append(list(cmd)), report, plan)
+        return report, calls, accounts, directories, role
+
+    def test_it_provisions_accounts_directories_the_cache_manager_login_and_git_trust_in_that_order(self):
+        report, calls, accounts, directories, role = self._run(before=[("accounts", "x")])
+        self.assertEqual([c.kwargs["environment"] if c.kwargs else c.args[1] for c in accounts.call_args_list],
+                         ["prod", "test"])
+        self.assertEqual(directories.call_count, 2)
+        role.assert_called_once()
+        self.assertEqual(role.call_args.args[1], pte.TEST_DATABASE)
+        self.assertIn(["git", "config", "--system", "--add", "safe.directory", "*"], calls)
+        self.assertEqual(report.changes, ["provisioned accounts"])
+
+    def test_a_host_that_already_has_everything_reports_no_change_and_adds_no_git_entry(self):
+        report, calls, *_ = self._run(trusts_git=True)
+        self.assertEqual(report.changes, [])
+        self.assertNotIn(["git", "config", "--system", "--add", "safe.directory", "*"], calls)
+
+    def test_a_changed_pg_hba_rule_reloads_postgresql(self):
+        _report, calls, *_ = self._run(hba_changed=True, trusts_git=True)
+        self.assertTrue(any("pg_reload_conf()" in " ".join(c) for c in calls), calls)
+
+    def test_a_requirement_still_missing_afterwards_raises(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self._run(after=[("backups_directory", "/var/lib/odoo/backups does not exist")], trusts_git=True)
+        self.assertIn("/var/lib/odoo/backups", str(caught.exception))
+
+    def test_plan_touches_neither_the_database_nor_git(self):
+        report, calls, accounts, directories, role = self._run(plan=True, before=[("accounts", "x")])
+        self.assertEqual(calls, [])
+        role.assert_not_called()
+        self.assertEqual(accounts.call_count, 2)
 
 
 class PrivateHelperTests(unittest.TestCase):
