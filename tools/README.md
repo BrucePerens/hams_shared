@@ -688,11 +688,11 @@ Raises `ValueError` for a bad name. `release` removes whichever exists.
 Purpose: the Cargo target directory of a job: `/dev/shm/hams-cargo-target-<job>`, or `~/.cache/hams-cargo-target-<job>` when RAM is refused (the location AGENTS.md used before). Arguments: `job` (a name for `_check_job_name`),
 `pol` and `environ` as in `place`, `home` the home directory (default `~`). Returns a `Placement`; creates nothing. Raises `ValueError` for a bad job name. One name per concurrent job: two builds in one target directory overwrite each other's binaries.
 
-### `[@ANCHOR: ram_dirs:test_tmp_base]` `test_tmp_base(environ=None, pol=None)`
+### `[@ANCHOR: ram_dirs:test_tmp_base]` `test_tmp_base(environ=None, pol=None, create=True)`
 
 Purpose: the base TMPDIR of a test run that shares the host (Odoo's temporary files and the Chrome profiles; `slot-K` directories below it for slots above 1). Returns `/dev/shm/hams-test-tmp` (created, mode 1777 so the `odoo` account and the
 developer can both use it) or `None`: when the run is inside the full pipeline's private namespace (`HAMS_ISOLATED_NS=1` and `HAMS_TEST_LOCK_HELD=1`; its `/var` is a memory overlay that disappears with it, a directory in the host's `/dev/shm` would not), when `place` refuses RAM
-(with a warning), or when the directory cannot be created (warning). Called by `test.py`'s `default_test_tmpdir`.
+(with a warning), or when the directory cannot be created (warning). Called by `test.py`'s `default_test_tmpdir`. Argument `create` (bool): False only names the directory without creating it (the start-up sweep of a full-pipeline run runs on the host before its namespace and needs no directory).
 
 ### `[@ANCHOR: ram_dirs:lint_cargo_base]` `lint_cargo_base(environ=None, pol=None)`
 
@@ -727,7 +727,7 @@ Purpose: removal that cannot be turned against us. Removes the tree at `path`; a
 
 ### `[@ANCHOR: ram_dirs:sweep]` `sweep(pol=None, environ=None, say=None, now=time.time, remove=remove_tree)`
 
-Purpose: the clean-up of jobs that could not clean up after themselves (SIGKILL, power cut, an agent that forgot). Called at the start of every `run_job` and `path`, and by `ram_dirs.py sweep`.
+Purpose: the clean-up of jobs that could not clean up after themselves (SIGKILL, power cut, an agent that forgot). Called at the start of every `run_job` and `path`, by `ram_dirs.py sweep`, before a lint build in a RAM directory (`lint_cache.prepare_cargo_target`) and when a test run picks the RAM TMPDIR (`test.py` `default_test_tmpdir`), so any later RAM user frees what a crashed job left.
 
 | Argument | Type | Meaning |
 |---|---|---|
@@ -818,6 +818,23 @@ Purpose: every base that may hold Cargo caches, so `show`, `prune` and `clear` s
 ### `[@ANCHOR: lint_cache:in_ram]` `in_ram(path, environ=None)`
 
 Purpose: whether `path` is below the RAM root. Returns bool; False when `ram_dirs` cannot be imported.
+
+### `[@ANCHOR: test:default_test_tmpdir]` `default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR, create=True)`
+
+Purpose: the TMPDIR of a run that shares the host: RAM when `ram_dirs.test_tmp_base` offers it, else what `apply_default_test_tmpdir` chose before. `main()` and the start-up sweep call it.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `environ` | dict | Mutated: `TMPDIR` is set when the caller set none. |
+| `directory` | str | The disk directory (default `/var/lib/odoo/tmp`). |
+| `create` | bool | False: do not create the RAM base (the start-up sweep). |
+
+Returns the TMPDIR in force, or `None`. A TMPDIR the caller chose is never replaced. Inside the full pipeline's private namespace the answer is the disk directory (a memory overlay there already). If RAM is refused for lack of space a warning is printed (`ram_dirs`) and the disk directory is used.
+
+### `[@ANCHOR: test:ram_chrome_profile_globs]` `ram_chrome_profile_globs(resources, tmpdir)`
+
+Purpose: keeps the end-of-run Chrome profile removal correct after TMPDIR moved. Arguments: `resources` (`SlotResources`), `tmpdir` (the TMPDIR in force). Returns a tuple of globs: `resources.chrome_profile_globs`, plus `<tmpdir>/*_chrome_odoo` when the run
+is not slot-scoped and `tmpdir` is in RAM. A scoped run's globs and kill pattern already name its own `slot-K` directory (`/dev/shm/hams-test-tmp/slot-K/...`; the characters are in the safe set, so the pattern matches only that slot's Chrome), so they are returned unchanged.
 
 ## The dev box is the primary lint runner: slots
 
@@ -1526,7 +1543,7 @@ right after the slot lock was taken and before anything is built.
 | `pg` | `PostgresAccess` | The server to sweep. |
 | `held_slot` | int | The slot the caller holds; swept too, without a second lock. |
 | `lock_base_path` | str | Base lock path; slot K's lock is `runner_slots.slot_lock_path`, the queue directory `lock_queue.queue_dir_for_lock`. |
-| `base_tmpdir` | str or `None` | The TMPDIR whose `slot-K` directories are swept. |
+| `base_tmpdir` | str or `None` | The TMPDIR whose `slot-K` directories are swept. When it is in RAM (`/dev/shm/hams-test-tmp`), the old disk directory `/var/lib/odoo/tmp` is swept as well, so slot directories left there before TMPDIR moved are removed. |
 | `filestore_base` | str | Odoo's filestore directory. |
 | `say` | callable | Reports a line. |
 

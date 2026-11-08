@@ -89,6 +89,17 @@ class RamCargoBaseTest(unittest.TestCase):
         self.assertFalse(any("pruned" in line or "cleared" in line for line in lines), lines)
 
     # Tests [@ANCHOR: lint_cache:cargo_base]
+    def test_a_lint_build_in_ram_first_removes_the_directories_of_dead_jobs(self):
+        finished = subprocess.Popen([sys.executable, "-c", "pass"])
+        finished.wait()
+        dead = self.ram_dirs.claim(os.path.join(self.root, "hams-cargo-target-crashed"), pid=finished.pid)
+        target = os.path.join(self.root, "hams-lint-cargo", "repo-1.0-abcd1234")
+        lines = []
+        lint_cache.prepare_cargo_target(target, self.environ, log=lines.append)
+        self.assertFalse(os.path.exists(dead))
+        self.assertTrue(any("lint cache: removed" in line and "its job is gone" in line for line in lines), lines)
+
+    # Tests [@ANCHOR: lint_cache:cargo_base]
     def test_a_ram_directory_unused_for_two_days_is_dropped_and_no_legacy_directory_is_adopted(self):
         base = os.path.join(self.root, "hams-lint-cargo")
         target = os.path.join(base, "repo-1.0-abcd1234")

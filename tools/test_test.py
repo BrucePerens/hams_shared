@@ -75,6 +75,72 @@ class DefaultTestTmpdirTests(unittest.TestCase):
         self.assertEqual(_test_runner.DEFAULT_TEST_TMPDIR, "/var/lib/odoo/tmp")
 
 
+class RamTestTmpdirTests(unittest.TestCase):
+    """The TMPDIR of a run that shares the host moves to /dev/shm when it has room (ram_dirs), with the Chrome clean-up following it."""
+
+    def setUp(self):
+        import ram_dirs
+        self.ram_dirs = ram_dirs
+        ram_dirs._warned.clear()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = os.path.join(self._tmp.name, "shm")
+        os.makedirs(self.root)
+        self.disk = os.path.join(self._tmp.name, "disk")
+        os.makedirs(self.disk)
+        self.environ = {"HAMS_RAM_ROOT": self.root, "HAMS_RAM_DIRS": "1"}
+
+    # Tests [@ANCHOR: test:default_test_tmpdir]
+    def test_with_room_tmpdir_is_the_ram_base(self):
+        environ = dict(self.environ)
+        with patch.object(self.ram_dirs, "free_gb", return_value=60):
+            self.assertEqual(_test_runner.default_test_tmpdir(environ), os.path.join(self.root, "hams-test-tmp"))
+        self.assertEqual(environ["TMPDIR"], os.path.join(self.root, "hams-test-tmp"))
+
+    # Tests [@ANCHOR: test:default_test_tmpdir]
+    def test_choosing_the_ram_base_first_sweeps_the_directories_of_dead_jobs(self):
+        finished = subprocess.Popen([sys.executable, "-c", "pass"])
+        finished.wait()
+        dead = self.ram_dirs.claim(os.path.join(self.root, "hams-cargo-target-crashed"), pid=finished.pid)
+        with patch.object(self.ram_dirs, "free_gb", return_value=60):
+            _test_runner.default_test_tmpdir(dict(self.environ), self.disk)
+        self.assertFalse(os.path.exists(dead))
+
+    # Tests [@ANCHOR: test:default_test_tmpdir]
+    def test_create_false_names_the_ram_base_without_making_it(self):
+        with patch.object(self.ram_dirs, "free_gb", return_value=60):
+            self.assertEqual(_test_runner.default_test_tmpdir(dict(self.environ), self.disk, create=False), os.path.join(self.root, "hams-test-tmp"))
+        self.assertEqual(os.listdir(self.root), [])
+
+    # Tests [@ANCHOR: test:default_test_tmpdir]
+    def test_a_tmpdir_the_caller_chose_and_the_private_namespace_keep_the_disk_directory(self):
+        with patch.object(self.ram_dirs, "free_gb", return_value=60):
+            chosen = dict(self.environ, TMPDIR="/somewhere/else")
+            self.assertEqual(_test_runner.default_test_tmpdir(chosen, self.disk), "/somewhere/else")
+            namespace = dict(self.environ, HAMS_ISOLATED_NS="1", HAMS_TEST_LOCK_HELD="1")
+            self.assertEqual(_test_runner.default_test_tmpdir(namespace, self.disk), self.disk)
+        self.assertEqual(os.listdir(self.root), [])
+
+    # Tests [@ANCHOR: test:default_test_tmpdir]
+    def test_without_room_the_disk_directory_is_used_and_the_reason_is_printed(self):
+        with patch.object(self.ram_dirs, "free_gb", return_value=2), patch("sys.stderr") as err:
+            self.assertEqual(_test_runner.default_test_tmpdir(dict(self.environ), self.disk), self.disk)
+        self.assertIn("2.0 GB free", "".join(call.args[0] for call in err.write.call_args_list if call.args))
+
+    # Tests [@ANCHOR: test:ram_chrome_profile_globs]
+    def test_an_unscoped_run_in_ram_also_removes_the_profiles_under_its_tmpdir(self):
+        import runner_slots
+        unscoped = runner_slots.slot_resources(1, 1, False, "/var/lib/odoo/tmp")
+        base = os.path.join(self.root, "hams-test-tmp")
+        with patch.object(self.ram_dirs, "policy", return_value=self.ram_dirs.RamPolicy(root=self.root, require_tmpfs=False)):
+            globs = _test_runner.ram_chrome_profile_globs(unscoped, base)
+            self.assertEqual(globs, tuple(unscoped.chrome_profile_globs) + (base + "/*_chrome_odoo",))
+            self.assertEqual(_test_runner.ram_chrome_profile_globs(unscoped, "/var/lib/odoo/tmp"), tuple(unscoped.chrome_profile_globs))
+            scoped = runner_slots.slot_resources(2, 4, False, base)
+            self.assertEqual(_test_runner.ram_chrome_profile_globs(scoped, scoped.tmpdir), tuple(scoped.chrome_profile_globs))
+            self.assertEqual(scoped.chrome_kill_pattern, runner_slots._ere_escape(base + "/slot-2") + "/[^/ ]*_chrome_odoo")
+
+
 class OdooCpuLimitTests(unittest.TestCase):
     """The Odoo test process's CPU-time limit is a backstop a full suite cannot reach, and a death by it is reported as
     such, never as a test outcome. It was 20 CPU-minutes with soft == hard: combined runs were SIGKILLed mid-module."""
