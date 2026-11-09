@@ -2870,8 +2870,9 @@ is missing. `home` (str) is the runner's home. Network: crates.io, the Playwrigh
 ### `[@ANCHOR: provision_test_environment:provision_ml_assets]` `provision_ml_assets(layout, run, report, plan=False, reachable=url_reachable, manifest_exists=os.path.isfile)`
 
 Purpose: step 6, the browser ML assets `ham_shack/controllers/offline.py` serves from `/var/lib/odoo/hams_ml_assets`, which
-production provisions by hand and a test host never had (`TestMlAssetsRoute` answered 404 for `manifest.json`). Does nothing
-when the root has a `manifest.json` (the script writes it last, so an interrupted run is repeated). Otherwise creates the root
+production provisions by hand and a test host never had (`TestMlAssetsRoute` answered 404 for `manifest.json`). When the root
+has a `manifest.json` it downloads nothing but still runs `--verify-relay-pins` as `odoo` (local hashing; the script writes the manifest BEFORE that verification, so a run whose
+verification failed would otherwise turn green on the next call); a mismatch raises. Otherwise creates the root
 owned by `odoo`, runs `<hams_com>/ham_shack/tools/provision_ml_assets.py` as `odoo` under `nice -n 10`, then its
 `--verify-relay-pins`: the real files, no test-only route or placeholder. A missing script, or an unreachable npm or HuggingFace,
 is a reported skip. `plan` prints and changes nothing. Network: registry.npmjs.org and huggingface.co, about 1.8 GB the first
