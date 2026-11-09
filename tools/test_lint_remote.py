@@ -875,6 +875,7 @@ class ReserveTests(unittest.TestCase):
         real = lr.load_inventory()
         self.assertIn("bruce16", lr.runners(real))
         self.assertEqual(real["bruce16"]["ssh"]["target"], "ai@bruce16.lan")
+        self.assertIn("IdentitiesOnly=yes", real["bruce16"]["ssh"]["args"])
         self.assertEqual(real["bruce16"]["nice"], 19)
         self.assertTrue(real["bruce16"]["reserve"]["skip_when_user_session"])
         self.assertIn("chrome", real["bruce16"]["reserve"]["never_caps"])
