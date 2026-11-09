@@ -90,10 +90,12 @@ def normalize_message(text):
     return text.strip()
 
 
+# [@ANCHOR: lint_baseline:signature_of]
 def _signature(text):
     return hashlib.sha1(normalize_message(text).encode("utf-8", "replace")).hexdigest()[:12]
 
 
+# [@ANCHOR: lint_baseline:step_base]
 def _base(step_name):
     """Step name without its shard or option suffix: `pytest tools/[2of4]` -> `pytest tools/`."""
     return step_name.split("[")[0].strip()
@@ -133,6 +135,7 @@ def _age_text(days):
     return "%.1f days" % days if days >= 1 else "%.0f hours" % (days * 24)
 
 
+# [@ANCHOR: lint_baseline:item_record]
 def _item(step, test, message):
     return {"step": step, "test": test, "signature": _signature(message),
             "message": normalize_message(message)[:MAX_MESSAGE]}
@@ -256,6 +259,7 @@ def renew(key, item_id, reason, owner=None, environ=None, now=time.time):
     return item
 
 
+# [@ANCHOR: lint_baseline:commit_in_history]
 def _contains(repo, commit, head):
     """True when `head` has `commit` in its history (or is it)."""
     if not commit:

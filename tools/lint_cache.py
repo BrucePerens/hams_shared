@@ -174,6 +174,7 @@ def toolchain_id(environ=None):
     return f"{release}-{hashlib.sha256(res.stdout.encode()).hexdigest()[:8]}"
 
 
+# [@ANCHOR: lint_cache:lint_slot]
 def lint_slot(environ=None):
     """The lint run slot (lint_lock.RunLock) this process runs in, 1 when it holds none."""
     environ = os.environ if environ is None else environ
@@ -433,6 +434,7 @@ def drop_unused_dirs(base, keep, days=UNUSED_DAYS, now=None):
     return gone
 
 
+# [@ANCHOR: lint_cache:prepare_cargo_target]
 def prepare_cargo_target(target_dir, environ=None, log=None, budget=None):
     """Enforce the budget on `target_dir` before a build. Call while holding `locked(target_dir)`. Returns the log
     lines (also passed to `log`). Never raises for lack of space."""
@@ -512,6 +514,7 @@ def adopt_legacy_dir(target, environ=None):
     return legacy
 
 
+# [@ANCHOR: lint_cache:cargo_session]
 @contextlib.contextmanager
 def cargo_session(environ=None, log=None):
     """Context for a checker that builds: yields the target directory to use (CARGO_TARGET_DIR) with the budget
@@ -715,6 +718,7 @@ def _prune_results_dirs(base, keep, days=UNUSED_DAYS):
 # CLI
 
 
+# [@ANCHOR: lint_cache:show_cache_lines]
 def show_lines(environ=None):
     environ = os.environ if environ is None else environ
     b = budgets(environ)
@@ -740,6 +744,7 @@ def show_lines(environ=None):
     return lines
 
 
+# [@ANCHOR: lint_cache:cache_main]
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     command = argv[0] if argv else "show"
