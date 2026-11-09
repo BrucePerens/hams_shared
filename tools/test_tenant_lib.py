@@ -1076,8 +1076,8 @@ class _RedirectProbe:
 
     def __init__(self):
         outer = self
-        self.first_headers = []
-        self.sink_headers = []
+        self.first_headers: list[dict[str, str]] = []
+        self.sink_headers: list[dict[str, str]] = []
 
         class Sink(BaseHTTPRequestHandler):
             def _answer(self):
@@ -1114,7 +1114,7 @@ class _RedirectProbe:
 
         self.first = HTTPServer(("127.0.0.1", 0), First)  # burn-ignore-test-local-server: hermetic stand-in for the credentialed API that answers with a redirect
         self.url = f"http://127.0.0.1:{self.first.server_port}"  # burn-ignore-test-local-server: hermetic stand-in for the credentialed API
-        self._threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in (self.sink, self.first)]
+        self._threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in (self.sink, self.first)]  # burn-ignore-test-daemon-thread: two daemon threads of a hermetic fixture, both shut down in __exit__
 
     def __enter__(self):
         for thread in self._threads:
