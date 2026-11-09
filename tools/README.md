@@ -2275,9 +2275,13 @@ so this in-step retry covers that case. Cache files: `~/.cache/hams-lint/pip-aud
 
 Returns the reuse window in hours: `HAMS_PIP_AUDIT_CACHE_HOURS` as a float of at least 0 (0 means off), else 6.0 for an unset, non-numeric, infinite, NaN or negative value. Pure.
 
+### `[@ANCHOR: check_pip_audit:included_requirement_files]` `included_requirement_files(req_file)`
+
+Returns the real paths of every file `req_file` includes through `-r`, `--requirement`, `-c` or `--constraint` lines (`-r x`, `-rx`, `--requirement x`, `--requirement=x`; a ` #` comment is dropped), directly or through other included files, in first-seen order, each once; a cycle ends where it closes. A relative path is taken from the including file's directory, as pip does. Raises `OSError` for an included file that cannot be read, an include that names a URL, or nesting deeper than `MAX_INCLUDE_DEPTH` (8): an input the key cannot cover must never be answered from the cache.
+
 ### `[@ANCHOR: check_pip_audit:cache_key]` `cache_key(req_file, version_text)`
 
-Returns 64 hex digits: SHA-256 over the real path of `req_file`, its content and the stripped `version_text` (the `pip-audit --version` output), each length-prefixed. Another checkout path, an edit or another pip-audit version gives another key. Raises `OSError` for an unreadable file.
+Returns 64 hex digits: SHA-256 over the real path of `req_file`, its content, the path and content of every file in `included_requirement_files(req_file)`, and the stripped `version_text` (the `pip-audit --version` output), each length-prefixed. Another checkout path, an edit to the file or to an included file, or another pip-audit version gives another key. Raises `OSError` for an unreadable file or included file (the audit then runs and nothing is cached).
 
 ### `[@ANCHOR: check_pip_audit:cached_pass_age_hours]` `cached_pass_age_hours(key, now=None, environ=None)`
 
