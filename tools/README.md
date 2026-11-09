@@ -1866,6 +1866,78 @@ Purpose: `test.py`'s one call into the policy, from `main()` after a failing sta
 Returns the exit status: 0 when `rc_odoo` is 1, Odoo counted failures, there was no CPU limit or signal, and the outcome is green; else `rc_odoo` (also when the baseline or the flake file is invalid:
 the cause is printed). Writes `test_results.json`; takes the slot's database for the rerun through the callback.
 
+## Minimal module sets (`test.py --bisect-modules`, `bisect_modules.py`, ADR 0118)
+
+```
+test.py --bisect-modules -u <the failing module list> --test-tags /ham_club:TestA,/ham_club:TestB [--bisect-jobs 2] [--bisect-max-runs 40] [--bisect-report FILE] [-l LOGDIR]
+```
+
+A whole-system failure can depend on another module installed in the same database. This finds which ones, replacing the manual halving (the whole list, half, a quarter, ...).
+
+1. The modules the tags name (`/module:...`) are fixed: the tests need their own module. The other modules of `-u` are the candidates.
+2. Trial 1 runs every candidate. Its failing tests (from `test_results.json`) are the targets. If nothing fails, the report says `not_reproduced` and the exit status is 1.
+3. Rounds of a binary search for the shortest prefix of the remaining candidates that, with the modules found so far, still fails every target; its last module
+   is needed. A failure that needs k modules costs about k times log2(n) runs. With `--bisect-jobs 2` two prefixes run at once (the default when the machine has
+   two or more slots; never more than 2). The search assumes adding a module never hides the failure; the set it returns was run and did reproduce.
+4. Each trial is an ordinary `test.py` run (`-u <set> --test-tags <tags> --raw-failures --wait --solo -l <trial directory>`), so it waits its turn in the slot queue, runs
+   in its own database and is `nice 10` like the driver. Trials that die without a verdict count as not reproducing. `--raw-failures` means a baselined or flaky test is not hidden.
+5. Output: the minimal `-u` set and the still-failing tests, and a JSON report (`bisect_<time>.json` in the log directory, or `--bisect-report`): `status` (`minimal`,
+   `incomplete` when `--bisect-max-runs` stopped it, `not_reproduced`), `fixed`, `candidates`, `needed`, `minimal`, `targets`, `runs`, `trials` (modules, exit status,
+   failed tests, whether it reproduced, seconds, log directory). Exit status 0: minimal; 1: not reproduced or incomplete; 2: bad arguments; 75: the full run had no verdict.
+
+### `[@ANCHOR: bisect_modules:find_needed]` `find_needed(items, reproduces, jobs=1, max_runs=40, on_step=None)`
+
+Purpose: the search of point 3; knows nothing about `test.py`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `items` | list of str | Ordered candidate modules. All together must reproduce (the caller ran them). |
+| `reproduces` | callable | `reproduces(sublist) -> bool`: True when every target test still fails with those modules (plus the fixed ones). Called from up to `jobs` threads; never twice for the same sublist. It must be thread safe. |
+| `jobs` | int | 1: halve; 2 or more: probe two prefixes at once. |
+| `max_runs` | int | Stop after this many calls of `reproduces`. |
+| `on_step` | callable or None | `on_step(sublist, result)` after each call (from the calling thread). |
+
+Returns `(needed, complete, runs)`: `needed` in the order of `items` (`[]` when no extra module is needed), `complete` False when `max_runs` stopped the search or the failure was not deterministic (needed
+alone failed to reproduce although the whole set did); in that case `needed` is the smallest set known to reproduce, plus the part not searched. `runs` the number of calls. Blocks until the runs end; no other side effects.
+
+### `[@ANCHOR: bisect_modules:read_failed_tests]` `read_failed_tests(log_directory)`
+
+Purpose: the failing tests of a finished trial. Returns the `new_failures` ids of every `test_results*.json` in the directory, or None when there is no file (the run passed or died before a verdict;
+the caller uses the exit status to tell). Raises `BisectError` for a file that cannot be parsed or has no `new_failures` list. Reads files only.
+
+### `[@ANCHOR: bisect_modules:child_command]` `child_command(test_py, modules, test_tags, log_directory, extra=())`
+
+Purpose: the command line of one trial. Returns a list: the Python interpreter, `test_py`, `-u` with the modules joined by commas, `--test-tags`, `--raw-failures`, `--wait`, `--solo`, `-l` the directory, then `extra`. Pure.
+
+### `[@ANCHOR: bisect_modules:Bisector]` `Bisector(test_py, fixed, test_tags, work_directory, targets=None, runner=None, extra=())`
+
+Runs trials and decides what reproduces. `fixed`: modules in every trial; `work_directory`: where `trial_NNN` directories are made (mode 0777, because the nested run may be another account); `targets`: the ids that must all fail
+(None until `bisect` ran the full set); `runner(command) -> exit status` (default `subprocess.call`, replaced in tests); `trials`: the `Trial` records in order. `run_trial(extra_modules)` runs one and returns it;
+`reproduces(extra_modules)` is True when the targets are all in the trial's failures (False when targets are unknown, empty, or the trial died). Thread safe: two threads may run trials, each in its own directory.
+
+### `[@ANCHOR: bisect_modules:bisect]` `bisect(bisector, candidates, jobs=1, max_runs=40, out=print)`
+
+Purpose: the whole bisection. Runs the full set, sets the targets from its failures, calls `find_needed`, and returns the report dictionary described above. Returns `status` `not_reproduced` when the full run had no failing test. Raises `BisectError`
+when the full run exited non-zero and wrote no results (it died; there is no verdict to reduce). `out` receives one progress line per trial.
+
+### `[@ANCHOR: bisect_modules:write_report]` `write_report(path, report)`
+
+Purpose: stores the report as JSON (indent 1, sorted keys), through a temporary file and an atomic replace; creates the directory. Raises `OSError` when it cannot write.
+
+### `[@ANCHOR: bisect_modules:run]` `run(args, test_py, tag_modules, runner=None, out=print, slots=1)`
+
+Purpose: the `--bisect-modules` command, called from `main()` before any lock is taken (the trials take the slots, the driver does not).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `args` | Namespace | The parsed command line: `module`, `test_tags`, `log_directory`, `bisect_jobs`, `bisect_max_runs`, `bisect_report`. |
+| `test_py` | str | Path of `test.py`, run for each trial. |
+| `tag_modules` | list | Modules the tags name; fixed in every trial. |
+| `runner`, `out` | callable | As in `Bisector` and `bisect`. |
+| `slots` | int | The machine's slot count; `--bisect-jobs` defaults to `min(2, slots)`. |
+
+Returns 0, 1, 2 or 75 as above. Lowers its own priority with `os.nice(10)`; each trial inherits it. Writes the report; never kills a process. The trials run on this machine only.
+
 ## Staged-file size check
 
 `check_staged_files.py` (run by `git-hooks/pre-commit`) refuses a commit that stages a file over 5 MB (`MAX_BYTES`) or
