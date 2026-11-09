@@ -21,12 +21,15 @@ means nobody has looked since the code changed, which is exactly the condition t
 patent-specification claims drift out of sync with the code they described (a cross-document or
 cross-section self-contradiction that nobody re-checked).
 
-Python only, for now, matching every other layer of this anchor system's own incremental rollout
-(`check_function_test_anchors.py` shipped Python-only under ADR 0090 before its own JS and Rust
-sub-tracks followed as separate, later work) -- reuses `check_function_test_anchors.py`'s own
-`_function_span` so this check's notion of "the function's own text" never drifts from the
-existing ratchet's, the same reasoning that script's own docstring gives for reusing it from
-`check_anchor_coverage.py`. JS and Rust claims support are real, named, not-yet-done follow-ons.
+Hash algorithms (see the table above `ALGORITHMS`): a claim records `hash_algorithm: v2`, the token
+stream of the anchored item per language (Python, Rust, JavaScript, XML/QWeb, shell, SQL; see
+`claim_normalizers.py`), so comments and formatting never stale it. A claim with no such field is
+legacy: its algorithm is chosen from its own date (front matter `date:`, else the commit that last
+wrote the claim file, never the file's mtime). A legacy claim whose exact hash no longer matches is
+not stale for a comment-only or format-only change: the check loads the function as of the claim's
+commit (`git show`), computes v2 over that text and over the current text, and passes it when the
+two are equal; verdicts are cached in `~/.cache/hams_claims/` (`$HAMS_CLAIM_CACHE_DIR`). No
+repo-wide re-hash is ever needed, so old claims are never rewritten just to survive a tool change.
 
 No baseline/ratchet is needed the way `check_function_test_anchors.py` needs one: this is a brand
 new mechanism with zero pre-existing claims when it ships, so there is no backlog to grandfather --
@@ -35,14 +38,17 @@ every claim ever committed should have an accurate hash from the moment it's add
 
 import argparse
 import ast
+import collections
 import hashlib
 import io
+import json
 import os
 import re
 import subprocess
 import sys
 import tokenize
 
+import claim_normalizers as cn  # noqa: E402
 import verify_anchors as va  # noqa: E402
 from check_function_test_anchors import (  # noqa: E402
     _direct_functions,
@@ -235,14 +241,49 @@ def normalized_span_text(span_start, span_end, lines, comment_columns, docstring
     return "\n".join(out)
 
 
+# ---------------------------------------------------------------------------------------------
+# Hash algorithms (a claim's own date, never the file's mtime, says which one it was written with)
+# ---------------------------------------------------------------------------------------------
+
+# v1   sha256 of the function's raw source text (every claim written before 2026-11-09).
+# v1b  sha256 of the text with `#` comments, docstrings, blank lines and trailing whitespace removed
+#      (hams_shared #540, 2026-11-09): Python only, still sensitive to formatting.
+# v2   sha256 of the code's TOKEN STREAM, per language (`claim_normalizers.py`): comments and
+#      formatting never reach it; Python, Rust, JavaScript, XML/QWeb, shell and SQL.
+# A claim records `hash_algorithm: v2`. A claim without the field is legacy: the table below maps
+# the date the claim was written (front matter `date:` when present, else the date of the commit
+# that last wrote the claim file, `git log`) to the algorithm it was written with.
+ALGORITHMS = ("v1", "v1b", "v2")
+CURRENT_ALGORITHM = "v2"
+ALGORITHM_BY_DATE = (
+    ("0000-00-00", "v1"),
+    ("2026-11-09", "v1b"),
+    ("2026-11-10", "v2"),
+)
+HISTORY_DEPTH = 300
+
+Hashes = collections.namedtuple("Hashes", "v2 v1b v1")
+AnchorInfo = collections.namedtuple("AnchorInfo", "root path hashes")
+
+SOURCE_SUFFIXES = (".py", ".rs", ".js", ".mjs", ".cjs", ".xml", ".sh", ".bash", ".sql")
+
+
+def algorithm_for_date(date_text):
+    """The algorithm a legacy claim written on `date_text` (YYYY-MM-DD..., or None for 'now') used."""
+    if not date_text:
+        return CURRENT_ALGORITHM
+    chosen = ALGORITHM_BY_DATE[0][1]
+    for start, algorithm in ALGORITHM_BY_DATE:
+        if date_text[:10] >= start:
+            chosen = algorithm
+    return chosen
+
+
 def function_hashes_from_text(content, filename="<string>"):
-    """Returns `{anchor_name: (normalized_hash, legacy_hash)}` for every function in `content`
-    carrying a real BASE anchor declaration (not a Tests/Verified-by/Triggers link to one) within
-    its own span. `normalized_hash` is the current `code_hash` definition (comments and
-    docstrings ignored, see `normalized_span_text`); `legacy_hash` is the pre-2026-11-09
-    definition, the sha256 of the raw span text, kept only so claims written before the change
-    can be recognised and migrated (see `migrate_claim_hashes.py`). A file that does not parse
-    yields `{}`."""
+    """Returns `{anchor_name: Hashes}` for every Python function in `content` carrying a real BASE
+    anchor declaration (not a Tests/Verified-by/Triggers link to one) within its own span (the
+    AST span including decorators and the comment lines above them). `Hashes` is
+    `(v2, v1b, v1)`, see the table above. A file that does not parse yields `{}`."""
     try:
         tree = ast.parse(content, filename=filename)
     except SyntaxError:
@@ -250,6 +291,7 @@ def function_hashes_from_text(content, filename="<string>"):
 
     lines = content.splitlines()
     comment_columns = None
+    tokens = None
     hashes = {}
     for _qualname, node in _direct_functions(tree.body, []):
         start, end = _function_span(node, lines)
@@ -264,18 +306,41 @@ def function_hashes_from_text(content, filename="<string>"):
             continue
         if comment_columns is None:
             comment_columns = _comment_columns(content)
-        legacy = hashlib.sha256("\n".join(span_lines).encode("utf-8")).hexdigest()
-        normalized = hashlib.sha256(
+        try:
+            if tokens is None:
+                tokens = cn.PythonTokens(content)
+            v2 = hashlib.sha256(tokens.normalize(start, end).encode("utf-8")).hexdigest()
+        except cn.NormalizeError:
+            continue
+        v1 = hashlib.sha256("\n".join(span_lines).encode("utf-8")).hexdigest()
+        v1b = hashlib.sha256(
             normalized_span_text(
                 start, end, lines, comment_columns, _docstring_line_ranges(node)
             ).encode("utf-8")
         ).hexdigest()
         for name in names:
-            hashes[name] = (normalized, legacy)
+            hashes[name] = Hashes(v2, v1b, v1)
     return hashes
 
 
-def _read_python(filepath):
+def anchor_hashes_from_text(content, path, wanted=None):
+    """`{anchor_name: Hashes}` for the anchored items of one source text, whatever its language
+    (by `path`'s suffix); `{}` for an unknown language or a text that cannot be tokenized."""
+    language = cn.language_for_path(path)
+    if language is None or "[@ANCHOR" not in content:
+        return {}
+    if language == "python":
+        return function_hashes_from_text(content, path)
+    try:
+        return {
+            name: Hashes(h, None, None)
+            for name, h in cn.anchored_hashes(content, language, wanted).items()
+        }
+    except cn.NormalizeError:
+        return {}
+
+
+def _read_text(filepath):
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             return f.read()
@@ -284,50 +349,196 @@ def _read_python(filepath):
 
 
 def compute_function_hash(filepath):
-    """Returns {anchor_name: sha256_hex} for every function in `filepath` carrying a real BASE
-    anchor declaration, hashed with the current comment- and docstring-insensitive definition."""
-    content = _read_python(filepath)
+    """Returns {anchor_name: sha256_hex} for every anchored item in `filepath` (any supported
+    language), hashed with the current algorithm (v2: the token stream)."""
+    content = _read_text(filepath)
     if content is None:
         return {}
-    return {
-        name: pair[0] for name, pair in function_hashes_from_text(content, filepath).items()
-    }
+    return {name: h.v2 for name, h in anchor_hashes_from_text(content, filepath).items()}
 
 
-def compute_legacy_function_hash(filepath):
-    """Same as `compute_function_hash`, but with the legacy raw-text definition (see
-    `function_hashes_from_text`)."""
-    content = _read_python(filepath)
-    if content is None:
-        return {}
-    return {
-        name: pair[1] for name, pair in function_hashes_from_text(content, filepath).items()
-    }
-
-
-def build_anchor_hash_index(repo_root, legacy=False):
-    """Returns {anchor_name: sha256_hex} across every git-tracked .py file in repo_root (the
-    legacy raw-text hashes when `legacy` is true). A duplicate anchor name across files is a
-    pre-existing verify_anchors.py-level problem, not this script's to resolve -- last one
-    scanned wins, matching dict-update semantics elsewhere in this same tool family."""
+def build_anchor_index(repo_root, wanted=None):
+    """Returns {anchor_name: AnchorInfo(root, path, Hashes)} across every git-tracked source file
+    (Python, Rust, JavaScript, XML/QWeb, shell, SQL) of `repo_root`. `wanted` (a set of cleaned
+    anchor names) skips every file that declares none of them, so a run that has 2,400 claims to
+    check does not tokenize the files nobody claims. A duplicate anchor name across files is a
+    pre-existing verify_anchors.py-level problem, not this script's to resolve: last scanned wins."""
     index = {}
-    compute = compute_legacy_function_hash if legacy else compute_function_hash
-    for filepath in _git_tracked_files(repo_root, ".py"):
-        index.update(compute(filepath))
+    for suffix in SOURCE_SUFFIXES:
+        for filepath in _git_tracked_files(repo_root, suffix):
+            content = _read_text(filepath)
+            if content is None or "[@ANCHOR" not in content:
+                continue
+            if wanted is not None:
+                names = {va._clean(m.group(1)) for m in va.ANCHOR_PATTERN.finditer(content)}
+                if not names & wanted:
+                    continue
+            for name, hashes in anchor_hashes_from_text(content, filepath, wanted).items():
+                index[name] = AnchorInfo(repo_root, filepath, hashes)
     return index
 
 
-def recorded_hash_matches(recorded, current, legacy_current):
-    """True when a claim's recorded `code_hash` value is fresh for an anchor whose current hashes
-    are `current` (normalized) and `legacy_current` (raw text, may be None).
+def build_anchor_hash_index(repo_root):
+    """`{anchor_name: v2 sha256 hex}`; see `build_anchor_index`."""
+    return {name: info.hashes.v2 for name, info in build_anchor_index(repo_root).items()}
 
-    A claim written before 2026-11-09 carries the legacy hash. It is accepted while the function's
-    raw text is byte-for-byte what it was (so nothing in flight breaks the moment this lands), and
-    `migrate_claim_hashes.py` rewrites it to the normalized form; once the migration has run, the
-    legacy branch can be deleted. A legacy hash that no longer matches is stale like any other,
-    including after a comment-only edit, which is what the migration's history search resolves."""
-    expected = recorded[len("sha256:") :] if recorded.startswith("sha256:") else recorded
-    return expected == current or (legacy_current is not None and expected == legacy_current)
+
+def _strip_prefix(recorded):
+    recorded = recorded.strip()
+    return recorded[len("sha256:") :] if recorded.startswith("sha256:") else recorded
+
+
+def recorded_hash_matches(recorded, current):
+    """Exact comparison of a recorded hash with the current `Hashes` (any algorithm)."""
+    return _strip_prefix(recorded) in [h for h in current if h]
+
+
+def _git_out(root, *args):
+    result = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+    return result.stdout if result.returncode == 0 else None
+
+
+class FreshnessContext:
+    """Per-run state of the legacy-claim history check: dates of claim commits, and a persistent
+    cache of verdicts (`~/.cache/hams_claims/history_verdicts.json`, or `$HAMS_CLAIM_CACHE_DIR`).
+    A verdict is keyed by (recorded hash, anchor, current v2 hash, claim commit time, file), which
+    fully determines it, because the revisions it reads are all older than the claim commit."""
+
+    def __init__(self, cache_dir=None, depth=HISTORY_DEPTH):
+        self.depth = depth
+        self.cache_dir = cache_dir or os.environ.get("HAMS_CLAIM_CACHE_DIR") or os.path.join(
+            os.path.expanduser("~"), ".cache", "hams_claims"
+        )
+        self.cache_path = os.path.join(self.cache_dir, "history_verdicts.json")
+        self._cache = None
+        self._dirty = False
+        self._times = {}
+        self.history_lookups = 0  # revisions walked (not served from the cache), for tests
+
+    def _load(self):
+        if self._cache is None:
+            try:
+                with open(self.cache_path, "r", encoding="utf-8") as f:
+                    self._cache = json.load(f)
+            except (OSError, ValueError):
+                self._cache = {}
+        return self._cache
+
+    def save(self):
+        if not self._dirty:
+            return
+        try:
+            os.makedirs(self.cache_dir, exist_ok=True)
+            tmp = f"{self.cache_path}.{os.getpid()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self._cache, f)
+            os.replace(tmp, self.cache_path)
+        except OSError:
+            pass  # a cache that cannot be written only makes the next run slower
+        self._dirty = False
+
+    def claim_time(self, claim_path):
+        """(unix time, ISO date) of the commit that last wrote the claim file, or (None, None)."""
+        if claim_path not in self._times:
+            out = _git_out(
+                os.path.dirname(claim_path) or ".", "log", "-1", "--format=%ct %cI", "--", os.path.basename(claim_path)
+            )
+            parts = (out or "").split()
+            self._times[claim_path] = (int(parts[0]), parts[1][:10]) if len(parts) == 2 else (None, None)
+        return self._times[claim_path]
+
+    def claim_date(self, fields, claim_path):
+        """The claim's own date: front matter `date:` when it is a date, else its commit's date."""
+        declared = str(fields.get("date", ""))
+        if re.match(r"\d{4}-\d\d-\d\d", declared):
+            return declared[:10]
+        return self.claim_time(claim_path)[1]
+
+    def history_verdict(self, claim_path, anchor, info, recorded, date_algorithm):
+        """("fresh" | "stale" | "unknown", detail). Finds the newest revision of the anchor's file,
+        not newer than the claim's commit, whose anchored item carries the recorded hash (under any
+        algorithm, the date's own first), and compares the current v2 hash with that revision's:
+        equal means only comments or formatting changed since the claim was written."""
+        ts, _date = self.claim_time(claim_path)
+        if ts is None:
+            return "unknown", "the claim file has no commit, so it cannot be dated"
+        rel = os.path.relpath(info.path, info.root)
+        key = hashlib.sha256(
+            "|".join([recorded, anchor, info.hashes.v2, str(ts), rel]).encode("utf-8")
+        ).hexdigest()
+        cache = self._load()
+        if key in cache:
+            return cache[key][0], cache[key][1]
+        listing = _git_out(info.root, "log", f"-n{self.depth}", "--format=%H %ct", "--", rel)
+        if not listing:
+            return "unknown", f"no git history for {rel} in {info.root}"
+        order = [date_algorithm] + [a for a in ALGORITHMS if a != date_algorithm]
+        verdict = None
+        for line in listing.splitlines():
+            rev, _, ctime = line.partition(" ")
+            if not ctime.isdigit() or int(ctime) > ts:
+                continue
+            self.history_lookups += 1
+            text = _git_out(info.root, "show", f"{rev}:{rel}")
+            if text is None:
+                continue
+            old = anchor_hashes_from_text(text, rel, {anchor}).get(anchor)
+            if old is None:
+                continue
+            if any(getattr(old, a) == recorded for a in order if getattr(old, a)):
+                if old.v2 == info.hashes.v2:
+                    verdict = ("fresh", f"only comments or formatting changed since {rev[:10]}")
+                else:
+                    verdict = ("stale", f"the code changed since {rev[:10]}")
+                break
+        if verdict is None:
+            return "unknown", (
+                f"the recorded hash matches no revision of {rel} up to the claim's commit "
+                f"(searched the newest {self.depth} revisions), so history cannot say what changed"
+            )
+        cache[key] = list(verdict)
+        self._dirty = True
+        return verdict
+
+
+def claim_hash_problem(fields, claim_path, anchor, info, context):
+    """None when the claim's recorded hash is fresh for `info` (an `AnchorInfo`), else the text of
+    the problem. A claim declaring `hash_algorithm: v2` compares exactly (v2 already ignores
+    comments and formatting). A legacy claim (no field, or v1 / v1b) is fresh when its hash equals
+    one of the current hashes, and otherwise gets the history check
+    (`FreshnessContext.history_verdict`): comment-only and format-only changes since the claim was
+    written keep it fresh, a code change makes it stale, and when the history cannot be found the
+    exact comparison's mismatch stands, with the reason."""
+    recorded = _strip_prefix(fields["code_hash"])
+    declared = fields.get("hash_algorithm")
+    if declared is not None and declared not in ALGORITHMS:
+        return f"unknown hash_algorithm '{declared}' (known: {', '.join(ALGORITHMS)})"
+    current = info.hashes
+    if declared == "v2":
+        if recorded == current.v2:
+            return None
+        why = "the anchored code changed since this claim was last confirmed"
+    else:
+        if recorded_hash_matches(recorded, current):
+            return None
+        date = context.claim_date(fields, claim_path)
+        algorithm = declared or algorithm_for_date(date)
+        status, detail = context.history_verdict(claim_path, anchor, info, recorded, algorithm)
+        if status == "fresh":
+            return None
+        if status == "stale":
+            why = f"{detail} (written with hash algorithm {algorithm})"
+        else:
+            why = (
+                f"the exact comparison failed and the history check could not decide: {detail}; "
+                f"treated as stale (written with hash algorithm {algorithm})"
+            )
+    return (
+        f"code_hash mismatch for anchor '{anchor}' -- {why}; comment, docstring and formatting edits do not count "
+        f"(recorded sha256:{recorded[:12]}..., current sha256:{current.v2[:12]}... under {CURRENT_ALGORITHM}); "
+        "review the claim's own prose against the current code and rewrite the claim with write_claim.py "
+        "once confirmed accurate (or fix the code, if the claim was right and the change broke it)"
+    )
 
 
 def check_claims(repo_root):
@@ -339,44 +550,31 @@ def check_claims(repo_root):
     return scan_claims(repo_root)[0]
 
 
-def scan_claims(repo_root):
+def scan_claims(repo_root, context=None):
     """Returns `(problems, retired)`: the same (claim_path, problem) list `check_claims` returns,
     plus the paths of every claim deliberately retired (see COMM_claim_retirement). A retired
     claim is not hash-checked -- its anchor is gone on purpose -- but is reported as a non-failing
     count, so retirements stay visible instead of disappearing."""
     problems = []
     retired = []
-    anchor_hashes = None  # computed lazily, only if a claim file actually exists
-    legacy_hashes = None
+    pending = []  # (claim_path, fields, anchor) claims that carry a real hash
+    context = context or FreshnessContext()
 
     for claim_path in _git_tracked_files(repo_root, ".md"):
         if f"{os.sep}claims{os.sep}" not in claim_path:
             continue
         # A README.md inside a claims/ directory is a deliberate index/explanation file for the
-        # directory itself (e.g. hardware/claims/README.md, which says the directory is out
-        # of scope for claims), not a claim -- it carries no frontmatter because it isn't one.
-        # Without this exclusion this was a real false positive ("missing required frontmatter")
-        # against the real hams_com repo.
+        # directory itself, not a claim -- it carries no frontmatter because it isn't one.
         if os.path.basename(claim_path) == "README.md":
             continue
         # The centralized claims store (docs/bug_hunt_claims/<repo>/...) documents code that
-        # lives in a DIFFERENT git repo (hams_open/hams_shared claims, centralized into hams_com
-        # per the store policy in agents/skills/bug-hunt/SKILL.md) -- this checker's whole
-        # freshness model assumes the claim and the anchored code share one repo root
-        # (`build_anchor_hash_index` only ever scans `repo_root`'s own git-tracked .py files), so
-        # it can never find a centralized claim's real anchor and would otherwise always report
-        # it "orphaned". That skill's own docs already name the correct tool for these:
-        # `check_claims.py --source-root <other-repo>`. Without this exclusion, running this
-        # checker against the real hams_com repo produced over 1100 false-positive "orphaned
-        # claim" reports, the large majority of them centralized-store claims for
-        # hams_open/hams_shared code.
+        # lives in a DIFFERENT git repo; this checker's freshness model assumes the claim and the
+        # anchored code share one repo root, so it would report every one "orphaned". That skill's
+        # own docs name the correct tool for these: `check_claims.py --source-root <other-repo>`.
         rel = os.path.relpath(claim_path, repo_root)
         if rel.split(os.sep)[:2] == ["docs", "bug_hunt_claims"]:
             continue
-        # See EXCLUDED_TOP_LEVEL_DIRS's own comment: an exact top-level path-component match,
-        # not `startswith`, so a hypothetically-named `ingest_foo/` module (or anything else that
-        # merely starts with one of these names) is NOT swept in by accident -- only a claim
-        # actually rooted under `ingest/`, `ics_forms/`, or `ics_training/` themselves.
+        # See EXCLUDED_TOP_LEVEL_DIRS's own comment: an exact top-level path-component match.
         if rel.split(os.sep)[0] in EXCLUDED_TOP_LEVEL_DIRS:
             continue
         try:
@@ -403,46 +601,27 @@ def scan_claims(repo_root):
                 problems.append((claim_path, retirement_problem))
             continue
 
-        recorded = fields["code_hash"]
-        if recorded.strip().lower().startswith("not computable"):
-            # Established convention (already in active use across the real repo -- every
-            # Rust-anchored claim in daemons/*/claims/, plus claims for genuinely un-anchored
-            # Python functions) for a claim this checker structurally cannot verify yet: Python-
-            # only anchor hashing (per this file's own docstring, "JS and Rust claims support are
-            # real, named, not-yet-done follow-ons") has no way to resolve a Rust/JS anchor, and a
-            # function with no real `[@ANCHOR:]` at all has nothing to hash regardless. Without
-            # this check, such a claim always fell through to the "anchor not found" branch below
-            # and was reported as "orphaned" -- a false positive, and a misleading one (implying
-            # the anchor was deleted, when it was simply never Python). In the real hams_com repo, all 344
-            # "orphaned claim" findings left once centralized-store claims are excluded used this
-            # exact convention, none of them genuinely orphaned.
+        if fields["code_hash"].strip().lower().startswith("not computable"):
+            # A declared tooling gap (a claim written before the per-language normalizers, or an
+            # anchor-less function): not a freshness problem. write_claim.py now records a real
+            # hash for every language it can anchor.
             continue
+        pending.append((claim_path, fields, fields["anchor"]))
 
-        if anchor_hashes is None:
-            anchor_hashes = build_anchor_hash_index(repo_root)
-            legacy_hashes = build_anchor_hash_index(repo_root, legacy=True)
-
-        anchor = fields["anchor"]
-        current = anchor_hashes.get(va._clean(anchor))
-        if current is None:
-            problems.append(
-                (claim_path, f"anchor '{anchor}' not found in any git-tracked .py file -- orphaned claim")
-            )
-            continue
-
-        expected = recorded[len("sha256:") :] if recorded.startswith("sha256:") else recorded
-        if not recorded_hash_matches(recorded, current, legacy_hashes.get(va._clean(anchor))):
-            problems.append(
-                (
-                    claim_path,
-                    f"code_hash mismatch for anchor '{anchor}' -- the function's code changed since this "
-                    f"claim was last confirmed (comment and docstring edits do not count; recorded sha256:{expected[:12]}..., current "
-                    f"sha256:{current[:12]}...); review the claim's own prose against the current "
-                    "code and update code_hash once confirmed accurate (or fix the code, if the "
-                    "claim was right and the change broke it)",
+    if pending:
+        wanted = {va._clean(anchor) for _p, _f, anchor in pending}
+        index = build_anchor_index(repo_root, wanted)
+        for claim_path, fields, anchor in pending:
+            info = index.get(va._clean(anchor))
+            if info is None:
+                problems.append(
+                    (claim_path, f"anchor '{anchor}' not found in any git-tracked source file -- orphaned claim")
                 )
-            )
-
+                continue
+            problem = claim_hash_problem(fields, claim_path, anchor, info, context)
+            if problem:
+                problems.append((claim_path, problem))
+        context.save()
     return problems, retired
 
 

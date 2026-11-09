@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
-Every repository checkout registers the signal guard hook (Bruce, 2026-11-09).
+Every repository checkout registers the signal guard hook and the backup-secrets guard hook (Bruce, 2026-11-09).
 
 On 2026-11-09 an agent ran `kill $pp` on its own parent (the `systemd --user` that started it) because the PreToolUse hook
 `hams_shared/tools/claude_hooks/guard_signals.py` was not active: it was registered only in the `.claude/settings.json` of
@@ -13,9 +13,9 @@ settings of the directory it runs in, so each of the three checkouts (hams_com, 
 
 `REPO_DIR` defaults to the checkout this script lives in (the parent of `tools/`). A repository passes when
 `.claude/settings.json` exists, is tracked by git (when `REPO_DIR` is inside a git work tree), is valid JSON, and its
-`hooks.PreToolUse` has an entry whose `matcher` matches `Bash` and which holds a `command` hook that runs
-`claude_hooks/guard_signals.py` by a path that does not depend on the current directory (`$HOME/...`, `$CLAUDE_PROJECT_DIR/...`
-or an absolute path). Documentation: tools/README.md "Guard hook registration check".
+`hooks.PreToolUse` has, for each hook in HOOKS, an entry per required tool (`guard_signals.py`: Bash; `guard_backup_secrets.py`: Bash,
+Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Artifact) whose `matcher` matches that tool name and which holds a `command` hook that runs
+the script by a path that does not depend on the current directory (`$HOME/...`, `$CLAUDE_PROJECT_DIR/...` or an absolute path). Documentation: tools/README.md "Guard hook registration check".
 """
 
 import json
@@ -27,26 +27,45 @@ import sys
 import check_target
 
 HOOK_SCRIPT = "claude_hooks/guard_signals.py"
+BACKUP_HOOK_SCRIPT = "claude_hooks/guard_backup_secrets.py"
+# script -> the tool names whose PreToolUse matcher must reach it (the matcher is a regex on the tool name).
+HOOKS = {
+    HOOK_SCRIPT: ("Bash",),
+    BACKUP_HOOK_SCRIPT: ("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "Grep", "Artifact"),
+}
 SETTINGS = os.path.join(".claude", "settings.json")
-_ANCHORED_PATH_RE = re.compile(r"""(?<![\w./~$-])(?:\$HOME|\$\{HOME\}|\$CLAUDE_PROJECT_DIR|\$\{CLAUDE_PROJECT_DIR\}|~|/)[^\s"';]*""" + re.escape(HOOK_SCRIPT))
+_ANCHOR_PREFIX = r"""(?<![\w./~$-])(?:\$HOME|\$\{HOME\}|\$CLAUDE_PROJECT_DIR|\$\{CLAUDE_PROJECT_DIR\}|~|/)[^\s"';]*"""
+_ANCHORED_PATH_RE = re.compile(_ANCHOR_PREFIX + re.escape(HOOK_SCRIPT))
+
+
+# [@ANCHOR: check_claude_hook_registration:command_runs]
+def command_runs(command, script):
+    """True when the hook `command` text runs `script` (one of the HOOKS keys, e.g. `claude_hooks/guard_backup_secrets.py`) by an anchored path
+    (`$HOME`, `~`, `$CLAUDE_PROJECT_DIR` or absolute), so it works from a worktree and from any directory."""
+    return isinstance(command, str) and re.search(_ANCHOR_PREFIX + re.escape(script), command) is not None
 
 
 # [@ANCHOR: check_claude_hook_registration:command_is_guard]
 def command_is_guard(command):
-    """True when the hook `command` text runs `claude_hooks/guard_signals.py` by a path that is anchored (`$HOME`, `~`,
-    `$CLAUDE_PROJECT_DIR` or absolute), so it works from a worktree and from any directory."""
+    """`command_runs(command, HOOK_SCRIPT)`: the command runs the signal guard by an anchored path."""
     return isinstance(command, str) and _ANCHORED_PATH_RE.search(command) is not None
+
+
+# [@ANCHOR: check_claude_hook_registration:matcher_covers]
+def matcher_covers(matcher, tool):
+    """True when a PreToolUse `matcher` (a regex; empty or `*` means every tool) applies to the tool named `tool`."""
+    if matcher in (None, "", "*"):
+        return True
+    try:
+        return re.fullmatch(matcher, tool) is not None
+    except re.error:
+        return False
 
 
 # [@ANCHOR: check_claude_hook_registration:matcher_covers_bash]
 def matcher_covers_bash(matcher):
-    """True when a PreToolUse `matcher` (a regex; empty or `*` means every tool) applies to the Bash tool."""
-    if matcher in (None, "", "*"):
-        return True
-    try:
-        return re.fullmatch(matcher, "Bash") is not None
-    except re.error:
-        return False
+    """`matcher_covers(matcher, "Bash")`."""
+    return matcher_covers(matcher, "Bash")
 
 
 # [@ANCHOR: check_claude_hook_registration:is_tracked]
@@ -78,18 +97,16 @@ def check_repo(repo_dir):
     except (OSError, ValueError) as error:
         return [f"{name}: {SETTINGS} cannot be read as JSON: {error}"]
     entries = ((data.get("hooks") or {}).get("PreToolUse") or []) if isinstance(data, dict) else []
-    found = False
-    for entry in entries if isinstance(entries, list) else []:
-        if not isinstance(entry, dict) or not matcher_covers_bash(entry.get("matcher")):
-            continue
-        for hook in entry.get("hooks") or []:
-            if isinstance(hook, dict) and hook.get("type") == "command" and command_is_guard(hook.get("command")):
-                found = True
     problems = []
-    if not found:
-        problems.append(f"{name}: {SETTINGS} has no PreToolUse hook for the Bash tool that runs {HOOK_SCRIPT} by an anchored path "
-                        "($HOME/workspace/hams_open/hams_shared/tools/claude_hooks/guard_signals.py); copy the entry from "
-                        "hams_open/.claude/settings.json")
+    for script, tools in HOOKS.items():
+        missing = [tool for tool in tools if not any(
+            isinstance(entry, dict) and matcher_covers(entry.get("matcher"), tool) and any(
+                isinstance(hook, dict) and hook.get("type") == "command" and command_runs(hook.get("command"), script)
+                for hook in entry.get("hooks") or [])
+            for entry in (entries if isinstance(entries, list) else []))]
+        if missing:
+            problems.append(f"{name}: {SETTINGS} has no PreToolUse hook for the {', '.join(missing)} tool{'s' if len(missing) > 1 else ''} that runs {script} "
+                            f"by an anchored path ($HOME/workspace/hams_open/hams_shared/tools/{script}); copy the entry from hams_shared/.claude/settings.json")
     if not is_tracked(repo_dir):
         problems.append(f"{name}: {SETTINGS} is not tracked by git (git add it): a fresh checkout or a worktree would run without the guard")
     return problems
