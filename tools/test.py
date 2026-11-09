@@ -51,6 +51,7 @@ if "--mcp" in sys.argv:
 import host_requirements
 import infrastructure
 import bisect_modules
+import gate_snapshot
 import known_red
 import lock_queue
 import odoo_test_batch
@@ -4190,6 +4191,13 @@ def build_arg_parser():
         "named tests, by rerunning test.py on smaller sets through the normal slot queue (ADR 0118). Prints the set "
         "and writes a JSON report. The modules the tags name are always kept.",
     )
+    parser.add_argument(
+        "--snapshot-gate",
+        action="store_true",
+        help="Build the whole-system gate tree for the current origin/main commits (hams_com, hams_open and the hams_shared "
+        "commit it records), its build outputs, and print the command line of every shard; refuses when an input is "
+        "stale. Options: tools/gate_snapshot.py create --help (ADR 0118). Runs nothing.",
+    )
     parser.add_argument("--bisect-jobs", type=int, default=None, metavar="N",
                         help="With --bisect-modules: trials at once, 1 or 2 (default: 2 when the machine has 2 slots, else 1).")
     parser.add_argument("--bisect-max-runs", type=int, default=None, metavar="N",
@@ -4394,6 +4402,8 @@ def main():
     except (runner_slots.SlotConfigError, OSError) as e:
         print(f"❌ ERROR: cannot determine the test slot count: {e}")
         sys.exit(2)
+    if early_args.snapshot_gate:
+        sys.exit(gate_snapshot.main(["create"]))
     if early_args.bisect_modules:
         # The bisection is a driver: each trial is a normal test.py run that takes its own slot through the queue.
         sys.exit(bisect_modules.run(

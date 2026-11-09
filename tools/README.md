@@ -1938,6 +1938,104 @@ Purpose: the `--bisect-modules` command, called from `main()` before any lock is
 
 Returns 0, 1, 2 or 75 as above. Lowers its own priority with `os.nice(10)`; each trial inherits it. Writes the report; never kills a process. The trials run on this machine only.
 
+## Whole-system gate tree (`gate_snapshot.py`, `test.py --snapshot-gate`, ADR 0118)
+
+A whole-system run needs hams_com, hams_open and the hams_shared commit hams_open records, all at exact commits, plus build outputs some tests load, and `HAMS_OPEN_TREE`
+pointing at the right hams_open. Three gate shards failed in one night on a hams_open checkout behind `origin/main` and on a `libcloudflared.so` copied over with an old
+timestamp. `gate_snapshot.py` builds all of it from the current `origin/main` commits and refuses to continue when any input is stale or missing.
+
+```
+python3 hams_shared/tools/gate_snapshot.py create  [--workspace ~/workspace] [--parent DIR] [--shards 4] [--shards-file FILE] [--no-fetch] [--no-build] [--cargo-target-dir DIR]
+python3 hams_shared/tools/gate_snapshot.py verify  GATE_DIR [--no-fetch]    # exit 1 and every problem named when stale
+python3 hams_shared/tools/gate_snapshot.py commands GATE_DIR                # the shard command lines
+python3 hams_shared/tools/gate_snapshot.py prune   [--parent DIR] [--keep 1]
+python3 hams_shared/tools/test.py --snapshot-gate                           # create with the defaults
+```
+
+`create`: refuses on the production host (`hams1`, or a production marker file); fetches `origin main` of hams_com, hams_open and hams_shared; reads the three commits (hams_shared
+from the gitlink of hams_open's `origin/main`); makes `<parent>/gate_<com>_<open>/{hams_com,hams_open,hams_open/hams_shared}` as detached worktrees (an existing directory for the
+same commits is reused); builds `libcloudflared.so` (with `build_cloudflared_ffi.py --force`) and the relay test binary (`cargo build --features test-hooks --locked`, then the
+`.console_tree` file) when they are missing or stale, at `nice -n 10`; writes a stamp (`<output>.gate_stamp`: the git tree ids of the sources) beside each output; chooses shards
+(`--shards-file`: modules keep their shard from an earlier `gate_shards.json`; otherwise round robin); writes `gate_snapshot.json` and `gate_shards.json` (a list of lists of
+module names) in the gate directory; verifies; prints the shard command lines. No test is started.
+
+`verify` (also run at the end of `create`) refuses when: a tree is missing, not at its recorded commit, or has uncommitted changes; a tree's commit is no longer `origin/main`
+(after a fetch); `HAMS_OPEN_TREE` is unset or is not the gate's hams_open; the hams_com tree's `hams_shared` link does not resolve into the gate; a shard names a module with no manifest;
+an output is missing, has no stamp for its current sources (copied in or built from other sources), is older than a source file, is built for another CPU, or (relay) lacks a
+`.console_tree` naming the current console, is not executable, or `HAMS_CONSOLE_TEST_RELAY_BIN` names another file. The relay builds into `--cargo-target-dir` (default
+`$CARGO_TARGET_DIR`, else `~/.cache/hams-test/gate/cargo-target`).
+
+### `[@ANCHOR: gate_snapshot:refuse_production]` `refuse_production(hostname=None, marker_files=(...))`
+
+Purpose: the gate never runs on production. Raises `SnapshotError` when the host name is `hams1` (or starts with `hams1.`) or a marker file exists; returns None otherwise. Reads the host name and file metadata.
+
+### `[@ANCHOR: gate_snapshot:origin_main]` `origin_main(repo, fetch=True)`
+
+Purpose: the commit that is `origin/main` now. `fetch` runs `git fetch -q origin main` first (network). Returns the 40-character id. Raises `SnapshotError` when the fetch or `rev-parse` fails: a stale answer must not look current.
+
+### `[@ANCHOR: gate_snapshot:recorded_shared_commit]` `recorded_shared_commit(open_repo, open_commit)`
+
+Purpose: which hams_shared commit hams_open's tree records. Returns the id of the `hams_shared` gitlink (`git ls-tree`). Raises `SnapshotError` when there is none.
+
+### `[@ANCHOR: gate_snapshot:gate_dir_name]` `gate_dir_name(com_commit, open_commit)`
+
+Purpose: the snapshot directory name `gate_<9 hex>_<9 hex>`; the same commits give the same name, so a rerun reuses the tree. Pure.
+
+### `[@ANCHOR: gate_snapshot:create_trees]` `create_trees(workspace, parent, com_commit, open_commit, shared_commit)`
+
+Purpose: makes the three worktrees. `workspace` holds the main checkouts `hams_com`, `hams_open` and `hams_open/hams_shared`; `parent` the directory for `gate_*`; the commits must exist in those repositories.
+Returns `Trees` (frozen dataclass: `parent` (the gate directory), `com`, `open`, `shared` paths, and `com_commit`, `open_commit`, `shared_commit`; one snapshot, serialized in `gate_snapshot.json`). Raises `SnapshotError` for a missing
+commit, a failing `git worktree add`, or a hams_com `hams_shared` link that does not resolve into the gate. Writes worktrees (and removes the empty `hams_shared` directory of the hams_open worktree); needs no network.
+
+### `[@ANCHOR: gate_snapshot:artifact_output]` `artifact_output(artifact, trees, cargo_target_dir)`
+
+Purpose: where an output is. `Artifact` (frozen dataclass: `name` `cloudflared_ffi` or `relay_test_hooks`, `tree` `com` or `open`, `sources` tree-relative directories) is listed in `ARTIFACTS`. Returns
+`<hams_open tree>/daemons/cloudflared-ffi/libcloudflared.so` or `<cargo_target_dir>/debug/hams_local_relay`. Pure.
+
+### `[@ANCHOR: gate_snapshot:source_stamp]` `source_stamp(artifact, trees)`
+
+Purpose: the content of the stamp file: `{source directory: git tree id at the tree's HEAD}` (`git rev-parse HEAD:<dir>`). Changes whenever any file of a source directory changes in a commit. Reads git only.
+
+### `[@ANCHOR: gate_snapshot:artifact_problems]` `artifact_problems(artifact, trees, cargo_target_dir, environ=None)`
+
+Purpose: whether an output may be used. Returns a list of sentences, empty when it may. The checks are the output and stamp rules of `verify`; `environ` supplies `HAMS_CONSOLE_TEST_RELAY_BIN`. Reads files and git; changes nothing.
+Source files are compared by modification time excluding build products (`libcloudflared.so`, its header, stamps, `.console_tree`).
+
+### `[@ANCHOR: gate_snapshot:build_artifact]` `build_artifact(artifact, trees, cargo_target_dir, run=None, out=print)`
+
+Purpose: builds one output and stamps it. `run(command, cwd, env)` returns an exit status (default `nice -n 10` plus `subprocess.call`; tests pass a fake). Returns the output path. Raises `SnapshotError` when the command fails or the output
+is missing afterwards. Slow (Go build; cargo build, minutes cold). Side effects: the build outputs, the `.console_tree` and stamp files.
+
+### `[@ANCHOR: gate_snapshot:discover_modules]` `discover_modules(trees)`
+
+Purpose: the whole-system module list: directories at the root of the hams_com and hams_open trees that contain `__manifest__.py`, sorted, unique. Pass `--shards-file` to keep a curated list's placement; modules absent from it are added.
+
+### `[@ANCHOR: gate_snapshot:make_shards]` `make_shards(modules, count, previous=None)`
+
+Purpose: the shard split. Returns a list of lists of module names, each module in exactly one list (`gate_shards.json` form). With `previous`, old placement is kept, vanished modules dropped, new modules go to the smallest shard. Pure.
+
+### `[@ANCHOR: gate_snapshot:shard_command]` `shard_command(trees, shard, log_directory, relay_binary, extra_env=None)`
+
+Purpose: the exact command line of one shard: `cd <gate hams_com> && source /etc/profile.d/hams_test_environment.sh && nice -n 10 sudo -n -u odoo env HAMS_ISOLATED_NS=1 HAMS_CI_LOAD_GATE_RATIO=3 HAMS_CRYPTO_KEY="$HAMS_CRYPTO_KEY" GIT_DISCOVERY_ACROSS_FILESYSTEM=1 HAMS_OPEN_TREE=<gate hams_open> HAMS_CONSOLE_TEST_RELAY_BIN=<binary> python3 hams_shared/tools/test.py --wait --solo -l <log directory> -u <modules>`. Queued (`--wait`) behind other runs and slots, never batched (`--solo`). Pure; the string is run by a shell.
+
+### `[@ANCHOR: gate_snapshot:verify_snapshot]` `verify_snapshot(gate_dir, fetch=True, environ=None, cargo_target_dir=None)`
+
+Purpose: the refusal. Returns every problem listed above (empty: current and complete). `fetch` refreshes `origin/main` of the repositories first; `environ` is where `HAMS_OPEN_TREE` is read (default `os.environ`). Raises `SnapshotError` for an unreadable manifest. A stale
+input is a returned problem, never an exception, so one call names all of them.
+
+### `[@ANCHOR: gate_snapshot:create_snapshot]` `create_snapshot(workspace, parent, shards, shards_file, fetch, build, cargo_target_dir, run, out, hostname)`
+
+Purpose: `create`. Returns the manifest dictionary (`version`, `created`, `workspace`, `trees`, `cargo_target_dir`, `shards`, `commands`). Raises `SnapshotError` for a production host, a failed step, a malformed shard file, or a snapshot that does not verify afterwards.
+Takes no test slot and starts no test.
+
+### `[@ANCHOR: gate_snapshot:prune_snapshots]` `prune_snapshots(parent, keep=1, out=print)`
+
+Purpose: removes old trees. Keeps the `keep` newest `gate_*` directories of `parent` (by modification time); for each other one runs `git worktree remove --force` through the repository that owns each worktree, then deletes the directory. Returns the removed paths. Never touches other names.
+
+### `[@ANCHOR: gate_snapshot:main]` `main(argv=None, out=print)`
+
+Purpose: the command line above. Returns 0 on success, 1 for a stale or incomplete snapshot or a failed step (`REFUSING:` and one `  - problem` line each), 2 on the production host.
+
 ## Staged-file size check
 
 `check_staged_files.py` (run by `git-hooks/pre-commit`) refuses a commit that stages a file over 5 MB (`MAX_BYTES`) or
