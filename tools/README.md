@@ -2208,7 +2208,7 @@ passed, or died before a verdict; the exit status tells which). Raises `CanaryEr
 ### `[@ANCHOR: gate_canary:aggregate]` `aggregate(shards, commits, now=None)`
 
 Purpose: the status document. `shards` is a list of `{"number", "modules", "exit_status", "results", "problems"?}`; `commits` is `{"com", "open", "shared"}`; `now` an ISO UTC time (default now). Returns the `status.json` dictionary described above, lists sorted and unique,
-`status` `red` when there is a new failure or a shard error. Pure.
+`status` `red` when there is a new failure or a shard error. A shard that exited with a status other than 0 whose results file names no new failure is a shard error ("the run did not finish"): `test.py` writes the file for every non-zero Odoo exit and returns non-zero when the run was cut short (CPU limit, a signal), so the file lists only the failures seen before the abort. Pure.
 
 ### `[@ANCHOR: gate_canary:baseline_candidates]` `baseline_candidates(status, known)`
 
