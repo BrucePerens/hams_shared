@@ -81,6 +81,18 @@ def read_shard_results(log_directory):
     return merged
 
 
+# [@ANCHOR: gate_canary:shard_tests_run]
+def shard_tests_run(log_path):
+    """How many tests a passing shard's log says ran: the sum of the N in every `0 failed, 0 error(s) of N tests` line (test.py's `TEST RUN COMPLETE` line and
+    Odoo's own `odoo.tests.result:` line), 0 when the log is missing, unreadable or has none. Pure apart from the read."""
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return 0
+    return sum(int(n) for n in re.findall(r"\b0 failed, 0 error\(s\) of (\d+) tests", text))
+
+
 # [@ANCHOR: gate_canary:parse_cargo_failures]
 def parse_cargo_failures(text):
     """`{"failed": [test paths], "passed": N}` from the output of `cargo test --no-fail-fast`: every `test <path> ... FAILED` line (sorted, de-duplicated) and the
@@ -119,7 +131,12 @@ def run_relay_suite(com_tree, log_directory, runner=None, now=time.time):
             parsed = parse_cargo_failures(handle.read())
     except OSError:
         parsed = {"failed": [], "passed": 0}
-    verdict = "green" if status == 0 else ("red" if parsed["failed"] else "error")
+    # Green needs positive evidence: exit 0 AND at least one test counted in the log. Exit 0 with no `N passed` line (a cargo that ran nothing,
+    # an unreadable log) is an error, never a pass.
+    if status == 0:
+        verdict = "green" if parsed["passed"] > 0 else "error"
+    else:
+        verdict = "red" if parsed["failed"] else "error"
     return {"status": verdict, "failed": parsed["failed"], "passed": parsed["passed"], "exit_status": status, "seconds": round(now() - started, 1), "log": log_path}
 
 
@@ -138,6 +155,8 @@ def aggregate(shards, commits, now=None, relay=None):
     new, tolerated, flakes, passing, fix_me, errors = set(), set(), set(), set(), set(), []
     counts = {"failed": 0, "errors": 0, "total": 0}
     detail = {}
+    if not shards:
+        errors.append("no shard was run: a night with nothing tested has no verdict")
     for shard in shards:
         results = shard.get("results")
         if shard.get("problems"):
@@ -146,6 +165,9 @@ def aggregate(shards, commits, now=None, relay=None):
         if results is None:
             if shard.get("exit_status") != 0:
                 errors.append("shard %s: exit status %s and no test_results.json (no verdict)" % (shard.get("number"), shard.get("exit_status")))
+            elif not shard.get("tests_run"):
+                # test.py writes no results file for a passing run, so a pass is exit 0 plus its own "Odoo reports 0 failed ... of N tests" line.
+                errors.append("shard %s: exit status 0 but its log shows no tests that ran (zero tests, or no verdict line): not a pass" % shard.get("number"))
             continue
         new.update(results["new_failures"])
         tolerated.update(results["known_red"])
@@ -164,7 +186,7 @@ def aggregate(shards, commits, now=None, relay=None):
     if relay:
         new.update(RELAY_ID_PREFIX + name for name in relay.get("failed", []))
         if relay.get("status") == "error":
-            errors.append("relay full suite: exit status %s and no failed test (it did not build or died); log %s" % (relay.get("exit_status"), relay.get("log")))
+            errors.append("relay full suite: exit status %s and no failed test or no passed test (it did not build, ran nothing or died); log %s" % (relay.get("exit_status"), relay.get("log")))
     return {
         "relay": relay, "version": STATUS_VERSION, "commit": commits.get("com", ""), "commits": commits, "time": now,
         "status": "red" if (new or errors) else "green", "new_failures": sorted(new), "tolerated": sorted(tolerated),
@@ -325,8 +347,10 @@ def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir
             return {"number": index + 1, "modules": shard_modules[index], "exit_status": 2, "results": None, "problems": problems}
         for stale in glob.glob(os.path.join(directory, "test_results*.json")):
             os.unlink(stale)  # a rerun on the same commits must not read the verdict file of an earlier run
-        status = runner(commands[index], os.path.join(trees["parent"], "logs", "shard%d.log" % (index + 1)))
-        return {"number": index + 1, "modules": shard_modules[index], "exit_status": status, "results": read_shard_results(directory)}
+        log_path = os.path.join(trees["parent"], "logs", "shard%d.log" % (index + 1))
+        status = runner(commands[index], log_path)
+        return {"number": index + 1, "modules": shard_modules[index], "exit_status": status, "results": read_shard_results(directory),
+                "tests_run": shard_tests_run(log_path)}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=width) as pool:
         shard_results = list(pool.map(one, range(len(commands))))
