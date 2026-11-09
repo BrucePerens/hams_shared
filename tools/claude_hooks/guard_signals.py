@@ -27,6 +27,7 @@ import dataclasses
 import json
 import os
 import re
+import shlex
 import sys
 import time
 
@@ -39,6 +40,7 @@ _PYTHON_KILL_RE = re.compile(
     r"SIGKILL|os\.killpg|\.kill\([^)]*,\s*9\s*\)|\[\s*['\"](?:pkill|killall)['\"]|\[\s*['\"]pgrep['\"]\s*,\s*['\"]-\w*f|"
     r"os\.system\(\s*['\"][^'\"]*(?:pkill|killall|kill\s+-9|pgrep\s+-\w*f)")
 RESERVED = {"if", "then", "else", "elif", "while", "until", "do", "!", "{", "}", "time", "fi", "done", "esac", "coproc"}
+EXEC_OPTIONS = ("-exec", "-execdir", "-ok", "-okdir")
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 KILLERS = {"pkill": "pkill", "killall": "killall", "skill": "skill", "killall5": "killall5"}
 OPERATORS = ("<<<", "<<-", "&>>", "<<", ">>", "&>", ">&", "<&", ">|", "<>", "&&", "||", ";;", "|&", "<", ">", ";", "&", "|",
@@ -403,9 +405,14 @@ def check_command(command, verdict, depth):
     elif name in ("watch", "ssh"):
         for i in range(1, len(words)):
             analyze(" ".join(w.text for w in words[i:]), depth + 1, verdict)
-    elif name == "find" and any(r in ("-exec", "-execdir", "-ok", "-okdir") for r in rest):
-        index = next(i for i, r in enumerate(rest) if r in ("-exec", "-execdir", "-ok", "-okdir"))
-        analyze(" ".join(rest[index + 1:]).replace(";", " ; "), depth + 1, verdict)
+    elif name == "find" and any(r in EXEC_OPTIONS for r in rest):
+        index = 0
+        while index < len(rest):
+            if rest[index] in EXEC_OPTIONS:  # every -exec, each up to its `;` or `+`, words re-quoted so `sh -c 'kill -9 $0'` stays one script
+                end = next((j for j in range(index + 1, len(rest)) if rest[j] in (";", "+")), len(rest))
+                analyze(" ".join(shlex.quote(r) for r in rest[index + 1:end]), depth + 1, verdict)
+                index = end
+            index += 1
     elif re.match(r"(python|perl|ruby|node|php)", name):
         texts = [words[i + 1].text for i, w in enumerate(words[:-1]) if w.text in ("-c", "-e", "-r")] + command.bodies
         if any(_PYTHON_KILL_RE.search(text) for text in texts):

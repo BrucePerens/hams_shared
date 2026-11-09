@@ -3440,7 +3440,7 @@ Purpose: the script text of `sh -c SCRIPT`, `bash -lc SCRIPT`, `su -c SCRIPT`; `
 
 ### `[@ANCHOR: guard_signals:check_command]` `check_command(command, verdict, depth)`
 
-Purpose: judge one `Command`: names `pkill killall skill killall5`, `kill`, `pgrep`, `fuser -k`, `systemctl kill`; recurses (`depth` guards recursion) into `bash -c`, `su -c`, shell heredoc bodies, `eval`, `ssh` and `watch` (every suffix of the words, since options precede the command), `find -exec`, and interpreter (`python perl ruby node php`) `-c`/`-e` strings and heredoc bodies that use SIGKILL, `os.killpg` or call `pkill`, `killall` or `pgrep -f`. Adds reasons to `verdict`.
+Purpose: judge one `Command`: names `pkill killall skill killall5`, `kill`, `pgrep`, `fuser -k`, `systemctl kill`; recurses (`depth` guards recursion) into `bash -c`, `su -c`, shell heredoc bodies, `eval`, `ssh` and `watch` (every suffix of the words, since options precede the command), every `find -exec`/`-execdir`/`-ok`/`-okdir` (each up to its `;` or `+`, re-quoted so a `sh -c '...'` argument stays one script), and interpreter (`python perl ruby node php`) `-c`/`-e` strings and heredoc bodies that use SIGKILL, `os.killpg` or call `pkill`, `killall` or `pgrep -f`. Adds reasons to `verdict`.
 
 ### `[@ANCHOR: guard_signals:analyze]` `analyze(text, depth=0, verdict=None)`
 
