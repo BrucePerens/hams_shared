@@ -95,9 +95,8 @@ class BuildGraphTests(unittest.TestCase):
         self.assertNotIn("not_really_a_module", graph)
 
     def test_a_claude_worktree_directory_is_never_scanned_at_all(self):
-        """Real, live bug found reviewing this checker: without a dot-directory exclusion, a
-        concurrent session's own .claude/worktrees/<session>/ directory -- this project's own
-        standing convention for running concurrent bug-hunt dispatches in isolated git worktrees
+        """Without a dot-directory exclusion, a concurrent session's own
+        .claude/worktrees/<session>/ directory -- agent sessions run in isolated git worktrees
         INSIDE the repo root -- gets scanned as if it were part of the real repo. Beyond wasted
         work, `graph[mod] = [...]` keys purely by basename with no path disambiguation, so a
         worktree's own copy of a real module (same basename, possibly a different, in-progress

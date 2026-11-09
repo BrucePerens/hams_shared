@@ -62,15 +62,13 @@ class FindCargoCratesTests(unittest.TestCase):
         self.assertEqual(chk.find_cargo_crates(self.tmp), [])
 
     def test_a_concurrent_sessions_claude_worktree_is_never_walked(self):
-        """Real, live bug found reviewing this checker: IGNORE_DIR_NAMES has no ".claude" entry
-        and no generic dot-directory exclusion, unlike several sibling checkers in this same tree
-        (check_dead_code.py, check_minified_js_nested_templates.py, etc., which all prune `not
-        d.startswith(".")`). This project's own standing convention runs concurrent bug-hunt
-        dispatches in isolated git worktrees under `.claude/worktrees/<session>/` INSIDE the repo
-        root -- confirmed live while reviewing this exact file: running find_cargo_crates against
-        the real hams_com checkout during this session found the same daemon crates listed
-        THREE times over, once for the real repo and once each for two other, real, concurrently
-        running sessions' own worktrees. Beyond wasted work (cargo clippy is slow), a concurrent
+        """IGNORE_DIR_NAMES has no ".claude" entry, so dot-directories must be pruned generically
+        (`not d.startswith(".")`), as sibling checkers do (check_dead_code.py,
+        check_minified_js_nested_templates.py, etc.). Agent sessions run in isolated git
+        worktrees under `.claude/worktrees/<session>/` INSIDE the repo root, so without the
+        exclusion find_cargo_crates against the hams_com checkout lists the same daemon crates
+        once for the real repo and once for each concurrently running session's own worktree.
+        Beyond wasted work (cargo clippy is slow), a concurrent
         session's in-progress, uncommitted Rust code failing to build or having real clippy
         findings -- completely normal for work in progress -- would be reported as a finding
         against the wrong repo entirely, a spurious CI failure with no relationship to the actual
