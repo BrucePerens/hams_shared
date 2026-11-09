@@ -234,6 +234,10 @@ When debugging tests, especially UI tours, you can use the MCP test server inste
 * **A tag-selected run is NOT the pre-merge run.** It proves the one test you named. Before merging,
   run the whole module without tags: `test.py --wait -u MODULE` (and the module's dependents when you
   changed shared code). Say in the PR which run you did.
+* **Per-PR targeted run:** `python3 hams_shared/tools/test_impact.py` prints the smallest `test.py -u ...` command for the
+  branch (changed modules plus everything that depends on them; only the changed classes when only test files changed) and says
+  why. Anything it cannot map (manifests, `security/`, `data/`, `views/`, hams_shared tools, shared libraries, daemons)
+  answers "run the full module list". The nightly whole-system run stays the safety net. See `tools/README.md`.
 * **Pre-flight first:** the manifest, burn-list, init-import, anchor and JavaScript checks now run in
   the first seconds, before the lock queue and the provisioning, so a finding ends the run at once.
   The last two lines of such a failure are `❌ PRE-FLIGHT FAILED: <cause>` and `NEXT: <action>`.
