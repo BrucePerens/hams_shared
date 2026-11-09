@@ -6,7 +6,7 @@ Tests for anchor_doc_inventory.py, the measurement behind night_shift_todo/low/d
 (ADR 0113). They build small documentation and source trees in a temporary directory.
 
 Tests [@ANCHOR: anchor_doc_inventory:entry_shape]
-Tests [@ANCHOR: anchor_doc_inventory:doc_entries]
+Tests [@ANCHOR: anchor_doc_inventory:markdown_entries]
 Tests [@ANCHOR: anchor_doc_inventory:scan_docs]
 Tests [@ANCHOR: anchor_doc_inventory:find_data_structures]
 Tests [@ANCHOR: anchor_doc_inventory:scan_structures]

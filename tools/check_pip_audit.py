@@ -60,6 +60,7 @@ IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".
 # than a `--version` check).
 VERSION_CHECK_TIMEOUT_SECONDS = 30
 AUDIT_TIMEOUT_SECONDS = 300
+# [@ANCHOR: check_pip_audit:timeout_scale]
 # On a saturated machine run_linters.py exports HAMS_LINT_TIMEOUT_SCALE (1 to 4): the limit stretches with it, so a starved audit is not
 # reported as a stalled network (ADR 0117). A bad value means 1.
 def _timeout_scale(text):
@@ -96,6 +97,7 @@ def cache_hours(environ=None):
     return value
 
 
+# [@ANCHOR: check_pip_audit:cache_directory]
 def _cache_directory(environ):
     explicit = environ.get(CACHE_DIR_ENV)
     if explicit:
@@ -193,6 +195,7 @@ def find_requirements_files(repo_root):
     return sorted(found)
 
 
+# [@ANCHOR: check_pip_audit:main]
 def main():
     if len(sys.argv) < 2:
         print("Usage: check_pip_audit.py <repo_root>")

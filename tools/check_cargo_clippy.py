@@ -378,6 +378,7 @@ ALL_TARGETS_CRATES = {
 }
 
 
+# [@ANCHOR: tools:check_cargo_clippy_command]
 def _clippy_command(crate_dir):
     """The cargo clippy command line for `crate_dir` (all targets and features for ALL_TARGETS_CRATES)."""
     extra = []
@@ -387,6 +388,7 @@ def _clippy_command(crate_dir):
     return ["cargo", "clippy"] + extra + ["--", "-W", "clippy::all"]
 
 
+# [@ANCHOR: tools:check_cargo_clippy_run]
 def _run_clippy(crate_dir):
     return subprocess.run(
         _clippy_command(crate_dir),

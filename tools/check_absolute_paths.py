@@ -55,6 +55,7 @@ import os
 import sys
 
 
+# [@ANCHOR: tools:check_absolute_paths]
 def check_absolute_paths(repo_dir):
     violations = []
 

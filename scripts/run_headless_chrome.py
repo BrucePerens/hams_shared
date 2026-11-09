@@ -88,6 +88,7 @@ def _matching_chromes(real_profile):
 REAP_WAIT_SECONDS = 15.0
 
 
+# [@ANCHOR: run_headless_chrome_reap]
 def reap_headless_chromes(user_data_dir):
     """Kill the Chrome processes of this UID that use user_data_dir as profile.
 

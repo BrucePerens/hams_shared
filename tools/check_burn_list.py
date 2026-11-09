@@ -5742,6 +5742,7 @@ def _git_ignored_paths(target_dir):
     return {os.path.normpath(line.rstrip("/")) for line in result.stdout.splitlines() if line.strip()}
 
 
+# [@ANCHOR: tools:check_burn_list_main]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", nargs="?", default=".")

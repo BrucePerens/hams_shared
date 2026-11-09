@@ -50,7 +50,7 @@ def entry_shape(text):
     }
 
 
-# [@ANCHOR: anchor_doc_inventory:doc_entries]
+# [@ANCHOR: anchor_doc_inventory:markdown_entries]
 def doc_entries(path):
     """The documentation entries of one markdown file: a list of `{"anchors": [ids], "line": n, "shape": {...}}`.
 
@@ -122,6 +122,7 @@ def scan_docs(root, short_words=DEFAULT_SHORT_WORDS):
     return report
 
 
+# [@ANCHOR: anchor_doc_inventory:importance]
 def importance(path):
     """Sort key: the index of the first IMPORTANCE fragment the path contains, else after all of them."""
     for rank, fragment in enumerate(IMPORTANCE):
