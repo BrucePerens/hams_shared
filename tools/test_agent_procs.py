@@ -11,6 +11,8 @@ Tests [@ANCHOR: agent_procs:WaitResult]
 Tests [@ANCHOR: agent_procs:user_name]
 Tests [@ANCHOR: agent_procs:boot_time]
 Tests [@ANCHOR: agent_procs:format_start]
+Tests [@ANCHOR: agent_procs:parse_start_time]
+Tests [@ANCHOR: agent_procs:check_start_time]
 Tests [@ANCHOR: agent_procs:read_proc]
 Tests [@ANCHOR: agent_procs:snapshot]
 Tests [@ANCHOR: agent_procs:ancestry]
@@ -21,6 +23,7 @@ Tests [@ANCHOR: agent_procs:caller_worktree]
 Tests [@ANCHOR: agent_procs:chrome_data_dir]
 Tests [@ANCHOR: agent_procs:protected_reason]
 Tests [@ANCHOR: agent_procs:ps_line]
+Tests [@ANCHOR: agent_procs:shell_clones]
 Tests [@ANCHOR: agent_procs:find_procs]
 Tests [@ANCHOR: agent_procs:read_pid_file]
 Tests [@ANCHOR: agent_procs:jobs_dir]
@@ -35,6 +38,7 @@ Tests [@ANCHOR: agent_procs:forward_signal]
 Tests [@ANCHOR: agent_procs:wrapper_main]
 Tests [@ANCHOR: agent_procs:start_job]
 Tests [@ANCHOR: agent_procs:wait_pid]
+Tests [@ANCHOR: agent_procs:wait_matching]
 Tests [@ANCHOR: agent_procs:wait_job]
 Tests [@ANCHOR: agent_procs:wait_file]
 Tests [@ANCHOR: agent_procs:group_members]
@@ -473,8 +477,17 @@ class WaitTests(ProcTestCase):
         wrong = ap.read_proc(decoy.pid).start_ticks - 1000
         result = ap.wait_pid(decoy.pid, start_ticks=wrong, timeout=5, interval=0.05)
         self.assertEqual(result.code, 0)
-        self.assertIn("different process", result.message)
+        self.assertIn("was reused", result.message)
+        self.assertNotIn("still running", result.message)
         self.assertTrue(self.alive(decoy))  # and nothing was signalled
+
+    def test_wait_pid_with_a_start_time_that_cannot_be_this_pid_is_an_error_not_done(self):
+        decoy = self.decoy("tokfuture")
+        later = ap.read_proc(decoy.pid).start_ticks + 1
+        with self.assertRaises(ap.ProcError) as caught:
+            ap.wait_pid(decoy.pid, start_ticks=later, timeout=5, interval=0.05)
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("ticks=", str(caught.exception))
 
     def test_wait_pid_unknown_pid_is_already_gone(self):
         self.assertIn("already gone", ap.wait_pid(2 ** 22 + 99).message)
@@ -557,6 +570,236 @@ class WaitTests(ProcTestCase):
     def test_wait_job_unknown_is_a_usage_error(self):
         with self.assertRaises(ap.ProcError):
             ap.wait_job("nosuchjob", directory=self.jobs)
+
+
+def stat_ticks(pid):
+    """Field 22 of /proc/PID/stat read directly (not through agent_procs), or None when the pid is gone."""
+    try:
+        with open(f"/proc/{pid}/stat") as handle:
+            raw = handle.read()
+    except OSError:
+        return None
+    return int(raw[raw.rindex(")") + 2:].split()[19])
+
+
+class WaitStartTimeTests(ProcTestCase):
+    """`wait --pid P --start-time T` through the real command line, for processes started in different ways.
+
+    Regression of 2026-11-09: a start time that did not equal the process's was taken for "pid reused, the original is gone"
+    and `wait` returned 0 at once while the target (a long gate_snapshot.py create) was still running."""
+
+    LIFETIME = 2.5
+
+    def started(self, how):
+        """(pid to wait on, the process that ends, Popen to clean up) for a long-lived child started the way `how` says."""
+        code = f"import time; time.sleep({self.LIFETIME})"
+        if how == "plain":
+            proc = subprocess.Popen([sys.executable, "-c", code])
+        elif how == "nohup":
+            proc = subprocess.Popen(["nohup", sys.executable, "-c", code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif how == "setsid":  # from a plain parent setsid execs in place
+            proc = subprocess.Popen(["setsid", sys.executable, "-c", code])
+        elif how == "shell":  # bash runs the last command of -c in the same pid
+            proc = subprocess.Popen(["bash", "-c", f"{sys.executable} -c '{code}'"])
+        elif how == "shell-wrapper-with-child":  # the shell stays as the parent of the real work: wait on the shell
+            proc = subprocess.Popen(["bash", "-c", f"{sys.executable} -c '{code}'; true"])
+        else:
+            raise AssertionError(how)
+        self.spawned.append(proc)
+        self.until(lambda: stat_ticks(proc.pid) is not None)
+        return proc
+
+    def reparented(self):
+        """A python sleeper started by a shell that exits at once: its parent is gone, init (or a subreaper) adopts it."""
+        out = subprocess.run(["bash", "-c", f"{sys.executable} -c 'import time; time.sleep({self.LIFETIME})' "
+                              f"</dev/null >/dev/null 2>&1 & echo $!"], capture_output=True, text=True, timeout=20)
+        pid = int(out.stdout.strip())
+        self.until(lambda: stat_ticks(pid) is not None)
+        return pid
+
+    def wait_cli(self, pid, start, timeout="30"):
+        began = time.monotonic()
+        done = cli("wait", "--pid", str(pid), "--start-time", str(start), "--timeout", timeout, "--interval", "0.1",
+                   env=self.env)
+        return done, time.monotonic() - began
+
+    def test_waits_until_the_process_ends_for_every_way_of_starting_it(self):
+        for how in ("plain", "nohup", "setsid", "shell", "shell-wrapper-with-child"):
+            with self.subTest(how=how):
+                proc = self.started(how)
+                ticks = stat_ticks(proc.pid)  # field 22 as read by hand
+                done, took = self.wait_cli(proc.pid, ticks)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertIn("ended", done.stdout)
+                self.assertGreater(took, self.LIFETIME - 1.5, f"returned after {took:.2f}s, the process lives {self.LIFETIME}s")
+                self.assertIsNotNone(proc.wait(timeout=5))
+
+    def test_waits_for_a_reparented_process(self):
+        pid = self.reparented()
+        done, took = self.wait_cli(pid, stat_ticks(pid))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertGreater(took, self.LIFETIME - 1.5)
+        self.assertIsNone(stat_ticks(pid))
+
+    def test_accepts_every_format_find_prints(self):
+        decoy = self.decoy("tokformats")
+        line = cli("find", "--cmd-contains", "tokformats", env=self.env).stdout.split()
+        fields = dict(part.split("=", 1) for part in line if "=" in part and part.split("=", 1)[0] in ("start", "ticks"))
+        for given in (fields["ticks"], f"ticks={fields['ticks']}", fields["start"], f"start={fields['start']}"):
+            with self.subTest(given=given):
+                done = cli("wait", "--pid", str(decoy.pid), "--start-time", given, "--timeout", "0.5", "--interval", "0.1",
+                           env=self.env)
+                self.assertEqual(done.returncode, 75, done.stdout + done.stderr)
+                self.assertIn("still running", done.stdout)
+        self.assertTrue(self.alive(decoy))
+
+    def test_a_wrong_start_time_is_an_error_naming_the_format_never_done(self):
+        decoy = self.decoy("tokwrongfmt")
+        ticks = stat_ticks(decoy.pid)
+        now_ticks = int((time.time() - ap.boot_time()) * ap.CLK_TCK)
+        wrong = {
+            "one tick later": str(ticks + 1),
+            "seconds since boot": str(ticks // ap.CLK_TCK),
+            "epoch seconds": str(int(time.time())),
+            "epoch milliseconds": str(int(time.time() * 1000)),
+            "a later start= time": ap.format_start(now_ticks + 10 * ap.CLK_TCK),
+            "not a number": "soon",
+            "empty": "",
+            "negative": "-5",
+            "hex": hex(ticks),
+        }
+        for label, value in wrong.items():
+            with self.subTest(label=label):
+                done = cli("wait", "--pid", str(decoy.pid), "--start-time", value, "--timeout", "0.5", "--interval", "0.1",
+                           env=self.env)
+                self.assertEqual(done.returncode, 2, f"{label}: {done.stdout}{done.stderr}")
+                self.assertNotIn("ended", done.stdout)
+                self.assertNotIn("gone", done.stdout)
+                if label != "negative":  # argparse itself refuses "-5" as a value, with its own usage text
+                    self.assertIn("ticks=", done.stderr)
+        self.assertTrue(self.alive(decoy))
+
+    def test_a_gone_pid_with_a_plausible_start_time_is_done(self):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        self.spawned.append(proc)
+        ticks = stat_ticks(proc.pid)
+        proc.wait(timeout=10)
+        done, took = self.wait_cli(proc.pid, ticks)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("already gone", done.stdout)
+        self.assertLess(took, 10)
+
+    def test_a_gone_pid_with_an_impossible_start_time_is_still_an_error(self):
+        done, _ = self.wait_cli(2 ** 22 + 99, int(time.time() * 1000))
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+
+    def test_a_reused_pid_is_done_and_never_still_running(self):
+        """Pid reuse simulated: the pid now holds a process that started after the one the caller named."""
+        decoy = self.decoy("tokreused2")
+        earlier = stat_ticks(decoy.pid) - 3 * ap.CLK_TCK - 1  # the "original" ended; this pid belongs to someone newer
+        done, took = self.wait_cli(decoy.pid, earlier)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("was reused", done.stdout)
+        self.assertNotIn("still running", done.stdout)
+        self.assertLess(took, 10)
+        self.assertTrue(self.alive(decoy))  # never signalled
+
+    def test_a_wrapper_that_exits_is_done_while_the_real_work_runs(self):
+        """The pid of a wrapper (`nohup sh -c 'work &'`, `setsid` run by a group leader) ends at once while the work goes on.
+        `wait` is right to say that pid ended: the documentation says to wait on the worker's own pid (found with `find`)
+        or to start it with `run`."""
+        wrapper = subprocess.Popen(["bash", "-c", f"{sys.executable} -c 'import time; time.sleep(3)' </dev/null >/dev/null 2>&1 &"])
+        self.spawned.append(wrapper)
+        wrapper_ticks = stat_ticks(wrapper.pid)
+        wrapper.wait(timeout=10)
+        done = cli("wait", "--pid", str(wrapper.pid), "--start-time", str(wrapper_ticks), "--timeout", "1", env=self.env)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("already gone", done.stdout)
+
+
+class WaitSelectorTests(ProcTestCase):
+    """`wait` by selector: one match waits, several is an error (or --all), none is an error (or --allow-missing)."""
+
+    def sleeper(self, token, seconds):
+        proc = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep({seconds})", token], start_new_session=True)
+        self.spawned.append(proc)
+        self.until(lambda: ap.read_proc(proc.pid) is not None and token in " ".join(ap.read_proc(proc.pid).argv))
+        return proc
+
+    def wait_sel(self, *args):
+        began = time.monotonic()
+        done = cli("wait", *args, "--interval", "0.1", env=self.env)
+        return done, time.monotonic() - began
+
+    def test_one_match_waits_until_it_ends(self):
+        self.sleeper("toksel1", 2)
+        done, took = self.wait_sel("--cmd-contains", "toksel1", "--timeout", "30")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertGreater(took, 1.0)
+
+    def test_two_matches_is_an_error_listing_both_and_how_to_name_one(self):
+        first = self.sleeper("toksel2", 30)
+        second = self.sleeper("toksel2", 30)
+        done, took = self.wait_sel("--cmd-contains", "toksel2", "--timeout", "30")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertLess(took, 10)
+        self.assertIn("ambiguous: 2 matches", done.stderr)
+        for proc in (first, second):
+            self.assertIn(f"pid={proc.pid} ticks={stat_ticks(proc.pid)}", done.stderr)
+        self.assertIn("user=", done.stderr)
+        self.assertIn("--pid P --start-time T", done.stderr)
+        self.assertTrue(self.alive(first) and self.alive(second))
+
+    def test_all_waits_for_every_match(self):
+        self.sleeper("toksel3", 1.5)
+        self.sleeper("toksel3", 3)
+        done, took = self.wait_sel("--cmd-contains", "toksel3", "--all", "--timeout", "30")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertGreater(took, 2.0, "must wait for the longer one too")
+
+    def test_all_times_out_while_one_still_runs(self):
+        self.sleeper("toksel3b", 1)
+        self.sleeper("toksel3b", 60)
+        done, _ = self.wait_sel("--cmd-contains", "toksel3b", "--all", "--timeout", "2")
+        self.assertEqual(done.returncode, 75, done.stdout + done.stderr)
+
+    def test_no_match_is_an_error_unless_allowed(self):
+        done, took = self.wait_sel("--cmd-contains", "tokselnothingruns", "--timeout", "30")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("nothing matches", done.stderr)
+        self.assertLess(took, 10)
+        allowed, _ = self.wait_sel("--cmd-contains", "tokselnothingruns", "--allow-missing", "--timeout", "30")
+        self.assertEqual(allowed.returncode, 0, allowed.stdout + allowed.stderr)
+
+    def test_the_waiter_its_ancestors_and_its_own_shell_never_match(self):
+        """The text of the selector sits in the waiter's own command line, in the `bash -c` that holds it and in this test's
+        runner command line: none of them may count, so a selector that only they match is 'nothing matches'."""
+        done = subprocess.run(["bash", "-c", f"{sys.executable} {TOOL} wait --cmd-contains tokselselfonly --timeout 5"],
+                              capture_output=True, text=True, env=dict(os.environ, **self.env), timeout=30)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("nothing matches", done.stderr)
+
+    def test_a_forked_copy_of_the_waiters_shell_never_matches(self):
+        """`wait --cmd-contains X | tail` in a shell: the pipeline's subshell copy holds the whole script text (and X)."""
+        script = (f"for i in 1; do {sys.executable} {TOOL} wait --cmd-contains tokselclone --timeout 5 2>&1 | cat; done; "
+                  "# tokselclone")
+        done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=dict(os.environ, **self.env), timeout=30)
+        self.assertIn("nothing matches", done.stdout)
+        clone = ap.ProcInfo(900001, 900000, 1, 1, 0, "u", "S", 1, "bash", ("bash", "-c", "t"), None)
+        anc = ap.ProcInfo(900000, 1, 1, 1, 0, "u", "S", 1, "bash", ("bash", "-c", "t"), None)
+        other = ap.ProcInfo(900002, 900000, 1, 1, 0, "u", "S", 1, "bash", ("bash", "-c", "different"), None)
+        fake = {900000: anc, 900001: clone, 900002: other}
+        self.assertEqual(ap.shell_clones(fake, {900000}), {900001})
+
+    def test_a_selector_wait_never_signals_and_all_flags_need_a_selector(self):
+        victim = self.sleeper("toksel6", 30)
+        done = cli("wait", "--pid", str(victim.pid), "--all", "--timeout", "1", env=self.env)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("selector", done.stderr)
+        self.assertTrue(self.alive(victim))
+        both = cli("wait", "--cmd-contains", "toksel6", "--job", "x", env=self.env)
+        self.assertEqual(both.returncode, 2)
+        self.assertTrue(self.alive(victim))
 
 
 class JobTests(ProcTestCase):
@@ -771,10 +1014,18 @@ class KillPidTests(ProcTestCase):
 
     def test_a_reused_pid_wrong_start_time_is_refused_and_survives(self):
         target = self.decoy("tokkill3")
-        wrong = ap.read_proc(target.pid).start_ticks + 99
+        wrong = ap.read_proc(target.pid).start_ticks - 99
         done = cli("kill-pid", str(target.pid), "--start-time", str(wrong), env=self.env)
         self.assertEqual(done.returncode, 3)
         self.assertIn("was reused", done.stderr)
+        self.assertTrue(self.alive(target))
+
+    def test_a_start_time_later_than_the_process_is_a_usage_error_and_survives(self):
+        target = self.decoy("tokkill3b")
+        wrong = ap.read_proc(target.pid).start_ticks + 99
+        done = cli("kill-pid", str(target.pid), "--start-time", str(wrong), env=self.env)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("ticks=", done.stderr)
         self.assertTrue(self.alive(target))
 
     def test_without_proof_of_identity_it_is_refused(self):
