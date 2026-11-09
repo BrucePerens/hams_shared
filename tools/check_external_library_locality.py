@@ -13,7 +13,7 @@ independently-drifted copies of transformers.js (2.16.0 in ham_events,
 2.16.1 in external) -- silently different versions of the same NLP
 pipeline, discovered only by accident while root-causing an unrelated
 minifier bug (hams_com commit f1f00511). It also multiplies exposure to
-that same bug class: every vendored copy is a separate place rjsmin can
+that same bug: every vendored copy is a separate place rjsmin can
 corrupt on a nested template literal.
 
 This flags any .js or .css file sitting in <module>/static/**/lib/ or

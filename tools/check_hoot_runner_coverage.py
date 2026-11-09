@@ -210,11 +210,10 @@ def check_bundled_tag_is_triggered(module_path, manifest_dict, requested_tags):
     than written as a literal, or a suite whose tests are all skipped at runtime, are both
     invisible here. It finds the common, checkable case rather than attempting the general one.
 
-    No baseline accompanies this check, and that is a finding rather than an omission. A scan on
-    2026-09-15 found 18 bundled-but-untriggered tags across both repositories, and 17 of them are
+    No baseline accompanies this check, and that is a finding rather than an omission. A scan
+    found 18 bundled-but-untriggered tags across both repositories, and 17 of them are
     in the 13 modules that already carry `# burn-ignore-hoot-runner-coverage` and have no hoot
-    runner of any kind -- the backlog `night_shift_todo/medium/hoot-runner-coverage-13-modules-
-    d5b7c88b.md` already tracks. Because this check runs after that skip, it never sees them, so
+    runner of any kind -- a known backlog. Because this check runs after that skip, it never sees them, so
     there is nothing to grandfather. The single remaining case was
     `user_websites/static/tests/violation_report.test.js`: a module that HAS a runner, and
     therefore passes the module-level check above, while three of its tests are triggered by

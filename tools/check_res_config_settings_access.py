@@ -8,8 +8,8 @@ Mechanical guard for ADR-0096 ("res.config.settings Authorization Is All-or-Noth
 no module's own ir.model.access.csv may grant model-level access to res.config.settings to any
 group other than base.group_system.
 
-Born from a real, live security hole: night_shift_todo.md's "saving ANY Settings page can crash
-with an AccessError" investigation found user_websites/security/ir.model.access.csv granted
+Born from a real security hole (saving ANY Settings page could crash
+with an AccessError): user_websites/security/ir.model.access.csv granted
 group_user_websites_administrator -- a content-moderation-tier role that does not imply
 base.group_system -- full read/write/create/unlink on the ENTIRE shared res.config.settings
 TransientModel. ir.model.access.csv grants are per (model, group), never per field, so that row

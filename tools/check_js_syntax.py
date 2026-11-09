@@ -43,11 +43,9 @@ def is_ignored(path, patterns):
 # implement -- confirmed by reading that file's complete list of `to*`
 # methods directly, not assumed. Calling one of these throws
 # "expect(...).toXxx is not a function" at test-run time; 10 real instances
-# of this exact mistake were found and fixed across 7 modules in both
-# hams_com and hams_open on 2026-08-27 (see hams_com/night_shift_todo.md's
-# Twenty-second through Twenty-fourth addenda), several of which had been
-# silently masked by an unrelated asset-bundle bug and had never actually
-# run before that session. This check exists so the same mistake fails
+# of this exact mistake existed across 7 modules in both hams_com and
+# hams_open, several of which had been silently masked by an unrelated
+# asset-bundle bug and had never actually run. This check exists so the same mistake fails
 # fast (a syntax-adjacent lint error) instead of silently shipping a test
 # that can never pass.
 _INVALID_HOOT_MATCHERS = {
@@ -132,7 +130,7 @@ def audit_file(file_path):
             # (wired into run_linters.py), not here -- kept as one rule in
             # one place rather than duplicating it.
 
-            # Real bug pattern, found live 2026-09-09: hoot's mocked window
+            # Real bug pattern: hoot's mocked window
             # only redirects `window.history` to a MockHistory/MockLocation
             # pair (odoo/addons/web/static/lib/hoot/mock/window.js's
             # WINDOW_MOCK_DESCRIPTORS -- `history: { value: mockHistory }`);

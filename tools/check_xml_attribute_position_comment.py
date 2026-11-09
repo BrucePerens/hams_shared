@@ -18,8 +18,7 @@ between two `<attribute>` siblings, comment before a lone `<attribute>`, both wi
 `inherit_branding=True`, and a two-view stacked-inheritance case) produced an identical,
 fully-correct arch with or without the comment. The original "confirmed twice" observation was
 most likely a misattribution confounded by an unrelated theme-copy-step timing gap. Full
-write-up: hams_com commit 551db4c1 (PR #512) and its `night_shift_history.md` 2026-10-02
-entry closing the parent to-do.
+write-up: hams_com commit 551db4c1 (PR #512).
 
 The checker is kept anyway because the structural shape it flags -- a comment as a direct
 child of an `<xpath position="attributes">` element, i.e. interspersed among inheritance-spec
