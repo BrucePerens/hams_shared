@@ -8,12 +8,10 @@ target, a plain file, or an empty directory is exit 2 with the cause named, neve
 
 import os
 import subprocess
-import sys
 import tempfile
 import unittest
 
-import check_target
-from test_check_target import assert_checker_refuses_a_bad_target, checker_environment, run_checker
+from test_check_target import assert_checker_refuses_a_bad_target, run_checker
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
