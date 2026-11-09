@@ -1,0 +1,67 @@
+{
+  "name": "hams_com",
+  "comment": "hams.com-specific names. Everything here is a name or a path, never a key. Bucket and endpoint are those of MANIFEST in infrastructure.py.",
+  "debian_suite": "trixie",
+  "debian_mirror": "http://deb.debian.org/debian",
+  "database": {
+    "name": "hams_prod",
+    "pg_major": 18,
+    "stanza": "hams_prod",
+    "datadir": "/var/lib/postgresql/18/main",
+    "pgbackrest_repo_path_b2": "/hams_prod_enc",
+    "cipher_type": "aes-256-cbc",
+    "count_tables": ["res_users", "res_partner", "ir_attachment", "mail_message", "ir_model_data"],
+    "time_table": "mail_message"
+  },
+  "b2": {
+    "bucket": "hams-com-prod-backups",
+    "endpoint": "s3.us-east-005.backblazeb2.com",
+    "region": "us-east-1",
+    "kopia_prefix": "files/"
+  },
+  "local": {
+    "kopia_repo": "hams1-kopia-repo",
+    "pgbackrest_repo": "pgbackrest",
+    "kopia_stream_kinds": {"base": "base", "wal": "wal", "config": "config", "files": "files"}
+  },
+  "b2_kopia_paths": [
+    "/var/lib/odoo/.local/share/Odoo/filestore/hams_prod",
+    "/opt/hams/etc",
+    "/var/lib/hams-static/perens_com/static",
+    "/var/lib/hams/qso_recordings",
+    "/opt/hams/backups/tenants"
+  ],
+  "b2_kopia_files": {"hams_crypto_secret": "/var/lib/odoo/hams_crypto.secret"},
+  "local_files_sources": {
+    "filestore": "/var/lib/odoo/.local/share/Odoo/filestore/hams_prod",
+    "static_perens_com": "/var/lib/hams-static/perens_com/static",
+    "qso_recordings": "/var/lib/hams/qso_recordings"
+  },
+  "config_tar_scope": [
+    "opt/hams/etc", "opt/hams/systemd", "etc/odoo", "etc/pgbackrest", "etc/postgresql", "etc/nginx", "etc/cloudflared",
+    "etc/systemd/system", "etc/hams", "etc/letsencrypt", "etc/pagerduty", "etc/redis", "etc/rabbitmq", "etc/wireguard",
+    "etc/ssh/sshd_config", "etc/ssh/sshd_config.d", "etc/sudoers", "etc/sudoers.d", "etc/cron.d", "etc/crontab",
+    "var/spool/cron/crontabs", "etc/fstab", "etc/hosts", "etc/nftables.conf", "etc/logrotate.d", "usr/local/sbin",
+    "var/lib/odoo/hams_crypto.secret"
+  ],
+  "machine_specific": [
+    "etc/fstab", "etc/hostname", "etc/machine-id", "var/lib/dbus/machine-id", "etc/hosts", "etc/network", "etc/netplan",
+    "etc/systemd/network", "etc/resolv.conf", "etc/ssh/ssh_host_*", "etc/adjtime", "etc/mtab", "boot", "etc/default/grub",
+    "etc/grub.d", "etc/initramfs-tools", "etc/crypttab", "etc/kernel", "lib/modules", "usr/lib/modules",
+    "var/lib/dhcp", "etc/udev/rules.d/70-persistent-net.rules", "etc/wireguard"
+  ],
+  "apt_repositories": [
+    {"name": "pgdg", "key_url": "https://www.postgresql.org/media/keys/ACCC4CF8.asc", "keyring": "postgresql-keyring.gpg",
+     "line": "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] https://apt.postgresql.org/pub/repos/apt/ {suite}-pgdg main"},
+    {"name": "odoo", "key_url": "https://nightly.odoo.com/odoo.key", "keyring": "odoo-archive-keyring.gpg",
+     "line": "deb [signed-by=/usr/share/keyrings/odoo-archive-keyring.gpg] https://nightly.odoo.com/19.0/nightly/deb/ ./"}
+  ],
+  "extra_packages": ["postgresql-18", "postgresql-18-pgvector", "kopia", "openssh-server", "systemd-sysv", "dbus", "python3", "rsync", "ca-certificates"],
+  "package_not_in_archive": ["python3-pypdf2"],
+  "verify": {
+    "http_checks": [{"url": "http://127.0.0.1:8069/web/login", "status": 200}, {"url": "http://127.0.0.1:8069/", "status_in": [200, 301, 302, 303]}],
+    "login": {"kind": "odoo", "db": "hams_prod", "user_id": 2},
+    "must_be_active": ["postgresql@18-main.service", "odoo.service", "redis-server.service", "rabbitmq-server.service", "nginx.service"],
+    "journal_wait_seconds": 240
+  }
+}
