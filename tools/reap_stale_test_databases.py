@@ -58,7 +58,9 @@ _logger = logging.getLogger(__name__)
 SCRATCH_DB_PREFIX = "tmp_"
 
 DEFAULT_MAX_AGE_HOURS = 6
-PG_DATA_BASE_DIR = "/var/lib/postgresql/17/main/base"
+# None: ask the server (`SHOW data_directory`). The major version used to be written into this path (17), and the dev box runs 18, so
+# every database's base directory was missing, no age could be read, and the reaper skipped everything without ever dropping one.
+PG_DATA_BASE_DIR = None
 
 # `dropdb` operates at the PostgreSQL level and has no concept of Odoo's filestore -- only
 # Odoo's own `/web/database/manager` "Drop" action (odoo.service.db.exp_drop()) removes the
@@ -95,6 +97,14 @@ def _list_scratch_databases() -> dict[str, int]:
             continue
         candidates[datname] = int(oid)
     return candidates
+
+
+def _pg_base_dir() -> str:
+    """The `base` directory (one subdirectory per database OID) of the running server, from `SHOW data_directory`."""
+    data_directory = _run_psql("SHOW data_directory;").strip()
+    if not os.path.isabs(data_directory):
+        raise ValueError(f"unexpected data_directory {data_directory!r}")
+    return os.path.join(data_directory, "base")
 
 
 def _open_database_names() -> set[str]:
@@ -168,7 +178,7 @@ def _database_age_hours(oid: int) -> float | None:
     recent mtime across the base directory AND every file inside it, recursively, which correctly
     reflects real write activity regardless of whether it happened to also touch the directory's
     own entry list."""
-    base_dir = os.path.join(PG_DATA_BASE_DIR, str(oid))
+    base_dir = os.path.join(PG_DATA_BASE_DIR or _pg_base_dir(), str(oid))
     try:
         mtime = _dir_tree_max_mtime(base_dir)
     except OSError:

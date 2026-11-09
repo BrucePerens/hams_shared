@@ -210,6 +210,19 @@ class SudoDirTreeMaxMtimeTests(unittest.TestCase):
 
 
 class DatabaseAgeHoursFallbackTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(reaper, "PG_DATA_BASE_DIR", "/pg/base")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_base_directory_comes_from_the_server_not_a_hardcoded_version(self):
+        reaper.PG_DATA_BASE_DIR = None
+        with mock.patch.object(reaper, "_run_psql", return_value="/var/lib/postgresql/18/main\n"), mock.patch.object(
+            reaper, "_dir_tree_max_mtime", return_value=1000000000.0
+        ) as walk:
+            self.assertIsNotNone(reaper._database_age_hours(42))
+            walk.assert_called_once_with("/var/lib/postgresql/18/main/base/42")
+
     def test_the_sudo_fallback_is_used_when_the_direct_walk_raises_oserror(self):
         with mock.patch.object(
             reaper, "_dir_tree_max_mtime", side_effect=OSError("permission denied")
