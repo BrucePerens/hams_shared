@@ -2197,6 +2197,30 @@ Purpose: warns about `HAMS_ISOLATED_NS=1` on a machine with several slots, calle
 (`HAMS_TEST_LOCK_HELD` is not `1`) and `slots` is above 1. The message says the run is pinned to the host network namespace (RabbitMQ modules refused above slot 1, ADR 0116) and gives the normal command, `python3 hams_shared/tools/test.py --wait -u <modules>`.
 Never changes behaviour. Pure apart from `say`.
 
+## `check_pip_audit.py`: a passing audit is reused, a stalled one is retried once
+
+`pip-audit` waits on PyPI's advisory API, and a stalled PyPI (or a starved box) used to fail unrelated branches after 300 s. Now: (1) a requirements file whose audit PASSED is not audited again for
+`HAMS_PIP_AUDIT_CACHE_HOURS` hours (default 6; 0 turns the cache off), as long as the file, its path and the pip-audit version are unchanged; the run prints "reusing that result" and the age, so it is never silent; the entry
+expires, so a new vulnerability is still found within the window. (2) Only a PASS is ever cached: a finding, a timeout and any other error are not. (3) A call that exceeds the limit (300 s, stretched by `HAMS_LINT_TIMEOUT_SCALE`) is
+retried once before the gate fails, "twice" in the message; the bound is two limits. The runner's own serial retry of timed-out steps (`retry_timed_out_steps`) applies only when the machine was saturated at the end, which a stalled network is not,
+so this in-step retry covers that case. Cache files: `~/.cache/hams-lint/pip-audit/<key>.json` (`HAMS_PIP_AUDIT_CACHE_DIR` overrides).
+
+### `[@ANCHOR: check_pip_audit:cache_hours]` `cache_hours(environ=None)`
+
+Returns the reuse window in hours: `HAMS_PIP_AUDIT_CACHE_HOURS` as a float of at least 0 (0 means off), else 6.0 for an unset, non-numeric, infinite, NaN or negative value. Pure.
+
+### `[@ANCHOR: check_pip_audit:cache_key]` `cache_key(req_file, version_text)`
+
+Returns 64 hex digits: SHA-256 over the real path of `req_file`, its content and the stripped `version_text` (the `pip-audit --version` output), each length-prefixed. Another checkout path, an edit or another pip-audit version gives another key. Raises `OSError` for an unreadable file.
+
+### `[@ANCHOR: check_pip_audit:cached_pass_age_hours]` `cached_pass_age_hours(key, now=None, environ=None)`
+
+Returns the age in hours of the recorded pass for `key`, or None when there is none, it is older than `cache_hours()`, it is dated in the future, the cache is off, or the file is unreadable or malformed. Reads one small JSON file; never raises.
+
+### `[@ANCHOR: check_pip_audit:store_pass]` `store_pass(key, now=None, environ=None)`
+
+Records `{"passed_at": now}` for `key` (default the current time) in the cache directory, through a temporary file and an atomic replace; creates the directory. Returns True when written; False (and nothing happens) when the cache is off or the directory cannot be written: the cache is an optimisation and never a reason to fail.
+
 ## Staged-file size check
 
 `check_staged_files.py` (run by `git-hooks/pre-commit`) refuses a commit that stages a file over 5 MB (`MAX_BYTES`) or

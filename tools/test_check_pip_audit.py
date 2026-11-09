@@ -23,6 +23,18 @@ from unittest.mock import MagicMock, patch
 
 import check_pip_audit as chk  # noqa: E402
 
+_CACHE_ROOT = tempfile.mkdtemp(prefix="pipaudit-cache-test-")
+
+
+def setUpModule():
+    # Every test gets its own cache directory: no real cache under ~/.cache is read or written.
+    os.environ["HAMS_PIP_AUDIT_CACHE_DIR"] = _CACHE_ROOT
+
+
+def tearDownModule():
+    os.environ.pop("HAMS_PIP_AUDIT_CACHE_DIR", None)
+    shutil.rmtree(_CACHE_ROOT, ignore_errors=True)
+
 
 def _write(path, content=""):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -229,19 +241,120 @@ class TimeoutTests(unittest.TestCase):
     def test_a_hung_per_file_audit_fails_that_file_cleanly_and_continues(self):
         _write(os.path.join(self.tmp, "requirements.txt"), "requests==2.0\n")
         _write(os.path.join(self.tmp, "requirements-dev.txt"), "pytest==8.0\n")
-        version_check = MagicMock(returncode=0)
-        hang = subprocess.TimeoutExpired(cmd="pip_audit -r ...", timeout=300)
-        clean = MagicMock(returncode=0, stdout="", stderr="")
-        with patch.object(sys, "argv", self._argv()), patch(
-            "check_pip_audit.subprocess.run", side_effect=[version_check, hang, clean]
-        ) as mock_run, patch("builtins.print") as mock_print:
+        version_check = MagicMock(returncode=0, stdout="pip-audit 2.7")
+        calls = []
+
+        def fake(cmd, **kwargs):
+            if "--version" in cmd:
+                return version_check
+            calls.append(os.path.basename(cmd[cmd.index("-r") + 1]))
+            if calls[-1] == "requirements.txt":
+                raise subprocess.TimeoutExpired(cmd="pip_audit -r ...", timeout=300)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch.object(sys, "argv", self._argv()), patch("check_pip_audit.subprocess.run", side_effect=fake), \
+                patch("builtins.print") as mock_print:
             with self.assertRaises(SystemExit) as ctx:
                 chk.main()
-            # Both files were attempted -- the hang on the first one didn't abort the loop.
-            self.assertEqual(mock_run.call_count, 3)
+            # Both files were attempted -- the hang on the first one didn't abort the loop -- and the hung one was tried twice.
+            self.assertEqual(sorted(calls), ["requirements-dev.txt", "requirements.txt", "requirements.txt"])
             self.assertEqual(ctx.exception.code, 1)
             printed = " ".join(str(c) for c in mock_print.call_args_list)
             self.assertIn("did not complete within", printed)
+            self.assertIn("twice", printed)
+
+
+class CacheAndRetryTests(unittest.TestCase):
+    """A passing audit of an unchanged file is reused for a few hours, a stalled call is retried once, and only a pass is cached.
+
+    Tests [@ANCHOR: check_pip_audit:cache_hours]
+    Tests [@ANCHOR: check_pip_audit:cache_key]
+    Tests [@ANCHOR: check_pip_audit:cached_pass_age_hours]
+    Tests [@ANCHOR: check_pip_audit:store_pass]
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.cache = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(shutil.rmtree, self.cache, ignore_errors=True)
+        self.env = {chk.CACHE_DIR_ENV: self.cache}
+        self.req = os.path.join(self.tmp, "requirements.txt")
+        _write(self.req, "requests==2.0\n")
+
+    def test_hours_default_override_zero_and_bad_values(self):
+        self.assertEqual(chk.cache_hours({}), 6.0)
+        self.assertEqual(chk.cache_hours({chk.CACHE_HOURS_ENV: "2.5"}), 2.5)
+        self.assertEqual(chk.cache_hours({chk.CACHE_HOURS_ENV: "0"}), 0.0)  # 0 turns the cache off
+        for bad in ("x", "nan", "inf", "-1"):
+            self.assertEqual(chk.cache_hours({chk.CACHE_HOURS_ENV: bad}), 6.0, bad)
+
+    def test_the_key_changes_with_the_content_the_path_and_the_version(self):
+        key = chk.cache_key(self.req, "pip-audit 2.7")
+        self.assertEqual(len(key), 64)
+        self.assertEqual(chk.cache_key(self.req, "pip-audit 2.7\n"), key)
+        self.assertNotEqual(chk.cache_key(self.req, "pip-audit 2.8"), key)
+        other = os.path.join(self.tmp, "sub", "requirements.txt")
+        _write(other, "requests==2.0\n")
+        self.assertNotEqual(chk.cache_key(other, "pip-audit 2.7"), key)
+        _write(self.req, "requests==2.1\n")
+        self.assertNotEqual(chk.cache_key(self.req, "pip-audit 2.7"), key)
+        with self.assertRaises(OSError):
+            chk.cache_key(os.path.join(self.tmp, "missing.txt"), "v")
+
+    def test_a_stored_pass_is_found_until_it_expires_and_never_from_the_future(self):
+        self.assertTrue(chk.store_pass("k", now=1000.0, environ=self.env))
+        self.assertAlmostEqual(chk.cached_pass_age_hours("k", now=1000.0 + 3600, environ=self.env), 1.0)
+        self.assertIsNone(chk.cached_pass_age_hours("k", now=1000.0 + 7 * 3600, environ=self.env))
+        self.assertIsNone(chk.cached_pass_age_hours("k", now=500.0, environ=self.env))
+        self.assertIsNone(chk.cached_pass_age_hours("unknown", now=1001.0, environ=self.env))
+        self.assertIsNone(chk.cached_pass_age_hours("k", now=1001.0, environ=dict(self.env, **{chk.CACHE_HOURS_ENV: "0"})))
+        self.assertFalse(chk.store_pass("k2", environ=dict(self.env, **{chk.CACHE_HOURS_ENV: "0"})))
+        self.assertFalse(chk.store_pass("k3", environ={chk.CACHE_DIR_ENV: "/proc/no/such/dir"}))
+
+    def _run_main(self, audit):
+        calls = []
+
+        def fake(cmd, **kwargs):
+            if "--version" in cmd:
+                return MagicMock(returncode=0, stdout="pip-audit 2.7\n")
+            calls.append(cmd)
+            return audit(len(calls))
+
+        with patch.dict(os.environ, self.env), patch.object(sys, "argv", ["check_pip_audit.py", self.tmp]), \
+                patch("check_pip_audit.subprocess.run", side_effect=fake), patch("builtins.print") as shown:
+            with self.assertRaises(SystemExit) as ctx:
+                chk.main()
+        return ctx.exception.code, calls, " ".join(str(c) for c in shown.call_args_list)
+
+    def test_a_pass_is_reused_and_a_changed_file_is_audited_again(self):
+        clean = lambda n: MagicMock(returncode=0, stdout="", stderr="")  # noqa: E731
+        self.assertEqual(self._run_main(clean)[:2][0], 0)
+        code, calls, printed = self._run_main(clean)
+        self.assertEqual((code, len(calls)), (0, 0))
+        self.assertIn("reusing that result", printed)
+        _write(self.req, "requests==2.1\n")
+        self.assertEqual(len(self._run_main(clean)[1]), 1)
+
+    def test_a_finding_or_a_double_stall_is_never_cached_and_one_stall_is_retried(self):
+        finding = lambda n: MagicMock(returncode=1, stdout="VULN", stderr="")  # noqa: E731
+        self.assertEqual(self._run_main(finding)[0], 1)
+        self.assertEqual(self._run_main(finding)[0], 1)
+
+        def stall(n):
+            raise subprocess.TimeoutExpired(cmd="pip_audit", timeout=300)
+
+        code, calls, printed = self._run_main(stall)
+        self.assertEqual((code, len(calls)), (1, 2))
+        self.assertIn("twice", printed)
+
+        def stall_once(n):
+            if n == 1:
+                raise subprocess.TimeoutExpired(cmd="pip_audit", timeout=300)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        code, calls, _ = self._run_main(stall_once)
+        self.assertEqual((code, len(calls)), (0, 2))
 
 
 class ResolveRepoRootTests(unittest.TestCase):
