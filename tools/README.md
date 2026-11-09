@@ -3412,7 +3412,7 @@ Purpose: consume a heredoc body that starts at `text[start]`. Returns `(body, ne
 
 ### `[@ANCHOR: guard_signals:tokenize]` `tokenize(text, commands, depth=0)`
 
-Purpose: the shell reader. Splits `text` into simple commands and appends them (`Command`) to the list `commands`, including those inside `$(...)`, backticks, `<(...)` and `>(...)` (parsed recursively). Handles single and double quotes, backslashes, `#` comments, the boundaries `; & | && || ( )` and newline, redirections (the file word and a leading fd digit are dropped) and heredocs. Returns `commands`. Raises `ValueError` when nesting is deeper than 8 (the caller then fails according to the crash policy). Pure; not a full shell parser: it errs towards seeing more commands, never fewer.
+Purpose: the shell reader. Splits `text` into simple commands and appends them (`Command`) to the list `commands`, including those inside `$(...)`, backticks, `<(...)` and `>(...)` (parsed recursively). Handles single and double quotes, backslashes, `#` comments, the boundaries `; & | && || ( )` and newline, redirections (the file word and a leading fd digit are dropped) and heredocs and here-strings (`<<<`; the string is attached to the command like a heredoc body, so `bash <<< 'pkill x'` is judged). Returns `commands`. Raises `ValueError` when nesting is deeper than 8 (the caller then fails according to the crash policy). Pure; not a full shell parser: it errs towards seeing more commands, never fewer.
 
 ### `[@ANCHOR: guard_signals:skip_options]` `skip_options(words, start, value_options)`
 
@@ -3424,11 +3424,11 @@ Purpose: find the real command behind assignments, reserved words (`until`, `do`
 
 ### `[@ANCHOR: guard_signals:signal_is_kill]` `signal_is_kill(spec)`
 
-Purpose: recognise SIGKILL. True for `9`, `KILL` and `SIGKILL` in any case with or without a leading `-`.
+Purpose: recognise SIGKILL. True for `9` (also `09`), `KILL` and `SIGKILL` in any case with or without a leading `-`.
 
 ### `[@ANCHOR: guard_signals:check_kill]` `check_kill(words, via_xargs, verdict)`
 
-Purpose: judge a `kill` command (`words[0]` is kill). Adds a reason to `verdict` for SIGKILL in any option form (`-9 -KILL -s KILL -n 9 --signal=9`), for a pid that is not a literal number (or `%job`, or `$!`) and for pids supplied by `xargs`. `kill -l` and a `kill` with no pid are fine. A literal pid adds the note to print its ps line first.
+Purpose: judge a `kill` command (`words[0]` is kill). Adds a reason to `verdict` for SIGKILL in any option form (`-9 -09 -KILL -s KILL -sKILL -n 9 -n9 --signal=9`), for a pid that is not a literal number (or `%job`, or `$!`), for the literal pids 0, 1 and -1 (own process group, init, every process) and for pids supplied by `xargs`. `kill -l` and a `kill` with no pid are fine. A literal pid adds the note to print its ps line first.
 
 ### `[@ANCHOR: guard_signals:check_pgrep]` `check_pgrep(words, verdict)`
 

@@ -151,8 +151,8 @@ def tokenize(text, commands, depth=0):
     inside `$(...)`, backticks, `<(...)`, `>(...)` (parsed recursively, `depth` guards against absurd nesting).
 
     Handles single quotes, double quotes (with `$(...)` inside), backslash escapes, `#` comments, the operators `; & | && ||
-    ( )` and newline (command boundaries), redirections (the file word and a leading fd digit are dropped) and heredocs (the
-    body is attached to the command). Raises `ValueError` when the nesting is deeper than `MAX_DEPTH`."""
+    ( )` and newline (command boundaries), redirections (the file word and a leading fd digit are dropped) and heredocs and here-strings (the
+    body or string is attached to the command). Raises `ValueError` when the nesting is deeper than `MAX_DEPTH`."""
     if depth > MAX_DEPTH:
         raise ValueError("shell text nested too deeply")
     words, buf, started, expands = [], [], False, False
@@ -177,6 +177,8 @@ def tokenize(text, commands, depth=0):
                     bodies.append("")
                     want_delim = None
                 elif drop_next:
+                    if drop_next == "here":
+                        bodies.append(word)  # a here-string is the command's standard input, like a heredoc body
                     drop_next = False
                 elif op in REDIRECTS and word.isdigit():
                     pass  # a file descriptor number as in `2>/dev/null`
@@ -190,7 +192,7 @@ def tokenize(text, commands, depth=0):
             if op in ("<<", "<<-"):
                 want_delim = op == "<<-"
             elif op in REDIRECTS:
-                drop_next = True
+                drop_next = "here" if op == "<<<" else True
             else:
                 if op == "\n" and pending:
                     for delimiter, strip_tabs, index in pending:
@@ -254,7 +256,9 @@ def tokenize(text, commands, depth=0):
             expands = expands or (c == "$" and text[i + 1:i + 2] not in ("", " "))
             buf.append(c)
             i += 1
-    if started and not drop_next and want_delim is None:
+    if started and drop_next == "here":
+        bodies.append("".join(buf))
+    elif started and not drop_next and want_delim is None:
         words.append(Word("".join(buf), expands))
     if words or bodies:
         commands.append(current)
@@ -303,16 +307,17 @@ def resolve(words):
 
 # [@ANCHOR: guard_signals:signal_is_kill]
 def signal_is_kill(spec):
-    """True when the signal spec text (`9`, `KILL`, `SIGKILL`, any case, with or without a leading `-`) names SIGKILL."""
+    """True when the signal spec text (`9`, `09`, `KILL`, `SIGKILL`, any case, with or without a leading `-`) names SIGKILL."""
     spec = spec.lstrip("-").upper()
     spec = spec[3:] if spec.startswith("SIG") else spec
-    return spec in ("9", "KILL")
+    return spec == "KILL" or (spec.isascii() and spec.isdigit() and int(spec) == 9)
 
 
 # [@ANCHOR: guard_signals:check_kill]
 def check_kill(words, via_xargs, verdict):
-    """Judge a `kill` command (`words[0]` is kill): SIGKILL is denied, every pid must be a literal number (or `%job`, or
-    `$!`), and pids supplied by an `xargs` pipe are denied. `kill -l` and a `kill` with no pid are allowed. A literal pid
+    """Judge a `kill` command (`words[0]` is kill): SIGKILL is denied (also as `-sKILL`, `-n9`, `-09`), every pid must be a
+    literal number (or `%job`, or `$!`) other than 0, 1 and -1 (the caller's own group, init, every process), and pids supplied
+    by an `xargs` pipe are denied. `kill -l` and a `kill` with no pid are allowed. A literal pid
     adds a reminder note to print its ps line first."""
     pids, i, listing = [], 1, False
     while i < len(words):
@@ -331,7 +336,7 @@ def check_kill(words, via_xargs, verdict):
             pids.extend(words[i + 1:])
             break
         elif re.fullmatch(r"-(\d+|[A-Za-z][A-Za-z0-9]*)", text):
-            if signal_is_kill(text):
+            if signal_is_kill(text) or (text[:2] in ("-s", "-n") and signal_is_kill(text[2:])):
                 verdict.reasons.append("SIGKILL (kill -9 / -KILL) is forbidden: a SIGKILLed PostgreSQL backend crashes the "
                                        "whole shared cluster")
         else:
@@ -343,6 +348,9 @@ def check_kill(words, via_xargs, verdict):
         verdict.reasons.append("`xargs kill`: the pids come from a pipe and cannot be verified")
     for word in pids:
         literal = re.fullmatch(r"-?\d+|%\d+", word.text) and not word.expands
+        if literal and word.text[:1] != "%" and int(word.text) in (0, 1, -1):
+            verdict.reasons.append(f"kill {word.text} signals the caller's own process group, init or every process of the user")
+            break
         if not literal and word.text != "$!":
             verdict.reasons.append(f"kill needs literal pid numbers, not {word.text!r}: a pid from `$(...)`, a variable or a pipe "
                                    "can name the wrong process")
