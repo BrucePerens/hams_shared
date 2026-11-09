@@ -252,6 +252,21 @@ member of the batch and has no side effects. Why: `verify_anchors` and `check_fu
 file names, so before this a failure there named no changed path, was unattributable and split the batch (b47d90e3). Test:
 `test_changed_anchors_are_the_ids_on_added_and_removed_lines_only`.
 
+### `lint_batch:changed_function_anchors`
+**Purpose.** `changed_function_anchors(repo, base, tip) -> set[str]`: the anchor ids of functions whose BODY the branch changed although the anchor line did not. `check_claims_freshness` fails when a function that has a claim changes, and
+its output names the claim file and the anchor id; when only the body was edited neither is on a changed line, so `changed_anchors` found nothing, the failure was unattributable, the batch was split, and branches that never
+touched the function failed in the batch and passed alone (`night-shift/club-card-apply`, 2026-11-08).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `repo` | str | A git checkout; borrowed, only read. |
+| `base` | str | The base ref (`origin/main`). |
+| `tip` | str | The branch tip. |
+
+Returns the ids (base anchors, in the Python functions the branch added, changed, deleted or renamed) whose function hash differs between the merge-base and `tip`, using `check_claims_freshness.compute_function_hash`, the same hash the claim
+check compares. An empty set when git fails (bad ref) or `check_claims_freshness` cannot be imported; never raises. Cost: one `git merge-base`, one `git diff --name-only`, two `git show` and two parses per changed `.py` file; temporary files in a
+temporary directory that is removed. `LintBatch.tokens` unions it with `changed_anchors`, so a stale claim is blamed on the branch that changed the function and only on it. Test: `test_an_edited_function_body_is_attributed_to_the_branch_through_its_anchor`.
+
 ### `lint_batch:anchor_finder`
 `anchor_finder(ids)` returns `find(line) -> [ids]` for `blame_by_tokens`: the entries of `ids` that a line of output names as
 a whole word. A word is a run of letters, digits, `_` and `:`; surrounding quotes, brackets and punctuation and a trailing

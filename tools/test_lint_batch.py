@@ -18,6 +18,7 @@ Tests [@ANCHOR: lint_batch:batching_tools_changed]
 Tests [@ANCHOR: lint_batch:path_finder]
 Tests [@ANCHOR: lint_batch:owners_of]
 Tests [@ANCHOR: lint_batch:changed_anchors]
+Tests [@ANCHOR: lint_batch:changed_function_anchors]
 Tests [@ANCHOR: lint_batch:anchor_finder]
 Tests [@ANCHOR: lint_batch:default_command]
 Tests [@ANCHOR: lint_batch:read_results]
@@ -251,6 +252,27 @@ class UnitTests(unittest.TestCase):
                              {"demo:gone", "demo:fresh", "demo:other_module:x"})  # `demo:kept` is on an unchanged line
             self.assertEqual(lint_batch.changed_anchors(work, "no-such", tip), set())
             self.assertTrue(base)
+
+    def test_an_edited_function_body_is_attributed_to_the_branch_through_its_anchor(self):
+        tag = lambda name: "[@ANCH" + "OR: %s]" % name  # noqa: E731
+        source = "# %s\ndef kept(x):\n    return x + %%d\n\n\n# %s\ndef other(x):\n    return x\n" % (tag("demo:edited"), tag("demo:untouched"))
+        with tempfile.TemporaryDirectory() as tmp:
+            work = helpers.make_repo(tmp)
+            helpers.commit_branch(work, "seed", {"c.py": source % 1, "d.py": "# %s\ndef gone():\n    return 1\n" % tag("demo:vanishing")})
+            helpers.git(work, "push", "-q", "origin", "seed:main")
+            helpers.git(work, "fetch", "-q", "origin")
+            tip = helpers.commit_branch(work, "x", {"c.py": source % 2, "d.py": "x = 1\n",
+                                                    "e.py": "# %s\ndef fresh():\n    return 1\n" % tag("demo:added")})
+            # The anchor lines did not change, so the line-based reading misses the edited body ...
+            self.assertEqual(lint_batch.changed_anchors(work, "origin/main", tip), {"demo:added", "demo:vanishing"})
+            # ... the function-based one finds it, a deleted function's anchor and an added one, and not an untouched function.
+            self.assertEqual(lint_batch.changed_function_anchors(work, "origin/main", tip), {"demo:edited", "demo:vanishing", "demo:added"})
+            self.assertEqual(lint_batch.changed_function_anchors(work, "no-such", tip), set())
+            batch = lint_batch.LintBatch(work, "hams_demo", "origin/main", [], lambda *a: None, fetch=False)
+            owners, find = batch.tokens([{"tip": tip, "branch": "x"}])
+            self.assertEqual(owners["demo:edited"], [tip])
+            self.assertEqual(find("c.md: code_hash mismatch for anchor 'demo:edited' -- the function changed"), ["demo:edited"])
+            self.assertNotIn("demo:untouched", owners)
 
     def test_anchor_finder_finds_whole_anchor_ids_in_checker_output(self):
         find = lint_batch.anchor_finder(["m:feature", "m:feature_two"])
