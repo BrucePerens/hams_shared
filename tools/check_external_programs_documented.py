@@ -184,6 +184,7 @@ def script_dependencies(text, powershell=False):
     return found
 
 
+# [@ANCHOR: ext_programs:cells]
 def _cells(line):
     return [c.strip() for c in line.strip().strip("|").split("|")]
 
@@ -252,11 +253,13 @@ def watch_findings(adr_text, watch):
     return findings
 
 
+# [@ANCHOR: ext_programs:is_test_file]
 def _is_test_file(rel):
     base = os.path.basename(rel)
     return bool(_TEST_FILE.search(base)) or "tests" in rel.split(os.sep)
 
 
+# [@ANCHOR: ext_programs:relay_rust_files]
 def _relay_rust_files(relay):
     src = os.path.join(relay, "src")
     for path in tree_files(src, ".rs", ("vendor", "target"), untracked=True):
@@ -265,6 +268,7 @@ def _relay_rust_files(relay):
             yield os.path.join(relay, rel), rel
 
 
+# [@ANCHOR: ext_programs:script_files]
 def _script_files(relay):
     found = set()
     for pattern in ("install_*.sh", "packaging/**/*.sh", "packaging/**/postinst", "packaging/**/postrm", "tools/*.sh"):
@@ -272,6 +276,7 @@ def _script_files(relay):
     return sorted(f for f in found if not os.path.basename(f).startswith("test_"))
 
 
+# [@ANCHOR: ext_programs:read]
 def _read(path):
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         return f.read()

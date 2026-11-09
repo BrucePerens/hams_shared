@@ -628,6 +628,19 @@ class CodeHashIgnoresCommentsTests(unittest.TestCase):
         )
         self.assertEqual(self._hash(src), self._hash(src.replace("Inner docs.", "Reworded.")))
 
+    def test_a_tests_list_in_a_test_docstring_does_not_take_the_anchor_from_the_real_function(self):
+        _write(self.path, _COMMENTED)
+        test_path = os.path.join(self.tmp, "test_mod.py")
+        _write(
+            test_path,
+            "def test_foo():\n"
+            '    """Tests [@ANCHOR: other:x] [@ANCHOR: my_module:foo]: it works."""\n'
+            "    assert True\n",
+        )
+        _init_git_repo(self.tmp)
+        index = ccf.build_anchor_hash_index(self.tmp)
+        self.assertEqual(index, {"my_module:foo": ccf.compute_function_hash(self.path)["my_module:foo"]})
+
     def test_a_legacy_hash_of_unchanged_text_is_still_accepted(self):
         """Claims written before the definition changed keep passing until migrated."""
         _write(self.path, _COMMENTED)

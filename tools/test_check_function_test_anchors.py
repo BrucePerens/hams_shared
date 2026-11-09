@@ -217,6 +217,23 @@ class ScanFileTests(unittest.TestCase):
         results = cfta.scan_file(path, self.tmp)
         self.assertEqual(results, [("foo.py::bar", True)])
 
+    def test_every_anchor_of_a_tests_list_is_a_citation_not_a_base_declaration(self):
+        """`Tests [@ANCHOR: a] [@ANCHOR: b]` cites both; only the first used to be seen as one."""
+        path = os.path.join(self.tmp, "foo.py")
+        _write(
+            path,
+            "def bar():\n"
+            "    \"\"\"Tests [@ANCHOR: mod:one] [@ANCHOR: mod:two]\n"
+            "    [@ANCHOR: mod:three]: text.\"\"\"\n"
+            "    pass\n",
+        )
+        self.assertEqual(cfta.scan_file(path, self.tmp), [("foo.py::bar", False)])
+
+    def test_two_base_anchors_on_one_line_are_both_still_base_declarations(self):
+        path = os.path.join(self.tmp, "foo.py")
+        _write(path, "def bar():\n    # [@ANCHOR: mod:one] [@ANCHOR: mod:two]\n    pass\n")
+        self.assertEqual(cfta.scan_file(path, self.tmp), [("foo.py::bar", True)])
+
     def test_the_decorator_lookback_does_not_cross_a_blank_line_into_the_prior_function(self):
         # The real, named risk of the fix above: an unrelated trailing
         # comment on the PREVIOUS function, separated by the ordinary

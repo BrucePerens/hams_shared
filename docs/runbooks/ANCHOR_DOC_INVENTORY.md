@@ -26,7 +26,7 @@ letters, digits, backticks, `_`, `'`, `.` and `-`), `table` is True if any line 
 paragraphs (the "Errors:", "Concurrency:" paragraphs ADR 0113 asks for). Pure; never raises. Test:
 `EntryShapeTests` in `tools/test_anchor_doc_inventory.py`.
 
-### `anchor_doc_inventory:doc_entries`
+### `anchor_doc_inventory:markdown_entries`
 `doc_entries(path) -> [{"anchors": [ids], "line": n, "shape": entry_shape}]`. An anchor on a heading line owns the text up to the
 next heading of the same or a higher level (so sub-headings belong to it); an anchor in a bullet or paragraph owns the
 paragraph (up to a blank line or heading). Several anchors in one entry share it, which is how the older one-line README bullets

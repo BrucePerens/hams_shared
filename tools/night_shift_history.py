@@ -271,6 +271,7 @@ def new_entry(root, title, body, now=None, date=None):
     return path
 
 
+# [@ANCHOR: tools:night_shift_history_repository_root]
 def _repository_root(explicit):
     if explicit:
         return explicit
