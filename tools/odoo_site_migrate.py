@@ -61,6 +61,17 @@ from urllib.parse import urlsplit
 
 import wp_leftovers
 
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuses every redirect. urllib copies all request headers, the credential included, to wherever a 3xx answer
+    points; a refused redirect surfaces as the HTTPError of the 3xx status."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
 TOOL_VERSION = "1.0"
 PUBLICATION_FIELDS = ("is_published", "website_published", "date_publish", "published_date")
 USER_AGENT = "HamsComSyncDaemon/1.0 (+https://crawler.hams.com)"
@@ -274,7 +285,7 @@ def _urllib_http(url, headers, data, timeout=120):
     """(status, body bytes); a GET when `data` is None, else a POST. An HTTP error status is returned, not raised."""
     request = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # audit-ignore-outbound-fetch
+        with _OPENER.open(request, timeout=timeout) as response:  # audit-ignore-outbound-fetch
             return response.status, response.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
@@ -303,6 +314,10 @@ class Json2Transport(_ThrottledTransport):
             payload = json.loads(raw.decode("utf-8")) if raw else None
         except ValueError:
             payload = None
+        if 300 <= status < 400:
+            # _urllib_http refuses redirects (urllib would send the API key to the host the answer names).
+            raise MigrateError(f"{self.creds.url + path} answered HTTP {status}, a redirect that is not followed "
+                               "(the API key must not be sent to another address): use the final address of the site")
         if status == 401 and body is not None:
             raise MigrateError("authentication failed (JSON-2 needs a valid API key, and the right database)")
         error_body = isinstance(payload, dict) and "message" in payload
