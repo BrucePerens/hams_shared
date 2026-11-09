@@ -68,7 +68,9 @@ DENY_GLOBS = [
     "credentials*", "secrets*", "*.csr", "phpinfo.php", "Thumbs.db", "*.php",
 ]
 INDEX_NAMES = ("index.html", "index.htm")
-RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+RANGE_RE = re.compile(r"^bytes=([0-9]*)-([0-9]*)$")
+# int() refuses a digit string longer than 4300 characters; no file is near 10**18 bytes, so a longer number only needs to compare as huge.
+MAX_RANGE_NUMBER = 10**18
 
 
 def is_denied_name(name):
@@ -83,6 +85,16 @@ def content_type(path):
     guessed = mimetypes.guess_type(path)[0] or ""
     # Anything the table above does not know is a download unless it is plain media.
     return guessed if guessed.startswith(("image/", "audio/", "video/", "font/")) else "application/octet-stream"
+
+
+def _servable(served, real):
+    """True when the resolved path `real` is inside `served` and no component below it is a dot name or a denied name. This runs on the
+    path after symbolic links are followed, so a link named `notes.txt` that points at `.env`, or an `index.html` that points out of
+    the tree, is refused like the target itself would be."""
+    if real != served and not real.startswith(served + os.sep):
+        return False
+    below = os.path.relpath(real, served).split(os.sep) if real != served else []
+    return all(segment != "." and not segment.startswith(".") and not is_denied_name(segment) for segment in below)
 
 
 # [@ANCHOR: static_site_server:resolve]
@@ -107,7 +119,7 @@ def resolve(root, prefix, url_path):
     # Only the served subtree counts: a link to the site directory's own bookkeeping (checksum lists) is refused too.
     served = os.path.realpath(os.path.join(root, *[p for p in prefix.split("/") if p]))
     full = os.path.realpath(os.path.join(os.path.realpath(root), *segments))
-    if full != served and not full.startswith(served + os.sep):
+    if not _servable(served, full):
         return "missing", None
     if os.path.isdir(full):
         if not trailing:
@@ -115,7 +127,8 @@ def resolve(root, prefix, url_path):
         for name in INDEX_NAMES:
             candidate = os.path.join(full, name)
             if os.path.isfile(candidate):
-                return "file", candidate
+                # An index file that is a symbolic link must still resolve inside the served tree.
+                return ("file", candidate) if _servable(served, os.path.realpath(candidate)) else ("missing", None)
         return "missing", None
     if os.path.isfile(full):
         if trailing:
@@ -131,16 +144,16 @@ def parse_range(header, size):
     match = RANGE_RE.match(header.strip())
     if not match:
         return None  # multi-range or an unknown unit: ignore the header, as the standard allows
-    first, last = match.groups()
+    first, last = ((MAX_RANGE_NUMBER if len(number) > 18 else int(number)) if number else "" for number in match.groups())
     if first == "" and last == "":
         return None
     if first == "":
-        length = int(last)
+        length = last
         if length == 0:
             return "bad"
         return max(0, size - length), size - 1
-    start = int(first)
-    end = int(last) if last != "" else size - 1
+    start = first
+    end = last if last != "" else size - 1
     if start >= size or start > end:
         return "bad"
     return start, min(end, size - 1)

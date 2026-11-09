@@ -155,6 +155,41 @@ class ResolveTests(unittest.TestCase):
             self.assertTrue(srv.is_denied_name(name), f"{name} is flagged by the scan but still served")
 
 
+class SymlinkAndRangeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="static-link-test-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.root = os.path.join(self.tmp, "site")
+        os.makedirs(os.path.join(self.root, "static", "dir"))
+        os.makedirs(os.path.join(self.root, "static", "gitlike", ".git"))
+        with open(os.path.join(self.tmp, "outside.txt"), "w") as handle:
+            handle.write("outside")
+        with open(os.path.join(self.root, "static", ".env"), "w") as handle:
+            handle.write("SECRET=1")
+
+    def test_an_index_file_that_is_a_link_out_of_the_tree_is_refused(self):
+        os.symlink(os.path.join(self.tmp, "outside.txt"), os.path.join(self.root, "static", "dir", "index.html"))
+        self.assertEqual(srv.resolve(self.root, "/static/", "/static/dir/"), ("missing", None))
+
+    def test_a_link_inside_the_tree_to_a_denied_name_is_refused(self):
+        os.symlink(".env", os.path.join(self.root, "static", "notes.txt"))
+        os.symlink(".git", os.path.join(self.root, "static", "repo"))
+        self.assertEqual(srv.resolve(self.root, "/static/", "/static/notes.txt"), ("missing", None))
+        self.assertEqual(srv.resolve(self.root, "/static/", "/static/repo/"), ("missing", None))
+
+    def test_an_index_file_that_is_a_link_inside_the_tree_is_served(self):
+        with open(os.path.join(self.root, "static", "home.html"), "w") as handle:
+            handle.write("home")
+        os.symlink("../home.html", os.path.join(self.root, "static", "dir", "index.html"))
+        kind, path = srv.resolve(self.root, "/static/", "/static/dir/")
+        self.assertEqual(kind, "file")
+
+    def test_a_range_with_a_huge_number_is_clamped_not_an_exception(self):
+        self.assertEqual(srv.parse_range("bytes=0-" + "9" * 5000, 100), (0, 99))
+        self.assertEqual(srv.parse_range("bytes=" + "9" * 5000 + "-", 100), "bad")
+        self.assertEqual(srv.parse_range("bytes=-" + "9" * 5000, 100), (0, 99))
+
+
 class ConfigTests(unittest.TestCase):
     def write(self, tmp, **values):
         config = {"root": tmp, "prefix": "/static/", "port": 18201}
