@@ -6638,3 +6638,16 @@ def test_the_outbound_fetch_finding_is_an_error_and_its_audit_tag_suppresses_it(
     tagged = "def f(url):\n    return requests.get(url)  # audit-ignore-outbound-fetch\n"
     errors, warnings = check_ast_vulnerabilities("/tmp/some_module/models/importer.py", tagged, tagged.splitlines(), is_odoo_module=True)
     assert not [m for _n, m in errors + warnings if "OUTBOUND FETCH" in m]
+
+
+def test_a_directory_that_does_not_exist_is_red_not_a_clean_scan_of_zero_files(tmp_path):
+    # Negative control: a mistyped or renamed module used to print "Checked 0 files" and exit 0.
+    result = _run_burn_list(tmp_path / "no_such_module")
+    assert result.returncode == 2, result.stdout
+    assert "not a directory" in result.stdout
+
+
+def test_a_module_colon_test_class_target_is_still_accepted(tmp_path):
+    # tools/test.py passes `module:TestClass`; that is not a directory and must stay a no-op, not an error.
+    result = _run_burn_list(tmp_path / "some_module:TestThing")
+    assert result.returncode == 0, result.stdout
