@@ -3281,7 +3281,7 @@ Purpose: load a job. Returns the `JobRecord`, or `None` when the file is missing
 
 ### `[@ANCHOR: agent_procs:list_records]` `list_records(directory=None)`
 
-Purpose: every readable record (`jobs`, and the "recorded job" proof of `kill_pid`). Returns a list sorted by `started_at`. Ignores unreadable files.
+Purpose: every readable record (`jobs`, and the "recorded job" proof of `kill_pid`). Returns a list sorted by `started_at`. Ignores unreadable files and files whose name is not a valid job name.
 
 ### `[@ANCHOR: agent_procs:pid_alive]` `pid_alive(pid, start_ticks)`
 
@@ -3301,7 +3301,7 @@ Purpose: the tiny process that leads a job's session (`agent_procs.py _wrap NAME
 
 ### `[@ANCHOR: agent_procs:start_job]` `start_job(name, argv, tag="", cwd=None, directory=None)`
 
-Purpose: start a named job; the engine of `run`. Returns the `JobRecord` (pid, process group and session of the wrapper, log path). Side effects: creates `<name>.lock`, truncates and writes `<name>.log`, starts `python3 agent_procs.py _wrap` with `start_new_session=True` (its own session and process group, so `stop` can signal the group and a signal to your shell cannot reach it), sets `AGENT_PROCS_JOB=<name>` in its environment, writes the record. Locks: an exclusive `flock` on `<name>.lock` while checking and starting. Errors: `ProcError` code 2 for a bad name or empty command, code 1 when a job of that name is still running.
+Purpose: start a named job; the engine of `run`. Returns the `JobRecord` (pid, process group and session of the wrapper, log path). Side effects: creates `<name>.lock`, truncates and writes `<name>.log`, starts `python3 agent_procs.py _wrap` with `start_new_session=True` (its own session and process group, so `stop` can signal the group and a signal to your shell cannot reach it), sets `AGENT_PROCS_JOB=<name>` in its environment, writes the record. Locks: an exclusive `flock` on `<name>.lock` while checking and starting. Errors: `ProcError` code 2 for a bad name, an empty command or a `cwd` that is not a directory, code 1 when a job of that name is still running.
 
 ### `[@ANCHOR: agent_procs:wait_pid]` `wait_pid(pid, start_ticks=None, timeout=1800, interval=0.5, sleep=time.sleep, clock=time.monotonic, table=None)`
 
