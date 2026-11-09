@@ -97,7 +97,7 @@ class CheckOneTests(unittest.TestCase):
         self.assertIn("no route to host", result["error"])
 
     def test_a_response_missing_the_expected_key_is_reported_not_raised(self):
-        # Real bug found 2026-09-10: GitHub's API returning valid JSON with an unexpected
+        # GitHub's API returning valid JSON with an unexpected
         # schema (missing "tag_name") raised an uncaught KeyError from inside check_one(),
         # rather than being isolated to this one entry's own error report the way HTTPError/
         # URLError already are.
@@ -176,7 +176,7 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(code, 1)
 
     def test_a_malformed_response_for_one_dependency_does_not_abort_the_whole_run(self):
-        # Real bug found 2026-09-10: before the fix, an uncaught KeyError from ONE
+        # Before the fix, an uncaught KeyError from ONE
         # dependency's malformed API response propagated out of the list comprehension in
         # main(), crashing the whole scheduled run with a traceback before "thing_b" (a
         # perfectly healthy, up-to-date dependency) was ever checked or reported on.

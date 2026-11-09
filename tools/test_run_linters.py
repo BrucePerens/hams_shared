@@ -114,11 +114,11 @@ class DiscoverySnippetTests(unittest.TestCase):
 
 
 class ResolveRepoRootTests(unittest.TestCase):
-    # Regression test for the same real bug found and fixed across 9 other checker scripts the
-    # same night (see docs/proposals/LINTER_POLICY_REVISIT.md): run_linters.py's own `dir_path`
+    # Regression test for the repo-root redirect shared with 9 other checker scripts
+    # (see docs/proposals/LINTER_POLICY_REVISIT.md): run_linters.py's own `dir_path`
     # resolves to .../hams_shared, not a real repo root, whenever it's invoked from hams_shared
-    # directly -- a third, intentionally valid invocation mode per AGENTS.md. Confirmed directly:
-    # before this fix, check_burn_list.py scanned only 3 files via that exact invocation, versus
+    # directly -- a third, intentionally valid invocation mode per AGENTS.md. Without the redirect,
+    # check_burn_list.py scans only 3 files via that exact invocation, versus
     # 557 once `targets`/module-discovery/the sibling-repo resolution all switched from `dir_path`
     # to `_resolve_repo_root(dir_path)`.
     def test_a_hams_shared_path_redirects_to_its_parent_repo(self):
@@ -186,7 +186,7 @@ def _make_manifest_dir(base, name):
 
 
 class ResolveModulePathTests(unittest.TestCase):
-    # Real bug found 2026-09-10 reviewing run_linters.py: `targets` (the list handed to
+    # `targets` (the list handed to
     # flake8/check_burn_list/verify_anchors/etc when modules are explicitly named) used to be
     # recomputed from scratch as `os.path.join(repo_root, mod)` for every named module,
     # completely ignoring the `community_dir` (sibling-repo) fallback the neighboring
@@ -234,7 +234,7 @@ class ResolveModulePathTests(unittest.TestCase):
 
 
 class RunPerTargetCheckerTests(unittest.TestCase):
-    # Real bug found 2026-09-10: run_linters.py invoked several hams_shared/tools/check_*.py
+    # run_linters.py invoked several hams_shared/tools/check_*.py
     # scripts as ONE subprocess call with every scoped target appended to the same argv list
     # (`[script] + targets`). check_manifest_dependencies.py, check_test_tags.py,
     # check_absolute_paths.py, check_rabbitmq_pool.py, check_shebang.py, and
@@ -320,15 +320,15 @@ def _read_source():
 
 
 class Flake8ExcludeListTests(unittest.TestCase):
-    # Real bug found 2026-09-12 reviewing this file: passing a custom --exclude to flake8
+    # Passing a custom --exclude to flake8
     # REPLACES its own built-in default exclude list rather than adding to it (flake8 only
     # appends to the defaults when --extend-exclude is used instead) -- so the hand-written
     # --exclude value at run_linters.py's flake8 step never excluded ".claude", and flake8
     # would descend straight into ".claude/worktrees/<session>/", this project's own standing,
     # documented convention (see check_dependency_cycles.py and 4 other sibling checkers,
-    # already fixed for the identical bug per docs/BUG_HUNT_PROGRESS.md's "Batch A" entry) for
-    # running concurrent bug-hunt dispatches in isolated git worktrees INSIDE the repo root.
-    # Before this fix, a lint run started while another session's worktree existed could fail
+    # which exclude it for the identical reason) of running agent sessions in isolated git
+    # worktrees INSIDE the repo root.
+    # Without the entry, a lint run started while another session's worktree existed could fail
     # (or spuriously pass) based on that OTHER session's own in-progress, uncommitted code --
     # not the real repo state this invocation was actually scoped to check.
     def _extract_exclude_value(self):
@@ -392,16 +392,15 @@ class Flake8ExcludeListTests(unittest.TestCase):
 
 
 class PreFlightCheckStepPrintsOnSuccessTests(unittest.TestCase):
-    # Real bug found 2026-09-12: every OTHER subprocess-checking step in run_linters.py prints
+    # Every OTHER subprocess-checking step in run_linters.py prints
     # a checker's stdout when it's non-empty even on a clean (returncode == 0) pass -- this
     # pre-flight-check step (step 6) was the sole exception, silently dropping any diagnostic
-    # pre_flight_check.py prints on success. Confirmed live, not hypothetical:
+    # pre_flight_check.py prints on success. For example:
     # pre_flight_check.py's own module-tier dormancy notice ("[*] Module-tier architecture
     # check skipped: ... not found") is unconditionally printed with returncode 0 whenever
     # tier_config.json is absent -- true for every real invocation today, since no
-    # tier_config.json exists anywhere in either repo -- so that notice never reached a live
-    # CI/terminal output before this fix. Already flagged as a known, not-yet-fixed gap in
-    # night_shift_todo.md.
+    # tier_config.json exists anywhere in either repo -- so that notice must reach live
+    # CI/terminal output.
     def _render(self, returncode, stdout, stderr):
         import lint_exec
 

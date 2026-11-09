@@ -28,7 +28,7 @@ RULES OF TRACEABILITY:
    `<module>/claims/<anchor_name>.md` -- a short, falsifiable statement of exactly what the
    anchored function guarantees, in the same numbered-statement style this portfolio's own patent
    claims use. Not mandatory the way rules 1-7 are for a real anchor; opt-in per function, mainly
-   added by a `hams_shared/agents/skills/bug-hunt/SKILL.md` review pass where a function's own
+   added (see `hams_shared/agents/skills/bug-hunt/SKILL.md`) where a function's own
    behavioral subtlety makes a durable claim worth having. If a claim exists, its own frontmatter
    `code_hash` is checked against the anchored function's current source by
    `check_claims_freshness.py`, not by this script -- a hash mismatch means the code changed since
@@ -69,7 +69,7 @@ ANCHOR_TAG_START = "[@ANCHOR"
 # below because it is overwhelmingly documentation, but this one directory
 # (a real PDF-generation pipeline: build_spec.py/build_drawings.py/
 # make_pdf.py, with a real test_pipeline.py exercising pandoc/chromium for
-# real) is genuine operational code, not documentation. Found live: its own
+# real) is genuine operational code, not documentation. Its own
 # correctly-formed [@ANCHOR: ...]/`Verified by`/`Tests` comments were being
 # silently classified as doc-only references by find_anchors_in_docs
 # (never matched against real code), producing false "missing from
@@ -91,7 +91,7 @@ CODE_ISLANDS_UNDER_DOCS = [
 # check_manifest_dependencies.py, check_cargo_clippy.py, run_linters.py itself) got walked as if
 # it were real code. Its files are byte-identical copies of real source under daemons/, so every
 # anchor in them was reported as a "Duplicate Semantic Anchor" against the real definition -- a
-# hard CI/CD failure (found live 2026-09-29, blocking an unrelated devbox_tools change) caused
+# hard CI/CD failure (which can block an unrelated devbox_tools change) caused
 # entirely by stale disk state, not a real duplicate. Anything here is pruned in every walk;
 # adding a new exclusion once, here, is how the next such gap is avoided instead of quietly
 # missing one of three copies again.
@@ -100,7 +100,7 @@ ANCHOR_SCAN_EXCLUDE_DIRS = {
     ".git",
     "__pycache__",
     # Cargo build output (rustdoc HTML mirrors every .rs source file's own comments verbatim,
-    # including anchor tags) -- generated, gitignored, not source. Found live: scanning it
+    # including anchor tags) -- generated, gitignored, not source. Scanning it
     # duplicated a real anchor's "stacked Tests-anchor lines" finding under a second, bogus path
     # (target/doc/src/.../decode.rs.html) alongside the real one.
     "target",
@@ -387,20 +387,19 @@ def _ends_with_marker(prefix, marker):
     """True if `prefix` ends with the exact word/phrase `marker`, as a standalone token --
     not merely as a trailing substring glued onto a longer word.
 
-    Real bug found 2026-09-12, confirmed empirically: the classification below used to call
-    `own_prefix.endswith("Tests")` (and the "Verified by"/"Tested by"/"Triggers"/"Triggered by"
-    marker checks) directly, with no word-boundary check at all. A base-declaration comment that
+    The classification below must not call
+    `own_prefix.endswith("Tests")` (or the "Verified by"/"Tested by"/"Triggers"/"Triggered by"
+    marker checks) directly, with no word-boundary check at all: a base-declaration comment that
     simply happened to end in a word SUFFIXED by one of these markers -- e.g. `# Runs our
     UnitTests [@ANCHOR: COMM_x]`, a normal English sentence, not the documented `# Tests
-    [@ANCHOR: ...]` convention -- silently misclassified as a real "# Tests" link purely because
-    "UnitTests" ends with the substring "Tests". Confirmed directly: that exact comment recorded
-    the anchor in `tests_links_set` as genuinely tested. Consequence: `_report_bidirectional_orphans`'s
+    [@ANCHOR: ...]` convention -- would be silently misclassified as a real "# Tests" link purely because
+    "UnitTests" ends with the substring "Tests", recording the anchor in `tests_links_set` as
+    genuinely tested. Consequence: `_report_bidirectional_orphans`'s
     orphaned-source check (`a not in tests_links_set`) would then treat a truly untested feature as
-    already covered, masking a real ADR-0054 coverage gap -- a false negative in the class of bug
-    this campaign exists to catch. Fixed by additionally requiring the character immediately
-    before the marker (if any) not be a word-continuation character, so "UnitTests" no longer
-    matches "Tests" but "# Tests" (and "# Add more Tests", which was already permissively accepted
-    before this fix and is left unchanged) still does.
+    already covered, masking a real ADR-0054 coverage gap -- a false negative.
+    So the character immediately
+    before the marker (if any) must not be a word-continuation character, so "UnitTests" no longer
+    matches "Tests" but "# Tests" (and "# Add more Tests", which is permissively accepted) still does.
     """
     if not prefix.endswith(marker):
         return False
@@ -605,7 +604,7 @@ def _process_file_for_anchors(
         loc_str = f"./{rel_path}:{line_num}"
         code_anchor_lines.setdefault(full_path, set()).add(line_num)
 
-        # Real bug found 2026-09-10: classification used to be driven by a single
+        # Classification used to be driven by a single
         # `first_prefix = line[: matches[0].start()].strip()`, computed ONCE from the text before
         # the FIRST anchor on the line, then reused unchanged for EVERY anchor on that line. A
         # line with more than one `[@ANCHOR: ...]` tag (confirmed empirically, not just read) had
@@ -728,14 +727,14 @@ def find_anchors_in_code(root_dir, repo_root):
             if file == "LLM_LINTER_GUIDE.md" or file == "documentation.html":
                 continue
 
-            # Bug-hunt fix, 2026-09-13: `.rs` was never in this tuple, so this scan (the one that
+            # `.rs` must be in this tuple: this scan (the one that
             # builds `code_anchors`, the ground truth every doc/claim reference is checked
-            # against) has always been completely blind to Rust source -- `get_module()`'s own
+            # against) would otherwise be completely blind to Rust source -- `get_module()`'s own
             # `daemons/<crate>` special-case above already implies Rust was meant to be in scope.
             # Concretely: every real `[@ANCHOR: ...]` in `daemons/ham_digital_modes/src/**/*.rs`
             # (`ear_protection`, `div_round_i128`, etc. -- all genuinely present in the source,
-            # confirmed by direct `grep`) was invisible to `code_anchors`, so every claim
-            # documenting one of them was unconditionally reported "missing from operational
+            # as a `grep` shows) would be invisible to `code_anchors`, so every claim
+            # documenting one of them would be unconditionally reported "missing from operational
             # source code" by `_report_documentation_gaps` regardless of the real code, a
             # permanent false-positive baked into this checker rather than a real gap in the
             # crate's own anchors. `_process_file_for_anchors` below is a plain per-line regex
@@ -1394,7 +1393,7 @@ def _add_sibling_repo_target(repo_root, target_dirs):
     location; falling back to a nested child location with a warning, matching
     run_linters.py's own "Child Directory Mandate"). Returns `(new_target_dirs, warning_or_None)`.
 
-    Real bug found 2026-09-10: the old check tested for the literal substring "hams_community"
+    The old check tested for the literal substring "hams_community"
     (a name no real directory in this codebase has ever used) or "hams_com" anywhere in a target
     path. Since ANY path under the hams_com repo trivially contains the substring "hams_com",
     invoking this script unscoped from hams_com (`sys.argv[1:]` empty, `target_dirs == [repo_root]`
@@ -1407,7 +1406,7 @@ def _add_sibling_repo_target(repo_root, target_dirs):
     tree: `verify_anchors.py` invoked unscoped from hams_com (a real, documented-valid invocation
     root per AGENTS.md) never scanned hams_open at all, silently missing every cross-repo
     Triggers/Tests/Verified-by anchor reference into it -- exactly the "does it actually cover
-    both hams_com and hams_open" scoping gap this review pass exists to catch. The reverse
+    both hams_com and hams_open" scoping gap. The reverse
     direction (invoked from hams_open) happened to work by accident, since "hams_com" both isn't
     a substring of "hams_open" and IS one of the (coincidentally correct) candidate names.
     """
@@ -1545,8 +1544,7 @@ def main():
     primary_dirs = [os.path.abspath(d) for d in args]
     target_dirs = list(primary_dirs)
 
-    # Real bug found 2026-09-12, confirmed empirically against the real repo tree (not just
-    # read): `repo_root` above is deliberately THIS SCRIPT's own containing directory --
+    # `repo_root` above is deliberately THIS SCRIPT's own containing directory --
     # `hams_shared` itself -- so every reported location string stays relative to the real
     # hams_shared root even when scanning a different target (see test_verify_anchors.py's own
     # module docstring). But `_add_sibling_repo_target` was being handed that SAME `repo_root`
@@ -1637,7 +1635,7 @@ def main():
             _cal,
         ) = find_anchors_in_code(target_dir, repo_root)
 
-        # Real bug found 2026-09-12, confirmed empirically: `find_anchors_in_code`'s own
+        # `find_anchors_in_code`'s own
         # duplicate-base-anchor detection (see `_process_file_for_anchors`) only ever compares
         # against the `anchor_locations` dict it builds DURING THAT SINGLE CALL -- scoped to one
         # `target_dir`. Since this tool's flagship use case is scanning hams_com and hams_open
