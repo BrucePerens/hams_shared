@@ -37,10 +37,10 @@ def _resolve_repo_root(given_path):
     invocation root (alongside hams_com and hams_open), but hams_shared has no Odoo addon modules
     of its own, so anything that needs a real repo root to scan (module discovery, `targets`, the
     sibling-repo/addons-path resolution used by pre_flight_check.py) must not use `dir_path`
-    as-is in that case. Confirmed directly, not assumed: check_burn_list.py scanned only 3 files
-    via this exact invocation before this fix, versus 78+ real files against a real repo root --
-    every `targets`-based step (7-18, 21) was silently scanning almost nothing. Same fix as the 9
-    individual checker scripts this same bug was found and fixed in earlier tonight (see
+    as-is in that case. check_burn_list.py scans only 3 files
+    via this exact invocation without the redirect, versus 78+ real files against a real repo root --
+    every `targets`-based step (7-18, 21) was silently scanning almost nothing. Same redirect as the 9
+    individual checker scripts that handle this same case (see
     docs/proposals/LINTER_POLICY_REVISIT.md) -- detect the hams_shared case by name and redirect
     to its real parent repo. Deliberately NOT used for steps 27-29 (the tools/scripts/daemons
     test-suite runners) or the anti-symlink/child-directory structural checks just below: those
@@ -96,7 +96,7 @@ def shared_worktree_root(dir_path, repo_root):
     A hams_shared worktree resolves `repo_root` to the hams_open main checkout (`_resolve_repo_root`), so
     flake8, the absolute-path and the shebang checker scanned that checkout and never the worktree: a
     branch's own findings were not seen, and whatever the main checkout held (stale, or another session's
-    edits) failed the run on files the branch did not touch (found 2026-10-30: 13 flake8 hits and 40
+    edits) failed the run on files the branch did not touch (for example 13 flake8 hits and 40
     absolute-path hits, among them an undefined name the branch had already fixed). The worktree is
     therefore a scan root of its own for those steps (SHARED_WORKTREE_STEPS). Started in the main checkout
     (or through the `hams_shared` link into it) it is already under `repo_root`: nothing is added."""
@@ -476,7 +476,7 @@ def stamp_repos(repo_root, tools_dir, dir_path, layout=None):
     scanned it: started from it, or reachable below `repo_root` without crossing a symlink. A
     repository's `hams_shared` link to the main checkout is not followed by the checkers' directory
     walks, so a run from a worktree that links it covers none of its files and must not vouch for
-    its commit (found 2026-10-30: Rust and tool PRs carried stamps that checked nothing).
+    its commit (otherwise Rust and tool PRs carry stamps that checked nothing).
 
     `layout` (lint_layout.Layout or None): given when a hams_shared worktree was linted in a layout of throwaway
     sibling clones; only the hams_shared tree is stamped then."""
@@ -910,10 +910,10 @@ def _run_per_target_checker(python_exec, dir_path, script_name, targets):
     argument -- once per entry in `targets`, instead of batching every target into one argv
     list (`[script] + targets`).
 
-    Real bug found 2026-09-10 reviewing this file: `check_manifest_dependencies.py`,
+    `check_manifest_dependencies.py`,
     `check_test_tags.py`, `check_absolute_paths.py`, `check_rabbitmq_pool.py`,
     `check_shebang.py`, and `check_init_imports.py` all read only `sys.argv[1]`, silently
-    ignoring `sys.argv[2:]` entirely (confirmed by reading each script directly, not assumed);
+    ignoring `sys.argv[2:]` entirely (as each script's source shows);
     `check_burn_list.py` declares its positional `directory` argument with `nargs="?"`, which
     argparse rejects outright (a loud "unrecognized arguments" failure) given 2+ positional
     values. `targets` becomes a multi-element list whenever `target_modules_str` names more
@@ -1040,7 +1040,7 @@ def real_shared_root(script_path):
 
     The staleness check must examine this checkout, not the repository the script was started from:
     through a hams_open or hams_com `tools` link, `invocation_root` is that repository, and its own
-    unpushed or behind commits were reported as a stale hams_shared (found 2026-10-29)."""
+    unpushed or behind commits were reported as a stale hams_shared."""
     return os.path.dirname(os.path.dirname(os.path.realpath(script_path)))
 
 
@@ -1052,7 +1052,7 @@ def invocation_root(script_path):
     linked it to the main checkout), `dirname(dirname(script))` is that symlink. Every step
     root, daemon directory and test directory derived from it then pointed into the real
     hams_shared checkout instead of the worktree, so a Rust change in the worktree lay under no
-    step's root and `--changed` selected zero steps (found 2026-10-30). The worktree itself is the
+    step's root and `--changed` selected zero steps. The worktree itself is the
     root in that case, exactly as when the script is started through the `tools` link."""
     given = os.path.dirname(os.path.dirname(os.path.abspath(script_path)))
     if os.path.basename(given) == "hams_shared" and os.path.islink(given):
@@ -1202,7 +1202,7 @@ def main():
             print(text, file=sys.stderr)
     # A hams_shared worktree is linted inside a layout of its own: this hams_shared as hams_open/hams_shared, hams_com
     # beside it. The main checkouts' submodule is whatever commit they have, so every cross-repository step (anchors,
-    # claims, burn list) used to judge the OLD hams_shared and never the branch (2026-11-07, #411 and #412).
+    # claims, burn list) used to judge the OLD hams_shared and never the branch (#411 and #412).
     layout = None
     if shared_worktree_root(dir_path, repo_root) and not any(
         flag in sys.argv for flag in ("--lint-caches", "--lock-status", "--baseline-refresh", "--baseline-show", "--baseline-renew")
@@ -1374,23 +1374,23 @@ def main():
 
     # 6. Pre-flight Checks
     # `resolved_mod_paths` also becomes `targets` below (when modules were explicitly named) --
-    # real bug found 2026-09-10: the OLD code recomputed `targets` from scratch as
-    # `[os.path.join(repo_root, m) for m in mod_array]`, unconditionally assuming every named
-    # module lives directly under `repo_root` and completely ignoring the `community_dir`
+    # `targets` must not be recomputed from scratch as
+    # `[os.path.join(repo_root, m) for m in mod_array]`, which would assume every named
+    # module lives directly under `repo_root` and ignore the `community_dir`
     # fallback this very loop performs one path resolution earlier. A module that exists only in
     # the sibling repo (e.g. running from `hams_com` and naming a `hams_open`-only module like
-    # `zero_sudo`) got a `targets` entry pointing at a path that doesn't exist at all under
+    # `zero_sudo`) would get a `targets` entry pointing at a path that doesn't exist at all under
     # `repo_root` -- `os.walk()` on a nonexistent directory yields nothing and raises nothing, so
     # every `targets`-scoped checker (flake8, check_burn_list, verify_anchors,
     # check_manifest_dependencies, check_js_syntax, check_test_tags, check_absolute_paths,
-    # check_rabbitmq_pool, check_shebang, check_init_imports) silently scanned zero files for
-    # that module and reported a clean pass, even though `pre_flight_check.py` (this same loop,
+    # check_rabbitmq_pool, check_shebang, check_init_imports) would silently scan zero files for
+    # that module and report a clean pass, even though `pre_flight_check.py` (this same loop,
     # correctly, via `mod_path`) was checking the real, correctly-resolved sibling-repo path the
-    # whole time. Fixed by reusing this loop's own already-correct `mod_path` resolution instead
+    # whole time. So `targets` reuses this loop's own already-correct `mod_path` resolution instead
     # of recomputing a second, wrong one. A module name that resolves in neither repo now prints
     # an explicit warning and fails the run instead of being silently absent from `targets` with
-    # no signal at all (the same "loud, honest failure over a silent no-op" preference this
-    # campaign applies everywhere else).
+    # no signal at all (the same "loud, honest failure over a silent no-op" preference applied
+    # everywhere else).
     resolved_mod_paths = []
     for mod in mod_array:
         mod_path = _resolve_module_path(mod, repo_root, community_dir)
@@ -1412,19 +1412,16 @@ def main():
             addons_path_str,
         ]
         # The pre-flight step prints a passing run's stdout too (same as every other step):
-        # Real bug found 2026-09-12: every other step in this file prints a checker's
-        # stdout even on a clean (returncode == 0) pass when it's non-empty -- this one was
-        # the sole exception, silently dropping any diagnostic pre_flight_check.py prints on
-        # success. Confirmed live, not hypothetical: pre_flight_check.py's own module-tier
+        # every other step in this file prints a checker's
+        # stdout even on a clean (returncode == 0) pass when it's non-empty, so this one must
+        # not silently drop a diagnostic pre_flight_check.py prints on
+        # success. pre_flight_check.py's own module-tier
         # dormancy notice ("[*] Module-tier architecture check skipped: ... not found") is
         # unconditionally printed to stdout with returncode 0 whenever tier_config.json is
         # absent -- true for every real invocation today, since no tier_config.json exists
         # anywhere in either repo -- and this branch's absence meant that notice never
-        # reached a live CI/terminal output, only the module's own capture_output buffer.
-        # Already flagged as a known, not-yet-fixed gap in night_shift_todo.md ("pre_flight_
-        # check.py's new tier-config dormancy notice doesn't surface through its real, live
-        # caller"); fixed here by matching this file's own established convention instead of
-        # the "broader design decision" that earlier note assumed was required.
+        # reached a live CI/terminal output, only the module's own capture_output buffer. This matches this file's own
+        # established convention for every other step.
         _add(
             f"pre_flight_check[{os.path.basename(mod_path)}]",
             pre_flight_cmd,
@@ -1478,18 +1475,17 @@ def main():
     # already-committed one-shot script to satisfy a linter would make the
     # archive inaccurate, not correct.
     #
-    # .claude: real bug found 2026-09-12 reviewing this file. Passing a custom
+    # .claude: passing a custom
     # --exclude replaces flake8's own default exclude list entirely (flake8 does
     # NOT append to its defaults unless --extend-exclude is used instead), so
     # without an explicit entry here flake8 descends into
     # ".claude/worktrees/<session>/" -- this project's own standing, documented
-    # convention (see check_dependency_cycles.py's identical fix, and the "Batch A"
-    # entry in docs/BUG_HUNT_PROGRESS.md fixing the same gap in 5 sibling checker
-    # scripts) for running concurrent bug-hunt dispatches in isolated git worktrees
-    # INSIDE the repo root. Confirmed empirically: a fake .claude/worktrees/<sess>/
+    # convention (see check_dependency_cycles.py's identical exclusion, shared by 5 sibling
+    # checker scripts) of running agent sessions in isolated git worktrees
+    # INSIDE the repo root. A fake .claude/worktrees/<sess>/
     # tree with one file containing a real, unambiguous F401 violation was scanned
-    # and reported by flake8 with this exact --exclude value before this fix.
-    # Before this fix, a lint run started while another session's worktree existed
+    # and reported by flake8 with this exact --exclude value without the entry.
+    # Without it, a lint run started while another session's worktree existed
     # could fail (or, depending on E9/F/E402 content, spuriously pass) based on that
     # OTHER session's own in-progress, uncommitted code -- not the real repo state
     # this invocation was actually scoped to check.
@@ -1660,12 +1656,12 @@ def main():
     # of those three literally IS hams_shared. An earlier version of this comment/code assumed
     # dir_path always equals hams_shared, which broke ESLint entirely (hard, unconditional
     # linters_failed=True) for the other two -- the far more common -- invocation modes:
-    # confirmed directly, `dir_path/node_modules/.bin/eslint` does not exist when dir_path is a
-    # real repo root, only when dir_path is hams_shared itself. Fixed by resolving the REAL
+    # `dir_path/node_modules/.bin/eslint` does not exist when dir_path is a
+    # real repo root, only when dir_path is hams_shared itself. So resolve the REAL
     # hams_shared directory via realpath() (which follows the hams_open/tools and hams_com/tools
-    # symlinks, unlike a dirname chain off `dir_path`), same technique as the fix to the same bug
-    # class in test_odoo_mypy_plugin.py the same night -- correct regardless of which of the
-    # three valid roots this script was invoked from.
+    # symlinks, unlike a dirname chain off `dir_path`), same technique as in
+    # test_odoo_mypy_plugin.py -- correct regardless of which of the three valid roots this
+    # script was invoked from.
     _real_tools_dir = os.path.dirname(os.path.realpath(__file__))
     hams_shared_dir = os.path.dirname(_real_tools_dir)
     eslint_config = os.path.join(hams_shared_dir, "eslint.config.js")
@@ -2058,8 +2054,8 @@ def main():
                     aliases=aliases if len(sessions) == 1 else (),
                 )
 
-    # 30. check_access_csv_group_order -- catches the exact bug class that
-    # silently broke the ENTIRE test suite tonight (not just one module's
+    # 30. check_access_csv_group_order -- catches the exact mistake that
+    # silently broke the ENTIRE test suite once (not just one module's
     # tests): ham_aprs/__manifest__.py listed security/ir.model.access.csv
     # before the XML file defining the group it references, and Odoo's
     # whole boot died at that module with nothing after it in the -i list
@@ -2075,7 +2071,7 @@ def main():
     ],
     )
 
-    # 31. check_module_subpackage_imports -- catches a second, real bug found tonight, the same
+    # 31. check_module_subpackage_imports -- catches a second, real bug of the same
     # shape as step 30's: a new ham_propagation/models/ subpackage was added (a real, correct
     # _inherit extension of ham.sked) but ham_propagation/__init__.py only ever imported
     # `controllers`, so Odoo's module loader never imported the new file at all -- the new
@@ -2095,7 +2091,7 @@ def main():
     # 32. check_registry_test_cr_usage -- catches a real, repeatedly-found bug: an
     # `is_test = vars(self.env.registry).get("test_cr") is not None` guard around
     # env.cr.commit() that is always False, since registry.test_cr isn't a real attribute
-    # in this installed Odoo version. Found live in ham_relay_bridge (the guarded commit()
+    # in this installed Odoo version. Seen in ham_relay_bridge (the guarded commit()
     # had literally never been exercised end-to-end by any test) and as the same latent,
     # not-yet-triggered bug in 10 places across user_websites. Same reasoning as
     # step 19/20/22/23/30/31: always scans the full repo.
@@ -2164,8 +2160,8 @@ def main():
     # 35. check_cargo_deny -- the Rust supply-chain/license/advisory scan
     # check_pip_audit.py's own docstring already describes as its "direct
     # Python parallel," but was never actually wired in here at all: a real
-    # gap found 2026-08-26 running `cargo deny check` by hand for the first
-    # time in this codebase's history and finding 11 real, previously-
+    # gap: running `cargo deny check` by hand for the first
+    # time in this codebase's history found 11 real, previously-
     # unremediated advisory/license/unmaintained findings in hams_local_relay
     # alone (an HTTP/2 unbounded-DATA-frame DoS vector among them). Same
     # reasoning as step 19/20/22/23/24/30/31/32/33/34: always scans the full
@@ -2178,15 +2174,15 @@ def main():
     # 36. check_cargo_clippy -- the Rust code-quality scan that is
     # flake8/ESLint's direct parallel on the Rust side, but -- like
     # cargo-deny above -- was never actually wired in here at all: a real
-    # gap found 2026-08-26 running `cargo clippy` by hand for the first time
-    # in this codebase's history. Same reasoning as step 35: always scans
+    # gap: running `cargo clippy` by hand for the first time
+    # in this codebase's history found real warnings. Same reasoning as step 35: always scans
     # the full repo, not a possibly-scoped `targets` list.
     _add(
         "check_cargo_clippy",
         [python_exec, os.path.join(dir_path, "tools", "check_cargo_clippy.py"), dir_path] + rust_changed_args,
     )
 
-    # 37. check_binary_manifest_consistency -- catches a real drift class found 2026-08-27
+    # 37. check_binary_manifest_consistency -- catches a real drift class seen when
     # bumping kopia/etcd/cloudflared: hams_shared/tools/binary_manifest.json (what
     # dependency_watch.json / check_dependency_releases.py track) and
     # binary_downloader/data/binary_manifest_data.xml (the actual runtime seed data
@@ -2205,8 +2201,8 @@ def main():
     # code now, we will do the sweep when we get to that proposal."
     # Doesn't scan `targets` (a possibly-scoped module list) -- the
     # baseline is repo-wide, keyed by `repo_root`'s own basename, matching
-    # the `function_test_anchor_baseline_<repo>.json` files this session
-    # generated for both real repos.
+    # the `function_test_anchor_baseline_<repo>.json` files generated
+    # for both real repos.
     _add(
         "check_function_test_anchors",
         [
@@ -2368,7 +2364,7 @@ def main():
     # postMessage/event branches must be gated behind a real, server-substituted
     # TEST_HOOKS_ENABLED flag (a deliberate, per-deployment ir.config_parameter, never Odoo's
     # own test_enable -- that shape of test/prod branching is banned, see
-    # ham_repeater_dir/models/ham_repeater_import.py's own comment). Found live: both real
+    # ham_repeater_dir/models/ham_repeater_import.py's own comment). Both real
     # Service Workers (sw.js, shack_sw.js) shipped several such hooks completely unguarded in
     # every production deployment before this ADR. Real AST parse via acorn
     # (js_test_hook_gating_scan.cjs), same split-responsibility pattern as steps 39/40. No
@@ -2379,8 +2375,8 @@ def main():
         [python_exec, os.path.join(dir_path, "tools", "check_js_test_hook_gating.py"), repo_root],
     )
 
-    # 47. check_async_lock_scope -- Rust daemon gate born 2026-09-11 from a real bug found by
-    # adversarial review in hams_relay_bridge's telemetry_loop: a tokio::sync::RwLock read
+    # 47. check_async_lock_scope -- Rust daemon gate born from a real bug in
+    # hams_relay_bridge's telemetry_loop: a tokio::sync::RwLock read
     # guard bound at the top of a loop body with no explicit drop stayed held across a slow
     # network POST (Rust's lexical drop-scope rules don't shorten a guard's lifetime just
     # because the borrow checker's own "last use" analysis ends earlier) -- since
@@ -2407,10 +2403,10 @@ def main():
         print_ok=False,
     )
 
-    # 48. check_fake_network_listener -- born the same night as step 47, from the same
-    # real-network-integration-test work that found hams_relay_bridge and dx_firehose had zero
+    # 48. check_fake_network_listener -- born alongside step 47, from the same
+    # real-network-integration-test work that revealed hams_relay_bridge and dx_firehose had zero
     # tests exercising their own actual WebSocket routing (every prior test either checked
-    # extracted pure logic directly or mocked Odoo's own HTTP responses). The fix pattern
+    # extracted pure logic directly or mocked Odoo's own HTTP responses). The pattern
     # (real TcpListener/websockets.serve on an ephemeral port, real connecting client, mock
     # only genuine external boundaries) is now established in both daemons; this gate flags a
     # regression toward the old anti-pattern -- a hand-rolled Fake/Mock/Dummy/Stub type named
@@ -2424,13 +2420,13 @@ def main():
         print_ok=False,
     )
 
-    # 49. check_int_float_overflow -- born 2026-09-11 from a real bug found by adversarial
-    # review in sota_sync.process_sota_csv()'s own _int() helper: int(float(val)) wrapped in
+    # 49. check_int_float_overflow -- born from a real bug in
+    # sota_sync.process_sota_csv()'s own _int() helper: int(float(val)) wrapped in
     # `except ValueError` looks like it safely handles any malformed numeric string, but
     # int(float("inf")) raises OverflowError, not ValueError -- Python's float() parses
     # "inf"/"nan"/"-infinity" (case-insensitively) with no exception at all, and only the
     # subsequent int() conversion of that non-finite value fails, with the "wrong" exception
-    # type. One bad CSV cell used to silently drop every row remaining in the file for that
+    # type. One bad CSV cell would silently drop every row remaining in the file for that
     # whole sync cycle. This gate walks every .py file in both repos for int(<expr containing
     # a float(...) call>) not guarded by a try/except that would catch OverflowError. Same
     # two-repo sweep as steps 47/48.
@@ -2442,13 +2438,13 @@ def main():
         print_ok=False,
     )
 
-    # 50. check_float_isfinite -- born 2026-09-11/12 from a single night's bug-hunt sweep that
-    # found and fixed roughly fifteen separate real instances of the same bug class: float(x)
+    # 50. check_float_isfinite -- born from roughly fifteen separate real instances of
+    # the same bug: float(x)
     # parses "nan"/"inf"/"-infinity" with NO exception at all, so a `try: float(x) except
     # ValueError: ...` block -- which reads as "safely parse this untrusted text" -- silently
     # lets a non-finite value through. This gate flags a float(...) call inside a try/except
     # ValueError with no math.isfinite() call anywhere in the enclosing function. Same two-repo
-    # sweep as steps 47/48/49; validated silent on every site fixed that night after adding
+    # sweep as steps 47/48/49; validated silent on every fixed site after adding
     # float-isfinite-ignore escape hatches to the confirmed-safe remainder.
     # One process scans both repositories (was one step per repository: two interpreters, two
     # tree walks; docs/LINT_STEP_ANALYSIS.md).
@@ -2458,16 +2454,16 @@ def main():
         print_ok=False,
     )
 
-    # 51. check_res_config_settings_access -- ADR-0096, born from the real
-    # night_shift_todo.md "saving ANY Settings page can crash with an
-    # AccessError" investigation: user_websites/security/ir.model.access.csv
+    # 51. check_res_config_settings_access -- ADR-0096, born from a real
+    # case where saving ANY Settings page could crash with an
+    # AccessError: user_websites/security/ir.model.access.csv
     # granted group_user_websites_administrator (not a base.group_system
     # group) full read/write/create/unlink on the ENTIRE shared
     # res.config.settings model -- ir.model.access.csv grants are per
     # (model, group), never per field, so that was never actually scoped to
     # user_websites' own 3 settings fields; it handed that role read/write
-    # on every OTHER installed module's settings too (confirmed
-    # concretely: distributed_redis_cache's redis_password, cloudflare's
+    # on every OTHER installed module's settings too (for example
+    # distributed_redis_cache's redis_password, cloudflare's
     # cloudflare_api_token). Same reasoning as step 30: always scans the
     # full repo, since a module adding this kind of row can happen anywhere.
     _add(
@@ -2504,15 +2500,12 @@ def main():
     )
 
     # 53. check_claims_freshness -- ADR 0091's own real, named follow-on ("not yet wired into
-    # run_linters.py as of this ADR... a real, named follow-on, not forgotten"), finally wired in
-    # 2026-09-18: Bruce's own decision, via AskUserQuestion (hams_com/night_shift_questions/
-    # answered/wire-check-claims-freshness-into-ci-fa45dba0.md), after a same-session triage pass
-    # brought the real stale-claim backlog to 0 everywhere outside `ingest/`, `ics_forms/`, and
-    # `ics_training/` (hams_com/night_shift_todo/medium/
-    # check-claims-freshness-never-wired-into-ci-1e71bfb6.md's own "Triage progress" section).
+    # run_linters.py as of this ADR... a real, named follow-on, not forgotten"), wired in
+    # as a hard gate after a triage pass brought the real stale-claim backlog to 0 everywhere
+    # outside `ingest/`, `ics_forms/`, and `ics_training/`.
     # Those three directories are excluded from the checker's own scan (see
-    # check_claims_freshness.py's EXCLUDED_TOP_LEVEL_DIRS), not scoped here, since another
-    # session has real, active, in-progress work landing throughout them this same night. Always
+    # check_claims_freshness.py's EXCLUDED_TOP_LEVEL_DIRS), not scoped here, since other
+    # sessions have real, active, in-progress work landing throughout them. Always
     # scans `repo_root` (not the possibly-scoped `targets`), same reasoning as step 38: a claim
     # documents one function anywhere in the repo, not a property of any single target module.
     _add(

@@ -116,7 +116,7 @@ for line in open(sys.argv[1], encoding="utf-8"):
     if not m:
         continue
     # Every visible copy must be the pinned version: a host with several overlapping dist-info directories for one package (a dirty
-    # /usr/local dist-packages) made pip treat the pin as satisfied while the hash-pinned user-level set was broken (bruce16, 2026-11-08).
+    # /usr/local dist-packages) made pip treat the pin as satisfied while the hash-pinned user-level set was broken (seen on bruce16).
     name = re.sub(r"[-_.]+", "-", m.group(1)).lower()
     found = {d.version for d in metadata.distributions() if re.sub(r"[-_.]+", "-", d.metadata["Name"] or "").lower() == name}
     if found == {m.group(2)}:
@@ -373,7 +373,7 @@ do_apply() {
 }
 
 # The user-level part only (no sudo, no apt, no service, no download but rustup and pip wheels): what the dev box itself needs to be a full lint
-# runner (2026-11-08): the pinned Rust toolchain with rustfmt and clippy, the lint user's createdb role where PostgreSQL already runs, and the
+# runner: the pinned Rust toolchain with rustfmt and clippy, the lint user's createdb role where PostgreSQL already runs, and the
 # pytest wheels. `apply` on a machine that is also somebody's workstation or server would install brokers and a database; this does not.
 do_apply_user() {
   local rc=0
