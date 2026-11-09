@@ -1756,6 +1756,20 @@ def anchor_scan_sibling_dir(base_dir, other_repo_name, environ=None):
     return None
 
 
+def burn_list_target(base_dir, module):
+    """The directory the burn-list scan of MODULE covers: its directory in base_dir, else the same-named
+    directory in the sibling hams_open/hams_com checkout (a hams_com run names hams_open modules), else
+    the base_dir path, which check_burn_list.py then reports as missing instead of passing."""
+    own = os.path.join(base_dir, module)
+    if os.path.isdir(own):
+        return own
+    for other_repo_name in ("hams_open", "hams_com"):
+        sibling_dir = anchor_scan_sibling_dir(base_dir, other_repo_name)
+        if sibling_dir and os.path.isdir(os.path.join(sibling_dir, module)):
+            return os.path.join(sibling_dir, module)
+    return own
+
+
 def get_addons_path(base_dir):
     paths = ["/usr/lib/python3/dist-packages/odoo/addons", base_dir]
 
@@ -1861,7 +1875,7 @@ def check_linters(
     # run scans each named module in its own subprocess call and aggregates the results, rather
     # than trying to pass several paths at once.
     burn_targets = (
-        [os.path.join(base_dir, module) for module in target_modules]
+        [burn_list_target(base_dir, module) for module in target_modules]
         if target_modules
         else [base_dir]
     )
