@@ -3200,3 +3200,121 @@ The `argparse` parser: sub-commands `run` (`--repo-root`, `--set small|medium|la
 ### `[@ANCHOR: tools:template_db_main]` `main(argv=None)`
 
 Entry point: `_stub ...` goes to `stub_main` (internal), anything else is parsed and dispatched to `run_command`, `key_command` or `report_command`. Returns the exit status.
+
+## Per-PR targeted test runs (`test_impact.py`)
+
+Why: a branch that touches one module does not need the whole-system run. `test_impact.py` reads the branch's changed files
+(against `origin/main`), maps them to Odoo modules, widens the set to every module that depends on one of them (across hams_com and
+hams_open) and prints the smallest `test.py -u ...` command that is still safe; when only test files changed it adds the specific
+`--test-tags`. It is conservative: a change it cannot map to one module's code (a manifest, `security/`, `data/`, `views/`, any XML or
+CSV outside `static/`, a hams_shared tool, a shared library, a daemon, an unknown file type) answers "run the full module list" and says
+why. Only documentation-only changes answer "no Odoo test impact". The per-PR run is a shortcut for the author and the merge gate;
+the **nightly whole-system run stays the safety net** for anything a targeted run cannot see (cross-module data, shared state, load
+order). Run it with `nice -n 10 python3 hams_shared/tools/test_impact.py` (add `--command-only` to paste the line, `--files a b` to
+analyse paths without git), then run the printed command through the usual `sudo -n -u odoo env ... test.py --wait` wrapper.
+
+| Changed file | Verdict |
+|---|---|
+| `<module>/models|controllers|static|...` code or asset (`.py .js .scss` ...) | that module and its reverse dependents |
+| `<module>/tests/test_*.py` only | that module, narrowed to `/module:Class` tags |
+| `<module>/README.md`, `<module>/docs/` | that module, whole |
+| `__manifest__.py`, `security/`, `data/`, `views/`, `demo/`, `i18n/`, `report/`, XML or CSV outside `static/` | full list |
+| anything outside every module (hams_shared tools, shared libs, daemons, config, the `hams_shared` gitlink) | full list |
+| Markdown or `docs/`, `night_shift_*` outside modules | nothing to run |
+
+### `[@ANCHOR: test_impact:Impact]` `Impact(kind, modules, test_tags, reasons)`
+
+Purpose: the answer `analyze` returns and `build_command` prints. A `collections.namedtuple` in `tools/test_impact.py`; immutable, built
+per call, never stored or serialised.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `kind` | str | `none` (nothing to run), `targeted` (the closure of changed code), `tests` (only test or documentation files changed), `full` (every module). |
+| `modules` | list of str | Sorted module names for `-u`; empty when `kind` is `none`. |
+| `test_tags` | list of str or None | `/module:Class` selectors when `kind` is `tests` and every changed test file has readable classes, else None. |
+| `reasons` | list of str | One line per changed file (verdict and why) and a last `=>` line giving the decision. |
+
+Invariants: `full` always lists every module of the universe; `test_tags` is only set for `tests`.
+
+### `[@ANCHOR: test_impact:module_dirs]` `module_dirs(roots)`
+
+Purpose: the module universe. Finds directories directly below each root that hold a `__manifest__.py`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `roots` | iterable of str | Directories such as the hams_com and hams_open checkouts. A root that cannot be listed is skipped. |
+
+Returns: `{name: real path}`; the first root wins when two roots hold the same name. No errors raised. Reads the directory listing only;
+no locks, no side effects, safe to repeat.
+
+### `[@ANCHOR: test_impact:read_depends]` `read_depends(module_path)`
+
+Purpose: the `depends` list of a manifest, parsed with `ast.literal_eval` (the manifest is never executed).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `module_path` | str | A module directory. |
+
+Returns: list of names; `[]` when the manifest is missing, unparsable or not a dict. Includes Odoo's own modules (`base`, `web`), which
+the closure ignores.
+
+### `[@ANCHOR: test_impact:reverse_closure]` `reverse_closure(changed, modules)`
+
+Purpose: every module that must be retested when `changed` modules change: those modules plus all that depend on them, transitively.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `changed` | iterable of str | Module names that changed. |
+| `modules` | dict | The `module_dirs` mapping; each manifest is read once to build the reverse graph. |
+
+Returns: sorted list of names. A dependency cycle cannot loop (visited modules are not revisited).
+
+### `[@ANCHOR: test_impact:classify_path]` `classify_path(rel)`
+
+Purpose: the conservative per-file rule inside a module. Pure; no file access.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `rel` | str | Path relative to the module directory, `/`-separated. |
+
+Returns `(category, reason)`: `full` (manifest, `security/`, `data/`, `views/`, `demo/`, `i18n/`, `report/`, `templates/`, XML outside `static/`, unknown
+types), `code` (code and assets, including `tests/` helpers other than `test_*.py`, since dependents may import them), `test` (`tests/test_*.py`),
+`doc` (Markdown, `docs/`).
+
+### `[@ANCHOR: test_impact:test_classes]` `test_classes(path)`
+
+Purpose: lets `--test-tags` name test classes. Parses a test file (never imports it) and returns the top-level classes that have a base class.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `path` | str | A Python file; a missing, unreadable or unparsable file yields `[]` (a deleted test file), which makes the caller run the module whole. |
+
+### `[@ANCHOR: test_impact:analyze]` `analyze(changes, modules)`
+
+Purpose: the decision. Called by `main` and by tests.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `changes` | list of (str, str) | `(repo_root, repo-relative path)` for each changed file; renames and deletions appear under their old and new names. |
+| `modules` | dict | The `module_dirs` universe. The owning module is the one with the longest path prefix. |
+
+Returns an `Impact`. Order of precedence: any `full` file makes the result full; else any code change gives the closure (plus any
+documentation/test-only modules, whole, because tags would under-test the code modules); else tests-only narrowing; else none. Pure
+apart from reading the test files and manifests; no locks, safe to retry.
+
+### `[@ANCHOR: test_impact:build_command]` `build_command(impact)`
+
+Purpose: the line to run. Returns `python3 hams_shared/tools/test.py --wait -u <modules> [--test-tags <tags>]`, or a `#` comment line for
+`none`. It does not add the `sudo -n -u odoo env ...` wrapper; take that from `AGENTS.md`.
+
+### `[@ANCHOR: test_impact:changed_files]` `changed_files(repo, base="origin/main")`
+
+Purpose: the branch's changed paths: everything that differs from `merge-base(base, HEAD)` in the work tree, plus untracked files, with renames
+reported as delete and add (`--no-renames`).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `repo` | str | Any path inside a git checkout. |
+| `base` | str | The ref to compare against. |
+
+Returns a sorted list of repo-relative paths. Raises `RuntimeError` when git fails (not a checkout, or no such ref). Runs read-only git commands.
