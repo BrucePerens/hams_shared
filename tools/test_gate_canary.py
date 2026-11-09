@@ -78,7 +78,7 @@ class AggregateTests(unittest.TestCase):
     # Tests [@ANCHOR: gate_canary:aggregate]
     def test_status_lists_new_tolerated_and_flaky_tests_and_is_red_only_for_new_ones(self):
         shards = [
-            {"number": 1, "modules": ["a"], "exit_status": 0, "results": None},
+            {"number": 1, "modules": ["a"], "exit_status": 0, "results": None, "tests_run": 5},
             {"number": 2, "modules": ["b"], "exit_status": 0, "results": {
                 "new_failures": [], "known_red": {"b:T.t": {}}, "flakes": {"b:T.f": {}}, "now_passing": ["b:T.g"], "fix_me": [],
                 "unparsed": 0, "counts": {"failed": 1, "errors": 0, "total": 9}}},
@@ -99,6 +99,30 @@ class AggregateTests(unittest.TestCase):
             "new_failures": [], "known_red": {}, "flakes": {}, "now_passing": [], "fix_me": [], "unparsed": 2,
             "counts": {"failed": 2, "errors": 0, "total": 3}}}], COMMITS)
         self.assertEqual(unnamed["status"], "red")
+
+    # Negative controls (gate audit 2026-11-09): a pass needs positive evidence.
+    # Tests [@ANCHOR: gate_canary:aggregate]
+    def test_negative_control_no_shards_and_exit_0_without_a_test_are_red(self):
+        self.assertEqual(gc.aggregate([], COMMITS)["status"], "red")
+        for tests_run in (0, None):
+            shard = {"number": 1, "exit_status": 0, "results": None}
+            if tests_run is not None:
+                shard["tests_run"] = tests_run
+            status = gc.aggregate([shard], COMMITS)
+            self.assertEqual(status["status"], "red")
+            self.assertIn("not a pass", status["shard_errors"][0])
+
+    # Tests [@ANCHOR: gate_canary:shard_tests_run]
+    def test_negative_control_shard_log_missing_empty_or_without_a_verdict_counts_zero_tests(self):
+        path = os.path.join(self.tmp.name, "shard.log")
+        self.assertEqual(gc.shard_tests_run(path), 0)
+        for text in ("", "Odoo died: Address already in use\n", "odoo.tests.result: 1 failed, 0 error(s) of 9 tests\n"):
+            with open(path, "w") as handle:
+                handle.write(text)
+            self.assertEqual(gc.shard_tests_run(path), 0)
+        with open(path, "w") as handle:
+            handle.write("odoo.tests.result: 0 failed, 0 error(s) of 9 tests when loading database 'd'\n")
+        self.assertEqual(gc.shard_tests_run(path), 9)
 
     # Tests [@ANCHOR: gate_canary:baseline_candidates]
     def test_candidates_use_the_baseline_format_and_load_with_the_real_loader(self):
@@ -172,6 +196,9 @@ class RunTests(unittest.TestCase):
             if "--bisect-modules" in command:
                 return 0
             number = int(command.split("shard ")[1][0])
+            if number not in results:  # a passing shard: test.py prints this line and writes no results file
+                with open(log_path, "a", encoding="utf-8") as log:
+                    log.write("TEST RUN COMPLETE: Odoo reports 0 failed, 0 error(s) of 12 tests -- the suite passed.\n")
             if number in results:
                 directory = os.path.join(self.gate, "logs", "shard%d" % number)
                 results[number](directory)
@@ -356,6 +383,12 @@ class RelaySuiteTests(RunTests):
         code, status = self.run_with("error: could not compile `hams_local_relay`\n", 101)
         self.assertEqual((code, status["relay"]["status"]), (1, "error"))
         self.assertTrue(any("relay full suite" in e for e in status["shard_errors"]))
+
+    def test_negative_control_relay_exit_0_with_no_test_counted_is_an_error_never_green(self):
+        self.make_relay()
+        for text in ("", "running 0 tests\ntest result: ok. 0 passed; 0 failed\n"):
+            code, status = self.run_with(text, 0)
+            self.assertEqual((code, status["relay"]["status"], status["status"]), (1, "error", "red"))
 
     def test_no_relay_crate_or_no_relay_flag_is_said_not_silent(self):
         code, status = self.run_with("", 0)  # the snapshot has no relay crate here
