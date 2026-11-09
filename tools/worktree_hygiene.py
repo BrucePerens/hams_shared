@@ -7,7 +7,7 @@ Worktree Hygiene
 Half-finished worktrees and branches pile up (about 300 local branches were found in hams_open and hams_com on 2026-10-26, most
 already squash-merged). This tool finds them and removes the ones that are provably finished.
 
-  worktree_hygiene.py [--apply] [--stale-minutes N] [--no-fetch] REPO...
+  worktree_hygiene.py [--apply] [--stale-minutes N] [--no-fetch] [--branch NAME [--tip SHA]] REPO...
 
 For every REPO (the main working tree of a repository):
   * A linked worktree whose branch is merged (no commits beyond origin/main, or its tip is the head of a merged pull request),
@@ -17,6 +17,14 @@ For every REPO (the main working tree of a repository):
   * A worktree that has uncommitted changes, or commits not in origin/main, and has not been touched for N minutes (default 30)
     is STALE: it is only reported, never removed. The fix is to commit the named paths, open a pull request and merge it, even
     if the work is unfinished (say so in the pull request), then run this tool again.
+  * A worktree that a running process holds (its working directory, an open file or its executable is inside the worktree) is HELD:
+    it is reported and never removed, merged or not, since removing the directory under a running test, editor or shell breaks that
+    process. The shell that started this tool, and the shells above it, do not count: `prmerge.sh` run from the merged worktree
+    must be able to clean up the worktree it ran in. Processes of other users (the `odoo` user running `test.py`) are found through
+    `sudo -n`; without passwordless sudo only the caller's own processes can be seen.
+  * `--branch NAME` is the post-merge mode `prmerge.sh` uses: only the worktree and local branch of NAME are considered, and no
+    idle time is required, because the pull request has just merged and nothing else is going to use them. Dirty, unmerged (the
+    local tip is not the merged head; `--tip SHA` names that head) and held worktrees are still kept, and reported with the reason.
 Exit status 1 when anything is STALE, so a timer or a session start can surface it.
 
 Nothing unmerged or dirty is ever deleted. Merged pull request heads come from `gh pr list`; without gh only the plain
@@ -26,9 +34,12 @@ Nothing unmerged or dirty is ever deleted. Merged pull request heads come from `
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
+
+_SHELLS = ("bash", "sh", "dash", "zsh", "ksh", "fish")
 
 
 def git(repo, *args, check=True):
@@ -66,6 +77,18 @@ def worktrees(repo):
         key, _, value = line.partition(" ")
         current[key] = value.removeprefix("refs/heads/") if key == "branch" else value
     return entries[1:]
+
+
+def locked_worktrees(repo):
+    """Set of worktree paths marked `git worktree lock` (a batch lint run's, or one on removable media). They are never removed."""
+    locked, path = set(), None
+    for line in git(repo, "worktree", "list", "--porcelain").splitlines():
+        key, _, value = line.partition(" ")
+        if key == "worktree":
+            path = value
+        elif key == "locked":
+            locked.add(path)
+    return locked
 
 
 def is_merged(repo, branch, merged_heads, base="origin/main"):
@@ -107,14 +130,105 @@ def branch_activity(repo, branch):
     return int(reflog) if reflog.isdigit() else int(git(repo, "log", "-1", "--format=%ct", branch, check=False) or 0)
 
 
-def run(repo, apply, stale_seconds, merged_heads, now=None):
+def _inside(link_target, real_root):
+    return link_target == real_root or link_target.startswith(real_root + os.sep)
+
+
+def scan_holders(path):
+    """[(pid, command)] of every process this user can inspect whose working directory, executable or an open file is inside `path`,
+    and the number of processes it could not inspect (another user's). `/proc` is read directly, so there is no `lsof` dependency."""
+    root = os.path.realpath(path)
+    holders, unreadable = [], 0
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        proc = f"/proc/{entry}"
+        targets = []
+        try:
+            for name in ("cwd", "exe"):
+                try:
+                    targets.append(os.readlink(f"{proc}/{name}"))
+                except FileNotFoundError:
+                    pass  # a kernel thread has no cwd or exe link target; a process that just exited has no /proc entry
+            for fd in os.listdir(f"{proc}/fd"):
+                try:
+                    targets.append(os.readlink(f"{proc}/fd/{fd}"))
+                except FileNotFoundError:
+                    pass
+            with open(f"{proc}/comm") as handle:
+                command = handle.read().strip()
+        except PermissionError:
+            unreadable += 1
+            continue
+        except FileNotFoundError:
+            continue  # exited while scanning
+        if any(_inside(target.removesuffix(" (deleted)"), root) for target in targets):
+            holders.append((int(entry), command))
+    return holders, unreadable
+
+
+def _parent_and_command(pid):
+    """(parent pid, command) of a process from /proc/<pid>/stat; (0, "") when it has gone."""
+    try:
+        with open(f"/proc/{pid}/stat") as handle:
+            stat = handle.read()
+    except OSError:
+        return 0, ""
+    command = stat[stat.index("(") + 1 : stat.rindex(")")]
+    return int(stat[stat.rindex(")") + 2 :].split()[1]), command
+
+
+def calling_shells():
+    """Pids that must not count as holding a worktree: this process, and the chain of shells directly above it (the script that ran this
+    tool, the `bash -c` of an agent's command), up to the first process that is not a shell."""
+    pids = {os.getpid()}
+    pid = os.getppid()
+    while pid > 1:
+        parent, command = _parent_and_command(pid)
+        if command not in _SHELLS:
+            break
+        pids.add(pid)
+        pid = parent
+    return pids
+
+
+def holding_processes(path, exempt=None):
+    """[(pid, command)] of the running processes that hold `path` (see scan_holders), except `exempt` (default: calling_shells()).
+    Processes of other users are found by running this module's own `--holders` mode under `sudo -n`; when that is not available
+    only the caller's own processes are known."""
+    exempt = calling_shells() if exempt is None else exempt
+    holders, unreadable = scan_holders(path)
+    if unreadable and shutil.which("sudo"):
+        # cwd="/" so the helper's own working directory is not the worktree it is looking for.
+        result = subprocess.run(
+            ["sudo", "-n", sys.executable, "-I", os.path.abspath(__file__), "--holders", path],
+            capture_output=True,
+            text=True,
+            cwd="/",
+        )
+        if result.returncode == 0:
+            holders = [(int(line.split(None, 1)[0]), line.split(None, 1)[1]) for line in result.stdout.splitlines() if line.strip()]
+    return sorted(set(h for h in holders if h[0] not in exempt))
+
+
+def run(repo, apply, stale_seconds, merged_heads, now=None, only_branch=None, holders_of=holding_processes):
     now = now or time.time()
-    report = {"removed": [], "deleted": [], "stale": [], "kept": []}
+    report = {"removed": [], "deleted": [], "stale": [], "kept": [], "held": []}
     checked_out = set()
+    locked = locked_worktrees(repo)
     for path, branch in worktrees(repo):
         checked_out.add(branch)
+        if only_branch and branch != only_branch:
+            continue
+        if path in locked:
+            report["held"].append((path, branch, [("locked", "git worktree lock")]))
+            continue
         dirty = bool(git(path, "status", "--porcelain", check=False))
         if branch and not dirty and is_merged(repo, branch, merged_heads) and now - worktree_activity(path) >= stale_seconds:
+            holders = holders_of(path)
+            if holders:
+                report["held"].append((path, branch, holders))
+                continue
             if apply:
                 git(repo, "worktree", "remove", "--force", path)
                 git(repo, "branch", "-D", branch)
@@ -127,7 +241,7 @@ def run(repo, apply, stale_seconds, merged_heads, now=None):
             report["kept"].append((path, branch))
     default = "main"
     for branch in git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads").splitlines():
-        if branch == default or branch in checked_out:
+        if branch == default or branch in checked_out or (only_branch and branch != only_branch):
             continue
         if is_merged(repo, branch, merged_heads) and now - branch_activity(repo, branch) >= stale_seconds:
             if apply:
@@ -140,16 +254,27 @@ def run(repo, apply, stale_seconds, merged_heads, now=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("repos", nargs="+")
+    parser.add_argument("repos", nargs="*")
     parser.add_argument("--apply", action="store_true", help="remove merged worktrees and delete merged branches")
     parser.add_argument("--stale-minutes", type=float, default=30)
     parser.add_argument("--no-fetch", action="store_true")
+    parser.add_argument("--branch", help="only this branch and its worktree, with no idle time required (the post-merge cleanup)")
+    parser.add_argument("--tip", help="with --branch: the commit the pull request merged (its head); skips the `gh pr list` lookup")
+    parser.add_argument("--holders", metavar="PATH", help="print 'pid command' of each process holding PATH and exit (used under sudo)")
     args = parser.parse_args(argv)
+    if args.holders:
+        for pid, command in scan_holders(args.holders)[0]:
+            print(pid, command)
+        return 0
+    if not args.repos:
+        parser.error("REPO is required")
     any_stale = False
     for repo in args.repos:
         if not args.no_fetch:
             git(repo, "fetch", "-q", "--prune", "origin", check=False)
-        report = run(repo, args.apply, args.stale_minutes * 60, merged_pull_request_heads(repo))
+        stale_seconds = 0 if args.branch else args.stale_minutes * 60
+        merged = {args.branch: {args.tip}} if args.branch and args.tip else merged_pull_request_heads(repo)
+        report = run(repo, args.apply, stale_seconds, merged, only_branch=args.branch)
         verb = "removed" if args.apply else "would remove"
         print(f"== {repo}")
         for path, branch in report["removed"]:
@@ -159,6 +284,9 @@ def main(argv=None):
         for path, branch, why in report["stale"]:
             print(f"  STALE    {path or '(no worktree)'} {branch}: {why}; commit it, open a PR and merge it now, unfinished or not")
             any_stale = True
+        for path, branch, holders in report["held"]:
+            who = ", ".join(f"{command} (pid {pid})" for pid, command in holders)
+            print(f"  HELD     {path} {branch}: kept, in use by {who}")
         for path, branch in report["kept"]:
             print(f"  active   {path} {branch}")
     return 1 if any_stale else 0
