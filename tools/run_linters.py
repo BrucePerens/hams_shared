@@ -22,6 +22,7 @@ import batch_queue
 import lint_cache
 import lint_exec
 import lint_batch
+import rust_impact
 import lint_layout
 import lint_lock
 import lint_remote
@@ -1504,6 +1505,13 @@ def main():
     # zero_sudo/docs/stories, outside the scope (2026-10-29, #957, merged with PRMERGE_SKIP_LINT).
     # The sibling repository is named explicitly: verify_anchors would otherwise look for it
     # beside the directory it was started from, and a worktree has no sibling there.
+    # Under --changed the Rust checkers check the crates with a changed file and their dependents only (rust_impact.py); a full run, a run of
+    # the checker tooling itself, or a list too long to pass checks every crate.
+    rust_changed_args = (
+        [rust_impact.CHANGED_FLAG] + sorted(changed_set)
+        if changed_set is not None and not run_all and len(changed_set) <= rust_impact.MAX_PATHS
+        else []
+    )
     anchor_targets = [repo_root] if (changed_set is not None and not target_modules_str) else targets
     if anchor_targets == [repo_root] and sibling_dir and os.path.isdir(sibling_dir):
         # Both repositories are scanned as primary, as `verify_anchors.py . ../hams_open` does. Handed one
@@ -2131,7 +2139,7 @@ def main():
     # the full repo, not a possibly-scoped `targets` list.
     _add(
         "check_cargo_clippy",
-        [python_exec, os.path.join(dir_path, "tools", "check_cargo_clippy.py"), dir_path],
+        [python_exec, os.path.join(dir_path, "tools", "check_cargo_clippy.py"), dir_path] + rust_changed_args,
     )
 
     # 37. check_binary_manifest_consistency -- catches a real drift class found 2026-08-27
@@ -2434,7 +2442,7 @@ def main():
     # always scans the full repo, not a possibly-scoped `targets` list.
     _add(
         "check_cargo_fmt",
-        [python_exec, os.path.join(dir_path, "tools", "check_cargo_fmt.py"), dir_path],
+        [python_exec, os.path.join(dir_path, "tools", "check_cargo_fmt.py"), dir_path] + rust_changed_args,
     )
 
     # 53. check_claims_freshness -- ADR 0091's own real, named follow-on ("not yet wired into

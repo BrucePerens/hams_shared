@@ -4011,3 +4011,27 @@ files). A stamp that already exists for `tip` is returned as it is, never replac
 ### `[@ANCHOR: lint_stamp_gate:inherited_note]` `inherited_note(stamp_text)`
 
 Purpose: the loud line the gate prints for an inherited stamp, so the merge output says what the pass rests on. Returns a str naming the first 12 characters of the source commit, or None. Pure. Tests: `InheritTests`.
+## Rust crates checked by what changed (`rust_impact.py`)
+
+Written 2026-11-08. `check_cargo_clippy.py` and `check_cargo_fmt.py` checked every crate of both repositories whenever any `.rs`, `.toml` or `.lock` file changed: 17 crates one after another, 139 s on average
+and 1,329 s at worst for clippy, the longest step of 25 of 142 measured runs. Under `--changed` the runner passes them the changed paths (`<repo_root> --changed-files PATH...`; no list for a full run, a run of
+the checker tooling itself, or more than 5,000 paths) and they check only the crates with a changed file and the crates that depend on one by `path = ...`. Each skipped crate is printed with its reason and the
+step prints `N of M crates checked`, so a skip is never silent. Cargo's build-directory lock still makes the crates take turns; the saving is the crates not built.
+
+### `[@ANCHOR: rust_impact:split_argv]` `split_argv(argv)`
+
+Purpose: read a checker's command line. `argv` is a list of str (without the program name). Returns `(positional, changed)`: the arguments before `--changed-files`, and the paths after it made absolute and resolved
+(an empty list when the flag has no paths: nothing changed), or None when the flag is absent (check every crate). Pure. Tests: `DependencyTests` in `test_rust_impact.py`.
+
+### `[@ANCHOR: rust_impact:path_dependencies]` `path_dependencies(crate_dir)`
+
+Purpose: the directories a crate depends on by path. Reads `crate_dir/Cargo.toml` and returns the resolved absolute directories named by `path = ...` in `[dependencies]`, `[dev-dependencies]`,
+`[build-dependencies]`, their `[target.*]` forms, `[workspace.dependencies]` and `[patch.*]`. Returns None when the file cannot be read or parsed, or the Python has no `tomllib` (before 3.11): the caller checks the
+crate. Reads one file; no side effects. Tests: `DependencyTests`.
+
+### `[@ANCHOR: rust_impact:select_crates]` `select_crates(crate_dirs, changed)`
+
+Purpose: decide which crates to check. `crate_dirs`: list of crate directories; `changed`: resolved changed paths or None. Returns `(selected, skipped)`: `selected` is a list of the given directories, `skipped` a list of
+`(directory, reason)`. A crate is selected when a changed path lies under it or under a directory it depends on by path (followed through those directories' manifests; cycles end), when a manifest cannot be read, or
+for every crate when a changed `.rs` file, `rust-toolchain*` file or `.cargo/` file lies outside every crate (it may be `include!`d or pin the toolchain). `changed` None selects all. Reads manifests only. Tests:
+`SelectionTests` and `EndToEndTests` (a fake `cargo` records where it was started) in `test_rust_impact.py`.
