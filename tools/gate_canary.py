@@ -26,12 +26,15 @@ import fcntl
 import glob
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import time
 
 import gate_snapshot
 import known_red
+import lint_cache
 import runner_slots
 
 DEFAULT_STATE_DIR = os.path.expanduser("~/.cache/hams-test/canary")
@@ -41,6 +44,10 @@ NOTE_NAME = "note.txt"
 STATUS_VERSION = 1
 IDLE_LOAD = 4.0
 BISECT_MAX_RUNS = 30
+RELAY_REL = os.path.join("daemons", "hams_local_relay")
+RELAY_FEATURES = "radioctl,shared_receiver"
+RELAY_LOG = "relay_full_suite.log"
+RELAY_ID_PREFIX = "relay cargo test: "
 
 
 class CanaryError(RuntimeError):
@@ -74,15 +81,58 @@ def read_shard_results(log_directory):
     return merged
 
 
+# [@ANCHOR: gate_canary:parse_cargo_failures]
+def parse_cargo_failures(text):
+    """`{"failed": [test paths], "passed": N}` from the output of `cargo test --no-fail-fast`: every `test <path> ... FAILED` line (sorted, de-duplicated) and the
+    sum of the `N passed` counts of the `test result:` lines. Pure. Full entry: tools/README.md."""
+    failed = sorted(set(re.findall(r"^test (\S+) \.\.\. FAILED$", text, re.M)))
+    passed = sum(int(count) for count in re.findall(r"test result: \w+\. (\d+) passed", text))
+    return {"failed": failed, "passed": passed}
+
+
+# [@ANCHOR: gate_canary:relay_command]
+def relay_command(relay_dir, target_dir):
+    """The shell line of the nightly full relay suite: `cd <relay> && CARGO_TARGET_DIR=<target> CARGO_INCREMENTAL=0 cargo test --locked --features
+    radioctl,shared_receiver --no-fail-fast`, every test of every target, all failures listed, not the structural group the lint step runs. Pure. Full entry: tools/README.md."""
+    return "cd %s && CARGO_TARGET_DIR=%s CARGO_INCREMENTAL=0 cargo test --locked --features %s --no-fail-fast" % (
+        shlex.quote(relay_dir), shlex.quote(target_dir), RELAY_FEATURES)
+
+
+# [@ANCHOR: gate_canary:run_relay_suite]
+def run_relay_suite(com_tree, log_directory, runner=None, now=time.time):
+    """Runs the whole relay `cargo test` suite of the snapshot's hams_com tree (`com_tree`) and returns `{"status", "failed", "passed", "exit_status", "seconds",
+    "log"}`: `status` is `green` (exit 0), `red` (non-zero with at least one `FAILED` test: `failed` names them) or `error` (non-zero and no failed test: it did not
+    build or died, so it is never green) and `skipped` (with `reason`) when `com_tree` is None or holds no relay crate, which the status and note say. The build
+    goes to the budgeted Cargo directory `lint_cache.named_cargo_session("relay-nightly")` (warm after the first night). `runner(command, log_path)` runs the shell
+    line (default `shell_runner`). Never signals a process. Full entry: tools/README.md."""
+    relay = os.path.join(com_tree, RELAY_REL) if com_tree else None
+    if not relay or not os.path.isfile(os.path.join(relay, "Cargo.toml")):
+        return {"status": "skipped", "reason": "no relay crate in the snapshot", "failed": [], "passed": 0, "exit_status": None, "seconds": 0.0, "log": ""}
+    runner = runner or shell_runner
+    os.makedirs(log_directory, exist_ok=True)
+    log_path = os.path.join(log_directory, RELAY_LOG)
+    started = now()
+    with lint_cache.named_cargo_session("relay-nightly") as target:
+        status = runner(relay_command(relay, target or os.path.join(log_directory, "relay-target")), log_path)
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as handle:
+            parsed = parse_cargo_failures(handle.read())
+    except OSError:
+        parsed = {"failed": [], "passed": 0}
+    verdict = "green" if status == 0 else ("red" if parsed["failed"] else "error")
+    return {"status": verdict, "failed": parsed["failed"], "passed": parsed["passed"], "exit_status": status, "seconds": round(now() - started, 1), "log": log_path}
+
+
 # [@ANCHOR: gate_canary:aggregate]
-def aggregate(shards, commits, now=None):
+def aggregate(shards, commits, now=None, relay=None):
     """The status document of one canary run.
 
     `shards`: a list of `{"number", "modules", "exit_status", "results"}` (`results` from `read_shard_results`, None when the shard
     wrote none). `commits`: `{"com", "open", "shared"}`. Returns `{"version", "commit" (hams_com), "commits", "time", "new_failures",
     "tolerated", "flakes", "now_passing", "fix_me", "shard_errors", "counts", "shards"}`: every list sorted and de-duplicated. A
     shard that exited non-zero without any results file is a `shard_errors` entry (it has no verdict, so it is never green); a shard with `problems` (its input was stale, it was not run) is one too; an
-    exit status of 0 with no results is a pass. An `unparsed` failure count is a shard error too. `status` is `red` when there is a new
+    exit status of 0 with no results is a pass. An `unparsed` failure count is a shard error too. `relay` (from `run_relay_suite`) adds a `relay`
+    entry; each failed relay test is a new failure named `relay cargo test: <path>` and a relay run that is `error` is a shard error. `status` is `red` when there is a new
     failure or shard error, else `green`."""
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) if now is None else now
     new, tolerated, flakes, passing, fix_me, errors = set(), set(), set(), set(), set(), []
@@ -105,10 +155,18 @@ def aggregate(shards, commits, now=None):
         fix_me.update(results["fix_me"])
         if results["unparsed"]:
             errors.append("shard %s: %d failure(s) no log line named" % (shard.get("number"), results["unparsed"]))
+        elif shard.get("exit_status") not in (0, None) and not results["new_failures"]:
+            # test.py writes the file for every non-zero Odoo exit and returns non-zero when the run was cut short (CPU limit, a signal): the
+            # file then lists only the failures seen before the abort, all tolerated or flaky, and must not make the shard green.
+            errors.append("shard %s: exit status %s with a results file and no new failure: the run did not finish" % (shard.get("number"), shard.get("exit_status")))
         for key in counts:
             counts[key] += results["counts"][key]
+    if relay:
+        new.update(RELAY_ID_PREFIX + name for name in relay.get("failed", []))
+        if relay.get("status") == "error":
+            errors.append("relay full suite: exit status %s and no failed test (it did not build or died); log %s" % (relay.get("exit_status"), relay.get("log")))
     return {
-        "version": STATUS_VERSION, "commit": commits.get("com", ""), "commits": commits, "time": now,
+        "relay": relay, "version": STATUS_VERSION, "commit": commits.get("com", ""), "commits": commits, "time": now,
         "status": "red" if (new or errors) else "green", "new_failures": sorted(new), "tolerated": sorted(tolerated),
         "flakes": sorted(flakes), "now_passing": sorted(passing), "fix_me": sorted(fix_me), "shard_errors": errors,
         "counts": counts, "tolerated_detail": detail,
@@ -129,6 +187,8 @@ def baseline_candidates(status, known):
                         "first_seen_time": kept.get("first_seen_time", status["time"]), "owner": kept.get("owner", "unassigned"),
                         "reason": kept.get("reason", "listed in the baseline")})
     for test_id in status["new_failures"]:
+        if test_id.startswith(RELAY_ID_PREFIX):
+            continue  # a relay cargo test is not an Odoo test id: it is reported, never proposed for the Odoo baseline
         entries.append({"test_id": test_id, "first_seen": status["commit"], "first_seen_time": status["time"], "owner": "unassigned",
                         "reason": "canary: failed on %s (%s); investigate" % (status["commit"][:12], status["time"])})
     return {"version": known_red.BASELINE_VERSION, "entries": sorted(entries, key=lambda e: e["test_id"])}
@@ -151,6 +211,12 @@ def note_lines(status, lint_lines=()):
         item = status.get("tolerated_detail", {}).get(test_id, {})
         lines.append("tolerated (known red): %s, known red for %s days, owner %s: %s" % (
             test_id, item.get("age_days", "?"), item.get("owner", "?"), item.get("reason", "")))
+    relay = status.get("relay")
+    if relay:
+        if relay["status"] == "skipped":
+            lines.append("relay full suite: NOT RUN (%s)" % relay.get("reason", ""))
+        else:
+            lines.append("relay full suite: %s, %d passed, %d failed, %.0f s, log %s" % (relay["status"], relay["passed"], len(relay["failed"]), relay["seconds"], relay["log"]))
     lines += ["flaky: %s" % i for i in status["flakes"]] + ["FIX ME (flaky above the threshold): %s" % i for i in status["fix_me"]]
     lines += ["remove from the baseline (now passing): %s" % i for i in status["now_passing"]]
     if lint_lines:
@@ -208,7 +274,7 @@ def _write_json(path, data):
 # [@ANCHOR: gate_canary:run_canary]
 def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir=DEFAULT_STATE_DIR, shards=gate_snapshot.DEFAULT_SHARDS,
                shards_file=None, jobs=1, idle_jobs=2, only_if_new_commit=False, bisect=True, fetch=True, runner=None, snapshot=None,
-               out=print, hostname=None, slots=None, load=None):
+               out=print, hostname=None, slots=None, load=None, relay=True):
     """One canary run; returns `(exit status, status document or None)`.
 
     Takes `<state_dir>/canary.lock` (a second run exits 3 at once, nothing is waited for). With `only_if_new_commit` and the
@@ -265,7 +331,8 @@ def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir
     with concurrent.futures.ThreadPoolExecutor(max_workers=width) as pool:
         shard_results = list(pool.map(one, range(len(commands))))
     commits = {"com": trees["com_commit"], "open": trees["open_commit"], "shared": trees["shared_commit"]}
-    status = aggregate(shard_results, commits)
+    relay_result = run_relay_suite(trees.get("com"), os.path.join(trees["parent"], "logs"), runner) if relay else None
+    status = aggregate(shard_results, commits, relay=relay_result)
     known = {}
     for shard in shard_results:
         known.update((shard["results"] or {}).get("known_red", {}))
@@ -348,6 +415,7 @@ def main(argv=None, out=print):
     run.add_argument("--only-if-new-commit", action="store_true", help="do nothing when origin/main is what the last run tested")
     run.add_argument("--no-bisect", action="store_true")
     run.add_argument("--no-fetch", action="store_true")
+    run.add_argument("--no-relay", action="store_true", help="skip the whole relay `cargo test` suite (it runs after the shards by default)")
     status = sub.add_parser("status", help="print status.json")
     status.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
     args = parser.parse_args(argv)
@@ -361,7 +429,7 @@ def main(argv=None, out=print):
             return 1
     try:
         code, _ = run_canary(args.workspace, args.parent, args.state_dir, args.shards, args.shards_file, args.jobs,
-                             args.max_jobs_when_idle, args.only_if_new_commit, not args.no_bisect, not args.no_fetch, out=out)
+                             args.max_jobs_when_idle, args.only_if_new_commit, not args.no_bisect, not args.no_fetch, out=out, relay=not args.no_relay)
     except CanaryError as error:
         out("gate_canary: %s" % error)
         return 1

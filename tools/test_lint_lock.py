@@ -353,6 +353,16 @@ class SlotTests(Base):
         self.assertEqual(again.slot, 2)  # the slot that was freed
         again.release()
 
+    def test_release_removes_this_runs_holder_record_while_another_slot_holds_a_newer_one(self):
+        qdir = lint_lock.queue_dir(self.env3)
+        mine = lint_lock.RunLock(self.env3)
+        self.assertTrue(mine.acquire("/wt/mine\tcmd", timeout=10, out=lambda _l: None, poll=0.1))
+        self.start_holder("/wt/other\tcmd", slots="3")  # takes the next slot and writes a newer record
+        self.assertEqual(len(lock_queue.read_holders(qdir)), 2)
+        mine.release()
+        remaining = lock_queue.read_holders(qdir)
+        self.assertEqual([h["info"] for h in remaining], ["/wt/other\tcmd"])
+
     def test_local_busy_only_when_every_slot_is_taken(self):
         qdir = lint_lock.queue_dir(self.env3)
         self.start_holder("/wt/1\tcmd", slots="3")

@@ -26,7 +26,8 @@ import os
 import subprocess
 import sys
 
-from check_cargo_clippy import _resolve_repo_roots, find_cargo_crates
+import rust_impact
+from check_cargo_clippy import _resolve_repo_roots, find_cargo_crates, narrow_to_changed
 
 FMT_CHECK_COMMAND = ["cargo", "fmt", "--", "--check"]
 
@@ -38,15 +39,17 @@ def check_crate(crate_dir):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: check_cargo_fmt.py <repo_root>")
+    positional, changed = rust_impact.split_argv(sys.argv[1:])
+    if not positional:
+        print("Usage: check_cargo_fmt.py <repo_root> [--changed-files PATH...]")
         sys.exit(1)
 
     crate_dirs = [
         (repo_root, crate_dir)
-        for repo_root in _resolve_repo_roots(sys.argv[1])
+        for repo_root in _resolve_repo_roots(positional[0])
         for crate_dir in find_cargo_crates(repo_root)
     ]
+    crate_dirs = narrow_to_changed(crate_dirs, changed, "fmt")
     if not crate_dirs:
         sys.exit(0)
 

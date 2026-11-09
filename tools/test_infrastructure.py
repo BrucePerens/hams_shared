@@ -186,9 +186,8 @@ class FormatEnvTests(unittest.TestCase):
         self.assertIn("r = env['daemon.key.registry'].action_force_provision_all()", command)
 
     def test_a_missing_variable_now_raises_instead_of_silently_degrading(self):
-        # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
-        # LAZINESS: Catch-all KeyError): this used to silently return the unformatted
-        # template instead of raising, on the theory that "a hook with an unresolved
+        # This must raise rather than silently return the unformatted
+        # template, on the theory that "a hook with an unresolved
         # placeholder shouldn't crash the whole provisioning run" -- but format_env() is
         # never actually called on a hook's own template text (see format_env's own
         # docstring for the full, checked-against-every-real-call-site rationale). Every
@@ -601,7 +600,7 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
                 stdout=log, stderr=subprocess.STDOUT)
             self.addCleanup(lambda proc=proc, log=log: (proc.terminate(), proc.wait(self._PDNS_HANG_SECONDS), log.close()))
             # Ready is what pdns says in its log, not an answer inside a guessed time: with 100 CPU hogs on 16 cores
-            # (2026-11-07) the start took longer than the old fixed 15 s. Wait while the process lives, up to the
+            # the start took longer than the old fixed 15 s. Wait while the process lives, up to the
             # hang limit.
             deadline = time.time() + self._PDNS_HANG_SECONDS
             while proc.poll() is None and time.time() < deadline:
@@ -923,14 +922,12 @@ class HookInstallKopiaBinaryTests(_TmpDirTestCase):
         extract_cmd = mock_run.call_args_list[0][0][0]
         self.assertIn("tar", extract_cmd)
         self.assertIn(target_dir, extract_cmd)
-        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1 (a real
-        # Raspberry Pi 500, aarch64): this internal tar-extraction path used to be
+        # On a real Raspberry Pi 500 (aarch64) the internal tar-extraction path must not be
         # hardcoded to "kopia-0.23.1-linux-x64/kopia" regardless of the real machine
         # architecture -- tar/chmod both "succeed" against the wrong-architecture
-        # binary (they don't inspect ELF headers), so the bug was silent until kopia
-        # was actually invoked later, when it failed with "Exec format error". Never
-        # caught on the dev box since it's genuinely x86_64. This asserts the real
-        # fix: the extracted path name matches the real (here, mocked) architecture.
+        # binary (they don't inspect ELF headers), so the mistake would stay silent until kopia
+        # was actually invoked later and failed with "Exec format error". The x86_64 dev box
+        # cannot catch it. This asserts the extracted path name matches the real (here, mocked) architecture.
         self.assertIn("kopia-0.23.1-linux-arm64/kopia", extract_cmd)
         chmod_cmd = mock_run.call_args_list[1][0][0]
         self.assertEqual(chmod_cmd, ["chmod", "+x", os.path.join(target_dir, "kopia")])
@@ -945,11 +942,9 @@ class HookInstallKopiaBinaryTests(_TmpDirTestCase):
             {"KOPIA_ARCH": "arm64"}, self.tmp, archive_path, mock_run
         )  # must not raise
         self.assertFalse(os.path.exists(archive_path))
-        # Bug-hunt fix (2026-09-18, night_shift_todo
-        # provisioning-silent-hook-failures-summary-328e3e45.md): swallowing the
-        # failure used to be the end of the story -- provisioning reported plain
-        # success even with no kopia binary installed. Now the failure must also
-        # be recorded for the end-of-run summary, not just logged and forgotten.
+        # Swallowing the failure must not be the end of the story: provisioning
+        # would otherwise report plain success even with no kopia binary
+        # installed. The failure must also be recorded for the end-of-run summary, not just logged and forgotten.
         failures = infra.get_hook_failures()
         self.assertEqual(len(failures), 1)
         name, msg = failures[0]
@@ -974,7 +969,7 @@ class HookInstallKopiaBinaryTests(_TmpDirTestCase):
 
 
 class HookInstallWkhtmltopdfTests(_TmpDirTestCase):
-    # Real production failure, found live 2026-09-29: "Unable to find Wkhtmltopdf on this system"
+    # Real production failure: "Unable to find Wkhtmltopdf on this system"
     # -- Debian dropped the wkhtmltopdf package from its own repos entirely, so Odoo's own PDF
     # reports (e.g. Event: Registration Confirmation's attached ticket) failed outright. Odoo's
     # own docs point at wkhtmltopdf's own GitHub releases instead of a distro package.
@@ -1008,8 +1003,7 @@ class HookInstallWkhtmltopdfTests(_TmpDirTestCase):
 
 
 class HookFailureSummaryTests(_TmpDirTestCase):
-    """Tests for the end-of-run hook-failure summary mechanism itself
-    (night_shift_todo provisioning-silent-hook-failures-summary-328e3e45.md):
+    """Tests for the end-of-run hook-failure summary mechanism itself:
     non-fatal hook failures must be collected across a run and surfaced in
     one prominent summary, without aborting the run for any single one."""
 
@@ -1063,13 +1057,12 @@ class HookFailureSummaryTests(_TmpDirTestCase):
 
 class ExecuteHooksTests(_TmpDirTestCase):
     """execute_hooks() is the dispatcher that runs MANIFEST["directories"]
-    entries' post_provision_hooks for a given environment. Bug found
-    2026-09-18: this function existed and was exercised in isolation by
-    nothing, but was never actually called from provision_environment (or
-    anywhere else in real provisioning) -- apply_production_directories()
-    creates the directories but never runs their hooks, so hook_generate_ssl
-    and hook_clear_pycache silently never ran during a real provisioning
-    run. These tests call the real execute_hooks() (not a mock of it) with a
+    entries' post_provision_hooks for a given environment. It must actually
+    be called from provision_environment (an isolated exercise is not enough):
+    apply_production_directories() creates the directories but never runs
+    their hooks, so without that call hook_generate_ssl and hook_clear_pycache
+    would silently never run during a real provisioning run. These tests call the real
+    execute_hooks() (not a mock of it) with a
     mocked run_cmd_func, matching HookGenerateSslTests'/HookClearPycacheTests'
     own boundary, and assert the real, observable effects of the hooks it
     dispatches to -- proving the dispatch itself works, not just the hooks
@@ -1204,7 +1197,7 @@ class ServiceStartCommandTests(unittest.TestCase):
     """_service_start_command() is the one piece of run_post_provision_
     smoketest()'s own logic worth testing in isolation (see that function's
     own module-level NON_BLOCKING_START_SERVICES comment for the real
-    2026-09-24 production incident this fixes) -- pure, no subprocess/host
+    production incident it addresses) -- pure, no subprocess/host
     interaction, matching this file's own established reasoning for why the
     smoketest function itself isn't attempted here."""
 
@@ -1561,7 +1554,7 @@ class ProvisionSystemdOverrideTests(_TmpDirTestCase):
 
 class ProvisionModeEnvFileTests(_TmpDirTestCase):
     """load_and_prompt_env() must not carry saved *.env values across test-mode and production
-    provisioning (night_shift_todo provisioning-test-mode-env-dir-leak). Real files in a temporary
+    provisioning (the test-mode env directory leak). Real files in a temporary
     directory stand in for /opt/hams/etc: glob is pointed at them, so the reader, the setdefault
     ordering and the mode marker all run for real."""
 
@@ -1748,7 +1741,7 @@ class LoadAndPromptEnvTests(_SafePatchTestCase):
         )
 
     def test_never_reads_stdin(self):
-        # A regression guard for the exact bug class being removed: nothing
+        # A regression guard against prompting: nothing
         # in load_and_prompt_env should call input() or getpass.getpass()
         # unattended, which would hang a headless provisioning run forever.
         env_vars = {"DOMAIN": "hams.com"}
@@ -1929,17 +1922,15 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         self.assertIn("db_pass=normalPass123", cmd)
 
     def test_role_creation_sql_is_not_wrapped_in_a_dollar_quoted_do_block(self):
-        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1 (a
-        # genuinely fresh Raspberry Pi 500): the prior version wrapped this
-        # CREATE ROLE in a `DO $$...$$` PL/pgSQL block so the SQL itself
-        # could check IF NOT EXISTS -- but psql's own `:'variable'`
+        # The CREATE ROLE must not be wrapped in a `DO $$...$$` PL/pgSQL block (to let the
+        # SQL itself check IF NOT EXISTS): psql's own `:'variable'`
         # substitution does not apply inside a dollar-quoted string body,
-        # so `PASSWORD :'db_pass'` reached the server as the literal,
-        # unsubstituted text, which PostgreSQL's parser rejected outright
+        # so `PASSWORD :'db_pass'` would reach the server as the literal,
+        # unsubstituted text, which PostgreSQL's parser rejects outright
         # with "syntax error at or near ':'" -- breaking role creation on
-        # every genuinely fresh box. Never caught on the dev box because
-        # its own `odoo` role already existed from unrelated prior history.
-        # This asserts the real fix: no dollar-quoting anywhere in the SQL.
+        # every genuinely fresh box (seen on a fresh Raspberry Pi 500). The dev box
+        # cannot catch it because its own `odoo` role already exists.
+        # This asserts there is no dollar-quoting anywhere in the SQL.
         call = self._run("normalPass123", role_already_exists=False).call_args
         sql_text = call.kwargs["input"]
         self.assertNotIn("$$", sql_text, f"SQL must not use dollar-quoting: {sql_text!r}")
@@ -1947,8 +1938,7 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         self.assertIn("CREATE ROLE odoo", sql_text)
 
     def test_role_creation_sql_is_not_passed_via_dash_c(self):
-        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1,
-        # discovered only AFTER the dollar-quoting fix above still failed
+        # Dollar-quoting alone is not enough: the failure persists
         # identically on a real, genuinely fresh Postgres 18 instance:
         # psql's `:'variable'` substitution does not apply at all when SQL
         # is passed via `-c` (confirmed directly with a bare
@@ -1956,7 +1946,7 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         # identical syntax error the dollar-quoting bug produced, on both a
         # real Raspberry Pi 500 and the x86_64 dev box, same psql version)
         # -- only when the SQL is read as a script over stdin. This asserts
-        # the real, complete fix: -c is gone from the argv, the SQL goes
+        # the complete solution: -c is gone from the argv, the SQL goes
         # over stdin (`input=`) instead.
         call = self._run("normalPass123", role_already_exists=False).call_args
         cmd = call.args[0]
@@ -1964,7 +1954,7 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         self.assertIn("input", call.kwargs, "SQL must be piped over stdin instead")
 
     def test_existing_role_is_not_recreated_but_is_granted_superuser(self):
-        # hams_shared PR #66 (d31aad3, found live provisioning jetson-1): the
+        # hams_shared PR #66 (d31aad3, seen provisioning jetson-1): the
         # odoo apt package's postinst pre-creates a NON-superuser `odoo` role,
         # so the already-exists path must still ALTER it to SUPERUSER (needed
         # for `CREATE EXTENSION vector`). Exactly one command runs: that
@@ -1984,7 +1974,7 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
 class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
     """Tests [@ANCHOR: infrastructure:_provision_cache_manager_role]
 
-    night_shift_todo/low/cache-manager-odoo-password-fallback-0ea55461.md: no automated
+    No automated
     provisioning flow ever called scripts/provision_cache_manager_db_role.py, so cache_manager.py's
     own "odoo"/"odoo" fallback was the normal case on every deployment, not an edge case. This is
     the automated-provisioning half of that fix -- see cache_manager.py's own _require_db_credentials
@@ -2045,16 +2035,15 @@ class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
         self.assertNotIn("SELECT", grant_sql)
 
     def test_writes_an_owner_only_env_file_and_hands_ownership_to_odoo(self):
-        # Real bug found and fixed while writing this function: os.open()'s own mode
-        # argument only ever governs a brand-new file's initial permissions, and this
-        # function's own author (running as root during provisioning) never actually
-        # verified the daemon's own OS user (odoo) could read the result -- it could
-        # not, since the file was left root:root while the daemon's own load_dotenv()
+        # os.open()'s own mode
+        # argument only ever governs a brand-new file's initial permissions, so the result
+        # must be readable by the daemon's own OS user (odoo), not just root running
+        # provisioning: a file left root:root is unreadable while the daemon's own load_dotenv()
         # call runs as the unprivileged odoo user (unlike cache_manager.env, loaded by
-        # systemd's EnvironmentFile= as root before it drops to User=odoo). Caught by
-        # actually running this function end-to-end against a real local Postgres
-        # instance and reading the result back as the odoo user, not by this mocked
-        # test alone -- this test pins the fix so it can't silently regress.
+        # systemd's EnvironmentFile= as root before it drops to User=odoo). A mocked
+        # test alone cannot see this (it needs an end-to-end run against a real local
+        # Postgres instance, reading the result back as the odoo user); this test pins
+        # the behaviour so it can't silently regress.
         run_cmd = MagicMock()
         self.safe_patch_object(infra, "_role_exists", return_value=False)
         mock_apply_permissions = self.safe_patch_object(infra, "apply_permissions")
@@ -2151,7 +2140,7 @@ class RoleExistsTests(_SafePatchTestCase):
         cmd = mock_run.call_args[0][0]
         kwargs = mock_run.call_args.kwargs
         self.assertNotIn("bash", cmd, f"expected no shell invocation: {cmd!r}")
-        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: see
+        # See
         # CreateOdooRoleIfMissingTests.test_role_creation_sql_is_not_passed_via_dash_c
         # for the full investigation -- `:'variable'` substitution never applies via
         # `-c`/`-tAc`, only over stdin.
@@ -2183,9 +2172,9 @@ class DatabaseExistsAndOwnerTests(_SafePatchTestCase):
         # No shell is invoked at all (no "bash" in the argv), and the SQL
         # text itself never contains the raw malicious value.
         self.assertNotIn("bash", cmd)
-        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: psql's
+        # psql's
         # `:'variable'` substitution does not apply at all when SQL is passed via
-        # `-c`/`-tAc` -- confirmed directly against a real Postgres 18 instance on
+        # `-c`/`-tAc` -- verified against a real Postgres 18 instance on
         # both a real Raspberry Pi 500 and the x86_64 dev box -- only when it's
         # read as a script over stdin. The SQL now goes over stdin (`input=`), and
         # `-tAc` is gone from the argv entirely (replaced by the boolean `-tA`).
@@ -2320,9 +2309,8 @@ class OptInOnlyModuleTests(_TmpDirTestCase):
 
 
 class DiscoverHamsComDirTests(_TmpDirTestCase):
-    """Regression test for a real production incident, 2026-09-23: fixing
-    provision.py's own repo_root computation (a separate, earlier fix)
-    exposed this function's own ambiguity, since hams_open has its own,
+    """Regression test for a real production incident: correcting
+    provision.py's own repo_root computation exposed this function's own ambiguity, since hams_open has its own,
     unrelated top-level daemons/ directory -- the exact real
     /opt/hams/src/{hams_com,hams_open} sibling layout is reproduced here
     directly, not simplified away, since that's precisely what the bug
@@ -2733,14 +2721,13 @@ class LinkedSystemdTimersAreActuallyEnabledTests(unittest.TestCase):
     """provision_environment() is too host-dependent to execute here (see this file's own
     established pattern for it), so this reads its source, like the neighbouring tests.
 
-    Real bug found live on hams1, 2026-09-23: linking a unit into /etc/systemd/system with a
+    Linking a unit into /etc/systemd/system with a
     bare os.symlink() leaves it in systemd's own "linked" state, not "enabled" -- [Install]
     WantedBy=timers.target is only acted on by an explicit `systemctl enable`, which this
-    provisioning step never issued. Confirmed live: ~18 of ~20 hams.com-specific timers sat
-    "linked (dead)" with zero timer-driven run history since the box was first provisioned,
+    provisioning step never issued. Left that way, ~18 of ~20 hams.com-specific timers sit
+    "linked (dead)" with zero timer-driven run history,
     silently never syncing regulator callbook data, AMSAT TLE, contest calendars, POTA/SOTA, or
-    ingesting inbound support email -- caught only because a night-watch session happened to
-    check `systemctl list-timers --all` days later."""
+    ingesting inbound support email -- visible only in `systemctl list-timers --all`."""
 
     def test_every_linked_timer_is_enabled_after_the_linking_loop(self):
         source = inspect.getsource(infra.provision_environment)
@@ -2788,13 +2775,12 @@ class LinkedSystemdTimersAreActuallyEnabledTests(unittest.TestCase):
 
 class LoadAndPromptEnvRabbitmqUserDefaultTests(unittest.TestCase):
     def test_rmq_user_defaults_to_a_real_non_guest_service_account(self):
-        # Real bug found and fixed 2026-09-13 hardware-qualifying pi500-1: this used
-        # to default to the literal "guest" (RabbitMQ's factory-default account),
+        # This must not default to the literal "guest" (RabbitMQ's factory-default account),
         # which daemons/adif_processor/main.py's own _require_rabbitmq_credentials
         # deliberately refuses for either RMQ_USER or RMQ_PASS -- see
         # _create_rabbitmq_user_if_missing's own docstring for the full
-        # investigation. Never caught on the dev box because adif.processor.service
-        # had simply never been started there either.
+        # investigation. The dev box cannot catch it because adif.processor.service
+        # has never been started there either.
         env_vars = {"DOMAIN": "hams.com"}
         infra.load_and_prompt_env(env_vars, is_test=False)
         self.assertNotEqual(env_vars["RMQ_USER"], "guest")
@@ -3054,14 +3040,13 @@ class RedisAclTests(_SafePatchTestCase):
 
 class AptPackagesManifestTests(unittest.TestCase):
     def test_python3_fitz_is_installed_for_ham_onboardings_real_external_dependency(self):
-        # Real, previously-masked missing dependency found 2026-09-13 hardware-
-        # qualifying pi500-1 (a genuinely fresh Raspberry Pi 500):
-        # ham_onboarding/__manifest__.py declares a real external Python
+        # A real, previously-masked missing dependency on a genuinely fresh
+        # Raspberry Pi 500: ham_onboarding/__manifest__.py declares a real external Python
         # dependency on `fitz` (PyMuPDF's import name), but this project's own
         # apt_packages MANIFEST never installed the package that provides it --
-        # `odoo -i ham_onboarding` failed on a fresh box with "external
-        # dependency is not met: fitz". Never caught on the dev box because it
-        # already had python3-pymupdf/python3-fitz installed incidentally from
+        # `odoo -i ham_onboarding` fails on a fresh box with "external
+        # dependency is not met: fitz". The dev box cannot catch it because it
+        # already has python3-pymupdf/python3-fitz installed incidentally from
         # unrelated prior work. This is a narrow regression guard for this one
         # real finding, not a general manifest-vs-apt-packages cross-checker
         # (a real, separate, larger undertaking -- most external_dependencies
@@ -3110,9 +3095,9 @@ class AptPackagesManifestTests(unittest.TestCase):
         self.assertIn("early_prod", entries[0]["environments"])
 
     def test_python3_aiohttp_is_installed_for_adif_ingress_and_gdpr_csv_exports_real_runtime_dependency(self):
-        # The same miscategorization as the feedparser test above, found while root-causing
-        # night_shift_todo's adif-ingress-intermittent-aiohttp-modulenotfound-crash-loop report
-        # (2026-10-02): daemons/adif_ingress/main.py and daemons/gdpr_csv_export/main.py both do
+        # The same miscategorization as the feedparser test above, behind an
+        # intermittent adif-ingress aiohttp ModuleNotFoundError crash loop:
+        # daemons/adif_ingress/main.py and daemons/gdpr_csv_export/main.py both do
         # a real, unconditional module-level `import aiohttp` / `from aiohttp import web`, but
         # this package had only ever been installed under `if is_test:` further down in
         # provision_environment() (grouped there with other daemons' genuinely test-only
@@ -3152,7 +3137,7 @@ class AptPackagesManifestTests(unittest.TestCase):
         self.assertLess(text.index(pre_line), exec_start_index)
 
     def test_awscli_is_installed_for_ses_inbound_mail_ingests_real_runtime_dependency(self):
-        # Real gap found live on hams1, 2026-09-22: daemons/ses_inbound_mail_ingest/main.py
+        # Real gap on hams1: daemons/ses_inbound_mail_ingest/main.py
         # shells out to the `aws` CLI, but nothing in this MANIFEST ever installed it --
         # ses.inbound.mail.ingest.service crashed with an unhandled FileNotFoundError
         # ('aws' not found), before any of the daemon's own logging ran, which is why
@@ -3180,10 +3165,9 @@ class StaticFilesEntriesHaveContentTests(unittest.TestCase):
     which crashed with IsADirectoryError the moment any of those three
     paths already existed as a real directory (which, in production, they
     always do -- each is created by a package's own postinst or a daemon's
-    own setup before this ever runs). The first of the three was found only
-    by actually running provision.py against hams1 mid-release; the other
-    two were found by this same check, run proactively, before either
-    became the next crash. Every entry in "static_files" must declare one
+    own setup before this ever runs). Each of the three was a path that crashed
+    a real provisioning run (found by running provision.py against hams1) until
+    this check covered it. Every entry in "static_files" must declare one
     of content/src/url -- a directory-only entry belongs in "directories"
     instead."""
 
@@ -3200,11 +3184,10 @@ class StaticFilesEntriesHaveContentTests(unittest.TestCase):
 
 
 class Pi500FccUlsSyncManifestTests(unittest.TestCase):
-    """night_shift_todo/medium/pi500-1-fcc-uls-sync-not-tracked-in-infrastructure-py-6d9a2f83.md:
-    pi500-1's real, currently-working fcc.uls.sync.service/.timer used to exist only as
+    """pi500-1's real, currently-working fcc.uls.sync.service/.timer used to exist only as
     hand-edited files on that one physical machine, with nothing in version control to
     reconstruct them from if the box were ever reprovisioned. Confirms the real content (pulled
-    directly from /etc/systemd/system/ on pi500-1, 2026-09-30) is captured, and that it is
+    directly from /etc/systemd/system/ on pi500-1) is captured, and that it is
     tagged with its own "pi500-1" environment -- never "prod"/"test" -- so provision_environment()
     (default environment="prod") never touches it unless something explicitly targets pi500-1."""
 
@@ -3240,9 +3223,9 @@ class Pi500FccUlsSyncManifestTests(unittest.TestCase):
             e for e in self._pi500_entries() if e["path"].endswith("fcc.uls.sync.service")
         )
         content = service["content"]
-        # The real, currently-working deployment's own distinguishing features -- confirmed
-        # live, 2026-09-30, not assumed: the venv-based ExecStart (not system Python), the
-        # UMask=0002 fix (night_shift_history.md's own 2026-09-30 entry), and the residential
+        # The real, currently-working deployment's own distinguishing features, as read from the
+        # live machine: the venv-based ExecStart (not system Python), the
+        # UMask=0002 setting, and the residential
         # ODOO_URL pointing at the real production site rather than a local address.
         self.assertIn("UMask=0002", content)
         self.assertIn(
@@ -3255,7 +3238,7 @@ class Pi500FccUlsSyncManifestTests(unittest.TestCase):
     def test_service_names_its_registry_for_remote_self_rotation(self):
         # hams1's Odoo cannot write pi500-1's key file. Without this variable the daemon
         # never rotates its own key, and hams1's 59-day cron would revoke it instead
-        # (night_shift_todo/low/fcc-uls-sync-pi500-key-does-not-auto-rotate-3f8c1d92.md).
+        # (a known open item).
         service = next(
             e for e in self._pi500_entries() if e["path"].endswith("fcc.uls.sync.service")
         )
@@ -3272,9 +3255,9 @@ class Pi500FccUlsSyncManifestTests(unittest.TestCase):
 class ClaudeWrapperCiOauthTokenTests(unittest.TestCase):
     """Tests [@ANCHOR: infrastructure:claude_wrapper_ci_oauth_token]
 
-    The two Claude CLI wrapper scripts were fixed live on hams1 (2026-10-02) to prefer a
-    provisioned `~/.claude/ci_oauth_token` as CLAUDE_CODE_OAUTH_TOKEN; the MANIFEST copy had
-    drifted and a re-provisioning run would have reverted it. These run the real rendered
+    The two Claude CLI wrapper scripts prefer a
+    provisioned `~/.claude/ci_oauth_token` as CLAUDE_CODE_OAUTH_TOKEN; a drifted MANIFEST copy
+    would be restored by a re-provisioning run and revert that. These run the real rendered
     MANIFEST content (what provision_static_files() writes to disk) under bash, with only the
     account's home path redirected to a temp dir so it can run off-box, and a stand-in `claude`
     that reports what it was given."""
@@ -3747,11 +3730,10 @@ class ProvisionEnvironmentHookWiringTests(unittest.TestCase):
     (see this file's docstring, and PostgresqlLockdownTests'
     test_provision_environment_uses_the_lockdown_commands_and_no_pg_hba_edit
     above for the established pattern this follows), so this checks its
-    source instead of running it. Bug found 2026-09-18: execute_hooks() was
-    defined and covered by ExecuteHooksTests above in isolation, but nothing
-    in provision_environment (or anywhere else in production) ever called
-    it, so hook_generate_ssl/hook_clear_pycache silently never ran during a
-    real provisioning run despite being attached to MANIFEST["directories"]
+    source instead of running it. execute_hooks() is covered by ExecuteHooksTests
+    above in isolation, but must also be called from provision_environment (or
+    somewhere else in production); otherwise hook_generate_ssl/hook_clear_pycache
+    silently never run during a real provisioning run despite being attached to MANIFEST["directories"]
     entries via post_provision_hooks."""
 
     def test_provision_environment_calls_execute_hooks_for_prod_and_test(self):
@@ -4859,7 +4841,7 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
 
     # [@ANCHOR: infrastructure:test_smoketest_fixtures]
     def test_no_unit_is_skipped_by_a_flag_in_the_test_smoketest(self):
-        """Bruce, 2026-10-31: a unit a test host cannot run gets a fixture, not a skip flag."""
+        """A unit a test host cannot run gets a fixture, not a skip flag."""
         self.assertEqual([], [sf["path"] for sf in infra.MANIFEST["static_files"] if "smoketest_skip_in_test" in sf])
         test_started = infra._smoketest_candidate_services(True, is_test_env=True)
         for name in (
@@ -5342,7 +5324,7 @@ class SimulatedBandUnitHardeningTests(unittest.TestCase):
 class SimulatedBandRecordingProvisioningTests(unittest.TestCase):
     """The Simulated Band's QSO recording directory and the drop-in that turns recording on.
 
-    Found on hams1, 2026-10-12: HAMS_QSO_RECORDING_DIR alone would have panicked the SFU, because the unit is
+    On hams1, HAMS_QSO_RECORDING_DIR alone would have panicked the SFU, because the unit is
     ProtectSystem=strict with an empty ReadWritePaths=; Odoo reads the same path from a system parameter. Recordings are
     kept forever (Bruce's standing rule), so provisioning creates the directory and nothing ever deletes in it."""
 
@@ -5503,7 +5485,7 @@ class SimulatedBandAccountTests(unittest.TestCase):
 
     def test_the_bots_and_the_observer_still_run_as_odoo_with_their_reason(self):
         # They hold the AI safety key (a registry row with no registration in code) and read the speech models, which are
-        # hams_com-only; both need their own change first (night_shift_todo daemon OS isolation).
+        # hams_com-only; both need their own change first (daemon OS isolation).
         for unit in ("hams.simulated.bots.service", "hams.simulated.observer.service"):
             with self.subTest(unit=unit):
                 self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "User"), ["odoo"])
@@ -6220,7 +6202,7 @@ class WebBotAuthSigningUnitTests(_SafePatchTestCase):
                 continue
             name = os.path.basename(path)
             if "pi500-1" in entry.get("environments", []):
-                continue  # the pi500-1 variant of fcc.uls.sync: another host, its key is the open item in night_shift_todo web-bot-auth-every-source-signs
+                continue  # the pi500-1 variant of fcc.uls.sync: another host, its key signing is a known open item
             if name == "fcc.uls.sync.service" and "User=odoo" in entry["content"]:
                 continue
             seen.add(name)
@@ -7112,7 +7094,7 @@ class EventAiEnrichmentTimerUnitTests(unittest.TestCase):
 class CacheManagerUnitTests(unittest.TestCase):
     """The cache-manager.service unit in the MANIFEST.
 
-    Found on hams1, 2026-10-12: global_cache_invalidation_counter was empty and no cache-manager unit
+    On hams1 global_cache_invalidation_counter was empty and no cache-manager unit
     existed, because nothing in the MANIFEST ever installed distributed_redis_cache's daemon, so no Odoo worker
     ever learned of another worker's cache invalidation. The site monitor skips a unit that is not linked on
     the host, so the missing unit raised no alarm either."""
@@ -7511,7 +7493,7 @@ class PagerLogAnalyzerUnitTests(_SafePatchTestCase):
 class PagerOsMonitorUnitTests(_SafePatchTestCase):
     """Tests [@ANCHOR: infrastructure:_provision_pager_monitor_role]
 
-    The pager-os-monitor.service unit in the MANIFEST. Found on hams1, 2026-10-12: pager_duty's generalized monitor was
+    The pager-os-monitor.service unit in the MANIFEST. On hams1, pager_duty's generalized monitor was
     never installed (the sample unit points at /opt/odoo/addons and /etc/pager_daemons.env), so its 24 check rows all said
     "passing" while none had ever run."""
 

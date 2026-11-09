@@ -575,6 +575,20 @@ class JobTests(ProcTestCase):
         self.assertEqual(cli("run", "dup", "--", "true", env=self.env).returncode, 0)
         self.assertEqual(cli("wait", "--job", "dup", "--timeout", "30", env=self.env).returncode, 0)
 
+    def test_a_stray_file_in_the_jobs_directory_does_not_break_listing(self):
+        with open(os.path.join(self.jobs, ".stray.json"), "w") as handle:
+            handle.write("{}")
+        self.assertEqual(cli("run", "okstray", "--", "true", env=self.env).returncode, 0)
+        self.assertEqual([rec.name for rec in ap.list_records(self.jobs)], ["okstray"])
+        self.assertEqual(cli("jobs", env=self.env).returncode, 0)
+
+    def test_a_missing_working_directory_is_a_usage_error_and_starts_nothing(self):
+        done = cli("run", "nodir", "--cwd", os.path.join(self.tmp, "absent"), "--", "true", env=self.env)
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("not a directory", done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+        self.assertIsNone(ap.read_record("nodir", self.jobs))
+
     def test_bad_names_and_empty_commands_are_refused(self):
         self.assertEqual(cli("run", "../evil", "--", "true", env=self.env).returncode, 2)
         self.assertEqual(cli("run", "nocmd", env=self.env).returncode, 2)
@@ -616,6 +630,18 @@ class JobTests(ProcTestCase):
         done = cli("stop", "stale", env=self.env)
         self.assertEqual(done.returncode, 0)
         self.assertIn("nothing to stop", done.stdout)
+        self.assertTrue(self.alive(victim))
+
+    def test_stop_with_a_reused_group_leader_pid_signals_nothing(self):
+        """The recorded pid is now a session leader of an unrelated process: same group and session numbers, other start time."""
+        victim = self.decoy("tokreused")
+        info = ap.read_proc(victim.pid)
+        self.assertEqual((info.pgid, info.sid), (victim.pid, victim.pid))
+        stale = ap.JobRecord("reused", "", victim.pid, victim.pid, victim.pid, info.start_ticks - 5, "/", ["x"], "/l", 0.0, "u")
+        ap.write_record(stale, self.jobs)
+        out = io.StringIO()
+        self.assertEqual(ap.stop_job("reused", out=out, directory=self.jobs), 0)
+        self.assertIn("nothing to stop", out.getvalue())
         self.assertTrue(self.alive(victim))
 
     def test_stop_unknown_job_is_a_usage_error(self):

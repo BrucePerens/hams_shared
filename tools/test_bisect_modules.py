@@ -84,6 +84,15 @@ class FindNeededTests(unittest.TestCase):
         self.assertTrue({"m05", "m20", "m31"} <= set(minimal))
 
     # Tests [@ANCHOR: bisect_modules:find_needed]
+    def test_an_incomplete_search_still_returns_a_set_that_reproduces(self):
+        items = ["a", "b", "c", "d", "e"]
+        for needed in ({"a"}, {"e"}, {"b", "d"}, {"a", "e"}, {"c"}):
+            for jobs in (1, 2):
+                for budget in range(1, 12):
+                    (minimal, complete, _), _ = self.search(needed, items=items, jobs=jobs, max_runs=budget)
+                    self.assertTrue(needed <= set(minimal), (needed, jobs, budget, minimal, complete))
+
+    # Tests [@ANCHOR: bisect_modules:find_needed]
     def test_every_step_is_reported(self):
         steps = []
         bisect_modules.find_needed(MODULES, lambda s: "m09" in s, on_step=lambda s, r: steps.append((len(s), r)))

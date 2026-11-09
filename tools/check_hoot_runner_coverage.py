@@ -61,6 +61,7 @@ import os
 import re
 import sys
 from urllib.parse import unquote
+from tree_files import tree_walk
 
 # A hoot suite declares which tag triggers it with `describe.current.tags("name")`, and a Python
 # wrapper triggers it by asking /web/tests for `?tag=name`. Both are matched textually, which is
@@ -119,9 +120,8 @@ def find_unbundled_test_files(module_path, manifest_dict):
                 listed.add(os.path.basename(entry))
 
     unbundled = []
-    for root, dirs, files in os.walk(tests_dir):
-        # tours/ live in web.assets_tests and are driven by start_tour, not by a hoot tag.
-        dirs[:] = [d for d in dirs if d not in ("tours", "__pycache__")]
+    # tours/ live in web.assets_tests and are driven by start_tour, not by a hoot tag.
+    for root, _dirs, files in tree_walk(tests_dir, ".test.js", ("tours", "__pycache__"), untracked=True):
         for f in files:
             if f.endswith(".test.js") and f not in listed:
                 unbundled.append(os.path.relpath(os.path.join(root, f), module_path))
@@ -148,8 +148,7 @@ def collect_requested_tags(repo_root):
     """
     requested = set()
     untagged_runners = []
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
+    for root, _dirs, files in tree_walk(repo_root, ".py", _IGNORE_DIRS, untracked=True):
         if os.path.basename(root) != "tests":
             continue
         for f in files:
@@ -180,8 +179,7 @@ def collect_declared_tags(repo_root):
     triggers it need not live in the same repository.
     """
     declared = set()
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
+    for root, _dirs, files in tree_walk(repo_root, ".test.js", _IGNORE_DIRS, untracked=True):
         for f in files:
             if not f.endswith(".test.js"):
                 continue
@@ -212,11 +210,10 @@ def check_bundled_tag_is_triggered(module_path, manifest_dict, requested_tags):
     than written as a literal, or a suite whose tests are all skipped at runtime, are both
     invisible here. It finds the common, checkable case rather than attempting the general one.
 
-    No baseline accompanies this check, and that is a finding rather than an omission. A scan on
-    2026-09-15 found 18 bundled-but-untriggered tags across both repositories, and 17 of them are
+    No baseline accompanies this check, and that is a finding rather than an omission. A scan
+    found 18 bundled-but-untriggered tags across both repositories, and 17 of them are
     in the 13 modules that already carry `# burn-ignore-hoot-runner-coverage` and have no hoot
-    runner of any kind -- the backlog `night_shift_todo/medium/hoot-runner-coverage-13-modules-
-    d5b7c88b.md` already tracks. Because this check runs after that skip, it never sees them, so
+    runner of any kind -- a known backlog. Because this check runs after that skip, it never sees them, so
     there is nothing to grandfather. The single remaining case was
     `user_websites/static/tests/violation_report.test.js`: a module that HAS a runner, and
     therefore passes the module-level check above, while three of its tests are triggered by
@@ -235,8 +232,7 @@ def check_bundled_tag_is_triggered(module_path, manifest_dict, requested_tags):
                     listed.add(os.path.basename(entry))
 
     violations = []
-    for root, dirs, files in os.walk(tests_dir):
-        dirs[:] = [d for d in dirs if d not in ("tours", "__pycache__")]
+    for root, _dirs, files in tree_walk(tests_dir, ".test.js", ("tours", "__pycache__"), untracked=True):
         for f in sorted(files):
             if not f.endswith(".test.js") or f not in listed:
                 continue
@@ -297,8 +293,7 @@ def check_wrapper_requests_declared_tag(repo_root, declared_tags):
     "finds the common, checkable case rather than attempting the general one" philosophy.
     """
     violations = []
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
+    for root, _dirs, files in tree_walk(repo_root, ".py", _IGNORE_DIRS, untracked=True):
         if os.path.basename(root) != "tests":
             continue
         for f in sorted(files):
@@ -363,7 +358,7 @@ def module_has_hoot_runner(module_path):
     tests_dir = os.path.join(module_path, "tests")
     if not os.path.isdir(tests_dir):
         return False
-    for root, dirs, files in os.walk(tests_dir):
+    for root, _dirs, files in tree_walk(tests_dir, ".py", untracked=True):
         for f in files:
             if not f.endswith(".py"):
                 continue
@@ -414,8 +409,7 @@ def main():
 
     # Pass 2: judge each module.
     for repo_root in sys.argv[1:]:
-        for root, dirs, files in os.walk(repo_root):
-            dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
+        for root, _dirs, files in tree_walk(repo_root, "__manifest__.py", _IGNORE_DIRS, untracked=True):
             if "__manifest__.py" not in files:
                 continue
 

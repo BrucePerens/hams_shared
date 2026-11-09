@@ -15,6 +15,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 import check_async_lock_scope as chk  # noqa: E402
+import tree_files_testkit as kit  # noqa: E402
 
 
 def _write_rs(tmp, content):
@@ -323,6 +324,21 @@ class FindRustFilesTests(unittest.TestCase):
         found = chk.find_rust_files(self.tmp)
         self.assertEqual(len(found), 1)
         self.assertTrue(found[0].endswith(os.path.join("src", "lib.rs")))
+
+
+class NestedForeignWorktreeTests(unittest.TestCase):
+    """A second worktree nested under the checkout (another agent's `tmp/<name>`) is not part of this tree."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_nested_foreign_worktree_is_not_scanned(self):
+        kit.checkout_with_nested_worktree(self.tmp, 'src/lib.rs', 'fn f() {}\n')
+        found = chk.find_rust_files(self.tmp)
+        self.assertEqual([os.path.relpath(p, self.tmp) for p in found], [os.path.join(*['src', 'lib.rs'])])
 
 
 if __name__ == "__main__":

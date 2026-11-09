@@ -13,42 +13,40 @@ import sys
 import subprocess
 import logging
 
-# Bug-hunt fix (2026-09-23, found while preparing a real production release):
-# this script lives at hams_shared/tools/provision.py, and infrastructure.py is
-# its own direct sibling in that same tools/ directory -- but `repo_root` used
-# to be computed as ONE level up from here (dirname(__file__) + "/.."), landing
-# on hams_shared itself, not hams_open. That broke two different things that
-# both used to share this one value:
+# This script lives at hams_shared/tools/provision.py, and infrastructure.py is
+# its own direct sibling in that same tools/ directory -- so `repo_root` must not
+# be computed as ONE level up from here (dirname(__file__) + "/.."), which lands
+# on hams_shared itself, not hams_open. That would break two different things
+# that share this one value:
 #   1. `sys.path.insert(0, repo_root)` needs the directory infrastructure.py
 #      actually lives in (this file's own directory, zero levels up) for
-#      `import infrastructure` to succeed at all -- confirmed directly: running
-#      this script standalone (not under pytest, which happens to also put
-#      this same directory on sys.path via its own test collection and so
-#      masked the bug) raised a real ModuleNotFoundError.
+#      `import infrastructure` to succeed at all: running this script
+#      standalone (not under pytest, which happens to also put this same
+#      directory on sys.path via its own test collection and so masks the
+#      problem) raises a real ModuleNotFoundError.
 #   2. `env_vars["REPO_ROOT"]`, which infrastructure.provision_environment()
 #      expects to be hams_open's own root (it checks
 #      `os.path.exists(os.path.join(repo_root, "hams_shared"))` as its PRIMARY
 #      test for "this repo_root IS hams_open") -- that needs TWO levels up from
-#      here (tools -> hams_shared -> hams_open), not one. The single wrong
-#      value happened to still often locate hams_com_dir/hams_community_dir
-#      correctly in practice, purely by falling through to this same
-#      function's own `../..`-relative fallback branches for the specific,
-#      real `/opt/hams/src/{hams_com,hams_open}` sibling layout -- coincidence
-#      that masked the deeper problem, not evidence the original value was
-#      right.
+#      here (tools -> hams_shared -> hams_open), not one. A single wrong value
+#      would still often locate hams_com_dir/hams_community_dir correctly in
+#      practice, purely by falling through to this same function's own
+#      `../..`-relative fallback branches for the specific, real
+#      `/opt/hams/src/{hams_com,hams_open}` sibling layout -- a coincidence that
+#      would mask the deeper problem, not evidence the value was right.
 _provision_tools_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _provision_tools_dir)
 import infrastructure  # noqa: E402
 import provision_test_environment  # noqa: E402
 
 
-# Bug-hunt fix (2026-10-01, found via a full tools/run_linters.py sweep): this script is
+# This script is
 # deployed as an identical copy at two genuinely different nesting depths --
 # `hams_com/tools/provision.py` (one level above hams_com's own root, which holds `hams_shared`
 # as a symlink into hams_open) and `hams_open/hams_shared/tools/provision.py` (two levels above
-# hams_open's own root, which holds `hams_shared` as a real directory). The previous fixed
-# `"..", ".."` walk was only ever correct for the second copy -- the first copy landed on the
-# PARENT of hams_com (e.g. `~/workspace`), where `hams_shared` does not exist at all, breaking
+# hams_open's own root, which holds `hams_shared` as a real directory). A fixed
+# `"..", ".."` walk is only correct for the second copy -- for the first copy it lands on the
+# PARENT of hams_com (e.g. `~/workspace`), where `hams_shared` does not exist at all, which breaks
 # every caller of `repo_root` for that copy. A fixed-depth walk cannot serve both real layouts by
 # construction, so this walks upward from this file's own location until it finds the first
 # ancestor directory whose own `hams_shared` subdirectory exists (real directory or symlink,
@@ -56,7 +54,7 @@ import provision_test_environment  # noqa: E402
 def _find_repo_root(start_dir):
     """The nearest ancestor whose `hams_shared` is THIS checkout of hams_shared, or None.
 
-    Finding any ancestor with a `hams_shared` entry is not enough. 2026-10-12: a test run inside a git worktree of
+    Finding any ancestor with a `hams_shared` entry is not enough. For example, a test run inside a git worktree of
     hams_shared itself (no hams_open above it) walked up to the user's home directory, found an unrelated, months-old
     ~/hams_shared copy there, and `test_provision_py_help_runs_in_a_fresh_subprocess...` then executed THAT
     copy's provision.py through sudo, which provisioned the dev box (apt, usermod) before the test timed out. So an
@@ -168,18 +166,17 @@ def provision():
 
     if os.geteuid() != 0:
         _logger.info("[*] Elevating privileges (sudo) to provision environment...")
-        # Bug-hunt fix (2026-09-10): this re-exec previously dropped every
-        # one of this process's own CLI arguments (sys.argv[1:], e.g.
-        # --test/--force-reset) -- confirmed by direct comparison against
-        # test.py's own equivalent self-re-exec-via-sudo pattern
-        # (`["sudo", "-H", "-E", sys.executable] + sys.argv`), which does
-        # forward them. A caller running `provision.py --force-reset` as a
-        # non-root user (the common case) had that flag silently vanish
+        # This re-exec forwards every one of this process's own CLI arguments
+        # (sys.argv[1:], e.g. --test/--force-reset), as test.py's own equivalent
+        # self-re-exec-via-sudo pattern does
+        # (`["sudo", "-H", "-E", sys.executable] + sys.argv`). A caller running
+        # `provision.py --force-reset` as a non-root user (the common case)
+        # would otherwise have that flag silently vanish
         # the moment this script escalated to root: the re-exec'd,
         # actually-provisioning process ran with NO CLI args at all, so
         # neither --force-reset nor --test ever took effect unless the
-        # caller happened to already be root. Fixed by forwarding
-        # sys.argv[1:] explicitly, matching test.py's own pattern.
+        # caller happened to already be root. So sys.argv[1:] is forwarded
+        # explicitly.
         os.execvp(
             "sudo",
             ["sudo", "-H", "-E", sys.executable, os.path.abspath(__file__)]
@@ -387,7 +384,7 @@ def provision():
         )
     elif args.force_reset:
         db_name = env_vars.get("DB_NAME", "hams_test")
-        # Bug-hunt fix (2026-09-10): db_name is interpolated below into a
+        # db_name is interpolated below into a
         # filesystem path that a subsequent `rm -rf` deletes outright
         # (`filestore_path`). DB_NAME is normally an operator-controlled
         # config value (a .env file or an interactive prompt in

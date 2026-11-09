@@ -330,6 +330,13 @@ class ArtifactTests(SnapshotTestBase):
         self.assertEqual(self.problems({gs.RELAY_BIN_ENV: self.relay}), [])
 
     # Tests [@ANCHOR: gate_snapshot:artifact_problems]
+    def test_a_relay_built_before_a_change_in_a_crate_it_links_is_refused(self):
+        write(os.path.join(self.trees.com, "daemons/shack_console/hams_core/lib.rs"), "fn changed(){}\n")
+        git(self.trees.com, "add", "daemons/shack_console/hams_core/lib.rs")
+        git(self.trees.com, "commit", "-q", "-m", "core change")
+        self.assertTrue(any("no stamp" in p for p in self.problems()), self.problems())
+
+    # Tests [@ANCHOR: gate_snapshot:artifact_problems]
     def test_a_library_with_an_old_timestamp_copied_over_is_refused(self):
         old = time.time() - 86400 * 30
         os.utime(self.lib, (old, old))

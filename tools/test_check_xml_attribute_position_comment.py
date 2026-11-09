@@ -48,7 +48,7 @@ class CheckXmlAttributePositionCommentTests(unittest.TestCase):
         self.assertIn("layout_overrides.xml", violations[0])
 
     def test_flags_a_comment_preceding_a_single_attribute_element(self):
-        # The second instance this checker found live, 2026-10-01:
+        # The second real instance this checker caught:
         # theme_hams/views/layout_overrides.xml's hams_dynamic_filter_template_blog_post_card
         # had an audit-ignore-xpath comment directly inside the <xpath> block, immediately
         # before its one <attribute> child -- not "between" two attributes, but still a
