@@ -67,6 +67,8 @@ DENIED = [
     "ssh -p 22 host sudo kill -9 5", "watch -n 5 pkill foo", "eval 'kill -9 5'", 'sh -c "kill -9 5"', "bash -lc 'pkill foo'",
     "nohup pkill foo &", "timeout 5 pkill foo", "nice -n 5 killall x", "env FOO=1 kill -9 5", "sudo -n -u odoo env X=1 pkill x",
     "cd /tmp && pkill foo", "true || pkill foo", "(pkill foo)", "{ pkill foo; }", "! pgrep -f foo",
+    "kill -sKILL 123", "kill -09 123", "kill -n9 5", "kill -s 09 5", "kill -TERM -- -1", "kill -TERM 0", "kill 1",
+    "bash <<< 'kill -9 5'", 'sh <<<"pkill foo"', "bash -s <<<'pgrep -f x'",
     "python3 -c 'import os; os.kill(5, 9)'", "python3 -c 'import os,signal; os.kill(5, signal.SIGKILL)'",
     "python3 - <<'EOF'\nimport os\nos.killpg(5, 9)\nEOF\n", "python3 -c \"import subprocess; subprocess.run(['pkill', 'x'])\"", "bash <<'EOF'\npkill foo\nEOF\n",
     "sleep 1\npkill foo\n", "echo a; kill -9 5 # note", "kill -9 5 2>/dev/null",
@@ -88,6 +90,7 @@ ALLOWED = [
     "ps aux", "ps -eo pid,user,lstart,args | grep postgres", "ps -p 123 -o pid,user,lstart,args", "pgrep -x postgres",
     "pgrep -u bruce chrome", "pgrep -c sshd", "pidof sshd", "which pkill", "command -v pkill", "type pkill", "man kill",
     "kill -TERM 123", "kill 123", "kill -15 123", "kill -0 123", "kill -HUP 123 456", "sudo kill -TERM 123", "kill -l",
+    "cat <<< 'pkill foo'", "grep -q x <<< 'kill -9 5'", "kill -sTERM 123", "kill -n15 123",
     "kill -s TERM 123", "kill --signal=TERM 123", "kill %1", "kill $!", "ps -o ppid= -p 123",
     "echo parent $(ps -o ppid= -p 123)", "ps -eo pid,ppid,args | grep systemd", "systemctl status sshd", "systemctl --user status", "sleep 100 & echo $!",
     "cargo test --all", "cargo clippy --all-targets -- -D warnings", "git status && git log --oneline | head",
@@ -206,6 +209,12 @@ class ParserTests(GuardTestCase):
         self.assertEqual(tabbed[0].bodies, ["\tbody"])
         self.assertEqual([c.words[0].text for c in tabbed], ["cat", "ls"])
 
+    def test_a_here_string_is_attached_like_a_heredoc_body(self):
+        commands = gs.tokenize("bash <<< 'echo one' ; cat <<<$x; ls <<<\"a b\"; cat <<<tail", [])
+        self.assertEqual([c.words[0].text for c in commands], ["bash", "cat", "ls", "cat"])
+        self.assertEqual([c.bodies for c in commands], [["echo one"], ["$x"], ["a b"], ["tail"]])
+        self.assertEqual([len(c.words) for c in commands], [1, 1, 1, 1])
+
     def test_nesting_too_deep_raises(self):
         text = "echo " + "$(" * 12 + "x" + ")" * 12
         with self.assertRaises(ValueError):
@@ -252,7 +261,7 @@ class RuleTests(GuardTestCase):
     """signal_is_kill, check_kill, check_pgrep, check_command."""
 
     def test_signal_is_kill_spellings(self):
-        for spec in ("9", "-9", "KILL", "-KILL", "SIGKILL", "-sigkill", "kill"):
+        for spec in ("9", "-9", "09", "-009", "KILL", "-KILL", "SIGKILL", "-sigkill", "kill"):
             self.assertTrue(gs.signal_is_kill(spec), spec)
         for spec in ("TERM", "-15", "HUP", "0", "SIGTERM", "-19"):
             self.assertFalse(gs.signal_is_kill(spec), spec)
@@ -263,8 +272,11 @@ class RuleTests(GuardTestCase):
             result = gs.Verdict()
             gs.check_kill(command.words, False, result, {})
             return result
-        self.assertEqual(verdict_for("kill -TERM 1 2 3").reasons, [])
-        self.assertTrue(verdict_for("kill -TERM 1 2 3").notes)
+        self.assertEqual(verdict_for("kill -TERM 11 12 13").reasons, [])
+        self.assertTrue(verdict_for("kill -TERM 11 12 13").notes)
+        for text in ("kill -TERM 11 1", "kill -TERM 0", "kill -- -1", "kill -sKILL 5", "kill -n9 5", "kill -09 5"):
+            self.assertTrue(verdict_for(text).reasons, text)
+        self.assertTrue(verdict_for("kill -- -123 %1 10").reasons)  # a negative pid names a process group
         self.assertEqual(verdict_for("kill -l").notes, [])
         self.assertEqual(verdict_for("kill").reasons, [])
         self.assertTrue(verdict_for("kill -9 5").reasons)
