@@ -2053,7 +2053,7 @@ def check_linters(
     # for any future caller (this function's sole current caller in main()
     # always passes a real list, so this was latent, not live) that reuses
     # this function without an explicit module list.
-    target_dirs = [os.path.join(base_dir, m) for m in (target_modules or [])]
+    target_dirs = [burn_list_target(base_dir, m) for m in (target_modules or [])]
     cmd_js = [python_exec, js_linter, "--ignore-file", ignore_filepath] + target_dirs
     res_js = subprocess.run(cmd_js, capture_output=True, text=True)
     if res_js.returncode != 0:
