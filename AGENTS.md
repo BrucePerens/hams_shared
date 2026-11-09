@@ -231,6 +231,12 @@ When debugging tests, especially UI tours, you can use the MCP test server inste
   lint or test runs are already waiting too long (oldest wait over 10 minutes, more than 4 queued lint runs) or the CPU or memory is over
   its limit: wait and check again; do not stop running agents. No verdict (missing or stale stats) is HOLD. Work that routes to a free
   overflow machine may still go (the output says when one is free). Details: `tools/README.md`, "Admission control".
+* **Clarification: the verdict is advisory, and ten agents run at all times (Bruce, 2026-11-08/09).** The rule above says how to read `dispatch_ok.py`;
+  it is information for the coordinator, not a veto. Bruce's standing instruction is that ten agents are running at all times, so a coordinator tops
+  up to ten as soon as fewer are running. A HOLD whose reasons are only lint or test queue waits (the oldest-wait and queued-lint-runs reasons) does not
+  stop that: choose work that does not queue on lint (builds, tests, rehearsals, profiling, sweeps) and fix the queue bottleneck itself instead of
+  throttling agents. A HOLD for memory over its limit or critical CPU still binds: wait and check again, and never stop running agents. When an agent
+  is started on a HOLD, say which reasons were shown. No existing rule is withdrawn by this note.
 
 ### Iterating with `test.py` (one test in seconds; worktrees)
 * **One test or class:** `python3 hams_shared/tools/test.py --wait -u MODULE --test-tags /MODULE:TestClass.test_method`
