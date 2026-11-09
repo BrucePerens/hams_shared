@@ -950,6 +950,46 @@ class GarbageCollectionTest(RamTestCase):
                 self.assertEqual(ram_dirs.main(["status"]), 0)
             self.assertFalse(os.path.exists(old))
 
+    # Tests [@ANCHOR: ram_dirs:main]
+    # Tests [@ANCHOR: ram_dirs:sweep]
+    def test_gc_dry_run_removes_and_modifies_nothing_and_names_what_it_would_remove(self):
+        """`gc --dry-run` used to run a real `sweep()` first, which removed dead jobs' directories and stale test TMPDIR entries."""
+        dead = self.make_job("dead")  # its job ended
+        stale = os.path.join(self.root, ram_dirs.TEST_TMP_NAME, "old-leftover")
+        os.makedirs(stale)
+        long_ago = time.time() - 40 * 3600
+        os.utime(stale, (long_ago, long_ago))
+        before = sorted((os.path.join(b, n), os.lstat(os.path.join(b, n)).st_mtime_ns)
+                        for b, ds, fs in os.walk(self.root) for n in ds + fs)
+        with mock.patch.dict(os.environ, self.environ), mock.patch.object(ram_dirs, "references", return_value=[]):
+            with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                self.assertEqual(ram_dirs.main(["gc", "--dry-run"]), 0)
+        self.assertTrue(os.path.isdir(dead))
+        self.assertTrue(os.path.isdir(stale))
+        after = sorted((os.path.join(b, n), os.lstat(os.path.join(b, n)).st_mtime_ns)
+                       for b, ds, fs in os.walk(self.root) for n in ds + fs)
+        self.assertEqual(before, after)  # nothing removed, created (no removal log) or touched
+        self.assertIn("would remove " + ram_dirs.CARGO_PREFIX + "dead", err.getvalue())
+        self.assertEqual(err.getvalue().count("would remove " + ram_dirs.CARGO_PREFIX + "dead"), 1)
+        self.assertIn("would remove " + ram_dirs.TEST_TMP_NAME + "/old-leftover", err.getvalue())
+
+    # Tests [@ANCHOR: ram_dirs:sweep]
+    def test_sweep_dry_run_returns_what_it_would_remove_and_removes_nothing(self):
+        dead = self.make_job("dead")
+        pol = ram_dirs.policy(self.environ)
+        self.assertEqual(ram_dirs.sweep(pol, dry_run=True), [ram_dirs.CARGO_PREFIX + "dead"])
+        self.assertTrue(os.path.isdir(dead))
+        self.assertFalse(os.path.exists(ram_dirs.gc_log_path(pol)))
+
+    # Tests [@ANCHOR: ram_dirs:sweep]
+    def test_sweep_logs_the_idle_time_of_what_it_removes(self):
+        self.make_job("dead", age_hours=5)
+        pol = ram_dirs.policy(self.environ)
+        ram_dirs.sweep(pol, say=lambda text: None)
+        with open(ram_dirs.gc_log_path(pol), encoding="utf-8") as handle:
+            line = handle.read()
+        self.assertIn("idle 5.0 h", line)
+
 
 class GcUnitFilesTest(unittest.TestCase):
     # Tests [@ANCHOR: ram_dirs:gc]
