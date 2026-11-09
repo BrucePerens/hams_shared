@@ -243,10 +243,15 @@ class RabbitMqWrapperTrapTests(unittest.TestCase):
         left = subprocess.run(["pgrep", "-g", str(pgid)], capture_output=True, text=True).stdout.split()
         self.assertEqual(left, [], "the server in the wrapper's process group must be gone too")
 
-    def test_the_old_self_reentering_trap_did_segfault(self):
-        # The control: the previous script dies of SIGSEGV here, so the test above is not vacuous.
-        returncode, _ = self._run_and_terminate("trap 'kill -TERM 0 2>/dev/null; exit 0' TERM; sleep 30 & wait $!")
-        self.assertEqual(returncode, -signal.SIGSEGV)
+    def test_the_old_self_reentering_trap_re_entered_itself(self):
+        # The control: the previous trap (`kill -TERM 0; exit 0`) sent SIGTERM to its own process group, so the shell took it again
+        # while still inside the handler, without end, until bash overflowed its stack. That crash is not reproduced here: it wrote a
+        # `bash[pid]: segfault` line to the kernel log on every run of this file. The same trap with a counter that leaves with
+        # status 99 on the fifth entry shows the re-entry without any crash; the wrapper test above is therefore not vacuous.
+        returncode, _ = self._run_and_terminate(
+            "n=0; trap 'n=$((n+1)); [ $n -ge 5 ] && exit 99; kill -TERM 0 2>/dev/null; exit 0' TERM; sleep 30 & wait $!"
+        )
+        self.assertEqual(returncode, 99, "the old trap must re-enter itself (-> 99), not exit 0 and not crash (-11)")
 
     def test_rabbitmq_is_started_through_the_wrapper(self):
         source = open(_TEST_PY_PATH, encoding="utf-8").read()
