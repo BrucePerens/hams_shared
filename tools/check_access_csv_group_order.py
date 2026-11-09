@@ -32,6 +32,7 @@ import ast
 import csv
 import io
 import os
+import check_target
 import lint_exec
 import re
 import sys
@@ -205,6 +206,7 @@ def main():
         print("Usage: check_access_csv_group_order.py <repo_root>", file=sys.stderr)
         return 1
 
+    check_target.require_directory(sys.argv[1], "check_access_csv_group_order")
     repo_root = _resolve_repo_root(sys.argv[1])
     roots = [repo_root]
     sibling = _find_sibling_repo(repo_root)
@@ -212,7 +214,9 @@ def main():
         roots.append(sibling)
 
     all_errors = []
-    for module_name, module_dir, manifest_path in _find_modules(roots):
+    modules = list(_find_modules(roots))
+    check_target.require_scanned(len(modules), ", ".join(roots), "check_access_csv_group_order", "Odoo modules (directories holding __manifest__.py)")
+    for module_name, module_dir, manifest_path in modules:
         all_errors.extend(_check_module(module_name, module_dir, manifest_path))
 
     if all_errors:

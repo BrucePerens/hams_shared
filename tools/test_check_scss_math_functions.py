@@ -190,6 +190,8 @@ class ScssTreeTests(unittest.TestCase):
         other = tempfile.mkdtemp()
         try:
             self._write("mod_a/static/src/scss/ok.scss", _rule("w: unquote('min(12rem, 100%)')"))
+            with open(os.path.join(other, "ok.scss"), "w", encoding="utf-8") as handle:
+                handle.write(_rule("w: 1rem"))
             res = subprocess.run([sys.executable, _SCRIPT, self.tmp, other], capture_output=True, text=True)
             self.assertEqual(res.returncode, 0, res.stdout)
             with open(os.path.join(other, "bad.scss"), "w", encoding="utf-8") as handle:

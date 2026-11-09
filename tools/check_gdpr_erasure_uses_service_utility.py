@@ -50,6 +50,7 @@ Usage: check_gdpr_erasure_uses_service_utility.py <repo_root>
 
 import ast
 import os
+import check_target
 import lint_exec
 import sys
 from tree_files import tree_walk
@@ -142,13 +143,15 @@ def _check_file(path, repo_root):
     return violations
 
 
-def check_gdpr_erasure_uses_service_utility(repo_root):
+def check_gdpr_erasure_uses_service_utility(repo_root, stats=None):
     violations = []
     for root, _dirs, files in tree_walk(repo_root, ".py", SKIP_DIRS, skip_hidden=True, untracked=True):
         for filename in files:
             if not filename.endswith(".py"):
                 continue
             path = os.path.join(root, filename)
+            if stats is not None:
+                stats["files"] = stats.get("files", 0) + 1
             # The utility's own implementation is exempt -- it IS the blessed
             # unlink() call every other _execute_gdpr_erasure should route through.
             if os.path.basename(path) == "security_utils.py":
@@ -162,9 +165,13 @@ if __name__ == "__main__":
         print("Usage: check_gdpr_erasure_uses_service_utility.py <repo_root>")
         sys.exit(1)
 
+    check_target.require_directory(sys.argv[1], "check_gdpr_erasure_uses_service_utility")
     violations = []
-    for repo_root in _resolve_repo_roots(sys.argv[1]):
-        violations.extend(check_gdpr_erasure_uses_service_utility(repo_root))
+    stats = {}
+    roots = _resolve_repo_roots(sys.argv[1])
+    for repo_root in roots:
+        violations.extend(check_gdpr_erasure_uses_service_utility(repo_root, stats))
+    check_target.require_scanned(stats.get("files", 0), ", ".join(roots), "check_gdpr_erasure_uses_service_utility", "Python files")
 
     if violations:
         print("❌ GDPR erasure hand-rolled unlink() violations:")

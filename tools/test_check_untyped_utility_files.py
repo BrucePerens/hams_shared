@@ -285,6 +285,8 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("mypy findings", out)
 
     def test_a_file_defining_an_odoo_model_class_is_never_scanned_even_with_a_real_bug(self):
+        # A second, clean candidate keeps the scan non-empty: a scan of nothing is red (check_target.py).
+        _write(os.path.join(self.tmp, "daemons", "clean.py"), "x = 1\n")
         _write(
             os.path.join(self.tmp, "daemons", "model_with_bug.py"),
             "class Foo(models.Model):\n"
@@ -297,9 +299,18 @@ class MainIntegrationTests(unittest.TestCase):
         code, out = self._run()
         self.assertEqual(code, 0, out)
 
-    def test_no_candidates_at_all_passes_quietly(self):
+    def test_no_candidates_at_all_is_red_by_hand_and_a_quiet_pass_only_with_the_opt_out(self):
         code, out = self._run()
-        self.assertEqual(code, 0, out)
+        self.assertEqual(code, 2, out)
+        self.assertIn("scanned 0", out)
+        result = subprocess.run(
+            [sys.executable, _SCRIPT, self.tmp],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=dict(os.environ, HAMS_CHECK_ALLOW_EMPTY="1"),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class ResolveRepoRootTests(unittest.TestCase):

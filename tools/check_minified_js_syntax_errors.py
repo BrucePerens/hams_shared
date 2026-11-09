@@ -38,6 +38,7 @@ the minified (whitespace-stripped, hard for a human to read) output.
 
 import ast
 import os
+import check_target
 import lint_exec
 import sys
 import subprocess
@@ -150,13 +151,15 @@ def main():
         print("Usage: check_minified_js_syntax_errors.py <repo_root> [sibling_repo_root]")
         sys.exit(1)
 
-    repo_root = _resolve_repo_root(sys.argv[1])
+    repo_root = check_target.require_directory(_resolve_repo_root(sys.argv[1]), "check_minified_js_syntax_errors")
     search_roots = [repo_root] + sys.argv[2:]
     computed_sibling = _find_sibling_repo(repo_root)
     if computed_sibling and computed_sibling not in search_roots:
         search_roots.append(computed_sibling)
 
     asset_to_bundles = collect_minified_js_assets(repo_root)
+    # Bundled .js assets are what this checker reads (named by the manifests under repo_root); none at all is an empty scan.
+    check_target.require_scanned(len(asset_to_bundles), repo_root, "check_minified_js_syntax_errors", "bundled .js assets listed in manifests")
     if not asset_to_bundles:
         print("[+] Minified JS Output Syntax Linter: No bundled JS assets found.")
         sys.exit(0)
@@ -170,6 +173,8 @@ def main():
             continue
         jobs.append((asset_path, real_path))
 
+    # Assets named only by modules outside this tree and the sibling root are not ours; if none resolve, nothing was checked.
+    check_target.require_scanned(len(jobs), repo_root, "check_minified_js_syntax_errors", "resolvable bundled .js assets")
     if not jobs:
         print("[+] Minified JS Output Syntax Linter: No resolvable bundled JS assets found.")
         sys.exit(0)

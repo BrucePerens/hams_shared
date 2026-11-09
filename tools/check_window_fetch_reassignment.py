@@ -26,6 +26,7 @@ import os
 import re
 import sys
 
+import check_target
 from tree_files import tree_files
 
 _ASSIGNMENT_RE = re.compile(
@@ -89,7 +90,15 @@ if __name__ == "__main__":
 
     # Several repositories are scanned by ONE process (one step in run_linters.py).
     violations = []
-    for repo_dir in dict.fromkeys(sys.argv[1:]):
+    roots = [check_target.require_directory(repo_dir, "check_window_fetch_reassignment") for repo_dir in dict.fromkeys(sys.argv[1:])]
+    # One scan of nothing across ALL the roots is the failure: hams_com alone may hold no test file while hams_open holds them all.
+    check_target.require_scanned(
+        sum(len(tree_files(repo_dir, ".test.js", _IGNORE_DIRS)) for repo_dir in roots),
+        ", ".join(roots),
+        "check_window_fetch_reassignment",
+        "*.test.js files",
+    )
+    for repo_dir in roots:
         violations.extend(check_window_fetch_reassignment(repo_dir))
 
     if violations:

@@ -15,6 +15,7 @@ import os
 import sys
 import ast
 import re
+import check_target
 from tree_files import tree_walk
 
 
@@ -23,8 +24,9 @@ def main():
         print("Usage: check_manifest_dependencies.py <repo_root>")
         sys.exit(1)
 
-    repo_root = sys.argv[1]
+    repo_root = check_target.require_directory(sys.argv[1], "check_manifest_dependencies")
     manifests = {}
+    manifest_files = 0
     file_to_bundles = {}
     errors_found = False
 
@@ -37,6 +39,7 @@ def main():
         if "__manifest__.py" in files:
             mod_name = os.path.basename(root)
             manifest_path = os.path.join(root, "__manifest__.py")
+            manifest_files += 1
             try:
                 with open(manifest_path, "r", encoding="utf-8") as f:
                     tree = ast.parse(f.read(), filename=manifest_path)
@@ -107,6 +110,7 @@ def main():
         r"['\"]@([a-zA-Z0-9_-]+)/(.*?)['\"]"
     )
 
+    check_target.require_scanned(manifest_files, repo_root, "check_manifest_dependencies", "Odoo modules (__manifest__.py files)")
     mod_cache = {}
     for root, _dirs, files in tree_walk(repo_root, ".js", ("radae",), skip_hidden=True, untracked=True):
         if "node_modules" in root:

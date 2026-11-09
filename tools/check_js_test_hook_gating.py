@@ -27,6 +27,8 @@ import os
 import subprocess
 import sys
 
+import check_target
+
 EXCLUDE_DIRS = {
     ".git",
     "node_modules",
@@ -111,7 +113,9 @@ def main():
         print("usage: check_js_test_hook_gating.py <repo_root>", file=sys.stderr)
         return 2
 
-    repo_root = os.path.abspath(sys.argv[1])
+    repo_root = check_target.require_directory(sys.argv[1], "check_js_test_hook_gating")
+    # A tree git cannot list (not a work tree, no JS) yields no files at all; that is not a clean scan.
+    check_target.require_scanned(len(_git_tracked_js_files(repo_root)), repo_root, "check_js_test_hook_gating", "git-tracked production .js files")
     violations_by_file = scan_tree(repo_root)
 
     if violations_by_file:

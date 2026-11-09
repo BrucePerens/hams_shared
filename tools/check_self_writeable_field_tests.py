@@ -32,6 +32,7 @@ check_burn_list.py's existing bypass-testing Deep AST Verification.
 
 import ast
 import os
+import check_target
 import lint_exec
 import re
 import sys
@@ -79,7 +80,7 @@ def _owning_module(path, repo_root):
     return None
 
 
-def _find_self_writeable_overrides(repo_roots):
+def _find_self_writeable_overrides(repo_roots, stats=None):
     """Yields (py_path, anchor_or_None, def_lineno) for every
     `def SELF_WRITEABLE_FIELDS` found outside a tests/ directory."""
     for repo_root in repo_roots:
@@ -91,6 +92,8 @@ def _find_self_writeable_overrides(repo_roots):
                 if not f.endswith(".py"):
                     continue
                 path = os.path.join(root, f)
+                if stats is not None:
+                    stats["files"] = stats.get("files", 0) + 1
                 try:
                     with open(path, "r", encoding="utf-8") as fh:
                         content = fh.read()
@@ -278,10 +281,12 @@ def main():
         print("Usage: check_self_writeable_field_tests.py <repo_root>")
         sys.exit(1)
 
+    check_target.require_directory(sys.argv[1], "check_self_writeable_field_tests")
     roots = _resolve_repo_roots(sys.argv[1])
 
     errors = 0
-    for path, anchor, lineno in _find_self_writeable_overrides(roots):
+    stats = {}
+    for path, anchor, lineno in _find_self_writeable_overrides(roots, stats):
         if not anchor:
             print(
                 f"❌ ERROR: {path}:{lineno}: SELF_WRITEABLE_FIELDS override has no "
@@ -324,6 +329,7 @@ def main():
                 print(f"    - {e}")
             errors += len(shape_errors)
 
+    check_target.require_scanned(stats.get("files", 0), ", ".join(roots), "check_self_writeable_field_tests", "Python files outside tests/")
     if errors:
         print(f"Total Errors (SELF_WRITEABLE_FIELDS Write Proof): {errors}")
         sys.exit(1)

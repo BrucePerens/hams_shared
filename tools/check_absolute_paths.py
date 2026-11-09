@@ -53,11 +53,12 @@ ham_training/ is a real module and its other files must stay checked.
 
 import os
 import sys
+import check_target
 from tree_files import tree_walk
 
 
 # [@ANCHOR: tools:check_absolute_paths]
-def check_absolute_paths(repo_dir):
+def check_absolute_paths(repo_dir, stats=None):
     violations = []
 
     # Common directories to ignore
@@ -161,6 +162,8 @@ def check_absolute_paths(repo_dir):
                 continue
 
             file_path = os.path.join(root, file)
+            if stats is not None:
+                stats["files"] = stats.get("files", 0) + 1
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     for i, line in enumerate(f, 1):
@@ -191,8 +194,10 @@ if __name__ == "__main__":
         print("Usage: check_absolute_paths.py <repo_dir>")
         sys.exit(1)
 
-    repo_dir = sys.argv[1]
-    violations = check_absolute_paths(repo_dir)
+    repo_dir = check_target.require_directory(sys.argv[1], "check_absolute_paths")
+    stats = {}
+    violations = check_absolute_paths(repo_dir, stats)
+    check_target.require_scanned(stats.get("files", 0), repo_dir, "check_absolute_paths", "source, doc and data files")
 
     if violations:
         print("❌ Absolute Paths Violations:")

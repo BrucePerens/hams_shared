@@ -36,6 +36,7 @@ import os
 import re
 import sys
 
+import check_target
 from tree_files import tree_files
 
 IGNORE_DIR_NAMES = {
@@ -136,6 +137,7 @@ def main():
     # Several roots (hams_com and hams_open) are scanned by ONE process, one step in run_linters.py.
     roots = []
     for given in sys.argv[1:]:
+        check_target.require_directory(given, "check_fake_network_listener")
         repo_root = os.path.abspath(given)
         if os.path.basename(repo_root) == "hams_shared":
             repo_root = os.path.dirname(repo_root)
@@ -143,8 +145,10 @@ def main():
             roots.append(repo_root)
 
     any_found = False
+    scanned = 0
     for repo_root in roots:
         for path in find_candidate_files(repo_root):
+            scanned += 1
             for line_num, msg in check_file(path):
                 any_found = True
                 rel = os.path.relpath(path, repo_root)
@@ -152,6 +156,7 @@ def main():
                     rel = os.path.join(os.path.basename(repo_root), rel)
                 print(f"❌ {rel}:{line_num}: {msg}")
 
+    check_target.require_scanned(scanned, ", ".join(roots), "check_fake_network_listener", "Rust and Python files")
     if any_found:
         sys.exit(1)
     sys.exit(0)

@@ -152,15 +152,28 @@ def inherit_stamp(repo, tip, passed_dir, base="origin/main", log=print):
 
 
 def _history_problems(repo, tip):
-    """What `night_shift_history.check_tree` says about the history files of `tip` (empty list: fine, or the repository has none)."""
+    """What `night_shift_history.check_tree` says about the history files of `tip`.
+
+    An empty list means the history is fine, or `tip` has none (hams_shared itself has no `night_shift_history`: proven by `git
+    ls-tree` succeeding and listing neither path). Anything git cannot do (list the tree, archive the history, unpack it) is a
+    problem naming the cause, never "no problems": an unreadable history was not checked."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import night_shift_history
 
+    paths = ["night_shift_history", "night_shift_history.md"]
+    listing = subprocess.run(["git", "-C", repo, "ls-tree", "--name-only", tip, "--", *paths], capture_output=True)
+    if listing.returncode != 0:
+        return ["git ls-tree %s failed (exit %s): %s" % (tip[:9], listing.returncode, listing.stderr.decode("utf-8", "replace").strip())]
+    present = [line for line in listing.stdout.decode("utf-8", "replace").splitlines() if line]
+    if not present:
+        return []  # the repository has no such history (hams_shared itself)
     with tempfile.TemporaryDirectory(prefix="stamp-history-") as scratch:
-        archive = subprocess.run(["git", "-C", repo, "archive", tip, "night_shift_history", "night_shift_history.md"], capture_output=True)
+        archive = subprocess.run(["git", "-C", repo, "archive", tip, *present], capture_output=True)
         if archive.returncode != 0:
-            return []  # the repository has no such history (hams_shared itself)
-        subprocess.run(["tar", "-x", "-C", scratch], input=archive.stdout, check=True)
+            return ["git archive %s of %s failed (exit %s), so the history was not checked: %s" % (tip[:9], ", ".join(present), archive.returncode, archive.stderr.decode("utf-8", "replace").strip())]
+        unpacked = subprocess.run(["tar", "-x", "-C", scratch], input=archive.stdout, capture_output=True)
+        if unpacked.returncode != 0:
+            return ["unpacking the history of %s failed (tar exit %s), so it was not checked: %s" % (tip[:9], unpacked.returncode, unpacked.stderr.decode("utf-8", "replace").strip())]
         return night_shift_history.check_tree(scratch)
 
 
