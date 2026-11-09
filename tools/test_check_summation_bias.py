@@ -214,5 +214,118 @@ class CheckSummationBiasTests(unittest.TestCase):
         self.assertIn("SUMMATION BIAS DETECTED", result.stdout)
 
 
+def _lines(n, prefix="line"):
+    return "".join(f"{prefix} {i:03d} with a good many words of explanatory text\n" for i in range(n))
+
+
+class MergeCommitTests(unittest.TestCase):
+    """A merge commit is judged against the merge result, not the first parent (the branch author's side)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        _init_repo(self.tmp)
+        _git(self.tmp, "checkout", "-q", "-b", "trunk")
+        self.base = _lines(100)
+        _commit_file(self.tmp, "a.md", self.base, "base a")
+        _commit_file(self.tmp, "other.md", "o\n", "base other")
+        _git(self.tmp, "checkout", "-q", "-b", "feature")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _reworded(self):
+        # Main shortens the first 60 lines (about 15 percent of the file) and leaves the tail alone.
+        lines = self.base.splitlines(True)
+        return "".join(l[:-20] + "\n" for l in lines[:60]) + "".join(lines[60:])
+
+    def _main_rewords(self, content):
+        _git(self.tmp, "checkout", "-q", "trunk")
+        _commit_file(self.tmp, "a.md", content, "main rewords a")
+        _git(self.tmp, "checkout", "-q", "feature")
+
+    def _feature_touches_other_file(self):
+        _commit_file(self.tmp, "other.md", "o\nmore\n", "feature edit")
+
+    def _merge(self, expect_conflict=False):
+        res = subprocess.run(
+            ["git", "merge", "--no-commit", "--no-ff", "trunk"], cwd=self.tmp, capture_output=True, text=True
+        )
+        self.assertEqual(res.returncode != 0, expect_conflict, res.stdout + res.stderr)
+
+    def test_ordinary_commit_after_a_merge_is_still_strict(self):
+        self._main_rewords(_lines(100)[: len(self.base) * 8 // 10])
+        self._feature_touches_other_file()
+        self._merge()
+        _git(self.tmp, "commit", "-q", "-m", "merge", "--no-verify")
+        _write(os.path.join(self.tmp, "a.md"), _lines(10))
+        _git(self.tmp, "add", "a.md")
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 1, out)
+        self.assertIn("SUMMATION BIAS DETECTED in a.md", out)
+
+    def test_shrink_that_came_from_main_is_not_flagged_in_a_merge(self):
+        shorter = self._reworded()
+        self._main_rewords(shorter)
+        self._feature_touches_other_file()
+        self._merge()
+        # The same content committed ordinarily on the feature branch is a 5+ percent shrink and is caught.
+        self.assertLess(len(shorter), len(self.base) * 0.95)
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 0, out)
+
+    def test_clean_merge_of_mains_shrink_with_an_unrelated_author_edit_is_not_flagged(self):
+        shorter = self._reworded()
+        self._main_rewords(shorter)
+        _commit_file(self.tmp, "a.md", self.base + "# author appended a line\n", "feature edits a")
+        self._merge()
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 0, out)
+
+    def test_author_shrinking_below_mains_version_in_a_merge_is_flagged(self):
+        shorter = self._reworded()
+        self._main_rewords(shorter)
+        self._feature_touches_other_file()
+        self._merge()
+        _write(os.path.join(self.tmp, "a.md"), shorter[: len(shorter) // 2])
+        _git(self.tmp, "add", "a.md")
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 1, out)
+        self.assertIn("SUMMATION BIAS DETECTED in a.md", out)
+
+    def test_author_shrink_on_top_of_a_clean_merge_is_flagged(self):
+        shorter = self._reworded()
+        self._main_rewords(shorter)
+        _commit_file(self.tmp, "a.md", self.base + "# author appended a line\n", "feature edits a")
+        self._merge()
+        with open(os.path.join(self.tmp, "a.md"), encoding="utf-8") as f:
+            merged = f.read()
+        _write(os.path.join(self.tmp, "a.md"), merged[: len(merged) * 8 // 10])
+        _git(self.tmp, "add", "a.md")
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 1, out)
+
+    def test_conflict_resolution_that_drops_lines_is_flagged(self):
+        head, tail = self.base.splitlines(True)[:50], self.base.splitlines(True)[50:]
+        self._main_rewords("".join(head) + "".join(l.replace("line", "MAIN") for l in tail))
+        _commit_file(self.tmp, "a.md", "".join(head) + "".join(l.replace("line", "FEAT") for l in tail), "feature edits a")
+        self._merge(expect_conflict=True)
+        _write(os.path.join(self.tmp, "a.md"), "".join(head))  # resolved by throwing the contested half away
+        _git(self.tmp, "add", "a.md")
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 1, out)
+        self.assertIn("SUMMATION BIAS DETECTED in a.md", out)
+
+    def test_conflict_resolved_to_mains_version_is_not_flagged(self):
+        shorter = self._reworded()
+        self._main_rewords(shorter)
+        _commit_file(self.tmp, "a.md", self.base.replace("line 000", "LINE 000"), "feature edits a")
+        # Conflicts only if the hunks touch; force that by rewording line 000 on main too.
+        self._merge(expect_conflict=True)
+        _git(self.tmp, "checkout", "--theirs", "a.md")
+        _git(self.tmp, "add", "a.md")
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 0, out)
+
+
 if __name__ == "__main__":
     unittest.main()
