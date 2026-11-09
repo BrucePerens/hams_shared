@@ -65,8 +65,8 @@ def merged_pull_request_heads(repo):
     return heads
 
 
-def worktrees(repo):
-    """[(path, branch or None)] of the linked worktrees (the main working tree is first and is skipped by the caller)."""
+def all_worktrees(repo):
+    """[(path, branch or None)] of every worktree, the main working tree first."""
     entries, current = [], {}
     for line in git(repo, "worktree", "list", "--porcelain").splitlines() + [""]:
         if not line:
@@ -76,7 +76,12 @@ def worktrees(repo):
             continue
         key, _, value = line.partition(" ")
         current[key] = value.removeprefix("refs/heads/") if key == "branch" else value
-    return entries[1:]
+    return entries
+
+
+def worktrees(repo):
+    """[(path, branch or None)] of the linked worktrees (the main working tree is not one)."""
+    return all_worktrees(repo)[1:]
 
 
 def locked_worktrees(repo):
@@ -126,7 +131,9 @@ def worktree_activity(path):
 
 def branch_activity(repo, branch):
     """Seconds since the epoch of the branch's newest reflog entry (its creation or last update), or its tip's commit time."""
-    reflog = git(repo, "log", "-g", "-1", "--format=%ct", branch, check=False)
+    # `%ct` of a `-g` walk is the commit's own time, not the reflog entry's, so a branch created now at an old commit would read as idle.
+    entry = git(repo, "log", "-g", "-1", "--date=unix", "--format=%gd", branch, check=False)
+    reflog = entry[entry.rfind("@{") + 2 : -1] if entry.endswith("}") and "@{" in entry else ""
     return int(reflog) if reflog.isdigit() else int(git(repo, "log", "-1", "--format=%ct", branch, check=False) or 0)
 
 
@@ -220,7 +227,8 @@ def _idle(now, touched, stale_seconds):
 def run(repo, apply, stale_seconds, merged_heads, now=None, only_branch=None, holders_of=holding_processes):
     now = now or time.time()
     report = {"removed": [], "deleted": [], "stale": [], "kept": [], "held": []}
-    checked_out = set()
+    # The main working tree's branch is checked out too: `git branch -D` refuses it, and that error would abort the whole run.
+    checked_out = {all_worktrees(repo)[0][1]}
     locked = locked_worktrees(repo)
     for path, branch in worktrees(repo):
         checked_out.add(branch)
