@@ -610,7 +610,9 @@ def changed_files(repo, base):
         return None
     top = _git_lines(repo, "rev-parse", "--show-toplevel")
     root = os.path.realpath(top[0] if top else repo)
-    diff = _git_lines(repo, "diff", "--name-only", "--no-renames", mb[0]) or []
+    # A moved submodule pointer is a change even where `submodule.<name>.ignore=all` is set (hams_open clones set it); only untracked files inside
+    # a submodule are left out.
+    diff = _git_lines(repo, "diff", "--ignore-submodules=untracked", "--name-only", "--no-renames", mb[0]) or []
     untracked = _git_lines(repo, "ls-files", "--others", "--exclude-standard") or []
     return {os.path.join(root, name) for name in diff + untracked}
 
