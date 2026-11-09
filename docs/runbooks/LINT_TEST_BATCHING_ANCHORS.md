@@ -127,6 +127,11 @@ No effect once the batch is sealed.
 `prune` first), moves the batch to `running` with `member` as runner and returns it; otherwise None. `log` is the batch log
 path stored for status output. The sealed member list is final: later requests form the next batch.
 
+### `batch_queue:resolve_max_running`
+`resolve_max_running(caps) -> int`: the number of batches that may run right now. `caps["max_running"]` is an int or a callable that returns one (the lint queue passes
+`lint_batch:batch_limit`, which grows while the machine has spare processors). The result is at least 1; a callable that raises `TypeError`, `ValueError` or `OSError`
+or returns a non-number counts as 1. Called every poll by `coalesce`, so the limit follows the machine. No side effects of its own. Test: `ConcurrentBatchStateTests` in `tools/test_batch_queue.py`.
+
 ### `batch_queue:finish`
 `finish(state, batch_id)` frees the running slot that holds that batch; the other running batches keep running (the first remaining one is
 promoted to the `running` key). Call after the verdict file is written.
@@ -287,6 +292,14 @@ Class attributes `kind` ("lint"), `runner_env` (marker exported to the run) and 
 command with output teed to the leader's terminal and the batch log, reads the results file and always removes the tree.
 Stamps are written for every `passed` verdict from the step names of the last run. Exit code 75 from the run (lock or load
 gate gave up) is `fatal` for the batch. Concurrency: only the leader runs this, and only after sealing.
+
+### `lint_batch:batch_limit`
+`batch_limit(environ=None, headroom=None, ttl=5.0, now=time.monotonic) -> int | callable | None`: the `max_running` that `run_linters.main` passes to `run_member`. None when
+`HAMS_BATCH_MAX_RUNNING` is set; the plain base slot count (`batches_that_may_run`) when the machine has no burst slots (`lint_lock:burst_slot_count`); otherwise a function that
+returns base plus burst slots while `lint_lock:burst_headroom` holds (the processors are mostly idle, 0.5 s sample, memory free) and the base count when not, measured at most
+once per `ttl` seconds (`headroom` replaces the measurement in tests; `now` is the clock). Effect: when every base slot has a batch and the machine is idle, a new request starts a
+batch of its own at once instead of waiting for the forming batch; under load it joins the forming batch as before, which is the coalescing that saves work. It only
+reads `/proc`; takes no lock. Test: `test_the_batch_limit_grows_by_the_burst_slots_only_while_the_machine_has_headroom` in `tools/test_lint_batch.py`.
 
 ### `lint_batch:batches_that_may_run`
 `batches_that_may_run(environ=None) -> int | None`: how many lint batches of one repository may run at once, the machine's lint slot count

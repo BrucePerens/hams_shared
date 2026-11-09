@@ -19,6 +19,7 @@ Tests [@ANCHOR: batch_queue:join]
 Tests [@ANCHOR: batch_queue:leave]
 Tests [@ANCHOR: batch_queue:seal]
 Tests [@ANCHOR: batch_queue:finish]
+Tests [@ANCHOR: batch_queue:resolve_max_running]
 Tests [@ANCHOR: batch_queue:write_verdicts]
 Tests [@ANCHOR: batch_queue:read_verdicts]
 Tests [@ANCHOR: batch_queue:coalesce]
@@ -295,6 +296,18 @@ class ConcurrentBatchStateTests(StateMachineTests):
         self.assertIsNone(bq.seal(state, third, max_running=2), "both running slots are busy: it waits in the forming batch")
         self.assertIsNotNone(state["forming"])
         self.assertIsNotNone(bq.seal(state, third, max_running=3))
+
+    def test_the_running_limit_may_be_a_function_that_grows_and_shrinks(self):
+        self.assertEqual(bq.resolve_max_running({"max_running": 3}), 3)
+        self.assertEqual(bq.resolve_max_running({"max_running": 0}), 1, "never below one")
+        room = [6]
+        self.assertEqual(bq.resolve_max_running({"max_running": lambda: room[0]}), 6)
+        room[0] = 4
+        self.assertEqual(bq.resolve_max_running({"max_running": lambda: room[0]}), 4)
+        self.assertEqual(bq.resolve_max_running({"max_running": lambda: "x"}), 1, "a bad value is one running batch")
+        state = bq.empty_state()
+        self.sealed(state, 1, bq.resolve_max_running({"max_running": lambda: 2}))
+        self.assertIsNotNone(self.sealed(state, 2, bq.resolve_max_running({"max_running": lambda: 2})))
 
     def test_finish_frees_only_its_own_slot_and_promotes_the_rest(self):
         state = bq.empty_state()

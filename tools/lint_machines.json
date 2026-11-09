@@ -5,6 +5,7 @@
       "local": true,
       "os": "linux",
       "lint_slots": 4,
+      "lint_burst_slots": 8,
       "lint_load_ratio": 1.5,
       "nice": 10,
       "max_load_ratio": 1.0,

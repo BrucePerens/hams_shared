@@ -2556,7 +2556,7 @@ def main():
             pending,
             lint_batch.LintBatch(member_repo, member_name, options.changed, passthrough, write_batch_stamp),
             timeout=options.lock_timeout,
-            max_running=lint_batch.batches_that_may_run(os.environ),
+            max_running=lint_batch.batch_limit(os.environ),
             # Steps run `-j` at a time and many have no record: estimate from the known ones, spread over the jobs.
             estimate=lambda names: sum(batch_durations.get(name, 0.0) for name in names) / max(1, options.jobs),
         )

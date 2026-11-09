@@ -866,7 +866,7 @@ Bruce, 2026-11-08: "we aren't limited by those less powerful machines." The dev 
 including `check_cargo_fmt`, `check_cargo_clippy` and `check_cargo_deny`, with several heavy runs side by side. Its toolchain is the
 repositories' pinned Rust (rustup, user level, `provision_build_host.sh apply-user`: rustfmt, clippy, the `wasm32-unknown-unknown` target).
 `lint_machines.json` gives it `"lint_slots": 4`: four runs at once, one lock file per slot (`lint_lock.py`), each run at `nice` 10 with its own
-TMPDIR (slots above 1: `<TMPDIR>/s<K>`) and its own warm Cargo target directory (`-sK`). A fifth run queues in the same FIFO. The other machines
+TMPDIR (slots above 1: `<TMPDIR>/s<K>`) and its own warm Cargo target directory (`-sK`). A fifth run takes one of the **burst slots** (`lint_burst_slots`: 8) while the processors are mostly idle (`burst_headroom`, one new burst slot per 20 s) and otherwise queues in the same FIFO. The other machines
 keep one slot. `--remote auto` no longer spreads steps to idle machines: another machine takes a **whole** run only as overflow, when every slot
 is taken or a run waits (a high load alone does not send it away: the run waits at the load gate, whose limit is 1.5 per core here), and a run whose overflow machine is claimed or unreachable simply waits for a
 slot here: it always ends with a real result and a stamp.
@@ -883,6 +883,42 @@ Purpose: how many heavy lint runs this machine lets go at once. `RunLock` and `l
 Returns an int from 1 to `runner_slots.MAX_SLOTS` (15): `HAMS_LINT_SLOTS` when set and valid, else `lint_slots` of the machine's entry
 (`lint_cache.machine_name`: the entry whose `hostnames` hold this host's name, else `devbox`), else 1. A value that is not a whole number in range
 gives 1 rather than an error (a typo must not stop the lint). Special concerns: reads one small file, no other side effects. Tests: `SlotTests` in `test_lint_lock.py`.
+
+### `[@ANCHOR: lint_lock:burst_slot_count]` `burst_slot_count(environ=None, machines_file=None)`
+
+Purpose: how many EXTRA lint slots the machine opens while it has spare processors (written 2026-11-08 after a day in which the dev box sat at 5 to 10 % CPU while fifteen agents waited
+for its four slots: a run uses about two cores on average, because its longest step is serial; 75 of 142 measured runs queued for a slot). Returns an int from 0 to `runner_slots.MAX_SLOTS`
+minus `slot_count`: `HAMS_LINT_BURST_SLOTS` when set, else `lint_burst_slots` of the machine's entry in `lint_machines.json` (the dev box: 8), else 0. A value that is not a whole number
+gives 0 (a typo must not add runs); a sum above 15 is cut. A burst slot is taken only when `burst_headroom` holds (`RunLock._try_burst`); the base slots start as before. Reads one small file, no
+side effects. Tests: `BurstSlotTests` in `test_lint_lock.py`.
+
+### `[@ANCHOR: lint_lock:total_slot_count]` `total_slot_count(environ=None, machines_file=None)`
+
+Purpose: base plus burst slots, the most heavy runs that can be live at once: what the FIFO queue (`lock_queue` `slots`), `--lock-status` and `RunLock.slots` count. Returns an int
+(`slot_count + burst_slot_count`). `jobs_per_slot` follows the base count (a burst run has as many parallel steps as a base run); a burst slot K has its own TMPDIR and Cargo directory (`-sK`) like any slot. Tests: `BurstSlotTests`.
+
+### `[@ANCHOR: lint_lock:burst_headroom]` `burst_headroom(busy, psi, mem_gb, busy_limit, psi_limit, min_mem_gb)`
+
+Purpose: the test for opening a burst slot, stricter than the saturation gate (`saturated`): the base slots start whenever the box is not saturated (busy at least 92 % AND stall at least 25 %), a
+burst slot only when it is mostly idle. Arguments: `busy` percent 0 to 100 (`cpu_busy_percent`), `psi` percent (`cpu_stall`), `mem_gb` available GiB (`mem_available_gb`); any of the three may be
+None. Returns `(ok, reason)`: ok when `busy < busy_limit`, `psi < psi_limit` and `mem_gb >= min_mem_gb`; a signal that is None refuses (nothing is added blind). Pure. Tests: `BurstSlotTests`.
+
+### `[@ANCHOR: lint_lock:burst_limits]` `burst_limits(environ=None)`
+
+Purpose: the four numbers a burst slot needs. Returns `(busy percent, pressure percent, minimum available GiB, spacing seconds)` from `HAMS_LINT_BURST_BUSY_PERCENT` (60),
+`HAMS_LINT_BURST_PSI_PERCENT` (10), `HAMS_LINT_BURST_MIN_MEM_GB` (24) and `HAMS_LINT_BURST_SPACING_SECONDS` (20); an unreadable or non-finite value means its default. Pure. Tests: `BurstSlotTests`.
+
+### `[@ANCHOR: lint_lock:mem_available_gb]` `mem_available_gb(path="/proc/meminfo")`
+
+Purpose: the machine's `MemAvailable` in GiB. Returns a float, or None when the file cannot be read or has no such line. Reads one file. Tests: `BurstSlotTests`.
+
+### `[@ANCHOR: lint_lock:try_burst]` `RunLock._try_burst(headroom=None, now=time.time)`
+
+Purpose: one non-blocking attempt to take a burst slot (slots above `slot_count`). Takes an flock of its own, `<cache>/hams-lint/burst.admit`, with LOCK_NB: a waiter that cannot get it returns False
+and tries again at its next poll, so only one waiter at a time looks at the machine. Under that lock it refuses when another burst slot was taken less than `HAMS_LINT_BURST_SPACING_SECONDS` ago (the
+mtime of the file; a run that has just started has not loaded the processors yet, so without the spacing every waiter would see an idle box and start at once), or when `burst_headroom` fails
+(0.5 s of `/proc/stat`, `/proc/pressure/cpu`, `/proc/meminfo`; `headroom`, a function returning bool, replaces the measurement in tests), else takes the lowest free burst slot, stamps the file and
+returns True with the slot in `self.slot` and its lock in `self.fd`. Returns False when no burst slot is free. Blocks for the sample only. Tests: `BurstSlotTests`.
 
 ### `[@ANCHOR: lint_lock:machine_load_ratio]` `machine_load_ratio(environ=None, machines_file=None)`
 

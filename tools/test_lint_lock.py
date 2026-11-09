@@ -22,7 +22,7 @@ HOLDER_SCRIPT = textwrap.dedent(
     import os, sys, time
     sys.path.insert(0, {tools!r})
     import lint_lock
-    lock = lint_lock.RunLock({{"XDG_CACHE_HOME": {cache!r}, "HAMS_LINT_SLOTS": {slots!r}}})
+    lock = lint_lock.RunLock({{"XDG_CACHE_HOME": {cache!r}, "HAMS_LINT_SLOTS": {slots!r}, "HAMS_LINT_BURST_SLOTS": "0"}})
     assert lock.acquire({info!r}), "child could not take the lock"
     print("held", flush=True)
     time.sleep(120)
@@ -33,7 +33,7 @@ HOLDER_SCRIPT = textwrap.dedent(
 class Base(unittest.TestCase):
     def setUp(self):
         self.cache = tempfile.mkdtemp(prefix="lintlock-")
-        self.env = {"XDG_CACHE_HOME": self.cache, "HAMS_LINT_SLOTS": "1"}  # one slot: the dev box's own lint_slots must not leak in
+        self.env = {"XDG_CACHE_HOME": self.cache, "HAMS_LINT_SLOTS": "1", "HAMS_LINT_BURST_SLOTS": "0"}  # one slot: the dev box's own lint_slots must not leak in
         self.children = []
         self.addCleanup(self._cleanup)
 
@@ -209,7 +209,7 @@ class LoadGateTests(unittest.TestCase):
 
 class RunnerIntegrationTests(Base):
     def test_lock_status_and_help_document_the_options(self):
-        env = dict(os.environ, XDG_CACHE_HOME=self.cache, HAMS_LINT_SLOTS="1")
+        env = dict(os.environ, XDG_CACHE_HOME=self.cache, HAMS_LINT_SLOTS="1", HAMS_LINT_BURST_SLOTS="0")
         script = os.path.join(TOOLS, "run_linters.py")
         help_text = subprocess.run([sys.executable, script, "--help"], capture_output=True, text=True, env=env).stdout
         for flag in ("--lock-timeout", "--no-lock", "--lock-status", "--load-limit", "--load-timeout"):
@@ -494,6 +494,97 @@ class SlotTests(Base):
         self.assertEqual(lint_cache.cargo_target_dir("hams_com", {"XDG_CACHE_HOME": self.cache, "HAMS_LINT_SLOT": "1"}), one)
         for lock in (first, second):
             lock.release()
+
+
+class BurstSlotTests(Base):
+    """Tests [@ANCHOR: lint_lock:burst_slot_count] [@ANCHOR: lint_lock:total_slot_count] [@ANCHOR: lint_lock:burst_headroom]
+    [@ANCHOR: lint_lock:burst_limits] [@ANCHOR: lint_lock:mem_available_gb] [@ANCHOR: lint_lock:try_burst]: extra lint slots that open only
+    while the machine has spare processors."""
+
+    def setUp(self):
+        super().setUp()
+        self.env = dict(self.env, HAMS_LINT_SLOTS="2", HAMS_LINT_BURST_SLOTS="2", HAMS_LINT_BURST_SPACING_SECONDS="0")
+        os.makedirs(lint_lock.cache_dir(self.env), exist_ok=True)
+
+    def test_burst_slots_come_from_the_environment_then_the_machine_entry_then_none(self):
+        table = os.path.join(self.cache, "machines.json")
+        with open(table, "w", encoding="utf-8") as handle:
+            json.dump({"machines": {"devbox": {"lint_slots": 4, "lint_burst_slots": 8}, "other": {"lint_slots": 2}}}, handle)
+        self.assertEqual(lint_lock.burst_slot_count({}, table), 8)
+        self.assertEqual(lint_lock.total_slot_count({}, table), 12)
+        self.assertEqual(lint_lock.burst_slot_count({"HAMS_LINT_BURST_SLOTS": "3"}, table), 3)
+        self.assertEqual(lint_lock.burst_slot_count({"HAMS_LINT_BURST_SLOTS": "0"}, table), 0)
+        self.assertEqual(lint_lock.burst_slot_count({"HAMS_LINT_MACHINE": "other"}, table), 0, "no entry: no burst")
+        for bad in ("x", "-1", "2.5", ""):
+            self.assertEqual(lint_lock.burst_slot_count({"HAMS_LINT_BURST_SLOTS": bad}, table), 0, bad)
+        self.assertEqual(lint_lock.burst_slot_count({"HAMS_LINT_BURST_SLOTS": "99"}, table), 11, "base plus burst never passes the 15 slots")
+        self.assertEqual(lint_lock.burst_slot_count({}, os.path.join(self.cache, "missing.json")), 0)
+
+    def test_the_committed_inventory_opens_burst_slots_on_the_dev_box_only(self):
+        self.assertGreater(lint_lock.burst_slot_count({"HAMS_LINT_MACHINE": "devbox"}), 0)
+        for name in ("mac1-vm", "bruce17", "bruce-yoga"):
+            self.assertEqual(lint_lock.burst_slot_count({"HAMS_LINT_MACHINE": name}), 0, name)
+
+    def test_headroom_needs_idle_processors_no_waiting_tasks_and_memory_and_refuses_what_it_cannot_measure(self):
+        limits = (60.0, 10.0, 24.0)
+        self.assertTrue(lint_lock.burst_headroom(20.0, 1.0, 80.0, *limits)[0])
+        for args, word in (((60.0, 1.0, 80.0), "busy"), ((20.0, 10.0, 80.0), "waited"), ((20.0, 1.0, 10.0), "memory"),
+                           ((None, 1.0, 80.0), "measured"), ((20.0, None, 80.0), "measured"), ((20.0, 1.0, None), "measured")):
+            ok, why = lint_lock.burst_headroom(*args, *limits)
+            self.assertFalse(ok, args)
+            self.assertIn(word, why)
+
+    def test_limits_and_memory_reading(self):
+        self.assertEqual(lint_lock.burst_limits({}), (60.0, 10.0, 24.0, 20.0))
+        self.assertEqual(lint_lock.burst_limits({"HAMS_LINT_BURST_BUSY_PERCENT": "30", "HAMS_LINT_BURST_PSI_PERCENT": "x",
+                                                 "HAMS_LINT_BURST_MIN_MEM_GB": "8", "HAMS_LINT_BURST_SPACING_SECONDS": "5"}), (30.0, 10.0, 8.0, 5.0))
+        meminfo = os.path.join(self.cache, "meminfo")
+        with open(meminfo, "w", encoding="utf-8") as handle:
+            handle.write("MemTotal: 1000 kB\nMemAvailable: 2097152 kB\n")
+        self.assertEqual(lint_lock.mem_available_gb(meminfo), 2.0)
+        self.assertIsNone(lint_lock.mem_available_gb(os.path.join(self.cache, "none")))
+
+    def test_a_burst_slot_is_taken_only_with_headroom_and_only_after_the_base_slots(self):
+        lock = lint_lock.RunLock(self.env)
+        self.assertEqual((lock.base, lock.slots), (2, 4))
+        base_holders = [lint_lock.RunLock(self.env) for _ in range(2)]
+        for holder in base_holders:
+            self.assertTrue(holder._try_flock())
+            self.addCleanup(holder.release)
+        self.assertEqual(sorted(h.slot for h in base_holders), [1, 2])
+        self.assertFalse(lock._try_burst(headroom=lambda: False), "no headroom: no burst slot")
+        self.assertIsNone(lock.slot)
+        self.assertTrue(lock._try_burst(headroom=lambda: True))
+        self.assertEqual(lock.slot, 3, "the lowest free burst slot")
+        self.addCleanup(lock.release)
+        other = lint_lock.RunLock(self.env)
+        self.assertTrue(other._try_burst(headroom=lambda: True))
+        self.assertEqual(other.slot, 4)
+        self.addCleanup(other.release)
+        third = lint_lock.RunLock(self.env)
+        self.assertFalse(third._try_burst(headroom=lambda: True), "every slot is taken")
+
+    def test_a_burst_slot_waits_for_the_spacing_after_the_last_one(self):
+        env = dict(self.env, HAMS_LINT_BURST_SPACING_SECONDS="30")
+        os.makedirs(lint_lock.cache_dir(env), exist_ok=True)
+        first = lint_lock.RunLock(env)
+        taken = [lint_lock.RunLock(env) for _ in range(2)]
+        for lock in taken:
+            self.assertTrue(lock._lock_slot(len([t for t in taken if t.slot]) + 1))
+            self.addCleanup(lock.release)
+        self.assertTrue(first._try_burst(headroom=lambda: True))
+        self.addCleanup(first.release)
+        second = lint_lock.RunLock(env)
+        self.assertFalse(second._try_burst(headroom=lambda: True), "20 s spacing not over")
+        later = time.time() + 31
+        self.assertTrue(second._try_burst(headroom=lambda: True, now=lambda: later))
+        self.addCleanup(second.release)
+
+    def test_a_run_with_no_burst_slots_never_looks_at_the_machine(self):
+        lock = lint_lock.RunLock(dict(self.env, HAMS_LINT_BURST_SLOTS="0"))
+        self.assertEqual((lock.base, lock.slots), (2, 2))
+        self.assertTrue(lock._try_flock())
+        self.addCleanup(lock.release)
 
 
 if __name__ == "__main__":  # pragma: no cover

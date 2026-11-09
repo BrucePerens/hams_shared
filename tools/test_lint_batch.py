@@ -12,6 +12,7 @@ that file, like flake8 would) in place of run_linters.py.
 Tests [@ANCHOR: lint_batch:ineligible_reason]
 Tests [@ANCHOR: lint_batch:changed_paths]
 Tests [@ANCHOR: lint_batch:batches_that_may_run]
+Tests [@ANCHOR: lint_batch:batch_limit]
 
 Tests [@ANCHOR: lint_batch:batching_tools_changed]
 Tests [@ANCHOR: lint_batch:path_finder]
@@ -156,6 +157,20 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(lint_batch.batches_that_may_run(dict(base, HAMS_LINT_SLOTS="1")), 1)
             self.assertIsNone(lint_batch.batches_that_may_run(dict(base, HAMS_LINT_SLOTS="3", HAMS_BATCH_MAX_RUNNING="2")))
             self.assertEqual(lint_batch.batches_that_may_run(dict(base, HAMS_LINT_SLOTS="bad")), 1)  # a typo is one slot
+
+    def test_the_batch_limit_grows_by_the_burst_slots_only_while_the_machine_has_headroom(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = {"XDG_CACHE_HOME": tmp, "HAMS_LINT_SLOTS": "3"}
+            self.assertEqual(lint_batch.batch_limit(dict(base, HAMS_LINT_BURST_SLOTS="0")), 3, "no burst slots: the plain number")
+            self.assertIsNone(lint_batch.batch_limit(dict(base, HAMS_LINT_BURST_SLOTS="2", HAMS_BATCH_MAX_RUNNING="2")))
+            spare = [True]
+            clock = [100.0]
+            limit = lint_batch.batch_limit(dict(base, HAMS_LINT_BURST_SLOTS="2"), headroom=lambda: spare[0], ttl=5.0, now=lambda: clock[0])
+            self.assertEqual(limit(), 5, "idle processors: three base slots and two burst slots")
+            spare[0] = False
+            self.assertEqual(limit(), 5, "the measurement is kept for the ttl")
+            clock[0] += 6
+            self.assertEqual(limit(), 3, "busy processors: the base slots only")
 
     def test_a_hams_shared_branch_changing_the_batching_tools_runs_alone(self):
         self.assertEqual(lint_batch.batching_tools_changed(["docs/x.md", "tools/foo.py"]), [])

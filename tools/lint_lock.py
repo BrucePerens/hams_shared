@@ -40,6 +40,10 @@ fails, and each run takes 20-40 minutes instead of 5. So heavy runs queue:
     their slot, and a run in slot K gets its own Cargo target directory (lint_cache.cargo_target_dir adds `-sK`) and its
     own TMPDIR (slots above 1: `<TMPDIR>/s<K>`), so concurrent runs never share a build directory or a scratch file. The load gate still applies to every
     run, and runs under slots go on at `nice` 10 so a saturated box stays usable.
+  * BURST SLOTS (2026-11-08). Four runs left the 32-thread box at 5 to 10 % CPU while fifteen agents queued (a run's longest step is serial, so it uses
+    about two cores; 75 of 142 measured runs waited for a slot). `burst_slot_count` (`lint_burst_slots`, the dev box 8) are extra slots, taken
+    only while the processors are mostly idle (`burst_headroom`: under 60 % busy, under 10 % stall, 24 GiB free) and one every 20 s, so a
+    burst never starts a stampede. The base slots and the load gate are unchanged.
   * OVERRIDES. HAMS_LINT_NO_LOCK=1 (CI, a machine that is used by one run at a time) takes no lock;
     the gate has its own switch above. The holder exports HAMS_LINT_LOCK_HELD so the runs it
     starts itself (tests that call run_linters.py) never queue behind their own parent.
@@ -135,6 +139,85 @@ def slot_count(environ=None, machines_file=None):
         return runner_slots.parse_slot_count(entry.get("lint_slots", 1), "lint_slots")
     except (OSError, ValueError, AttributeError, runner_slots.SlotConfigError):
         return 1
+
+
+BURST_ENV = "HAMS_LINT_BURST_SLOTS"
+DEFAULT_BURST_BUSY_PERCENT = 60.0
+DEFAULT_BURST_PSI_PERCENT = 10.0
+DEFAULT_BURST_MIN_MEM_GB = 24.0
+DEFAULT_BURST_SPACING_SECONDS = 20.0
+
+
+# [@ANCHOR: lint_lock:burst_slot_count]
+def burst_slot_count(environ=None, machines_file=None):
+    """How many EXTRA lint slots this machine opens while it has spare processors: HAMS_LINT_BURST_SLOTS, else `lint_burst_slots` of this
+    machine's entry in lint_machines.json, else 0 (no burst). The base slots (`slot_count`) always start under the load gate; a burst slot starts
+    only when `burst_headroom` says the machine is mostly idle. The sum with `slot_count` is cut to runner_slots.MAX_SLOTS; a bad value is 0 (a
+    typo must not add runs). Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    base = slot_count(environ, machines_file)
+    value = environ.get(BURST_ENV)
+    if value is None:
+        try:
+            import lint_cache
+
+            name = lint_cache.machine_name(environ, machines_file)
+            with open(machines_file or MACHINES_FILE, encoding="utf-8") as handle:
+                value = json.load(handle).get("machines", {}).get(name, {}).get("lint_burst_slots", 0)
+        except (OSError, ValueError, AttributeError):
+            return 0
+    cleaned = str(value).strip()
+    if not re.fullmatch(r"[0-9]+", cleaned):
+        return 0
+    return max(0, min(int(cleaned), runner_slots.MAX_SLOTS - base))
+
+
+# [@ANCHOR: lint_lock:total_slot_count]
+def total_slot_count(environ=None, machines_file=None):
+    """Base slots plus burst slots: the most heavy lint runs that can be live at once. The FIFO queue, the status lines and the batch coalescer
+    count this many; only `RunLock` tells the two kinds apart. Full entry: tools/README.md."""
+    return slot_count(environ, machines_file) + burst_slot_count(environ, machines_file)
+
+
+# [@ANCHOR: lint_lock:burst_limits]
+def burst_limits(environ=None):
+    """(busy percent, pressure percent, minimum available GiB, spacing seconds) a burst slot needs: HAMS_LINT_BURST_BUSY_PERCENT (60),
+    HAMS_LINT_BURST_PSI_PERCENT (10), HAMS_LINT_BURST_MIN_MEM_GB (24), HAMS_LINT_BURST_SPACING_SECONDS (20)."""
+    environ = os.environ if environ is None else environ
+    return (_finite(environ.get("HAMS_LINT_BURST_BUSY_PERCENT"), DEFAULT_BURST_BUSY_PERCENT),
+            _finite(environ.get("HAMS_LINT_BURST_PSI_PERCENT"), DEFAULT_BURST_PSI_PERCENT),
+            _finite(environ.get("HAMS_LINT_BURST_MIN_MEM_GB"), DEFAULT_BURST_MIN_MEM_GB),
+            _finite(environ.get("HAMS_LINT_BURST_SPACING_SECONDS"), DEFAULT_BURST_SPACING_SECONDS))
+
+
+# [@ANCHOR: lint_lock:mem_available_gb]
+def mem_available_gb(path="/proc/meminfo"):
+    """MemAvailable of the machine in GiB, None when it cannot be read."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / (1024.0 * 1024.0)
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+# [@ANCHOR: lint_lock:burst_headroom]
+def burst_headroom(busy, psi, mem_gb, busy_limit, psi_limit, min_mem_gb):
+    """(ok, reason): True when one more heavy run would find spare processors and memory: the processors are busy less than `busy_limit` percent AND
+    tasks waited for them less than `psi_limit` percent of the last 10 s AND at least `min_mem_gb` GiB are available. This is stricter than the
+    saturation gate on purpose: the base slots start whenever the box is not saturated, a burst slot only when it is mostly idle. A signal that
+    cannot be measured (None) refuses: nothing is added blind. Pure. Full entry: tools/README.md."""
+    if busy is None or psi is None or mem_gb is None:
+        return False, "the processor or memory load cannot be measured"
+    if busy >= busy_limit:
+        return False, "the processors are %.0f%% busy (burst limit %.0f%%)" % (busy, busy_limit)
+    if psi >= psi_limit:
+        return False, "tasks waited for a processor %.0f%% of the last 10 s (burst limit %.0f%%)" % (psi, psi_limit)
+    if mem_gb < min_mem_gb:
+        return False, "%.0f GiB of memory available (burst needs %.0f)" % (mem_gb, min_mem_gb)
+    return True, "the processors are %.0f%% busy, %.0f GiB free" % (busy, mem_gb)
 
 
 # [@ANCHOR: lint_lock:slot_lock_path]
@@ -251,23 +334,61 @@ class RunLock:
         self.environ = os.environ if environ is None else environ
         self.path = lock_path(self.environ)
         self.qdir = queue_dir(self.environ)
-        self.slots = slot_count(self.environ) if slots is None else slots
+        self.slots = total_slot_count(self.environ) if slots is None else slots
+        # Slots 1..base always start; base+1..slots are burst slots (see `_try_burst`). A caller that names `slots` has no burst.
+        self.base = slot_count(self.environ) if slots is None else slots
         self.fd = None
         self.slot = None
         self.ticket = None
 
+    def _lock_slot(self, slot):
+        """One non-blocking flock of `slot`; keeps it open in self.fd and returns True when it was free."""
+        fd = os.open(slot_lock_path(slot, self.environ), os.O_CREAT | os.O_RDWR, 0o666)  # not inheritable: steps never hold it
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        self.fd, self.slot = fd, slot
+        return True
+
     def _try_flock(self):
-        """One non-blocking pass over the slot files, lowest first; keeps the first one it locks open in self.fd."""
-        for slot in range(1, self.slots + 1):
-            fd = os.open(slot_lock_path(slot, self.environ), os.O_CREAT | os.O_RDWR, 0o666)  # not inheritable: steps never hold it
+        """One non-blocking pass over the slot files, lowest first; keeps the first one it locks open in self.fd. The base slots come first
+        and need nothing; a burst slot is taken only with headroom (`_try_burst`)."""
+        for slot in range(1, self.base + 1):
+            if self._lock_slot(slot):
+                return True
+        return self.slots > self.base and self._try_burst()
+
+    def _try_burst(self, headroom=None, now=time.time):
+        """[@ANCHOR: lint_lock:try_burst] Take a free burst slot when the machine is mostly idle and no other run took one in the last HAMS_LINT_BURST_SPACING_SECONDS: a run that just
+        started has not yet loaded the processors, so without the spacing a queue of waiters would all see an idle box and start together. The check and
+        the stamp happen under an flock of their own (`burst.admit`); a waiter that cannot get it simply tries again at its next poll."""
+        busy_limit, psi_limit, min_mem, spacing = burst_limits(self.environ)
+        stamp = os.path.join(cache_dir(self.environ), "burst.admit")
+        fd = os.open(stamp, os.O_CREAT | os.O_RDWR, 0o666)
+        try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
-                os.close(fd)
-                continue
-            self.fd, self.slot = fd, slot
-            return True
-        return False
+                return False
+            info = os.fstat(fd)
+            if info.st_size and now() - info.st_mtime < spacing:  # an empty file is one nobody has stamped yet
+                return False
+            if headroom is None:
+                ok, _why = burst_headroom(cpu_busy_percent(0.5), cpu_stall(), mem_available_gb(), busy_limit, psi_limit, min_mem)
+            else:
+                ok = headroom()
+            if not ok:
+                return False
+            for slot in range(self.base + 1, self.slots + 1):
+                if self._lock_slot(slot):
+                    os.pwrite(fd, b"1", 0)
+                    os.utime(fd)
+                    return True
+            return False
+        finally:
+            os.close(fd)
 
     def acquire(self, info, timeout=None, out=print, report_every=30.0, poll=1.5, sleep=time.sleep, now=time.time):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -355,6 +476,7 @@ def local_busy(environ=None, loadavg=None, cpu_count=None, qdir=None, slots=None
     machine). Takes no lock; reads the queue only."""
     environ = os.environ if environ is None else environ
     qdir = qdir or queue_dir(environ)
+    burst = burst_slot_count(environ) if slots is None else 0
     slots = slot_count(environ) if slots is None else slots
     tickets = lock_queue.live_tickets(qdir, clean=False)
     holders = lock_queue.read_holders(qdir)
@@ -366,6 +488,10 @@ def local_busy(environ=None, loadavg=None, cpu_count=None, qdir=None, slots=None
         running_pids = {h.get("pid") for h in holders}  # a holder written by an older checkout names no ticket
         waiting = [t for t in tickets if t["name"] not in running and t["pid"] not in running_pids]
         if len(holders) >= slots:
+            if burst and len(holders) < slots + burst and not waiting:
+                ok, _why = burst_headroom(cpu_busy_percent(0.5), cpu_stall(), mem_available_gb(), *burst_limits(environ)[:3])
+                if ok:
+                    return False, "the base slots are busy but the processors are mostly idle: a burst slot opens (%d of %d running)" % (len(holders), slots + burst)
             return True, "all %d lint slots are busy here (%d waiting)" % (slots, len(waiting))
         if waiting:
             return True, "%d lint run(s) wait for a slot here (%d of %d slots running)" % (len(waiting), len(holders), slots)
@@ -458,7 +584,7 @@ def claimed(machines, environ=None):
 def status_lines(environ=None):
     """For `--lock-status`: the holder and the queue."""
     qdir = queue_dir(environ)
-    return lock_queue.describe_queue(qdir, slots=slot_count(environ))
+    return lock_queue.describe_queue(qdir, slots=total_slot_count(environ))
 
 
 def load_limit(environ=None, cpu_count=None, override=None):
