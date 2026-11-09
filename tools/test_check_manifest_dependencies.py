@@ -178,12 +178,10 @@ class CheckManifestDependenciesTests(unittest.TestCase):
         self.assertIn("'@mod_c'", out)
 
     def test_a_concurrent_sessions_claude_worktree_is_never_scanned(self):
-        """Real, live bug found reviewing this checker: neither of its two os.walk loops (the
-        manifest-mapping pass, the JS-import-scanning pass) excludes dot-directories or
-        ".claude" specifically. This project's own standing convention runs concurrent bug-hunt
-        dispatches in isolated git worktrees under ".claude/worktrees/<session>/" INSIDE the repo
-        root -- confirmed live: two other real, concurrently active sessions' own worktrees were
-        found sitting in the real repo root while this exact review was running. A concurrent
+        """Neither of this checker's two os.walk loops (the manifest-mapping pass, the
+        JS-import-scanning pass) may descend into dot-directories such as ".claude". Agent
+        sessions run in isolated git worktrees under ".claude/worktrees/<session>/" INSIDE the
+        repo root, so other concurrently active sessions' worktrees sit in the real repo root. A concurrent
         session's own in-progress, uncommitted manifest/JS changes (completely normal for work in
         progress -- an undeclared dependency mid-refactor, say) would be reported as a MANIFEST
         DEPENDENCY VIOLATION against the wrong repo entirely."""
@@ -299,7 +297,7 @@ class CheckManifestDependenciesTests(unittest.TestCase):
         # imported_bundles and not any(...)" guard never fires. A
         # completely unregistered import -- arguably the most likely real
         # test-runner crash case -- currently passes silently. Flagged as
-        # a tangential finding in night_shift_todo.md rather than changed
+        # a separate follow-up rather than changed
         # here, since narrowing a shared pre-commit gate's behavior is a
         # deliberate call, not a mechanical test-coverage add.
         self._manifest(

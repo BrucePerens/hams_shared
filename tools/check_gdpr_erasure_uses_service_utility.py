@@ -52,6 +52,7 @@ import ast
 import os
 import lint_exec
 import sys
+from tree_files import tree_walk
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "tools", "radae"}
 IGNORE_MARKER = "audit-ignore-gdpr-hand-rolled-unlink"
@@ -143,8 +144,7 @@ def _check_file(path, repo_root):
 
 def check_gdpr_erasure_uses_service_utility(repo_root):
     violations = []
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+    for root, _dirs, files in tree_walk(repo_root, ".py", SKIP_DIRS, skip_hidden=True, untracked=True):
         for filename in files:
             if not filename.endswith(".py"):
                 continue

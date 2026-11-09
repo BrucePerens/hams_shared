@@ -36,6 +36,8 @@ import os
 import re
 import sys
 
+from tree_files import tree_files
+
 IGNORE_DIR_NAMES = {
     "__pycache__",
     "node_modules",
@@ -74,17 +76,10 @@ def find_candidate_files(repo_root):
     """Rust files anywhere (a fake network type usually lives in a `#[cfg(test)]` module
     inside the same file as the code it tests, not a separate tests/ directory) and Python
     files that look like tests by path or name."""
-    found = []
-    for root, dirs, filenames in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES and not d.startswith(".")]
-        for fname in filenames:
-            full = os.path.join(root, fname)
-            rel = os.path.relpath(full, repo_root)
-            if fname.endswith(".rs"):
-                found.append(full)
-            elif fname.endswith(".py") and _TEST_PATH_RE.search(rel.replace(os.sep, "/")):
-                found.append(full)
-    return sorted(found)
+    return tree_files(
+        repo_root, (".rs", ".py"), IGNORE_DIR_NAMES, skip_hidden=True,
+        accept=lambda rel: rel.endswith(".rs") or bool(_TEST_PATH_RE.search(rel)),
+    )
 
 
 def _usb_traits(content):

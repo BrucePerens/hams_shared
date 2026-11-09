@@ -90,10 +90,12 @@ def normalize_message(text):
     return text.strip()
 
 
+# [@ANCHOR: lint_baseline:signature_of]
 def _signature(text):
     return hashlib.sha1(normalize_message(text).encode("utf-8", "replace")).hexdigest()[:12]
 
 
+# [@ANCHOR: lint_baseline:step_base]
 def _base(step_name):
     """Step name without its shard or option suffix: `pytest tools/[2of4]` -> `pytest tools/`."""
     return step_name.split("[")[0].strip()
@@ -133,6 +135,7 @@ def _age_text(days):
     return "%.1f days" % days if days >= 1 else "%.0f hours" % (days * 24)
 
 
+# [@ANCHOR: lint_baseline:item_record]
 def _item(step, test, message):
     return {"step": step, "test": test, "signature": _signature(message),
             "message": normalize_message(message)[:MAX_MESSAGE]}
@@ -181,10 +184,17 @@ def failure_items(step_name, output):
 
 # [@ANCHOR: lint_baseline:items_from_failures]
 def items_from_failures(failed):
-    """Merge `failure_items` of every failed step. `failed` is {step name: output}. Returns {item_id: item}."""
-    items = {}
+    """Merge `failure_items` of every failed step. `failed` is {step name: output}. Returns {item_id: item}. When shards of one
+    step give the same item id with different failures, the item's signature covers all of them (whatever the order of `failed`)."""
+    items, signatures = {}, {}
     for name, output in failed.items():
-        items.update(failure_items(name, output))
+        for item_id, item in failure_items(name, output).items():
+            items[item_id] = item
+            signatures.setdefault(item_id, set()).add(item["signature"])
+    for item_id, seen in signatures.items():
+        if len(seen) > 1:
+            # Shards of one step share an item id: a shard that fails differently must not hide behind another's record.
+            items[item_id] = dict(items[item_id], signature=hashlib.sha1("\n".join(sorted(seen)).encode()).hexdigest()[:12])
     return items
 
 
@@ -256,6 +266,7 @@ def renew(key, item_id, reason, owner=None, environ=None, now=time.time):
     return item
 
 
+# [@ANCHOR: lint_baseline:commit_in_history]
 def _contains(repo, commit, head):
     """True when `head` has `commit` in its history (or is it)."""
     if not commit:

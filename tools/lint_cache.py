@@ -174,6 +174,7 @@ def toolchain_id(environ=None):
     return f"{release}-{hashlib.sha256(res.stdout.encode()).hexdigest()[:8]}"
 
 
+# [@ANCHOR: lint_cache:lint_slot]
 def lint_slot(environ=None):
     """The lint run slot (lint_lock.RunLock) this process runs in, 1 when it holds none."""
     environ = os.environ if environ is None else environ
@@ -429,10 +430,12 @@ def drop_unused_dirs(base, keep, days=UNUSED_DAYS, now=None):
             with locked(full, exclusive=True, wait=False) as held:
                 if held:
                     shutil.rmtree(full, ignore_errors=True)
+                    shutil.rmtree(os.path.join(cache_root(), "hams-lint", "work", name), ignore_errors=True)  # its work checkouts (work_checkout)
                     gone.append(name)
     return gone
 
 
+# [@ANCHOR: lint_cache:prepare_cargo_target]
 def prepare_cargo_target(target_dir, environ=None, log=None, budget=None):
     """Enforce the budget on `target_dir` before a build. Call while holding `locked(target_dir)`. Returns the log
     lines (also passed to `log`). Never raises for lack of space."""
@@ -512,6 +515,7 @@ def adopt_legacy_dir(target, environ=None):
     return legacy
 
 
+# [@ANCHOR: lint_cache:cargo_session]
 @contextlib.contextmanager
 def cargo_session(environ=None, log=None):
     """Context for a checker that builds: yields the target directory to use (CARGO_TARGET_DIR) with the budget
@@ -573,6 +577,127 @@ def named_cargo_session(name, environ=None, log=None):
     with locked(target, exclusive=True):
         prepare_cargo_target(target, environ, log)
         yield target
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Fixed work checkouts: the path cargo sees stays the same from one lint run to the next
+
+# Directories a work checkout never holds: build output, caches and virtual environments (never sources), the checkout's own `.git`.
+WORK_SKIP = frozenset({".git", "target", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".venv", "venv", ".claude"})
+
+
+def _same_bytes(a, b):
+    """True when files `a` and `b` have the same content (size first, then the bytes)."""
+    if os.path.getsize(a) != os.path.getsize(b):
+        return False
+    with open(a, "rb") as left, open(b, "rb") as right:
+        while True:
+            block = left.read(1 << 20)
+            if block != right.read(1 << 20):
+                return False
+            if not block:
+                return True
+
+
+def _under(path, directory):
+    return path == directory or path.startswith(directory.rstrip(os.sep) + os.sep)
+
+
+# [@ANCHOR: lint_cache:sync_tree]
+def sync_tree(source, destination, skip=WORK_SKIP, submodules=()):
+    """Make `destination` hold exactly the files of `source`, rewriting only files whose bytes differ. An unchanged file keeps its
+    modification time: cargo's fingerprint of a path package is its files' mtimes, so a copy made afresh every run is rebuilt in full.
+    Directories named in `skip` are left out, and so is a directory that holds another checkout (its own `.git`) unless its path
+    relative to `source` is in `submodules`. A symlink is copied as a link; a relative link that leaves `source` is made absolute so it
+    still resolves. Special files are skipped and a file that vanishes while the tree is read is left out. Full entry: tools/README.md."""
+    source = os.path.realpath(source)
+    os.makedirs(destination, exist_ok=True)
+    wanted_files, wanted_dirs = set(), {destination}
+    for directory, dirs, names in os.walk(source):
+        relative = os.path.relpath(directory, source)
+        target_dir = destination if relative == "." else os.path.join(destination, relative)
+        kept = []
+        for name in dirs:
+            path = os.path.join(directory, name)
+            if os.path.islink(path):
+                names.append(name)
+            elif name in skip:
+                continue
+            elif os.path.lexists(os.path.join(path, ".git")) and os.path.relpath(path, source) not in submodules:
+                continue
+            else:
+                kept.append(name)
+        dirs[:] = kept
+        if os.path.lexists(target_dir) and (os.path.islink(target_dir) or not os.path.isdir(target_dir)):
+            os.remove(target_dir)  # it was a file or a link and is a directory now
+        os.makedirs(target_dir, exist_ok=True)
+        wanted_dirs.add(target_dir)
+        wanted_dirs.update(os.path.join(target_dir, name) for name in kept)
+        for name in names:
+            src, dst = os.path.join(directory, name), os.path.join(target_dir, name)
+            try:
+                if os.path.islink(src):
+                    link = os.readlink(src)
+                    if not os.path.isabs(link):
+                        resolved = os.path.realpath(os.path.join(directory, link))
+                        if not _under(resolved, source):
+                            link = resolved
+                    wanted_files.add(dst)
+                    if not (os.path.islink(dst) and os.readlink(dst) == link):
+                        if os.path.lexists(dst):
+                            shutil.rmtree(dst) if os.path.isdir(dst) and not os.path.islink(dst) else os.remove(dst)
+                        os.symlink(link, dst)
+                    continue
+                if not os.path.isfile(src):
+                    continue
+                wanted_files.add(dst)
+                if not (os.path.isfile(dst) and not os.path.islink(dst) and _same_bytes(src, dst)):
+                    if os.path.lexists(dst):
+                        shutil.rmtree(dst) if os.path.isdir(dst) and not os.path.islink(dst) else os.remove(dst)
+                    shutil.copyfile(src, dst)
+                if os.stat(src).st_mode & 0o777 != os.stat(dst).st_mode & 0o777:
+                    shutil.copymode(src, dst)
+            except FileNotFoundError:
+                wanted_files.discard(dst)
+    for directory, dirs, names in os.walk(destination, topdown=False):
+        for name in names + [d for d in dirs if os.path.islink(os.path.join(directory, d))]:
+            path = os.path.join(directory, name)
+            if path not in wanted_files:
+                os.remove(path)
+        if directory not in wanted_dirs:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
+# [@ANCHOR: lint_cache:work_checkout]
+def work_checkout(repo_root, name, target, environ=None, log=None):
+    """A copy of the checkout `repo_root` at a FIXED path, `<cache>/hams-lint/work/<target directory name>/<name>`, or None when the
+    build should run in `repo_root` itself. Cargo hashes absolute paths into the fingerprints and build-script outputs of the
+    workspace crates, so a build run in a different worktree each time (every lint run is one) recompiles the relay and its path
+    crates in a warm target (measured 2026-11-09: 163-183 s of 183 s, against 0.6 s when the path is the same and nothing changed).
+    The copy is synced with `sync_tree` (unchanged files keep their mtime), so a build from it is fresh exactly when a build in the
+    checkout would be, and the files cargo and the tests read are the checkout's, byte for byte.
+
+    Call it while holding the target's lock (`named_cargo_session`, `cargo_session`): the lock keeps two runs out of the directory.
+    None when `target` is not a managed Cargo directory (an explicit `CARGO_TARGET_DIR`), under `HAMS_LINT_NO_CACHE=1`, or when
+    the copy fails (full disk): the caller then builds in place as before. `name` tells repositories apart (hams_com, hams_open).
+    Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    if not target or environ.get("HAMS_LINT_NO_CACHE") == "1":
+        return None
+    target = os.path.abspath(target)
+    if not (in_ram(target, environ) or any(_under(target, os.path.abspath(base)) for base in cargo_bases(environ))):
+        return None
+    work = os.path.join(cache_root(environ), "hams-lint", "work", os.path.basename(target), name)
+    try:
+        import tree_files
+
+        submodules = {path for path in tree_files._submodule_paths(repo_root)}
+        sync_tree(repo_root, work, submodules=submodules)
+    except (OSError, ImportError) as error:
+        if log:
+            log(f"lint cache: work checkout {work} not made ({error}); building in {repo_root}")
+        return None
+    return work
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -715,6 +840,7 @@ def _prune_results_dirs(base, keep, days=UNUSED_DAYS):
 # CLI
 
 
+# [@ANCHOR: lint_cache:show_cache_lines]
 def show_lines(environ=None):
     environ = os.environ if environ is None else environ
     b = budgets(environ)
@@ -740,6 +866,7 @@ def show_lines(environ=None):
     return lines
 
 
+# [@ANCHOR: lint_cache:cache_main]
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     command = argv[0] if argv else "show"
@@ -762,6 +889,8 @@ def main(argv=None):
             targets += [*cargo_bases(), *legacy_cargo_dirs()]
         if which in ("results", "all"):
             targets.append(results_base())
+        if which in ("cargo", "all"):
+            targets.append(os.path.join(cache_root(), "hams-lint", "work"))  # the fixed work checkouts of the Cargo builds (work_checkout)
         for path in targets:
             if not os.path.isdir(path):
                 continue

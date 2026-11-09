@@ -4,7 +4,7 @@
 """
 Real, standalone Owl QWeb template compile-checker.
 
-Built 2026-09-07 after a real, live-instrumented investigation (OFFLINE_HAM_OPERATION.md,
+Built after a real, live-instrumented investigation (OFFLINE_HAM_OPERATION.md,
 ANCHOR_COVERAGE_AND_REMEDIATION_PLAN.md) finally found `ham_shack.WebShackTemplate` had a genuine
 compile error -- `ham_shack.web_shack` never mounted for weeks/several prior debugging sessions
 specifically because Odoo's own runtime error reporting for this failure mode is real but
@@ -13,7 +13,7 @@ of KB), which (a) gets silently truncated by Chrome DevTools Protocol's own cons
 limit before it ever reaches a test log, and (b) V8's own `SyntaxError` from a dynamically
 `new Function()`-compiled string carries no line/column information at all ("Invalid or unexpected
 token", full stop) -- there is no way to find the actual broken template from that error alone.
-Per Bruce's own direct instruction, this is an always-on linter, not a one-off debugging script:
+This is an always-on linter, not a one-off debugging script:
 wired into `run_linters.py` as a required gate, so a template that fails to compile is caught at
 commit time, in a clear, non-truncated, per-template report -- not discovered by a component
 silently never mounting in production.
@@ -26,13 +26,13 @@ because of an incomplete hand-written DOM shim is worse than no linter at all he
 is the same real runtime every actual user's browser uses, so a genuine compile failure/success here
 is the real answer, not an approximation.
 
-**How it works**: launches a real headless Chrome via CDP (same technique this session's own live
-investigation already used), loads the real `owl.js` bundle by evaluating its source directly (no
+**How it works**: launches a real headless Chrome via CDP (the same technique as the original live
+investigation), loads the real `owl.js` bundle by evaluating its source directly (no
 script tag, no CORS/file:// friction), then for each `static/src/xml/*.xml` file in a module,
 extracts every `[t-name]` element's raw outerHTML via a real `DOMParser`, registers it with a fresh
 `owl.App` instance via `addTemplates()`, and calls `getTemplate(name)` for each -- the *exact* same
 call `ComponentNode`'s own constructor makes at real mount time (confirmed by reading
-`interaction_service.js`/`colibri.js`/Owl's own `owl.js` source directly this session, not assumed).
+`interaction_service.js`/`colibri.js`/Owl's own `owl.js` source directly, not assumed).
 The full, untruncated error (if any) comes back as the direct return value of one `Runtime.evaluate`
 call with `returnByValue=True` -- never printed through `console.*`, so none of the truncation/
 ordering problems that made the live investigation so hard apply here.
@@ -51,6 +51,7 @@ from shutil import which
 
 import requests
 import websockets
+from tree_files import tree_walk
 
 _OWL_JS_PATH = (
     "/usr/lib/python3/dist-packages/odoo/addons/web/static/lib/owl/owl.js"
@@ -69,21 +70,15 @@ def find_owl_template_files(target_dir):
     absolute-path argument it sees -- every os.sep argument here IS absolute -- so the real value
     was just "/xml", making the substring check match almost any path and short-circuit past the
     real, precise component check below it)."""
-    for root, dirs, files in os.walk(target_dir):
-        # Dot-directories -- critically ".claude/worktrees/<session>/", this project's own
-        # standing convention for running concurrent bug-hunt dispatches in isolated git
-        # worktrees INSIDE the repo root -- are never real template locations. Without this, a
-        # concurrently running session's own worktree gets scanned as if it were part of the real
-        # repo: confirmed live while reviewing this exact file -- 40 of 60 real-repo template
-        # files found were duplicates from two other concurrently active sessions' own worktrees,
-        # meaning this checker was spending roughly two-thirds of its real headless-Chrome
-        # compile work re-checking other sessions' own copies of the same templates.
-        dirs[:] = [
-            d
-            for d in dirs
-            if d not in ("node_modules", "__pycache__", ".git", "target")
-            and not d.startswith(".")
-        ]
+    for root, _dirs, files in tree_walk(
+        target_dir, ".xml", ("node_modules", "__pycache__", ".git", "target"), skip_hidden=True, untracked=True
+    ):
+        # Dot-directories -- critically ".claude/worktrees/<session>/", where agent sessions run
+        # in isolated git worktrees nested inside the repo root -- are never real template
+        # locations. Without this, a concurrently running session's own worktree gets scanned as
+        # if it were part of the real repo: other sessions' worktrees accounted for 40 of 60
+        # template files found in one measured run, so this checker spent roughly two-thirds of
+        # its headless-Chrome compile work re-checking copies of the same templates.
         parts = root.replace("\\", "/").split("/")
         if parts[-3:] != ["static", "src", "xml"]:
             continue

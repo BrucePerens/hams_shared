@@ -35,6 +35,7 @@ import os
 import lint_exec
 import re
 import sys
+from tree_files import tree_walk
 
 ANCHOR_VERIFIED_RE = re.compile(r"#\s*Verified by \[@ANCHOR:\s*([A-Za-z0-9_:]+)\]")
 ANCHOR_TESTS_RE = re.compile(r"#\s*Tests \[@ANCHOR:\s*([A-Za-z0-9_:]+)\]")
@@ -42,10 +43,10 @@ ANCHOR_TESTS_RE = re.compile(r"#\s*Tests \[@ANCHOR:\s*([A-Za-z0-9_:]+)\]")
 
 def _resolve_repo_root(given_path):
     """run_linters.py's own `dir_path` resolves to the hams_shared directory itself, not a real
-    repo root (same bug found and fixed in check_model_extension_collisions.py and others) --
-    confirmed directly: this checker was silently finding 0 SELF_WRITEABLE_FIELDS overrides via
+    repo root (as in check_model_extension_collisions.py and other checkers) --
+    without the redirect this checker silently finds 0 SELF_WRITEABLE_FIELDS overrides via
     run_linters.py's actual invocation, versus 8 at a real repo root, one of which (ham_callbook's)
-    was a genuine, previously-undetected MASTER_10 write-proof gap. Detect the hams_shared case by
+    is a genuine MASTER_10 write-proof gap. Detect the hams_shared case by
     name and redirect to its real parent repo."""
     given_path = os.path.abspath(given_path)
     if os.path.basename(given_path) == "hams_shared":
@@ -82,15 +83,8 @@ def _find_self_writeable_overrides(repo_roots):
     """Yields (py_path, anchor_or_None, def_lineno) for every
     `def SELF_WRITEABLE_FIELDS` found outside a tests/ directory."""
     for repo_root in repo_roots:
-        for root, dirs, files in os.walk(repo_root):
-            if "radae" in dirs:
-                dirs.remove("radae")
-            dirs[:] = [
-                d
-                for d in dirs
-                if d not in ("node_modules", "__pycache__", ".git", "tools", "daemons")
-                and not d.startswith(".")
-            ]
+        skip = ("radae", "node_modules", "__pycache__", ".git", "tools", "daemons")
+        for root, _dirs, files in tree_walk(repo_root, ".py", skip, skip_hidden=True, untracked=True):
             if os.sep + "tests" + os.sep in root + os.sep or root.endswith("tests"):
                 continue
             for f in files:
@@ -129,7 +123,7 @@ def _find_tests_anchor(module_dir, anchor):
     tests_dir = os.path.join(module_dir, "tests")
     if not os.path.isdir(tests_dir):
         return None, None, None
-    for root, dirs, files in os.walk(tests_dir):
+    for root, _dirs, files in tree_walk(tests_dir, ".py", untracked=True):
         for f in files:
             if not f.endswith(".py"):
                 continue
@@ -218,7 +212,7 @@ def _verify_write_proof_shape(func_node):
                 lineno = getattr(node, "lineno", 0)
                 write_lines.append(lineno)
                 receiver = getattr(node.func, "value", None)
-                # bug-hunt (2026-09-13): a test can call BOTH .with_user(...)
+                # A test can call BOTH .with_user(...)
                 # and .write(...) without the write ever actually running
                 # through the switched recordset -- e.g. a throwaway
                 # `other.with_user(other)` statement alongside a plain
@@ -268,7 +262,7 @@ def _verify_write_proof_shape(func_node):
 
 def _resolve_repo_roots(given_path):
     """This checker's own dual-repo scan -- the template the other 8 checkers hit by the same
-    dir_path/sibling-repo bug (found 2026-08-27) now mirror exactly. Extracted here, unchanged in
+    dir_path/sibling-repo bug now mirror exactly. Extracted here, unchanged in
     behavior, so it's independently testable the same way theirs are rather than only reachable
     through main()'s own argv-driven flow."""
     repo_root = _resolve_repo_root(given_path)

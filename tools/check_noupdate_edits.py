@@ -10,9 +10,8 @@ first install. The decision is made from the XML file's own structure at parse t
 the `ir_model_data.noupdate` column. So an edit to such a record reaches a fresh database and
 silently never reaches an existing one: no error, no warning, the page or rule just stays as it
 was. Found by hand three times (ham_init contact templates, `hams_minimal_footer`, and
-`compliance.protects_hams_template`), plus seven more in a sweep; see
-night_shift_history.md and the retired to-do `audit-other-noupdate-block-templates-for-same-
-latent-risk-f291b8d3`.
+`compliance.protects_hams_template`), plus seven more in a sweep; a sweep of the other
+noupdate-block templates for the same latent risk.
 
 This tool compares the XML data files changed between a base ref and HEAD. For every record,
 template or menuitem that was inside a noupdate block at the base ref and exists at HEAD with

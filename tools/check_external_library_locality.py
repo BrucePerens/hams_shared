@@ -13,7 +13,7 @@ independently-drifted copies of transformers.js (2.16.0 in ham_events,
 2.16.1 in external) -- silently different versions of the same NLP
 pipeline, discovered only by accident while root-causing an unrelated
 minifier bug (hams_com commit f1f00511). It also multiplies exposure to
-that same bug class: every vendored copy is a separate place rjsmin can
+that same bug: every vendored copy is a separate place rjsmin can
 corrupt on a nested template literal.
 
 This flags any .js or .css file sitting in <module>/static/**/lib/ or
@@ -29,6 +29,7 @@ not flagged; they're not "a library".
 import os
 import lint_exec
 import sys
+from tree_files import tree_walk
 
 # Files already vendored outside "external" that are NOT yet migrated,
 # each because moving them safely needs something this linter can't
@@ -83,11 +84,7 @@ def _resolve_repo_roots(given_path):
 
 def find_violations(repo_root):
     violations = []
-    for root, dirs, files in os.walk(repo_root):
-        if "radae" in dirs:
-            dirs.remove("radae")
-        dirs[:] = [d for d in dirs if d not in ("__pycache__",) and not d.startswith(".")]
-
+    for root, _dirs, files in tree_walk(repo_root, (".js", ".css"), ("radae", "__pycache__"), skip_hidden=True, untracked=True):
         rel_root = os.path.relpath(root, repo_root)
         parts = rel_root.split(os.sep)
         if not parts or parts[0] in (".", "external"):
