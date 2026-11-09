@@ -226,6 +226,8 @@ STEP_META = {
     "check_js_syntax": {"suffixes": _JS},
     # The signal guard hook must be registered in the repository's own .claude/settings.json (2026-11-09 incident).
     "check_claude_hook_registration": {"suffixes": frozenset({".json", ".py"})},
+    # Backup encryption, stanza creation, key generation and secret-file overwrites need Bruce's recorded approval (2026-11-09).
+    "check_backup_encryption_changes": {"suffixes": frozenset({".py", ".sh", ".service", ".timer", ".conf", ".md"})},
     "check_test_tags": {"suffixes": _PY},
     "check_rabbitmq_pool": {"suffixes": _PY},
     "check_init_imports": {"suffixes": _PY},
@@ -1643,6 +1645,13 @@ def main():
     _add(
         "check_claude_hook_registration",
         [python_exec, os.path.join(dir_path, "tools", "check_claude_hook_registration.py"), dir_path],
+    )
+
+    # 17c. check_backup_encryption_changes -- the change against origin/main adds no cipher setting, stanza creation, backup key generation
+    # or secret-file overwrite without an approval entry naming Bruce (docs/APPROVED_BACKUP_ENCRYPTION_CHANGES.md).
+    _add(
+        "check_backup_encryption_changes",
+        [python_exec, os.path.join(dir_path, "tools", "check_backup_encryption_changes.py"), dir_path],
     )
 
     # 18. check_init_imports -- one call per target, not batched (sys.argv[1]-only, see

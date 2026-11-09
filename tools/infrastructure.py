@@ -11066,6 +11066,42 @@ def _plan_ownership(path, owner_str, mode_int):
         _plan("chmod", f"{path}: {', '.join(changes)}")
 
 
+# Variables whose value, once written to an env file, provisioning never changes or drops: data and backups are encrypted with them, so a
+# new value makes every backup and every encrypted field unreadable (Bruce, 2026-11-09). There is no override; a human who must replace
+# one edits the file himself.
+UNCHANGEABLE_ENV_KEYS = re.compile(r"^(?:HAMS_CRYPTO_KEY|ODOO_BACKUP_CRYPTO_KEY|KOPIA_PASSWORD|PGBACKREST_REPO\d*_CIPHER_\w+)$")
+
+
+# [@ANCHOR: infrastructure:_refuse_to_change_unchangeable_keys]
+def _refuse_to_change_unchangeable_keys(filepath, content):
+    """
+    Raises RuntimeError when `filepath` exists and holds a UNCHANGEABLE_ENV_KEYS variable (HAMS_CRYPTO_KEY, ODOO_BACKUP_CRYPTO_KEY,
+    KOPIA_PASSWORD, a pgBackRest cipher passphrase) that `content` (the new file text) would change or leave out. Writing the
+    same value, adding new keys and a file that does not exist yet are fine. A file that cannot be read is not judged (a
+    plan run as a normal user). Without this, provisioning with the key missing from env_vars (a deleted file elsewhere, a
+    mode switch that starts from fresh defaults) silently replaced the key that every backup depends on.
+    """
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            old_lines = f.read().splitlines()
+    except OSError:
+        return
+    new_values = {}
+    for line in content.splitlines():
+        name, sep, value = line.partition("=")
+        if sep:
+            new_values[name.strip()] = value.strip()
+    for line in old_lines:
+        name, sep, value = line.partition("=")
+        name = name.strip()
+        if sep and UNCHANGEABLE_ENV_KEYS.match(name) and new_values.get(name) != value.strip():
+            raise RuntimeError(
+                f"Refusing to {'drop' if name not in new_values else 'change'} {name} in {filepath}: it encrypts data and backups, and a "
+                "new value makes them unreadable. Provisioning never replaces it. If this is a deliberate rebuild, a human edits "
+                "or removes that line himself after confirming no backup needs the old key."
+            )
+
+
 # [@ANCHOR: infrastructure:write_env_files]
 def write_env_files(base_etc_dir, env_vars, run_cmd_func, dest_dir=""):
     if dest_dir:
@@ -11076,6 +11112,7 @@ def write_env_files(base_etc_dir, env_vars, run_cmd_func, dest_dir=""):
     for filename, keys in MANIFEST["env_groups"].items():
         filepath = os.path.join(base_etc_dir, filename)
         content = "".join(f"{k}={env_vars[k]}\n" for k in keys if k in env_vars)
+        _refuse_to_change_unchangeable_keys(filepath, content)
         if _planning():
             state = _file_state(filepath, content)
             if state != "unchanged":

@@ -1336,6 +1336,59 @@ class WriteEnvFilesTests(_TmpDirTestCase):
         self.assertNotIn("DB_PASS=", content)
 
 
+class UnchangeableKeyTests(_TmpDirTestCase):
+    """Bruce, 2026-11-09: provisioning never replaces HAMS_CRYPTO_KEY or another key that backups depend on.
+    Tests [@ANCHOR: infrastructure:_refuse_to_change_unchangeable_keys]"""
+
+    def write_core(self, text):
+        path = os.path.join(self.tmp, "core.env")
+        with open(path, "w") as f:
+            f.write(text)
+        os.chmod(path, 0o600)
+        return path
+
+    def test_a_different_crypto_key_is_refused_and_the_file_is_left_alone(self):
+        path = self.write_core("HAMS_CRYPTO_KEY=old\nDOMAIN=a.example\n")
+        with self.assertRaisesRegex(RuntimeError, "Refusing to change HAMS_CRYPTO_KEY"):
+            infra.write_env_files(self.tmp, {"HAMS_CRYPTO_KEY": "new", "DOMAIN": "a.example"}, MagicMock())
+        with open(path) as f:
+            self.assertEqual(f.read(), "HAMS_CRYPTO_KEY=old\nDOMAIN=a.example\n")
+
+    def test_dropping_the_key_is_refused(self):
+        path = self.write_core("HAMS_CRYPTO_KEY=old\n")
+        with self.assertRaisesRegex(RuntimeError, "Refusing to drop HAMS_CRYPTO_KEY"):
+            infra.write_env_files(self.tmp, {"DOMAIN": "a.example"}, MagicMock())
+        with open(path) as f:
+            self.assertEqual(f.read(), "HAMS_CRYPTO_KEY=old\n")
+
+    def test_the_same_value_new_keys_and_a_missing_file_are_fine(self):
+        self.write_core("HAMS_CRYPTO_KEY=same\n")
+        infra.write_env_files(self.tmp, {"HAMS_CRYPTO_KEY": "same", "DOMAIN": "b.example"}, MagicMock())
+        with open(os.path.join(self.tmp, "core.env")) as f:
+            self.assertIn("HAMS_CRYPTO_KEY=same", f.read())
+        other = os.path.join(self.tmp, "fresh")
+        infra.write_env_files(other, {"HAMS_CRYPTO_KEY": "brand-new"}, MagicMock())
+        with open(os.path.join(other, "core.env")) as f:
+            self.assertIn("HAMS_CRYPTO_KEY=brand-new", f.read())
+
+    def test_other_variables_may_change_and_every_protected_name_is_covered(self):
+        self.write_core("DOMAIN=old.example\n")
+        infra.write_env_files(self.tmp, {"DOMAIN": "new.example"}, MagicMock())
+        for name in ("HAMS_CRYPTO_KEY", "ODOO_BACKUP_CRYPTO_KEY", "KOPIA_PASSWORD", "PGBACKREST_REPO2_CIPHER_PASS", "PGBACKREST_REPO3_CIPHER_TYPE"):
+            path = os.path.join(self.tmp, "x.env")
+            with open(path, "w") as f:
+                f.write(f"{name}=old\n")
+            with self.assertRaises(RuntimeError, msg=name):
+                infra._refuse_to_change_unchangeable_keys(path, f"{name}=new\n")
+        infra._refuse_to_change_unchangeable_keys(os.path.join(self.tmp, "absent.env"), "HAMS_CRYPTO_KEY=x\n")
+
+    def test_the_mode_switch_override_does_not_lift_the_refusal(self):
+        self.write_core("HAMS_CRYPTO_KEY=old\nHAMS_PROVISION_MODE=prod\n")
+        with patch.dict(os.environ, {"HAMS_ALLOW_PROVISION_MODE_SWITCH": "1"}):
+            with self.assertRaises(RuntimeError):
+                infra.write_env_files(self.tmp, {"HAMS_CRYPTO_KEY": "fresh", "HAMS_PROVISION_MODE": "test"}, MagicMock())
+
+
 class ProvisionStaticFilesPermissionTests(_TmpDirTestCase):
     def test_a_pre_existing_looser_permission_file_is_hardened_before_content_is_written(self):
         fake_manifest = {
