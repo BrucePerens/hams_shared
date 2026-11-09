@@ -63,7 +63,8 @@ if os.path.exists("RED_MAIN"):
     text += "global check failed with no file\n"
     rc = 1
 print(text, end="")
-json.dump({"steps": [{"name": "fake", "returncode": rc, "seconds": 0.1}], "selected": ["fake", "other"],
+json.dump({"steps": [{"name": "fake", "returncode": rc, "seconds": 0.1}, {"name": "other", "returncode": 0, "seconds": 0.1}],
+           "selected": ["fake", "other"],
            "outputs": {"fake": text} if rc else {}}, open(results, "w"))
 sys.exit(rc)
 '''
@@ -211,10 +212,73 @@ class UnitTests(unittest.TestCase):
             with open(path, "w") as handle:
                 json.dump({"steps": [{"name": "a", "returncode": 0}, {"name": "b", "returncode": 1}],
                            "selected": ["a", "b", "c"], "outputs": {"b": "out"}}, handle)
-            self.assertEqual(lint_batch.read_results(path), (["a", "b", "c"], {"b": "out"}))
+            # "c" was selected but has no result: that is a failure, not a pass (negative control, 2026-11-09)
+            selected, failed = lint_batch.read_results(path)
+            self.assertEqual(selected, ["a", "b", "c"])
+            self.assertEqual(set(failed), {"b", "c"})
+            self.assertEqual(failed["b"], "out")
             with open(path, "w") as handle:
                 json.dump({"steps": [{"name": "a", "returncode": 0}]}, handle)
             self.assertEqual(lint_batch.read_results(path), (["a"], {}))
+
+    def test_negative_controls_a_results_file_that_cannot_prove_a_pass_reads_as_failed(self):
+        """Broken results (null returncode, a selected step with no result, a non-object file, garbage) must never read as green."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "r.json")
+
+            def read(text):
+                with open(path, "w") as handle:
+                    handle.write(text)
+                return lint_batch.read_results(path)
+
+            selected, failed = read(json.dumps({"steps": [{"name": "a", "returncode": None}]}))
+            self.assertIn("a", failed)
+            selected, failed = read(json.dumps({"steps": [{"name": "a"}]}))
+            self.assertIn("a", failed)
+            selected, failed = read(json.dumps({"steps": [{"name": "a", "returncode": True}]}))
+            self.assertIn("a", failed)
+            selected, failed = read(json.dumps({"steps": [{"name": "a", "returncode": 0}], "selected": ["a", "never_ran"]}))
+            self.assertEqual(list(failed), ["never_ran"])
+            self.assertEqual(read("[1, 2]"), ([], {}))
+            self.assertEqual(read("null"), ([], {}))
+            self.assertEqual(read('{"steps": [{"name": "a", "returncode": 0}'), ([], {}))  # truncated
+            self.assertEqual(read(""), ([], {}))
+
+    def test_negative_controls_an_exit_0_that_wrote_no_step_results_is_not_a_pass(self):
+        runner = lint_batch.LintBatch("/nonexistent", "hams_demo", "origin/main", [], lambda *a, **k: None, out=lambda text: None)
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = os.path.join(tmp, "none.json")
+            selected, failed = runner.collect(tmp, missing, "all fine\n", 0)
+            self.assertEqual(selected, [])
+            self.assertIn("run_linters", failed)
+            empty = os.path.join(tmp, "empty.json")
+            with open(empty, "w") as handle:
+                json.dump({"steps": [], "selected": []}, handle)
+            self.assertIn("run_linters", runner.collect(tmp, empty, "", 0)[1])
+            # the same missing file after a crash (exit 1) is reported by _run_once, and a real result is untouched
+            good = os.path.join(tmp, "good.json")
+            with open(good, "w") as handle:
+                json.dump({"steps": [{"name": "a", "returncode": 0}]}, handle)
+            self.assertEqual(runner.collect(tmp, good, "", 0), (["a"], {}))
+
+    def test_negative_controls_run_once_turns_a_silent_exit_0_into_exit_1(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = lint_batch.LintBatch(tmp, "hams_demo", "origin/main", [], lambda *a, **k: None, prepare=lambda tree: None,
+                                          command=lambda tree, results: [sys.executable, "-c", "print('ok')"],
+                                          out=lambda text: None, environ=dict(os.environ, HAMS_BATCH_TREE_DIR=tmp), fetch=False)
+            runner.last_selected = ["stale_step_from_an_earlier_run"]
+            built = {"head": "abc", "merged": [{"branch": "b", "tip": "t"}], "conflicted": []}
+
+            def build(repo, base, group, dest):
+                os.makedirs(dest, exist_ok=True)
+                return built
+
+            with mock.patch.object(batch_queue, "build_combined_tree", side_effect=build), \
+                    mock.patch.object(batch_queue, "remove_tree"):
+                verdict = runner._run_once(1, [{"branch": "b", "tip": "t"}])
+        self.assertEqual(verdict["exit_code"], 1)
+        self.assertIn("run_linters", verdict["failures"])
 
     def test_changed_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
