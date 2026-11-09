@@ -21,7 +21,6 @@ import time
 import batch_queue
 import lint_cache
 import lint_exec
-import lint_baseline
 import lint_batch
 import lint_layout
 import lint_lock
@@ -438,7 +437,7 @@ def _parse_args(argv):
     )
     options = parser.parse_args(argv)
     if options.no_baseline:
-        os.environ[lint_baseline.ENV_SWITCH] = "off"
+        os.environ["HAMS_LINT_BASELINE"] = "off"
     if options.no_lock:
         os.environ["HAMS_LINT_NO_LOCK"] = "1"
     if options.lock_timeout is None and os.environ.get("HAMS_LINT_LOCK_TIMEOUT"):
@@ -1042,6 +1041,7 @@ def baseline_command(options, dir_path, repo_root):
     (hams_com, hams_open, or a worktree of hams_shared, key `hams_shared`). Returns an exit code: `lint_baseline.refresh`'s,
     0 for show, 2 when started from the main hams_shared checkout (run it from a worktree of hams_shared, whose combined
     tree is built from origin/main). No lint lock is taken here: the canary's own run takes it like any run."""
+    import lint_baseline
     if shared_worktree_root(dir_path, repo_root):
         repo, key, tree_name = dir_path, "hams_shared", lint_batch.SHARED_TREE_NAME
     elif os.path.realpath(dir_path) == real_shared_root(__file__):
@@ -2621,6 +2621,8 @@ def main():
     failed_now = {r.name: r.output or "" for r in results if r.returncode != 0}
     baseline_verdict = None
     known_red = ""
+    if failed_now:
+        import lint_baseline  # not at the top: the remote bundle side (run_bundle) never needs it
     if failed_now and lint_baseline.enabled():
         baseline_verdict = lint_baseline.judge(
             failed_now,
