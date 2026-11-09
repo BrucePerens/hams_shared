@@ -86,7 +86,7 @@ def ineligible_reason(args, environ, cwd_is_root, dirty, foreign_shared=False):
         return "an internal phase of a run"
     if args.mode != "standard":
         return "mode %s" % args.mode
-    for flag in ("test_tags", "coverage", "mcp", "pause_on_fail", "offline_isolation", "profile", "build_daemons", "keep_db"):
+    for flag in ("test_tags", "coverage", "mcp", "pause_on_fail", "offline_isolation", "profile", "build_daemons", "keep_db", "raw_failures"):
         if getattr(args, flag, None):
             return "--%s" % flag.replace("_", "-")
     if module_scope(args.module) is None:
