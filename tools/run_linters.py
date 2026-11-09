@@ -281,6 +281,7 @@ def default_remote_applies(options, environ):
     return True
 
 
+# [@ANCHOR: run_linters:parse_args]
 def _parse_args(argv):
     """`run_linters.py [MODULES] [options]`: MODULES is the old comma-separated module list."""
     parser = argparse.ArgumentParser(
@@ -489,6 +490,7 @@ def stamp_repos(repo_root, tools_dir, dir_path, layout=None):
     return repos
 
 
+# [@ANCHOR: run_linters:stamp_text]
 def stamp_text(mode, step_names, hosts=(), known_red=""):
     """One line: mode, time, how many steps were selected and their names (the part of a name
     before `[`). prmerge.sh reads it to refuse a stamp that selected nothing for a code change."""
@@ -498,6 +500,7 @@ def stamp_text(mode, step_names, hosts=(), known_red=""):
     return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}{known_red}\n"
 
 
+# [@ANCHOR: run_linters:write_batch_stamp]
 def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
     """Pass stamp for one branch tip that passed in a coalesced batch (lint_batch.py): the same file and line
     format `_write_pass_stamps` writes, plus ` batch=N` and, when other branches were in the run, ` with=a,b` (their
@@ -515,6 +518,7 @@ def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
         print(f"(pass stamp not written: {error})", file=sys.stderr)
 
 
+# [@ANCHOR: run_linters:write_pass_stamps]
 def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red=""):
     """Record "run_linters.py passed (mode) with a clean tree at commit <sha>" for each repo
     involved. devbox_tools/prmerge.sh refuses to merge a branch whose tip has no stamp, so a
@@ -1163,6 +1167,7 @@ HOST_BOUND_TOOL_TESTS = frozenset(
 )
 
 
+# [@ANCHOR: run_linters:main_orchestrator]
 def main():
     lint_remote.prefer_user_toolchain()
     if "--run-bundle" in sys.argv:

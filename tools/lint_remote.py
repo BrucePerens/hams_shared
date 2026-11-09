@@ -234,6 +234,7 @@ class Probe:
     sessions: int = 0  # interactive login sessions on the machine (`who`)
 
 
+# [@ANCHOR: lint_remote:parse_probe]
 def parse_probe(name, text):
     values = {}
     for line in text.splitlines():
@@ -397,6 +398,7 @@ def apply_reserve(machine, probe, jobs):
     return probe, jobs, ""
 
 
+# [@ANCHOR: lint_remote:make_plan]
 def make_plan(step_names, static_names, durations, inventory, probes, mode, local_cores, local_load,
               whole=False, exclude=(), unfit=None):
     """Route steps. `mode`: 'local', 'auto' or a machine name. `static_names`: steps with no command
@@ -1071,6 +1073,7 @@ def repo_roles(repo_root, sibling_dir, shared_dir):
     return roots, ("hams_open" if is_open else "hams_com")
 
 
+# [@ANCHOR: lint_remote:dispatch]
 def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cores, local_load,
              where=False, inventory=None, transports=None, probes=None, out=print, whole=False, claim=None, claimed=None,
              unfit=None, odoo_lock=None):

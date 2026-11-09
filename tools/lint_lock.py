@@ -307,6 +307,7 @@ def _split_info(info):
     return worktree or "?", command
 
 
+# [@ANCHOR: lint_lock:waiting_message]
 def waiting_message(qdir, pid=None, slots=1):
     """'waiting for the lint run in <worktree> (pid N), position K'."""
     pid = os.getpid() if pid is None else pid
@@ -330,6 +331,7 @@ class RunLock:
     """The machine-wide run lock. `acquire` returns True when held, False on timeout. With `slots` > 1 (see `slot_count`)
     that many runs hold one lock file each at the same time; `slot` is the number taken (1 when there is one slot)."""
 
+    # [@ANCHOR: lint_lock:run_lock_init]
     def __init__(self, environ=None, slots=None):
         self.environ = os.environ if environ is None else environ
         self.path = lock_path(self.environ)
@@ -352,6 +354,7 @@ class RunLock:
         self.fd, self.slot = fd, slot
         return True
 
+    # [@ANCHOR: lint_lock:run_lock_try_flock]
     def _try_flock(self):
         """One non-blocking pass over the slot files, lowest first; keeps the first one it locks open in self.fd. The base slots come first
         and need nothing; a burst slot is taken only with headroom (`_try_burst`)."""
@@ -390,6 +393,7 @@ class RunLock:
         finally:
             os.close(fd)
 
+    # [@ANCHOR: lint_lock:run_lock_acquire]
     def acquire(self, info, timeout=None, out=print, report_every=30.0, poll=1.5, sleep=time.sleep, now=time.time):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         status, ticket = lock_queue.acquire(
@@ -416,6 +420,7 @@ class RunLock:
         os.environ[SLOT_ENV] = str(self.slot)
         return True
 
+    # [@ANCHOR: lint_lock:run_lock_release]
     def release(self):
         if self.ticket:
             lock_queue.release_ticket(self.qdir, self.ticket)
@@ -469,6 +474,7 @@ def running_count(qdir):
     return len(lock_queue.read_holders(qdir))
 
 
+# [@ANCHOR: lint_lock:local_busy]
 def local_busy(environ=None, loadavg=None, cpu_count=None, qdir=None, slots=None):
     """(busy, reason): True when a heavy run started now would wait here for a slot: every slot is taken or a run waits for one.
     With a single slot that is "a lint run holds or waits for the lock", as before, and also a 1-minute load average above the
@@ -581,12 +587,14 @@ def claimed(machines, environ=None):
     return taken
 
 
+# [@ANCHOR: lint_lock:lock_status_lines]
 def status_lines(environ=None):
     """For `--lock-status`: the holder and the queue."""
     qdir = queue_dir(environ)
     return lock_queue.describe_queue(qdir, slots=total_slot_count(environ))
 
 
+# [@ANCHOR: lint_lock:load_limit]
 def load_limit(environ=None, cpu_count=None, override=None):
     """The 1-minute load average above which a heavy run does not start."""
     environ = os.environ if environ is None else environ
@@ -676,6 +684,7 @@ def cpu_busy_percent(window=SAMPLE_SECONDS, path="/proc/stat", sleep=time.sleep)
     return max(0.0, min(100.0, 100.0 * (second[0] - first[0]) / (second[1] - first[1])))
 
 
+# [@ANCHOR: lint_lock:saturation_limits]
 def saturation_limits(environ=None):
     """(busy percent, pressure percent) limits: HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT (92) and HAMS_CI_LOAD_GATE_PSI_PERCENT (25), the names test.py uses."""
     environ = os.environ if environ is None else environ
@@ -773,6 +782,7 @@ def gate(environ, load_limit_override=None, load_timeout_override=None, out=prin
     return wait_for_load(load_limit(environ, override=load_limit_override), timeout, environ=environ, out=out)
 
 
+# [@ANCHOR: lint_lock:begin_heavy_run]
 def begin_heavy_run(environ, pending_names, durations, worktree, command, lock_timeout=None,
                     load_limit_override=None, load_timeout_override=None, out=print, residue=False):
     """Everything run_linters.py does before it starts steps. Returns (ok, RunLock or None); on
