@@ -39,6 +39,8 @@ import os
 import re
 import sys
 
+from tree_files import tree_files
+
 IGNORE_DIR_NAMES = {
     "__pycache__",
     "node_modules",
@@ -73,13 +75,7 @@ _SPAWN_BOUNDARY_RE = re.compile(r"(?:tokio::spawn|task::spawn)\s*\(\s*async\s+mo
 
 
 def find_rust_files(repo_root):
-    found = []
-    for root, dirs, filenames in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES and not d.startswith(".")]
-        for fname in filenames:
-            if fname.endswith(".rs"):
-                found.append(os.path.join(root, fname))
-    return sorted(found)
+    return tree_files(repo_root, ".rs", IGNORE_DIR_NAMES, skip_hidden=True)
 
 
 def check_file(path):
