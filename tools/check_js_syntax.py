@@ -8,6 +8,7 @@ import multiprocessing
 import re
 import json
 import logging
+from tree_files import tree_walk
 
 
 def load_ignore_file(filepath):
@@ -288,17 +289,15 @@ def main():
     for d in args.directories:
         if not os.path.isdir(d):
             continue
-        for root, dirs, files in os.walk(d):
-            if "radae" in dirs:
-                dirs.remove("radae")
-            # Prune hidden folders and standard library directories to save time
-            dirs[:] = [
-                dir_name
-                for dir_name in dirs
-                if not dir_name.startswith(".")
-                and dir_name not in ("node_modules", "__pycache__")
-                and not (os.path.basename(root) == "static" and dir_name == "lib")
-            ]
+        # Hidden folders and standard library directories are left out; so is `static/lib` (vendored libraries), where
+        # the `static` may be the directory given itself.
+        def not_in_static_lib(rel, d=d):
+            parts = [os.path.basename(os.path.abspath(d))] + rel.split("/")[:-1]
+            return not any(a == "static" and b == "lib" for a, b in zip(parts, parts[1:]))
+
+        for root, _dirs, files in tree_walk(
+            d, ".js", ("radae", "node_modules", "__pycache__"), skip_hidden=True, accept=not_in_static_lib, untracked=True
+        ):
             for f in files:
                 if f.endswith(".js") and ".min." not in f:
                     full_path = os.path.join(root, f)

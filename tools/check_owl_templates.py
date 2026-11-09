@@ -51,6 +51,7 @@ from shutil import which
 
 import requests
 import websockets
+from tree_files import tree_walk
 
 _OWL_JS_PATH = (
     "/usr/lib/python3/dist-packages/odoo/addons/web/static/lib/owl/owl.js"
@@ -69,7 +70,9 @@ def find_owl_template_files(target_dir):
     absolute-path argument it sees -- every os.sep argument here IS absolute -- so the real value
     was just "/xml", making the substring check match almost any path and short-circuit past the
     real, precise component check below it)."""
-    for root, dirs, files in os.walk(target_dir):
+    for root, _dirs, files in tree_walk(
+        target_dir, ".xml", ("node_modules", "__pycache__", ".git", "target"), skip_hidden=True, untracked=True
+    ):
         # Dot-directories -- critically ".claude/worktrees/<session>/", this project's own
         # standing convention for running concurrent bug-hunt dispatches in isolated git
         # worktrees INSIDE the repo root -- are never real template locations. Without this, a
@@ -78,12 +81,6 @@ def find_owl_template_files(target_dir):
         # files found were duplicates from two other concurrently active sessions' own worktrees,
         # meaning this checker was spending roughly two-thirds of its real headless-Chrome
         # compile work re-checking other sessions' own copies of the same templates.
-        dirs[:] = [
-            d
-            for d in dirs
-            if d not in ("node_modules", "__pycache__", ".git", "target")
-            and not d.startswith(".")
-        ]
         parts = root.replace("\\", "/").split("/")
         if parts[-3:] != ["static", "src", "xml"]:
             continue

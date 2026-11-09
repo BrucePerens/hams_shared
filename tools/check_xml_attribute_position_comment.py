@@ -40,6 +40,7 @@ import lint_exec
 import sys
 
 from lxml import etree
+from tree_files import tree_walk
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "radae"}
 _HAMS_SHARED_TOOLS_SUFFIX = os.path.join("hams_shared", "tools")
@@ -73,14 +74,16 @@ def _is_hams_shared_tools(path):
 
 def check_xml_attribute_position_comment(repo_root):
     violations = []
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [
-            d
-            for d in dirs
-            if d not in SKIP_DIRS
-            and not d.startswith(".")
-            and not (d == "tools" and _is_hams_shared_tools(os.path.join(root, d)))
-        ]
+    def not_under_hams_shared_tools(rel):
+        # The real hams_shared/tools directory (by path suffix, not bare name) is skipped with everything below it.
+        parts = rel.split("/")[:-1]
+        return not any(
+            part == "tools" and _is_hams_shared_tools(os.path.join(repo_root, *parts[: k + 1])) for k, part in enumerate(parts)
+        )
+
+    for root, _dirs, files in tree_walk(
+        repo_root, ".xml", SKIP_DIRS, skip_hidden=True, accept=not_under_hams_shared_tools, untracked=True
+    ):
         for filename in files:
             if not filename.endswith(".xml"):
                 continue
