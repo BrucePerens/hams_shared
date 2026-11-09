@@ -49,6 +49,7 @@ import ast
 import os
 import lint_exec
 import sys
+from tree_files import tree_files
 
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}
@@ -192,36 +193,31 @@ def _scan(roots):
     module_cache = {}
 
     for repo_root in roots:
-        for root, dirs, files in os.walk(repo_root):
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
-            for fname in files:
-                if not fname.endswith(".py"):
+        for fpath in tree_files(repo_root, ".py", SKIP_DIRS, skip_hidden=True, untracked=True):
+            mod = _module_of(fpath, module_cache)
+            if not mod:
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    tree = ast.parse(f.read(), filename=fpath)
+            except (SyntaxError, OSError):
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef) or not _is_model_class(node):
                     continue
-                fpath = os.path.join(root, fname)
-                mod = _module_of(fpath, module_cache)
-                if not mod:
-                    continue
-                try:
-                    with open(fpath, "r", encoding="utf-8") as f:
-                        tree = ast.parse(f.read(), filename=fpath)
-                except (SyntaxError, OSError):
-                    continue
-                for node in ast.walk(tree):
-                    if not isinstance(node, ast.ClassDef) or not _is_model_class(node):
-                        continue
-                    name_values, inherit_values, auto_false, has_init = _extract_class_info(node)
-                    del has_init  # not needed once check 2 keys off _auto alone
-                    if name_values:
-                        for nm in name_values:
-                            name_owners.setdefault(nm, []).append((mod, fpath, node.lineno))
-                            self_referencing = bool(inherit_values) and nm in inherit_values
-                            if not self_referencing:
-                                claiming_owners.setdefault(nm, []).append((mod, fpath, node.lineno))
-                            if auto_false:
-                                auto_false_models[nm] = True
-                    elif inherit_values:
-                        for tgt in inherit_values:
-                            inherit_only.append((tgt, mod, fpath, node.lineno))
+                name_values, inherit_values, auto_false, has_init = _extract_class_info(node)
+                del has_init  # not needed once check 2 keys off _auto alone
+                if name_values:
+                    for nm in name_values:
+                        name_owners.setdefault(nm, []).append((mod, fpath, node.lineno))
+                        self_referencing = bool(inherit_values) and nm in inherit_values
+                        if not self_referencing:
+                            claiming_owners.setdefault(nm, []).append((mod, fpath, node.lineno))
+                        if auto_false:
+                            auto_false_models[nm] = True
+                elif inherit_values:
+                    for tgt in inherit_values:
+                        inherit_only.append((tgt, mod, fpath, node.lineno))
 
     return name_owners, claiming_owners, auto_false_models, inherit_only
 

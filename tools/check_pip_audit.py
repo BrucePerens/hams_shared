@@ -26,6 +26,7 @@ import lint_exec
 import subprocess
 import sys
 import time
+from tree_files import tree_files
 
 # "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
 # site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
@@ -237,13 +238,9 @@ def _resolve_repo_roots(given_path):
 
 
 def find_requirements_files(repo_root):
-    found = []
-    for root, dirs, filenames in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES]
-        for name in filenames:
-            if name.startswith("requirements") and name.endswith(".txt"):
-                found.append(os.path.join(root, name))
-    return sorted(found)
+    return tree_files(
+        repo_root, ".txt", IGNORE_DIR_NAMES, accept=lambda rel: rel.rsplit("/", 1)[-1].startswith("requirements"), untracked=True
+    )
 
 
 def main():

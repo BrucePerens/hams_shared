@@ -90,6 +90,7 @@ import lint_exec
 import queue
 import subprocess
 import sys
+from tree_files import tree_files
 
 
 def _resolve_repo_root(given_path):
@@ -210,12 +211,7 @@ def collect_candidates(repo_root):
         if os.path.isfile(abs_root):
             files = [abs_root]
         elif os.path.isdir(abs_root):
-            files = []
-            for root, dirs, filenames in os.walk(abs_root):
-                dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES]
-                for name in filenames:
-                    if name.endswith(".py"):
-                        files.append(os.path.join(root, name))
+            files = tree_files(abs_root, ".py", IGNORE_DIR_NAMES, untracked=True)
         else:
             continue
 

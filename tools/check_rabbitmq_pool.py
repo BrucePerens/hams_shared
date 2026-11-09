@@ -11,6 +11,7 @@ import sys
 import re
 import io
 import tokenize
+from tree_files import tree_walk
 
 def _code_hits(text, pattern):
     """1-based line numbers where `pika.BlockingConnection` / `pika.SelectConnection` appears in CODE.
@@ -65,10 +66,7 @@ def check_rabbitmq(repo_dir):
     # Pattern to look for direct pika connection instantiation
     pattern = re.compile(r"pika\.(BlockingConnection|SelectConnection)")
 
-    for root, dirs, files in os.walk(repo_dir):
-        # Modify dirs in-place to ignore specified directories
-        dirs[:] = [d for d in dirs if d not in ignore_dirs]
-
+    for root, _dirs, files in tree_walk(repo_dir, ".py", ignore_dirs, untracked=True):
         for file in files:
             if not file.endswith(".py"):
                 continue

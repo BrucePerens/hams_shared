@@ -21,13 +21,21 @@ def write(root, rel, content):
     return path
 
 
+def checkout_files_with_nested_worktree(root, files):
+    """In `root`, a git repository that tracks every `{rel: content}` of `files`, with a second real worktree of it at
+    `root/tmp/other` (so `tmp/other/<rel>` exists on disk with the same content)."""
+    git(root, "init", "-q")
+    for rel, content in files.items():
+        write(root, rel, content)
+        git(root, "add", rel)
+    git(root, "commit", "-q", "-m", "x")
+    git(root, "worktree", "add", "-q", "--detach", os.path.join("tmp", "other"))
+    for rel in files:
+        assert os.path.exists(os.path.join(root, "tmp", "other", rel)), "the nested worktree must hold its own copy"
+
+
 def checkout_with_nested_worktree(root, rel, content):
     """In `root`, a git repository that tracks `rel`, with a second real worktree of it at `root/tmp/other` (so
     `tmp/other/<rel>` exists on disk with the same content). Returns the path of the tracked file."""
-    git(root, "init", "-q")
-    mine = write(root, rel, content)
-    git(root, "add", rel)
-    git(root, "commit", "-q", "-m", "x")
-    git(root, "worktree", "add", "-q", "--detach", os.path.join("tmp", "other"))
-    assert os.path.exists(os.path.join(root, "tmp", "other", rel)), "the nested worktree must hold its own copy"
-    return mine
+    checkout_files_with_nested_worktree(root, {rel: content})
+    return os.path.join(root, rel)

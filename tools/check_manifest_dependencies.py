@@ -15,6 +15,7 @@ import os
 import sys
 import ast
 import re
+from tree_files import tree_walk
 
 
 def main():
@@ -28,9 +29,7 @@ def main():
     errors_found = False
 
     # 1. Map all manifests, their dependencies, and asset bundles
-    for root, dirs, files in os.walk(repo_root):
-        if "radae" in dirs:
-            dirs.remove("radae")
+    for root, _dirs, files in tree_walk(repo_root, "__manifest__.py", ("radae",), skip_hidden=True, untracked=True):
         # Dot-directories -- critically ".claude/worktrees/<session>/", this project's own
         # standing convention for running concurrent bug-hunt dispatches in isolated git
         # worktrees INSIDE the repo root -- are never real module locations. Without this, a
@@ -38,7 +37,6 @@ def main():
         # scanned as if they belonged to the real repo (confirmed live while reviewing this exact
         # file: two other real, concurrently active sessions' own worktrees were found sitting in
         # the real repo root).
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
         if "__manifest__.py" in files:
             mod_name = os.path.basename(root)
             manifest_path = os.path.join(root, "__manifest__.py")
@@ -113,10 +111,7 @@ def main():
     )
 
     mod_cache = {}
-    for root, dirs, files in os.walk(repo_root):
-        if "radae" in dirs:
-            dirs.remove("radae")
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
+    for root, _dirs, files in tree_walk(repo_root, ".js", ("radae",), skip_hidden=True, untracked=True):
         if "node_modules" in root:
             continue
         for file in files:
