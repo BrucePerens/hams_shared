@@ -36,7 +36,8 @@ A failing branch prints the findings that name its files and the log path. The l
    `origin/main` with each tip merged (`--no-ff`). A conflicting branch is aborted and gets verdict `solo`; its caller
    runs alone exactly as before. `fix_worktree_symlinks.py` links the tree like any agent worktree.
 4. The leader runs `nice -n 10 run_linters.py --changed origin/main --solo --results-json R` in the tree. That is an
-   ordinary run: it takes the lint lock and waits for the load gate; it runs every step here. Its output is shown by the leader and kept in the batch log.
+   ordinary run: it takes the lint lock, waits for the load gate and, with `--remote auto` (the default), may ship the
+   whole run to an idle machine. Its output is shown by the leader and kept in the batch log.
 5. `settle` turns the result into verdicts. Pass: everyone passes. Fail: each failed step's output is searched for the
    changed files of each branch (`path_finder`); a branch whose file is named fails, all others pass at once. A failure
    that names no branch's file splits the batch in halves and reruns (at most nine runs; both halves failing the same
@@ -78,7 +79,7 @@ itself; runs started from the main hams_shared checkout; and a hams_shared branc
 * Local TEST batches may run as many at once as there are test slots (`HAMS_BATCH_MAX_RUNNING` / ADR 0116) and so may LINT batches, up to the
   machine's lint slots (`lint_batch.batches_that_may_run`; the dev box 4, a small machine 1): a request starts a batch of its own at once while
   fewer batches than that run, and coalesces with others only while every running slot is busy. The slot is the machine, not a per-target
-  claim: the dev box is the primary lint runner and a run never goes to another machine because this one is busy, so there is
+  claim: the dev box is the primary lint runner and a whole run reaches another machine only as overflow (lint_lock `local_busy`), so there is
   no machine to claim before the batch seals. Remote test batches (`rtest`) keep one running batch, since one batch splits over every idle host.
 * The stamp of a batched branch vouches for "main plus the batch" and names the other tips it was checked with
   (`batch=N with=<12 hex>,...`), and a cross-branch interaction is blamed on the branch

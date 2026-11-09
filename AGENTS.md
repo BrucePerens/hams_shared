@@ -101,10 +101,10 @@ build and test it before merging** -- `cargo fmt --check`, `cargo clippy --all-t
 -- -D warnings` and `cargo test` in each crate you touched. **The full `cargo test` of `hams_local_relay` and `shack_console`
 (about 20 minutes) runs on the dev box (Bruce, 2026-11-08; this reverses the 2026-11-04 rule that sent it to the remote
 build hosts: the dev box has 32 cores and the remote hosts are far less powerful). Run it here under `nice`, with a
-`CARGO_TARGET_DIR` of its own per job, or through `python3 ~/workspace/hams_com/devbox_tools/remote_cargo_test.py devbox
-<committed worktree> daemons/hams_local_relay` (a queued local slot; exit 0 passed, 1 failed, 75 could not run; a filter goes after the crate,
-`... daemons/hams_local_relay -- updater::`). Remote hosts are for what this box cannot do (arm64 and macOS-specific checks, Windows-only
-work), never because this box is busy: wait for a slot (Bruce, 2026-11-08: no remote system for anything that can run here). Cargo you do run on the dev box goes under `nice` with a
+`CARGO_TARGET_DIR` of its own per job. The remote build hosts (`python3 ~/workspace/hams_com/devbox_tools/remote_cargo_test.py auto
+<committed worktree> daemons/hams_local_relay`; exit 0 passed, 1 failed, 75 could not run; a filter goes after the crate,
+`... daemons/hams_local_relay -- updater::`) remain for what this box cannot do: arm64 and macOS-specific checks, or overflow
+when this box is saturated). Cargo you do run on the dev box goes under `nice` with a
 `CARGO_TARGET_DIR` of its own per concurrent job, deleted when the job is done, and **in RAM, not on the SSD** (a build writes
 5-12 GB it throws away): `python3 hams_shared/tools/ram_dirs.py run <job> -- nice -n 10 cargo clippy --all-targets -- -D warnings`
 sets `CARGO_TARGET_DIR=/dev/shm/hams-cargo-target-<job>`, stops the job if that directory passes 30 GB or `/dev/shm` runs low, removes
@@ -273,9 +273,8 @@ in a fixed order, and ends with a per-step timing table.
   failure is attributed to the branches whose files it names; the others pass at once. `--solo` (or `HAMS_LINT_BATCH=off`)
   runs alone. `test.py -u MODULES` coalesces the same way (`--solo`, `HAMS_TEST_BATCH=off`). See `docs/runbooks/LINT_TEST_BATCHING.md`.
 * **Before every merge run `nice -n 10 python3 tools/run_linters.py --changed`** from your worktree
-  root, with the work committed (since 2026-11-08 every step runs on this machine, waiting for its lint lock and slot
-  when they are busy; a plain run never ships anything to another machine, and `--remote local` says the same).
-  Remote machines are for work that cannot run here (macOS, arm64, Windows-only) and are an explicit opt-in. It runs only the steps whose inputs differ from `origin/main`, scoped
+  root, with the work committed (since 2026-11-03 that means `--remote auto` without saying so; `--remote local`
+  or `HAMS_LINT_REMOTE=local` keeps everything on this machine). It runs only the steps whose inputs differ from `origin/main`, scoped
   to the changed modules and the modules that depend on them, and skips steps whose inputs are
   byte-identical to their last passing run. A change under `hams_shared/tools/` runs every step.
   A step is left out only when no changed file has a type it reads (the suffix table `STEP_META` in
@@ -309,21 +308,23 @@ in a fixed order, and ends with a per-step timing table.
   shells). `lint_slots` in `lint_machines.json` (4 on the dev box) lets that many heavy runs go at once, each in a lock file of its own
   (`~/.cache/hams-lint/run.lock`, `run.lock.slot-K`), at `nice` 10, with its own TMPDIR (slots above 1: `$TMPDIR/s<K>`) and its own warm Cargo
   target directory (`hams-lint-cargo/<repo>-<toolchain>-sK`); a run beyond the last slot queues in the one FIFO, and the load gate delays a start while the box is saturated: it is test.py's rule (CPU busy >= 92 % AND pressure `some avg10` >= 25 %, `HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT` / `HAMS_CI_LOAD_GATE_PSI_PERCENT`), not the load average (86 at 18 % stall on this box), unless a load limit is set explicitly. The slot count is `HAMS_LINT_SLOTS`, else the first line of `/opt/hams/etc/lint_slots` or `~/.config/hams-lint/slots`, else `lint_slots` of the inventory; each run's default `-j` is half the CPUs divided by the slots (`--lock-status` lists
-  the slots and the queue). Nothing is shipped to another machine because this one is busy (2026-11-08): a run waits for a slot here and always ends with a real
-  result and a pass stamp. A step goes elsewhere only with `--remote auto` and only when this machine lacks a tool the step needs (a
-  local probe says which; none today) or by explicit opt-in (`--remote HOST`); then the machine's own lock and gate apply, output is `[host] ...`,
-  and a per-machine claim (`~/.cache/hams-lint/claims/HOST.lock`) keeps two runs from choosing the same machine. Steps that need this checkout
-  stay here. `--where` shows the plan.
+  the slots and the queue). A run is shipped to another machine **only as overflow**: when every slot is taken (or a run waits), the *whole* run goes to the best idle runner (the one that can run the most of its steps; least loaded on a tie), under
+  that machine's own lock and gate, with output as `[host] ...`; the steps that need this checkout (`check_summation_bias`, `check_pip_audit`,
+  `check_claims_freshness`, `check_cargo_deny`, `check_noupdate_edits`, `pytest tools/[host-bound]`) stay and, when they total at most
+  `HAMS_LINT_RESIDUE_SECONDS` (240), wait only for the load gate. A per-machine claim (`~/.cache/hams-lint/claims/HOST.lock`) keeps two runs here from
+  choosing the same idle machine; if every machine is claimed, busy or unreachable the run waits for a slot here, so it always ends with
+  a real result and a pass stamp (the old "claimed host, fall back without clippy, no stamp" path is gone: this box has the full
+  toolchain). Nothing is sent away merely because a machine is idle (the spreading of 60 s steps and `--distribute always` were removed);
+  `--distribute off` (or `HAMS_LINT_DISTRIBUTE=off`) never ships; `--remote HOST` names a machine; `--where` shows the plan.
 * Steps over several test directories are merged where that is provably safe (one daemon, one interpreter:
   `pytest daemons/hams_local_relay`); the old step names are aliases that `--only` still accepts. The repository-pair
   checkers (`check_async_lock_scope`, `check_fake_network_listener`, `check_int_float_overflow`,
   `check_float_isfinite`, `check_window_fetch_reassignment`) are one step each over hams_com and hams_open.
   `tools/lint_step_inventory.py compare` proves a restructuring kept every test (`docs/LINT_STEP_ANALYSIS.md`).
 * **Remote execution** (`--remote auto|HOST|local`, `--where`; `tools/lint_remote.py`,
-  `tools/lint_machines.json`). By default, and with `--remote local`, everything runs on the dev box. `--remote auto` is the same except
-  that a step this machine lacks the tools for goes to a machine that has them; `--remote HOST` is an explicit opt-in that sends each step that
-  machine can run (never a step that needs git history, the network, this checkout or this login session) there. Do not use a remote
-  machine for anything that can run on the dev box (Bruce, 2026-11-08). Runners are probed over ssh (read-only: cores, load, which of python3, flake8, pytest, xdist, node,
+  `tools/lint_machines.json`). `--remote auto` runs everything on the dev box and uses the other lint runners only as overflow (above);
+  `--remote HOST` sends each heavy step that machine can run (>= 60 s; never a step that needs git history, the network, this
+  checkout or this login session) there. Runners are probed over ssh (read-only: cores, load, which of python3, flake8, pytest, xdist, node,
   eslint, cargo with clippy and rustfmt, chrome, odoo exist). `--where` prints the routing plan and runs nothing. Machines (versions are recorded in the inventory):
   **bruce-yoga** (Debian x86-64 build server, 8 cores, 4 workers at nice 10; ssh with `-o
   HostName=bruce-yoga.lan`; stays awake on AC, on battery it may suspend and shows as unreachable),
@@ -376,20 +377,24 @@ in a fixed order, and ends with a per-step timing table.
 
 1. Commit your work, then from your worktree root run the standard command:
    `nice -n 10 python3 tools/run_linters.py --changed`
-   (`tools` is the `hams_shared/tools` link of your worktree). Every step runs on this machine; when the box is
-   busy the run waits for a lint slot here and is never sent to another machine. It stamps the commit when everything passed.
+   (`tools` is the `hams_shared/tools` link of your worktree; `--remote auto` is the default since
+   2026-11-03). When the dev box is busy it sends the whole run to bruce-yoga or mac1-vm if one is up and
+   idle, so it starts at once; otherwise it queues here as before. It stamps the commit when everything passed.
    `devbox_tools/prmerge.sh` needs that stamp.
 2. `--only a,b` is for the edit-test loop (a step you are fixing, e.g. `--only flake8,check_cargo_fmt`);
    it never stamps. Run `--changed` once at the end, not after every edit; a repeat with unchanged inputs
    is a cache hit (seconds).
 3. Expected duration (measured 2026-11-02 on a docs+code branch where every step was selected, because
-   `hams_shared/tools` had changed): about 10 minutes of work on the dev box, plus any queue wait.
+   `hams_shared/tools` had changed): 10 minutes of work on the dev box alone (`--remote local`), 4.7 minutes with
+   mac1-vm taking the clippy build and a pytest chunk (`--remote auto`; bruce-yoga was off the network, so
+   the figure with both machines is not measured yet), each plus the queue wait (2.5 minutes in both runs).
    A run that selects few steps is much shorter; the timing table at the end names the long ones.
    `--where` shows the plan in two seconds without running anything.
 4. If the queue is long (`--lock-status`; each run ahead of you takes 5 to 15 minutes): do not start a
-   second heavy run by other means, and do not use `--no-lock`. Wait: remote machines are not an overflow
-   (Bruce, 2026-11-08). Spend the wait on the next piece of work; `--lock-timeout S` makes the run give up
-   (exit 75) instead of waiting.
+   second heavy run by other means, and do not use `--no-lock`. The run already looked for an idle machine
+   when it started (see the `[*] --remote:` lines); it queues only when every runner is busy, claimed or
+   down. Spend the wait on the next piece of work; `--lock-timeout S` makes the run give up (exit 75)
+   instead of waiting. Do not pass `--remote local` to "be safe": it takes the queue the machines avoid.
 5. A run that is reported as failed with `[host] ...` lines: read the lines; the step was re-run here, and
    what remains is a real finding. If a machine is down the run says so and does the work here.
 

@@ -3,10 +3,8 @@
 """
 Remote execution for run_linters.py: run heavy steps on another machine instead of the dev box.
 
-    run_linters.py --changed                      (default) every step runs on this machine
-    run_linters.py --changed --remote auto        like the default, but a step this machine lacks the tools for
-                                                  (a probe says which) goes to a machine that has them
-    run_linters.py --changed --remote HOST        explicit opt-in: everything that machine can run
+    run_linters.py --changed --remote auto        spread capable steps over the machines
+    run_linters.py --changed --remote mac1-vm     everything that machine can run
     run_linters.py --changed --remote auto --where    print the routing plan, run nothing
 
 How it works (all of it read-only toward the machines' systems; nothing is deployed, and the
@@ -17,11 +15,10 @@ inventory marks hams1 and the home router `never`):
      Bruce's Mac itself, production).
   2. PROBE (one ssh command per machine, no writes): cores, 1-minute load, and which tools exist.
      Capabilities are measured, not assumed. An unreachable machine is skipped.
-  3. ROUTING: every step needs some tools (`requirements_for`). With `--remote HOST` the steps that
-     machine can run go there (steps that need git history, the network or this machine's state stay
-     local; short steps (under 60 s) included). With `auto` (and by default, nothing is routed) a step
-     runs on this machine, waiting for its lint lock and slot when they are busy; only a step whose tools
-     this machine lacks goes to a reachable machine that has them. A busy lock or load never sends work away.
+  3. ROUTING: every step needs some tools (`requirements_for`). Steps that need git history, the
+     network or the dev box's state stay local. The rest go to the capable machine with the least
+     estimated finish time (assigned seconds plus its current load), never to a machine already
+     above its load ratio, and short steps (under 60 s) stay local because syncing costs more.
   4. SYNC: a persistent mirror under the machine's workdir. Each repository is shipped as the tracked
      tree of its HEAD commit (git archive), incrementally from the commit the mirror already has, plus
      the working tree's uncommitted regular files; excluded: .git, target/, node_modules, symlinks and
@@ -220,6 +217,7 @@ echo "queued=$n"
 l="$HOME/.cache/hams-lint/run.lock"
 if [ -e "$l" ] && command -v flock >/dev/null 2>&1 && ! flock -n "$l" true; then echo "held=1"; else echo "held=0"; fi
 echo "awake=1"
+echo "sessions=$(who 2>/dev/null | wc -l)"
 """
 
 
@@ -233,6 +231,7 @@ class Probe:
     caps: frozenset = frozenset()
     error: str = ""
     held: bool = False  # a lint run holds the machine's run lock right now
+    sessions: int = 0  # interactive login sessions on the machine (`who`)
 
 
 def parse_probe(name, text):
@@ -266,7 +265,11 @@ def parse_probe(name, text):
         queued = int(values.get("queued") or 0)
     except ValueError:
         queued = 0
-    return Probe(name, True, cores, load1, queued, frozenset(caps), held=values.get("held") == "1")
+    try:
+        sessions = max(0, int(values.get("sessions") or 0))
+    except ValueError:
+        sessions = 0
+    return Probe(name, True, cores, load1, queued, frozenset(caps), held=values.get("held") == "1", sessions=sessions)
 
 
 # --- transport ----------------------------------------------------------------------------------
@@ -368,15 +371,39 @@ def _est(name, durations):
     return durations.get(name, UNKNOWN_SECONDS)
 
 
+# [@ANCHOR: lint_remote:apply_reserve]
+def apply_reserve(machine, probe, jobs):
+    """The `reserve` policy of an inventory entry: a machine somebody also uses interactively, kept for overflow only.
+    Returns (probe, jobs, skip_reason). `reserve` keys (all optional): `skip_when_user_session` (true: the machine is skipped while any
+    login session is open, `Probe.sessions`), `max_core_fraction` (the run uses at most that share of the cores, at least one job) and
+    `never_caps` (capabilities hidden from the router, so a step that needs one, such as `chrome` for browser tests, never goes there).
+    A machine without `reserve` comes back unchanged with no reason. Pure."""
+    reserve = machine.get("reserve") or {}
+    if not reserve:
+        return probe, jobs, ""
+    if reserve.get("skip_when_user_session") and probe.sessions > 0:
+        return probe, jobs, "reserved: %d user session(s) active" % probe.sessions
+    try:
+        fraction = float(reserve.get("max_core_fraction") or 0)
+        if not math.isfinite(fraction):
+            raise ValueError(fraction)
+    except (TypeError, ValueError):
+        fraction = 0.5  # a malformed value keeps the machine at half its cores, the policy's default
+    if reserve.get("max_core_fraction"):
+        jobs = min(jobs, max(1, math.floor(probe.cores * fraction)))
+    hidden = set(reserve.get("never_caps") or ())
+    if hidden:
+        probe = dataclasses.replace(probe, caps=probe.caps - hidden)
+    return probe, jobs, ""
+
+
 def make_plan(step_names, static_names, durations, inventory, probes, mode, local_cores, local_load,
-              local_caps=None, exclude=(), unfit=None):
+              whole=False, exclude=(), unfit=None):
     """Route steps. `mode`: 'local', 'auto' or a machine name. `static_names`: steps with no command
     (always local). `probes`: name -> Probe for every runner. Pure: no I/O.
 
-    'auto' keeps every step on this machine unless `local_caps` (the tools this machine has, from a local probe)
-    shows it cannot run the step; only such a step goes to a machine that can (`make_auto_plan`). A busy lint
-    lock or a high load never moves a step. A named machine takes every step it can run (60 s floor not applied).
-    `exclude`: machines another run has claimed."""
+    `whole` (mode 'auto' only): this machine's run lock is busy, so the whole run is shipped, see
+    `make_whole_plan`. `exclude`: machines another run has claimed (whole runs only)."""
     notes = []
     skipped = {}
     if mode == "local" or not mode:
@@ -396,6 +423,10 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
             skipped[name] = "unreachable" + (f" ({probe.error})" if probe and probe.error else "")
             continue
         jobs = int(machine.get("jobs", max(1, probe.cores // 2)))
+        probe, jobs, why = apply_reserve(machine, probe, jobs)
+        if why:
+            skipped[name] = why
+            continue
         ratio = float(machine.get("max_load_ratio", 0.8))
         if probe.load1 > probe.cores * ratio:
             skipped[name] = f"busy: load {probe.load1:.1f} above {probe.cores * ratio:.1f}"
@@ -403,9 +434,24 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
         if name in exclude:
             skipped[name] = "claimed by another run (a lint claim, or the Odoo-test lock of a host that an Odoo test run is using)"
             continue
+        if whole and mode == "auto":
+            # A whole run waits for nothing: a machine with a run in progress or in line is not a place to send it.
+            if probe.held or probe.queued >= int(machine.get("max_concurrent", 1)):
+                skipped[name] = f"busy: {max(probe.queued, 1)} lint run(s) hold or wait for its lock"
+                continue
         candidates[name] = (probe, jobs)
-    if mode == "auto":
-        return make_auto_plan(step_names, static_names, durations, candidates, skipped, notes, local_caps, unfit or {})
+    if mode == "auto" and not whole:
+        # The dev box is the primary lint runner (Bruce, 2026-11-08): 32 cores, 125 GB, several runs side by side (lint_lock slots).
+        # A run goes to another machine only (a) when Bruce names one (--remote HOST), (b) as a WHOLE run when this machine has no free
+        # slot or is above its load limit (`whole`, make_whole_plan), or (c) for a step this machine cannot run (a probe says which;
+        # none today). Until 2026-11-08 `auto` also sent every step of 60 s or more to an idle runner, which made the 4-10 core
+        # machines the bottleneck for runs the dev box would have finished sooner.
+        for name, reason in skipped.items():
+            notes.append(f"{name}: skipped, {reason}")
+        notes.append("--remote auto: this machine has a free lint slot, so every step runs here")
+        return Plan(list(step_names), {}, notes, {LOCAL: sum(_est(n, durations) for n in step_names)}, skipped)
+    if whole and mode == "auto":
+        return make_whole_plan(step_names, static_names, durations, candidates, skipped, notes, local_cores, unfit or {})
     assigned = {LOCAL: []}
     finish = {LOCAL: local_load * 60.0 / max(1, local_cores)}
     for name, (probe, jobs) in candidates.items():
@@ -422,13 +468,19 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
             continue
         options = [
             name for name, (probe, _jobs) in candidates.items()
-            if need <= probe.caps
+            if need <= probe.caps and (mode != "auto" or seconds >= REMOTE_MIN_SECONDS)
         ]
-        if not options and step not in static_names and "local" not in need:
+        if mode != "auto" and not options and step not in static_names and "local" not in need:
             notes.append(f"{step}: {mode} lacks {', '.join(sorted(need - (candidates[mode][0].caps if mode in candidates else set())))}: runs here")
+        # A step is one process: it finishes when the work queued ahead of it (spread over the workers) is done, plus its own length.
         best = LOCAL
+        best_finish = finish[LOCAL] + seconds
         for name in options:
-            best = name  # a named machine takes every step it can run
+            candidate = finish[name] + seconds
+            # The point is to keep the shared dev box free: a capable machine takes a heavy step unless it would
+            # finish it more than one step-length (at most twice as slow) later than the dev box.
+            if candidate <= best_finish + seconds or mode != "auto":
+                best, best_finish = name, candidate
         assigned[best].append(step)
         finish[best] += seconds / jobs_of[best]
     remote = {name: sorted(names, key=step_names.index) for name, names in assigned.items() if name != LOCAL and names}
@@ -441,38 +493,58 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
     return Plan(local, remote, notes, seconds_by, skipped)
 
 
-def make_auto_plan(step_names, static_names, durations, candidates, skipped, notes, local_caps, unfit):
-    """`--remote auto` (2026-11-08, Bruce: no remote machine for anything that can run on the dev box).
+def make_whole_plan(step_names, static_names, durations, candidates, skipped, notes, local_cores, unfit=None):
+    """The plan for a run that would have to queue for this machine's run lock (2026-11-03).
 
-    Every step runs on this machine, waiting for its lint lock and slot when they are busy. A step goes elsewhere
-    only when `local_caps` (a probe of this machine) lacks a tool it needs and a reachable, not busy machine has all of
-    them (the least loaded one is chosen). Steps that need this checkout (`local` requirement) or have no command
-    stay here, as does a step no machine can run (it then reports its own missing tool). With `local_caps=None`
-    nothing is known to be missing and nothing moves."""
-    assigned = {}
-    for step in step_names:
-        need = requirements_for(step)
-        if step in static_names or "local" in need or local_caps is None or need <= local_caps:
-            continue
-        missing = ", ".join(sorted(need - local_caps))
-        options = [name for name, (probe, _jobs) in candidates.items()
-                   if need <= probe.caps and step not in unfit.get(name, ())]
-        if not options:
-            notes.append(f"{step}: needs {missing}, which this machine lacks and no reachable machine has: runs here")
-            continue
-        best = min(options, key=lambda name: (candidates[name][0].load1 + candidates[name][0].queued * candidates[name][0].cores)
-                   / max(1, candidates[name][0].cores))
-        assigned.setdefault(best, []).append(step)
-        notes.append(f"{step}: needs {missing}, which this machine lacks: runs on {best}")
+    One idle machine takes EVERY step it can run, however short (the 60 s floor of the spreading plan is
+    for a free dev box), under its own run lock and load gate; the machine that can run the most work
+    (least loaded on a tie) is the primary. A step it cannot run goes to another idle machine only when
+    those steps add up to at least REMOTE_MIN_SECONDS there (a second sync costs more than a few short
+    steps); everything else stays here. Steps that need this checkout (LOCAL_ONLY) or have no command stay
+    here. The run therefore waits for this machine's lock only for those."""
+    movable = [n for n in step_names if n not in static_names and "local" not in requirements_for(n)]
+    assigned = {LOCAL: [n for n in step_names if n not in movable]}
+    if not candidates or not movable:
+        for name, reason in skipped.items():
+            notes.append(f"{name}: skipped, {reason}")
+        notes.append("whole run: nothing can be shipped, the run queues here as before")
+        return Plan(list(step_names), {}, notes, {LOCAL: sum(_est(n, durations) for n in step_names)}, skipped)
+
+    unfit = unfit or {}
+
+    def can_run(step, name):
+        return requirements_for(step) <= candidates[name][0].caps and step not in unfit.get(name, ())
+
+    def covered(name):
+        return sum(_est(n, durations) for n in movable if can_run(n, name))
+
+    def load_fraction(name):
+        probe, _jobs = candidates[name]
+        return (probe.load1 + probe.queued * probe.cores) / max(1, probe.cores)
+
+    primary = max(candidates, key=lambda name: (covered(name), -load_fraction(name)))
+    if covered(primary) <= 0:
+        notes.append("whole run: no machine can run any step, the run queues here as before")
+        return Plan(list(step_names), {}, notes, {LOCAL: sum(_est(n, durations) for n in step_names)}, skipped)
+    assigned[primary] = [n for n in movable if can_run(n, primary)]
+    rest = [n for n in movable if n not in assigned[primary]]
+    extra = {}
+    for step in sorted(rest, key=lambda n: -_est(n, durations)):
+        options = [name for name in candidates if name != primary and can_run(step, name)]
+        if options:
+            best = min(options, key=lambda name: (sum(_est(n, durations) for n in extra.get(name, [])), load_fraction(name)))
+            extra.setdefault(best, []).append(step)
+    for name, names in extra.items():
+        if sum(_est(n, durations) for n in names) >= REMOTE_MIN_SECONDS:
+            assigned[name] = names
+    placed = {n for key, names in assigned.items() if key != LOCAL for n in names}
+    assigned[LOCAL] = [n for n in step_names if n not in placed]
+    remote = {name: sorted(names, key=step_names.index) for name, names in assigned.items() if name != LOCAL and names}
+    seconds_by = {name: sum(_est(n, durations) for n in names) for name, names in assigned.items()}
+    notes.append(f"whole run: this machine's lint lock is busy; {primary} takes {len(remote[primary])} of {len(step_names)} steps")
     for name, reason in skipped.items():
         notes.append(f"{name}: skipped, {reason}")
-    placed = {n for names in assigned.values() for n in names}
-    local = [n for n in step_names if n not in placed]
-    if not assigned:
-        notes.append("--remote auto: every step can run here, so every step runs here")
-    seconds_by = {name: sum(_est(n, durations) for n in names) for name, names in assigned.items()}
-    seconds_by[LOCAL] = sum(_est(n, durations) for n in local)
-    return Plan(local, {name: sorted(names, key=step_names.index) for name, names in assigned.items()}, notes, seconds_by, skipped)
+    return Plan(sorted(assigned[LOCAL], key=step_names.index), remote, notes, seconds_by, skipped)
 
 
 def format_plan(plan, inventory, probes):
@@ -916,7 +988,7 @@ def unfit_path(environ=None):
 
 def load_unfit(path=None, now=None):
     """host -> set of step names that failed on that machine and passed here in the last three days (a missing
-    Python package or service there). An auto run does not send them again: it would only queue them here
+    Python package or service there). A whole run does not send them again: it would only queue them here
     afterwards. Unreadable file: nothing is known."""
     now = time.time() if now is None else now
     try:
@@ -1000,19 +1072,17 @@ def repo_roles(repo_root, sibling_dir, shared_dir):
 
 
 def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cores, local_load,
-             where=False, inventory=None, transports=None, probes=None, out=print, local_probe=None, claim=None, claimed=None,
+             where=False, inventory=None, transports=None, probes=None, out=print, whole=False, claim=None, claimed=None,
              unfit=None, odoo_lock=None):
     """Split `steps` between this machine and the others.
 
     Returns (local_steps, jobs). With `where` it prints the plan and returns ([], []). Steps that are
     cached passes, have no command, or still name a path of this machine stay here.
 
-    `auto` (2026-11-08): this machine is probed first (`local_probe`, a Probe, for tests; else a real local probe) and a
-    step goes to another machine only when this one lacks a tool it needs (make_auto_plan); with nothing missing no
-    machine is probed or contacted and every step runs here, however busy this machine's lint lock is.
-    `claim(host)` returns a handle that keeps another run on this machine from choosing the same machine
-    (lint_lock.try_claim; None when taken), `claimed(hosts)` the hosts already taken; a claimed machine is not used by an
-    `auto` run. `odoo_lock(name)` takes the dev box's Odoo-test lock for a machine whose
+    `whole`: this machine's run lock is busy (lint_lock.local_busy), so ship the whole run to an idle
+    machine (make_whole_plan). `claim(host)` returns a handle that keeps another run on this machine from
+    choosing the same machine (lint_lock.try_claim; None when taken), `claimed(hosts)` the hosts already
+    taken; a claimed machine is not used by a whole run. `odoo_lock(name)` takes the dev box's Odoo-test lock for a machine whose
     inventory entry has `odoo_test_lock` (lint_lock.try_odoo_test_lock; None when an Odoo test run holds it): such a machine is
     not used while that lock is taken, and the run keeps the lock until its share ends."""
     inventory = inventory if inventory is not None else load_inventory()
@@ -1020,15 +1090,9 @@ def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cor
         out("[*] --remote: needs a hams_open checkout with its hams_shared; running everything here")
         return list(steps), []
     wanted = runners(inventory) if mode == "auto" else {mode: inventory[mode]} if mode in inventory and inventory[mode].get("ssh") else {}
-    local_caps = None
-    if mode == "auto":
-        here = local_probe if local_probe is not None else probe_machine(LOCAL, ShellTransport())
-        local_caps = here.caps if here.reachable else None
-        lacking = [s.name for s in steps if s.name in set(pending) and s.argv is not None
-                   and (lambda need: "local" not in need and local_caps is not None and not need <= local_caps)(requirements_for(s.name))]
-        if not lacking and not where:
-            out("[*] --remote auto: this machine can run every step; every step runs here (no machine is probed)")
-            return list(steps), []
+    if mode == "auto" and not whole and not where:
+        out("[*] --remote auto: this machine has a free lint slot; every step runs here (no machine is probed)")
+        return list(steps), []
     transports = transports if transports is not None else make_transports(inventory, wanted)
     probes = probes if probes is not None else probe_all(inventory, {n: t for n, t in transports.items() if n in wanted})
     pending_set = set(pending)
@@ -1046,24 +1110,24 @@ def dispatch(mode, steps, pending, durations, step_dicts, roots, role, local_cor
     names = [s.name for s in steps]
     ordered = [n for n in names if n in movable] + [n for n in names if n not in movable]
     static = {n for n in names if n not in movable}
-    auto = mode == "auto"
-    excluded = set(claimed(list(wanted))) if (auto and claimed) else set()
+    whole = whole and mode == "auto"
+    excluded = set(claimed(list(wanted))) if (whole and claimed) else set()
     handles = {}
     for _attempt in range(len(wanted) + 1):
         plan = make_plan(ordered, static, durations, inventory, probes, mode, local_cores, local_load,
-                         local_caps=local_caps, exclude=excluded, unfit=unfit)
+                         whole=whole, exclude=excluded, unfit=unfit)
         if where or not claim:
             break
         handles = {}
         lost = set()
         for host in plan.remote:
             handle = claim(host)
-            if handle is None and auto:
+            if handle is None and whole:
                 lost.add(host)  # another run took it between the probe and now: plan again without it
                 continue
             odoo_name = inventory[host].get("odoo_test_lock")
             if odoo_name and odoo_lock:
-                # The machine is also an Odoo test host: a lint run next to an Odoo browser test ran
+                # The machine is also an Odoo test host (the mac1 VM, bruce17): a lint run next to an Odoo browser test ran
                 # it out of memory (2026-11-04), so the lint run holds the host's Odoo-test lock too, or does not use it.
                 odoo = odoo_lock(odoo_name)
                 if odoo is None:

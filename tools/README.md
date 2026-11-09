@@ -587,8 +587,8 @@ Pure apart from `os.path.realpath` calls. Tests: `StampReposTests` in `test_lint
 
 ## Odoo-test hosts and the lint runner; signal exits of test.py
 
-Some remote hosts (the mac1 VM and bruce17) are Odoo test hosts as well as optional lint runners and relay `cargo test` hosts, reached only for
-work this machine cannot run (macOS, arm64, Windows-only) or by explicit opt-in. On 2026-11-04 a relay build overlapped an Odoo browser test in the 11 GiB VM and test.py's OOM watchdog killed the
+The mac1 VM (`hams-test-debian`) and bruce17 run Odoo browser tests (Odoo, PostgreSQL, Chromium) and are also lint runners and relay
+`cargo test` hosts. On 2026-11-04 a relay build overlapped an Odoo browser test in the 11 GiB VM and test.py's OOM watchdog killed the
 Odoo run (exit 247). `remote_cargo_test.py` now takes the host's Odoo-test lock; the lint runner takes it too, through the entries below.
 
 ## Build and test scratch directories in RAM (`ram_dirs.py`)
@@ -867,13 +867,13 @@ including `check_cargo_fmt`, `check_cargo_clippy` and `check_cargo_deny`, with s
 repositories' pinned Rust (rustup, user level, `provision_build_host.sh apply-user`: rustfmt, clippy, the `wasm32-unknown-unknown` target).
 `lint_machines.json` gives it `"lint_slots": 4`: four runs at once, one lock file per slot (`lint_lock.py`), each run at `nice` 10 with its own
 TMPDIR (slots above 1: `<TMPDIR>/s<K>`) and its own warm Cargo target directory (`-sK`). A fifth run queues in the same FIFO. The other machines
-keep one slot. No run is ever sent to another machine because this one is busy (Bruce, 2026-11-08: no remote machine for anything that can run here):
-a run waits at the load gate and for a slot here and always ends with a real result and a stamp. `--remote auto` moves only a step this machine
-lacks the tools for (`make_auto_plan`); `--remote HOST` is an explicit opt-in.
+keep one slot. `--remote auto` no longer spreads steps to idle machines: another machine takes a **whole** run only as overflow, when every slot
+is taken or a run waits (a high load alone does not send it away: the run waits at the load gate, whose limit is 1.5 per core here), and a run whose overflow machine is claimed or unreachable simply waits for a
+slot here: it always ends with a real result and a stamp.
 
 ### `[@ANCHOR: lint_lock:slot_count]` `slot_count(environ=None, machines_file=None)`
 
-Purpose: how many heavy lint runs this machine lets go at once. `RunLock` asks it.
+Purpose: how many heavy lint runs this machine lets go at once. `RunLock` and `local_busy` ask it.
 
 | Argument | Type | Meaning |
 |---|---|---|
@@ -969,28 +969,20 @@ Purpose: puts `~/.cargo/bin` (rustup's cargo, rustfmt and clippy at the pinned v
 component-less `/usr/bin/cargo`. `run_linters.main()` calls it first. Argument `environ`: dict or `None` for `os.environ`. Returns True when PATH changed. Tests:
 `test_prefer_user_toolchain_puts_rustup_first_once` in `test_lint_remote.py`.
 
-### `[@ANCHOR: lint_remote:make_auto_plan]` `make_auto_plan(step_names, static_names, durations, candidates, skipped, notes, local_caps, unfit)`
+### `[@ANCHOR: lint_remote:apply_reserve]` `apply_reserve(machine, probe, jobs)`
 
-Purpose: the routing rule of `--remote auto` (Bruce, 2026-11-08: remote machines are used only for work that cannot run on the development
-machine). Every step stays on this machine, waiting for its lint lock and slot when they are busy, unless a probe of this machine shows it lacks a tool the
-step needs (`requirements_for`) and a reachable machine that is not above its load ratio and not claimed has all of them. A busy lock, a busy machine or a
-long queue never moves a step. Called by `make_plan()` (mode `auto`), which `lint_remote.dispatch()` calls; `dispatch` probes this machine first and contacts no
-other machine at all when nothing is missing here.
+Purpose: the `reserve` policy of a `lint_machines.json` entry, for a machine that a person also uses interactively and that therefore takes overflow only. `lint_remote.make_plan()` calls it for every
+candidate machine before the load check. Keys of `reserve` (all optional): `skip_when_user_session` (true: skipped while any login session is open, as `who` reports in the probe's `sessions=` line),
+`max_core_fraction` (the run gets at most that share of the cores, at least one job) and `never_caps` (capabilities hidden from the router, e.g. `["chrome"]`, so a browser step is never sent there).
+The entry also uses the existing `nice`, `max_concurrent` and `max_load_ratio` (a low ratio is the low load limit). An entry with `pending_address: true` and no `ssh` is listed as not a runner until an `ssh` entry is added.
 
 | Argument | Type | Meaning |
 |---|---|---|
-| `step_names` | list of str | Every step of the run, in order. |
-| `static_names` | set of str | Steps with no command; they stay. |
-| `durations` | dict str to float | Recorded seconds per step (for the plan's totals). |
-| `candidates` | dict str to (Probe, jobs) | Reachable, not busy, not claimed machines. |
-| `skipped` | dict str to str | Machine to the reason it was skipped; copied into the notes. |
-| `notes` | list of str | Appended to; printed as `[*] --remote: ...`. |
-| `local_caps` | frozenset of str or `None` | Tools this machine has (from the local probe); `None` means nothing is known missing, so nothing moves. |
-| `unfit` | dict str to set | Steps that recently failed on a machine and passed here; never sent there again. |
+| `machine` | dict | The inventory entry. |
+| `probe` | `Probe` | What the probe measured (`sessions`, `cores`, `caps`). |
+| `jobs` | int | The entry's worker count before the policy. |
 
-Returns a `Plan`: `local` (steps run here, in their original order), `remote` (machine to its steps), `notes`, `seconds`, `skipped`. A step that needs this checkout (a
-`local` requirement) always stays, as does a step no machine can run (the note says so, and the step reports its own missing tool). Pure: no I/O. Tests:
-`AutoPlanTests` in `test_lint_remote.py` and `RemoteDefaultTests` in `test_run_linters.py` (`# Tests [@ANCHOR: lint_remote:make_auto_plan]`).
+Returns `(probe, jobs, skip_reason)`: the probe with the hidden capabilities removed, the limited job count, and a non-empty reason when the machine must be skipped. Pure. Tests: `ReserveTests` in `test_lint_remote.py`.
 
 ### `[@ANCHOR: lint_lock:held_locks]` `HeldLocks`
 
@@ -1011,7 +1003,7 @@ can be used where a claim is expected, which is why this quacks like the plain f
 
 Purpose: lets a lint run use a remote host that also runs Odoo tests only while no Odoo test run uses it, and keeps Odoo test runs off it
 meanwhile. `lint_remote.dispatch()` calls it (through `run_linters.py`) for every machine chosen for a run whose entry in
-`lint_machines.json` has `"odoo_test_lock": "<name>"` (for example `mac1` or `bruce17`). The name is the lock file of
+`lint_machines.json` has `"odoo_test_lock": "<name>"` (the mac1 VM: `mac1`; bruce17: `bruce17`). The name is the lock file of
 `devbox_tools/remote_odoo_test.py` (`~/.cache/hams-remote-test/<name>.lock`, `remote_odoo_test.lock_path`), the same file
 `remote_cargo_test.try_lock` takes for relay builds.
 
@@ -1025,7 +1017,7 @@ Returns the open, exclusively flocked file (keep it open for as long as the mach
 directory cannot be created. It never raises for those causes and never waits.
 
 Special concerns: non-blocking; creates the directory and the lock file; no other side effects; safe to retry. The caller treats `None` as
-"this machine is busy": the machine is excluded and the run is planned again without it, so a lint run never
+"this machine is busy": the machine is excluded and the run is planned again without it (whole or spread plans alike), so a lint run never
 queues behind an Odoo test or the reverse. The lock is not inherited by child processes. See also `HeldLocks`, `make_plan()` (its
 `exclude` set is honoured in every mode), and the tests `test_the_odoo_test_lock_is_exclusive_with_an_odoo_run_and_released_together_with_the_claim`
 in `test_lint_lock.py` and `test_a_machine_whose_odoo_test_lock_is_taken_is_not_used_and_the_lock_is_kept_for_the_run` in

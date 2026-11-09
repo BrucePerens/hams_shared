@@ -125,10 +125,10 @@ class RequirementTests(unittest.TestCase):
 
 
 class PlanTests(unittest.TestCase):
-    def plan(self, mode="auto", probes=None, names=None, local_load=0.0, local_caps=None):
+    def plan(self, mode="auto", probes=None, names=None, local_load=0.0, whole=False):
         names = names or ["pytest daemons/a", "pytest daemons/b", "check_x", "eslint", "check_summation_bias"]
         probes = probes if probes is not None else {"big": FULL, "small": FULL}
-        return lr.make_plan(names, set(), DURATIONS, INVENTORY, probes, mode, 16, local_load, local_caps=local_caps)
+        return lr.make_plan(names, set(), DURATIONS, INVENTORY, probes, mode, 16, local_load, whole=whole)
 
     def test_local_mode_keeps_everything(self):
         plan = self.plan("local")
@@ -137,13 +137,12 @@ class PlanTests(unittest.TestCase):
 
     def test_auto_keeps_every_step_on_the_dev_box_even_when_it_is_loaded_and_the_runners_are_idle(self):
         """Tests [@ANCHOR: lint_remote:prefer_user_toolchain]: the dev box is the primary lint runner (2026-11-08); an idle remote
-        is no reason to send a step there. Only a named machine (--remote HOST) or a step this machine lacks the tools for leaves it."""
+        is no reason to send a step there. Only a named machine (--remote HOST) or a whole-run overflow leaves it."""
         for load in (0.0, 40.0):
-            for caps in (None, WFULL.caps):
-                plan = self.plan(local_load=load, local_caps=caps)
-                self.assertEqual(plan.remote, {}, "load %s" % load)
-                self.assertEqual(sorted(plan.local), sorted(DURATIONS))
-                self.assertIn("every step runs here", " ".join(plan.notes))
+            plan = self.plan(local_load=load)
+            self.assertEqual(plan.remote, {}, "load %s" % load)
+            self.assertEqual(sorted(plan.local), sorted(DURATIONS))
+            self.assertIn("every step runs here", " ".join(plan.notes))
 
     def test_a_named_machine_still_spreads_heavy_steps_away_from_the_dev_box(self):
         plan = self.plan("big", probes={"big": FULL}, local_load=40.0)
@@ -167,21 +166,21 @@ class PlanTests(unittest.TestCase):
             self.assertEqual(env["PATH"].count(".cargo/bin"), 1)
 
     def test_every_step_is_in_exactly_one_place(self):
-        plan = self.plan(local_load=40.0, local_caps=NO_PYTEST)
+        plan = self.plan(local_load=40.0, whole=True)
         everything = plan.local + [n for names in plan.remote.values() for n in names]
         self.assertEqual(len(everything), len(set(everything)))
 
     def test_least_loaded_machine_gets_the_work(self):
         busy = lr.Probe("big", True, cores=8, load1=6.0, caps=FULL.caps)
         idle = lr.Probe("small", True, cores=8, load1=0.0, caps=FULL.caps)
-        # This machine lacks pytest: the step goes to the idle machine, not the busy one.
-        plan = self.plan(probes={"big": busy, "small": idle}, names=["pytest daemons/a"], local_load=40.0, local_caps=NO_PYTEST)
+        # Overflow: this machine has no free slot, so the whole run goes to the idle machine, not the busy one.
+        plan = self.plan(probes={"big": busy, "small": idle}, names=["pytest daemons/a"], local_load=40.0, whole=True)
         self.assertEqual(list(plan.remote), ["small"])
 
     def test_a_machine_above_its_load_ratio_or_unreachable_is_skipped_with_a_reason(self):
         overloaded = lr.Probe("big", True, cores=8, load1=7.5, caps=FULL.caps)
         down = lr.Probe("small", False, error="timed out")
-        plan = self.plan(probes={"big": overloaded, "small": down}, local_caps=NO_PYTEST)
+        plan = self.plan(probes={"big": overloaded, "small": down}, whole=True)
         self.assertEqual(plan.remote, {})
         text = " ".join(plan.notes)
         self.assertIn("busy", text)
@@ -218,53 +217,71 @@ class PlanTests(unittest.TestCase):
 
 
 WFULL = lr.Probe("m", True, cores=8, load1=0.5, caps=FULL.caps | {"eslint"})
-NO_PYTEST = frozenset({"python3", "git", "tar", "node", "eslint", "flake8", "cargo", "clippy", "chrome", "odoo"})
 
 
-class AutoPlanTests(unittest.TestCase):
-    """2026-11-08 (Bruce): no remote machine for anything that can run on the dev box. `auto` moves only a step this
-    machine lacks the tools for; a busy lint lock or load never moves anything. Tests [@ANCHOR: lint_remote:make_auto_plan]."""
+class WholeRunPlanTests(unittest.TestCase):
+    """2026-11-03: a run that would queue for the dev box's lock ships whole to an idle machine."""
 
     NAMES = ["pytest daemons/a", "pytest daemons/b", "check_x", "eslint", "check_summation_bias"]
 
-    def plan(self, probes, names=None, local_caps=NO_PYTEST, exclude=(), unfit=None):
-        return lr.make_plan(names or self.NAMES, set(), DURATIONS, INVENTORY, probes, "auto", 16, 40.0,
-                            local_caps=local_caps, exclude=exclude, unfit=unfit)
+    def plan(self, probes, names=None, whole=True, exclude=(), inventory=None):
+        return lr.make_plan(names or self.NAMES, set(), DURATIONS, inventory or INVENTORY, probes, "auto", 16, 40.0,
+                            whole=whole, exclude=exclude)
 
-    def test_only_the_steps_this_machine_cannot_run_leave_it_however_busy_it_is(self):
+    def test_lock_busy_and_a_machine_idle_ships_every_runnable_step_even_a_short_one(self):
         plan = self.plan({"big": WFULL, "small": WFULL})
-        self.assertEqual(len(plan.remote), 1, "one machine takes them")
+        self.assertEqual(len(plan.remote), 1, "one machine takes the run, not both")
         (host, names), = plan.remote.items()
-        self.assertEqual(names, ["pytest daemons/a", "pytest daemons/b"], "eslint, check_x and the checkout step stay here")
-        self.assertEqual(plan.local, ["check_x", "eslint", "check_summation_bias"])
-        self.assertIn("needs pytest", " ".join(plan.notes))
+        self.assertEqual(names, ["pytest daemons/a", "pytest daemons/b", "check_x", "eslint"])
+        self.assertEqual(plan.local, ["check_summation_bias"], "only the step that needs this checkout stays")
+        self.assertIn("whole run", " ".join(plan.notes))
 
-    def test_a_machine_with_everything_here_keeps_every_step_even_with_idle_runners(self):
-        plan = self.plan({"big": WFULL, "small": WFULL}, local_caps=WFULL.caps)
-        self.assertEqual((plan.remote, plan.local), ({}, self.NAMES))
+    def test_spreading_still_keeps_short_steps_here_when_the_lock_is_free(self):
+        plan = self.plan({"big": WFULL, "small": WFULL}, whole=False)
+        self.assertIn("check_x", plan.local)
 
-    def test_the_less_loaded_machine_with_the_needed_tools_is_chosen(self):
+    def test_the_less_loaded_machine_with_the_same_tools_is_chosen(self):
         busy = lr.Probe("big", True, cores=8, load1=3.0, caps=WFULL.caps)
         idle = lr.Probe("small", True, cores=8, load1=0.2, caps=WFULL.caps)
         self.assertEqual(list(self.plan({"big": busy, "small": idle}).remote), ["small"])
 
-    def test_a_machine_without_the_needed_tool_is_not_used_and_the_step_runs_here_with_a_note(self):
-        no_pytest = lr.Probe("big", True, cores=8, load1=0.0, caps=frozenset({"python3", "git", "tar"}))
-        plan = self.plan({"big": no_pytest}, names=["pytest daemons/a"])
-        self.assertEqual((plan.remote, plan.local), ({}, ["pytest daemons/a"]))
-        self.assertIn("runs here", " ".join(plan.notes))
+    def test_the_machine_that_can_run_the_most_wins_over_the_idler_one(self):
+        no_node = lr.Probe("big", True, cores=8, load1=0.0, caps=frozenset({"python3", "pytest", "flake8"}))
+        full = lr.Probe("small", True, cores=8, load1=2.0, caps=WFULL.caps)
+        plan = self.plan({"big": no_node, "small": full})
+        self.assertEqual(list(plan.remote), ["small"])
 
-    def test_a_claimed_or_unreachable_machine_is_skipped(self):
+    def test_a_machine_with_a_run_in_progress_or_in_line_is_not_used_so_all_busy_queues_as_before(self):
+        held = lr.Probe("big", True, cores=8, load1=1.0, caps=WFULL.caps, held=True)
+        queued = lr.Probe("small", True, cores=8, load1=0.1, queued=1, caps=WFULL.caps)
+        plan = self.plan({"big": held, "small": queued})
+        self.assertEqual(plan.remote, {})
+        self.assertEqual(plan.local, self.NAMES, "every step stays here: the run queues for the lock as it always did")
+        self.assertIn("busy", " ".join(plan.notes))
+
+    def test_a_claimed_machine_is_skipped_and_the_other_one_is_used(self):
         plan = self.plan({"big": WFULL, "small": WFULL}, exclude={"big"})
         self.assertEqual(list(plan.remote), ["small"])
-        none = self.plan({"big": WFULL, "small": lr.Probe("small", False, error="no route")}, exclude={"big"})
-        self.assertEqual((none.remote, none.local), ({}, self.NAMES))
+        none = self.plan({"big": WFULL, "small": WFULL}, exclude={"big", "small"})
+        self.assertEqual(none.remote, {})
         self.assertIn("claimed", " ".join(none.notes))
-        self.assertIn("unreachable", " ".join(none.notes))
 
-    def test_a_step_unfit_on_a_machine_is_not_sent_there_again(self):
-        plan = self.plan({"big": WFULL}, names=["pytest daemons/a"], unfit={"big": {"pytest daemons/a"}})
-        self.assertEqual((plan.remote, plan.local), ({}, ["pytest daemons/a"]))
+    def test_unreachable_machines_leave_everything_here(self):
+        down = lr.Probe("big", False, error="timed out")
+        plan = self.plan({"big": down, "small": lr.Probe("small", False, error="no route")})
+        self.assertEqual((plan.remote, plan.local), ({}, self.NAMES))
+
+    def test_steps_the_chosen_machine_cannot_run_go_to_the_other_only_when_they_add_up(self):
+        py_only = lr.Probe("big", True, cores=8, load1=0.0, caps=frozenset({"python3", "pytest", "flake8"}))
+        js_only = lr.Probe("small", True, cores=8, load1=0.0, caps=frozenset({"python3", "node", "eslint"}))
+        plan = self.plan({"big": py_only, "small": js_only}, names=["pytest daemons/a", "pytest daemons/b", "eslint"])
+        self.assertEqual(plan.remote, {"big": ["pytest daemons/a", "pytest daemons/b"], "small": ["eslint"]})
+        # a few seconds of node work do not justify a second machine and a second sync
+        durations = dict(DURATIONS, check_js_syntax=3.0)
+        short = lr.make_plan(["pytest daemons/a", "pytest daemons/b", "check_js_syntax"], set(), durations, INVENTORY,
+                             {"big": py_only, "small": js_only}, "auto", 16, 40.0, whole=True)
+        self.assertEqual(list(short.remote), ["big"])
+        self.assertEqual(short.local, ["check_js_syntax"])
 
     def test_every_step_is_placed_exactly_once(self):
         plan = self.plan({"big": WFULL, "small": WFULL})
@@ -325,20 +342,19 @@ class DispatchWholeRunTests(unittest.TestCase):
         self.patch.start()
         self.addCleanup(self.patch.stop)
 
-    def dispatch(self, probes, lacking_pytest, claim=None, claimed=None):
+    def dispatch(self, probes, whole, claim=None, claimed=None):
         transports = {n: object() for n in ("big", "small")}
         return lr.dispatch(
             "auto", self.steps, [s.name for s in self.steps], DURATIONS, self.dicts, self.roots, "hams_open", 16, 40.0,
-            inventory=INVENTORY, transports=transports, probes=probes, out=self.out.append,
-            local_probe=lr.Probe("devbox", True, cores=16, caps=NO_PYTEST if lacking_pytest else FULL.caps),
+            inventory=INVENTORY, transports=transports, probes=probes, out=self.out.append, whole=whole,
             claim=claim, claimed=claimed,
         )
 
-    def test_only_a_step_this_machine_cannot_run_is_sent_to_a_machine_that_can_and_the_rest_stays_here(self):
+    def test_lock_busy_and_a_machine_idle_sends_the_run_there_and_keeps_only_local_steps(self):
         claims = []
         local, jobs = self.dispatch({"big": WFULL, "small": WFULL}, True, claim=lambda host: claims.append(host) or io.StringIO(),
                                     claimed=lambda hosts: set())
-        self.assertEqual([s.name for s in local], ["check_x", "check_summation_bias"])
+        self.assertEqual([s.name for s in local], ["check_summation_bias"])
         self.assertEqual(len(jobs), 1)
         self.assertEqual(claims, [jobs[0].host])
         self.assertIsNotNone(jobs[0].claim)
@@ -355,10 +371,10 @@ class DispatchWholeRunTests(unittest.TestCase):
         self.assertNotEqual(tried[0], tried[1])
         self.assertEqual([j.host for j in jobs], [tried[1]])
 
-    def test_everything_claimed_runs_here_with_no_machine_used(self):
+    def test_everything_claimed_or_busy_queues_here_as_before(self):
         local, jobs = self.dispatch({"big": WFULL, "small": WFULL}, True, claim=lambda host: None, claimed=lambda hosts: set(hosts))
         self.assertEqual((len(local), jobs), (3, []))
-        self.assertTrue(any("claimed" in line for line in self.out), self.out)
+        self.assertTrue(any("queues here" in line or "claimed" in line for line in self.out), self.out)
 
     def test_unreachable_machines_fall_back_to_a_local_run(self):
         down = lr.Probe("x", False, error="timed out")
@@ -377,7 +393,7 @@ class DispatchWholeRunTests(unittest.TestCase):
         transports = {n: object() for n in ("big", "small")}
         local, jobs = lr.dispatch(
             "auto", self.steps, [s.name for s in self.steps], DURATIONS, self.dicts, self.roots, "hams_open", 16, 40.0,
-            inventory=inventory, transports=transports, probes={"big": WFULL, "small": WFULL}, out=self.out.append, local_probe=lr.Probe("devbox", True, caps=NO_PYTEST),
+            inventory=inventory, transports=transports, probes={"big": WFULL, "small": WFULL}, out=self.out.append, whole=True,
             claim=lambda host: io.StringIO(), claimed=lambda hosts: set(), odoo_lock=odoo_lock,
         )
         self.assertEqual([j.host for j in jobs], ["small"], "the machine an Odoo test run holds is skipped")
@@ -386,7 +402,7 @@ class DispatchWholeRunTests(unittest.TestCase):
         local, jobs = lr.dispatch(
             "auto", self.steps, [s.name for s in self.steps], DURATIONS, self.dicts, self.roots, "hams_open", 16, 40.0,
             inventory=dict(inventory, small=dict(INVENTORY["small"], odoo_test_lock="smallbox")), transports=transports,
-            probes={"big": WFULL, "small": WFULL}, out=self.out.append, local_probe=lr.Probe("devbox", True, caps=NO_PYTEST),
+            probes={"big": WFULL, "small": WFULL}, out=self.out.append, whole=True,
             claim=lambda host: io.StringIO(), claimed=lambda hosts: set(), odoo_lock=lambda name: held,
         )
         self.assertEqual(len(jobs), 1)
@@ -397,21 +413,19 @@ class DispatchWholeRunTests(unittest.TestCase):
     def test_with_every_odoo_test_lock_taken_the_run_stays_here(self):
         inventory = {k: dict(v, odoo_test_lock=k) if "ssh" in v else v for k, v in INVENTORY.items()}
         transports = {n: object() for n in ("big", "small")}
-        for lacking in (True, False):
+        for whole in (True, False):
             local, jobs = lr.dispatch(
                 "auto", self.steps, [s.name for s in self.steps], DURATIONS, self.dicts, self.roots, "hams_open", 16, 40.0,
-                inventory=inventory, transports=transports, probes={"big": WFULL, "small": WFULL}, out=self.out.append,
-                local_probe=lr.Probe("devbox", True, caps=NO_PYTEST if lacking else FULL.caps),
+                inventory=inventory, transports=transports, probes={"big": WFULL, "small": WFULL}, out=self.out.append, whole=whole,
                 claim=lambda host: io.StringIO(), claimed=lambda hosts: set(), odoo_lock=lambda name: None,
             )
-            self.assertEqual((len(local), jobs), (3, []), "lacking=%s" % lacking)
+            self.assertEqual((len(local), jobs), (3, []), "whole=%s" % whole)
 
-    def test_when_this_machine_can_run_every_step_nothing_leaves_it_and_no_machine_is_probed_or_claimed(self):
+    def test_without_whole_nothing_leaves_this_machine_and_no_machine_is_probed_or_claimed(self):
         claims = []
         local, jobs = lr.dispatch(
             "auto", self.steps, [s.name for s in self.steps], DURATIONS, self.dicts, self.roots, "hams_open", 16, 0.0,
-            inventory=INVENTORY, probes=None, transports=None, out=self.out.append,
-            local_probe=lr.Probe("devbox", True, cores=16, caps=FULL.caps),
+            inventory=INVENTORY, probes=None, transports=None, out=self.out.append, whole=False,
             claim=lambda host: claims.append(host), claimed=lambda hosts: set(),
         )
         self.assertEqual(([s.name for s in local], jobs), ([s.name for s in self.steps], []))
@@ -437,7 +451,7 @@ class UnfitTests(unittest.TestCase):
         self.assertEqual(lr.load_unfit(path, now=1000.0 + lr.UNFIT_TTL_SECONDS + 1), {}, "entries expire")
         self.assertEqual(lr.load_unfit(os.path.join(os.path.dirname(path), "none.json")), {})
         plan = lr.make_plan(["pytest daemons/a", "pytest daemons/b"], set(), DURATIONS, INVENTORY, {"big": FULL, "small": FULL},
-                            "auto", 16, 40.0, local_caps=NO_PYTEST, unfit={"big": {"pytest daemons/a"}, "small": {"pytest daemons/a"}})
+                            "auto", 16, 40.0, whole=True, unfit={"big": {"pytest daemons/a"}, "small": {"pytest daemons/a"}})
         self.assertNotIn("pytest daemons/a", [n for ns in plan.remote.values() for n in ns])
         self.assertIn("pytest daemons/a", plan.local)
 
@@ -819,3 +833,47 @@ class StepCostEstimateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# Tests [@ANCHOR: lint_remote:apply_reserve]
+class ReserveTests(unittest.TestCase):
+    """A reserved machine (somebody's interactive workstation) takes overflow only, and never a browser step."""
+
+    RESERVE = {"ssh": {"target": "ws"}, "jobs": 8, "max_load_ratio": 0.25,
+               "reserve": {"skip_when_user_session": True, "max_core_fraction": 0.5, "never_caps": ["chrome"]}}
+
+    def test_a_machine_without_reserve_is_unchanged(self):
+        probe = lr.Probe("m", True, cores=8, caps=FULL.caps)
+        self.assertEqual(lr.apply_reserve({"jobs": 4}, probe, 4), (probe, 4, ""))
+
+    def test_an_open_user_session_skips_the_machine(self):
+        busy = lr.Probe("ws", True, cores=8, caps=FULL.caps, sessions=1)
+        self.assertIn("user session", lr.apply_reserve(self.RESERVE, busy, 8)[2])
+
+    def test_jobs_are_limited_to_half_the_cores_and_chrome_is_hidden(self):
+        probe, jobs, why = lr.apply_reserve(self.RESERVE, lr.Probe("ws", True, cores=8, caps=FULL.caps), 8)
+        self.assertEqual((jobs, why), (4, ""))
+        self.assertNotIn("chrome", probe.caps)
+        self.assertIn("pytest", probe.caps)
+        self.assertEqual(lr.apply_reserve(self.RESERVE, lr.Probe("ws", True, cores=1, caps=FULL.caps), 8)[1], 1)
+
+    def test_the_plan_skips_a_machine_with_a_session_and_never_sends_it_a_browser_step(self):
+        inventory = dict(INVENTORY, ws=self.RESERVE)
+        names = ["pytest daemons/a", "check_owl_templates"]
+        free = lr.Probe("ws", True, cores=8, load1=0.1, caps=FULL.caps | {"odoo"})
+        plan = lr.make_plan(names, set(), dict(DURATIONS, check_owl_templates=300.0), inventory, {"ws": free}, "ws", 16, 40.0)
+        self.assertEqual(plan.remote, {"ws": ["pytest daemons/a"]})
+        self.assertIn("check_owl_templates", plan.local)
+        sessioned = lr.Probe("ws", True, cores=8, load1=0.1, caps=FULL.caps, sessions=2)
+        plan = lr.make_plan(names, set(), DURATIONS, inventory, {"ws": sessioned}, "ws", 16, 40.0)
+        self.assertEqual(plan.remote, {})
+        self.assertIn("user session", " ".join(plan.notes))
+
+    def test_the_probe_reads_sessions_and_the_real_inventory_entry_is_not_a_runner_until_it_has_an_address(self):
+        self.assertEqual(lr.parse_probe("m", "os=Linux\ncores=4\nsessions=3\n").sessions, 3)
+        self.assertEqual(lr.parse_probe("m", "os=Linux\nsessions=x\n").sessions, 0)
+        real = lr.load_inventory()
+        self.assertEqual((real["bruce16"]["host"], real["bruce16"]["user"], real["bruce16"]["provisioned"]), ("bruce16.lan", "ai", False))
+        self.assertNotIn("bruce16", lr.runners(real))
+        self.assertEqual(real["bruce16"]["nice"], 19)
+        self.assertTrue(real["bruce16"]["reserve"]["skip_when_user_session"])

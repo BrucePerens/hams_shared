@@ -41,10 +41,11 @@ run.
 7. **Robust.** Waiters and the runner are recorded with pid and process start time; a dead waiter is dropped
    when the batch seals, a dead runner frees the running slot and its members re-queue themselves (at most three
    times, then they run alone); the verdict file is written before the running slot is released.
-8. **Remote machines.** The leader's combined run goes through `run_linters.py` like any run. One running batch per
+8. **Remote machines.** The leader's combined run goes through `run_linters.py --remote auto` like any run, so
+   a whole batch may be shipped to an idle machine, which has its own lock and queue. One running batch per
    dev box and repository is the limit; per-target-machine batches are a follow-up.
-   *Amended 2026-11-08:* the dev box is now the primary lint runner and runs several lint runs at once in slots (4 there); a run
-   never goes to another machine because this one is busy (*amended again 2026-11-08*: remote machines only for work this machine cannot run, or by explicit `--remote HOST`). The limit for lint is therefore the slot count (`lint_batch.batches_that_may_run`, as the test
+   *Amended 2026-11-08:* the dev box is now the primary lint runner and runs several lint runs at once in slots (4 there); a whole run
+   goes to another machine only as overflow. The limit for lint is therefore the slot count (`lint_batch.batches_that_may_run`, as the test
    queue's is the test slot count), not one, and "per target machine" is not a separate claim: the leader's run takes a slot of the machine it
    runs on.
 
