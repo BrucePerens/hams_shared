@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 
+import check_target
 import lint_cache
 import lint_exec
 import rust_impact
@@ -355,11 +356,14 @@ def main():
         print("Usage: check_cargo_clippy.py <repo_root> [--changed-files PATH...]")
         sys.exit(1)
 
+    target = check_target.require_directory(positional[0], "check_cargo_clippy")
     crate_dirs = [
         (repo_root, crate_dir)
-        for repo_root in _resolve_repo_roots(positional[0])
+        for repo_root in _resolve_repo_roots(target)
         for crate_dir in find_cargo_crates(repo_root)
     ]
+    # Counted before --changed narrowing: narrowing everything away is a legitimate "nothing to check", a tree with no crate is not.
+    check_target.require_scanned(len(crate_dirs), target, "check_cargo_clippy", "Cargo crates (Cargo.toml with a [package])")
     crate_dirs = narrow_to_changed(crate_dirs, changed, "clippy")
     if not crate_dirs:
         sys.exit(0)

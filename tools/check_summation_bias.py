@@ -100,6 +100,13 @@ def reference_size(filepath, old_size, heads, new_blob, repo_root):
     return clean if clean is not None else min(sizes)
 
 
+def _has_no_head():
+    """True inside a git work tree that has no commit yet (the first commit)."""
+    inside = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+    head = subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"], capture_output=True, text=True)
+    return inside.returncode == 0 and head.returncode != 0
+
+
 def _moved_not_lost(filepath, changed_files, staged, repo_root):
     """True when the HEAD text of the Markdown file `filepath` is all present verbatim (check_no_rule_lost units) in the new
     content of the changed Markdown files of this change (the file itself included): a section moved to an on-demand
@@ -145,9 +152,16 @@ def main():
         diff_command = ["git", "diff", "--name-only"] + (["--cached"] if staged else ["HEAD"])
         res = subprocess.run(diff_command, capture_output=True, text=True, check=True)
         modified_files = [f for f in res.stdout.strip().split("\n") if f]
-    except subprocess.CalledProcessError:
-        # Not in a git repo or no HEAD yet
-        sys.exit(0)
+    except subprocess.CalledProcessError as error:
+        # A repository with no commit yet has no HEAD to compare with: nothing to measure a reduction against, which is the
+        # one legitimate "no diff". Anything else (not a git repository, a diff git cannot compute) means the checker could not
+        # look, so it is not a pass (exit 2, with git's own message).
+        if _has_no_head():
+            sys.exit(0)
+        detail = (error.stderr or "").strip() if isinstance(error.stderr, str) else ""
+        print(f"[!] check_summation_bias: git could not list the modified files ({' '.join(error.cmd)}: {detail or 'exit ' + str(error.returncode)}); "
+              "nothing was compared, so this is not a pass. Next: run it inside a git work tree.", file=sys.stderr)
+        sys.exit(2)
 
     violation = False
 

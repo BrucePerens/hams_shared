@@ -118,6 +118,7 @@ class MainTests(unittest.TestCase):
     def _argv(self):
         return ["check_pip_audit.py", self.tmp]
 
+    @patch.dict(os.environ, {"HAMS_CHECK_ALLOW_EMPTY": "1"})  # a step that may legitimately see zero files (check_target.py)
     def test_no_requirements_files_exits_0_without_calling_subprocess_at_all(self):
         with patch.object(sys, "argv", self._argv()), patch(
             "check_pip_audit.subprocess.run"
@@ -126,6 +127,16 @@ class MainTests(unittest.TestCase):
                 chk.main()
             self.assertEqual(ctx.exception.code, 0)
             mock_run.assert_not_called()
+
+    @patch.dict(os.environ)
+    def test_pip_audit_no_requirements_with_nothing_to_scan_is_exit_2_by_hand(self):
+        os.environ.pop("HAMS_CHECK_ALLOW_EMPTY", None)
+        with patch.object(sys, "argv", self._argv()), patch("check_pip_audit.subprocess.run") as mock_run:
+            with self.assertRaises(SystemExit) as ctx:
+                chk.main()
+            self.assertEqual(ctx.exception.code, 2)
+            mock_run.assert_not_called()
+
 
     def test_pip_audit_not_installed_exits_1_with_a_clear_message(self):
         _write(os.path.join(self.tmp, "requirements.txt"), "requests==2.0\n")

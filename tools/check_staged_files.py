@@ -10,6 +10,9 @@ git-hooks/pre-commit now fails closed when it cannot find its checkers, and this
 
 Only files being added or modified are judged, by the size of the staged blob, so removing an old large file is allowed.
 A deliberate large file is named in LARGE_FILES_ALLOWED (exact path) with the reason beside it; nothing else is exempt.
+
+Not converted to check_target.py, deliberately: this is a git hook with no target directory, and an index with nothing staged is the
+normal case (exit 0). It already fails loudly when git itself fails (`check=True`: a traceback and a non-zero exit, not a pass).
 """
 
 import subprocess

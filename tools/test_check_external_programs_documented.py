@@ -243,7 +243,14 @@ class TreeTests(unittest.TestCase):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(cepd.main([]), 2)
             with tempfile.TemporaryDirectory() as empty:
-                self.assertEqual(cepd.main([empty]), 0)
+                # A repository without a relay scans nothing: refused by hand, normal for a step that declares it (check_target.py).
+                with unittest.mock.patch.dict(os.environ, {"HAMS_CHECK_ALLOW_EMPTY": "1"}):
+                    self.assertEqual(cepd.main([empty]), 0)
+                with unittest.mock.patch.dict(os.environ):
+                    os.environ.pop("HAMS_CHECK_ALLOW_EMPTY", None)
+                    with self.assertRaises(SystemExit) as raised:
+                        cepd.main([empty])
+                    self.assertEqual(raised.exception.code, 2)
         self.assertIn("SUCCESS", out.getvalue())
         _write(os.path.join(self.relay, "src", "net.rs"), 'fn a() { Command::new("zzz_unknown"); }\n')
         self.assertEqual(cepd.find_findings(self.root, self.adr, self.watch)[0].count("zzz_unknown"), 1)

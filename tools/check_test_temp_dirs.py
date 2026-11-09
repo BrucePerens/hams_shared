@@ -32,6 +32,7 @@ import os
 import re
 import sys
 
+import check_target
 from tree_files import tree_files
 
 SKIP_DIRS = {
@@ -115,11 +116,14 @@ def main(argv=None):
     args = ap.parse_args(argv)
     roots = []
     for given in args.roots:
-        r = os.path.abspath(given)
+        r = check_target.require_directory(given, "check_test_temp_dirs")
         if os.path.basename(r) == "hams_shared":
             r = os.path.dirname(r)
         if r not in roots:
             roots.append(r)
+    check_target.require_scanned(
+        sum(len(list(find_rust_files(r))) for r in roots), ", ".join(roots), "check_test_temp_dirs", "Rust files"
+    )
     found = scan(roots)
     if args.generate_baseline:
         with open(args.baseline, "w", encoding="utf-8") as f:

@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 
+import check_target
 import lint_exec
 from tree_files import tree_walk
 
@@ -98,11 +99,13 @@ def main():
         print("Usage: check_cargo_deny.py <repo_root>")
         sys.exit(1)
 
+    target = check_target.require_directory(sys.argv[1], "check_cargo_deny")
     crate_dirs = [
         (repo_root, crate_dir)
-        for repo_root in _resolve_repo_roots(sys.argv[1])
+        for repo_root in _resolve_repo_roots(target)
         for crate_dir in find_deny_crates(repo_root)
     ]
+    check_target.require_scanned(len(crate_dirs), target, "check_cargo_deny", "crates with a Cargo.toml and a deny.toml")
     if not crate_dirs:
         sys.exit(0)
 

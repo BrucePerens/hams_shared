@@ -24,6 +24,8 @@ import re
 import subprocess
 import sys
 
+import check_target
+
 HOOK_SCRIPT = "claude_hooks/guard_signals.py"
 BACKUP_HOOK_SCRIPT = "claude_hooks/guard_backup_secrets.py"
 # script -> the tool names whose PreToolUse matcher must reach it (the matcher is a regex on the tool name).
@@ -116,6 +118,8 @@ def main(argv=None, out=None):
     argv = sys.argv[1:] if argv is None else argv
     out = out or sys.stdout
     repos = argv or [os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
+    for repo in repos:
+        check_target.require_directory(repo, "check_claude_hook_registration")
     problems = [problem for repo in repos for problem in check_repo(repo)]
     for problem in problems:
         print(f"🚨 {problem}", file=out)

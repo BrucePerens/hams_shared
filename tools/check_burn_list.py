@@ -22,6 +22,7 @@ import subprocess
 import sys
 import xml.parsers.expat
 
+import check_target
 from tree_files import tree_walk
 
 # Odoo's command-line loading flags. Odoo 19 sets these in `odoo/tools/config.py` and never
@@ -5750,8 +5751,7 @@ def main():
     # A directory that does not exist walks nothing and used to print "Checked 0 files ... Passed" with exit 0: a mistyped or renamed
     # module looked clean. tools/test.py names a single test class as `module:TestClass`, which is deliberately not a directory.
     if not os.path.isdir(target_dir) and ":" not in os.path.basename(target_dir):
-        print(f"[!] ERROR: {args.directory!r} is not a directory (resolved to {target_dir}); nothing was scanned, so this is not a pass.")
-        sys.exit(2)
+        check_target.require_directory(args.directory, "check_burn_list")
 
     ignore_patterns = []
     ignore_path = (
@@ -6185,6 +6185,10 @@ def main():
     # empty/nonexistent directory), a real
     # scan that genuinely had zero errors and zero warnings printed
     # nothing at all.
+    # A real directory that held none of the files this checker reads is not a pass either (`module:TestClass` names no directory and
+    # scans nothing on purpose).
+    if os.path.isdir(target_dir):
+        check_target.require_scanned(scanned_files, target_dir, "check_burn_list", "*.py, *.xml, *.js, *.csv and *.html files")
     print(f"\nScan Complete: Checked {scanned_files} files.")
     print(
         f"Total Errors: {total_errors} | Total Warnings (Audits): {total_warnings}"

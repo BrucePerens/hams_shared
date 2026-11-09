@@ -108,9 +108,10 @@ class MainIntegrationTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _run(self):
+    def _run(self, **env):
+        base = {k: v for k, v in os.environ.items() if k != "HAMS_CHECK_ALLOW_EMPTY"}
         result = subprocess.run(
-            [sys.executable, _SCRIPT, self.tmp], capture_output=True, text=True, timeout=30
+            [sys.executable, _SCRIPT, self.tmp], capture_output=True, text=True, timeout=30, env=dict(base, **env)
         )
         return result.returncode, result.stdout + result.stderr
 
@@ -147,10 +148,12 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("checksum differs", out)
 
     def test_missing_manifest_files_are_skipped_not_errored(self):
-        # Not every checkout necessarily has both files side by side -- absence is not a
-        # consistency violation.
-        code, out = self._run()
+        # Not every checkout has both files side by side -- absence is not a consistency violation, so a step that declares an
+        # empty scan normal (run_linters) passes; run by hand it compared nothing and is exit 2 (check_target.py).
+        code, out = self._run(HAMS_CHECK_ALLOW_EMPTY="1")
         self.assertEqual(code, 0, out)
+        code, out = self._run()
+        self.assertEqual(code, 2, out)
 
 
 if __name__ == "__main__":

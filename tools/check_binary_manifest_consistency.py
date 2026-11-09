@@ -18,6 +18,8 @@ import os
 import sys
 import xml.etree.ElementTree as ET
 
+import check_target
+
 
 def load_json_manifest(json_path):
     with open(json_path, "r", encoding="utf-8") as f:
@@ -85,7 +87,7 @@ def main():
         print("Usage: check_binary_manifest_consistency.py <repo_root>")
         sys.exit(1)
 
-    repo_root = sys.argv[1]
+    repo_root = check_target.require_directory(sys.argv[1], "check_binary_manifest_consistency")
     json_path = os.path.join(repo_root, "hams_shared", "tools", "binary_manifest.json")
     xml_path = os.path.join(
         repo_root, "binary_downloader", "data", "binary_manifest_data.xml"
@@ -93,11 +95,16 @@ def main():
 
     if not os.path.isfile(json_path) or not os.path.isfile(xml_path):
         # Not every checkout has both hams_open (binary_downloader) and hams_shared side by
-        # side under the same root -- nothing to compare in that case, not an error.
+        # side under the same root -- nothing to compare in that case. Run by hand that is still "compared nothing", not a pass
+        # (run_linters sets HAMS_CHECK_ALLOW_EMPTY=1, so its steps on a repository without both files pass).
+        check_target.require_scanned(0, repo_root, "check_binary_manifest_consistency", "binary manifests (binary_manifest.json and binary_manifest_data.xml)")
         sys.exit(0)
 
     json_manifest = load_json_manifest(json_path)
     xml_manifest = load_xml_manifest(xml_path)
+    check_target.require_scanned(
+        len(json_manifest) + len(xml_manifest), repo_root, "check_binary_manifest_consistency", "binary manifest entries"
+    )
     errors = compare(json_manifest, xml_manifest)
 
     if errors:

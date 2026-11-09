@@ -30,6 +30,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import check_target
+
 
 class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
     """Follows a redirect only to the same https host. GitHub answers a renamed repository with a 301 to
@@ -151,11 +153,13 @@ def main():
     manifest_path = os.path.join(os.path.dirname(__file__), "dependency_watch.json")
     if len(sys.argv) > 1:
         manifest_path = sys.argv[1]
+    manifest_path = check_target.require_file(manifest_path, "check_dependency_releases")
 
     with open(manifest_path, encoding="utf-8") as f:
         manifest = json.load(f)
 
     entries = {k: v for k, v in manifest.items() if not k.startswith("_")}
+    check_target.require_scanned(len(entries), manifest_path, "check_dependency_releases", "dependency entries")
     results = [check_one(name, entry) for name, entry in sorted(entries.items())]
 
     any_stale = False

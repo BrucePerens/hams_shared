@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+"""Host bot-compliance check (forward-confirmed reverse DNS of this host's public IP).
+
+Not converted to check_target.py, deliberately: it scans no directory or files, it probes the host. It already fails (exit 1) when
+the public IP cannot be found, so an unanswered probe is never a pass.
+"""
+
 import socket
 import urllib.request
 import json
