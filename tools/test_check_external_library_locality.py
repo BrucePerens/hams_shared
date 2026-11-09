@@ -129,7 +129,7 @@ class ResolveRepoRootTests(unittest.TestCase):
 
 
 class ResolveRepoRootsTests(unittest.TestCase):
-    # Regression test for the second half of the same bug class, found 2026-08-27:
+    # Regression test for the second half of the same repo-root redirect problem:
     # _resolve_repo_root's redirect only ever lands on ONE repo (hams_shared's literal parent) --
     # but EXCLUDED_FILES above names real hams_com paths (ham_satellite/...), meaning this
     # checker's real scope always spanned both repos and the single-repo redirect left hams_com

@@ -413,11 +413,12 @@ def read_record(name, directory=None):
 
 # [@ANCHOR: agent_procs:list_records]
 def list_records(directory=None):
-    """Every readable `JobRecord` in the jobs directory, sorted by start time."""
+    """Every readable `JobRecord` in the jobs directory, sorted by start time. A file whose name is not a valid job name (a
+    stray `.hidden.json`) is not a record and is skipped."""
     directory = directory or jobs_dir()
     records = []
     for entry in os.listdir(directory):
-        if entry.endswith(".json") and entry != "guard.json":
+        if entry.endswith(".json") and entry != "guard.json" and _NAME_RE.match(entry[:-5]):
             rec = read_record(entry[:-5], directory)
             if rec is not None:
                 records.append(rec)
@@ -487,12 +488,14 @@ def start_job(name, argv, tag="", cwd=None, directory=None):
 
     Output (standard output and error) goes to `<jobs dir>/<name>.log`, truncated. The record names the wrapper's pid,
     process group, session and start time. Holds an exclusive lock on `<name>.lock` while checking and starting, so two
-    starts of one name cannot both succeed. Raises `ProcError` for a bad name, an empty command, or a job of that name that
+    starts of one name cannot both succeed. Raises `ProcError` for a bad name, an empty command, a `cwd` that is not a directory, or a job of that name that
     is still running (stop it, or wait for it, first)."""
     directory = directory or jobs_dir()
     check_job_name(name)
     if not argv:
         raise ProcError("run needs a command after --")
+    if cwd is not None and not os.path.isdir(cwd):
+        raise ProcError(f"--cwd {cwd} is not a directory")
     with open(os.path.join(directory, name + ".lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         old = read_record(name, directory)
@@ -609,7 +612,9 @@ def stop_job(name, grace=DEFAULT_GRACE, force=False, owner_checked=False, out=sy
     """Stop the NAMED job `name`: SIGTERM to its process group, then (only with `force`) SIGKILL to that group.
 
     Verifies before every signal: the job's record exists and is the caller's; the group members found in /proc have the
-    recorded process group AND session (a reused pid cannot be in them); the group is not the caller's own. Prints the ps
+    recorded process group AND session; the process that now has the recorded pid, if any, has the recorded start time (a
+    reused pid that leads a session of its own has the same group and session numbers, but not the start time, and its group
+    is then left alone); the group is not the caller's own. Prints the ps
     line of every member first. Refuses (raises `ProcError` code 3) when a member is protected (`protected_reason`) unless
     `owner_checked` (the `--i-am-the-owner-and-checked` flag). Waits up to `grace` seconds after SIGTERM. Returns 0 when
     the job is gone, 1 when it is still running (SIGTERM was not enough and `force` was not given, or even SIGKILL failed).
@@ -626,6 +631,10 @@ def stop_job(name, grace=DEFAULT_GRACE, force=False, owner_checked=False, out=sy
     family = ancestry(table, me)
     if rec.pgid in {table[p].pgid for p in family if p in table} | {os.getpgrp()}:
         raise ProcError(f"refusing: job {name}'s process group contains the caller's own shell", EX_REFUSED)
+    leader = table.get(rec.pid)
+    if leader is not None and leader.start_ticks != rec.start_ticks:
+        print(f"job {name} is not running (pid {rec.pid} now belongs to a different process); nothing to stop", file=out)
+        return EX_OK
     worktree, tmpdir = caller_worktree(), os.environ.get("TMPDIR")
     for info in members:
         print(ps_line(info), file=out)

@@ -385,6 +385,45 @@ also set `CARGO_INCREMENTAL=0`, as the lint builds do, so no `incremental/` data
 entry may prune. Not for use from several threads of one process with the same name (the flock is per open file; the
 second waits for the first, which is the intent). See `CargoBudgetTest` in `test_lint_cache.py`.
 
+### `[@ANCHOR: lint_cache:sync_tree]` `sync_tree(source, destination, skip=WORK_SKIP, submodules=())`
+
+Purpose: make `destination` hold exactly the files of `source`, rewriting only the files whose bytes differ, so an unchanged
+file keeps its modification time. Cargo's fingerprint of a path package is its files' mtimes; a copy made afresh every run
+is compiled in full.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `source` | path | The tree to copy (resolved with `realpath`). |
+| `destination` | path | Created when missing; files, links and directories that `source` does not have are removed. |
+| `skip` | set of names | Directory names left out: `.git`, `target`, `node_modules`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.venv`, `venv`, `.claude`. |
+| `submodules` | set of paths | Paths relative to `source` of directories that hold their own `.git` and still belong to the tree (the submodules). Any other directory with a `.git` is another checkout and is left out. |
+
+Symlinks are copied as links; a relative link that leaves `source` is written absolute so it still resolves. Special files are
+skipped, and a file that vanishes while the tree is read is left out. A path that changed kind (file, directory, link) is
+replaced. Reads every file of both trees once (size, then bytes) and writes only what differs. Not safe against a second
+caller in the same `destination`: hold the Cargo target's lock (`work_checkout`). See `SyncTreeTest` in `test_lint_cache.py`.
+
+### `[@ANCHOR: lint_cache:work_checkout]` `work_checkout(repo_root, name, target, environ=None, log=None)`
+
+Purpose: a copy of a checkout at a fixed path, so cargo sees the same absolute paths from one lint run to the next. Cargo
+hashes absolute paths into the fingerprints and build-script output of the workspace crates, and every lint run is in a
+different worktree: the relay and its path crates were recompiled each time in a warm target (163-183 s of 183 s on the
+dev box, 2026-11-09, against 0.6 s when path and files are the same).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `repo_root` | path | The checkout to copy. |
+| `name` | str | Tells repositories apart (`hams_com`, `hams_open`). |
+| `target` | path or `None` | The Cargo target directory the build uses; the copy lives beside it by name: `<cache>/hams-lint/work/<target name>/<name>`, so each lint slot has its own and the target's lock covers it. |
+
+Returns (str) the directory to build in, or `None` and the caller builds in `repo_root` as before: `target` is not a managed
+Cargo directory (an explicit `CARGO_TARGET_DIR`), `HAMS_LINT_NO_CACHE=1`, or the copy failed (it says why through `log`).
+The copy is made by `sync_tree`, so the files cargo compiles and the tests read are the checkout's, byte for byte, and a
+build from it is fresh exactly when a build in the checkout would be. Call it while holding the target's lock
+(`named_cargo_session`, `cargo_session`). The copy is removed with its target directory (`drop_unused_dirs`, `clear cargo`).
+Users: `relay_structural.py`, `check_cargo_clippy.py`. Output that names the copy must be mapped back to the checkout by the
+caller. See `SyncTreeTest` in `test_lint_cache.py`.
+
 ### `[@ANCHOR: lint_cache:legacy_cargo_dirs]` `legacy_cargo_dirs(environ=None)`
 
 Purpose: names the old Cargo target directories that predate the budget so `show` can report them and `clear cargo` can
@@ -3142,11 +3181,17 @@ Purpose: finds the code that exists only in test builds. Argument `masked` (str)
 `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) attribute: from the attribute to the end of the item after it (the closing brace of a module, function or
 impl, or the `;` of `mod name;`), with other attributes between skipped. Never raises. Pure.
 
+### `[@ANCHOR: ext_programs:program_name]` `program_name(literal)`
+
+Purpose: the program a `Command::new` string literal names, so that a relay that starts a system program by absolute path (`Command::new("/usr/sbin/ioreg")`, which no
+PATH search can replace) is still checked against ADR 0114. Argument `literal` (str): the text between the quotes. Returns the text after the last `/`
+(`"/usr/sbin/ioreg"` gives `ioreg`); a bare name is returned unchanged. Pure, never raises. Used by `rust_launches`.
+
 ### `[@ANCHOR: ext_programs:rust_launches]` `rust_launches(text)`
 
 Purpose: the programs a Rust file starts in production. Argument `text` (str): the file. Returns `(literal_names, dynamic_count)`: a `set` of the names in
-`Command::new("name")` (also as `std::process::Command::new`) and the number of `Command::new(<expression>)` calls, ignoring comments and the spans from
-`test_spans`. A name containing a backslash is not recognised. Pure, never raises.
+`Command::new("name")` or `Command::new("/absolute/name")` (reported as `name`, see `program_name`; also as `std::process::Command::new`) and the number of `Command::new(<expression>)` calls, ignoring comments and the spans from
+`test_spans`. A name containing a backslash is not recognised (a Windows system program is started through a discovery function). Pure, never raises.
 
 ### `[@ANCHOR: ext_programs:script_dependencies]` `script_dependencies(text, powershell=False)`
 
@@ -3352,7 +3397,7 @@ Purpose: load a job. Returns the `JobRecord`, or `None` when the file is missing
 
 ### `[@ANCHOR: agent_procs:list_records]` `list_records(directory=None)`
 
-Purpose: every readable record (`jobs`, and the "recorded job" proof of `kill_pid`). Returns a list sorted by `started_at`. Ignores unreadable files.
+Purpose: every readable record (`jobs`, and the "recorded job" proof of `kill_pid`). Returns a list sorted by `started_at`. Ignores unreadable files and files whose name is not a valid job name.
 
 ### `[@ANCHOR: agent_procs:pid_alive]` `pid_alive(pid, start_ticks)`
 
@@ -3372,7 +3417,7 @@ Purpose: the tiny process that leads a job's session (`agent_procs.py _wrap NAME
 
 ### `[@ANCHOR: agent_procs:start_job]` `start_job(name, argv, tag="", cwd=None, directory=None)`
 
-Purpose: start a named job; the engine of `run`. Returns the `JobRecord` (pid, process group and session of the wrapper, log path). Side effects: creates `<name>.lock`, truncates and writes `<name>.log`, starts `python3 agent_procs.py _wrap` with `start_new_session=True` (its own session and process group, so `stop` can signal the group and a signal to your shell cannot reach it), sets `AGENT_PROCS_JOB=<name>` in its environment, writes the record. Locks: an exclusive `flock` on `<name>.lock` while checking and starting. Errors: `ProcError` code 2 for a bad name or empty command, code 1 when a job of that name is still running.
+Purpose: start a named job; the engine of `run`. Returns the `JobRecord` (pid, process group and session of the wrapper, log path). Side effects: creates `<name>.lock`, truncates and writes `<name>.log`, starts `python3 agent_procs.py _wrap` with `start_new_session=True` (its own session and process group, so `stop` can signal the group and a signal to your shell cannot reach it), sets `AGENT_PROCS_JOB=<name>` in its environment, writes the record. Locks: an exclusive `flock` on `<name>.lock` while checking and starting. Errors: `ProcError` code 2 for a bad name, an empty command or a `cwd` that is not a directory, code 1 when a job of that name is still running.
 
 ### `[@ANCHOR: agent_procs:wait_pid]` `wait_pid(pid, start_ticks=None, timeout=1800, interval=0.5, sleep=time.sleep, clock=time.monotonic, table=None)`
 
@@ -3388,7 +3433,7 @@ Purpose: wait for an output file or exit marker. Code 0 when `path` exists and (
 
 ### `[@ANCHOR: agent_procs:group_members]` `group_members(table, pgid, sid)`
 
-Purpose: the verified membership of a job's group. Returns the live (not zombie) processes with that process group **and** session. A reused pid cannot be a member, because a process-group id cannot be reused while the group has members.
+Purpose: the verified membership of a job's group. Returns the live (not zombie) processes with that process group **and** session. While the group has members its id cannot be reused as a pid, but once it is empty a new session leader may get the same number, so `stop_job` also compares the start time of the process that has the recorded pid.
 
 ### `[@ANCHOR: agent_procs:stop_job]` `stop_job(name, grace=10, force=False, owner_checked=False, out=sys.stdout, directory=None, sleep=..., clock=...)`
 
@@ -3401,7 +3446,7 @@ Purpose: stop a NAMED job and nothing else.
 | `force` | bool | Send SIGKILL to the verified group if SIGTERM was not enough. |
 | `owner_checked` | bool | `--i-am-the-owner-and-checked`: skip the protected-process refusal for your own job. |
 
-Order: read the record; find members by group and session (none: "not running", return 0); refuse a group that holds the caller's own shell; print the ps line of every member; refuse (code 3) a member of another user or a protected one; `killpg(SIGTERM)`; wait up to `grace`; only with `force`, re-verify the members and `killpg(SIGKILL)`. Returns 0 when the group is gone, 1 when it is still running (the message says `--force`). The record gets `stopped = term/kill`. Side effects: signals, record write. Errors: `ProcError` code 2 for an unknown job, 3 for a refusal.
+Order: read the record; find members by group and session (none: "not running", return 0); refuse a group that holds the caller's own shell; when the process that now has the recorded pid has another start time (the pid was reused), report "not running" and return 0 without signalling; print the ps line of every member; refuse (code 3) a member of another user or a protected one; `killpg(SIGTERM)`; wait up to `grace`; only with `force`, re-verify the members and `killpg(SIGKILL)`. Returns 0 when the group is gone, 1 when it is still running (the message says `--force`). The record gets `stopped = term/kill`. Side effects: signals, record write. Errors: `ProcError` code 2 for an unknown job, 3 for a refusal.
 
 ### `[@ANCHOR: agent_procs:authorize_kill]` `authorize_kill(info, start_ticks, cwd_under, directory=None)`
 
@@ -3449,10 +3494,10 @@ Purpose: the command-line entry. Returns the exit code (0 done, 1 failed or noth
 
 ## Guard hook for signals (`claude_hooks/guard_signals.py`)
 
-A `PreToolUse` hook for the Bash tool, wired in the `.claude/settings.json` of `hams_com` and `hams_open`. It reads the hook JSON on standard input, parses the command text into
+A `PreToolUse` hook for the Bash tool, wired in the tracked `.claude/settings.json` of `hams_com`, `hams_open` and `hams_shared` (all three: Claude Code reads the project settings of the directory it runs in, and a `hams_shared` worktree had none on 2026-11-09, when an agent killed its own parent; `check_claude_hook_registration.py` fails the lint when a checkout lacks the entry). The command uses `$HOME/workspace/hams_open/hams_shared/...`, so it finds the script from any worktree and any directory. It reads the hook JSON on standard input, parses the command text into
 commands (so a word inside a quoted string, a commit message, a data heredoc or a `grep` pattern is not a command) and **denies**: `kill -9` and every other spelling of SIGKILL, `pkill`, `killall`,
 `skill`, `fuser -k`, `systemctl kill`, `pgrep -f` / `--full` (the `[x]yz` trick does not help: it matched a PostgreSQL backend), `kill` whose pids are not literal numbers (`$(...)`, backticks, variables, `xargs`),
-and the same inside `bash -c`, `ssh host '...'`, `eval`, `find -exec`, `watch`, shell heredocs and `python -c` one-liners. It **allows** `kill -TERM 123`, `kill 123`, `kill -0 123`, `pgrep NAME` (name only), `ps`, `grep`, `cargo`, `git`, sleep loops
+`kill $PPID`, `kill $$`, `kill 0`, `kill -- -PGID` and a pid built from `ps`/`ppid`, a literal `kill PID` whose process (looked up in /proc when the hook runs) is the hook's own ancestry, pid 1, another user's or root's, or one of `agent_procs.PROTECTED_WORDS` (postgres, systemd, sshd, redis-server, rabbitmq, ...), a `kill` that names such a program, and the same inside `bash -c`, `ssh host '...'`, `eval`, `find -exec`, `watch`, shell heredocs and `python -c` one-liners. It **allows** `kill -TERM 123`, `kill 123`, `kill -0 123`, `pgrep NAME` (name only), `ps`, `grep`, `cargo`, `git`, sleep loops
 and `agent_procs.py`. A denial prints JSON `permissionDecision: deny` whose reason tells the agent to use `agent_procs.py`. The escape **for a human** is `HAMS_ALLOW_SIGNALS=1` inside the command itself;
 it is logged with the command to `~/.cache/hams-jobs/guard.log`, as is every denial and hook error. A crash inside the hook allows a command without a signal-looking word and denies one with such a word; the command in
 settings.json also allows everything when the script file is missing. The hook always exits 0. Tests: `test_guard_signals.py` (a table of about 130 commands, the exact command of 2026-11-08 12:18:33, the real script on standard input).
@@ -3497,9 +3542,17 @@ Purpose: find the real command behind assignments, reserved words (`until`, `do`
 
 Purpose: recognise SIGKILL. True for `9`, `KILL` and `SIGKILL` in any case with or without a leading `-`.
 
-### `[@ANCHOR: guard_signals:check_kill]` `check_kill(words, via_xargs, verdict)`
+### `[@ANCHOR: guard_signals:protected_words]` `protected_words()`
 
-Purpose: judge a `kill` command (`words[0]` is kill). Adds a reason to `verdict` for SIGKILL in any option form (`-9 -KILL -s KILL -n 9 --signal=9`), for a pid that is not a literal number (or `%job`, or `$!`) and for pids supplied by `xargs`. `kill -l` and a `kill` with no pid are fine. A literal pid adds the note to print its ps line first.
+Purpose: the lower-case program names that are never signalled: `agent_procs.PROTECTED_WORDS`, or a built-in copy of it when `agent_procs` cannot be imported.
+
+### `[@ANCHOR: guard_signals:literal_pid_reason]` `literal_pid_reason(pid, table=None)`
+
+Purpose: why signalling the literal `pid` is forbidden, or `None`. Reads `/proc` now (`table` is a `pid -> ProcInfo` snapshot, default `agent_procs.snapshot()`) and applies `agent_procs.protected_reason` with the hook's own ancestry as the family: the agent and the shells above it, pid 1, another user's or root's process, a protected program. `None` for a pid that does not exist, for pid 0 or below, and when `/proc` or `agent_procs` cannot be used (the textual rules still apply).
+
+### `[@ANCHOR: guard_signals:check_kill]` `check_kill(words, via_xargs, verdict, table=None)`
+
+Purpose: judge a `kill` command (`words[0]` is kill). Adds a reason to `verdict` for SIGKILL in any option form (`-9 -KILL -s KILL -n 9 --signal=9`), for `$PPID`, `$$`, `0` and negative pids (a parent, a process group, everything), for a pid that is not a literal number (or `%job`, or `$!`; the message names `ps`/`ppid`), for a literal pid refused by `literal_pid_reason`, for a word naming a protected program, and for pids supplied by `xargs`. `kill -l` and a `kill` with no pid are fine. A literal pid adds the note to print its ps line first.
 
 ### `[@ANCHOR: guard_signals:check_pgrep]` `check_pgrep(words, verdict)`
 
@@ -3536,6 +3589,30 @@ Purpose: the decision for one command. Returns `None` (allow, print nothing), th
 ### `[@ANCHOR: guard_signals:main]` `main(stdin=None, stdout=None, environ=None)`
 
 Purpose: the hook entry point. Reads the hook JSON (`tool_name`, `tool_input.command`, `session_id`) from `stdin`, prints the decision JSON on `stdout`, returns 0 always. Anything that is not a Bash call with a text command (or not JSON) is allowed.
+
+## Guard hook registration check (`check_claude_hook_registration.py`)
+
+`check_claude_hook_registration.py [REPO_DIR ...]` (lint step `check_claude_hook_registration`, run in the repository being linted) fails unless the checkout's tracked `.claude/settings.json` has a `PreToolUse` entry for the Bash tool that runs `claude_hooks/guard_signals.py` by an anchored path (`$HOME/...`, `~/...`, `$CLAUDE_PROJECT_DIR/...` or absolute: a relative path breaks in a worktree). Written after an agent in a `hams_shared` worktree, which had no `.claude/settings.json`, ran `kill $pp` on its own parent (2026-11-09). Tests: `test_check_claude_hook_registration.py` (also runs the registered command against the incident text).
+
+### `[@ANCHOR: check_claude_hook_registration:command_is_guard]` `command_is_guard(command)`
+
+Purpose: True when the hook command text runs `claude_hooks/guard_signals.py` by an anchored path.
+
+### `[@ANCHOR: check_claude_hook_registration:matcher_covers_bash]` `matcher_covers_bash(matcher)`
+
+Purpose: True when a PreToolUse `matcher` (a regex; empty, `*` or missing means every tool) applies to the Bash tool.
+
+### `[@ANCHOR: check_claude_hook_registration:is_tracked]` `is_tracked(repo_dir)`
+
+Purpose: False only when `repo_dir` is in a git work tree and `.claude/settings.json` is not tracked; an uncommitted file does not protect a fresh checkout or a worktree.
+
+### `[@ANCHOR: check_claude_hook_registration:check_repo]` `check_repo(repo_dir)`
+
+Purpose: the problems (a list of sentences) with the guard registration of one checkout: file missing, not JSON, no matching hook, not tracked. Empty means registered.
+
+### `[@ANCHOR: check_claude_hook_registration:main]` `main(argv=None, out=None)`
+
+Purpose: check each directory of `argv` (default: the checkout the script is in), print the problems, return 1 when there is any and 0 otherwise.
 
 ## Template-database benchmark (`benchmark_template_db.py`)
 
@@ -3693,8 +3770,17 @@ Daemon thread; read-only on `/proc`.
 
 ### `[@ANCHOR: tools:template_db_as_odoo]` `as_odoo(argv, env=None)`
 
-Returns `argv` prefixed with `sudo -n -u odoo` (and `env K=V ...` when `env` is a dict, since sudo resets the rest). The measured runs execute as `odoo`, like the dev box's documented
+Returns `argv` prefixed with `sudo -n -u odoo` (and `--preserve-env=NAME,...` when `env` is a non-empty dict, since sudo resets the rest). Only the NAMES are on the command
+line: the values (`HAMS_CRYPTO_KEY`, `PGPASSWORD`) must be in the environment of the process that starts the command (`run_arm` passes them so), so they never show in `ps` or sudo's log; a name that is not a plain identifier raises ValueError. The measured runs execute as `odoo`, like the dev box's documented
 `sudo -n -u odoo env HAMS_ISOLATED_NS=1 ...` invocation: `daemon_key_manager` chmods `/opt/hams/etc/keys`, which only its owner may do, and as another user the registry fails to load. Never prompts. Pure.
+
+### `[@ANCHOR: tools:template_db_refuse_on_production_host]` `refuse_on_production_host(runner)`
+
+Calls the runner's `refuse_to_run_on_production_host` with the database names the server holds (`list_database_names`); raises when the host looks like production. `run_command` calls it before it mounts, creates or drops anything, and `clone_for_run` calls it as the runner's own `rebuild_db` does.
+
+### `[@ANCHOR: tools:template_db_existing_databases]` `existing_databases(bench, names)`
+
+The members of `names` that exist as databases on the server (one read-only `pg_database` query each, names checked by `check_identifier`), in the order given. `run_command` uses it to refuse a template another run owns.
 
 ### `[@ANCHOR: tools:template_db_filestore_bytes]` `filestore_bytes(name)`
 
@@ -3803,9 +3889,9 @@ combination, the filestore copy, the re-key). `args` is the `run` command line. 
 
 ### `[@ANCHOR: tools:template_db_run_command]` `run_command(args)`
 
-`run`: builds the key, takes one test slot through the runner's own queue (`_acquire_lock_via_queue`, so it waits its turn behind other sessions), mounts the RAM tablespace if an arm needs it, builds the template
-`--build-reps` times, verifies its comment, copies it into RAM, runs the clone micro-benchmark, then `--reps` rounds of the `--arms` interleaved (so box-load drift hits all arms alike). Always drops the templates, their filestores
-and the tablespace, and unmounts. Returns 0; raises on a failed build.
+`run`: builds the key, refuses a production host, refuses to start when the template database or its RAM copy already exists (another run of the same module set owns it, or it was kept; `--replace-template` accepts that), takes one test slot through the runner's own queue (`_acquire_lock_via_queue`, so it waits its turn behind other sessions), mounts the RAM tablespace if an arm needs it, builds the template
+`--build-reps` times, verifies its comment, copies it into RAM, runs the clone micro-benchmark, then `--reps` rounds of the `--arms` interleaved (so box-load drift hits all arms alike). Always drops the templates THIS run created (never one it found), their filestores
+and the tablespace, and unmounts. The clone micro-benchmark's scratch databases carry the process id, so two runs never drop each other's. Returns 0; raises on a failed build.
 
 ### `[@ANCHOR: tools:template_db_key_command]` `key_command(args)`
 

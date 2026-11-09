@@ -15,6 +15,7 @@ runs the same `run_linters.py --changed`). The whole suite stays out of lint (it
 `STRUCTURAL_FILTERS` is the one place the group is named: each entry is a substring of a Rust test path (`module::test`), as `cargo test` filters work. Before it
 runs anything the step lists the tests (`cargo test -- --list`) and FAILS when a filter matches no test, so a renamed or deleted module can never leave the group
 quietly smaller. The build goes to `lint_cache.named_cargo_session("relay-structural")`: one warm Cargo directory per lint slot, in RAM when `/dev/shm` has room.
+It is built and run from a copy of the checkout at a fixed path (`lint_cache.work_checkout`): cargo hashes absolute paths into its fingerprints, so the relay was recompiled for every worktree.
 """
 
 import os
@@ -23,6 +24,7 @@ import subprocess
 import sys
 
 import lint_cache
+import lint_exec
 import rust_impact
 
 RELAY_REL = os.path.join("daemons", "hams_local_relay")
@@ -113,9 +115,15 @@ def main(argv):
         env = dict(os.environ, CARGO_INCREMENTAL="0")
         if target:
             env["CARGO_TARGET_DIR"] = target
+        # The build runs in a copy of the checkout at a fixed path (cargo hashes paths into its fingerprints: a different worktree every run
+        # recompiled the relay each time). The tests read the same bytes there; the lock held by the session keeps other runs out of it.
+        work = lint_cache.work_checkout(positional[0], lint_exec.repo_name(positional[0]) or "checkout", target, log=print)
+        if work:
+            relay = os.path.join(work, RELAY_REL)
+        shown = (lambda text: text.replace(work, os.path.abspath(positional[0]))) if work else (lambda text: text)
         listing = _run(cargo_command(filters=(), list_only=True), relay, env)  # every test of the binary: the filters are checked against it
         if listing.returncode != 0:
-            print("❌ the relay's tests did not build:\n" + listing.stdout + listing.stderr)
+            print("❌ the relay's tests did not build:\n" + shown(listing.stdout + listing.stderr))
             return 1
         tests = listed_tests(listing.stdout)
         if "--list" in argv:
@@ -129,7 +137,7 @@ def main(argv):
         done = _run(cargo_command(), relay, env)
     chosen = [name for name in tests if any(pattern in name for pattern in STRUCTURAL_FILTERS)]
     if done.returncode != 0:
-        print("❌ relay structural tests failed:\n" + done.stdout[-12000:] + done.stderr[-4000:])
+        print("❌ relay structural tests failed:\n" + shown(done.stdout[-12000:] + done.stderr[-4000:]))
         return 1
     print("relay structural tests: %d tests of %d filters passed (%d tests in the relay in all)" % (passed_count(done.stdout), len(STRUCTURAL_FILTERS), len(tests)))
     print("  selected: %d tests" % len(chosen))

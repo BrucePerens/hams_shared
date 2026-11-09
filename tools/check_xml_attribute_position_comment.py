@@ -18,8 +18,7 @@ between two `<attribute>` siblings, comment before a lone `<attribute>`, both wi
 `inherit_branding=True`, and a two-view stacked-inheritance case) produced an identical,
 fully-correct arch with or without the comment. The original "confirmed twice" observation was
 most likely a misattribution confounded by an unrelated theme-copy-step timing gap. Full
-write-up: hams_com commit 551db4c1 (PR #512) and its `night_shift_history.md` 2026-10-02
-entry closing the parent to-do.
+write-up: hams_com commit 551db4c1 (PR #512).
 
 The checker is kept anyway because the structural shape it flags -- a comment as a direct
 child of an `<xpath position="attributes">` element, i.e. interspersed among inheritance-spec
@@ -40,6 +39,7 @@ import lint_exec
 import sys
 
 from lxml import etree
+from tree_files import tree_walk
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "radae"}
 _HAMS_SHARED_TOOLS_SUFFIX = os.path.join("hams_shared", "tools")
@@ -73,14 +73,16 @@ def _is_hams_shared_tools(path):
 
 def check_xml_attribute_position_comment(repo_root):
     violations = []
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [
-            d
-            for d in dirs
-            if d not in SKIP_DIRS
-            and not d.startswith(".")
-            and not (d == "tools" and _is_hams_shared_tools(os.path.join(root, d)))
-        ]
+    def not_under_hams_shared_tools(rel):
+        # The real hams_shared/tools directory (by path suffix, not bare name) is skipped with everything below it.
+        parts = rel.split("/")[:-1]
+        return not any(
+            part == "tools" and _is_hams_shared_tools(os.path.join(repo_root, *parts[: k + 1])) for k, part in enumerate(parts)
+        )
+
+    for root, _dirs, files in tree_walk(
+        repo_root, ".xml", SKIP_DIRS, skip_hidden=True, accept=not_under_hams_shared_tools, untracked=True
+    ):
         for filename in files:
             if not filename.endswith(".xml"):
                 continue

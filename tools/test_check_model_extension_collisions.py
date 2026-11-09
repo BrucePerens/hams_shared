@@ -285,7 +285,7 @@ class ScanIntegrationTests(unittest.TestCase):
         self.assertIn("CROSS-MODULE EXTENSION OF AN _auto=False MODEL", result.stdout)
 
     def test_an_auto_false_model_whose_owner_self_references_is_still_detected_via_main(self):
-        """Real gap found reviewing this checker: check 2's owner_module_of is built from
+        """Check 2's owner_module_of is built from
         claiming_owners, which deliberately EXCLUDES a self-referencing _name=X + _inherit
         containing X declaration (the documented "extend + add a mixin" idiom -- see
         test_a_self_referencing_name_plus_inherit_is_excluded_from_claiming_owners above). If the
@@ -294,8 +294,8 @@ class ScanIntegrationTests(unittest.TestCase):
         mixing "hand-built SQL view" with "self-declare + extend with a mixin"), the owner is
         excluded from claiming_owners entirely, so owner_module_of never resolves it -- and check
         2 (ADR 0086 rule 2, banned outright, 'no exemption') silently misses a real cross-module
-        _auto=False extension it exists specifically to catch. Not yet found live in either real
-        repo (confirmed via a full scan for this exact shape), but a real, live gap in the
+        _auto=False extension it exists specifically to catch. No real repo contains this exact
+        shape yet (confirmed via a full scan), but it is a real gap in the
         checker's own logic for its most severe rule."""
         self._module(
             "mod_owner",

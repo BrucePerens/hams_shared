@@ -15,6 +15,8 @@ Tests [@ANCHOR: guard_signals:tokenize]
 Tests [@ANCHOR: guard_signals:skip_options]
 Tests [@ANCHOR: guard_signals:resolve]
 Tests [@ANCHOR: guard_signals:signal_is_kill]
+Tests [@ANCHOR: guard_signals:protected_words]
+Tests [@ANCHOR: guard_signals:literal_pid_reason]
 Tests [@ANCHOR: guard_signals:check_kill]
 Tests [@ANCHOR: guard_signals:check_pgrep]
 Tests [@ANCHOR: guard_signals:shell_script]
@@ -35,12 +37,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "claude_hooks"))
 import guard_signals as gs  # noqa: E402
 
 HOOK = os.path.join(HERE, "claude_hooks", "guard_signals.py")
+REAL_SNAPSHOT = gs.agent_procs.snapshot  # every test case patches gs.agent_procs.snapshot to an empty table
 
 DENIED = [
     # the incident of 2026-11-08 12:18:33, exactly as typed
@@ -66,6 +70,13 @@ DENIED = [
     "python3 -c 'import os; os.kill(5, 9)'", "python3 -c 'import os,signal; os.kill(5, signal.SIGKILL)'",
     "python3 - <<'EOF'\nimport os\nos.killpg(5, 9)\nEOF\n", "python3 -c \"import subprocess; subprocess.run(['pkill', 'x'])\"", "bash <<'EOF'\npkill foo\nEOF\n",
     "sleep 1\npkill foo\n", "echo a; kill -9 5 # note", "kill -9 5 2>/dev/null",
+    # 2026-11-09: an agent killed its own parent (systemd --user): a pid from ps/ppid, then the literal pids it printed
+    'pp=$(ps -o ppid= -p 2268409 | tr -d " "); echo parent $pp; kill $pp 2>/dev/null; kill 2268409 2268411 2>/dev/null',
+    "pp=$(ps -o ppid= -p $$); kill $pp", "kill $PPID", "kill -TERM $PPID", "kill ${PPID}", "kill $$", "kill -TERM $$", "kill 0",
+    "kill -TERM 0", "kill -- -123", "kill -TERM -- -123", "kill -- -1", "kill $(ps -o ppid= -p 5)", "kill `ps -o ppid= -p 5`",
+    "ps -o ppid= -p 5 | xargs kill -TERM", "kill $(pidof sshd)", "kill -HUP $(pidof postgres)", "kill -TERM sshd", "kill postgres",
+    "sudo kill -HUP systemd", "pkill systemd", "pkill -HUP sshd", "killall postgres", "sudo systemctl kill sshd",
+    "bash -c 'kill $PPID'", "ssh host 'kill $PPID'",
     # nesting
     "echo $(echo $(echo $(pkill foo)))", 'echo "a $(kill -9 5) b"',
 ]
@@ -77,7 +88,8 @@ ALLOWED = [
     "ps aux", "ps -eo pid,user,lstart,args | grep postgres", "ps -p 123 -o pid,user,lstart,args", "pgrep -x postgres",
     "pgrep -u bruce chrome", "pgrep -c sshd", "pidof sshd", "which pkill", "command -v pkill", "type pkill", "man kill",
     "kill -TERM 123", "kill 123", "kill -15 123", "kill -0 123", "kill -HUP 123 456", "sudo kill -TERM 123", "kill -l",
-    "kill -s TERM 123", "kill --signal=TERM 123", "kill %1", "kill -- -123", "kill $!", "sleep 100 & echo $!",
+    "kill -s TERM 123", "kill --signal=TERM 123", "kill %1", "kill $!", "ps -o ppid= -p 123",
+    "echo parent $(ps -o ppid= -p 123)", "ps -eo pid,ppid,args | grep systemd", "systemctl status sshd", "systemctl --user status", "sleep 100 & echo $!",
     "cargo test --all", "cargo clippy --all-targets -- -D warnings", "git status && git log --oneline | head",
     "sleep 5", "until [ -e /tmp/x ]; do sleep 1; done", "while sleep 1; do :; done & echo started",
     "python3 hams_shared/tools/agent_procs.py wait --pid 123 --start-time 456 --timeout 600",
@@ -95,10 +107,21 @@ ALLOWED = [
 ]
 
 
+def agent_info(pid, ppid=1, argv=("sleep", "9"), comm="sleep", uid=None, user=None):
+    """A synthetic agent_procs.ProcInfo for the table of a test."""
+    uid = os.getuid() if uid is None else uid
+    return gs.agent_procs.ProcInfo(pid=pid, ppid=ppid, pgid=pid, sid=pid, uid=uid, user=user or "bruce", state="S", start_ticks=1,
+                                   comm=comm, argv=argv, cwd="/")
+
+
 class GuardTestCase(unittest.TestCase):
     """Base: a private HAMS_JOBS_DIR so the log of a test never goes to the real ~/.cache."""
 
     def setUp(self):
+        # The table commands name made-up pids: no real process of this machine may change a verdict.
+        patcher = mock.patch.object(gs.agent_procs, "snapshot", return_value={})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tmp = tempfile.mkdtemp(prefix="guard-test-")
         self.environ = {"HAMS_JOBS_DIR": os.path.join(self.tmp, "jobs")}
         self.addCleanup(shutil.rmtree, self.tmp, True)
@@ -238,7 +261,7 @@ class RuleTests(GuardTestCase):
         def verdict_for(text):
             command = gs.tokenize(text, [])[0]
             result = gs.Verdict()
-            gs.check_kill(command.words, False, result)
+            gs.check_kill(command.words, False, result, {})
             return result
         self.assertEqual(verdict_for("kill -TERM 1 2 3").reasons, [])
         self.assertTrue(verdict_for("kill -TERM 1 2 3").notes)
@@ -249,6 +272,62 @@ class RuleTests(GuardTestCase):
         self.assertEqual(verdict_for("kill $!").reasons, [])
         self.assertTrue(verdict_for("kill 12abc").reasons)
         self.assertTrue(verdict_for("kill -s KILL -- 5").reasons)
+
+    def test_check_kill_refuses_parents_groups_and_protected_names(self):
+        def reasons(text):
+            result = gs.Verdict()
+            gs.check_kill(gs.tokenize(text, [])[0].words, False, result, {})
+            return " ".join(result.reasons)
+        self.assertIn("parent", reasons("kill $PPID"))
+        self.assertIn("parent", reasons("kill $$"))
+        self.assertIn("parent", reasons("kill 0"))
+        self.assertIn("parent", reasons("kill -- -4"))
+        self.assertIn("ps`/`ppid", reasons("kill $pp"))
+        self.assertIn("shared service", reasons("kill sshd"))
+        self.assertEqual(reasons("kill -TERM 4"), "")
+
+    def test_the_incident_of_2026_11_09_is_denied_for_the_variable_and_when_the_literals_are_protected(self):
+        command = 'pp=$(ps -o ppid= -p 2268409 | tr -d " "); echo parent $pp; kill $pp 2>/dev/null; kill 2268409 2268411 2>/dev/null'
+        verdict = gs.analyze(command)
+        self.assertTrue(any("`ps`/`ppid`" in reason for reason in verdict.reasons), verdict.reasons)
+        # the second kill names the pids the first run printed: here pid 2268409 is the agent's own parent
+        parent = agent_info(2268409, ppid=2268400, argv=("claude",), comm="claude")
+        systemd = agent_info(2268411, ppid=1, argv=("/usr/lib/systemd/systemd", "--user"), comm="systemd")
+        table = {1: agent_info(1, ppid=0, argv=("/sbin/init",), comm="systemd", uid=0, user="root"), 2268409: parent,
+                 2268411: systemd, 2268400: agent_info(2268400, ppid=2268411, argv=("claude",), comm="claude")}
+        with mock.patch.object(gs.agent_procs, "snapshot", return_value=table), mock.patch.object(gs.os, "getpid", return_value=2268409):
+            self.assertTrue(gs.analyze("kill 2268409 2268411 2>/dev/null").reasons)
+            self.assertTrue(gs.analyze("kill 2268411").reasons)
+            self.assertIn("ancestors", " ".join(gs.analyze("kill -TERM 2268411").reasons))
+            table[5000] = agent_info(5000, ppid=1, argv=("/usr/lib/systemd/systemd", "--user"), comm="systemd")
+            self.assertIn("systemd", " ".join(gs.analyze("kill -TERM 5000").reasons))
+
+    def test_literal_pid_reason_uses_proc_ancestry_protected_words_and_ownership(self):
+        me = os.getpid()
+        self.assertIn("ancestors", gs.literal_pid_reason(me, {me: agent_info(me, ppid=1), 1: agent_info(1, ppid=0)}))
+        self.assertIsNotNone(gs.literal_pid_reason(1, {1: agent_info(1, ppid=0), me: agent_info(me, ppid=1)}))
+        postgres = agent_info(700, ppid=1, argv=("postgres: 16/main",), comm="postgres")
+        self.assertIn("postgres", gs.literal_pid_reason(700, {700: postgres}))
+        other = agent_info(701, ppid=1, argv=("sleep", "9"), comm="sleep", uid=os.getuid() + 1, user="other")
+        self.assertIn("not by the caller", gs.literal_pid_reason(701, {701: other}))
+        own = agent_info(702, ppid=me, argv=("sleep", "9"), comm="sleep")
+        self.assertIsNone(gs.literal_pid_reason(702, {702: own, me: agent_info(me, ppid=1)}))
+        self.assertIsNone(gs.literal_pid_reason(999999, {}))
+        self.assertIsNone(gs.literal_pid_reason(0, {}))
+
+    def test_literal_pid_reason_of_the_real_parent_and_pid_1(self):
+        table = REAL_SNAPSHOT()
+        self.assertIn("init", gs.literal_pid_reason(1, table))
+        self.assertIn("ancestors", gs.literal_pid_reason(os.getppid(), table))
+        self.assertIn("ancestors", gs.literal_pid_reason(os.getpid(), table))
+        with mock.patch.object(gs, "agent_procs", None):
+            self.assertIsNone(gs.literal_pid_reason(1))
+            self.assertIn("postgres", gs.protected_words())
+
+    def test_protected_words_are_the_agent_procs_list(self):
+        self.assertEqual(gs.protected_words(), tuple(gs.agent_procs.PROTECTED_WORDS))
+        for word in ("systemd", "postgres", "sshd"):
+            self.assertIn(word, gs.protected_words())
 
     def test_check_pgrep_variants(self):
         def reasons(text):
@@ -287,7 +366,7 @@ class HookProcessTests(GuardTestCase):
             self.assertEqual((code, out), (0, None), command)
 
     def test_a_literal_kill_gets_the_reminder_and_no_decision(self):
-        code, out, _ = self.run_hook("kill -TERM 123")
+        code, out, _ = self.run_hook("kill -TERM 4194300")
         self.assertEqual(code, 0)
         self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
 

@@ -30,6 +30,8 @@ JS_SUFFIXES = (".js", ".mjs", ".cjs")
 RUST_STEPS = ("check_cargo_clippy", "check_cargo_fmt", "check_rust_function_test_anchors", "verify_anchors")
 JS_STEPS = ("check_js_syntax",)
 DOC_SUFFIXES = (".md",)
+# The first word of a stamp `run_linters.py` wrote; an empty file (a write that failed after the file was created) is none of them.
+KNOWN_MODES = ("full", "changed")
 
 
 def parse_stamp(text):
@@ -52,7 +54,11 @@ def refusal(stamp_text, changed_paths):
     mode, count, names = parse_stamp(stamp_text)
     paths = [path for path in changed_paths if path]
     code = [path for path in paths if not path.endswith(DOC_SUFFIXES)]
-    if not code or mode == "full":
+    if not code:
+        return None
+    if mode not in KNOWN_MODES:
+        return "the stamp is empty or unreadable (its first word is %r, not one of %s)" % (mode, "/".join(KNOWN_MODES))
+    if mode == "full":
         return None
     if count == 0:
         return "the stamp selected zero steps for a branch that changed code"
@@ -89,6 +95,8 @@ def exempt_path(path):
             and ".." not in path.split("/"))
 
 
+# A moved submodule pointer (gitlink) is a code change. `submodule.<name>.ignore=all` in a clone's config (hams_open sets it) makes a plain `git diff`
+# hide it, which read as "no files changed"; every diff here names `--ignore-submodules=none` so the setting cannot hide it.
 def _git(repo, *args):
     return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
 
@@ -116,7 +124,7 @@ def inherit_stamp(repo, tip, passed_dir, base="origin/main", log=print):
         old_stamp = os.path.join(passed_dir, old)
         if not os.path.exists(old_stamp):
             continue
-        diff = _git(repo, "diff", "--name-only", "--no-renames", old, tip)
+        diff = _git(repo, "diff", "--ignore-submodules=none", "--name-only", "--no-renames", old, tip)
         if diff.returncode != 0:
             return None
         changed = [line for line in diff.stdout.splitlines() if line]

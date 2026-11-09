@@ -64,10 +64,8 @@ class FindDenyCratesTests(unittest.TestCase):
         self.assertEqual(chk.find_deny_crates(self.tmp), [])
 
     def test_a_claude_worktree_directory_is_never_walked(self):
-        # Real bug found 2026-09-12, confirmed empirically against a real `git worktree add`
-        # from this exact repo (all 4 real deny.toml-bearing crates were checked out and
-        # re-found under the worktree path): a worktree is a full checkout, not an empty
-        # directory. A previous review pass wrongly assumed otherwise; retracted.
+        # A worktree is a full checkout, not an empty
+        # directory.
         crate = os.path.join(self.tmp, ".claude", "worktrees", "sess1", "daemons", "some_daemon")
         _write(os.path.join(crate, "Cargo.toml"))
         _write(os.path.join(crate, "deny.toml"))
@@ -126,7 +124,7 @@ class MainTests(unittest.TestCase):
             self.assertIn("not installed", printed)
 
     def test_cargo_itself_missing_exits_1_with_the_same_clear_message_not_a_crash(self):
-        # Real bug found 2026-09-10: `subprocess.run(["cargo", "deny", "--version"])` raises
+        # `subprocess.run(["cargo", "deny", "--version"])` raises
         # FileNotFoundError, uncaught, when the `cargo` binary itself isn't on PATH at all -- a
         # materially different, realistic condition (a Python-only environment/CI stage with no
         # Rust toolchain set up yet) from "cargo exists but cargo-deny isn't installed", which
@@ -185,10 +183,10 @@ class MainTests(unittest.TestCase):
 
 
 class TimeoutTests(unittest.TestCase):
-    """Regression tests for a real gap found 2026-09-12, same class as check_pip_audit.py's own
-    fix: `cargo deny check` can fetch a fresh advisory-db over the network, and neither
-    subprocess.run() call in main() passed a `timeout=` -- a stalled network condition would
-    block the whole run_linters.py run indefinitely. Confirmed each call site now passes a real
+    """Regression tests for the `timeout=` on both subprocess.run() calls in main(), as in
+    check_pip_audit.py: `cargo deny check` can fetch a fresh advisory-db over the network, and
+    without a timeout a stalled network condition would
+    block the whole run_linters.py run indefinitely. Confirms each call site passes a real
     timeout, and that a subprocess.TimeoutExpired is caught cleanly (a readable failure message +
     exit 1), never an uncaught traceback."""
 
@@ -284,7 +282,7 @@ class ResolveRepoRootTests(unittest.TestCase):
 
 
 class ResolveRepoRootsTests(unittest.TestCase):
-    # Regression test for the real gap found 2026-08-27: all four real deny.toml crates
+    # Regression test: all four real deny.toml crates
     # (hams_local_relay, hams_relay_bridge, hams_data_relay, hams_simulated_band) live under
     # hams_com/daemons/; hams_open's own daemons/ham_digital_modes has no deny.toml at all --
     # confirmed directly, run_linters.py's own real invocation was finding ZERO deny.toml crates

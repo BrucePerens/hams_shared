@@ -30,13 +30,10 @@ def main():
 
     # 1. Map all manifests, their dependencies, and asset bundles
     for root, _dirs, files in tree_walk(repo_root, "__manifest__.py", ("radae",), skip_hidden=True, untracked=True):
-        # Dot-directories -- critically ".claude/worktrees/<session>/", this project's own
-        # standing convention for running concurrent bug-hunt dispatches in isolated git
-        # worktrees INSIDE the repo root -- are never real module locations. Without this, a
-        # concurrently running session's own in-progress, uncommitted manifest changes get
-        # scanned as if they belonged to the real repo (confirmed live while reviewing this exact
-        # file: two other real, concurrently active sessions' own worktrees were found sitting in
-        # the real repo root).
+        # Dot-directories -- critically ".claude/worktrees/<session>/", where agent sessions run
+        # in isolated git worktrees nested inside the repo root -- are never real module
+        # locations. Without this, a concurrently running session's own in-progress, uncommitted
+        # manifest changes get scanned as if they belonged to the real repo.
         if "__manifest__.py" in files:
             mod_name = os.path.basename(root)
             manifest_path = os.path.join(root, "__manifest__.py")
@@ -93,13 +90,13 @@ def main():
     # The "skip to from" middle group is bounded by a negative lookahead against ';', 'import',
     # and 'export' so it can cross a multi-line destructured import list's own newlines (a real,
     # ordinary JS style -- exactly what prettier/eslint produce once an import line gets long,
-    # confirmed live in ham_shack/static/src/js/azimuth_map.js) WITHOUT also being able to cross
-    # into a different, later import/export statement. Before this bound existed, the pattern was
+    # as in ham_shack/static/src/js/azimuth_map.js) WITHOUT also being able to cross
+    # into a different, later import/export statement. A pattern
     # applied per-line (`for line_no, line in enumerate(f, 1): match =
     # import_pattern.search(line)`) with no DOTALL at all, so a multi-line import's 'from
     # "@module/..."' quote -- on a different line than its own 'import' keyword -- never matched
     # anything: a cross-module import naming an undeclared dependency this way was silently never
-    # checked. A naive fix of just adding re.DOTALL without this lookahead bound would trade that
+    # checked. Just adding re.DOTALL without this lookahead bound would trade that
     # false negative for a worse one: the lazy '.*?' would then happily skip across an entire
     # unrelated PRIOR import statement to reach a distant later 'from', misattributing that later
     # import's own target to the first statement and skipping the first statement's real target

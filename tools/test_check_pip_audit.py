@@ -89,11 +89,9 @@ class FindRequirementsFilesTests(unittest.TestCase):
         self.assertEqual(chk.find_requirements_files(self.tmp), [])
 
     def test_a_claude_worktree_directory_is_never_walked(self):
-        # Real bug found 2026-09-12, confirmed empirically against a real `git worktree add`:
-        # this project's own standing convention runs concurrent bug-hunt dispatches in
-        # isolated git worktrees under `.claude/worktrees/<session>/` INSIDE the repo root, and
-        # a worktree is a full checkout -- `requirements.txt` included, not an empty directory.
-        # A previous review pass wrongly assumed a worktree couldn't contain one; retracted.
+        # Agent sessions run in isolated git worktrees under `.claude/worktrees/<session>/`
+        # INSIDE the repo root, and a worktree is a full checkout (verified with a real
+        # `git worktree add`) -- `requirements.txt` included, not an empty directory.
         _write(
             os.path.join(self.tmp, ".claude", "worktrees", "sess1", "requirements.txt")
         )
@@ -184,10 +182,10 @@ class MainTests(unittest.TestCase):
 
 
 class TimeoutTests(unittest.TestCase):
-    """Regression tests for a real gap found 2026-09-12: neither subprocess.run() call in
-    main() passed a `timeout=`, despite this module's own docstring stating pip-audit "Requires
+    """Regression tests for the `timeout=` on both subprocess.run() calls in main():
+    this module's own docstring states pip-audit "Requires
     network access" -- a stalled network call (or a hung pip-audit subprocess for any other
-    reason) would block the whole run_linters.py run indefinitely. Confirmed each call site now
+    reason) would block the whole run_linters.py run indefinitely. Confirms each call site
     passes a real timeout, and that a subprocess.TimeoutExpired is caught cleanly (a readable
     failure message + exit 1), never an uncaught traceback."""
 
@@ -415,7 +413,7 @@ class ResolveRepoRootTests(unittest.TestCase):
 
 
 class ResolveRepoRootsTests(unittest.TestCase):
-    # Regression test for the second half of the same bug class, found 2026-08-27:
+    # Regression test for the second half of the same repo-root redirect problem:
     # _resolve_repo_root's redirect only ever lands on ONE repo (hams_shared's literal parent),
     # but real requirements.txt files exist in both hams_open's own root and hams_com/daemons/ --
     # confirmed directly, run_linters.py's own real invocation was catching hams_open's file but

@@ -31,6 +31,7 @@ import os
 import lint_exec
 import re
 import sys
+from tree_files import tree_files
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".claude", "vendor", "target", "radae"}
 BAD_NAMES = {"form_screenshot.png", "list_screenshot.png", "map_screenshot.png"}
@@ -115,42 +116,41 @@ def check_doc_images(repo_root, extra_roots=()):
     violations = []
     repo_roots = [repo_root] + [r for r in extra_roots if r != repo_root]
     modules_by_hash = {}
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
-        for filename in files:
-            path = os.path.join(root, filename)
-            rel = os.path.relpath(path, repo_root)
-            if not _is_doc_file(rel):
+    doc_files = tree_files(
+        repo_root, (".md", ".html"), SKIP_DIRS, skip_hidden=True, accept=lambda rel: _is_doc_file(rel.replace("/", os.sep)), untracked=True
+    )
+    for path in doc_files:
+        filename = os.path.basename(path)
+        rel = os.path.relpath(path, repo_root)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        except (UnicodeDecodeError, OSError) as error:
+            print(f"Warning: could not read {path}: {error}")
+            continue
+        module = rel.split(os.sep)[0]
+        for ref in (r.strip() for r in _image_refs(text, filename.endswith(".md"))):
+            if re.match(r"^(?:[a-z][a-z0-9+.-]*:|//)", ref, re.IGNORECASE):
                 continue
-            try:
-                with open(path, "r", encoding="utf-8") as handle:
-                    text = handle.read()
-            except (UnicodeDecodeError, OSError) as error:
-                print(f"Warning: could not read {path}: {error}")
+            base = os.path.basename(ref.split("?")[0])
+            if base in BAD_NAMES:
+                violations.append(
+                    f"{rel}: image '{ref}' is a scaffolding placeholder name "
+                    f"({base}); show a real screenshot of this module's own UI or no image."
+                )
                 continue
-            module = rel.split(os.sep)[0]
-            for ref in (r.strip() for r in _image_refs(text, filename.endswith(".md"))):
-                if re.match(r"^(?:[a-z][a-z0-9+.-]*:|//)", ref, re.IGNORECASE):
-                    continue
-                base = os.path.basename(ref.split("?")[0])
-                if base in BAD_NAMES:
-                    violations.append(
-                        f"{rel}: image '{ref}' is a scaffolding placeholder name "
-                        f"({base}); show a real screenshot of this module's own UI or no image."
-                    )
-                    continue
-                image = _resolve(ref, path, repo_roots)
-                if image is None:
-                    violations.append(f"{rel}: image '{ref[:100]}' does not exist.")
-                    continue
-                digest = _md5(image)
-                if digest in DENYLIST:
-                    violations.append(
-                        f"{rel}: image '{ref}' is {DENYLIST[digest]} (md5 {digest}); "
-                        f"documentation must never show a fake UI."
-                    )
-                    continue
-                modules_by_hash.setdefault(digest, {}).setdefault(module, set()).add(ref)
+            image = _resolve(ref, path, repo_roots)
+            if image is None:
+                violations.append(f"{rel}: image '{ref[:100]}' does not exist.")
+                continue
+            digest = _md5(image)
+            if digest in DENYLIST:
+                violations.append(
+                    f"{rel}: image '{ref}' is {DENYLIST[digest]} (md5 {digest}); "
+                    f"documentation must never show a fake UI."
+                )
+                continue
+            modules_by_hash.setdefault(digest, {}).setdefault(module, set()).add(ref)
     for digest, modules in sorted(modules_by_hash.items()):
         if len(modules) > MAX_MODULES_PER_IMAGE:
             names = ", ".join(sorted(modules))

@@ -10,7 +10,7 @@ AI DIRECTIVE: If UI Tours are failing with [watchdog alarm] or timeouts,
 you MUST read `hams_shared/docs/adrs/0081_ui_testability_and_tour_friendly_design.md`. The environment is heavily constrained
 and prone to race conditions if native macros are ignored.
 
-AI DIRECTIVE: two environment gotchas found 2026-09-01 that cost real time diagnosing, relevant
+AI DIRECTIVE: two environment gotchas that cost real time diagnosing, relevant
 whenever you invoke odoo by hand (e.g. `sudo -n -u odoo env ... odoo ...`) outside this runner --
 this module's own run_cmd() above is already unaffected (it captures stdout via subprocess.PIPE,
 never `--logfile`):
@@ -25,8 +25,8 @@ never `--logfile`):
 
 AI DIRECTIVE: any ad-hoc scoped-test database you create by hand (e.g.
 `sudo -u postgres createdb <name>` for a one-off `odoo --test-tags ...` run outside this runner)
-MUST be named with a `tmp_` prefix (e.g. `tmp_night_verify8`), not a free-form name. Found
-2026-09-02: 87 leaked scoped-test databases had accumulated from interrupted runs (a killed tool
+MUST be named with a `tmp_` prefix (e.g. `tmp_night_verify8`), not a free-form name. Once
+87 leaked scoped-test databases had accumulated from interrupted runs (a killed tool
 call, a crashed process, an abandoned session all skip the manual `dropdb` cleanup step),
 consuming several GB of a nearly-full /var partition. `hams_shared/tools/
 reap_stale_test_databases.py` runs on a systemd timer every 2 hours and automatically drops any
@@ -236,10 +236,10 @@ print = functools.partial(print, flush=True)
 
 
 # NOTE: `micro_privilege` used to be duplicated here byte-for-byte from `infrastructure.py`
-# (imported above) but was never called under its bare name anywhere in this file -- pure dead
-# code, removed 2026-09-09 during a bug-hunt pass. Use `infrastructure.micro_privilege` (the
-# fixed, canonical copy -- see hams_com/docs/bug_hunt_claims/hams_shared/tools/claims/
-# micro_privilege.md for the supplementary-groups bug that copy had too, now fixed there).
+# (imported above) but was never called under its bare name anywhere in this file, so the copy
+# was removed. Use `infrastructure.micro_privilege` (the canonical copy -- see
+# hams_com/docs/bug_hunt_claims/hams_shared/tools/claims/micro_privilege.md for its
+# supplementary-groups handling).
 
 
 # Local modules resolve natively without sys.path hacks.
@@ -354,7 +354,7 @@ def count_test_browser_processes(proc_root="/proc"):
             continue
         # /proc cmdline is NUL-separated -- EXCEPT that Chromium rewrites its
         # own argv in place to set the process title, collapsing the whole
-        # command line into argv[0] with spaces. Measured 2026-09-16 against a
+        # command line into argv[0] with spaces. Measured against a
         # real headless chromium on this box: every one of its processes had
         # exactly ONE NUL-separated element, several hundred characters long.
         # An earlier draft of this function split on NUL and took element zero
@@ -401,7 +401,7 @@ class ResourceMonitorThread(threading.Thread):
 
         This used to be `pgrep -c -f chrom`, a box-wide substring match, and on
         a developer box with a desktop session that is wrong in both
-        directions. Measured 2026-09-16 with no test running at all: 27
+        directions. Measured with no test running at all: 27
         matching processes, of which 17 were Bruce's own interactive Google
         Chrome and 8 were the Claude desktop application's Electron shell --
         both Chromium, neither anything a test leaked. A real run then tipped
@@ -518,29 +518,22 @@ class FailureExtractor:
         progress_name = runner_slots.slot_file_name("test_progress.txt", slot)
         self.display_path = os.path.join(base_dir, report_name)
 
-        # Bug-hunt fix (2026-09-09): HAMS_ISOLATED_NS=="1" alone does NOT prove
-        # /mnt/real_tmp is a real, bind-mounted directory pointing back to the
-        # host's real log dir -- it only means that when this process actually
-        # descends from setup_namespace_and_run_tests() (which creates the
-        # bind mount before ever setting this variable). The project's OWN
-        # standing convention (hams-odoo-test-runner-sudo-and-polkit) also
-        # sets this same variable by hand on a *direct* `test.py` invocation
-        # (`sudo -u odoo HAMS_ISOLATED_NS=1 test.py ...`) purely to skip
-        # rebuild_db()'s polkit-triggering `systemctl start` calls -- with
-        # none of setup_namespace_and_run_tests()'s mount namespace/overlay/
-        # bind-mount machinery ever having run. Under that real, documented
-        # invocation path, `/mnt/real_tmp` does not exist at all (it lives
-        # only inside the private mount namespace `unshare -m` creates), so
-        # trusting the bare env var here silently misdirects both the
-        # extracted-failures log and the live progress file to a location
-        # `finish_and_write()`'s own `display_path` (what actually gets
-        # printed to the user) never points at -- or crashes at exit trying
-        # to `os.makedirs()` a directory under root-owned `/mnt`. Checking
-        # the real, load-bearing OS fact (does the bind-mounted directory
-        # this code depends on actually exist) instead of the overloaded
-        # env var fixes this for the direct-invocation case while leaving
-        # the real isolated pipeline's behavior unchanged (there, this
-        # directory is always present by the time this constructor runs).
+        # HAMS_ISOLATED_NS=="1" alone does NOT prove /mnt/real_tmp is a real, bind-mounted
+        # directory pointing back to the host's real log dir. It only means that when this
+        # process descends from setup_namespace_and_run_tests() (which creates the bind mount
+        # before setting this variable). The standing convention for running tests as the odoo
+        # user (hams-odoo-test-runner-sudo-and-polkit) also sets this variable by hand on a
+        # *direct* `test.py` invocation (`sudo -u odoo HAMS_ISOLATED_NS=1 test.py ...`) purely
+        # to skip rebuild_db()'s polkit-triggering `systemctl start` calls, with none of
+        # setup_namespace_and_run_tests()'s mount namespace/overlay/bind-mount machinery
+        # having run. There `/mnt/real_tmp` does not exist (it lives only inside the private
+        # mount namespace `unshare -m` creates), so trusting the bare env var would misdirect
+        # both the extracted-failures log and the live progress file to a location that
+        # `finish_and_write()`'s `display_path` (what gets printed to the user) never points
+        # at, or crash at exit in `os.makedirs()` under root-owned `/mnt`. Checking that the
+        # bind-mounted directory actually exists, instead of the overloaded env var, handles
+        # the direct-invocation case and leaves the real isolated pipeline unchanged (there
+        # the directory is always present by the time this constructor runs).
         if os.environ.get("HAMS_ISOLATED_NS") == "1" and os.path.isdir("/mnt/real_tmp"):
             self.output_path = os.path.join("/mnt/real_tmp", report_name)
         else:
@@ -575,8 +568,7 @@ class FailureExtractor:
         self.current_block = []
         self._written = False
         self.aborted = False
-        # Real bug found and fixed 2026-09-15 (test-py-headline-contradicts-odoo-result-a33308da):
-        # the closing headline used to report `len(grouped_blocks)` -- a count of captured
+        # The closing headline must not report `len(grouped_blocks)` -- a count of captured
         # ERROR-level log-line blocks -- as "issues detected", with no relation to whether the
         # suite actually passed. A test that deliberately provokes an ERROR-level log line on a
         # path it then asserts correctly raises (a very normal thing for a test to do) produced a
@@ -593,13 +585,11 @@ class FailureExtractor:
         if not disable_atexit:
             atexit.register(self.finish_and_write)
 
-        # Bug-hunt fix (2026-09-09): same real-vs-assumed /mnt/real_tmp gap as
-        # self.output_path above -- see that comment for the full reasoning.
-        # This one is the more dangerous of the two: update_progress() wraps
-        # every write in a bare `except Exception: pass`, so under a direct
-        # `HAMS_ISOLATED_NS=1` invocation (no real bind mount) this used to
-        # silently no-op the entire live progress-tracking feature with
-        # zero signal to the user -- a textbook silent-failure gate.
+        # Same real-vs-assumed /mnt/real_tmp distinction as self.output_path above -- see that
+        # comment for the reasoning. This is the more dangerous of the two: update_progress()
+        # wraps every write in a bare `except Exception: pass`, so under a direct
+        # `HAMS_ISOLATED_NS=1` invocation (no real bind mount) the live progress tracking
+        # would silently do nothing, with no signal to the user.
         if os.environ.get("HAMS_ISOLATED_NS") == "1" and os.path.isdir("/mnt/real_tmp"):
             self.progress_path = os.path.join("/mnt/real_tmp", progress_name)
         else:
@@ -633,15 +623,14 @@ class FailureExtractor:
 
         if "Starting " in context_name:
             test_name = context_name.split("Starting ")[-1].strip()
-            # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
-            # LAZINESS: Catch-all AttributeError): __init__ unconditionally sets
+            # No try/except around this attribute: __init__ unconditionally sets
             # self.current_test = "Initializing..." before returning, and the only
             # attribute this instance ever exposes to outside code before __init__
             # finishes is via atexit.register(self.finish_and_write) -- which never reads
             # current_test at all (confirmed by reading its full body). set_context() is
             # only ever called (via process_line()) on a fully-constructed instance, so
-            # self.current_test always exists here; the try/except was masking an
-            # AttributeError that could never actually occur.
+            # self.current_test always exists here, and a catch-all would only mask an
+            # AttributeError that can never occur.
             curr = self.current_test
             if (
                 curr
@@ -805,11 +794,10 @@ class FailureExtractor:
         return modules
 
     def finish_and_write(self):
-        # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
-        # LAZINESS: Catch-all AttributeError): self._written = False is set unconditionally
-        # in __init__ before atexit.register(self.finish_and_write) ever runs, so this
-        # method can never see an instance without it -- the try/except was masking an
-        # AttributeError that could never actually occur.
+        # No try/except here: self._written = False is set unconditionally in __init__
+        # before atexit.register(self.finish_and_write) ever runs, so this method can never
+        # see an instance without it, and a catch-all would only mask an AttributeError that
+        # can never occur.
         w = self._written
         if w:
             return
@@ -889,11 +877,10 @@ class FailureExtractor:
             return
 
         print("\n==========================================================")
-        # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
-        # LAZINESS: Catch-all AttributeError): self.aborted = False is set unconditionally
-        # in __init__ before this method can ever run (see finish_and_write's own comment
-        # above for the full atexit-ordering argument) -- the try/except was masking an
-        # AttributeError that could never actually occur.
+        # No try/except here: self.aborted = False is set unconditionally in __init__ before
+        # this method can ever run (see finish_and_write's own comment above for the full
+        # atexit-ordering argument), so a catch-all would only mask an AttributeError that
+        # can never occur.
         a = self.aborted
 
         # See __init__'s own comment on self.odoo_result_lines: the headline used to be
@@ -901,8 +888,7 @@ class FailureExtractor:
         # any suite that deliberately provokes and correctly asserts on an ERROR-level log
         # line -- e.g. daemon_key_manager's own test_write_secure_env_file_* tests. When
         # Odoo's own `odoo.tests.result:` line(s) were captured this run, report THOSE counts
-        # as the authoritative pass/fail signal (real bug found and fixed 2026-09-15,
-        # test-py-headline-contradicts-odoo-result-a33308da) -- `num_failures`'s captured
+        # as the authoritative pass/fail signal -- `num_failures`'s captured
         # blocks are still surfaced, but as context, never as a contradiction of Odoo's own
         # verdict in the same log.
         odoo_total_failed = sum(r["failed"] for r in self.odoo_result_lines)
@@ -910,7 +896,7 @@ class FailureExtractor:
         odoo_total_tests = sum(r["total"] for r in self.odoo_result_lines)
         odoo_ran = len(self.odoo_result_lines) > 0
 
-        # Real bug found and fixed alongside the above: under HAMS_ISOLATED_NS=1,
+        # Under HAMS_ISOLATED_NS=1,
         # self.output_path (where the file actually gets written, see __init__) is
         # /mnt/real_tmp/filtered_test.txt -- a private-mount-namespace path this process
         # will tear down on exit -- while self.display_path (what got printed here) is built
@@ -1070,6 +1056,34 @@ def chrome_processes_of_this_run(pattern, uid=None, own_pids=None, processes=Non
     return found
 
 
+def remove_chrome_profiles(globs):
+    """Remove every directory that matches one of the glob patterns `globs` (the Chrome profile directories of the run).
+
+    No shell is involved: a TMPDIR with a space or a shell character in it is matched as the one path it is. A symbolic link is
+    removed as a link and never followed; a directory that cannot be removed is skipped. Returns the number of paths removed."""
+    removed = 0
+    for pattern in globs:
+        for path in glob.glob(pattern):
+            if os.path.islink(path):
+                os.unlink(path)
+            else:
+                shutil.rmtree(path, ignore_errors=True)
+            removed += not os.path.lexists(path)
+    return removed
+
+
+def kill_process_group_if_private(pid):
+    """SIGKILL the process group of child `pid` unless that group is this process's own; True when it was signalled.
+
+    A child started without its own group (Redis in the namespace's root phase) is in the group of the process that started
+    it: signalling it would end that process too. Raises OSError as os.getpgid and os.killpg do."""
+    pgid = os.getpgid(pid)
+    if pgid == os.getpgrp():
+        return False
+    os.killpg(pgid, signal.SIGKILL)
+    return True
+
+
 def kill_test_chrome(signal_name):
     """Send `signal_name` ('TERM' or 'KILL') to this run's headless Chrome processes (the odoo user's); see
     chrome_processes_of_this_run for which those are. A process that is already gone is ignored."""
@@ -1139,13 +1153,13 @@ RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS = 10
 # Where the Odoo test process (and the headless Chrome profiles it creates) keeps its temporary files. /tmp on the development box is a
 # separate 2.7 GB partition that leftovers from other jobs fill; the `caching` LRU-eviction tour writes hundreds of megabytes into its
 # Chrome profile and fails deterministically ("Cache.put: Unexpected internal error") when /tmp is nearly full. The same run with
-# TMPDIR on the roomy disk passes (night_shift_todo tmp-full-breaks-caching-lru-tour). Bruce approved this change 2026-09-28.
+# TMPDIR on the roomy disk passes.
 DEFAULT_TEST_TMPDIR = "/var/lib/odoo/tmp"
 
 
 # The CPU-time backstop for the Odoo test process (RLIMIT_CPU, whole process, all threads; Chrome is separate processes).
 # It was (1200, 1200): 20 CPU-minutes with soft == hard, so a full combined run was SIGKILLed by the kernel mid-module after
-# 1.5-2.5 h of wall time (found 2026-10-24 with bpftrace: SIGKILL code SI_KERNEL in Odoo's own thread) and the remaining
+# 1.5-2.5 h of wall time (seen with bpftrace: SIGKILL code SI_KERNEL in Odoo's own thread) and the remaining
 # tests silently gave no verdict. Now a backstop no real suite reaches, with the soft limit first so SIGXCPU (which
 # test.py recognises and reports) precedes the hard SIGKILL. Hung runs are still caught by run_cmd's hang recovery.
 ODOO_CPU_LIMIT_SOFT_SECONDS = 6 * 3600
@@ -1196,8 +1210,8 @@ def signal_exit_verdict(returncode, watchdog_fired, odoo_result_lines):
 
 # The shell that runs RabbitMQ in its own process group and stops the group on SIGTERM (PDEATHSIG or clean-up). The trap
 # first IGNORES TERM in this shell, then signals the group and exits 0: `kill -TERM 0` also reaches this shell, and with
-# the trap still set it re-entered itself until bash overflowed its stack and segfaulted, at the end of every run (found
-# 2026-10-24 from the kernel log: `bash[...]: segfault ... error 6` about 1 s after each run's Odoo exited). Resetting
+# the trap still set it re-entered itself until bash overflowed its stack and segfaulted, at the end of every run (seen
+# in the kernel log: `bash[...]: segfault ... error 6` about 1 s after each run's Odoo exited). Resetting
 # the trap to the default instead would kill the shell with TERM before `exit 0`.
 RABBITMQ_WRAPPER_SCRIPT = "trap \"trap '' TERM; kill -TERM 0 2>/dev/null; exit 0\" TERM; {server} & wait $!"
 
@@ -1335,35 +1349,23 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
     watchdog.start()
 
     force_killed = False
-    # Bug-hunt fix (2026-09-10): a 2026-06-24 commit (e24ff25) replaced this
-    # loop's original "kill the whole process on the first 60s stall"
-    # behavior (robust_reap() + force_killed = True + break) with a
-    # kill-chrome-and-keep-waiting recovery attempt, intentionally, to let a
-    # tour recover from a merely-stuck browser without failing the whole
-    # run. But that change never bounded how many times recovery can be
-    # retried -- `force_killed` was left assigned `False` and never set
-    # True again anywhere in this function (confirmed via
-    # `grep -n force_killed test.py`), so the `if force_killed:` branch
-    # near this function's own return has been permanently dead code ever
-    # since, and a test process that stays stuck even with chrome dead
-    # (e.g. a hang unrelated to the browser at all) re-triggers this same
-    # 60s idle branch forever: `run_cmd` -- and therefore the whole
-    # `test.py` invocation -- never terminates.
-    # `RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS` (module-level, above) bounds
-    # that: after this many consecutive un-hang attempts with no real
-    # output in between, actually reap the process and report failure
-    # instead of retrying indefinitely. A SEPARATE lifetime counter
-    # (`total_hang_recovery_attempts`, never reset) also bounds the case
-    # where killing chrome itself provokes a line or two of real output
-    # (a websocket/CDP error, a tour-teardown message) each time -- that
-    # would reset the consecutive counter to 0 forever while the run is
-    # still, in substance, stuck in the same hang/kill/hang cycle. Not
-    # confirmed either way against a real transcript (no logged
-    # "[!] TEST TIMEOUT" -> resumed-output sequence was found in this
-    # project's own night_shift_history.md/night_shift_todo.md to settle
-    # it), so this is defense-in-depth against an assumption the
-    # consecutive-only counter alone would silently depend on, not a
-    # confirmed second bug.
+    # The loop used to kill the whole process on the first 60s stall (robust_reap() +
+    # force_killed = True + break). Commit e24ff25 replaced that with kill-chrome-and-keep-
+    # waiting, so a tour can recover from a merely-stuck browser without failing the whole
+    # run. Recovery has to be bounded: `force_killed` is never set True again in this
+    # function (so the `if force_killed:` branch near the return is dead), and a test
+    # process that stays stuck even with chrome dead (a hang unrelated to the browser) would
+    # re-trigger this 60s idle branch forever, so `run_cmd` -- and the whole `test.py`
+    # invocation -- would never terminate.
+    # `RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS` (module-level, above) bounds that: after this many
+    # consecutive un-hang attempts with no real output in between, the process is reaped and
+    # failure reported instead of retrying indefinitely. A separate lifetime counter
+    # (`total_hang_recovery_attempts`, never reset) covers the case where killing chrome
+    # itself provokes a line or two of real output (a websocket/CDP error, a tour-teardown
+    # message) each time: that would reset the consecutive counter forever while the run is
+    # still stuck in the same hang/kill/hang cycle. No logged "[!] TEST TIMEOUT" ->
+    # resumed-output sequence has been observed, so this is defense-in-depth against an
+    # assumption the consecutive-only counter would silently depend on.
     hang_recovery_attempts = 0
     total_hang_recovery_attempts = 0
     q = queue.Queue()
@@ -1434,19 +1436,15 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                         or total_hang_recovery_attempts
                         > RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS
                     ):
-                        # Bug-hunt fix (2026-09-10): un-hang-by-killing-chrome
-                        # has already been tried too many times -- either
-                        # RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS times in a row
-                        # with zero real output in between (whatever is stuck
-                        # is not, or is no longer, a hung chrome tab), or
-                        # RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS times total
-                        # across this one run even with occasional output
-                        # resetting the consecutive count (a run stuck in a
-                        # repeating hang/kill-chrome/brief-output/hang cycle is
-                        # not healthy just because the counter above never hit
-                        # its own consecutive threshold). Actually terminate
-                        # the test process and report failure instead of
-                        # retrying/looping indefinitely.
+                        # Un-hang-by-killing-chrome has already been tried too many times:
+                        # either RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS times in a row with no
+                        # real output in between (whatever is stuck is not, or is no longer,
+                        # a hung chrome tab), or RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS
+                        # times in total across this run even with occasional output
+                        # resetting the consecutive count (a repeating
+                        # hang/kill-chrome/brief-output/hang cycle is not healthy just
+                        # because the consecutive threshold was never hit). Terminate the
+                        # test process and report failure instead of retrying indefinitely.
                         print(
                             f"\n[!] TEST TIMEOUT: still no sustained output after "
                             f"{total_hang_recovery_attempts} total un-hang attempt(s) "
@@ -1541,6 +1539,13 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         # killed (a hang with no captured error text is not evidence the
         # test would have passed, it is evidence nothing about it could be
         # observed).
+        force_kill_line = (
+            "🛑 Odoo was force-killed after repeated hangs: this run is NOT a test verdict -- the tests after that point never ran."
+        )
+        print(force_kill_line, flush=True)
+        if extractor is not None:
+            # The same field a kill by a signal sets: the known-red policy never turns such a run green.
+            extractor.signal_line = force_kill_line
         return 1
 
     exit_status, signal_line = signal_exit_verdict(
@@ -1653,15 +1658,14 @@ def resolve_repo_layout(base_dir):
     if os.path.isfile(git_file):
         try:
             result = subprocess.run(
-                # Bug fix (night-watch, 2026-09-22, see hams_com's own
-                # night_shift_todo/high/worktree-test-py-cannot-resolve-zero-sudo-addon-b9f496a7.md
-                # for the full trace): a linked worktree's `.git` is a FILE, not a directory, and
-                # git's ownership-safety check treats that differently from a plain repo -- this
-                # call was failing with "detected dubious ownership" for every worktree run as
-                # `odoo` (whose global git config has no safe.directory entries), silently caught
-                # by the except below and falling through to the plain-clone path, which is wrong
-                # for a worktree. `-c safe.directory=<base_dir>` scopes the exception to just this
-                # one subprocess call, with no standing config mutation on the `odoo` account.
+                # A linked worktree's `.git` is a FILE, not a directory, and git's
+                # ownership-safety check treats that differently from a plain repo: without
+                # this override the call fails with "detected dubious ownership" for every
+                # worktree run as `odoo` (whose global git config has no safe.directory
+                # entries), is silently caught by the except below and falls through to the
+                # plain-clone path, which is wrong for a worktree. `-c safe.directory=<base_dir>`
+                # scopes the exception to just this one subprocess call, with no standing
+                # config mutation on the `odoo` account.
                 ["git", "-c", f"safe.directory={base_dir}", "-C", base_dir, "rev-parse", "--git-common-dir"],
                 capture_output=True,
                 text=True,
@@ -1833,30 +1837,22 @@ def check_linters(
 
     print("[*] Running AST Burn List Linter...")
     burn_script = os.path.join(shared_dir, "tools", "check_burn_list.py")
-    # --scan-daemons-and-tools wired in for real 2026-09-14: this flag has existed since
-    # LINTER_POLICY_REVISIT.md's own "Discovered, not acted on" entry and Bruce's own
-    # 2026-09-07 decision (night_shift_todo.md) to apply the existing generic rules to
-    # daemons/tools/hams_local_relay/hams_community too -- but this call site never
-    # actually passed it, so that whole category of Python source went completely
-    # untriaged by the routine burn-list pass every multi-module test.py run and CI job
-    # exercises. Closed a real, previously-invisible 34-error backlog across 18 daemon
-    # directories (plus 2 more real bugs found in check_burn_list.py's own rule logic
-    # along the way) before finally wiring this in -- see night_shift_todo.md's own
-    # 2026-09-14 entries for the full trace. A fresh, real, whole-repo scan with this
-    # flag confirmed 0 errors before this line was changed; do not remove this flag to
-    # "fix" a future daemons/tools finding without first fixing the finding itself.
+    # --scan-daemons-and-tools applies the existing generic burn-list rules to
+    # daemons/tools/hams_local_relay/hams_community too (see LINTER_POLICY_REVISIT.md). Without
+    # the flag that whole category of Python source goes untriaged by the routine burn-list pass
+    # every multi-module test.py run and CI job exercises. A whole-repo scan with this flag
+    # reports 0 errors; do not remove this flag to "fix" a future daemons/tools finding without
+    # first fixing the finding itself.
     #
-    # Scan scope, per Bruce's own answer (night_shift_questions/answered/test-py-multi-
-    # target-burn-list-scope-4e892722.md, 2026-09-23): a run naming ONE OR MORE specific
-    # modules scans only those modules' own directories -- a multi-module run behaves
-    # the same way regardless of how many modules are named, and is no longer blocked
-    # by a burn-list issue in a module nobody asked to test, or by another session's
-    # unrelated in-progress work elsewhere in a shared checkout. Only a run naming ZERO
-    # modules (an explicit "test everything" request) scans the whole repository --
-    # that case is unchanged, since testing everything naturally implies linting
-    # everything too. check_burn_list.py's own `directory` argument takes exactly one
-    # path, so a multi-module run scans each named module in its own subprocess call
-    # and aggregates the results, rather than trying to pass several paths at once.
+    # Scan scope: a run naming ONE OR MORE specific modules scans only those modules' own
+    # directories -- a multi-module run behaves the same way regardless of how many modules are
+    # named, and is not blocked by a burn-list issue in a module nobody asked to test, or by
+    # another session's unrelated in-progress work elsewhere in a shared checkout. Only a run
+    # naming ZERO modules (an explicit "test everything" request) scans the whole repository,
+    # since testing everything naturally implies linting everything too.
+    # check_burn_list.py's own `directory` argument takes exactly one path, so a multi-module
+    # run scans each named module in its own subprocess call and aggregates the results, rather
+    # than trying to pass several paths at once.
     burn_targets = (
         [os.path.join(base_dir, module) for module in target_modules]
         if target_modules
@@ -1900,18 +1896,13 @@ def check_linters(
         print(res_burn.stdout)
         print(res_burn.stderr)
         if os.environ.get("HAMS_SKIP_BURN_LIST") == "1":
-            # Narrow, explicit escape hatch: this linter's own enforcement had been silently
-            # commented out here for an unknown period (found 2026-09-10 --
-            # see night_shift_todo.md), letting a real, dangerous bug
-            # (a _sql_constraints usage that is silently non-functional in
-            # this Odoo version) go uncaught. Re-enabled with a real
-            # backlog (35 errors/67 warnings across hams_com alone as of
-            # that date) already present, matching the anchor-scan gate's
-            # own accepted default of "enforce and block on the existing
-            # backlog" rather than silently staying disabled -- this
-            # opt-out is for verifying a specific, unrelated change without
-            # being blocked by that backlog, not a default and must never
-            # be set in CI.
+            # Narrow, explicit escape hatch: this linter must stay enforced (it had once been
+            # commented out here, which let a real, dangerous bug -- a _sql_constraints usage
+            # that is silently non-functional in this Odoo version -- go uncaught), and it
+            # blocks on the existing backlog rather than silently staying disabled, matching
+            # the anchor-scan gate's own accepted default of "enforce and block on the existing
+            # backlog". This opt-out is for verifying a specific, unrelated change without
+            # being blocked by that backlog, not a default and must never be set in CI.
             print(
                 "🛑 Burn list violations found (HAMS_SKIP_BURN_LIST=1 -- "
                 "explicit opt-out, not a default; see this block's own comment)."
@@ -1940,20 +1931,12 @@ def check_linters(
     if res_init.returncode != 0:
         print(res_init.stdout)
         print(res_init.stderr)
-        # Real gap found 2026-09-11 (night_shift_todo.md: "HIGH PRIORITY,
-        # found 2026-09-11: real security regression test files existed on
-        # disk but never actually ran"): this branch used to print the
-        # checker's own real findings (a test_*.py file missing from its
-        # package's __init__.py, so its tests silently never execute) and
-        # then fall through to running the suite anyway -- the exact
-        # "phantom coverage" risk that gate exists to catch, undone by
-        # never actually halting on it. Both real instances found that day
-        # (ham_events/ham_testing) had a genuine, previously-unknown live
-        # bug once wired up. Halt like the burn-list gate above, not skip
-        # like the anchor-scan gate below -- this checker has no
-        # baseline/ratchet mechanism to grandfather a pre-existing backlog
-        # into, and none currently exists (confirmed clean on both real
-        # repos before this fix landed).
+        # This branch must halt on the checker's findings (a test_*.py file missing from its
+        # package's __init__.py, so its tests silently never execute), not print them and then
+        # run the suite anyway: that is the "phantom coverage" risk this gate exists to catch.
+        # Halt like the burn-list gate above, not skip like the anchor-scan gate below -- this
+        # checker has no baseline/ratchet mechanism to grandfather a pre-existing backlog into,
+        # and none currently exists (both real repos are clean).
         print("🛑 Halting due to init-imports violations.")
         halt_preflight(
             extractor,
@@ -2087,8 +2070,8 @@ _SAFE_DB_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 
 _HOST_CORE_DAEMONS = ("postgresql", "redis-server", "rabbitmq-server", "pdns")
 
-# Bruce's decision, 2026-10-02/03: this script must never run on the production host (hams1).
-# Found the hard way: a `HAMS_ISOLATED_NS=1` run there used production's own Redis and RabbitMQ
+# This script must never run on the production host (hams1).
+# A `HAMS_ISOLATED_NS=1` run there used production's own Redis and RabbitMQ
 # (rebuild_db's `redis-cli flushdb` wiped production Redis db 0, and production's backup.worker
 # consumed test jobs). Two independent signals, either one is enough:
 #   * deploy_to_production.py writes these files under /opt/hams/src on the production host only;
@@ -2157,7 +2140,6 @@ def core_daemons_to_start(isolated):
     127.0.0.1, as daemons/pdns_sync/test_pdns_sync.py's
     TestPdnsSyncAgainstRealPowerDns does (hams_com #556); loopback is up
     inside the namespace, so that works under isolation too.
-    (night_shift_todo 6d19d5cb)
     """
     if isolated:
         return []
@@ -2165,8 +2147,7 @@ def core_daemons_to_start(isolated):
 
 
 def rebuild_db(db_name, redis_flush_db=None):
-    # Bug-hunt fix (2026-09-10, bug class 47 candidate: raw SQL built by
-    # string interpolation with no parameterization): `db_name` below is
+    # SQL here is built by string interpolation with no parameterization: `db_name` below is
     # interpolated directly into double-quoted SQL identifiers
     # (DROP/CREATE DATABASE, \c) -- PostgreSQL has no parameterized-query
     # placeholder for an *identifier* (only for values), so the standard
@@ -2236,12 +2217,12 @@ CREATE EXTENSION IF NOT EXISTS vector;
         env=env,
     )
 
-    # Bug-hunt fix (2026-09-13): see remove_stale_filestore()'s own docstring for the full
-    # reasoning -- DROP DATABASE never touches Odoo's on-disk filestore, so every real test run
-    # against the same db_name leaked its prior run's own now-unreferenced attachment blobs
-    # forever. Removing them right after the fresh CREATE DATABASE above closes that leak for
-    # this path (this script's own default/per-purpose db names), distinct from
-    # reap_stale_test_databases.py's own already-fixed leak for `tmp_`-prefixed scratch databases.
+    # See remove_stale_filestore()'s own docstring for the full reasoning -- DROP DATABASE never
+    # touches Odoo's on-disk filestore, so without this every test run against the same db_name
+    # would leak its prior run's now-unreferenced attachment blobs forever. Removing them right
+    # after the fresh CREATE DATABASE above covers this script's own default/per-purpose db
+    # names, distinct from reap_stale_test_databases.py's handling of `tmp_`-prefixed scratch
+    # databases.
     remove_stale_filestore(db_name)
 
 
@@ -2260,14 +2241,13 @@ def remove_stale_filestore(db_name, filestore_base=ODOO_FILESTORE_BASE):
     one of those becomes permanently orphaned garbage that nothing else ever cleans up, since
     Odoo's own filestore GC only runs as a cron job inside a live instance against that instance's
     own current DB, which a short-lived test run tears down long before any cron would fire.
-    Found live: `hams_test`'s own filestore had grown to 2.3GB, plus ~470MB more across 8 other
-    orphaned *-suffixed test-db filestores with no database left at all (dropped by a run that
-    used a different `--db` value once), on a /var partition already tight on space (see
-    `hams-devbox-var-partition-small`). This is the exact same bug class
-    `reap_stale_test_databases.py`'s own `ODOO_FILESTORE_BASE` fix closed for `tmp_`-prefixed
-    scratch databases on 2026-09-08 -- that reaper structurally only ever touches `tmp_`-prefixed
-    names (a deliberate destructive-operation allowlist), so it was blind to this script's own
-    non-`tmp_`-prefixed default db names.
+    On the development box `hams_test`'s own filestore had grown to 2.3GB, plus ~470MB more
+    across 8 other orphaned *-suffixed test-db filestores with no database left at all (dropped by
+    a run that used a different `--db` value once), on a /var partition already tight on space
+    (see `hams-devbox-var-partition-small`). `reap_stale_test_databases.py` handles the same leak
+    for `tmp_`-prefixed scratch databases (its `ODOO_FILESTORE_BASE`), but it structurally only
+    ever touches `tmp_`-prefixed names (a deliberate destructive-operation allowlist), so it is
+    blind to this script's own non-`tmp_`-prefixed default db names.
 
     Best-effort by design: a failure here should never abort an otherwise-working test run, only
     leave the old blobs in place (the pre-existing, if wasteful, behavior) for the reaper or a
@@ -2283,6 +2263,11 @@ def remove_stale_filestore(db_name, filestore_base=ODOO_FILESTORE_BASE):
     `reap_stale_test_databases.py`'s `sudo -n -u postgres psql`) for "fail fast, never block on an
     interactive password/polkit prompt" in an unattended script.
     """
+    # The name becomes a path below `filestore_base` that is removed recursively, with `sudo -n rm -rf` as the fallback: a name
+    # such as `../../x` (a `--db` value in slot mode reaches this before rebuild_db checks it) would remove a directory outside it.
+    if not _SAFE_DB_NAME_RE.match(db_name):
+        print(f"⚠️  WARNING: not removing a filestore for {db_name!r}: it is not a plain database name.")
+        return
     filestore_dir = os.path.join(filestore_base, db_name)
     if not os.path.isdir(filestore_dir):
         return
@@ -2978,17 +2963,15 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
             stderr=subprocess.DEVNULL,
         )
     except Exception as e: # audit-ignore-catch-all
-        # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL AI
-        # LAZINESS: Catch-all AttributeError x2): subprocess.Popen()'s own constructor
+        # subprocess.Popen()'s own constructor
         # only ever raises OSError/ValueError (e.g. FileNotFoundError if bash isn't on
         # PATH) -- never subprocess.CalledProcessError, the only stdlib exception type
         # that carries .stdout/.stderr, and stdout/stderr are DEVNULL above regardless, so
-        # nothing is ever captured to report even in principle. `out`/`err` were
-        # unconditionally "" every time this branch could ever run; the two try/except
-        # blocks and the misleading "STDOUT:"/"STDERR:" lines they fed added no real
-        # information and are removed rather than kept as dead code.
-        # Real fix, 2026-09-12 (hams_shared/tools/ 326-finding discovery, CRITICAL SILENT
-        # FAILURE): print() alone isn't a recognized logging call, and sys.exit(1) below
+        # nothing is ever captured to report even in principle. `out`/`err` would
+        # unconditionally be "" every time this branch could ever run; try/except
+        # blocks and "STDOUT:"/"STDERR:" lines fed from them would add no real
+        # information, so they are not kept as dead code.
+        # print() alone isn't a recognized logging call, and sys.exit(1) below
         # isn't an AST-visible raise, so this handler's own traceback had no trace anywhere
         # a log aggregator could see it, only the interactive CLI's own stdout.
         _logger.error("Failed to start RabbitMQ: %s", e)
@@ -3089,10 +3072,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
                     flush=True,
                 )
                 try:
-                    os.killpg(
-                        os.getpgid(proc.pid),
-                        signal.SIGKILL,
-                    )
+                    kill_process_group_if_private(proc.pid)
                 except OSError as e:
                     _logger.debug("Ignored OSError SIGKILLing %s process group %s during teardown: %s", proc_name, proc.pid, e)
                 try:
@@ -3281,13 +3261,10 @@ def _test_runner_lock_path():
     """
     Fixed, HOME-independent path for the single-instance test-runner lock.
 
-    Bug-hunt finding (2026-09-09, see docs/bug_hunt_claims/hams_shared/tools/
-    claims/setup_namespace_and_run_tests.md's "ISOLATION" section, and
-    night_shift_todo.md's "the single-instance test.py lock may not actually
-    protect the real isolated-namespace pipeline" entry): the old
-    os.path.expanduser("~/tmp")-based lock path used to be recomputed
-    independently at each of three separate points across one logical test
-    run -- the initial invocation (Process A), the re-exec'd root
+    The old os.path.expanduser("~/tmp")-based lock path (see
+    docs/bug_hunt_claims/hams_shared/tools/claims/setup_namespace_and_run_tests.md's "ISOLATION"
+    section) used to be recomputed independently at each of three separate points across
+    one logical test run -- the initial invocation (Process A), the re-exec'd root
     `--internal-ns-init` process (Process B), and the final odoo-uid test
     subprocess (Process C) -- under three DIFFERENT values of HOME (Process
     A's real HOME; Process B's, plausibly /root, since `systemd-run --scope`
@@ -3298,9 +3275,8 @@ def _test_runner_lock_path():
     genuinely separate, concurrent invocations -- plausible, but never
     actually verified.
 
-    Fixed by anchoring the lock to ONE fixed, absolute path instead of
-    anything derived from HOME. Honors an explicit override via the
-    HAMS_TEST_LOCK_PATH env var -- which, unlike an open file descriptor,
+    The lock is anchored to ONE fixed, absolute path instead of anything derived from HOME.
+    Honors an explicit override via the HAMS_TEST_LOCK_PATH env var -- which, unlike an open file descriptor,
     survives os.execvpe/sudo/systemd-run/unshare -- so this can be (and, in
     main(), is) computed once and passed through explicitly rather than
     re-derived at each re-exec boundary. NOTE: `systemd-run --scope` does NOT
@@ -3319,16 +3295,10 @@ def _test_runner_lock_path():
     fallback path to mean what it says; if that ordering is ever changed,
     re-verify this comment's assumption still holds.
 
-    This is also, deliberately, now a single SYSTEMWIDE path rather than a
-    per-user one (the old ~/tmp path differed per invoking user, so two
-    different real users on this box were never actually serialized against
-    each other even before this bug). Per this codebase's own coarse-lock
-    philosophy (one test at a time, box-wide, fail-fast rather than a
-    fine-grained per-context lock), that is believed to be the intended
-    semantics already, not a new behavior change worth gating -- but it IS a
-    real, observable difference from the pre-fix behavior, called out
-    explicitly here per Bruce's own request not to bury a design change like
-    this silently.
+    This is deliberately a single SYSTEMWIDE path rather than a per-user one (a path under ~
+    differs per invoking user, so two different real users on one box would never be serialized
+    against each other). That matches this codebase's coarse-lock philosophy: one test at a
+    time, box-wide, fail-fast rather than a fine-grained per-context lock.
     """
     return os.environ.get("HAMS_TEST_LOCK_PATH") or "/tmp/hams_odoo_test_runner.lock"
 
@@ -3376,12 +3346,11 @@ def check_offline_isolation_invocation_shape(offline_isolation, isolated_ns_env,
     -- so this check only fires for the case that can truly never work, and
     lets Process C itself proceed.
 
-    Found 2026-09-19 the slow way: a direct `HAMS_ISOLATED_NS=1
-    --offline-isolation` run got all the way through module install and DB
-    setup before the tour's own self-check finally caught it and failed with
+    Without this check, a direct `HAMS_ISOLATED_NS=1
+    --offline-isolation` run gets all the way through module install and DB
+    setup before the tour's own self-check catches it and fails with
     "This test only runs under tools/test.py --offline-isolation...". This
-    check moves that same, correct diagnosis to before any of that work
-    starts.
+    check moves that same diagnosis to before any of that work starts.
     """
     if offline_isolation and isolated_ns_env == "1" and lock_held_env != "1":
         return False, (
@@ -3409,11 +3378,11 @@ def check_offline_isolation_invocation_shape(offline_isolation, isolated_ns_env,
 # The development box hosts the `actions.runner.BrucePerens-hams_com.hams-devbox`
 # self-hosted GitHub Actions runner as well as this test suite, and a relay
 # build matrix compiles Hamlib and Rust on every push under
-# `daemons/hams_local_relay/**`. On 2026-09-15 three separate `test.py -u
+# `daemons/hams_local_relay/**`. Once three separate `test.py -u
 # ham_shack` runs of identical code failed DIFFERENT `TestShackSwBehaviorTour`
 # tests -- test_01, 01b, 02, 03b, 04 -- each at the ten-second "wait for
 # shack_sw.js's own registration to exist" step, while `rustc` held about 750
-# percent of the processor. A second run the same evening, with the load
+# percent of the processor. A further run, with the load
 # average near 23 on sixteen cores, additionally failed four plain `url_open`
 # tests on the test client's own ten-second read timeout even though the server
 # answered 200, each of them the first request after `Generating routing map`.
@@ -3463,7 +3432,7 @@ CI_LOAD_GATE_POLL_SECONDS = 15
 
 # The gate waits for CPU SATURATION, not for a high load average. The one-minute load average counts every runnable and every
 # uninterruptible task, so a box running hundreds of short-lived Chrome, PostgreSQL and test processes reads 25 to 50 on 32
-# cores while its processors are mostly idle (Bruce, 2026-11-08: a load average in the thirties is normal here). What makes
+# cores while its processors are mostly idle (a load average in the thirties is normal here). What makes
 # tours flaky is processors with no spare time, so the gate measures that: the CPU busy percentage over a short window from
 # /proc/stat and the kernel's pressure-stall figure `some avg10` from /proc/pressure/cpu, and holds only while BOTH are at or
 # above their limits. Environment overrides: HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT, HAMS_CI_LOAD_GATE_PSI_PERCENT.
@@ -3845,7 +3814,7 @@ def _open_lock_file(lock_file_path):
         )
         lock_file = os.fdopen(fd, "a")
         try:
-            os.chmod(lock_file_path, 0o777)
+            os.fchmod(lock_file.fileno(), 0o777)  # the descriptor, not the path: a path swapped for a symlink is never followed
         except OSError as e:
             # Not the file's owner (e.g. a prior run by a different user already created it) -- fine,
             # we only need to flock it, not own or widen its permissions.
@@ -4473,42 +4442,28 @@ def main():
         if os.environ.get("HAMS_ISOLATED_NS") != "1"
         else None
     )
-    # Bug-hunt fix (2026-09-09): this single-instance lock used to be skipped
-    # entirely under HAMS_ISOLATED_NS=1 -- the project's OWN standing convention
-    # for how to invoke this script (see hams-odoo-test-runner-sudo-and-polkit).
-    # That made this lock dead in practice for every test run following that
-    # convention, on both this and every other concurrent session's box. Per
-    # Bruce's direct instruction: "I didn't really ask for tours to be
-    # concurrent or for you to run more than one test at a time. Impose a
-    # one-test-at-a-time rule and put a lock on test.py so that it is not
-    # violated." Real, confirmed damage from the lock being dead: two
-    # concurrent invocations under the same uid can spawn/kill each other's
-    # Chrome, contend for the same ports/sockets, and race on the same shared
-    # database -- root-caused this same day via a tour-hang investigation (see
-    # night_shift_todo.md). Kept fail-fast (LOCK_NB, immediate exit), matching
-    # this mechanism's own original design, rather than a blocking wait: a
-    # second invocation refusing immediately with a clear message is safer
-    # than queuing behind a first instance that might itself be hung (a real,
-    # not-yet-fully-fixed possibility on this box right now) -- a blocking
-    # wait behind a hung holder would just relocate that hang onto every
-    # other session's test run instead of containing it to the one that's
-    # actually stuck.
+    # This single-instance lock is taken even under HAMS_ISOLATED_NS=1 -- the standing
+    # convention for how to invoke this script (see hams-odoo-test-runner-sudo-and-polkit).
+    # Skipping it there would make the lock dead for every run following that convention, on
+    # every concurrent session's box. The rule is one test at a time: two concurrent
+    # invocations under the same uid can spawn/kill each other's Chrome, contend for the same
+    # ports/sockets, and race on the same shared database. Kept fail-fast (LOCK_NB, immediate
+    # exit) rather than a blocking wait: a second invocation refusing immediately with a clear
+    # message is safer than queuing behind a first instance that might itself be hung -- a
+    # blocking wait behind a hung holder would just relocate that hang onto every other
+    # session's test run instead of containing it to the one that is actually stuck.
     #
     # Opt-in queueing (--wait / HAMS_TEST_WAIT=1, tools/lock_queue.py): the default stays
     # fail-fast exactly as described above. Sessions that wanted to wait used to poll pgrep and
     # race each other for the lock; --wait replaces that with a FIFO ticket queue in front of
     # this SAME flock, so the reasoning against an unbounded blocking flock still holds (a hung
     # holder is visible with --queue-status, and --wait-timeout bounds the wait).
-    # Second bug-hunt fix (2026-09-10, NOT yet Bruce-signed-off -- see
-    # night_shift_todo.md's "the single-instance test.py lock may not
-    # actually protect the real isolated-namespace pipeline" entry and this
-    # function's own claim file): the lock path itself used to be recomputed
-    # independently via os.path.expanduser("~/tmp") at each of three points
-    # in one logical run, under three different values of HOME, making real
-    # protection depend on an unverified assumption about how `systemd-run
-    # --scope` resolves HOME. Fixed by anchoring to one fixed path (see
-    # _test_runner_lock_path()'s own docstring for the full reasoning),
-    # computed once and passed through explicitly via HAMS_TEST_LOCK_PATH.
+    # The lock path is anchored to one fixed path (see _test_runner_lock_path()'s own
+    # docstring for the full reasoning), computed once and passed through explicitly via
+    # HAMS_TEST_LOCK_PATH. It must not be recomputed independently via
+    # os.path.expanduser("~/tmp") at each of the three points in one logical run: those see
+    # three different values of HOME, which would make real protection depend on an unverified
+    # assumption about how `systemd-run --scope` resolves HOME.
     #
     # Process C (the final odoo-uid subprocess spawned from
     # setup_namespace_and_run_tests) is explicitly exempted here via
@@ -4638,7 +4593,7 @@ def main():
         # When the log directory IS ~/tmp (the default, and always the case for the odoo account
         # under HAMS_ISOLATED_NS, where both resolve to /var/lib/odoo/tmp), the link would point
         # at itself. That self-loop made every later progress write fail with "Too many levels of
-        # symbolic links" (found 2026-09-15). The progress file is written in place there, so no
+        # symbolic links" (seen as a real failure). The progress file is written in place there, so no
         # link is needed.
         if os.path.realpath(user_tmp) != os.path.realpath(real_log_dir):
             try:
@@ -4682,8 +4637,7 @@ def main():
             # the scope it creates (see the longer comment just below, about
             # DISPLAY/XDG_SESSION_TYPE, for why) -- this specifically broke
             # HOME-independence for the single-instance lock
-            # (night_shift_todo.md's "the single-instance test.py lock may
-            # not actually protect the real isolated-namespace pipeline"), so
+            # (without it the lock path differs per process), so
             # the fixed lock path computed in main() (see
             # _test_runner_lock_path()) must be forwarded explicitly here,
             # the same way, rather than left to rely on `sudo -E` alone.
@@ -4853,16 +4807,14 @@ def main():
     # FailureExtractor (above) already established the correct fix for this
     # exact trap: use /mnt/real_tmp directly when inside the isolated
     # namespace, matching its own self.output_path convention exactly.
-    # Bug-hunt fix (2026-09-09): same real-vs-assumed /mnt/real_tmp gap as
-    # FailureExtractor's self.output_path/self.progress_path above -- a
-    # direct `HAMS_ISOLATED_NS=1` invocation (this project's own standing
-    # convention for skipping rebuild_db()'s polkit-triggering `systemctl
-    # start` calls; see hams-odoo-test-runner-sudo-and-polkit) never runs
-    # setup_namespace_and_run_tests(), so /mnt/real_tmp is never bind-mounted
-    # and does not exist. Without this check, --coverage under that
-    # invocation would write coverage data somewhere under root-owned /mnt
-    # (or crash trying to create it) instead of the intended, persistent
-    # ~/tmp/coverage_report location.
+    # Same real-vs-assumed /mnt/real_tmp distinction as FailureExtractor's
+    # self.output_path/self.progress_path above -- a direct `HAMS_ISOLATED_NS=1` invocation
+    # (the standing convention for skipping rebuild_db()'s polkit-triggering `systemctl start`
+    # calls; see hams-odoo-test-runner-sudo-and-polkit) never runs
+    # setup_namespace_and_run_tests(), so /mnt/real_tmp is never bind-mounted and does not
+    # exist. Without this check, --coverage under that invocation would write coverage data
+    # somewhere under root-owned /mnt (or crash trying to create it) instead of the intended,
+    # persistent ~/tmp/coverage_report location.
     coverage_data_dir = (
         os.path.join("/mnt/real_tmp", runner_slots.slot_file_name("coverage_report", held_slot))
         if os.environ.get("HAMS_ISOLATED_NS") == "1" and os.path.isdir("/mnt/real_tmp")
@@ -5059,23 +5011,15 @@ def main():
                 final_rc = 1
 
     else:
-        # Bug-hunt fix (2026-09-10, bug class 19: no-default-dispatch):
-        # "xml" and "downloads" have been accepted --mode choices since
-        # this file's very first commit, but neither one was ever given a
-        # dispatch branch here -- confirmed via `git log -p --follow` on
-        # this file, which shows the argparse `choices=` list unchanged
-        # since day one while only "standard"/"individual" were ever
-        # handled below it. Before this fix, passing either value silently
-        # skipped rebuild_db()/run_cmd() entirely (this if/elif simply
-        # matched nothing) and fell straight through to the
-        # Chrome-cleanup/audio-sink checks with `final_rc` still at its
-        # initial 0 -- `test.py --mode xml -u <module>` reported a clean,
-        # passing exit code having run zero actual Odoo tests. Confirmed
-        # latent, not live: grepped both hams_com and hams_open for any
-        # real invocation of `--mode xml`/`--mode downloads` and found
-        # none. Fail loudly instead of silently no-opping, matching this
-        # codebase's own fail-fast philosophy, rather than guessing at
-        # what either mode was originally meant to do.
+        # "xml" and "downloads" are accepted --mode choices, but neither has a dispatch branch
+        # here (only "standard"/"individual" are handled above). Without this branch, passing
+        # either value would skip rebuild_db()/run_cmd() entirely (this if/elif matches nothing)
+        # and fall through to the Chrome-cleanup/audio-sink checks with `final_rc` still at its
+        # initial 0, so `test.py --mode xml -u <module>` would report a clean, passing exit code
+        # having run zero actual Odoo tests. No hams_com or hams_open code invokes `--mode xml`
+        # or `--mode downloads`. Fail loudly instead of silently no-opping, matching this
+        # codebase's fail-fast philosophy, rather than guessing at what either mode was meant
+        # to do.
         print(
             f"❌ ERROR: --mode {args.mode!r} has no implementation in this "
             "runner (only 'standard' and 'individual' are wired up) -- "
@@ -5128,10 +5072,7 @@ def main():
                 print(f"[+] Coverage report written to {coverage_json_path}")
 
     print("[*] Cleaning up Chrome temporary directories...")
-    subprocess.run(
-        ["sh", "-c", "rm -rf " + " ".join(_CHROME_PROFILE_GLOBS)],
-        capture_output=True,
-    )
+    remove_chrome_profiles(_CHROME_PROFILE_GLOBS)
 
     if audio_sink_before and "dummy" not in audio_sink_before.lower():
         audio_sink_after = get_default_audio_sink_name()

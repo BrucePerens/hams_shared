@@ -34,26 +34,21 @@ from tree_files import tree_files
 # for the full story).
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", ".claude", "site-packages"}
 
-# Real bug found 2026-09-12, confirmed empirically with a real `git worktree add`: this
-# project's own standing convention runs concurrent bug-hunt dispatches in isolated git
-# worktrees under `.claude/worktrees/<session>/` INSIDE the repo root -- and a git worktree
-# checks out a full copy of every tracked file at its own commit/branch, `requirements.txt`
-# included. Before `.claude` was added to IGNORE_DIR_NAMES above,
-# `find_requirements_files()` walked straight into a live worktree and found its own
-# `requirements.txt` as a second, real scan target -- confirmed directly against a real
-# worktree created from this exact repo (found 2 real requirements.txt files under it). A
-# previous review pass (see night_shift_todo.md) wrongly dismissed this checker as immune to
-# the ".claude worktree" bug class on the reasoning that "a worktree wouldn't contain a
-# requirements.txt to falsely match in the first place" -- that reasoning was never verified
-# against a real worktree and was wrong: a worktree is a full checkout, not an empty
-# directory. Running pip-audit a second time against another session's own in-progress,
-# uncommitted requirements.txt wastes real network calls and could report spurious findings
-# against dependency changes that were never actually merged.
+# `.claude` is in IGNORE_DIR_NAMES above because agent sessions run in isolated git worktrees
+# under `.claude/worktrees/<session>/` INSIDE the repo root, and a git worktree checks out a
+# full copy of every tracked file at its own commit/branch, `requirements.txt` included.
+# Without the exclusion, `find_requirements_files()` would walk straight into a live worktree
+# and find its own `requirements.txt` as a second, real scan target (verified against a real
+# worktree of this repo: 2 requirements.txt files under it). A worktree is a full checkout,
+# not an empty directory, so this checker is not immune just because a worktree might seem to
+# hold no requirements file. Running pip-audit a second time against another session's own
+# in-progress, uncommitted requirements.txt wastes real network calls and could report
+# spurious findings against dependency changes that were never actually merged.
 
-# Real gap found 2026-09-12: neither subprocess.run() call below passed a `timeout=`, despite
-# this module's own docstring stating pip-audit "Requires network access" (PyPI's JSON Advisory
-# Database) -- a stalled/hung network condition (or a hung pip-audit subprocess for any other
-# reason) would block this call, and everything downstream of it in a run_linters.py run,
+# Both subprocess.run() calls below pass a `timeout=`. This module's own docstring states
+# pip-audit "Requires network access" (PyPI's JSON Advisory Database), and a stalled/hung
+# network condition (or a hung pip-audit subprocess for any other reason) would otherwise
+# block the call, and everything downstream of it in a run_linters.py run,
 # indefinitely. check_dependency_releases.py (a sibling network-calling checker in this same
 # tree) already establishes a REQUEST_TIMEOUT_SECONDS convention for exactly this class of call;
 # mirrored here as two separate constants since the version-probe and the real per-file audit
@@ -212,11 +207,11 @@ def store_pass(key, now=None, environ=None):
 
 def _resolve_repo_root(given_path):
     """run_linters.py's own `dir_path` resolves to the hams_shared directory itself, not a real
-    repo root (same bug found and fixed in check_model_extension_collisions.py and others) --
-    confirmed directly: this checker was silently finding 0 requirements.txt files via
-    run_linters.py's actual invocation, versus 2 at a real repo root -- this codebase's Python
-    supply-chain vulnerability gate (CODE_REVIEW_PROCESS.md) has never actually scanned anything
-    in CI. Detect the hams_shared case by name and redirect to its real parent repo."""
+    repo root (as in check_model_extension_collisions.py and other checkers) --
+    without the redirect this checker silently finds 0 requirements.txt files via
+    run_linters.py's actual invocation, versus 2 at a real repo root, so this codebase's Python
+    supply-chain vulnerability gate (CODE_REVIEW_PROCESS.md) would never scan anything in CI. Detect the hams_shared case by name and redirect to its real
+    parent repo."""
     given_path = os.path.abspath(given_path)
     if os.path.basename(given_path) == "hams_shared":
         return os.path.dirname(given_path)
@@ -224,11 +219,11 @@ def _resolve_repo_root(given_path):
 
 
 def _resolve_repo_roots(given_path):
-    """The fix above only ever redirects to ONE repo (hams_open) -- but real requirements.txt
+    """The redirect above only ever lands on ONE repo (hams_open) -- but real requirements.txt
     files exist in both: hams_open's own root, and two under hams_com/daemons/
-    (gdpr_csv_export, hams_simulated_bots). run_linters.py's own actual invocation was catching
-    hams_open's but silently missing both hams_com ones. Same sibling-repo shape as the other
-    fixed checkers."""
+    (gdpr_csv_export, hams_simulated_bots). Without the sibling scan, run_linters.py's own actual
+    invocation would catch hams_open's but silently miss both hams_com ones. Same sibling-repo
+    shape as the other checkers."""
     repo_root = _resolve_repo_root(given_path)
     roots = [repo_root]
     sibling = lint_exec.sibling_repo_root(repo_root, lint_exec.has_odoo_module)

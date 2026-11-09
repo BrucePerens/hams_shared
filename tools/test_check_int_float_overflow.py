@@ -24,7 +24,7 @@ def _write_py(tmp, content):
     # cannot start with leading whitespace on its own top-level `def` -- an un-dedented fixture
     # is a real IndentationError, which check_file()'s own `except SyntaxError: return []`
     # silently swallows into "no findings," making a fixture bug look identical to a real
-    # "this shape isn't flagged" result. Found live: every fixture in this file originally hit
+    # "this shape isn't flagged" result. Every fixture in this file originally hit
     # exactly this bug before dedent() was added.
     path = os.path.join(tmp, "main.py")
     with open(path, "w", encoding="utf-8") as f:

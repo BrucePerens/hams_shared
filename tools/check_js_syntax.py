@@ -8,6 +8,7 @@ import multiprocessing
 import re
 import json
 import logging
+from tree_files import tree_walk
 
 
 def load_ignore_file(filepath):
@@ -42,11 +43,9 @@ def is_ignored(path, patterns):
 # implement -- confirmed by reading that file's complete list of `to*`
 # methods directly, not assumed. Calling one of these throws
 # "expect(...).toXxx is not a function" at test-run time; 10 real instances
-# of this exact mistake were found and fixed across 7 modules in both
-# hams_com and hams_open on 2026-08-27 (see hams_com/night_shift_todo.md's
-# Twenty-second through Twenty-fourth addenda), several of which had been
-# silently masked by an unrelated asset-bundle bug and had never actually
-# run before that session. This check exists so the same mistake fails
+# of this exact mistake existed across 7 modules in both hams_com and
+# hams_open, several of which had been silently masked by an unrelated
+# asset-bundle bug and had never actually run. This check exists so the same mistake fails
 # fast (a syntax-adjacent lint error) instead of silently shipping a test
 # that can never pass.
 _INVALID_HOOT_MATCHERS = {
@@ -131,7 +130,7 @@ def audit_file(file_path):
             # (wired into run_linters.py), not here -- kept as one rule in
             # one place rather than duplicating it.
 
-            # Real bug pattern, found live 2026-09-09: hoot's mocked window
+            # Real bug pattern: hoot's mocked window
             # only redirects `window.history` to a MockHistory/MockLocation
             # pair (odoo/addons/web/static/lib/hoot/mock/window.js's
             # WINDOW_MOCK_DESCRIPTORS -- `history: { value: mockHistory }`);
@@ -288,17 +287,15 @@ def main():
     for d in args.directories:
         if not os.path.isdir(d):
             continue
-        for root, dirs, files in os.walk(d):
-            if "radae" in dirs:
-                dirs.remove("radae")
-            # Prune hidden folders and standard library directories to save time
-            dirs[:] = [
-                dir_name
-                for dir_name in dirs
-                if not dir_name.startswith(".")
-                and dir_name not in ("node_modules", "__pycache__")
-                and not (os.path.basename(root) == "static" and dir_name == "lib")
-            ]
+        # Hidden folders and standard library directories are left out; so is `static/lib` (vendored libraries), where
+        # the `static` may be the directory given itself.
+        def not_in_static_lib(rel, d=d):
+            parts = [os.path.basename(os.path.abspath(d))] + rel.split("/")[:-1]
+            return not any(a == "static" and b == "lib" for a, b in zip(parts, parts[1:]))
+
+        for root, _dirs, files in tree_walk(
+            d, ".js", ("radae", "node_modules", "__pycache__"), skip_hidden=True, accept=not_in_static_lib, untracked=True
+        ):
             for f in files:
                 if f.endswith(".js") and ".min." not in f:
                     full_path = os.path.join(root, f)

@@ -315,6 +315,127 @@ class CargoBudgetTest(unittest.TestCase):
         self.assertIsNone(lint_cache.adopt_legacy_dir(self.target, {"XDG_CACHE_HOME": cache}))
 
 
+class SyncTreeTest(unittest.TestCase):
+    """`sync_tree` and `work_checkout`: a copy at a fixed path whose unchanged files keep their mtime."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.src = os.path.join(self._tmp.name, "src")
+        self.dst = os.path.join(self._tmp.name, "dst")
+        os.makedirs(self.src)
+
+    def put(self, rel, text="1", root=None):
+        path = os.path.join(root or self.src, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        return path
+
+    # Tests [@ANCHOR: lint_cache:sync_tree]
+    def test_unchanged_files_keep_their_mtime_changed_ones_are_rewritten_and_stale_ones_removed(self):
+        for rel in ("keep.rs", "change.rs", "a/b/deep.rs"):
+            self.put(rel)
+        os.chmod(os.path.join(self.src, "keep.rs"), 0o755)
+        lint_cache.sync_tree(self.src, self.dst)
+        for rel in ("keep.rs", "change.rs", "a/b/deep.rs"):
+            os.utime(os.path.join(self.dst, rel), (1_000_000_000, 1_000_000_000))
+        self.put("stale.rs", root=self.dst)
+        self.put("gone/deeper/f", root=self.dst)
+        self.put("change.rs", "22")
+        os.symlink("keep.rs", os.path.join(self.src, "link.rs"))
+        lint_cache.sync_tree(self.src, self.dst)
+        self.assertEqual(os.path.getmtime(os.path.join(self.dst, "keep.rs")), 1_000_000_000)
+        self.assertEqual(os.path.getmtime(os.path.join(self.dst, "a", "b", "deep.rs")), 1_000_000_000)
+        self.assertGreater(os.path.getmtime(os.path.join(self.dst, "change.rs")), 1_000_000_000)
+        self.assertEqual(open(os.path.join(self.dst, "change.rs"), encoding="utf-8").read(), "22")
+        self.assertFalse(os.path.exists(os.path.join(self.dst, "stale.rs")))
+        self.assertFalse(os.path.exists(os.path.join(self.dst, "gone")))
+        self.assertEqual(os.readlink(os.path.join(self.dst, "link.rs")), "keep.rs")
+        self.assertTrue(os.access(os.path.join(self.dst, "keep.rs"), os.X_OK))
+
+    # Tests [@ANCHOR: lint_cache:sync_tree]
+    def test_build_output_nested_checkouts_and_the_git_directory_are_left_out_but_a_submodule_is_kept(self):
+        self.put("daemons/x/src/main.rs")
+        self.put("daemons/x/target/debug/big.o")
+        self.put(".git/HEAD")
+        self.put("nested/.git", "gitdir: elsewhere")
+        self.put("nested/file.rs")
+        self.put("sub/.git", "gitdir: elsewhere")
+        self.put("sub/file.rs")
+        lint_cache.sync_tree(self.src, self.dst, submodules={"sub"})
+        self.assertTrue(os.path.isfile(os.path.join(self.dst, "daemons", "x", "src", "main.rs")))
+        self.assertFalse(os.path.exists(os.path.join(self.dst, "daemons", "x", "target")))
+        self.assertFalse(os.path.exists(os.path.join(self.dst, ".git")))
+        self.assertFalse(os.path.exists(os.path.join(self.dst, "nested")))
+        self.assertTrue(os.path.isfile(os.path.join(self.dst, "sub", "file.rs")))
+
+    # Tests [@ANCHOR: lint_cache:sync_tree]
+    def test_a_relative_link_that_leaves_the_tree_still_resolves_and_one_inside_stays_relative(self):
+        outside = self.put("elsewhere/shared/f.txt", "o", root=self._tmp.name)
+        self.put("inside/f.txt")
+        os.symlink(os.path.join("..", "elsewhere", "shared"), os.path.join(self.src, "link_out"))
+        os.symlink("inside", os.path.join(self.src, "link_in"))
+        os.makedirs(os.path.join(self._tmp.name, "src2"))
+        # a link out of the tree: ../elsewhere is beside src, so it leaves it
+        lint_cache.sync_tree(self.src, self.dst)
+        self.assertEqual(os.path.realpath(os.path.join(self.dst, "link_out")), os.path.dirname(outside))
+        self.assertEqual(os.readlink(os.path.join(self.dst, "link_in")), "inside")
+
+    def test_a_checkout_made_over_another_directory_replaces_a_file_that_became_a_directory(self):
+        self.put("thing", "file")
+        lint_cache.sync_tree(self.src, self.dst)
+        os.remove(os.path.join(self.src, "thing"))
+        self.put("thing/inner.rs")
+        lint_cache.sync_tree(self.src, self.dst)
+        self.assertTrue(os.path.isfile(os.path.join(self.dst, "thing", "inner.rs")))
+
+    # Tests [@ANCHOR: lint_cache:work_checkout]
+    def test_work_checkout_is_one_fixed_path_for_two_checkouts_and_follows_the_checkout(self):
+        other = os.path.join(self._tmp.name, "other")
+        self.put("c/a.rs", "same")
+        self.put("c/a.rs", "same", root=other)
+        environ = {"XDG_CACHE_HOME": os.path.join(self._tmp.name, "cache")}
+        target = lint_cache.cargo_target_dir("relay-structural", environ)
+        first = lint_cache.work_checkout(self.src, "hams_com", target, environ)
+        os.utime(os.path.join(first, "c", "a.rs"), (1_000_000_000, 1_000_000_000))
+        self.put("c/b.rs", "new", root=other)
+        second = lint_cache.work_checkout(other, "hams_com", target, environ)
+        self.assertEqual(first, second)
+        self.assertEqual(os.path.getmtime(os.path.join(second, "c", "a.rs")), 1_000_000_000, "unchanged: same mtime, so cargo sees it fresh")
+        self.assertTrue(os.path.isfile(os.path.join(second, "c", "b.rs")))
+        self.assertIn(os.path.join("hams-lint", "work", os.path.basename(target)), second)
+        self.assertNotEqual(first, lint_cache.work_checkout(self.src, "hams_open", target, environ), "a repository of its own")
+
+    # Tests [@ANCHOR: lint_cache:work_checkout]
+    def test_work_checkout_is_none_for_an_explicit_target_no_cache_or_a_copy_that_fails(self):
+        self.put("c/a.rs")
+        cache = os.path.join(self._tmp.name, "cache")
+        environ = {"XDG_CACHE_HOME": cache}
+        mine = os.path.join(self._tmp.name, "mine")
+        self.assertIsNone(lint_cache.work_checkout(self.src, "r", mine, environ))
+        self.assertIsNone(lint_cache.work_checkout(self.src, "r", None, environ))
+        managed = lint_cache.cargo_target_dir("x", environ)
+        self.assertIsNone(lint_cache.work_checkout(self.src, "r", managed, {**environ, "HAMS_LINT_NO_CACHE": "1"}))
+        said = []
+        with unittest.mock.patch.object(lint_cache, "sync_tree", side_effect=OSError("disk full")):
+            self.assertIsNone(lint_cache.work_checkout(self.src, "r", managed, environ, log=said.append))
+        self.assertTrue(any("disk full" in line for line in said))
+
+    def test_an_unused_cargo_directory_takes_its_work_checkouts_with_it(self):
+        home = os.path.join(self._tmp.name, "home")
+        with unittest.mock.patch.dict(os.environ, {"XDG_CACHE_HOME": home}):
+            base = lint_cache.disk_cargo_base()
+            old = os.path.join(base, "old-1.0-abcd1234")
+            os.makedirs(old)
+            work = os.path.join(home, "hams-lint", "work", "old-1.0-abcd1234", "repo")
+            os.makedirs(work)
+            long_ago = time.time() - 100 * 86400
+            os.utime(old, (long_ago, long_ago))
+            self.assertEqual(lint_cache.drop_unused_dirs(base, keep=None), ["old-1.0-abcd1234"])
+            self.assertFalse(os.path.exists(work))
+
+
 class BudgetTableTest(unittest.TestCase):
     def test_machine_budget_from_the_inventory_file(self):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:

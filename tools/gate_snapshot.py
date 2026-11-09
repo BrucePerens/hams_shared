@@ -43,6 +43,7 @@ DEFAULT_SHARDS = 4
 ENV_FILE = "/etc/profile.d/hams_test_environment.sh"
 RELAY_CRATE = "daemons/hams_local_relay"
 CONSOLE_DIR = "daemons/shack_console/console"
+SHACK_CONSOLE_CRATE = "daemons/shack_console"  # linked into the relay (with its hams_core), so its sources decide staleness too
 CFFI_DIR = "daemons/cloudflared-ffi"
 RELAY_BIN_ENV = "HAMS_CONSOLE_TEST_RELAY_BIN"
 OPEN_TREE_ENV = "HAMS_OPEN_TREE"
@@ -156,7 +157,7 @@ class Artifact:
 
 ARTIFACTS = (
     Artifact("cloudflared_ffi", "open", (CFFI_DIR,)),
-    Artifact("relay_test_hooks", "com", (RELAY_CRATE, CONSOLE_DIR)),
+    Artifact("relay_test_hooks", "com", (RELAY_CRATE, SHACK_CONSOLE_CRATE, CONSOLE_DIR)),
 )
 
 

@@ -4,8 +4,8 @@
 """
 float()-parses-nan/inf-silently gate (Python).
 
-Born 2026-09-11/12 from a single night's bug-hunt sweep that found and fixed roughly fifteen
-separate real instances of the same bug class across hams_com: Python's `float(x)` happily
+Guards against a recurring real bug (roughly fifteen separate instances across hams_com):
+Python's `float(x)` happily
 parses "nan"/"inf"/"-infinity" (case-insensitively) into a real, non-finite float with NO
 exception at all -- so a `try: float(x) except ValueError: ...` block, which reads as "safely
 parse this untrusted text," silently lets a non-finite value straight through. Depending on the
@@ -13,7 +13,7 @@ call site this then either (a) gets stored as-is, silently poisoning any later c
 or aggregation over that value (NaN != NaN; a NaN/Inf coordinate breaks distance math), (b)
 crashes downstream with a real, uncaught, unrelated-looking exception (e.g. `int(float("inf"))`
 raising `OverflowError`, or a Postgres `numeric(N, M)` column raising "numeric field overflow"
-for Infinity, confirmed live via psql this same night), or (c) silently returns wrong results
+for Infinity), or (c) silently returns wrong results
 from a library call that itself tolerates a garbage angle/value without raising (e.g. `ephem`
 accepting a "nan"-valued Observer.lat and returning a nonsense angle instead of erroring).
 
@@ -52,7 +52,7 @@ IGNORE_DIR_NAMES = {
     "target",
     ".git",
     "worktrees",
-    # A venv's own outer directory can be named anything (found live 2026-09-28/29: a stray,
+    # A venv's own outer directory can be named anything (for example a stray,
     # untracked daemons/hams_local_relay/test_run/whisper_venv/ left over from an earlier
     # session's own testing flagged 15+ real-looking findings, every one of them inside vendored
     # third-party packages -- numpy, pip, torch, urllib3, tqdm -- none of it this project's own

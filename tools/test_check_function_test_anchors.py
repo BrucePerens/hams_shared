@@ -114,7 +114,7 @@ class ScanFileTests(unittest.TestCase):
         self.assertTrue(results["foo.py::C.bar"])
 
     def test_a_verified_by_citation_with_no_real_base_anchor_is_reported_as_unanchored(self):
-        # Real bug found live: user_websites/models/content_violation_appeal.py's
+        # Real case: user_websites/models/content_violation_appeal.py's
         # ContentViolationAppeal.action_approve has only a
         # "# Verified by [@ANCHOR: user_websites:test_tour_moderation_appeal]" citation in its
         # body -- a rule-3 VERIFICATION LINK per verify_anchors.py's own docstring, not a rule-1
@@ -161,7 +161,7 @@ class ScanFileTests(unittest.TestCase):
         self.assertEqual(results, [("foo.py::bar", False)])
 
     def test_a_multiline_comment_reference_with_see_on_the_preceding_line_is_not_a_declaration(self):
-        # Real bug found live, 2026-09-13: ham_shack/tests/test_station_timeshare_security.py had
+        # Real case: ham_shack/tests/test_station_timeshare_security.py had
         # a comment shaped exactly like this -- the referencing word "see" sits on the line BEFORE
         # the anchor tag, so the anchor's own same-line prefix is empty and gives no signal either
         # way. The old check only ever looked at the anchor's own line, wrongly counting this as a
