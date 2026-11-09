@@ -86,6 +86,11 @@ class StampTextTests(unittest.TestCase):
         self.assertEqual((mode, count), ("changed", 4))
         self.assertEqual(names, {"flake8", "check_async_lock_scope", "pytest"})
 
+    def test_a_hams_shared_worktree_run_watches_the_worktree_head_not_the_throwaway_clone(self):
+        layout = object()
+        self.assertEqual(run_linters.stamped_head_repo("/clone/hams_open", "/work/wt", layout), "/work/wt")
+        self.assertEqual(run_linters.stamped_head_repo("/work/repo", "/work/repo", None), "/work/repo")
+
     def test_a_run_started_through_a_hams_shared_link_is_rooted_at_the_repository(self):
         with tempfile.TemporaryDirectory() as directory:
             real = os.path.join(directory, "main", "hams_shared")
