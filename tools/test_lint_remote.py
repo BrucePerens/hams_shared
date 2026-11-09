@@ -631,6 +631,23 @@ class VerifyTests(unittest.TestCase):
         self.assertFalse(lr.verify_results("", ["a"], "b1")[0])
         self.assertFalse(lr.verify_results("{not json", ["a"], "b1")[0])
 
+    def test_negative_controls_a_results_file_that_cannot_prove_a_pass_is_not_ok(self):
+        step = {"name": "a", "returncode": 0}
+        for raw in ("null", "[]", "[1]", '"ok"', "{}", '{"bundle_id": "b1"}', '{"bundle_id": "b1", "steps": null}',
+                    json.dumps({"bundle_id": "b1", "steps": ["a"]}),
+                    json.dumps({"bundle_id": "b1", "steps": [{"returncode": 0}]}),
+                    json.dumps({"bundle_id": "b1", "steps": [{"name": "a"}]}),
+                    json.dumps({"bundle_id": "b1", "steps": [{"name": "a", "returncode": None}]}),
+                    json.dumps({"bundle_id": "b1", "steps": [{"name": "a", "returncode": False}]}),
+                    json.dumps({"bundle_id": "b1", "steps": [{"name": "a", "returncode": "0"}]}),
+                    json.dumps({"bundle_id": "b1", "steps": [step]})[:-6],  # truncated
+                    None, b"\xff"):
+            ok, problems = lr.verify_results(raw, ["a"], "b1")
+            self.assertFalse(ok, raw)
+            self.assertTrue(problems, raw)
+        # a machine that was expected to run nothing is not credited with a pass
+        self.assertFalse(lr.verify_results(json.dumps({"bundle_id": "b1", "steps": [step]}), [], "b1")[0])
+
 
 FAKE_SSH = textwrap.dedent(
     """\

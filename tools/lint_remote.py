@@ -952,19 +952,25 @@ def results_document(bundle_id, results):
 
 
 def verify_results(raw, expected_names, bundle_id):
-    """(ok, problems): the results file must name every expected step, all passed, for this bundle."""
+    """(ok, problems): the results file must name every expected step, all passed, for this bundle. Total: any shape of file that is
+    not a JSON object holding a list of `{"name", "returncode"}` objects is "unreadable", a step passes only with the integer 0 (not
+    null, false, "0", or a missing field), and an empty expected list is a problem (it would credit a machine with checking nothing)."""
     try:
         data = json.loads(raw)
     except (TypeError, ValueError):
         return False, ["results file missing or unreadable"]
+    if not isinstance(data, dict) or not isinstance(data.get("steps"), list):
+        return False, ["results file missing or unreadable"]
     problems = []
+    if not expected_names:
+        problems.append("no steps were expected, so nothing was checked")
     if data.get("bundle_id") != bundle_id:
         problems.append("results belong to another run")
-    got = {entry["name"]: entry for entry in data.get("steps", [])}
+    got = {entry["name"]: entry for entry in data["steps"] if isinstance(entry, dict) and "name" in entry}
     for name in expected_names:
         if name not in got:
             problems.append(f"step did not run: {name}")
-        elif got[name].get("returncode") != 0:
+        elif type(got[name].get("returncode")) is not int or got[name]["returncode"] != 0:
             problems.append(f"step failed: {name}")
     return not problems, problems
 
