@@ -609,7 +609,8 @@ def provision_user_tools(layout, run, as_user, home, report, reachable=url_reach
 
 
 # [@ANCHOR: provision_test_environment:provision_ml_assets]
-def provision_ml_assets(layout, run, report, plan=False, reachable=url_reachable, manifest_exists=os.path.isfile):
+def provision_ml_assets(layout, run, report, plan=False, reachable=url_reachable, manifest_exists=os.path.isfile,
+                        is_link=os.path.islink):
     """The browser ML assets a test host serves, made the way production makes them: the root /var/lib/odoo/hams_ml_assets
     owned by `odoo`, then hams_com's own `ham_shack/tools/provision_ml_assets.py` run as `odoo` (nice 10) when the root has
     no `manifest.json` (the script writes it last, so a half-finished download is repeated), then `--verify-relay-pins`. The pin
@@ -618,7 +619,8 @@ def provision_ml_assets(layout, run, report, plan=False, reachable=url_reachable
     let a host serve assets that match no pin (local hashing, no network; a mismatch raises). No
     test-only file or route: ham_shack's TestMlAssetsRoute serves this real root. Unreachable download hosts or a hams_com
     checkout without the script are a reported skip (the two route tests then fail on that host). Network: npm and
-    HuggingFace, once, about 1.8 GB. Raises CalledProcessError."""
+    HuggingFace, once, about 1.8 GB. A symlink at the root is refused (RuntimeError): /var/lib/odoo belongs to `odoo`, so `install -d
+    -o odoo` run as root on a link the odoo account planted would chown and chmod whatever it points at. Raises CalledProcessError."""
     script = os.path.join(layout["hams_com"], ML_ASSET_SCRIPT)
     manifest = os.path.join(ML_ASSET_ROOT, "manifest.json")
     if manifest_exists(manifest):
@@ -638,6 +640,9 @@ def provision_ml_assets(layout, run, report, plan=False, reachable=url_reachable
         report.skip(f"browser ML assets: {', '.join(down)} unreachable from this host; ham_shack's TestMlAssetsRoute "
                     "fails here")
         return
+    if is_link(ML_ASSET_ROOT):
+        raise RuntimeError(f"browser ML assets: {ML_ASSET_ROOT} is a symbolic link; refusing to chown through it as root. "
+                           "Inspect where it points, remove the link, and run the provisioning again.")
     as_odoo = as_user_command("odoo", "/var/lib/odoo")
     run(["install", "-d", "-o", "odoo", "-g", "odoo", ML_ASSET_ROOT])
     run(as_odoo(["nice", "-n", "10", "python3", script]))

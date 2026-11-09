@@ -636,6 +636,17 @@ class MlAssetsTests(unittest.TestCase):
         self.assertIn("runuser", run.calls[0])
         self.assertEqual(report.changes, [])
 
+    def test_a_symlink_at_the_asset_root_is_refused_before_root_touches_it(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        os.makedirs(os.path.join(tmp, "ham_shack", "tools"))
+        open(os.path.join(tmp, "ham_shack", "tools", "provision_ml_assets.py"), "w").close()
+        run = Recorder()
+        with patch.object(pte.os, "geteuid", return_value=0), self.assertRaisesRegex(RuntimeError, "symbolic link"):
+            _quiet(pte.provision_ml_assets, {"hams_com": tmp}, run, pte.Report(False), False, reachable=lambda url: True,
+                   manifest_exists=lambda path: False, is_link=lambda path: path == pte.ML_ASSET_ROOT)
+        self.assertEqual(run.calls, [])
+
     def test_a_failed_verification_of_an_existing_manifest_stops_provisioning(self):
         # The script writes the manifest before the verification: a run whose verification failed must fail again, never turn green.
         tmp = tempfile.mkdtemp()

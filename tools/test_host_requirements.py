@@ -24,6 +24,18 @@ class MissingRequirementsTests(unittest.TestCase):
     def test_a_complete_host_lacks_nothing(self):
         self.assertEqual(_missing(), [])
 
+    def test_the_git_probe_reads_only_the_system_config(self):
+        # A `*` in the running user's global config is not what the odoo account sees; the probe must ask for the system scope only.
+        seen = []
+
+        def fake_run(argv, **kwargs):
+            seen.append(argv)
+            return unittest.mock.Mock(stdout="*\n")
+
+        with patch.object(hr.subprocess, "run", fake_run):
+            self.assertTrue(hr.git_trusts_every_directory())
+        self.assertEqual(seen, [["git", "config", "--system", "--get-all", "safe.directory"]])
+
     def test_each_gap_is_reported_with_its_own_code(self):
         cases = {
             "crypto_key": dict(environ={}),

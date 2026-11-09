@@ -38,7 +38,9 @@ def _account_exists(name):
 
 
 def git_trusts_every_directory():
-    result = subprocess.run(["git", "config", "--get-all", "safe.directory"], capture_output=True, text=True)
+    """True when the SYSTEM git config holds `safe.directory = *`. `--system` is deliberate: provisioning writes only that scope, and the
+    odoo account that runs the tests does not read the global config of whoever ran provisioning (a user-level `*` must not pass)."""
+    result = subprocess.run(["git", "config", "--system", "--get-all", "safe.directory"], capture_output=True, text=True)
     return "*" in result.stdout.split()
 
 
