@@ -1056,6 +1056,34 @@ def chrome_processes_of_this_run(pattern, uid=None, own_pids=None, processes=Non
     return found
 
 
+def remove_chrome_profiles(globs):
+    """Remove every directory that matches one of the glob patterns `globs` (the Chrome profile directories of the run).
+
+    No shell is involved: a TMPDIR with a space or a shell character in it is matched as the one path it is. A symbolic link is
+    removed as a link and never followed; a directory that cannot be removed is skipped. Returns the number of paths removed."""
+    removed = 0
+    for pattern in globs:
+        for path in glob.glob(pattern):
+            if os.path.islink(path):
+                os.unlink(path)
+            else:
+                shutil.rmtree(path, ignore_errors=True)
+            removed += not os.path.lexists(path)
+    return removed
+
+
+def kill_process_group_if_private(pid):
+    """SIGKILL the process group of child `pid` unless that group is this process's own; True when it was signalled.
+
+    A child started without its own group (Redis in the namespace's root phase) is in the group of the process that started
+    it: signalling it would end that process too. Raises OSError as os.getpgid and os.killpg do."""
+    pgid = os.getpgid(pid)
+    if pgid == os.getpgrp():
+        return False
+    os.killpg(pgid, signal.SIGKILL)
+    return True
+
+
 def kill_test_chrome(signal_name):
     """Send `signal_name` ('TERM' or 'KILL') to this run's headless Chrome processes (the odoo user's); see
     chrome_processes_of_this_run for which those are. A process that is already gone is ignored."""
@@ -1511,6 +1539,13 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         # killed (a hang with no captured error text is not evidence the
         # test would have passed, it is evidence nothing about it could be
         # observed).
+        force_kill_line = (
+            "🛑 Odoo was force-killed after repeated hangs: this run is NOT a test verdict -- the tests after that point never ran."
+        )
+        print(force_kill_line, flush=True)
+        if extractor is not None:
+            # The same field a kill by a signal sets: the known-red policy never turns such a run green.
+            extractor.signal_line = force_kill_line
         return 1
 
     exit_status, signal_line = signal_exit_verdict(
@@ -3032,10 +3067,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
                     flush=True,
                 )
                 try:
-                    os.killpg(
-                        os.getpgid(proc.pid),
-                        signal.SIGKILL,
-                    )
+                    kill_process_group_if_private(proc.pid)
                 except OSError as e:
                     _logger.debug("Ignored OSError SIGKILLing %s process group %s during teardown: %s", proc_name, proc.pid, e)
                 try:
@@ -5035,10 +5067,7 @@ def main():
                 print(f"[+] Coverage report written to {coverage_json_path}")
 
     print("[*] Cleaning up Chrome temporary directories...")
-    subprocess.run(
-        ["sh", "-c", "rm -rf " + " ".join(_CHROME_PROFILE_GLOBS)],
-        capture_output=True,
-    )
+    remove_chrome_profiles(_CHROME_PROFILE_GLOBS)
 
     if audio_sink_before and "dummy" not in audio_sink_before.lower():
         audio_sink_after = get_default_audio_sink_name()
