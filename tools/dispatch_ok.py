@@ -61,6 +61,7 @@ def evaluate(path=DEFAULT_STATS, max_age=DEFAULT_MAX_AGE_SECONDS, now=time.time)
     return verdict["state"], lines
 
 
+# [@ANCHOR: dispatch_ok:main]
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--file", default=DEFAULT_STATS)

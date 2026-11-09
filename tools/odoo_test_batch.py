@@ -386,6 +386,7 @@ class OdooTestBatch(lint_batch.LintBatch):
         return [sys.executable, os.path.join(tree, "tools", "test.py"), "-u", ",".join(union), "--solo", "--wait",
                 "-l", os.path.join(os.path.dirname(results), "logs"), *self.passthrough]
 
+    # [@ANCHOR: odoo_test_batch:OdooTestBatch_collect]
     def collect(self, tree, results, output, code):
         union = sorted({m for member in self.current_members for m in member.get("scope", ())})
         if self.sdir:
