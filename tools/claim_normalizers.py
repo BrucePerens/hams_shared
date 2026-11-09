@@ -1406,12 +1406,15 @@ def _py_drop_trailing_commas(items):
 
 
 def _py_drop_one_paren_wrap(items):
+    """Removes one pair of parentheses that only wraps a whole right-hand side, return value,
+    condition, loop target or loop iterable (what black adds around a long line). A tuple keeps its
+    parentheses wherever dropping them would change the meaning (`assert (a, b)`, `x in (a, b)`)."""
+    first = items[0][1] if items else ""
+    closers = (",", ")", "]", "}")
     for k, (ty, s) in enumerate(items):
-        if not (ty == tokenize.OP and s == "(") or k == 0:
+        if not (ty == tokenize.OP and s == "("):
             continue
-        p = items[k - 1][1]
-        if p not in _PY_PAREN_PREV:
-            continue
+        p = items[k - 1][1] if k else None
         depth = 0
         close = None
         for m in range(k, len(items)):
@@ -1426,7 +1429,31 @@ def _py_drop_one_paren_wrap(items):
         if close is None or close == k + 1:
             continue
         rest = items[close + 1 :]
-        if rest and not (len(rest) == 1 and rest[0][1] == ":" ):
+        nxt = rest[0][1] if rest else None
+        tuple_ok = False
+        if p is None:
+            if nxt != "=":
+                continue
+            tuple_ok = True  # `(a, b) = x`
+        elif p in _PY_PAREN_PREV:
+            if rest and not (len(rest) == 1 and nxt == ":") and nxt not in closers:
+                continue
+            tuple_ok = (p in _PY_AUGASSIGN or p in ("return", "yield")) and nxt not in closers or (
+                p == "in" and first in ("for", "async") and len(rest) == 1
+            )
+        elif p == "yield" and not rest:
+            tuple_ok = True
+        elif p == "for" and first in ("for", "async") and k <= 2 and nxt == "in":
+            tuple_ok = True  # `for (a, b) in x`
+        elif p in (",", "(", "[", "{", ":") and (nxt in closers or (p != "," and nxt in ("for", "async"))):
+            pass  # a whole argument, element or value (or a comprehension's element)
+        elif p == "except" and nxt in ("as", ":"):
+            pass
+        elif p == "assert" and nxt == ",":
+            pass
+        elif p == "not" and rest and len(rest) == 1 and nxt == ":":
+            pass
+        else:
             continue
         inner = items[k + 1 : close]
         if inner[0][1] in ("*", "**"):
@@ -1439,7 +1466,8 @@ def _py_drop_one_paren_wrap(items):
             elif t2 == tokenize.OP and s2 in ")]}":
                 d -= 1
             elif d == 0 and (
-                (t2 == tokenize.OP and s2 in (",", ":="))
+                (t2 == tokenize.OP and s2 == ":=")
+                or (t2 == tokenize.OP and s2 == "," and not tuple_ok)
                 or (t2 == tokenize.NAME and s2 in ("yield", "for", "as"))
             ):
                 bad = True

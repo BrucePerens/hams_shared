@@ -135,6 +135,44 @@ def foo(a, b=1, *, c="x"):
         other = "# [@ANCHOR: t:x]\ndef f(a, b):\n    x = (a + b)\n    return x\n"
         self.assertNotEqual(self.h(tup), self.h(other))
 
+    def test_the_parentheses_black_adds_at_a_narrow_width_do_not_matter(self):
+        plain = (
+            "# [@ANCHOR: t:x]\ndef f(a, b, c, d):\n"
+            "    for x, y in c:\n        pass\n"
+            "    for x in a, b:\n        pass\n"
+            "    t, u = g(a)\n"
+            "    try:\n        v = h(k=a if b else c)\n    except E as e:\n        raise\n"
+            "    assert a == b, 'msg'\n"
+            "    w = [x if x else d for x in c]\n"
+            "    return t, u\n"
+        )
+        wrapped = (
+            "# [@ANCHOR: t:x]\ndef f(a, b, c, d):\n"
+            "    for (x, y) in c:\n        pass\n"
+            "    for x in (a, b):\n        pass\n"
+            "    (t, u) = g(a)\n"
+            "    try:\n        v = h(k=(a if b else c))\n    except (E) as e:\n        raise\n"
+            "    assert (a == b), 'msg'\n"
+            "    w = [(x if x else d) for x in c]\n"
+            "    return (t, u)\n"
+        )
+        self.assertEqual(self.h(plain), self.h(wrapped))
+
+    def test_parentheses_that_change_meaning_are_kept(self):
+        for a, b in (
+            ("x = (a + b) * c", "x = a + b * c"),
+            ("assert (a, b)", "assert a, b"),
+            ("x = a in (b, c)", "x = a in b"),
+            ("x = (a if b else c).y", "x = a if b else c.y"),
+            ("x = f((i for i in a))", "x = f(i for i in a, b)"),
+        ):
+            with self.subTest(a):
+                try:
+                    hb = self.h(f"# [@ANCHOR: t:x]\ndef f(a, b, c):\n    {b}\n")
+                except Exception:
+                    continue  # the second form is not valid Python
+                self.assertNotEqual(self.h(f"# [@ANCHOR: t:x]\ndef f(a, b, c):\n    {a}\n"), hb)
+
     def test_string_values_not_spellings_are_compared(self):
         a = "# [@ANCHOR: t:x]\ndef f():\n    return 'a\"b', b'x', r'\\d'\n"
         b = "# [@ANCHOR: t:x]\ndef f():\n    return \"a\\\"b\", b\"x\", '\\\\d'\n"
