@@ -52,10 +52,9 @@ def check_rabbitmq(repo_dir):
         "radae",
         "daemon",
         "daemons",
-        # Real bug found 2026-09-12: this project's own standing convention runs concurrent
-        # bug-hunt dispatches in isolated git worktrees under .claude/worktrees/<session>/
-        # inside the repo root -- a real git worktree checkout, not an empty directory --
-        # which this set never excluded.
+        # ".claude" holds agent sessions' isolated git worktrees under
+        # .claude/worktrees/<session>/ inside the repo root -- real git worktree checkouts, not
+        # empty directories -- so it is excluded.
         ".claude",
         # Matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/site-packages/
         # subdirectory regardless of the venv's own outer directory name -- "venv"/".venv" alone
@@ -86,10 +85,10 @@ def check_rabbitmq(repo_dir):
                             f"{os.path.relpath(file_path, repo_dir)}:{i} Instantiates pika connection directly. Use env['hams_rabbitmq.pool'] instead."
                         )
             except (UnicodeDecodeError, OSError) as e:
-                # OSError added 2026-09-10: a broken symlink (target doesn't exist) with a
-                # .py extension makes open() raise FileNotFoundError, not caught before this
-                # fix -- crashing the entire scan on one unreadable file. Real, reachable repo
-                # state (see check_absolute_paths.py's identical fix), not contrived.
+                # OSError is caught too: a broken symlink (target doesn't exist) with a
+                # .py extension makes open() raise FileNotFoundError, which would crash the
+                # entire scan on one unreadable file. Real, reachable repo state (see
+                # check_absolute_paths.py's identical handling), not contrived.
                 print(f"Warning: could not read {file_path}: {e}")
 
     return violations
