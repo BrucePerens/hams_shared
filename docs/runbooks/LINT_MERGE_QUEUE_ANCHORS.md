@@ -18,7 +18,8 @@ by the canary (`lint_baseline:refresh`) and read by every branch run (`lint_base
 
 An item: `step` (step name without its shard suffix), `test` (test id, or `""` for a whole step), `signature` (12 hex
 digits: hash of the normalized message), `message` (normalized, at most 240 characters), `since` (the oldest main commit at which
-the item was seen red with this signature). An item id is `<step>::<test id>` or `<step>`.
+the item was seen red with this signature), `first_seen_time` (local ISO time it was first recorded; a record from before the field existed counts from `created`), `owner` (who fixes it, default `unassigned`) and optionally `renewed` (`{time, reason}`). An item id is `<step>::<test id>` or `<step>`.
+An item is tolerated for `max_age_days` (default 3) from its last renewal; after that it blocks (see `classify`).
 **Invariants.** `since` never moves forward while the item stays red with the same signature. **Lifetime.** Replaced whole,
 atomically, at each canary run; never edited by hand and never committed. **Concurrency.** Written under a non-blocking lock
 (`<repository>.lock`) so one canary runs per repository; readers need no lock because the file is replaced atomically.
@@ -67,18 +68,18 @@ stays identical. **See also.** `items_from_failures`; tests in `tools/test_lint_
 | `key` | str | Repository name. |
 | `main` | str | The main commit the canary linted. |
 | `items` | dict | `{item_id: item}` from `items_from_failures`. |
-| `previous` | dict or None | The old document: an item with the same id and signature keeps its `since`; others get `since=main`. |
+| `previous` | dict or None | The old document: an item with the same id and signature keeps its `since`, `first_seen_time`, `owner` and `renewed`; others get `since=main`, `first_seen_time` now and owner `unassigned`. |
 
 Returns the document written. Raises `OSError` when the directory or file cannot be written. Writes a temporary file in the same directory and renames it (atomic).
 
 ### `lint_baseline:classify`
-**Purpose.** The decision rule. `classify(items, doc, repo=None, head="HEAD", contains=...) -> (tolerated, blocking)`.
+**Purpose.** The decision rule. `classify(items, doc, repo=None, head="HEAD", contains=..., now=time.time, environ=None) -> (tolerated, blocking)`.
 `tolerated` maps an id to the recorded item when the id is recorded, the signature is equal and (when `repo` is given) `git merge-base --is-ancestor <since> <head>`
-holds. `blocking` maps an id to a reason: `new: not failing on main`, `changed: fails differently from main (main: ...)` or
-`main was red since <sha>, which is not in your tree: rebase on origin/main`. `doc=None` tolerates nothing. Runs `git` once per tolerated candidate. Pure otherwise.
+holds and the item is not older than `max_age_days` (counted from the last renewal; each tolerated item is returned as a copy with `age_days`). `blocking` maps an id to a reason: `new: not failing on main`, `changed: fails differently from main (main: ...)`,
+`main was red since <sha>, which is not in your tree: rebase on origin/main`, or `known red for N days (limit L days, owner O): fix it, or renew it with a reason`. `doc=None` tolerates nothing. Runs `git` once per tolerated candidate. Pure otherwise.
 
 ### `lint_baseline:judge`
-**Purpose.** The verdict of one branch run. `judge(failed, key, repo, head="HEAD", environ=None) -> dict` with `tolerated`, `blocking`, `items`, `main` and `passes`.
+**Purpose.** The verdict of one branch run. `judge(failed, key, repo, head="HEAD", environ=None, now=time.time) -> dict` with `tolerated`, `blocking`, `items`, `main` and `passes`.
 `failed` is `{step name: output}` of every failed step; `repo` is the git checkout whose history is searched. `passes` is True only when something failed and every failure is tolerated.
 With no failures, no baseline file or the switch off, nothing is tolerated and `passes` is False. Called by `run_linters.main` after the steps ran; the result
 decides the exit code, is written to `--results-json` (`known_red`) and goes into the pass stamp.
@@ -88,7 +89,7 @@ decides the exit code, is written to `--results-json` (`known_red`) and goes int
 something still blocks, a header and one `BLOCKS:` line per blocking item with its reason. Pure.
 
 ### `lint_baseline:stamp_field`
-`stamp_field(tolerated, main) -> str`. ` known_red=<id>,<id> baseline=<main 12 hex>` appended to the pass stamp's line; `""` when nothing was tolerated. Spaces in ids become `_`;
+`stamp_field(tolerated, main) -> str`. ` known_red=<id>(<age>d;<owner>),<id>(...) baseline=<main 12 hex>` appended to the pass stamp's line (age in days from the item's `age_days`, owner from the baseline); `""` when nothing was tolerated. Spaces in ids become `_`;
 more than 12 ids end with `+N`. `lint_stamp_gate.known_red_note` reads it back.
 
 ### `lint_baseline:refresh`
@@ -109,12 +110,21 @@ old record is kept). **Special concerns.** Blocking subprocess, minutes long (a 
 creates and removes a worktree under `~/workspace/tmp`; the run takes the machine's lint lock like any other; never touches main or any branch.
 
 ### `lint_baseline:show_lines`
-`show_lines(key, environ=None) -> [str]`: the record, one line per item, or a line saying none is recorded.
+`show_lines(key, environ=None, now=time.time) -> [str]`: the record, one line per item, oldest first, each with its age, whether it is `EXPIRED: blocks`, its owner, `since`, a renewal reason if any and the message; the header gives the age limit. A line saying none is recorded when there is no record. `--baseline-show`.
+
+### `lint_baseline:max_age_days`
+`max_age_days(environ=None) -> float`: how long an item is tolerated: `HAMS_LINT_BASELINE_MAX_AGE_DAYS` or 3. Raises `ValueError` for anything that is not a finite number above 0 (a quiet "forever" would defeat the limit). Pure.
+
+### `lint_baseline:item_age_days`
+`item_age_days(item, created=None, now=time.time) -> float`: days since the item's last renewal, else its `first_seen_time`, else `created` (the document time, for a record from before the field). 0.0 when no readable time exists; never negative. Pure.
+
+### `lint_baseline:renew`
+`renew(key, item_id, reason, owner=None, environ=None, now=time.time) -> item`: keeps tolerating an item for another window. Stores `renewed: {time, reason}` (and `owner` when given) in the baseline file, atomically. Raises `ValueError` for an empty reason, `KeyError` when the repository has no baseline or the item is not in it. `run_linters.py --baseline-renew ITEM --baseline-reason TEXT [--baseline-owner NAME]`.
 
 ## run_linters
 
 ### `run_linters:baseline_command`
-`baseline_command(options, dir_path, repo_root) -> int`. Handles `--baseline-refresh` and `--baseline-show`: picks the repository (a worktree of hams_shared is `hams_shared` with the tree named
+`baseline_command(options, dir_path, repo_root) -> int`. Handles `--baseline-refresh`, `--baseline-show` and `--baseline-renew` (exit 2 with the cause for an empty reason or an unknown item): picks the repository (a worktree of hams_shared is `hams_shared` with the tree named
 `hams_shared_wt`; hams_com and hams_open by their main checkout's directory name), prints or refreshes. Returns 2 from the main hams_shared checkout. Takes no lock of its own.
 
 ## lint_batch

@@ -410,7 +410,15 @@ def _parse_args(argv):
         "(--baseline-force repeats it)",
     )
     parser.add_argument("--baseline-force", action="store_true", help="with --baseline-refresh: run even when current")
-    parser.add_argument("--baseline-show", action="store_true", help="print the recorded known-red baseline, then exit")
+    parser.add_argument("--baseline-show", action="store_true", help="print the recorded known-red baseline, oldest first, then exit")
+    parser.add_argument(
+        "--baseline-renew",
+        metavar="ITEM",
+        help="keep tolerating this known-red item for another window (HAMS_LINT_BASELINE_MAX_AGE_DAYS, default 3 days); needs "
+        "--baseline-reason; --baseline-owner changes its owner; then exit",
+    )
+    parser.add_argument("--baseline-reason", help="with --baseline-renew: why it stays red")
+    parser.add_argument("--baseline-owner", help="with --baseline-renew: who fixes it")
     parser.add_argument(
         "--no-baseline",
         action="store_true",
@@ -1076,7 +1084,7 @@ def timeout_retried_field(names):
 
 # [@ANCHOR: run_linters:baseline_command]
 def baseline_command(options, dir_path, repo_root):
-    """`--baseline-refresh` / `--baseline-show`: record or print the known-red baseline of the repository `dir_path` belongs to
+    """`--baseline-refresh` / `--baseline-show` / `--baseline-renew`: record, print or renew the known-red baseline of the repository `dir_path` belongs to
     (hams_com, hams_open, or a worktree of hams_shared, key `hams_shared`). Returns an exit code: `lint_baseline.refresh`'s,
     0 for show, 2 when started from the main hams_shared checkout (run it from a worktree of hams_shared, whose combined
     tree is built from origin/main). No lint lock is taken here: the canary's own run takes it like any run."""
@@ -1090,6 +1098,14 @@ def baseline_command(options, dir_path, repo_root):
         key = os.path.basename(_resolve_main_checkout_root(repo_root).rstrip(os.sep))
         repo, tree_name = dir_path, key
     if options.baseline_show:
+        print("\n".join(lint_baseline.show_lines(key)))
+        return 0
+    if options.baseline_renew:
+        try:
+            lint_baseline.renew(key, options.baseline_renew, options.baseline_reason, options.baseline_owner)
+        except (KeyError, ValueError) as error:
+            print("--baseline-renew: %s" % error.args[0])
+            return 2
         print("\n".join(lint_baseline.show_lines(key)))
         return 0
     return lint_baseline.refresh(repo, key, tree_name, force=options.baseline_force, remote=options.remote or "auto")
@@ -1172,7 +1188,7 @@ def main():
     # claims, burn list) used to judge the OLD hams_shared and never the branch (2026-11-07, #411 and #412).
     layout = None
     if shared_worktree_root(dir_path, repo_root) and not any(
-        flag in sys.argv for flag in ("--lint-caches", "--lock-status", "--baseline-refresh", "--baseline-show")
+        flag in sys.argv for flag in ("--lint-caches", "--lock-status", "--baseline-refresh", "--baseline-show", "--baseline-renew")
     ):
         import atexit
 
@@ -1271,7 +1287,7 @@ def main():
     if options.lock_status:
         print("\n".join(lint_lock.status_lines()))
         sys.exit(0)
-    if options.baseline_refresh or options.baseline_show:
+    if options.baseline_refresh or options.baseline_show or options.baseline_renew:
         sys.exit(baseline_command(options, dir_path, repo_root))
     wall_start = time.monotonic()
     tools_dir = os.path.join(dir_path, "tools")

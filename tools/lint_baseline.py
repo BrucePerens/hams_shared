@@ -18,6 +18,7 @@ run of the linters on a clean main tree. The reasons it is not a file in the rep
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -29,6 +30,10 @@ import batch_queue
 
 VERSION = 1
 ENV_SWITCH = "HAMS_LINT_BASELINE"
+MAX_AGE_ENV = "HAMS_LINT_BASELINE_MAX_AGE_DAYS"
+DEFAULT_MAX_AGE_DAYS = 3.0
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
+UNASSIGNED = "unassigned"
 MAX_MESSAGE = 240
 MAX_STAMP_ITEMS = 12
 
@@ -49,7 +54,8 @@ VOLATILE = [
 # The baseline document, one JSON file per repository: {"version": 1, "repo": name, "main": sha of the main commit
 # the canary linted, "created": ISO time, "items": {item_id: {"step": step base name, "test": test id or "",
 # "signature": 12 hex digits, "message": short text, "since": the oldest main commit at which this item was seen
-# red with this signature}}}. An item id is `<step>::<test id>` for a failing test and `<step>` for a step that failed
+# red with this signature, "first_seen_time": ISO local time the item was first recorded, "owner": who fixes it
+# (default "unassigned"), optional "renewed": {"time", "reason"}}}. An item id is `<step>::<test id>` for a failing test and `<step>` for a step that failed
 # with no test named. See docs/runbooks/LINT_MERGE_QUEUE_ANCHORS.md.
 
 
@@ -91,6 +97,40 @@ def _signature(text):
 def _base(step_name):
     """Step name without its shard or option suffix: `pytest tools/[2of4]` -> `pytest tools/`."""
     return step_name.split("[")[0].strip()
+
+
+# [@ANCHOR: lint_baseline:max_age_days]
+def max_age_days(environ=None):
+    """How many days an item may stay tolerated: `HAMS_LINT_BASELINE_MAX_AGE_DAYS` (a finite number above 0) or 3. A bad value
+    raises ValueError: a limit that quietly became "forever" would defeat it."""
+    environ = os.environ if environ is None else environ
+    text = environ.get(MAX_AGE_ENV, "").strip()
+    if not text:
+        return DEFAULT_MAX_AGE_DAYS
+    try:
+        value = float(text)
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("%s=%r is not a finite number of days above 0" % (MAX_AGE_ENV, text))
+    return value
+
+
+# [@ANCHOR: lint_baseline:item_age_days]
+def item_age_days(item, created=None, now=time.time):
+    """Days an item has been known red: since its last renewal, else since `first_seen_time`, else (an item recorded before
+    the field existed) since the document's `created` time `created`. Returns a float, 0 when no time is known or it is unreadable."""
+    renewed = item.get("renewed") or {}
+    text = renewed.get("time") or item.get("first_seen_time") or created
+    try:
+        started = time.mktime(time.strptime(str(text), TIME_FORMAT))
+    except (ValueError, OverflowError):
+        return 0.0
+    return max(0.0, (now() - started) / 86400.0)
+
+
+def _age_text(days):
+    return "%.1f days" % days if days >= 1 else "%.0f hours" % (days * 24)
 
 
 def _item(step, test, message):
@@ -164,16 +204,27 @@ def read_baseline(key, environ=None):
 # [@ANCHOR: lint_baseline:write_baseline]
 def write_baseline(key, main, items, environ=None, previous=None, now=time.time):
     """Write the baseline of `key` for main commit `main` (atomically). `items` is {item_id: item}; an item that
-    `previous` (the old document) already has with the same signature keeps its `since`, a new one gets `since=main`.
-    Returns the document. Raises OSError when the file cannot be written."""
+    `previous` (the old document) already has with the same signature keeps its `since`, `first_seen_time`, `owner` and
+    `renewed`; a new one gets `since=main`, `first_seen_time` now and owner `unassigned`. Returns the document.
+    Raises OSError when the file cannot be written."""
     old = (previous or {}).get("items", {})
+    stamp = time.strftime(TIME_FORMAT, time.localtime(now()))
     stored = {}
     for item_id, item in items.items():
         kept = old.get(item_id)
-        since = kept.get("since") if kept and kept.get("signature") == item["signature"] and kept.get("since") else main
-        stored[item_id] = dict(item, since=since)
-    doc = {"version": VERSION, "repo": key, "main": main,
-           "created": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now())), "items": stored}
+        same = bool(kept) and kept.get("signature") == item["signature"]
+        record = dict(item, since=kept.get("since") if same and kept.get("since") else main,
+                      first_seen_time=(kept.get("first_seen_time") or (previous or {}).get("created") or stamp) if same else stamp,
+                      owner=(kept.get("owner") or UNASSIGNED) if same else UNASSIGNED)
+        if same and kept.get("renewed"):
+            record["renewed"] = kept["renewed"]
+        stored[item_id] = record
+    doc = {"version": VERSION, "repo": key, "main": main, "created": stamp, "items": stored}
+    _store(doc, key, environ)
+    return doc
+
+
+def _store(doc, key, environ=None):
     directory = baseline_dir(environ)
     os.makedirs(directory, exist_ok=True)
     handle, temp = tempfile.mkstemp(dir=directory, prefix=key + ".", suffix=".tmp")
@@ -185,7 +236,24 @@ def write_baseline(key, main, items, environ=None, previous=None, now=time.time)
         if os.path.exists(temp):
             os.unlink(temp)
         raise
-    return doc
+
+
+# [@ANCHOR: lint_baseline:renew]
+def renew(key, item_id, reason, owner=None, environ=None, now=time.time):
+    """Keep tolerating `item_id` for another `max_age_days` window, with a stated `reason` (and optionally a new `owner`).
+    Records `renewed: {time, reason}` on the item, atomically. Returns the item. Raises ValueError for an empty reason and
+    KeyError when there is no baseline or no such item (the message lists nothing else: use `--baseline-show`)."""
+    if not str(reason or "").strip():
+        raise ValueError("a renewal needs a reason")
+    doc = read_baseline(key, environ)
+    if doc is None or item_id not in doc["items"]:
+        raise KeyError("no known-red item %r in the baseline of %s" % (item_id, key))
+    item = doc["items"][item_id]
+    item["renewed"] = {"time": time.strftime(TIME_FORMAT, time.localtime(now())), "reason": str(reason).strip()}
+    if owner:
+        item["owner"] = owner
+    _store(doc, key, environ)
+    return item
 
 
 def _contains(repo, commit, head):
@@ -198,15 +266,17 @@ def _contains(repo, commit, head):
 
 
 # [@ANCHOR: lint_baseline:classify]
-def classify(items, doc, repo=None, head="HEAD", contains=_contains):
+def classify(items, doc, repo=None, head="HEAD", contains=_contains, now=time.time, environ=None):
     """Sort this run's failure `items` against baseline `doc`.
 
     Returns (tolerated, blocking): `tolerated` is {item_id: baseline item} for items recorded with the same
     signature whose `since` commit is in `head`'s history (the branch contains the red main, so the failure is not
     its own); `blocking` is {item_id: reason} for everything else: "new" (not in the baseline), "changed" (recorded,
-    but the message differs: the branch changed how it fails) or "since <sha> is not in your tree: rebase".
-    With no document nothing is tolerated."""
+    but the message differs: the branch changed how it fails), "since <sha> is not in your tree: rebase", or "known red for N
+    days": an item older than `max_age_days` (counted from its last renewal) is no longer tolerated, whatever the branch.
+    Each tolerated item is returned as a copy with `age_days`. With no document nothing is tolerated."""
     tolerated, blocking = {}, {}
+    limit = max_age_days(environ)
     recorded = (doc or {}).get("items", {})
     for item_id, item in items.items():
         old = recorded.get(item_id)
@@ -217,12 +287,18 @@ def classify(items, doc, repo=None, head="HEAD", contains=_contains):
         elif repo is not None and not contains(repo, old.get("since"), head):
             blocking[item_id] = "main was red since %s, which is not in your tree: rebase on origin/main" % str(old.get("since"))[:10]
         else:
-            tolerated[item_id] = old
+            age = item_age_days(old, (doc or {}).get("created"), now)
+            if age > limit:
+                blocking[item_id] = ("known red for %s (limit %g days, owner %s): fix it, or renew it with a reason: "
+                                     "run_linters.py --baseline-renew '%s' --reason TEXT" % (
+                                         _age_text(age), limit, old.get("owner") or UNASSIGNED, item_id))
+            else:
+                tolerated[item_id] = dict(old, age_days=age)
     return tolerated, blocking
 
 
 # [@ANCHOR: lint_baseline:judge]
-def judge(failed, key, repo, head="HEAD", environ=None):
+def judge(failed, key, repo, head="HEAD", environ=None, now=time.time):
     """The decision of one run. `failed` is {step name: output} of every failed step. Returns a dict:
     {"tolerated": {id: item}, "blocking": {id: reason}, "items": {id: item}, "main": baseline's main sha or None,
     "passes": bool}. `passes` is True only when there is at least one failure, all of them tolerated. No failures,
@@ -233,7 +309,7 @@ def judge(failed, key, repo, head="HEAD", environ=None):
     if not items or doc is None:
         return {"tolerated": {}, "blocking": {i: "new: no baseline" for i in items}, "items": items,
                 "main": None, "passes": False}
-    tolerated, blocking = classify(items, doc, repo, head)
+    tolerated, blocking = classify(items, doc, repo, head, now=now, environ=environ)
     return {"tolerated": tolerated, "blocking": blocking, "items": items, "main": doc.get("main"),
             "passes": bool(tolerated) and not blocking}
 
@@ -249,8 +325,9 @@ def report_lines(verdict):
         lines.append("=== KNOWN RED ON MAIN (baseline of %s): %d failure(s) tolerated, not caused by this branch ===" % (
             str(verdict.get("main") or "?")[:10], len(tolerated)))
         for item_id, item in sorted(tolerated.items()):
-            lines.append("  known red: %s   (red on main since %s)  %s" % (
-                item_id, str(item.get("since"))[:10], item.get("message", "")[:100]))
+            lines.append("  known red: %s   (known red for %s, owner %s; red on main since %s)  %s" % (
+                item_id, _age_text(item.get("age_days", 0.0)), item.get("owner") or UNASSIGNED,
+                str(item.get("since"))[:10], item.get("message", "")[:100]))
     if blocking:
         lines.append("")
         lines.append("=== %d failure(s) that are NOT known red on main (these block) ===" % len(blocking))
@@ -261,11 +338,14 @@ def report_lines(verdict):
 
 # [@ANCHOR: lint_baseline:stamp_field]
 def stamp_field(tolerated, main):
-    """` known_red=<id>,<id>... baseline=<main 12 hex>` for a pass stamp, or "" when nothing was tolerated. Spaces in
-    an id become `_`; more than `MAX_STAMP_ITEMS` ids end with `+N`. The pass stamp thereby records what it tolerated."""
+    """` known_red=<id>(<age>;<owner>),... baseline=<main 12 hex>` for a pass stamp, or "" when nothing was tolerated. Spaces
+    in an id become `_`; the age is `item["age_days"]` as `3.1d`; more than `MAX_STAMP_ITEMS` ids end with `+N`. The pass
+    stamp thereby records what it tolerated, for how long, and whose it is."""
     if not tolerated:
         return ""
-    ids = ["_".join(item_id.split()) for item_id in sorted(tolerated)]
+    ids = ["%s(%.1fd;%s)" % ("_".join(item_id.split()), item.get("age_days", 0.0),
+                             "_".join(str(item.get("owner") or UNASSIGNED).split()))
+           for item_id, item in sorted(tolerated.items())]
     shown = ids[:MAX_STAMP_ITEMS]
     if len(ids) > MAX_STAMP_ITEMS:
         shown.append("+%d" % (len(ids) - MAX_STAMP_ITEMS))
@@ -343,13 +423,20 @@ def refresh(repo, key, tree_name, base="origin/main", force=False, environ=None,
 
 
 # [@ANCHOR: lint_baseline:show_lines]
-def show_lines(key, environ=None):
-    """Lines describing the baseline of `key` (`run_linters.py --baseline-show`)."""
+def show_lines(key, environ=None, now=time.time):
+    """Lines describing the baseline of `key` (`run_linters.py --baseline-show`), the oldest item first: age, owner, a renewal
+    reason if any, whether it is already past the limit, and the message."""
     doc = read_baseline(key, environ)
     if doc is None:
         return ["baseline: none recorded for %s (run: run_linters.py --baseline-refresh)" % key]
-    lines = ["baseline of %s: main %s, recorded %s, %d known-red item(s)" % (
-        key, doc.get("main", "?")[:10], doc.get("created", "?"), len(doc["items"]))]
-    for item_id, item in sorted(doc["items"].items()):
-        lines.append("  %s  since %s  %s" % (item_id, str(item.get("since"))[:10], item.get("message", "")[:100]))
+    limit = max_age_days(environ)
+    rows = sorted(((item_age_days(item, doc.get("created"), now), item_id, item) for item_id, item in doc["items"].items()),
+                  key=lambda row: (-row[0], row[1]))
+    lines = ["baseline of %s: main %s, recorded %s, %d known-red item(s), tolerated for at most %g days" % (
+        key, doc.get("main", "?")[:10], doc.get("created", "?"), len(doc["items"]), limit)]
+    for age, item_id, item in rows:
+        renewed = item.get("renewed")
+        lines.append("  %s  known red for %s%s, owner %s, since %s%s  %s" % (
+            item_id, _age_text(age), " (EXPIRED: blocks)" if age > limit else "", item.get("owner") or UNASSIGNED,
+            str(item.get("since"))[:10], ", renewed: %s" % renewed["reason"] if renewed else "", item.get("message", "")[:100]))
     return lines

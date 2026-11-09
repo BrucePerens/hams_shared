@@ -23,6 +23,9 @@ Tests [@ANCHOR: lint_baseline:report_lines]
 Tests [@ANCHOR: lint_baseline:stamp_field]
 Tests [@ANCHOR: lint_baseline:refresh]
 Tests [@ANCHOR: lint_baseline:show_lines]
+Tests [@ANCHOR: lint_baseline:max_age_days]
+Tests [@ANCHOR: lint_baseline:item_age_days]
+Tests [@ANCHOR: lint_baseline:renew]
 Tests [@ANCHOR: lint_batch:read_known_red]
 Tests [@ANCHOR: lint_stamp_gate:known_red_note]
 Tests [@ANCHOR: run_linters:baseline_command]
@@ -183,8 +186,8 @@ class JudgeTests(Env):
         self.assertIn("KNOWN RED ON MAIN", text)
         self.assertIn("known red: flake8", text)
         self.assertIn("BLOCKS: other", text)
-        field = lb.stamp_field({"pytest tools/::a b": {}, "flake8": {}}, "0123456789abcdef")
-        self.assertEqual(field, " known_red=flake8,pytest_tools/::a_b baseline=0123456789ab")
+        field = lb.stamp_field({"pytest tools/::a b": {"age_days": 3.04, "owner": "ann lee"}, "flake8": {}}, "0123456789abcdef")
+        self.assertEqual(field, " known_red=flake8(0.0d;unassigned),pytest_tools/::a_b(3.0d;ann_lee) baseline=0123456789ab")
         many = lb.stamp_field({"s%02d" % i: {} for i in range(15)}, "m")
         self.assertIn(",+3 ", many + " ")
         self.assertEqual(lb.stamp_field({}, "m"), "")
@@ -258,10 +261,125 @@ class RefreshTests(Env):
             baseline_show = True
             baseline_refresh = False
             baseline_force = False
+            baseline_renew = None
             remote = ""
 
         work = helpers.make_repo(self.tmp.name)
         self.assertEqual(run_linters.baseline_command(Options, work, work), 0)
+
+
+DAY = 86400.0
+
+
+class AccountabilityTests(Env):
+    """Known-red items age: they are tolerated for a limited time, then block unless renewed with a reason."""
+
+    def setUp(self):
+        super().setUp()
+        self.t0 = 1_800_000_000.0
+        self.items = lb.failure_items("flake8", "x.py:1: E1 bad\n")
+        self.doc = lb.write_baseline("hams_com", "aaa111", self.items, self.env, now=lambda: self.t0)
+
+    def at(self, days):
+        return lambda: self.t0 + days * DAY
+
+    # Tests [@ANCHOR: lint_baseline:max_age_days]
+    def test_the_limit_defaults_to_three_days_and_a_bad_value_is_an_error(self):
+        self.assertEqual(lb.max_age_days({}), 3.0)
+        self.assertEqual(lb.max_age_days({lb.MAX_AGE_ENV: "0.5"}), 0.5)
+        for bad in ("0", "-1", "abc", "inf", "nan"):
+            with self.assertRaises(ValueError, msg=bad):
+                lb.max_age_days({lb.MAX_AGE_ENV: bad})
+
+    # Tests [@ANCHOR: lint_baseline:item_age_days]
+    def test_age_counts_from_first_seen_then_from_a_renewal_and_old_records_use_created(self):
+        item = self.doc["items"]["flake8"]
+        self.assertAlmostEqual(lb.item_age_days(item, self.doc["created"], self.at(2.5)), 2.5, places=2)
+        renewed = dict(item, renewed={"time": time_text(self.t0 + 2 * DAY), "reason": "r"})
+        self.assertAlmostEqual(lb.item_age_days(renewed, None, self.at(2.5)), 0.5, places=2)
+        legacy = {k: v for k, v in item.items() if k != "first_seen_time"}
+        self.assertAlmostEqual(lb.item_age_days(legacy, self.doc["created"], self.at(1)), 1.0, places=2)
+        self.assertEqual(lb.item_age_days({}, None, self.at(1)), 0.0)
+        self.assertEqual(lb.item_age_days({"first_seen_time": "garbage"}, None, self.at(1)), 0.0)
+
+    # Tests [@ANCHOR: lint_baseline:write_baseline]
+    def test_a_refresh_keeps_first_seen_owner_and_renewal_and_a_changed_failure_starts_again(self):
+        lb.renew("hams_com", "flake8", "waiting for the vendor", owner="ann", environ=self.env, now=self.at(1))
+        later = lb.write_baseline("hams_com", "bbb222", self.items, self.env, previous=lb.read_baseline("hams_com", self.env),
+                                  now=self.at(2))
+        item = later["items"]["flake8"]
+        self.assertEqual((item["first_seen_time"], item["owner"], item["renewed"]["reason"]),
+                         (self.doc["items"]["flake8"]["first_seen_time"], "ann", "waiting for the vendor"))
+        changed = lb.write_baseline("hams_com", "ccc333", lb.failure_items("flake8", "x.py:1: E1 other\n"), self.env,
+                                    previous=later, now=self.at(3))["items"]["flake8"]
+        self.assertEqual((changed["owner"], "renewed" in changed), ("unassigned", False))
+        self.assertNotEqual(changed["first_seen_time"], item["first_seen_time"])
+
+    # Tests [@ANCHOR: lint_baseline:classify]
+    # Tests [@ANCHOR: lint_baseline:judge]
+    def test_an_item_older_than_the_limit_stops_being_tolerated_until_renewed(self):
+        fresh = lb.judge({"flake8": "x.py:1: E1 bad\n"}, "hams_com", None, environ=self.env, now=self.at(2.9))
+        self.assertTrue(fresh["passes"])
+        self.assertAlmostEqual(fresh["tolerated"]["flake8"]["age_days"], 2.9, places=2)
+        old = lb.judge({"flake8": "x.py:1: E1 bad\n"}, "hams_com", None, environ=self.env, now=self.at(3.1))
+        self.assertFalse(old["passes"])
+        self.assertIn("known red for 3.1 days (limit 3 days", old["blocking"]["flake8"])
+        self.assertIn("--baseline-renew 'flake8'", old["blocking"]["flake8"])
+        lb.renew("hams_com", "flake8", "tracked in the vendor's queue", environ=self.env, now=self.at(3.1))
+        renewed = lb.judge({"flake8": "x.py:1: E1 bad\n"}, "hams_com", None, environ=self.env, now=self.at(4))
+        self.assertTrue(renewed["passes"])
+        self.assertTrue(lb.judge({"flake8": "x.py:1: E1 bad\n"}, "hams_com", None, environ=dict(self.env, **{lb.MAX_AGE_ENV: "10"}),
+                                 now=self.at(9))["passes"])
+
+    # Tests [@ANCHOR: lint_baseline:renew]
+    def test_a_renewal_needs_a_reason_and_an_existing_item(self):
+        with self.assertRaises(ValueError):
+            lb.renew("hams_com", "flake8", "  ", environ=self.env)
+        with self.assertRaises(KeyError):
+            lb.renew("hams_com", "no such item", "why", environ=self.env)
+        with self.assertRaises(KeyError):
+            lb.renew("hams_open", "flake8", "why", environ=self.env)
+
+    # Tests [@ANCHOR: lint_baseline:show_lines]
+    # Tests [@ANCHOR: lint_baseline:report_lines]
+    def test_show_lists_the_oldest_first_with_age_owner_and_expiry_and_the_report_names_age_and_owner(self):
+        more = lb.failure_items("pytest tools/", "FAILED tools/test_a.py::T::t - boom\n")
+        lb.write_baseline("hams_com", "bbb222", dict(self.items, **more), self.env, previous=lb.read_baseline("hams_com", self.env),
+                          now=self.at(2))
+        lines = lb.show_lines("hams_com", self.env, now=self.at(3.5))
+        self.assertIn("tolerated for at most 3 days", lines[0])
+        self.assertIn("known red for 3.5 days (EXPIRED: blocks), owner unassigned", lines[1])
+        self.assertIn("known red for 1.5 days", lines[2])
+        verdict = lb.judge({"flake8": "x.py:1: E1 bad\n"}, "hams_com", None, environ=self.env, now=self.at(1))
+        self.assertIn("known red for 1.0 days, owner unassigned", "\n".join(lb.report_lines(verdict)))
+
+    # Tests [@ANCHOR: run_linters:baseline_command]
+    def test_baseline_renew_command_renews_or_refuses_with_the_cause(self):
+        work = helpers.make_repo(self.tmp.name)
+
+        class Options:
+            baseline_show = False
+            baseline_refresh = False
+            baseline_renew = "flake8"
+            baseline_reason = "waiting"
+            baseline_owner = "ann"
+            baseline_force = False
+            remote = ""
+
+        key = os.path.basename(run_linters._resolve_main_checkout_root(work).rstrip(os.sep))
+        lb.write_baseline(key, "aaa111", self.items, dict(os.environ))
+        try:
+            self.assertEqual(run_linters.baseline_command(Options, work, work), 0)
+            self.assertEqual(lb.read_baseline(key)["items"]["flake8"]["owner"], "ann")
+            Options.baseline_reason = ""
+            self.assertEqual(run_linters.baseline_command(Options, work, work), 2)
+        finally:
+            os.unlink(lb.baseline_path(key))
+
+
+def time_text(epoch):
+    import time
+    return time.strftime(lb.TIME_FORMAT, time.localtime(epoch))
 
 
 if __name__ == "__main__":

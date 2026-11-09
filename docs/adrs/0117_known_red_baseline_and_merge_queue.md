@@ -74,3 +74,10 @@ the machine from a real run, so the canary must be current: a stale record toler
 next refresh), never more. Cost of the canary: one full lint run per main commit that is actually checked (it skips commits
 already recorded and collapses a burst of merges into one run of the newest). Cost of the queue: a delay of one timer
 interval between enqueue and merge.
+
+## Amendment 2026-11-08: a known-red item is tolerated for a limited time
+Bruce: "Let's not let lint issues stand even though we let things pass the known red ones." The baseline must not become a place
+where failures live. Each item records `first_seen_time` and an `owner`; every report, the pass stamp (`known_red=<id>(<age>d;<owner>)`)
+and `--baseline-show` (oldest first) name the age and the owner. An item older than `HAMS_LINT_BASELINE_MAX_AGE_DAYS` (default 3) stops
+being tolerated and blocks, until it is fixed or renewed with a stated reason (`run_linters.py --baseline-renew ITEM --baseline-reason TEXT`).
+The test runner's baseline (ADR 0118) has the same rule.
