@@ -31,6 +31,11 @@ import psutil
 import run_headless_chrome as rhc
 
 
+# Safety nets only: every wait below ends as soon as its condition holds.
+SETTLE_SECONDS = 180.0
+EXIT_SECONDS = 180.0
+
+
 def _spawn_real_headless_chrome(tmp_dir):
     """
     Spawns a real, minimal google-chrome --headless process (not chromium
@@ -75,9 +80,18 @@ def _spawn_real_headless_chrome(tmp_dir):
         env={**os.environ, "TMPDIR": tmp_dir},
     )
     p = psutil.Process(proc.pid)
-    deadline = time.time() + 10.0
-    while time.time() < deadline and p.name() != "chrome":
+    # Wait on the condition, not for ten seconds: under a load of 100 the wrapper took longer than that to exec the real binary, the
+    # old loop gave up while the process was still `bash`, and the reaper (which matches Chrome by name and profile) then rightly
+    # did not kill it, so the test failed with "must terminate a real headless chrome" about 30 s later. The bound is only a safety
+    # net, and an unsettled process is a setup failure that says so, never a half-started test.
+    deadline = time.time() + SETTLE_SECONDS
+    while time.time() < deadline and proc.poll() is None and p.name() != "chrome":
         time.sleep(0.1)  # audit-ignore-sleep
+    if proc.poll() is not None or p.name() != "chrome":
+        raise AssertionError(
+            "test setup: the spawned process did not become the chrome binary within %.0f s (exit status %s, name %s)"
+            % (SETTLE_SECONDS, proc.poll(), None if proc.poll() is not None else p.name())
+        )
     return proc
 
 
@@ -107,14 +121,14 @@ class ReapHeadlessChromesTests(unittest.TestCase):
         # Scoped to this test's own profile, so other sessions' Chromes survive.
         rhc.reap_headless_chromes(profile)
         try:
-            proc.wait(timeout=30.0)
+            proc.wait(timeout=EXIT_SECONDS)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait(timeout=30.0)
+            proc.wait(timeout=EXIT_SECONDS)
 
     def _assert_exits(self, proc):
         try:
-            exit_code = proc.wait(timeout=30.0)
+            exit_code = proc.wait(timeout=EXIT_SECONDS)
         except subprocess.TimeoutExpired:
             exit_code = None
         self.assertIsNotNone(
