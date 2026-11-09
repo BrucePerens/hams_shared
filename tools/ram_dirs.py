@@ -18,6 +18,10 @@ Rules every caller gets from this module:
     a crashed job's directory from a live one and remove it. A job that ends normally, or by a signal, removes its own.
   * `run_job` stops a job whose directory outgrows `job_max_gb` (default 30) or that drives the free space of `/dev/shm`
     below `hard_free_gb` (default 5), so one runaway build cannot take all of the RAM.
+  * Leak check: `run_job` gives the command a private, empty TMPDIR (a fresh directory under the caller's TMPDIR). What
+    is in it when the command ends was left by that command and by nothing else on the host: it is named on standard
+    error as `LEAK: ...`, then removed. `HAMS_LEAK_CHECK=warn` (default) only reports, `fail` also makes an otherwise
+    successful job exit 70, `off` does not look.
 
 CLI (all output on standard error except `path`, which prints the directory):
   ram_dirs.py run JOB [--keep] [--ssd] -- COMMAND...   run COMMAND with CARGO_TARGET_DIR set to the job's directory; the
@@ -45,6 +49,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -64,6 +69,9 @@ UNMARKED_HOURS = 24.0
 TEST_TMP_STALE_HOURS = 12.0
 LINT_UNUSED_DAYS = 2
 EX_TEMPFAIL = 75
+# Exit code of a job that succeeded but left files in its private temporary directory while `HAMS_LEAK_CHECK=fail`.
+EX_LEAK = 70
+LEAK_CHECK_ENV = "HAMS_LEAK_CHECK"
 _JOB_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _warned = set()
 
@@ -344,6 +352,46 @@ def newest_mtime(path, depth=2):
     return newest
 
 
+# [@ANCHOR: ram_dirs:leak_mode]
+def leak_mode(environ=None):
+    """`HAMS_LEAK_CHECK`: "warn" (the default), "fail" or "off". Anything else is "warn"."""
+    value = (os.environ if environ is None else environ).get(LEAK_CHECK_ENV, "warn").strip().lower()
+    return value if value in ("warn", "fail", "off") else "warn"
+
+
+# [@ANCHOR: ram_dirs:make_job_tmp]
+def make_job_tmp(job, environ=None):
+    """A private, empty TMPDIR for one job: a fresh directory under the caller's TMPDIR (else the system one). Everything left
+    in it when the job ends was left by the job, whatever else runs on the host. None when it cannot be made."""
+    environ = os.environ if environ is None else environ
+    base = environ.get("TMPDIR") or tempfile.gettempdir()
+    try:
+        return tempfile.mkdtemp(prefix=f"hams-job-{_check_job_name(job)}-", dir=base)
+    except OSError:
+        return None
+
+
+# [@ANCHOR: ram_dirs:leftovers]
+def leftovers(path):
+    """The entries left in a job's private TMPDIR, as sorted `(name, bytes)` pairs (directories counted recursively)."""
+    found = []
+    try:
+        names = sorted(os.listdir(path))
+    except OSError:
+        return found
+    for name in names:
+        full = os.path.join(path, name)
+        found.append((name, tree_bytes(full) if os.path.isdir(full) and not os.path.islink(full) else _file_bytes(full)))
+    return found
+
+
+def _file_bytes(path):
+    try:
+        return os.lstat(path).st_size
+    except OSError:
+        return 0
+
+
 # [@ANCHOR: ram_dirs:remove_tree]
 def remove_tree(path):
     """Remove `path` (a symbolic link is only unlinked). True when it is gone afterwards. Never raises."""
@@ -565,6 +613,7 @@ class JobResult:
     peak_bytes: int = 0
     elapsed: float = 0.0
     block_write_bytes: int = 0
+    leaked: tuple = ()
 
 
 # [@ANCHOR: ram_dirs:run_job]
@@ -598,6 +647,11 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
     if placed.in_ram:
         write_usage(pol)
     environ["CARGO_TARGET_DIR"] = target
+    mode = leak_mode(environ)
+    job_tmp = make_job_tmp(job, environ) if mode != "off" else None
+    if job_tmp:
+        environ["TMPDIR"] = job_tmp
+    leaked = []
     say(f"job {job}: target {target} ({'RAM' if placed.in_ram else 'disk'}: {placed.reason})")
     started = time.monotonic()
     before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_oublock
@@ -638,10 +692,19 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
             remove_tree(target)
         if placed.in_ram:
             write_usage(pol)
+        if job_tmp:
+            leaked = leftovers(job_tmp)
+            remove_tree(job_tmp)
     elapsed = time.monotonic() - started
     blocks = (resource.getrusage(resource.RUSAGE_CHILDREN).ru_oublock - before) * 512
     code = returncode if returncode >= 0 else 128 - returncode
-    result = JobResult(code, target, placed.in_ram, state["stopped"], state["peak"], elapsed, blocks)
+    if leaked:
+        listing = ", ".join(f"{name} ({size / 1e6:.1f} MB)" for name, size in leaked[:20]) + (" ..." if len(leaked) > 20 else "")
+        say(f"LEAK: job {job} left {len(leaked)} entr{'y' if len(leaked) == 1 else 'ies'} in its private TMPDIR (removed now): {listing}. "
+            "A test or tool that creates temporary files must remove them itself, also when it fails.")
+        if mode == "fail" and code == 0:
+            code = EX_LEAK
+    result = JobResult(code, target, placed.in_ram, state["stopped"], state["peak"], elapsed, blocks, tuple(name for name, _ in leaked))
     say(f"job {job}: exit {code} after {elapsed:.0f} s, directory peaked at {state['peak'] / GB:.2f} GB"
         f" ({'RAM' if placed.in_ram else 'disk'}), block writes {blocks / GB:.2f} GB, "
         + ("kept" if keep else "removed"))

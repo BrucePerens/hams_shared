@@ -248,6 +248,7 @@ STEP_META = {
     "check_minified_js_syntax_errors": {"suffixes": frozenset({".js", ".py"})},
     "check_hoot_runner_coverage": {"suffixes": frozenset({".js", ".py"})},
     "check_async_lock_scope": {"suffixes": frozenset({".rs"})},
+    "check_test_temp_dirs": {"suffixes": frozenset({".rs", ".py", ".json"})},
     "check_fake_network_listener": {"suffixes": frozenset({".rs", ".py"})},
     "check_function_test_anchors": {"suffixes": _PY},
     "check_js_function_test_anchors": {"suffixes": frozenset({".js", ".py"})},
@@ -2325,6 +2326,15 @@ def main():
     _add(
         "check_async_lock_scope",
         [python_exec, os.path.join(dir_path, "tools", "check_async_lock_scope.py"), *_pair_roots],
+        print_ok=False,
+    )
+
+    # check_test_temp_dirs -- Rust test code must not build its own scratch directory under the temporary directory (never removed
+    # when the test fails; the temporary directory may be memory). New uses fail; the existing ones are in
+    # tools/test_temp_dir_baseline.json. One process scans both repositories.
+    _add(
+        "check_test_temp_dirs",
+        [python_exec, os.path.join(dir_path, "tools", "check_test_temp_dirs.py"), *_pair_roots],
         print_ok=False,
     )
 

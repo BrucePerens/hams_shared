@@ -42,6 +42,7 @@ Tests [@ANCHOR: ram_dirs:write_usage]
 import fcntl
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -517,6 +518,41 @@ class RunJobTest(RamTestCase):
         self.assertFalse(os.path.exists(result.target))
         self.assertIn("removed", said[-1])
         self.assertIn("RAM", said[0])
+
+    # Tests [@ANCHOR: ram_dirs:run_job]
+    # Tests [@ANCHOR: ram_dirs:leftovers]
+    # Tests [@ANCHOR: ram_dirs:make_job_tmp]
+    # Tests [@ANCHOR: ram_dirs:leak_mode]
+    def test_a_clean_job_is_silent_and_a_job_that_leaves_a_file_is_named_loudly_then_cleaned(self):
+        base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, base, True)
+        self.environ["TMPDIR"] = base
+        clean, said = self.run_job("import os, tempfile; open(os.path.join(tempfile.gettempdir(), 'gone'), 'w').close(); os.remove(os.path.join(tempfile.gettempdir(), 'gone'))")
+        self.assertEqual((clean.returncode, clean.leaked), (0, ()))
+        self.assertFalse([line for line in said if "LEAK" in line])
+        leaky, said = self.run_job("import os, tempfile; open(os.path.join(tempfile.gettempdir(), 'left_behind.png'), 'w').write('x')")
+        self.assertEqual((leaky.returncode, leaky.leaked), (0, ("left_behind.png",)))
+        self.assertTrue([line for line in said if "LEAK" in line and "left_behind.png" in line])
+        self.assertEqual(os.listdir(base), [], "the private TMPDIR is removed after the report")
+        self.assertEqual(ram_dirs.leak_mode({}), "warn")
+        self.assertEqual(ram_dirs.leak_mode({"HAMS_LEAK_CHECK": "FAIL"}), "fail")
+        self.assertEqual(ram_dirs.leak_mode({"HAMS_LEAK_CHECK": "bogus"}), "warn")
+
+    # Tests [@ANCHOR: ram_dirs:run_job]
+    def test_fail_mode_fails_a_job_that_succeeded_but_leaked_and_off_mode_does_not_look(self):
+        base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, base, True)
+        self.environ["TMPDIR"] = base
+        code = "import os; open(os.path.join(os.environ['TMPDIR'], 'x'), 'w').close()"
+        self.environ["HAMS_LEAK_CHECK"] = "fail"
+        result, _ = self.run_job(code)
+        self.assertEqual(result.returncode, ram_dirs.EX_LEAK)
+        failing, _ = self.run_job(code + "; raise SystemExit(3)")
+        self.assertEqual(failing.returncode, 3, "a job's own failure is not replaced")
+        self.environ["HAMS_LEAK_CHECK"] = "off"
+        result, said = self.run_job("import os; print(os.environ.get('TMPDIR'))")
+        self.assertEqual((result.returncode, result.leaked), (0, ()))
+        self.assertEqual(os.listdir(base), [])
 
     # Tests [@ANCHOR: ram_dirs:run_job]
     def test_keep_leaves_the_directory(self):

@@ -723,6 +723,18 @@ A marker without a start time counts as alive while the pid exists. Reads one fi
 
 Purpose: the age test for unmarked directories. Returns the latest modification time (seconds since the epoch) of `path` and of its entries down to `depth` levels (a build touches `debug/deps`, two levels down), 0.0 when `path` is missing. Does not follow symbolic links.
 
+### `[@ANCHOR: ram_dirs:leak_mode]` `leak_mode(environ=None)`
+
+Purpose: the leak check's setting. Returns `"warn"` (default), `"fail"` or `"off"` from `HAMS_LEAK_CHECK`; any other value is `"warn"`. Test: `test_a_clean_job_is_silent_and_a_job_that_leaves_a_file_is_named_loudly_then_cleaned`.
+
+### `[@ANCHOR: ram_dirs:make_job_tmp]` `make_job_tmp(job, environ=None)`
+
+Purpose: a private, empty TMPDIR for one job, a fresh directory `hams-job-<job>-XXXX` under the caller's TMPDIR (else the system temporary directory). Returns its path, or `None` when it cannot be made. Because nothing else uses it, whatever is in it afterwards was left by the job, however many other runs share the host.
+
+### `[@ANCHOR: ram_dirs:leftovers]` `leftovers(path)`
+
+Purpose: what a job left in its private TMPDIR: sorted `(name, bytes)` pairs, directories counted recursively; empty when the directory is gone. Used by `run_job`, which reports them as `LEAK:` on standard error and removes the directory.
+
 ### `[@ANCHOR: ram_dirs:remove_tree]` `remove_tree(path)`
 
 Purpose: removal that cannot be turned against us. Removes the tree at `path`; a symbolic link is only unlinked, never followed. Returns True when `path` is gone afterwards. Never raises (errors inside the tree are ignored; the return value tells).
