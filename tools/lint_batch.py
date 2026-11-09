@@ -311,7 +311,7 @@ class LintBatch:
             selected, failed = self.collect(dest, results, "".join(captured), proc.returncode)
             self.last_selected = selected or self.last_selected
             self.last_known_red = read_known_red(results) if proc.returncode == 0 else ""
-            code = proc.returncode
+            code = self.verdict_code(proc.returncode, selected, "".join(captured))
             if code == lock_queue.EXIT_WAIT_TIMEOUT:
                 return {"exit_code": code, "fatal": True, "failures": {}, "conflicted": built["conflicted"],
                         "detail": "the combined run gave up waiting for the lint lock or the load gate (exit 75)"}
@@ -320,6 +320,11 @@ class LintBatch:
             return {"exit_code": code, "failures": failed, "conflicted": built["conflicted"], "selected": selected}
         finally:
             batch_queue.remove_tree(self.repo, dest)
+
+    def verdict_code(self, code, selected, output):
+        """The exit status that decides the batch's verdict: the run's own by default. A subclass returns non-zero for an exit 0 that proves nothing
+        (it checked nothing, or its output says nothing ran): a green gate needs positive evidence."""
+        return code
 
     def collect(self, tree, results, output, code):
         """(selected step names, {failed step: output}) of the run that just ended. Lint: the results file."""
