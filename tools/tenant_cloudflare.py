@@ -37,6 +37,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import tenant_lib as lib  # noqa: E402
 
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuses every redirect. urllib copies all request headers, the credential included, to wherever a 3xx answer
+    points; a refused redirect surfaces as the HTTPError of the 3xx status."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
 HAMS_HOSTS = ("hams.com", "*.hams.com")
 ENV_FILE = os.path.expanduser("~/.secrets/cloudflare_hams_com.env")
 API = "https://api.cloudflare.com/client/v4"
@@ -213,7 +224,7 @@ def read_credentials(path=ENV_FILE):
 class Api:
     def __init__(self, token, opener=None):
         self._token = token
-        self._open = opener or urllib.request.urlopen
+        self._open = opener or _OPENER.open
 
     def call(self, method, path, body=None):
         data = json.dumps(body).encode() if body is not None else None

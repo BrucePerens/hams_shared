@@ -27,7 +27,23 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
+
+
+class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
+    """Follows a redirect only to the same https host. GitHub answers a renamed repository with a 301 to
+    `api.github.com/repositories/<id>`; anywhere else the token must not follow (urllib copies every request header to the
+    target of a redirect), so the redirect is refused and surfaces as the HTTPError of the 3xx status."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if new.scheme != "https" or new.netloc.lower() != old.netloc.lower():
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_SameHostRedirect)
 
 GITHUB_API = "https://api.github.com"
 REQUEST_TIMEOUT_SECONDS = 15
@@ -43,7 +59,7 @@ def _github_get(path):
     token = os.environ.get("GITHUB_TOKEN")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
+    with _OPENER.open(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
         return json.load(resp)
 
 

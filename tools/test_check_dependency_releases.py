@@ -19,7 +19,9 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
@@ -354,6 +356,85 @@ class MainExitStatusTests(unittest.TestCase):
     def test_exit_one_when_another_pin_is_stale_even_if_one_is_held(self):
         code, _ = self._run_main({"a": _entry(hold=_hold()), "b": _entry()})
         self.assertEqual(code, 1)
+
+
+class _RedirectProbe:
+    """Two real local servers: `url` answers every request with a 302 to the second, `sink`, which records the headers of
+    whatever reaches it. A credential header that follows the redirect shows up in `sink_headers`; `first_headers` holds
+    what the first server received, which proves the request did carry the credential."""
+
+    def __init__(self):
+        outer = self
+        self.first_headers = []
+        self.sink_headers = []
+
+        class Sink(BaseHTTPRequestHandler):
+            def _answer(self):
+                outer.sink_headers.append({k.lower(): v for k, v in self.headers.items()})
+                body = b"{}"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = do_POST = do_PUT = do_PATCH = _answer
+
+            def log_message(self, *args):
+                pass
+
+        self.sink = HTTPServer(("127.0.0.1", 0), Sink)  # burn-ignore-test-local-server: hermetic stand-in for the host a redirect points at
+        sink_url = f"http://127.0.0.1:{self.sink.server_port}/elsewhere"  # burn-ignore-test-local-server: hermetic stand-in for the host a redirect points at
+
+        class First(BaseHTTPRequestHandler):
+            def _answer(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                outer.first_headers.append({k.lower(): v for k, v in self.headers.items()})
+                self.send_response(302)
+                self.send_header("Location", sink_url)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            do_GET = do_POST = do_PUT = do_PATCH = _answer
+
+            def log_message(self, *args):
+                pass
+
+        self.first = HTTPServer(("127.0.0.1", 0), First)  # burn-ignore-test-local-server: hermetic stand-in for the credentialed API that answers with a redirect
+        self.url = f"http://127.0.0.1:{self.first.server_port}"  # burn-ignore-test-local-server: hermetic stand-in for the credentialed API
+        self._threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in (self.sink, self.first)]
+
+    def __enter__(self):
+        for thread in self._threads:
+            thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        for server in (self.first, self.sink):
+            server.shutdown()
+            server.server_close()
+
+
+class GithubRedirectTests(unittest.TestCase):
+    """A token goes to api.github.com only: a redirect to another host is refused, a same-host https redirect is followed."""
+
+    def test_a_redirect_to_another_host_is_refused_and_the_token_never_reaches_it(self):
+        with _RedirectProbe() as probe, patch.object(chk, "GITHUB_API", probe.url), patch.dict(os.environ, {"GITHUB_TOKEN": "gh-token"}):
+            with self.assertRaises(HTTPError) as raised:
+                chk._github_get("/repos/o/r/releases/latest")
+        self.assertEqual(raised.exception.code, 302)
+        self.assertEqual(probe.first_headers[0]["authorization"], "Bearer gh-token")
+        self.assertEqual(probe.sink_headers, [], "the redirect target must never be asked")
+
+    def test_only_a_same_host_https_redirect_is_followed(self):
+        handler = chk._SameHostRedirect()
+        request = chk.urllib.request.Request("https://api.github.com/repos/o/old/releases/latest", headers={"Authorization": "Bearer t"})
+        follow = lambda target: handler.redirect_request(request, None, 301, "Moved", {}, target)  # noqa: E731
+        self.assertIsNotNone(follow("https://api.github.com/repositories/42/releases/latest"))
+        self.assertIsNone(follow("https://evil.example/repositories/42"))
+        self.assertIsNone(follow("http://api.github.com/repositories/42"))
+        self.assertIsNone(follow("https://api.github.com.evil.example/x"))
 
 
 if __name__ == "__main__":
