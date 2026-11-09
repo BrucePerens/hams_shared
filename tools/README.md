@@ -2036,6 +2036,73 @@ Purpose: removes old trees. Keeps the `keep` newest `gate_*` directories of `par
 
 Purpose: the command line above. Returns 0 on success, 1 for a stale or incomplete snapshot or a failed step (`REFUSING:` and one `  - problem` line each), 2 on the production host.
 
+## Nightly whole-system canary (`gate_canary.py`, ADR 0118)
+
+```
+python3 hams_shared/tools/gate_canary.py run [--only-if-new-commit] [--jobs 1] [--max-jobs-when-idle 2] [--no-bisect] [--shards 4] [--shards-file FILE] [--state-dir ~/.cache/hams-test/canary]
+python3 hams_shared/tools/gate_canary.py status
+```
+
+`run` takes `<state-dir>/canary.lock` (a second run exits 3 at once), then: builds the gate tree with `gate_snapshot.py` (a stale or missing input is a refusal, exit 2), runs each shard's command line
+(`gate_snapshot.shard_command`, so through the ordinary `test.py` slot queue, `nice -n 10`, as the `odoo` account) one shard at a time (`--jobs`; `--max-jobs-when-idle` raises it when the one-minute load
+average is below 4, never above the machine's slot count), re-verifies the snapshot (no fetch) before each shard, reads each shard's `test_results.json` (written by `test.py` when a run fails; known-red and flaky
+tests are already separated, ADR 0118) and writes, atomically:
+
+* `<state-dir>/status.json`: `commit` (the hams_com commit), `commits` (`com`, `open`, `shared`), `time`, `status` (`green` or `red`), `new_failures`, `tolerated`, `flakes`, `now_passing`, `fix_me`, `shard_errors`, `counts`, `shards`, and
+  `bisect` (per shard: `tags`, `report`, `exit_status`) when a bisection ran. A shard that exits non-zero without results, a shard whose input was stale, and failures no log line named are `shard_errors`: the night is red, never silently green.
+* `<state-dir>/known_red_candidates.json`: the red tests of this run in the baseline's format (`{"version": 1, "entries": [{test_id, first_seen, owner, reason}]}`): tolerated tests keep their entries, new failures become `unassigned`
+  entries with the canary's commit as `first_seen`. A proposal only: nothing writes it into a tracked baseline.
+* `<state-dir>/gate_shards.json`: the shard split, reused by the next run so a module keeps its shard.
+
+When a NEW failure appears, each shard that has one is bisected: the shard's own command with `--bisect-modules --test-tags /module:Class,... --bisect-max-runs 30 --bisect-report <shard log directory>/bisect_report.json`
+appended (see "Minimal module sets"). Exit status: 0 green, 1 red, 2 refused, 3 already running. `--only-if-new-commit` does nothing when `origin/main` of hams_com and hams_open is what the last run tested.
+
+It runs on this machine only: no remote host, no `kill`, refuses on the production host. With several slots, shards that run at once use `HAMS_ISOLATED_NS=1` on the host, where a module that mentions RabbitMQ is refused above slot 1
+while a RabbitMQ listens (ADR 0116): keep `--jobs 1` unless that is understood.
+
+**systemd.** `tools/hams-gate-canary.service` (oneshot, `Nice=10`, idle I/O, `--only-if-new-commit`) and `tools/hams-gate-canary.timer` (01:30 nightly, `Persistent=true`) are user units. They are provided and not enabled; the install and
+enable commands are in the service file's header comment. On demand: `systemctl --user start hams-gate-canary.service` or run the script.
+
+### `[@ANCHOR: gate_canary:read_shard_results]` `read_shard_results(log_directory)`
+
+Purpose: one shard's verdict. Returns the `test_results*.json` files of the directory merged into one dictionary (`new_failures`, `known_red`, `flakes`, `now_passing`, `fix_me`, `unparsed`, `counts`, `commit`), or None when there is none (the shard
+passed, or died before a verdict; the exit status tells which). Raises `CanaryError` for a file that is not the documented JSON. Reads files.
+
+### `[@ANCHOR: gate_canary:aggregate]` `aggregate(shards, commits, now=None)`
+
+Purpose: the status document. `shards` is a list of `{"number", "modules", "exit_status", "results", "problems"?}`; `commits` is `{"com", "open", "shared"}`; `now` an ISO UTC time (default now). Returns the `status.json` dictionary described above, lists sorted and unique,
+`status` `red` when there is a new failure or a shard error. Pure.
+
+### `[@ANCHOR: gate_canary:baseline_candidates]` `baseline_candidates(status, known)`
+
+Purpose: the proposal file. `known` maps a test id to `{"owner", "reason", "first_seen"}` (from the shard results' `known_red`). Returns `{"version": 1, "entries": [...]}` sorted by id: the loader `known_red.load_baseline` accepts it unchanged. Pure.
+
+### `[@ANCHOR: gate_canary:failure_tags]` `failure_tags(test_ids)`
+
+Purpose: the `--test-tags` of a bisection. Returns `/module:Class` for each distinct class among `module:Class.method` ids, sorted and comma separated (a whole class keeps its `setUpClass`); other ids are ignored. Pure.
+
+### `[@ANCHOR: gate_canary:bisect_command]` `bisect_command(shard_command, tags, report_path)`
+
+Purpose: the bisection command of a shard: its command line with `--bisect-modules --test-tags <tags> --bisect-max-runs 30 --bisect-report <report_path>` appended, so the tree, environment, account and `-u` list are the shard's own. Pure.
+
+### `[@ANCHOR: gate_canary:choose_jobs]` `choose_jobs(requested, idle_cap, slots, shard_count, load=None)`
+
+Purpose: shards at once. `requested` is the base; when the one-minute load average (`load`, default `os.getloadavg()[0]`) is below 4 the larger of `requested` and `idle_cap` is used; the result is never above `slots` or `shard_count` and at least 1. Returns an int.
+
+### `[@ANCHOR: gate_canary:shell_runner]` `shell_runner(command, log_path)`
+
+Purpose: runs a shard command line with `bash -c`, appending its output to `log_path`, and returns the exit status. Blocks until it ends; signals nothing. `run_canary` takes any function of the same shape so tests can replace it.
+
+### `[@ANCHOR: gate_canary:run_canary]` `run_canary(workspace, parent, state_dir, shards, shards_file, jobs, idle_jobs, only_if_new_commit, bisect, fetch, runner, snapshot, out, hostname, slots, load)`
+
+Purpose: one canary run. Returns `(exit status, status document or None)`; None when nothing ran (refused, locked, or unchanged). Exit statuses: 0 green, 1 red, 2 refused (production host, stale or missing input), 3 another run holds the lock.
+`runner`, `snapshot`, `hostname`, `slots`, `load` replace the shell runner, `gate_snapshot.create_snapshot`, the host name, the slot count and the load average (tests). Lowers its own priority with `os.nice(10)`; takes `canary.lock` with a non-blocking `flock` held for the run.
+Long: the shards take as long as the whole-system run (about 75 minutes of tests per set of modules), then the bisections.
+
+### `[@ANCHOR: gate_canary:main]` `main(argv=None, out=print)`
+
+Purpose: the command line. `run` returns `run_canary`'s status (1 also for unreadable results); `status` prints `status.json` and returns 0, or 1 when there is none.
+
 ## Staged-file size check
 
 `check_staged_files.py` (run by `git-hooks/pre-commit`) refuses a commit that stages a file over 5 MB (`MAX_BYTES`) or
