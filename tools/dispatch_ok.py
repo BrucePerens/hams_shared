@@ -19,6 +19,7 @@ may still be dispatched at the coordinator's discretion (the exit status stays 1
 
 import argparse
 import json
+import math
 import sys
 import time
 
@@ -40,7 +41,10 @@ def evaluate(path=DEFAULT_STATS, max_age=DEFAULT_MAX_AGE_SECONDS, now=time.time)
     if not isinstance(data, dict):
         return "HOLD", ["load stats at %s are not a JSON object" % path]
     try:
-        age = now() - float(data["written_epoch"])
+        written = float(data["written_epoch"])
+        if not math.isfinite(written):
+            raise ValueError("not finite")
+        age = now() - written
     except (KeyError, TypeError, ValueError):
         return "HOLD", ["load stats have no written_epoch"]
     if age > max_age:
