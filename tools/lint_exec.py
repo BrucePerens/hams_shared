@@ -386,6 +386,7 @@ DEFAULT_LOAD_RATIO = 1.25
 MAX_TIMEOUT_SCALE = 4.0
 
 
+# [@ANCHOR: lint_exec:finite]
 def _finite(text, default):
     """`text` as a finite float, else `default` (empty, non-numeric, nan and inf all give the default)."""
     try:
@@ -439,7 +440,7 @@ def saturation(environ=None, loadavg=os.getloadavg, cpus=None, pressure=cpu_pres
 def timeout_scale(environ=None, loadavg=os.getloadavg, cpus=None, pressure=cpu_pressure):
     """Factor by which a step's own time limits are stretched right now: 1.0 on a quiet machine, otherwise the load average per
     processor (at least 1, at most 4). Exported to every step as `HAMS_LINT_TIMEOUT_SCALE` when it starts; a checker that has a
-    time limit multiplies it by this (`check_pip_audit.py` does). `HAMS_LINT_TIMEOUT_SCALE=1` in the caller's environment pins it to 1."""
+    time limit multiplies it by this (`check_pip_audit.py` does). `HAMS_LINT_TIMEOUT_SCALE_FIXED=1` in the caller's environment pins it to 1."""
     environ = os.environ if environ is None else environ
     if environ.get("HAMS_LINT_TIMEOUT_SCALE_FIXED"):
         return 1.0
@@ -463,6 +464,7 @@ def timeout_suspect(result):
     return bool(result.returncode != 0 and not result.cached and result.saturated and TIMEOUT_TEXT.search(result.output or ""))
 
 
+# [@ANCHOR: lint_exec:run_step]
 def run_step(step, locks):
     """Run one step; never raises for a checker failure."""
     started = time.monotonic()
