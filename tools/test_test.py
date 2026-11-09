@@ -1249,6 +1249,56 @@ class SlotFilesAndKillTests(unittest.TestCase):
         self.assertEqual(self._flush_command(), ["redis-cli", "-n", "0", "flushdb"])
         self.assertEqual(self._flush_command(redis_flush_db=3), ["redis-cli", "-n", "3", "flushdb"])
 
+    # Tests [@ANCHOR: test:run_psql_script]
+    # Tests [@ANCHOR: test:rebuild_db]
+    def test_a_failing_psql_script_fails_the_run_loudly_with_psql_output(self):
+        """A fake psql that behaves like the real one: without ON_ERROR_STOP it prints the error and exits 0, with it exit 3."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = os.path.join(tmp, "psql")
+            record = os.path.join(tmp, "args")
+            with open(fake, "w") as handle:
+                handle.write('#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD"\ncat > "$RECORD.stdin"\n'
+                             'echo \'ERROR:  database "hams_test" is being accessed by other users\'\n'
+                             'case " $* " in *ON_ERROR_STOP=1*) exit 3;; esac\nexit 0\n')
+            os.chmod(fake, 0o755)
+            err = io.StringIO()
+            with patch.dict(os.environ, {"RECORD": record}), contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+                _test_runner.run_psql_script(fake, ["postgres"], "CREATE DATABASE x;", "rebuilding database x", env=dict(os.environ))
+            self.assertEqual(ctx.exception.code, 1)
+            self.assertIn("ON_ERROR_STOP=1", open(record).read().split())
+            self.assertEqual(open(record + ".stdin").read(), "CREATE DATABASE x;")
+            self.assertIn("exit status 3", err.getvalue())
+            self.assertIn("rebuilding database x", err.getvalue())
+            self.assertIn("is being accessed by other users", err.getvalue())  # psql's own output is shown
+
+    def test_a_psql_script_that_succeeds_returns_quietly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = os.path.join(tmp, "psql")
+            with open(fake, "w") as handle:
+                handle.write("#!/bin/sh\ncat > /dev/null\necho CREATE DATABASE\n")
+            os.chmod(fake, 0o755)
+            self.assertIsNone(_test_runner.run_psql_script(fake, ["postgres"], "SELECT 1;", "testing"))
+
+    def test_rebuild_db_stops_when_the_database_cannot_be_rebuilt(self):
+        def fake_run(cmd, *args, **kw):
+            if "-At" in cmd:
+                return MagicMock(returncode=0, stdout="postgres\n", stderr="")
+            if cmd[0] == "psql" and "CREATE DATABASE" in kw.get("input", b"").decode():
+                return MagicMock(returncode=3, stdout=b'ERROR:  permission denied to create database\n')
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        err = io.StringIO()
+        with patch.dict(os.environ, {"HAMS_ISOLATED_NS": "1"}), \
+             patch.object(_test_runner.subprocess, "run", side_effect=fake_run), \
+             patch.object(_test_runner.infrastructure, "get_pg_bin", return_value="psql"), \
+             patch.object(_test_runner, "PRODUCTION_HOST_MARKER_FILES", ()), \
+             patch.object(_test_runner, "remove_stale_filestore") as stale, \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+            _test_runner.rebuild_db("hams_test")
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("permission denied to create database", err.getvalue())
+        stale.assert_not_called()  # the old filestore is not touched when the database was not rebuilt
+
     def test_the_chrome_kill_signals_only_this_runs_matching_browsers(self):
         """Tests [@ANCHOR: test:chrome_processes_of_this_run] with real processes: stand-ins named `chrome` (a script that sleeps)."""
         with tempfile.TemporaryDirectory() as tmp:
