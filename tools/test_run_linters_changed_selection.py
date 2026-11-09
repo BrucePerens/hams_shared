@@ -564,6 +564,50 @@ class BaseHandlingTests(SelectionFixture):
         self.assertIn("cannot compare", result.stderr)
 
 
+class ChangedFilesNegativeControlTests(unittest.TestCase):
+    """Negative controls for `run_linters.changed_files`: a git listing that fails must read as "cannot tell" (None, which makes `--changed`
+    exit 2), never as an empty change set (every step skipped, pass stamp written)."""
+
+    def _repo(self):
+        tmp = tempfile.mkdtemp(prefix="changed_files_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        for args in (["init", "-q", "-b", "main"], ["config", "user.email", "t@example.org"], ["config", "user.name", "t"]):
+            subprocess.run(["git", "-C", tmp, *args], check=True, capture_output=True)
+        with open(os.path.join(tmp, "a.py"), "w") as handle:
+            handle.write("x = 1\n")
+        subprocess.run(["git", "-C", tmp, "add", "a.py"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", tmp, "commit", "-qm", "one"], check=True, capture_output=True)
+        return tmp
+
+    def test_a_real_change_is_listed(self):
+        repo = self._repo()
+        with open(os.path.join(repo, "a.py"), "w") as handle:
+            handle.write("x = 2\n")
+        self.assertEqual({os.path.basename(p) for p in run_linters.changed_files(repo, "HEAD")}, {"a.py"})
+
+    def test_a_failed_git_diff_is_not_an_empty_change_set(self):
+        from unittest import mock
+        repo = self._repo()
+        real = run_linters._git_lines
+
+        def broken(repo_, *args):
+            return None if args and args[0] == "diff" else real(repo_, *args)
+
+        with mock.patch.object(run_linters, "_git_lines", broken):
+            self.assertIsNone(run_linters.changed_files(repo, "HEAD"))
+
+    def test_a_failed_untracked_listing_is_not_an_empty_change_set(self):
+        from unittest import mock
+        repo = self._repo()
+        real = run_linters._git_lines
+
+        def broken(repo_, *args):
+            return None if args and args[0] == "ls-files" else real(repo_, *args)
+
+        with mock.patch.object(run_linters, "_git_lines", broken):
+            self.assertIsNone(run_linters.changed_files(repo, "HEAD"))
+
+
 class EslintToolchainTests(SelectionFixture):
     def test_missing_toolchain_fails_the_step_with_a_clear_message_when_javascript_is_in_scope(self):
         # The fixture's hams_shared has no node_modules and is its own main checkout.

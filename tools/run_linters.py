@@ -632,7 +632,7 @@ def _git_lines(repo, *args):
 
 def changed_files(repo, base):
     """Absolute real paths of files differing from `merge-base(base, HEAD)` in the work tree
-    (committed on the branch, staged, unstaged, and untracked). None if `repo` has no `base`."""
+    (committed on the branch, staged, unstaged, and untracked). None if `repo` has no `base` or either git listing fails."""
     mb = _git_lines(repo, "merge-base", base, "HEAD")
     if not mb:
         return None
@@ -640,8 +640,11 @@ def changed_files(repo, base):
     root = os.path.realpath(top[0] if top else repo)
     # A moved submodule pointer is a change even where `submodule.<name>.ignore=all` is set (hams_open clones set it); only untracked files inside
     # a submodule are left out.
-    diff = _git_lines(repo, "diff", "--ignore-submodules=untracked", "--name-only", "--no-renames", mb[0]) or []
-    untracked = _git_lines(repo, "ls-files", "--others", "--exclude-standard") or []
+    diff = _git_lines(repo, "diff", "--ignore-submodules=untracked", "--name-only", "--no-renames", mb[0])
+    untracked = _git_lines(repo, "ls-files", "--others", "--exclude-standard")
+    if diff is None or untracked is None:
+        # A failed `git diff` is not "nothing changed": that skipped every step that depends on a changed file and still wrote a pass stamp.
+        return None
     return {os.path.join(root, name) for name in diff + untracked}
 
 
