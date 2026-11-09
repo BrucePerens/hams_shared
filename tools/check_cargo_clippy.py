@@ -377,7 +377,16 @@ def main():
     with lint_cache.cargo_session(log=print) as session_target:
         if session_target:
             os.environ["CARGO_TARGET_DIR"] = session_target
-        any_failed = _clippy_all(crate_dirs)
+        # Cargo hashes absolute paths into the fingerprints and build-script output of the workspace crates, so a different worktree
+        # every run recompiled them in a warm target. The crates are built in a copy of each checkout at a fixed path
+        # (lint_cache.work_checkout, under the session's lock); its text is the checkout's, byte for byte.
+        work_roots = {}
+        for repo_root in dict.fromkeys(root for root, _crate in crate_dirs):
+            work = lint_cache.work_checkout(repo_root, lint_exec.repo_name(repo_root) or os.path.basename(repo_root), session_target, log=print)
+            if work:
+                work_roots[repo_root] = work
+        crate_dirs, display = _in_work_checkouts(crate_dirs, work_roots)
+        any_failed = _clippy_all(crate_dirs, display)
     sys.exit(1 if any_failed else 0)
 
 
@@ -408,7 +417,24 @@ def _run_clippy(crate_dir):
     )
 
 
-def _clippy_all(crate_dirs):
+def _in_work_checkouts(crate_dirs, work_roots):
+    """(the (repo root, crate directory) pairs with every repository that has a work checkout moved into it, a function that maps a text
+    naming the work checkouts back to the real ones). Pure."""
+    moved = [
+        (work_roots.get(root, root), os.path.join(work_roots[root], os.path.relpath(crate, root)) if root in work_roots else crate)
+        for root, crate in crate_dirs
+    ]
+    back = {work: root for root, work in work_roots.items()}
+
+    def display(text):
+        for work, root in back.items():
+            text = text.replace(work, root)
+        return text
+
+    return moved, display
+
+
+def _clippy_all(crate_dirs, display=lambda text: text):
     any_failed = False
     scanned = {}
     for repo_root, crate_dir in crate_dirs:
@@ -416,13 +442,13 @@ def _clippy_all(crate_dirs):
         kept = []
         for target_dir in target_dirs(crate_dir):
             for removed in purge_stale_build_script_output(target_dir, repo_root, crate_dir, scanned, kept):
-                print(f"note: removed build-script output cached from another checkout: {removed}")
+                print(f"note: removed build-script output cached from another checkout: {display(removed)}")
         res = _run_clippy(crate_dir)
         if res.returncode != 0 and kept:
             # A script's private build tree (CMake's cache) kept because it was built from identical sources can still
             # make a rerun of that script fail; the old behaviour (purge it, build again) is the fallback.
             for run_dir in kept:
-                print(f"note: build failed with build-script output kept from another checkout; removing it and building again: {run_dir}")
+                print(f"note: build failed with build-script output kept from another checkout; removing it and building again: {display(run_dir)}")
                 remove_run_dir(run_dir)
                 scanned.pop(run_dir, None)
             res = _run_clippy(crate_dir)
@@ -451,15 +477,15 @@ def _clippy_all(crate_dirs):
                 print("❌ cargo-clippy findings:")
             any_failed = True
             print(f"-- {rel_path} --")
-            print(res.stderr, end="")
+            print(display(res.stderr), end="")
         if res.returncode != 0:
             if not any_failed:
                 print("❌ cargo-clippy findings:")
             any_failed = True
             print(f"-- {rel_path} (build error) --")
             if res.stdout:
-                print(res.stdout, end="")
-            print(res.stderr, end="")
+                print(display(res.stdout), end="")
+            print(display(res.stderr), end="")
     return any_failed
 
 

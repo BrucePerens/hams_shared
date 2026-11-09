@@ -97,7 +97,7 @@ class MainTests(Fixture):
             handle.write(
                 '#!/bin/sh\n'
                 'if [ "$1" = "--version" ]; then echo cargo; exit 0; fi\n'
-                'echo "$@ target=$CARGO_TARGET_DIR" >> %s\n'
+                'echo "$@ target=$CARGO_TARGET_DIR cwd=$(pwd -P)" >> %s\n'
                 'case "$*" in *--list*) cat %s; exit 0;; esac\n'
                 'echo "test result: ok. 7 passed; 0 failed"\nexit %d\n' % (record, os.path.join(self.root, "listing.txt"), test_exit))
         os.chmod(fake, os.stat(fake).st_mode | stat.S_IXUSR)
@@ -118,6 +118,43 @@ class MainTests(Fixture):
         self.assertIn("relay-structural", calls[1])
         self.assertIn("-s2", calls[1], "one Cargo directory per lint slot")
         self.assertIn("relay structural tests: 7 tests of %d filters passed" % len(rs.STRUCTURAL_FILTERS), done.stdout)
+
+    # Tests [@ANCHOR: lint_cache:work_checkout]
+    def test_two_checkouts_build_from_the_same_fixed_directory_and_the_second_sees_its_own_files(self):
+        first, calls_one = self.run_main(LISTING)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        second_repo = os.path.join(self.root, "repo2")
+        shutil.copytree(os.path.join(self.root, "repo"), second_repo)
+        with open(os.path.join(second_repo, "daemons", "hams_local_relay", "changed.rs"), "w", encoding="utf-8") as handle:
+            handle.write("second")
+        env = dict(os.environ, PATH=os.path.join(self.root, "bin") + os.pathsep + os.environ["PATH"],
+                   XDG_CACHE_HOME=os.path.join(self.root, "cache"), HAMS_LINT_SLOT="2")
+        done = subprocess.run([sys.executable, os.path.join(HERE, "relay_structural.py"), second_repo], capture_output=True, text=True, env=env)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        calls_two = open(os.path.join(self.root, "calls.txt"), encoding="utf-8").read().splitlines()[len(calls_one):]
+        cwd_one = calls_one[0].split("cwd=")[1]
+        self.assertEqual(calls_two[0].split("cwd=")[1], cwd_one, "the same directory for a different checkout")
+        self.assertNotEqual(os.path.dirname(os.path.dirname(cwd_one)), os.path.join(self.root, "repo"))
+        self.assertIn(os.path.join("hams-lint", "work"), cwd_one)
+        self.assertTrue(os.path.isfile(os.path.join(cwd_one, "changed.rs")), "the copy holds the second checkout's file")
+
+    def test_an_explicit_cargo_target_dir_builds_in_the_checkout(self):
+        bin_dir = os.path.join(self.root, "bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        with open(os.path.join(self.root, "listing.txt"), "w", encoding="utf-8") as handle:
+            handle.write(LISTING)
+        fake = os.path.join(bin_dir, "cargo")
+        with open(fake, "w", encoding="utf-8") as handle:
+            handle.write('#!/bin/sh\nif [ "$1" = "--version" ]; then echo cargo; exit 0; fi\n'
+                         'echo "cwd=$(pwd -P)" >> %s\ncase "$*" in *--list*) cat %s; exit 0;; esac\necho "test result: ok. 7 passed"\n'
+                         % (os.path.join(self.root, "calls.txt"), os.path.join(self.root, "listing.txt")))
+        os.chmod(fake, 0o755)
+        relay = self.crate("daemons/hams_local_relay")
+        env = dict(os.environ, PATH=bin_dir + os.pathsep + os.environ["PATH"], XDG_CACHE_HOME=os.path.join(self.root, "cache"),
+                   CARGO_TARGET_DIR=os.path.join(self.root, "mine"))
+        done = subprocess.run([sys.executable, os.path.join(HERE, "relay_structural.py"), os.path.join(self.root, "repo")], capture_output=True, text=True, env=env)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(open(os.path.join(self.root, "calls.txt"), encoding="utf-8").read().split(), ["cwd=" + relay] * 2)
 
     def test_a_group_that_shrank_fails_before_running_anything(self):
         done, calls = self.run_main("exposure_tests::a: test\n")

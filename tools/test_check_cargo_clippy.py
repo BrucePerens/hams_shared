@@ -201,6 +201,44 @@ class MainTests(unittest.TestCase):
             self.assertEqual(mock_run.call_count, 3)
 
 
+class WorkCheckoutTests(unittest.TestCase):
+    """The crates are built in the fixed work checkout (lint_cache.work_checkout) and the findings name the real checkout."""
+
+    # Tests [@ANCHOR: lint_cache:work_checkout]
+    def test_crates_move_into_their_repositorys_work_checkout_and_the_text_maps_back(self):
+        pairs = [("/r/hams_com", "/r/hams_com/daemons/a"), ("/r/hams_open", "/r/hams_open/daemons/b"), ("/r/other", "/r/other/c")]
+        moved, display = chk._in_work_checkouts(pairs, {"/r/hams_com": "/w/hams_com", "/r/hams_open": "/w/hams_open"})
+        self.assertEqual(moved, [("/w/hams_com", "/w/hams_com/daemons/a"), ("/w/hams_open", "/w/hams_open/daemons/b"), ("/r/other", "/r/other/c")])
+        self.assertEqual(display("--> /w/hams_com/daemons/a/src/x.rs:3 and /w/hams_open/y"), "--> /r/hams_com/daemons/a/src/x.rs:3 and /r/hams_open/y")
+
+    # Tests [@ANCHOR: lint_cache:work_checkout]
+    def test_main_runs_clippy_in_the_work_checkout_and_reports_the_real_path(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        real = os.path.realpath(tmp)
+        work = os.path.join(real, "work")
+        crate_rel = os.path.join("daemons", "d")
+        _write(os.path.join(real, "repo", crate_rel, "Cargo.toml"), "[package]\nname = \"d\"\n")
+        os.makedirs(os.path.join(work, crate_rel))
+        warning = "warning: unused\n  --> %s/src/main.rs:1:1\n" % os.path.join(work, crate_rel)
+        seen = []
+
+        def run(command, **kwargs):
+            seen.append(kwargs.get("cwd"))
+            return MagicMock(returncode=0, stdout="", stderr=warning if kwargs.get("cwd") else "")
+
+        with patch.object(sys, "argv", ["check_cargo_clippy.py", os.path.join(real, "repo")]), \
+                patch("check_cargo_clippy.lint_cache.work_checkout", return_value=work), \
+                patch("check_cargo_clippy.subprocess.run", side_effect=run), patch("builtins.print") as shown:
+            with self.assertRaises(SystemExit) as ctx:
+                chk.main()
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn(os.path.join(work, crate_rel), seen)
+        text = " ".join(str(c) for c in shown.call_args_list)
+        self.assertIn(os.path.join(real, "repo", crate_rel), text)
+        self.assertNotIn(work, text)
+
+
 class PurgeStaleBuildScriptOutputTests(unittest.TestCase):
     """A build script's cached output, shared by every worktree that shares one target dir, must
     not be reused by a checkout it was not generated in (bench_mcp's build.rs embeds absolute
