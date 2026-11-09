@@ -23,6 +23,7 @@ import dataclasses
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -384,6 +385,15 @@ DEFAULT_LOAD_RATIO = 1.25
 MAX_TIMEOUT_SCALE = 4.0
 
 
+def _finite(text, default):
+    """`text` as a finite float, else `default` (empty, non-numeric, nan and inf all give the default)."""
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) else default
+
+
 # [@ANCHOR: lint_exec:cpu_pressure]
 def cpu_pressure(path=PRESSURE_PATH):
     """The 10-second average percentage of time some task waited for a processor (`some avg10` in /proc/pressure/cpu), or None
@@ -394,7 +404,7 @@ def cpu_pressure(path=PRESSURE_PATH):
                 if line.startswith("some"):
                     for field in line.split():
                         if field.startswith("avg10="):
-                            return float(field[len("avg10="):])
+                            return _finite(field[len("avg10="):], None)
     except (OSError, ValueError):
         pass
     return None
@@ -410,11 +420,8 @@ def saturation(environ=None, loadavg=os.getloadavg, cpus=None, pressure=cpu_pres
     average; no locks."""
     environ = os.environ if environ is None else environ
     cpus = cpus or os.cpu_count() or 1
-    try:
-        psi_limit = float(environ.get("HAMS_LINT_TIMEOUT_PSI_PERCENT") or DEFAULT_PRESSURE_PERCENT)
-        ratio = float(environ.get("HAMS_LINT_TIMEOUT_LOAD_RATIO") or DEFAULT_LOAD_RATIO)
-    except ValueError:
-        psi_limit, ratio = DEFAULT_PRESSURE_PERCENT, DEFAULT_LOAD_RATIO
+    psi_limit = _finite(environ.get("HAMS_LINT_TIMEOUT_PSI_PERCENT") or DEFAULT_PRESSURE_PERCENT, DEFAULT_PRESSURE_PERCENT)
+    ratio = _finite(environ.get("HAMS_LINT_TIMEOUT_LOAD_RATIO") or DEFAULT_LOAD_RATIO, DEFAULT_LOAD_RATIO)
     psi = pressure()
     if psi is not None and psi >= psi_limit:
         return True, "CPU pressure %.0f%% (limit %.0f%%)" % (psi, psi_limit)

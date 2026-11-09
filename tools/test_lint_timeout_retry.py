@@ -90,6 +90,16 @@ class SaturationTests(unittest.TestCase):
         self.assertFalse(lint_exec.timeout_suspect(result(output="E501 line too long")))
 
 
+class PipAuditScaleTests(unittest.TestCase):
+    def test_the_audit_limit_scale_is_clamped_and_bad_values_mean_one(self):
+        import check_pip_audit
+        scale = check_pip_audit._timeout_scale
+        self.assertEqual((scale(None), scale("2.5"), scale("9"), scale("0.2")), (1.0, 2.5, 4.0, 1.0))
+        self.assertEqual((scale("nan"), scale("inf"), scale("abc")), (1.0, 1.0, 1.0))
+        self.assertEqual(lint_exec._finite("inf", 7.0), 7.0)
+        self.assertEqual(lint_exec._finite("3", 7.0), 3.0)
+
+
 class RetryTests(unittest.TestCase):
     def steps(self):
         return [lint_exec.Step(name=n, argv=["true"], roots=(), suffixes=None) for n in ("check_pip_audit", "flake8", "pytest daemons/relay_ca")]
