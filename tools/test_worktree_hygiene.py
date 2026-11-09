@@ -140,6 +140,14 @@ class WorktreeHygieneTest(unittest.TestCase):
         self.assertEqual([pid for pid, _ in wh.holding_processes(path, exempt=set())], [proc.pid])
         self.assertEqual(wh.holding_processes(path, exempt={proc.pid}), [])
 
+    def test_a_zero_idle_limit_is_met_even_when_a_file_time_is_ahead_of_the_clock(self):
+        path = self.worktree("ahead-clock")
+        future = time.time() + 5
+        os.utime(os.path.join(path, "a"), (future, future))
+        os.utime(_git(path, "rev-parse", "--absolute-git-dir") + "/HEAD", (future, future))
+        report = wh.run(self.repo, True, 0, {}, only_branch="ahead-clock")
+        self.assertEqual(report["removed"], [(path, "ahead-clock")])
+
     def test_a_locked_worktree_is_never_removed(self):
         path = self.worktree("locked")
         _git(self.repo, "worktree", "lock", "--reason", "batch run", path)
