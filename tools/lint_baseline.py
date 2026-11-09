@@ -42,10 +42,12 @@ UNITTEST_LINE = re.compile(r"^(FAIL|ERROR): (\S+) \(([\w.]+)\)")
 CARGO_LINE = re.compile(r"^test (\S+) \.\.\. FAILED$")
 PROGRESS_LINE = re.compile(r"^\s*[.sFExX]+\s*(\[\s*\d+%\])?\s*$")
 VOLATILE = [
-    (re.compile(r"/[^\s'\"):,]+"), "<path>"),
+    # Not after a digit: `3/4` and `3/5` are different numbers, not a path.
+    (re.compile(r"(?<!\d)/[^\s'\"):,]+"), "<path>"),
     (re.compile(r"<path>:\d+"), "<path>"),
     (re.compile(r"0x[0-9a-fA-F]+"), "<addr>"),
-    (re.compile(r"\b[0-9a-fA-F]{8,}\b"), "<hex>"),
+    # A hex word has a letter: `10000000` and `10000001` are different numbers, not ids.
+    (re.compile(r"\b(?=\d*[a-fA-F])[0-9a-fA-F]{8,}\b"), "<hex>"),
     (re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|s|sec|seconds|min)\b"), "<time>"),
     (re.compile(r"\s+"), " "),
 ]

@@ -37,6 +37,8 @@ KIND_TESTS = "tests"  # only test files changed: these modules, narrowed to test
 KIND_FULL = "full"  # run every module
 
 FULL_DIRS = frozenset({"security", "data", "views", "demo", "i18n", "report", "reports", "templates"})
+DOC_DIRS = ("docs", "night_shift_history", "night_shift_todo", "night_shift_questions")
+DOC_SUFFIXES = (".md", ".txt", ".rst")
 CODE_SUFFIXES = (".py", ".js", ".mjs", ".scss", ".css", ".png", ".svg", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".ttf", ".webp")
 
 
@@ -58,13 +60,16 @@ def module_dirs(roots):
 
 # [@ANCHOR: test_impact:read_depends]
 def read_depends(module_path):
-    """The `depends` list of a module's manifest; [] when the manifest is missing or is not a literal dict."""
+    """The `depends` list of a module's manifest. Raises ValueError when the manifest cannot be read or is not a literal dict:
+    an unreadable manifest silently dropped every dependent edge through that module, which under-tests."""
     try:
         with open(os.path.join(module_path, "__manifest__.py"), encoding="utf-8") as handle:
             data = ast.literal_eval(handle.read())
-    except (OSError, ValueError, SyntaxError):
-        return []
-    return list(data.get("depends", [])) if isinstance(data, dict) else []
+    except (OSError, ValueError, SyntaxError) as error:
+        raise ValueError("cannot read the manifest of %s: %s" % (module_path, error)) from error
+    if not isinstance(data, dict):
+        raise ValueError("the manifest of %s is not a dict literal" % module_path)
+    return list(data.get("depends", []))
 
 
 # [@ANCHOR: test_impact:reverse_closure]
@@ -122,7 +127,8 @@ def classes_in_test_file(path):
 def _outside(rel):
     """(category, reason) for a changed path that belongs to no module."""
     top = rel.split("/")[0]
-    if rel.endswith(".md") or top in ("docs", "night_shift_history", "night_shift_todo", "night_shift_questions"):
+    # Only documentation suffixes count, also under the documentation directories: a .json, .csv or .py there may be read by a test.
+    if rel.endswith(DOC_SUFFIXES) and (top in DOC_DIRS or rel.endswith(".md")):
         return "none", "documentation outside the modules (linters cover it, no Odoo test reads it)"
     return "full", "outside every Odoo module (tool, shared library, daemon, config or gitlink): any module may depend on it"
 
@@ -156,7 +162,10 @@ def analyze(changes, modules):
     if full:
         return Impact(KIND_FULL, sorted(modules), None, reasons + ["=> run the full module list: at least one change cannot be narrowed"])
     if code_modules:
-        closure = reverse_closure(code_modules, modules)
+        try:
+            closure = reverse_closure(code_modules, modules)
+        except ValueError as error:
+            return Impact(KIND_FULL, sorted(modules), None, reasons + ["=> run the full module list: dependents cannot be proven (%s)" % error])
         extra = sorted((doc_modules | test_modules) - set(closure))
         everything = sorted(set(closure) | doc_modules | test_modules)
         note = "=> %s changed code; run them and their dependents: %s" % (", ".join(sorted(code_modules)), ", ".join(closure))

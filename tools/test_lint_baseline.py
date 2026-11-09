@@ -75,6 +75,11 @@ class ItemTests(Env):
         self.assertEqual(a, b)
         self.assertNotEqual(lb.normalize_message("3 != 4"), lb.normalize_message("3 != 5"))
 
+    def test_a_fraction_and_a_long_decimal_are_not_a_path_or_a_hex_id(self):
+        self.assertNotEqual(lb.normalize_message("got 3/4"), lb.normalize_message("got 3/5"))
+        self.assertNotEqual(lb.normalize_message("limit 10000000"), lb.normalize_message("limit 10000001"))
+        self.assertEqual(lb.normalize_message("at /tmp/a/b run deadbeef01"), lb.normalize_message("at /var/c run cafecafe99"))
+
     def test_pytest_lines_give_one_item_per_test_without_the_shard(self):
         items = lb.failure_items("pytest tools/[2of4]", PYTEST_OUT)
         self.assertEqual(set(items), {"pytest tools/::tools/test_a.py::TestA::test_one", "pytest tools/::tools/test_b.py"})
