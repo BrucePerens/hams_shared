@@ -221,48 +221,6 @@ class RunnerIntegrationTests(Base):
 
 
 class DistributionTests(Base):
-    def test_a_free_lock_and_a_quiet_box_is_not_busy(self):
-        busy, _why = lint_lock.local_busy(self.env, loadavg=lambda: 0.5, cpu_count=16)
-        self.assertFalse(busy)
-
-    def test_a_run_holding_the_lock_makes_it_busy(self):
-        self.start_holder()
-        busy, why = lint_lock.local_busy(self.env, loadavg=lambda: 0.5, cpu_count=16)
-        self.assertTrue(busy)
-        self.assertIn("hold or wait", why)
-
-    def test_load_above_the_limit_makes_it_busy_unless_the_gate_is_skipped(self):
-        busy, why = lint_lock.local_busy(self.env, loadavg=lambda: 40.0, cpu_count=16)
-        self.assertTrue(busy)
-        self.assertIn("above the lint limit", why)
-        env = dict(self.env, HAMS_SKIP_CI_LOAD_GATE="1")
-        self.assertFalse(lint_lock.local_busy(env, loadavg=lambda: 40.0, cpu_count=16)[0])
-
-    def test_the_residue_of_a_shipped_run_skips_the_queue_but_not_the_load_gate(self):
-        self.start_holder()
-        # The queue decision is under test, not the load: a dev box above its load limit (a busy afternoon) failed this.
-        self.env = dict(self.env, HAMS_LINT_LOAD_LIMIT="100000")
-        steps = ["pytest tools/[host-bound]", "check_pip_audit"]
-        durations = {steps[0]: 65.0, steps[1]: 8.0}
-        lines = []
-        ok, lock = lint_lock.begin_heavy_run(self.env, steps, durations, "/w", "cmd", lock_timeout=1, out=lines.append, residue=True)
-        self.assertEqual((ok, lock), (True, None), lines)
-        self.assertTrue(any("rest of the run is on other machines" in line for line in lines))
-        # not a residue (the same steps, a plain run): they total over 60 s, so they queue behind the holder
-        ok, lock = lint_lock.begin_heavy_run(self.env, steps, durations, "/w", "cmd", lock_timeout=1, out=lambda _l: None)
-        self.assertEqual((ok, lock), (False, None))
-        # a residue that is itself heavy queues too
-        ok, lock = lint_lock.begin_heavy_run(self.env, steps, {steps[0]: 900.0, steps[1]: 8.0}, "/w", "cmd", lock_timeout=1,
-                                             out=lambda _l: None, residue=True)
-        self.assertEqual((ok, lock), (False, None))
-
-    def test_the_residue_still_waits_for_the_load_gate(self):
-        steps = ["pytest tools/[host-bound]"]
-        env = dict(self.env, HAMS_LINT_LOAD_LIMIT="0.0001", HAMS_LINT_LOAD_TIMEOUT="0")
-        lines = []
-        ok, lock = lint_lock.begin_heavy_run(env, steps, {steps[0]: 65.0}, "/w", "cmd", out=lines.append, residue=True)
-        self.assertEqual((ok, lock), (False, None), lines)
-
     def test_a_machine_is_claimed_by_one_run_at_a_time_and_a_dead_claim_frees_it(self):
         first = lint_lock.try_claim("mac1-vm", self.env)
         self.assertIsNotNone(first)
@@ -353,17 +311,6 @@ class SlotTests(Base):
         self.assertEqual(again.slot, 2)  # the slot that was freed
         again.release()
 
-    def test_local_busy_only_when_every_slot_is_taken(self):
-        qdir = lint_lock.queue_dir(self.env3)
-        self.start_holder("/wt/1\tcmd", slots="3")
-        busy, why = lint_lock.local_busy(self.env3, loadavg=lambda: 0.5, cpu_count=16, qdir=qdir)
-        self.assertFalse(busy, why)
-        self.start_holder("/wt/2\tcmd", slots="3")
-        self.start_holder("/wt/3\tcmd", slots="3")
-        busy, why = lint_lock.local_busy(self.env3, loadavg=lambda: 0.5, cpu_count=16, qdir=qdir)
-        self.assertTrue(busy)
-        self.assertIn("slots are busy", why)
-
     def test_lock_status_lists_every_slot_on_a_multi_slot_machine(self):
         self.start_holder("/wt/1\tcmd", slots="3")
         self.start_holder("/wt/2\tcmd", slots="3")
@@ -453,13 +400,6 @@ class SlotTests(Base):
         self.assertTrue(lint_lock.gate({"HAMS_CI_LOAD_GATE_RATIO": "1"}, out=lines.append, stall=lambda: 99.0))
         self.assertTrue(lint_lock.gate({}, out=lines.append, stall=lambda: None, measurable_busy=lambda: False), "nothing measurable: the load average")
         self.assertEqual(len(calls), 4)
-
-    def test_load_alone_does_not_make_a_machine_with_free_slots_busy_but_does_with_one_slot(self):
-        busy, why = lint_lock.local_busy(self.env3, loadavg=lambda: 90.0, cpu_count=16)
-        self.assertFalse(busy, why)  # the run waits at the load gate here; a smaller machine would be slower
-        busy, why = lint_lock.local_busy(self.env, loadavg=lambda: 90.0, cpu_count=16)
-        self.assertTrue(busy)
-        self.assertIn("load", why)
 
     def test_a_run_in_a_later_slot_gets_its_own_tmpdir_and_environment(self):
         first = lint_lock.RunLock(self.env3)

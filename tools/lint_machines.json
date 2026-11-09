@@ -8,7 +8,7 @@
       "lint_load_ratio": 1.5,
       "nice": 10,
       "max_load_ratio": 1.0,
-      "note": "This development machine (32 cores, 125 GB): the PRIMARY lint runner (Bruce, 2026-11-08), with the full toolchain (rustup 1.98.1 with rustfmt and clippy, cargo-deny, the pytest stack). `lint_slots` heavy lint runs go at once (tools/lint_lock.py), each in its own Cargo target directory and TMPDIR at nice 10; the other machines take a whole run only as overflow when every slot is busy or the load is above the limit. All other machines are optional."
+      "note": "This development machine (32 cores, 125 GB): the PRIMARY lint runner (Bruce, 2026-11-08), with the full toolchain (rustup 1.98.1 with rustfmt and clippy, cargo-deny, the pytest stack). `lint_slots` heavy lint runs go at once (tools/lint_lock.py), each in its own Cargo target directory and TMPDIR at nice 10; a busy lock or load never sends a run to another machine (Bruce, 2026-11-08: remote machines only for work this machine cannot run). All other machines are optional and explicit opt-ins (`--remote HOST`)."
     },
     "mac1-vm": {
       "ssh": {
@@ -37,7 +37,7 @@
       "max_concurrent": 1,
       "odoo_test_lock": "mac1",
       "max_load_ratio": 0.6,
-      "note": "Debian 13 arm64 Lima VM hams-test-debian on the Mac mini mac1 (Bruce's machine; the VM also runs the production FCC ULS sync): lowest priority, 3 workers, never started by the lint runner (a stopped VM is reported unreachable). Provisioned for lint 2026-11-02 and completed for every lint step 2026-11-03 (the dev box's Python test stack, python3-typeshed; its Odoo, PostgreSQL 18 and kopia were already there). Never touched by the provisioning: the fcc-uls-sync unit, the fccsync account and /opt/fcc-uls-sync. Its PostgreSQL has a createdb role for the ai user (tools tests); hams_shared node_modules are installed in the mirror by the runner (npm ci).",
+      "note": "Debian 13 arm64 Lima VM hams-test-debian on the Mac mini mac1 (Bruce's machine; the VM also runs the production FCC ULS sync): lowest priority, explicit opt-in only (macOS/arm64 work), 3 workers, never started by the lint runner (a stopped VM is reported unreachable). Provisioned for lint 2026-11-02 and completed for every lint step 2026-11-03 (the dev box's Python test stack, python3-typeshed; its Odoo, PostgreSQL 18 and kopia were already there). Never touched by the provisioning: the fcc-uls-sync unit, the fccsync account and /opt/fcc-uls-sync. Its PostgreSQL has a createdb role for the ai user (tools tests); hams_shared node_modules are installed in the mirror by the runner (npm ci).",
       "provisioned": {
         "date": "2026-11-03",
         "by": "python3 tools/lint_remote.py provision mac1-vm --apply (tools/provision_build_host.sh)",
@@ -61,7 +61,7 @@
       "max_concurrent": 1,
       "odoo_test_lock": "bruce17",
       "max_load_ratio": 0.8,
-      "note": "HP Notebook board 81FF (Core i7-7500U, 2 cores / 4 threads, 7.6 GiB, 256 GB SATA SSD), Debian 13 x86-64, wifi only (RTL8188EE; hp-notebook-81ff-support fixes its PCIe error flood). A light helper and clean-room test host: lint fan-out, one Odoo module test at a time, small CI. Provisioned 2026-11-04 with tools/provision_build_host.sh via lint_remote.py provision bruce17 --apply.",
+      "note": "HP Notebook board 81FF (Core i7-7500U, 2 cores / 4 threads, 7.6 GiB, 256 GB SATA SSD), Debian 13 x86-64, wifi only (RTL8188EE; hp-notebook-81ff-support fixes its PCIe error flood). A light helper and clean-room test host, explicit opt-in only. Provisioned 2026-11-04 with tools/provision_build_host.sh via lint_remote.py provision bruce17 --apply.",
       "provisioned": {
         "date": "2026-11-04",
         "by": "python3 tools/lint_remote.py provision bruce17 --apply (tools/provision_build_host.sh)",
