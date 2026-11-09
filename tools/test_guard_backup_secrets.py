@@ -54,6 +54,7 @@ import guard_backup_secrets as gb  # noqa: E402
 
 HOOK = os.path.join(HERE, "claude_hooks", "guard_backup_secrets.py")
 HOME = os.path.expanduser("~")
+OTHER = os.path.join(os.path.dirname(HOME), "bob")  # another user's home
 
 DENIED = [
     # printing the key
@@ -234,17 +235,17 @@ class PathTests(unittest.TestCase):
         self.assertEqual(gb.to_absolute("$HOME/x", "/c", "/h"), "/h/x")
         self.assertEqual(gb.to_absolute("${HOME}/x", "/c", "/h"), "/h/x")
         self.assertEqual(gb.to_absolute("x//y", "/c", "/h"), "/c/x/y")
-        self.assertEqual(gb.to_absolute("~bob/x", "/c", "/h"), "/home/bob/x")
+        self.assertEqual(gb.to_absolute("~bob/x", "/c", "/u/h"), "/u/bob/x")
         self.assertEqual(gb.to_absolute("/a/./b/", "/c", "/h"), "/a/b")
 
     def test_samples_for_and_protected_reason_and_contains_protected(self):
         self.assertIn("/h/.secrets/b2_application_key.env", gb.samples_for("/h"))
         self.assertTrue(all(not s.startswith("HOME") for s in gb.samples_for("/h")))
-        for path in ("/var/lib/odoo/hams_crypto.secret", "/etc/pgbackrest/x", "/opt/hams/etc/keys/backup_management/a.key", "/home/bob/.secrets/kopia_pw",
-                     "/root/.secrets/b2_key", "/home/bob/.secrets/custody_kit_2026/items/a", "/proc/12/environ", "/opt/hams/etc/core.env", "/tmp/pgbackrest.conf.bak"):
+        for path in ("/var/lib/odoo/hams_crypto.secret", "/etc/pgbackrest/x", "/opt/hams/etc/keys/backup_management/a.key", OTHER + "/.secrets/kopia_pw",
+                     "/root/.secrets/b2_key", OTHER + "/.secrets/custody_kit_2026/items/a", "/proc/12/environ", "/opt/hams/etc/core.env", "/tmp/pgbackrest.conf.bak"):
             self.assertTrue(gb.protected_reason(path), path)
-        for path in ("/var/lib/odoo/filestore/x", "/home/bob/.secrets/cloudflare_hams_com.env", "/opt/hams/etc/keys/club_crawl/a.key", "/tmp/x", "/etc/hosts",
-                     "/proc/12/status", "/home/bob/workspace/hams_open/backup_management/models/backup_config.py"):
+        for path in ("/var/lib/odoo/filestore/x", OTHER + "/.secrets/cloudflare_hams_com.env", "/opt/hams/etc/keys/club_crawl/a.key", "/tmp/x", "/etc/hosts",
+                     "/proc/12/status", OTHER + "/workspace/hams_open/backup_management/models/backup_config.py"):
             self.assertIsNone(gb.protected_reason(path), path)
         for path in ("/", "/var", "/var/lib/odoo", "/opt/hams/etc/keys", "/h", "/h/.secrets", "/proc", "/etc/pgbackrest"):
             self.assertTrue(gb.contains_protected(path, "/h"), path)
@@ -424,7 +425,7 @@ class CheckerTests(unittest.TestCase):
         gb.check_find(self.words("/h/.secrets -exec stat {} \\;"), ctx, v)
         self.assertEqual(v.reasons, [])
         for text, bad in (("open('/var/lib/odoo/hams_crypto.secret')", True), ("os.path.exists('/var/lib/odoo/hams_crypto.secret')", False), ("print(1)", False),
-                          ("print(dict(os.environ))", True), ("os.environ['HOME']", False), ("x='/home/b/.secrets/'+n; open(x)", True), ("open('/tmp/x')", False)):
+                          ("print(dict(os.environ))", True), ("os.environ['HOME']", False), ("x='/u/b/.secrets/'+n; open(x)", True), ("open('/tmp/x')", False)):
             v = self.verdict()
             gb.check_interpreter([text], v)
             self.assertEqual(bool(v.reasons), bad, text)

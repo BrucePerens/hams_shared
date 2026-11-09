@@ -40,7 +40,6 @@ import base64
 import binascii
 import dataclasses
 import fnmatch
-import itertools
 import json
 import os
 import re
@@ -64,8 +63,8 @@ PATH_RULES = [
     (re.compile(r"^/opt/hams/etc/b2_backup(?:/|$)"), "the b2_backup configuration, secrets and password fingerprint"),
     (re.compile(r"^/opt/hams/etc/keys/.*(?:" + BACKUP_TOKENS + ")"), "a backup-related key under /opt/hams/etc/keys"),
     (re.compile(r"^/opt/hams/etc/(?:core|db|odoo)\.env$"), "a provisioned env file that carries HAMS_CRYPTO_KEY"),
-    (re.compile(r"^(?:/home/[^/]+|/root)/\.secrets/.*(?:" + BACKUP_TOKENS + ")"), "a backup, B2, kopia or custody-kit secret in ~/.secrets"),
-    (re.compile(r"^(?:/home/[^/]+|/root)/\.b2_account_info$"), "the Backblaze B2 account info"),
+    (re.compile(r"^(?:/(?:home|Users)/[^/]+|/root)/\.secrets/.*(?:" + BACKUP_TOKENS + ")"), "a backup, B2, kopia or custody-kit secret in ~/.secrets"),
+    (re.compile(r"^(?:/(?:home|Users)/[^/]+|/root)/\.b2_account_info$"), "the Backblaze B2 account info"),
     (re.compile(r"(?:^|/)\.kopia-configs(?:/|$)"), "a kopia repository connection config"),
     (re.compile(r"/\.config/kopia(?:/|$)"), "kopia's repository config"),
     (re.compile(r"(?:^|/)(?:b2_application_key|b2_key|b2_account)[^/]*$"), "a Backblaze B2 application key file"),
@@ -167,7 +166,7 @@ def to_absolute(text, cwd, home):
     if text == "~" or text.startswith("~/"):
         text = home + text[1:]
     elif text.startswith("~") and not text.startswith("~="):
-        text = "/home/" + text[1:]
+        text = os.path.join(os.path.dirname(home), text[1:])  # ~user: a sibling of the home directory
     if not text.startswith("/"):
         text = os.path.join(cwd, text)
     return os.path.normpath(text)
