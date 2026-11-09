@@ -384,6 +384,8 @@ def check_job_name(name):
     raise `ProcError`. The name becomes a file name, so no `/` and no leading dot."""
     if not _NAME_RE.match(name or ""):
         raise ProcError(f"bad job name {name!r}: use letters, digits, '.', '_' or '-' (1-64 characters, alphanumeric first)")
+    if name == "guard":  # list_records skips guard.json (the hook's own name), so such a job would never be listed or counted
+        raise ProcError("bad job name 'guard': that name is reserved for the signal guard hook")
     return name
 
 
@@ -557,6 +559,8 @@ def wait_job(name, timeout=DEFAULT_WAIT_TIMEOUT, interval=POLL_INTERVAL, sleep=t
     deadline = clock() + timeout
     while True:
         rec = read_record(name, directory)
+        if rec is None:
+            return WaitResult(EX_FAILED, f"the record of job {name} disappeared while waiting (removed, or unreadable)")
         state = job_state(rec)
         if state == "exited":
             return WaitResult(EX_OK if rec.exit_code == 0 else EX_FAILED, f"job {name} exited with code {rec.exit_code}")
@@ -575,8 +579,11 @@ def wait_file(path, contains=None, fail_contains=None, while_pid=None, timeout=D
     Code 0 when the condition holds; 1 when `fail_contains` matches first, or when `while_pid` (a pid, or `(pid, ticks)`)
     ends before the condition holds (the producer died without writing its marker); 75 on timeout. The file is read whole
     each poll, so keep it a log or marker, not a large data file."""
-    want = re.compile(contains, re.MULTILINE) if contains else None
-    bad = re.compile(fail_contains, re.MULTILINE) if fail_contains else None
+    try:
+        want = re.compile(contains, re.MULTILINE) if contains else None
+        bad = re.compile(fail_contains, re.MULTILINE) if fail_contains else None
+    except re.error as error:
+        raise ProcError(f"bad --contains or --fail-contains regular expression: {error}")
     watch = None
     if while_pid is not None:
         wpid, wticks = while_pid if isinstance(while_pid, tuple) else (while_pid, None)
