@@ -1702,8 +1702,10 @@ parsed command line (`slots`, `db`, `keep_db`).
 `test.py` used to turn red for any failing test, whoever caused it, so every whole-system failure had to be debugged by hand before anything else could
 be judged. After Odoo's run, a failing standard-mode run now goes through this policy; a passing run is untouched.
 
-1. A failing test listed in a **baseline file** is "known red, not new". It does not turn the run red and is named in the summary with its owner, first-seen
-   commit and reason. A baselined test that ran and passed is named too ("remove its baseline entry").
+1. A failing test listed in a **baseline file** is "known red, not new". It does not turn the run red and is named in the summary with its age ("known red for 3.0 days"), owner, first-seen
+   commit and reason. **It is tolerated for a limited time (ADR 0118 amendment, 2026-11-08):** an entry older than `HAMS_KNOWN_RED_MAX_AGE_DAYS` (default 3), counted from its last
+   renewal, is no longer tolerated: the run fails on it ("EXPIRED known red", never rerun) until it is fixed (the entry removed) or renewed with a reason
+   (`python3 hams_shared/tools/known_red.py renew TEST_ID --reason TEXT [--owner NAME]`; `known_red.py show` lists the entries oldest first). A baselined test that ran and passed is named too ("remove its baseline entry").
 2. Any other failing test is **rerun once, alone**: a fresh database (`rebuild_db`, the slot's own database), the same modules installed, only the failed tests
    selected with `--test-tags /module:Class.method,...`. Passing on the rerun is a **flake**: it is counted in the flake file, named in the summary, and does
    not turn the run red. Failing again is a real failure and the run is red.
@@ -1718,9 +1720,9 @@ be judged. After Odoo's run, a failing standard-mode run now goes through this p
 
 The policy applies to `--mode standard`. `--mode individual` keeps Odoo's verdict untouched.
 
-**The baseline file** `known_red_baseline.json`: `{"version": 1, "entries": [{"test_id", "first_seen", "owner", "reason"}, ...]}`. `test_id` is
+**The baseline file** `known_red_baseline.json`: `{"version": 1, "entries": [{"test_id", "first_seen", "first_seen_time", "owner", "reason", "renewed"?}, ...]}`. `test_id` is
 `<module>:<Class>.<method>` (a class-level error uses the method `setUpClass`); `first_seen` the commit that first showed the failure; `owner` who fixes it;
-`reason` why it is red. All four are required and non-empty. A malformed file, a malformed id or a duplicate stops the run (exit status unchanged, the cause
+`first_seen_time` when it was first seen (UTC `YYYY-MM-DDTHH:MM:SSZ`; the age starts here); `reason` why it is red; `renewed` (optional) `{"time", "reason"}`, the last renewal, from which the age is counted instead. The first five are required and non-empty. A malformed file, a malformed id or a duplicate stops the run (exit status unchanged, the cause
 printed), because tolerating or dropping tests on a guess would hide failures. Files read: `HAMS_KNOWN_RED_BASELINE` (an `os.pathsep` list) if set, else
 `known_red_baseline.json` in the repository root being tested, in a sibling or nested `hams_open`, and `tools/known_red_baseline.json` here.
 A private repository keeps its entries in its own root file; this directory's file lists only tests of this public repository.
@@ -1777,7 +1779,7 @@ Not thread safe; `run_cmd` feeds it from one reader thread.
 
 ### `[@ANCHOR: known_red:BaselineEntry]` `BaselineEntry`
 
-A frozen dataclass of one baseline line: `test_id`, `first_seen`, `owner`, `reason` (strings from the file) and `source` (path of the file it came from). Created by
+A frozen dataclass of one baseline line: `test_id`, `first_seen`, `first_seen_time`, `owner`, `reason` (strings from the file), `source` (path of the file it came from) and `renewed` (None, or `(time, reason)`). `age_days(now=time.time)` returns the days since the last renewal, else since `first_seen_time`. Created by
 `load_baseline`, read by `classify` and the summary; never mutated.
 
 ### `[@ANCHOR: known_red:baseline_paths]` `baseline_paths(base_dir, environ=None)`
@@ -1796,7 +1798,7 @@ an empty baseline). Reads only file metadata.
 ### `[@ANCHOR: known_red:load_baseline]` `load_baseline(paths)`
 
 Purpose: reads and validates baseline files. Returns `{test_id: BaselineEntry}`. Raises `BaselineError` (a `ValueError`) for an unreadable or non-JSON file, a version other than
-1, an entry without all four non-empty fields, an id that is not `module:Class.method` (a leading `/` is accepted and removed), or an id listed twice, naming the
+1, an entry without all five non-empty fields (or with a time that is not `YYYY-MM-DDTHH:MM:SSZ`, or a renewal without a reason), an id that is not `module:Class.method` (a leading `/` is accepted and removed), or an id listed twice, naming the
 file. The caller prints the cause and keeps Odoo's exit status. Reads the files; no side effects.
 
 ### `[@ANCHOR: known_red:flake_threshold]` `flake_threshold(environ=None)`
@@ -1828,9 +1830,9 @@ readers never see a half-written file (mode 0666, as several accounts write it).
 A dataclass built by `classify`: `known_red` (dict id to `BaselineEntry`: tolerated), `new` (list of ids to rerun), `setup_new` (new class-level errors, never rerun),
 `unparsed` (int: failures Odoo counted that no log line named), `now_passing` (baselined ids that were started and did not fail). One run, one process.
 
-### `[@ANCHOR: known_red:classify]` `classify(observation, baseline)`
+### `[@ANCHOR: known_red:classify]` `classify(observation, baseline, max_age=None, now=time.time)`
 
-Purpose: splits the first run's failures. Returns a `Classification`. `unparsed` is `observation.counted() - len(observation.failures)` (not below 0): a failure that no line named is
+Purpose: splits the first run's failures. Returns a `Classification`; a baselined failure older than `max_age` days (default `max_age_days()`) lands in `expired`, not `known_red`. `unparsed` is `observation.counted() - len(observation.failures)` (not below 0): a failure that no line named is
 treated as new, never tolerated. A baselined id that did not run is neither failing nor "now passing". Pure.
 
 ### `[@ANCHOR: known_red:rerun_tags]` `rerun_tags(test_ids)`
@@ -1857,7 +1859,7 @@ A dataclass: the policy's verdict. `test.py` stores it as `extractor.policy_outc
 `test_results.json` (version 1): `version`, `commit`, `run_green`, `counts` (`failed`, `errors`, `total`), `known_red` (id to owner, reason, first_seen), `flakes`, `new_failures`
 (sorted failed-again, setup and not-rerun ids), `setup_errors`, `unparsed`, `now_passing`, `fix_me`.
 
-### `[@ANCHOR: known_red:decide]` `decide(first, baseline, rerun, flake_path, commit, threshold, modules=None, now=None, max_rerun=25)`
+### `[@ANCHOR: known_red:decide]` `decide(first, baseline, rerun, flake_path, commit, threshold, modules=None, now=None, max_rerun=25, max_age=None, clock=time.time)`
 
 Purpose: applies the policy to the first run.
 
@@ -1869,9 +1871,30 @@ Purpose: applies the policy to the first run.
 | `flake_path`, `commit`, `threshold`, `now` | str, str, int, str | See `record_flakes`, `flake_threshold`. |
 | `modules` | set or None | Modules under test; limits the fix-me list to them. |
 | `max_rerun` | int | More new failures than this are systemic: not rerun, red. |
+| `max_age`, `clock` | float or None, callable | Days a baseline entry is tolerated (default `max_age_days()`: 3) and the time source its age is read from. An entry past it is `expired`: the run is red, it is not rerun. |
 
-Returns a `PolicyOutcome`. A rerun counts as a pass only when it printed a verdict, started the test and did not fail it; a rerun that did not run the test or printed no verdict leaves it red.
+Returns a `PolicyOutcome` (with `expired`, `clock` and `limit`; `results()` adds `age_days` to each known-red entry and an `expired` map, and puts expired ids in `new_failures`). A rerun counts as a pass only when it printed a verdict, started the test and did not fail it; a rerun that did not run the test or printed no verdict leaves it red.
 Writes the flake file when something passed alone. Raises `BaselineError` for a corrupt flake file. The rerun is the expensive part (database rebuild and module install).
+
+### `[@ANCHOR: known_red:max_age_days]` `max_age_days(environ=None)`
+
+Purpose: how long a baseline entry is tolerated. Returns `HAMS_KNOWN_RED_MAX_AGE_DAYS` or 3 (float). Raises `BaselineError` for anything that is not a finite number above 0: a limit that quietly became "forever" would defeat it. Pure.
+
+### `[@ANCHOR: known_red:age_text]` `age_text(days)`
+
+Purpose: `3.1 days`, or `12 hours` below one day, for summaries. Pure.
+
+### `[@ANCHOR: known_red:show_lines]` `show_lines(baseline, max_age=None, clock=time.time)`
+
+Purpose: `known_red.py show`: the baseline, oldest entry first, each with age, `(EXPIRED: fails the run)` when past the limit, owner, first-seen commit, renewal reason if any, and its reason; one line saying it is empty when it is. Returns a list of lines. Pure.
+
+### `[@ANCHOR: known_red:renew_entry]` `renew_entry(baseline, test_id, reason, owner=None, now=time.time)`
+
+Purpose: `known_red.py renew`: renews an entry for another window. Rewrites the file that holds the entry (`BaselineEntry.source`) with `renewed: {"time", "reason"}` (and `owner`), atomically, keeping every other field and entry; returns that path. Raises `BaselineError` for an empty reason or an id not in `baseline`. A renewal is a change to a tracked file: commit it with a pull request.
+
+### `[@ANCHOR: known_red:main]` `main(argv=None, out=print)`
+
+Purpose: the command line `python3 hams_shared/tools/known_red.py show|renew`; `--base-dir` (default the working directory) finds the files as `baseline_paths` does. Returns 0, or 2 with the cause (bad baseline, empty reason, unknown id).
 
 ### `[@ANCHOR: known_red:raw_outcome]` `raw_outcome(first)`
 
@@ -2112,6 +2135,10 @@ Purpose: the status document. `shards` is a list of `{"number", "modules", "exit
 ### `[@ANCHOR: gate_canary:baseline_candidates]` `baseline_candidates(status, known)`
 
 Purpose: the proposal file. `known` maps a test id to `{"owner", "reason", "first_seen"}` (from the shard results' `known_red`). Returns `{"version": 1, "entries": [...]}` sorted by id: the loader `known_red.load_baseline` accepts it unchanged. Pure.
+
+### `[@ANCHOR: gate_canary:note_lines]` `note_lines(status, lint_lines=())`
+
+Purpose: `<state-dir>/note.txt`, the canary note that lists every tolerated item so none is forgotten: the verdict line, each new or expired failure, each shard error, each tolerated test with its age and owner (`tolerated_detail`), flaky tests, FIX ME flakes, baselined tests that now pass, and the lint baseline's `--baseline-show` lines. Returns a list of lines. Pure.
 
 ### `[@ANCHOR: gate_canary:failure_tags]` `failure_tags(test_ids)`
 

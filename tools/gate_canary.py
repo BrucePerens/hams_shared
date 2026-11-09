@@ -37,6 +37,7 @@ import runner_slots
 DEFAULT_STATE_DIR = os.path.expanduser("~/.cache/hams-test/canary")
 STATUS_NAME = "status.json"
 CANDIDATES_NAME = "known_red_candidates.json"
+NOTE_NAME = "note.txt"
 STATUS_VERSION = 1
 IDLE_LOAD = 4.0
 BISECT_MAX_RUNS = 30
@@ -86,6 +87,7 @@ def aggregate(shards, commits, now=None):
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) if now is None else now
     new, tolerated, flakes, passing, fix_me, errors = set(), set(), set(), set(), set(), []
     counts = {"failed": 0, "errors": 0, "total": 0}
+    detail = {}
     for shard in shards:
         results = shard.get("results")
         if shard.get("problems"):
@@ -97,6 +99,7 @@ def aggregate(shards, commits, now=None):
             continue
         new.update(results["new_failures"])
         tolerated.update(results["known_red"])
+        detail.update({i: v for i, v in results["known_red"].items() if isinstance(v, dict)})
         flakes.update(results["flakes"])
         passing.update(results["now_passing"])
         fix_me.update(results["fix_me"])
@@ -108,7 +111,7 @@ def aggregate(shards, commits, now=None):
         "version": STATUS_VERSION, "commit": commits.get("com", ""), "commits": commits, "time": now,
         "status": "red" if (new or errors) else "green", "new_failures": sorted(new), "tolerated": sorted(tolerated),
         "flakes": sorted(flakes), "now_passing": sorted(passing), "fix_me": sorted(fix_me), "shard_errors": errors,
-        "counts": counts,
+        "counts": counts, "tolerated_detail": detail,
         "shards": [{"number": s.get("number"), "modules": s.get("modules"), "exit_status": s.get("exit_status")} for s in shards],
     }
 
@@ -122,12 +125,38 @@ def baseline_candidates(status, known):
     entries = []
     for test_id in status["tolerated"]:
         kept = known.get(test_id, {})
-        entries.append({"test_id": test_id, "first_seen": kept.get("first_seen", status["commit"]), "owner": kept.get("owner", "unassigned"),
+        entries.append({"test_id": test_id, "first_seen": kept.get("first_seen", status["commit"]),
+                        "first_seen_time": kept.get("first_seen_time", status["time"]), "owner": kept.get("owner", "unassigned"),
                         "reason": kept.get("reason", "listed in the baseline")})
     for test_id in status["new_failures"]:
-        entries.append({"test_id": test_id, "first_seen": status["commit"], "owner": "unassigned",
+        entries.append({"test_id": test_id, "first_seen": status["commit"], "first_seen_time": status["time"], "owner": "unassigned",
                         "reason": "canary: failed on %s (%s); investigate" % (status["commit"][:12], status["time"])})
     return {"version": known_red.BASELINE_VERSION, "entries": sorted(entries, key=lambda e: e["test_id"])}
+
+
+# [@ANCHOR: gate_canary:note_lines]
+def note_lines(status, lint_lines=()):
+    """The canary note: every tolerated item, so none can be forgotten. Returns lines: the run's verdict and commit, each tolerated
+    test with its age and owner (`tolerated_detail`), each flake, each flake above the threshold (FIX ME), each baselined test that now
+    passes (remove its entry), each expired or new failure, the shard errors, and `lint_lines` (the lint baseline's
+    `--baseline-show` lines) after a heading. Pure."""
+    lines = ["canary %s of %s at %s: %d new failure(s), %d tolerated test(s), %d flake(s)" % (
+        status["status"], status["commit"][:12], status["time"], len(status["new_failures"]), len(status["tolerated"]),
+        len(status["flakes"]))]
+    for test_id in status["new_failures"]:
+        lines.append("NEW or EXPIRED failure: %s" % test_id)
+    for error in status["shard_errors"]:
+        lines.append("SHARD ERROR: %s" % error)
+    for test_id in status["tolerated"]:
+        item = status.get("tolerated_detail", {}).get(test_id, {})
+        lines.append("tolerated (known red): %s, known red for %s days, owner %s: %s" % (
+            test_id, item.get("age_days", "?"), item.get("owner", "?"), item.get("reason", "")))
+    lines += ["flaky: %s" % i for i in status["flakes"]] + ["FIX ME (flaky above the threshold): %s" % i for i in status["fix_me"]]
+    lines += ["remove from the baseline (now passing): %s" % i for i in status["now_passing"]]
+    if lint_lines:
+        lines.append("lint known-red baseline:")
+        lines += list(lint_lines)
+    return lines
 
 
 # [@ANCHOR: gate_canary:failure_tags]
@@ -242,9 +271,22 @@ def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir
     if bisect and status["new_failures"]:
         status["bisect"] = _bisect_failures(status, shard_results, commands, trees, runner, out)
     _write_json(status_path, status)
+    note = note_lines(status, _lint_baseline_lines())
+    with open(os.path.join(state_dir, NOTE_NAME), "w", encoding="utf-8") as handle:
+        handle.write("\n".join(note) + "\n")
     out("gate_canary: %s; %d new failure(s), %d tolerated, %d flake(s); status: %s" % (
         status["status"], len(status["new_failures"]), len(status["tolerated"]), len(status["flakes"]), status_path))
     return (0 if status["status"] == "green" else 1), status
+
+
+def _lint_baseline_lines():
+    """`--baseline-show` lines of the lint baseline of hams_com, or () when the module or a record is unavailable."""
+    try:
+        import lint_baseline
+
+        return [line for line in lint_baseline.show_lines("hams_com") if "none recorded" not in line]
+    except (ImportError, ValueError, OSError):
+        return ()
 
 
 def _slots():

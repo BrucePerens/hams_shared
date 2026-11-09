@@ -8,8 +8,10 @@ A test run used to be red when any test failed, whoever caused it. That forced a
 failures before anything else could land. This module is the pure part of the replacement policy; `test.py` calls it
 after Odoo's run and prints what it returns:
 
-* a failing test that is listed in a tracked baseline file is "known red, not new": it is named in the summary and
-  does not turn the run red; a baselined test that passes again is named so its entry gets removed;
+* a failing test that is listed in a tracked baseline file is "known red, not new": it is named in the summary, with
+  its age and owner, and does not turn the run red; a baselined test that passes again is named so its entry gets
+  removed; an entry older than `HAMS_KNOWN_RED_MAX_AGE_DAYS` (default 3) is no longer tolerated, unless it was renewed
+  with a reason (ADR 0118, amendment of 2026-11-08);
 * any other failing test is rerun ONCE, in isolation (fresh database, same installed modules, only that test);
   passing on the rerun is a flake (counted per test in a small JSON file), failing again is a real failure;
 * a setup or class error is never rerun: it is reported as such, and is red unless baselined;
@@ -19,11 +21,14 @@ Nothing is hidden: every tolerated test, flake and removable entry appears in th
 The reference is the "Known-red baseline and flakes" section of tools/README.md.
 """
 
+import argparse
+import calendar
 import dataclasses
 import fcntl
 import json
 import os
 import re
+import sys
 import tempfile
 import time
 
@@ -32,6 +37,9 @@ BASELINE_ENV = "HAMS_KNOWN_RED_BASELINE"
 FLAKE_FILE_ENV = "HAMS_TEST_FLAKE_FILE"
 FLAKE_THRESHOLD_ENV = "HAMS_FLAKE_FIX_ME_THRESHOLD"
 DEFAULT_FLAKE_THRESHOLD = 3
+MAX_AGE_ENV = "HAMS_KNOWN_RED_MAX_AGE_DAYS"
+DEFAULT_MAX_AGE_DAYS = 3.0
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 MAX_RERUN_TESTS = 25
 FLAKE_FILE_NAME = "test_flakes.json"
 BASELINE_VERSION = 1
@@ -56,6 +64,33 @@ _TEST_ID = re.compile(r"^/?(?P<module>[A-Za-z0-9_]+):(?P<cls>[A-Za-z_]\w*)\.(?P<
 
 class BaselineError(ValueError):
     """A baseline or flake file that cannot be trusted; the run stops rather than guess."""
+
+
+# [@ANCHOR: known_red:max_age_days]
+def max_age_days(environ=None):
+    """How many days a baseline entry is tolerated: `HAMS_KNOWN_RED_MAX_AGE_DAYS` (a finite number above 0) or 3. A bad value
+    raises `BaselineError`: a limit that quietly became "forever" would defeat it."""
+    environ = os.environ if environ is None else environ
+    text = environ.get(MAX_AGE_ENV, "").strip()
+    if not text:
+        return DEFAULT_MAX_AGE_DAYS
+    try:
+        value = float(text)
+    except ValueError:
+        value = float("nan")
+    if not value > 0 or value == float("inf"):
+        raise BaselineError("%s=%r is not a finite number of days above 0" % (MAX_AGE_ENV, text))
+    return value
+
+
+# [@ANCHOR: known_red:age_text]
+def age_text(days):
+    """`3.1 days`, or `5 hours` below one day: how long a baseline entry has been known red. Pure."""
+    return "%.1f days" % days if days >= 1 else "%.0f hours" % (days * 24)
+
+
+def _epoch(text):
+    return calendar.timegm(time.strptime(text, TIME_FORMAT))
 
 
 # [@ANCHOR: known_red:FailureRecord]
@@ -156,13 +191,21 @@ class RunObservation:
 @dataclasses.dataclass(frozen=True)
 class BaselineEntry:
     """One line of the known-red baseline: `test_id` (`<module>:<Class>.<method>`), `first_seen` (commit that first
-    showed the failure), `owner` (who fixes it), `reason` (why it is red), `source` (file it was read from)."""
+    showed the failure), `first_seen_time` (UTC `YYYY-MM-DDTHH:MM:SSZ`), `owner` (who fixes it), `reason` (why it is
+    red), `source` (file it was read from) and `renewed` (None, or `(time, reason)` of the last renewal)."""
 
     test_id: str
     first_seen: str
     owner: str
     reason: str
     source: str = ""
+    first_seen_time: str = ""
+    renewed: tuple = None
+
+    def age_days(self, now=time.time):
+        """Days since the last renewal, else since `first_seen_time`. Never negative."""
+        started = self.renewed[0] if self.renewed else self.first_seen_time
+        return max(0.0, (now() - _epoch(started)) / 86400.0)
 
 
 # [@ANCHOR: known_red:baseline_paths]
@@ -193,8 +236,9 @@ def baseline_paths(base_dir, environ=None):
 # [@ANCHOR: known_red:load_baseline]
 def load_baseline(paths):
     """Reads baseline files into `{test_id: BaselineEntry}`. Raises `BaselineError` for unreadable JSON, a wrong
-    version, a missing or empty field, a malformed test id, or the same id twice: a baseline that is wrong must stop
-    the run, never silently tolerate or drop a test."""
+    version, a missing or empty field (`test_id`, `first_seen`, `first_seen_time` in `YYYY-MM-DDTHH:MM:SSZ`, `owner`,
+    `reason`), a malformed `renewed` (`{"time", "reason"}`, optional), a malformed test id, or the same id twice: a
+    baseline that is wrong must stop the run, never silently tolerate or drop a test."""
     entries = {}
     for path in paths:
         try:
@@ -207,16 +251,29 @@ def load_baseline(paths):
         ):
             raise BaselineError("%s: expected {\"version\": %d, \"entries\": [...]}" % (path, BASELINE_VERSION))
         for raw in data["entries"]:
-            fields = {k: raw.get(k) for k in ("test_id", "first_seen", "owner", "reason")} if isinstance(raw, dict) else {}
+            names = ("test_id", "first_seen", "first_seen_time", "owner", "reason")
+            fields = {k: raw.get(k) for k in names} if isinstance(raw, dict) else {}
             if not fields or not all(isinstance(v, str) and v.strip() for v in fields.values()):
-                raise BaselineError("%s: an entry needs non-empty test_id, first_seen, owner and reason: %r" % (path, raw))
+                raise BaselineError("%s: an entry needs non-empty %s: %r" % (path, ", ".join(names), raw))
+            renewed = raw.get("renewed")
+            try:
+                _epoch(fields["first_seen_time"])
+                if renewed is not None:
+                    if not isinstance(renewed, dict) or not str(renewed.get("reason", "")).strip():
+                        raise ValueError("a renewal needs a reason")
+                    _epoch(renewed.get("time", ""))
+            except (ValueError, TypeError) as error:
+                raise BaselineError("%s: bad time or renewal in %r (times are YYYY-MM-DDTHH:MM:SSZ): %s" % (path, raw, error)) from error
             found = _TEST_ID.match(fields["test_id"])
             if not found:
                 raise BaselineError("%s: %r is not <module>:<Class>.<method>" % (path, fields["test_id"]))
             test_id = "%s:%s.%s" % found.group("module", "cls", "method")
             if test_id in entries:
                 raise BaselineError("%s: %s is listed twice (also in %s)" % (path, test_id, entries[test_id].source))
-            entries[test_id] = BaselineEntry(test_id, fields["first_seen"], fields["owner"], fields["reason"], path)
+            entries[test_id] = BaselineEntry(
+                test_id, fields["first_seen"], fields["owner"], fields["reason"], path, fields["first_seen_time"],
+                (renewed["time"], renewed["reason"]) if renewed else None,
+            )
     return entries
 
 
@@ -289,20 +346,27 @@ def record_flakes(path, test_ids, commit, now=None):
 class Classification:
     """How the first Odoo run's failures divide: `known_red` (`{id: BaselineEntry}` tolerated), `new` (ids to rerun),
     `setup_new` (new class-level errors, never rerun), `unparsed` (failures Odoo counted that no log line named),
-    `now_passing` (baselined ids that ran and passed)."""
+    `now_passing` (baselined ids that ran and passed), `expired` (`{id: BaselineEntry}` baselined failures older than the
+    age limit: no longer tolerated, never rerun)."""
 
     known_red: dict
     new: list
     setup_new: list
     unparsed: int
     now_passing: list
+    expired: dict = dataclasses.field(default_factory=dict)
 
 
 # [@ANCHOR: known_red:classify]
-def classify(observation, baseline):
-    """Splits `observation.failures` using `baseline` (`{id: BaselineEntry}`) into a `Classification`."""
+def classify(observation, baseline, max_age=None, now=time.time):
+    """Splits `observation.failures` using `baseline` (`{id: BaselineEntry}`) into a `Classification`. A baselined failure
+    whose entry is older than `max_age` days (`max_age_days()` when None; the age counts from the last renewal) goes to
+    `expired`, not `known_red`."""
     failed = observation.failed_ids()
-    known = {i: baseline[i] for i in sorted(failed) if i in baseline}
+    limit = max_age_days() if max_age is None else max_age
+    listed = {i: baseline[i] for i in sorted(failed) if i in baseline}
+    expired = {i: e for i, e in listed.items() if e.age_days(now) > limit}
+    known = {i: e for i, e in listed.items() if i not in expired}
     fresh = [f for f in observation.failures if f.test_id not in baseline]
     seen, new, setup_new = set(), [], []
     for record in fresh:
@@ -312,7 +376,7 @@ def classify(observation, baseline):
         (setup_new if record.setup else new).append(record.test_id)
     unparsed = max(0, observation.counted() - len(observation.failures))
     passing = sorted(i for i in baseline if i in observation.started and i not in failed)
-    return Classification(known, new, setup_new, unparsed, passing)
+    return Classification(known, new, setup_new, unparsed, passing, expired)
 
 
 # [@ANCHOR: known_red:rerun_tags]
@@ -326,7 +390,8 @@ def rerun_tags(test_ids):
 class PolicyOutcome:
     """The final verdict of the policy: `run_green` (True when every failure is tolerated), `known_red`,
     `flakes` (`{id: flake entry}`), `failed_again`, `setup_new`, `not_rerun` (`{id: reason}`), `unparsed`,
-    `now_passing`, `fix_me` (`{id: entry}` of flakes above the threshold), `rerun_ran`."""
+    `now_passing`, `fix_me` (`{id: entry}` of flakes above the threshold), `rerun_ran`, `expired` (`{id: BaselineEntry}`
+    over the age limit: red) and `clock` (the time source the ages are read from) and `limit` (the age limit in days)."""
 
     run_green: bool
     known_red: dict
@@ -338,6 +403,9 @@ class PolicyOutcome:
     now_passing: list
     fix_me: dict
     rerun_ran: bool
+    expired: dict = dataclasses.field(default_factory=dict)
+    clock: object = time.time
+    limit: float = DEFAULT_MAX_AGE_DAYS
 
     def results(self, commit="", counts=None):
         """The machine-readable form written to `test_results.json` (version 1)."""
@@ -346,9 +414,14 @@ class PolicyOutcome:
             "commit": commit,
             "run_green": self.run_green,
             "counts": counts or {},
-            "known_red": {i: {"owner": e.owner, "reason": e.reason, "first_seen": e.first_seen} for i, e in self.known_red.items()},
+            "known_red": {
+                i: {"owner": e.owner, "reason": e.reason, "first_seen": e.first_seen, "first_seen_time": e.first_seen_time,
+                    "age_days": round(e.age_days(self.clock), 2)}
+                for i, e in self.known_red.items()
+            },
+            "expired": {i: {"owner": e.owner, "age_days": round(e.age_days(self.clock), 2)} for i, e in self.expired.items()},
             "flakes": self.flakes,
-            "new_failures": sorted(self.failed_again) + sorted(self.setup_new) + sorted(self.not_rerun),
+            "new_failures": sorted(self.failed_again) + sorted(self.setup_new) + sorted(self.not_rerun) + sorted(self.expired),
             "setup_errors": sorted(self.setup_new),
             "unparsed": self.unparsed,
             "now_passing": self.now_passing,
@@ -359,9 +432,15 @@ class PolicyOutcome:
         """The text printed under the run's headline; every tolerated test is named."""
         lines = []
         if self.known_red:
-            lines.append("Known red, not new (%d; tolerated, listed in the baseline):" % len(self.known_red))
+            lines.append("Known red, not new (%d; tolerated for at most %g days, listed in the baseline):" % (
+                len(self.known_red), self.limit))
             for test_id, entry in self.known_red.items():
-                lines.append("  - %s  owner=%s first_seen=%s: %s" % (test_id, entry.owner, entry.first_seen[:12], entry.reason))
+                lines.append("  - %s  known red for %s, owner %s, first seen %s: %s" % (
+                    test_id, age_text(entry.age_days(self.clock)), entry.owner, entry.first_seen[:12], entry.reason))
+        for test_id, entry in self.expired.items():
+            lines.append("EXPIRED known red (%s, over the %g day limit, owner %s): %s. Fix it, or renew it with a reason: "
+                         "python3 hams_shared/tools/known_red.py renew %s --reason TEXT" % (
+                             age_text(entry.age_days(self.clock)), self.limit, entry.owner, test_id, test_id))
         for test_id in self.now_passing:
             lines.append("Known red now PASSING, remove its baseline entry: %s" % test_id)
         if self.flakes:
@@ -384,15 +463,19 @@ class PolicyOutcome:
 
 
 # [@ANCHOR: known_red:decide]
-def decide(first, baseline, rerun, flake_path, commit, threshold, modules=None, now=None, max_rerun=MAX_RERUN_TESTS):
+def decide(first, baseline, rerun, flake_path, commit, threshold, modules=None, now=None, max_rerun=MAX_RERUN_TESTS,
+           max_age=None, clock=time.time):
     """Applies the policy to the first run and returns a `PolicyOutcome`.
 
     `first`: `RunObservation` of the whole run. `baseline`: `{id: BaselineEntry}`. `rerun(test_ids)`: called at most
     once with the ids to rerun alone, returns a `RunObservation` of that rerun. `flake_path`: the flake file.
     `commit`: the commit under test. `threshold`: see `flake_threshold`. `modules`: the modules under test (limits
     the fix-me listing to them; None lists all). Nothing is rerun when no new failure exists, when more than
-    `max_rerun` tests are new (a systemic failure), or when a failure could not be named; those new failures stay red."""
-    cls = classify(first, baseline)
+    `max_rerun` tests are new (a systemic failure), or when a failure could not be named; those new failures stay red.
+    `max_age`: days a baseline entry is tolerated (`max_age_days()` when None); an entry past it, counted from its last renewal
+    by `clock` (default `time.time`), is not tolerated and is never rerun: the run is red and the summary says how to renew it."""
+    limit = max_age_days() if max_age is None else max_age
+    cls = classify(first, baseline, limit, clock)
     not_rerun, flakes, failed_again, rerun_ran = {}, {}, [], False
     if cls.new:
         if len(cls.new) > max_rerun:
@@ -412,9 +495,10 @@ def decide(first, baseline, rerun, flake_path, commit, threshold, modules=None, 
     fix_me = {
         i: e for i, e in counts.items() if e.get("count", 0) > threshold and (modules is None or i.split(":")[0] in modules)
     }
-    green = not (failed_again or cls.setup_new or not_rerun or cls.unparsed)
+    green = not (failed_again or cls.setup_new or not_rerun or cls.unparsed or cls.expired)
     return PolicyOutcome(
-        green, cls.known_red, flakes, failed_again, cls.setup_new, not_rerun, cls.unparsed, cls.now_passing, fix_me, rerun_ran
+        green, cls.known_red, flakes, failed_again, cls.setup_new, not_rerun, cls.unparsed, cls.now_passing, fix_me, rerun_ran,
+        cls.expired, clock, limit,
     )
 
 
@@ -462,3 +546,79 @@ def write_results(path, outcome, commit, observation):
         out.write("\n")
     os.chmod(temporary, 0o644)
     os.replace(temporary, path)
+
+
+# [@ANCHOR: known_red:show_lines]
+def show_lines(baseline, max_age=None, clock=time.time):
+    """The baseline as text, oldest entry first: id, age, whether it is `EXPIRED: fails the run`, owner, first-seen commit,
+    a renewal reason if any, and the reason it is red. `baseline` is `{id: BaselineEntry}`; `max_age` days (default
+    `max_age_days()`). `known_red.py show`. An empty baseline gives one line saying so. Pure."""
+    limit = max_age_days() if max_age is None else max_age
+    if not baseline:
+        return ["known-red baseline: empty (no tolerated test)"]
+    rows = sorted(((e.age_days(clock), i, e) for i, e in baseline.items()), key=lambda r: (-r[0], r[1]))
+    lines = ["known-red baseline: %d tolerated test(s), tolerated for at most %g days" % (len(rows), limit)]
+    for age, test_id, entry in rows:
+        lines.append("  %s  known red for %s%s, owner %s, first seen %s%s: %s" % (
+            test_id, age_text(age), " (EXPIRED: fails the run)" if age > limit else "", entry.owner, entry.first_seen[:12],
+            ", renewed: %s" % entry.renewed[1] if entry.renewed else "", entry.reason))
+    return lines
+
+
+# [@ANCHOR: known_red:renew_entry]
+def renew_entry(baseline, test_id, reason, owner=None, now=time.time):
+    """Renews `test_id` for another age window: rewrites the file that holds it (`entry.source`) with
+    `renewed: {"time", "reason"}` (and `owner` when given), atomically, keeping every other field and entry. Returns the path.
+    Raises `BaselineError` for an empty reason or an id that is not in `baseline`."""
+    if not str(reason or "").strip():
+        raise BaselineError("a renewal needs a reason")
+    entry = baseline.get(test_id)
+    if entry is None:
+        raise BaselineError("%s is not in the known-red baseline" % test_id)
+    with open(entry.source, encoding="utf-8") as handle:
+        data = json.load(handle)
+    for raw in data["entries"]:
+        if raw["test_id"].lstrip("/") == test_id:
+            raw["renewed"] = {"time": time.strftime(TIME_FORMAT, time.gmtime(now())), "reason": str(reason).strip()}
+            if owner:
+                raw["owner"] = owner
+    directory = os.path.dirname(entry.source)
+    handle, temporary = tempfile.mkstemp(dir=directory, prefix=".baseline-")
+    with os.fdopen(handle, "w", encoding="utf-8") as out:
+        json.dump(data, out, indent=1)
+        out.write("\n")
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, entry.source)
+    return entry.source
+
+
+# [@ANCHOR: known_red:main]
+def main(argv=None, out=print):
+    """`python3 tools/known_red.py show|renew`: `show [--base-dir DIR]` lists the baseline oldest first; `renew TEST_ID --reason TEXT
+    [--owner NAME] [--base-dir DIR]` keeps tolerating an entry for another window. Files are found as `baseline_paths(base_dir)` does
+    (default the working directory). Returns 0, or 2 with the cause for a bad baseline, empty reason or unknown id."""
+    parser = argparse.ArgumentParser(description="The known-red baseline of test.py (ADR 0118)")
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("show", "renew"):
+        command = sub.add_parser(name)
+        command.add_argument("--base-dir", default=os.getcwd())
+        if name == "renew":
+            command.add_argument("test_id")
+            command.add_argument("--reason", required=True)
+            command.add_argument("--owner")
+    args = parser.parse_args(argv)
+    try:
+        baseline = load_baseline(baseline_paths(args.base_dir))
+        if args.command == "renew":
+            out("renewed %s in %s" % (args.test_id, renew_entry(baseline, args.test_id, args.reason, args.owner)))
+            baseline = load_baseline(baseline_paths(args.base_dir))
+        for line in show_lines(baseline):
+            out(line)
+    except BaselineError as error:
+        out("known_red: %s" % error)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
