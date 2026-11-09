@@ -14,6 +14,11 @@ reference_size(). Ordinary commits are judged exactly as before.
 
 With `--staged` (what git-hooks/pre-commit runs) only the changes staged for the commit are compared, and the new size is
 the staged content's, so an unrelated edit another session has left in a shared working tree cannot block a commit.
+
+A Markdown file that shrinks because sections were MOVED is not flagged when every unit of its HEAD text (each heading, paragraph,
+list item and fenced block, whitespace collapsed) is present verbatim in the new content of the Markdown files of the same change
+(`check_no_rule_lost.moved_verbatim`, 2026-11-09: instruction files are trimmed by moving task-specific sections into on-demand
+documents). A single reworded or dropped unit makes it an ordinary shrink again.
 """
 
 import os
@@ -102,6 +107,35 @@ def _has_no_head():
     return inside.returncode == 0 and head.returncode != 0
 
 
+def _moved_not_lost(filepath, changed_files, staged, repo_root):
+    """True when the HEAD text of the Markdown file `filepath` is all present verbatim (check_no_rule_lost units) in the new
+    content of the changed Markdown files of this change (the file itself included): a section moved to an on-demand
+    document with a pointer left behind, which is not summarization. Any unit missing, or anything unreadable, is False."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import check_no_rule_lost
+        old_text = _git_out(["show", f"HEAD:{filepath}"], repo_root).decode("utf-8")
+        new_texts = []
+        for other in changed_files:
+            if not other.endswith(".md"):
+                continue
+            if staged:
+                result = subprocess.run(["git", "show", f":{other}"], capture_output=True, cwd=repo_root)
+                if result.returncode != 0:
+                    continue
+                new_texts.append(result.stdout.decode("utf-8"))
+            else:
+                path = os.path.join(repo_root, other)
+                if os.path.isfile(path):
+                    with open(path, encoding="utf-8") as handle:
+                        new_texts.append(handle.read())
+        return bool(new_texts) and check_no_rule_lost.moved_verbatim(old_text, new_texts)
+    except (ImportError, OSError, UnicodeDecodeError, subprocess.CalledProcessError):
+        return False
+    finally:
+        sys.path.pop(0)
+
+
 def main():
     staged = "--staged" in sys.argv[1:]
     try:
@@ -185,6 +219,10 @@ def main():
         
         if old_size > 0 and new_size < old_size:
             reduction_ratio = (old_size - new_size) / old_size
+            if reduction_ratio > 0.05 and filepath.endswith(".md") and _moved_not_lost(filepath, modified_files, staged, repo_root):
+                print(f"✓ {filepath} shrank by {reduction_ratio:.1%}, but every heading, paragraph, list item and code block of the old")
+                print("  text is present verbatim in this change (check_no_rule_lost.moved_verbatim): moved, not dropped.")
+                continue
             if reduction_ratio > 0.05:
                 print(f"❌ SUMMATION BIAS DETECTED in {filepath}")
                 print(f"   - File size reduced by {reduction_ratio:.1%} (from {old_size} to {new_size} bytes).")

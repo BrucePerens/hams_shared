@@ -327,5 +327,62 @@ class MergeCommitTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
 
+_RULES = "# Rules\n\n- Never do A; it broke B.\n  Second line of the rule.\n\n## Details\n\n" + "Long task-specific paragraph. " * 40 + "\n"
+
+
+class MovedNotLostTests(unittest.TestCase):
+    """A Markdown shrink whose old text all moved verbatim into another file of the same change is not flagged.
+
+    Tests [@ANCHOR: check_no_rule_lost:moved_verbatim]
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        _init_repo(self.tmp)
+        _commit_file(self.tmp, "CLAUDE.md", _RULES)
+        self.details = "## Details\n\n" + "Long task-specific paragraph. " * 40 + "\n"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _move(self, kept, moved):
+        _write(os.path.join(self.tmp, "CLAUDE.md"), kept)
+        _write(os.path.join(self.tmp, "docs/ondemand.md"), moved)
+        _git(self.tmp, "add", "CLAUDE.md", "docs/ondemand.md")
+
+    def test_staged_verbatim_move_with_a_pointer_is_not_flagged(self):
+        self._move("# Rules\n\n- Never do A; it broke B.\n  Second line of the rule.\n\nDetails: docs/ondemand.md.\n", self.details)
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 0, out)
+        self.assertIn("moved, not dropped", out)
+
+    def test_moved_but_rewrapped_text_still_counts_as_verbatim(self):
+        self._move("# Rules\n\n- Never do A;\n  it broke B. Second line\n  of the rule.\n", self.details)
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 0, out)
+
+    def test_a_condensed_rule_in_the_same_change_is_flagged(self):
+        self._move("# Rules\n\n- Never do A.\n", self.details)
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 1, out)
+        self.assertIn("SUMMATION BIAS DETECTED in CLAUDE.md", out)
+
+    def test_a_moved_paragraph_that_was_shortened_is_flagged(self):
+        self._move("# Rules\n\n- Never do A; it broke B.\n  Second line of the rule.\n", "## Details\n\n" + "Long task-specific paragraph. " * 39)
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 1, out)
+
+    def test_working_tree_mode_accepts_a_move_to_an_added_file(self):
+        self._move("# Rules\n\n- Never do A; it broke B.\n  Second line of the rule.\n", self.details)
+        code, out = _run(self.tmp)
+        self.assertEqual(code, 0, out)
+
+    def test_a_move_to_an_untracked_file_is_still_flagged(self):
+        _write(os.path.join(self.tmp, "CLAUDE.md"), "# Rules\n\n- Never do A; it broke B.\n  Second line of the rule.\n")
+        _write(os.path.join(self.tmp, "docs/ondemand.md"), self.details)
+        code, out = _run(self.tmp)
+        self.assertEqual(code, 1, out)
+
+
 if __name__ == "__main__":
     unittest.main()
