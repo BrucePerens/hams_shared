@@ -4231,8 +4231,8 @@ Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 # REQUIRED: the real callsign the daemon logs in to the DX cluster with. AR-Cluster drops placeholders such as N0CALL (the feed was dead for days); the daemon refuses to start without a valid one.
 Environment="DX_NODE_CALLSIGN=K6BP-2"
-# Ordered fallbacks, tried in turn when a node fails or goes quiet (ham_dx_daemon/main.py DX_NODES). Measured 2026-11-03: the public clusters re-share each other's spots, so the fallbacks add availability, not volume; one session is open at a time.
-Environment="DX_NODES=dxc.nc7j.com:7373,w3lpl.net:7373,dxc.ve7cc.net:23"
+# Ordered fallbacks, tried in turn when a node fails or goes quiet (ham_dx_daemon/main.py DX_NODES). Measured 2026-11-03: the public clusters re-share each other's spots, so the fallbacks add availability, not volume; one session is open at a time. dxc.ve7cc.net:23 was dropped 2026-11-08: it accepted a connection from hams1 and sent nothing in 10 s; add it back only once a working address is verified.
+Environment="DX_NODES=dxc.nc7j.com:7373,w3lpl.net:7373"
 
 # Smoketest Resource Verification
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/ham_dx_daemon/main.py --start-test
