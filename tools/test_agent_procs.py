@@ -205,6 +205,11 @@ class ProcReadingTests(ProcTestCase):
         text = ap.format_start(ap.read_proc(os.getpid()).start_ticks)
         self.assertRegex(text, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
 
+    def test_format_start_of_a_corrupt_start_time_is_unknown_not_an_exception(self):
+        # A record file can hold any number; none may raise out of format_start.
+        for ticks in (10 ** 30, -(10 ** 30), 2 ** 62, float("inf"), float("nan")):
+            self.assertEqual(ap.format_start(ticks), "unknown", ticks)
+
     def test_ps_line_names_pid_start_ticks_and_full_args(self):
         proc = self.decoy("tokpsline")
         line = ap.ps_line(ap.read_proc(proc.pid))
