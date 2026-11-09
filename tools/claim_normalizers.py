@@ -1270,6 +1270,14 @@ class PythonTokens:
         toks = self.toks
         skip = (tokenize.NL, tokenize.COMMENT)
         docs = set()
+        first = 0
+        while first < len(toks) and toks[first].type in skip + (tokenize.ENCODING,):
+            first += 1
+        j = first
+        while j < len(toks) and toks[j].type == tokenize.STRING and _py_is_plain_string(toks[j]):
+            j += 1
+        if j > first and j < len(toks) and toks[j].type == tokenize.NEWLINE:
+            docs.update(range(first, j + 1))  # the module docstring
         line_first = None
         line_last = None
         is_def = False
@@ -1332,12 +1340,13 @@ class PythonTokens:
             ty = t.type
             if ty in (tokenize.COMMENT, tokenize.NL, tokenize.ENCODING, tokenize.ENDMARKER):
                 continue
-            if ty == tokenize.INDENT:
+            if ty in (tokenize.INDENT, tokenize.DEDENT):
+                # the indentation changes that arrive before the slice's first code token belong
+                # to the code above it: the baseline depth is the first token's own
+                if not lines and not cur:
+                    continue
                 flush()
-                depth += 1
-            elif ty == tokenize.DEDENT:
-                flush()
-                depth -= 1
+                depth += 1 if ty == tokenize.INDENT else -1
             elif ty == tokenize.NEWLINE:
                 flush()
                 bracket = 0
@@ -1587,7 +1596,7 @@ def normalize_named(text, language, name):
             continue
         # walk back to the start of the item: modifiers and attributes on the same statement
         k = i
-        while k > 0 and (sig[k - 1].kind in ("ident", "word", "str") and not sig[k - 1].nl and not sig[k - 1].is_p(";")):
+        while k > 0 and not sig[k].nl and sig[k - 1].kind in ("ident", "word", "str"):
             k -= 1
         if language == "rust":
             while k > 0 and sig[k - 1].is_p("]"):

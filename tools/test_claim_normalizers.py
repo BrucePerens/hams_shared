@@ -167,6 +167,17 @@ def foo(a, b=1, *, c="x"):
         a = "class K:\n    # [@ANCHOR: t:x]\n    def m(self):\n        if self:\n            return 1\n"
         self.assertRegex(self.h(a), r"^[0-9a-f]{64}$")
 
+    def test_module_and_class_docstrings_are_dropped_but_later_strings_are_code(self):
+        text = cn.normalize_text('"""Module."""\nclass K:\n    """Class."""\n    x = "kept"\n', "python")
+        self.assertNotIn("Module", text)
+        self.assertNotIn("Class", text)
+        self.assertIn('"kept"', text)
+
+    def test_a_slice_starting_after_a_dedent_keeps_its_own_indentation_baseline(self):
+        src = "def a():\n    return 1\n\n\ndef b():\n    if x:\n        return 2\n"
+        text = cn.PythonTokens(src).normalize(5, 7)
+        self.assertEqual(text, "def b ( ) :\n    if x :\n        return 2")
+
     def test_normalized_output_is_readable_and_keeps_depth(self):
         text = cn.normalize_text("def f(a):\n    if a:\n        return 'x'\n    return 2\n", "python")
         self.assertEqual(text, 'def f ( a ) :\n    if a :\n        return "x"\n    return 2')
