@@ -4397,6 +4397,162 @@ the Odoo known-red baseline and are not bisected) and a relay `error` as a shard
 
 A bug-hunt claim's `code_hash` is stale only when the anchored code changed, never for a comment or a formatter. The claim records `hash_algorithm: v2` next to `code_hash`: the sha256 of the item's token stream (Python `tokenize`, a Rust lexer, a JavaScript lexer that tells a regex from a division, canonical XML for XML/QWeb, a shell lexer and an SQL lexer), so formatting, comments, quote style and trailing commas do not reach it and every code token and string value does. `v1` (raw text) and `v1b` (comment-insensitive text, Python only) are the older algorithms. A claim with no `hash_algorithm` is legacy; the date table `ALGORITHM_BY_DATE` maps the date of the commit that last wrote the claim file (or a front matter `date:`, never the mtime) to its algorithm. When a legacy claim's exact hash no longer matches, `check_claims_freshness.py` and `check_claims.py` load the function as of the claim's commit, compute v2 over that text and over the current text, and treat the claim as fresh when they are equal; the verdict is cached in `~/.cache/hams_claims/` (`HAMS_CLAIM_CACHE_DIR`). There is no repo-wide re-hash: old claims are never rewritten to survive a tool change. `bug-hunt/normalized_view.py <file> [--function NAME]` (hams_com) prints the normalized text.
 
+## Mutation testing (`mutation_harness.py`)
+
+`mutation_harness.py --root TREE --file REL --cwd REL --test "CMD"` mutates one Python file (flipped comparisons, negated
+conditions, deleted raises and returns, and/or swaps, constants changed by one, call results replaced by None), runs the tests
+per mutant and prints the surviving mutants. **Mutation testing is only done on a COPY of the tree.** A worktree's `hams_shared`
+entry is a symlink to the main checkout, and a mutant written through it once deleted `tools/lint_stamp_gate.py` in the main
+checkout (incident 2026-11-09). The harness clones the tree with hardlinks into its own work directory, refuses
+(`require_inside_copy`) any path that does not resolve inside that copy, and checks the original file is byte-identical at the end.
+Pass `--root` as a real tree, never a path whose target lives behind a symlink. Tests: `test_mutation_harness.py`.
+
+`mutation_harness.py --budget SECONDS` starts no new mutant after that time and prints `PARTIAL: R of N mutants run before the budget`; `mutation_run.py` uses it.
+
+## Overnight automation (`overnight_common.py`, `mutation_run.py`, `fuzz_run.py`, `hypothesis_scale.py`)
+
+Bruce, 2026-11-09: automate the processes paused to save tokens as scripts, so mechanical, CPU-heavy work runs unattended and an agent starts only when a finding needs
+judgment. The hams_com scripts that use these (`devbox_tools/overnight/`: `land_pr.py`, `queue_triage.py`, `gate_delta.py`, `driver.py`) and the runbook are in hams_com
+(`docs/runbooks/OVERNIGHT_AUTOMATION.md`). Rules: every process wait and stop goes through `agent_procs.py` (`overnight_common.run_job`), nothing is committed or pushed, no
+network write, scripts are idempotent, nothing starts when the load display says HOLD or memory is low (`overnight_common.read_load`), and a live checkout is never mutated.
+
+- `mutation_run.py TARGETS.toml` runs the copy-only harness over a list of targets (root, file, cwd, test, budget_minutes, workers, timeout, funcs): the tree is rsync-copied
+  into a `ram_dirs.py run` scratch directory, the harness runs at nice 10 with the budget, and `<reports>/mutation/<name>.json` records mutants, killed, survivors
+  (`file`, `line`, `operator`), score and `original_unchanged`. A `done` result for the same file hash, test and funcs younger than 7 days is skipped.
+- `fuzz_run.py TARGETS.toml` runs `cargo-fuzz`, stable-toolchain `libfuzzer` bins and Hypothesis tests (with `hypothesis_scale.py` raising every `@given` to
+  `examples`) for a time budget each, minimizes new crashes, stores artifacts under `<reports>/fuzz/state/<name>/` and writes a night_shift_todo stub per NEW crash to
+  `<reports>/findings/` (never committed). A crash is new when its sha256 is not in `seen.json`.
+- Exit codes: 0 ok, 1 a target failed or crashed, 2 bad targets file, 4 not idle (load HOLD or memory low: nothing ran).
+- Tests: `test_overnight_common.py`, `test_mutation_run.py`, `test_fuzz_run.py` (the ones that start real jobs are `heavy`: `HAMS_SKIP_HEAVY=1` skips them).
+
+### `[@ANCHOR: overnight_common:reports_dir]` `reports_dir(environ=None)`
+
+`$HAMS_REPORTS_DIR`, else `~/workspace/tmp/reports`. Holds `overnight.log`, `mutation/`, `fuzz/`, `findings/`. Pure.
+
+### `[@ANCHOR: overnight_common:log_line]` `log_line(path, text, now=time.time)`
+
+Appends `YYYY-MM-DD HH:MM:SS text` (one line, newlines folded) to `path`, creating the directory. Never raises on a write error.
+
+### `[@ANCHOR: overnight_common:write_json]` `write_json(path, data)`
+
+Writes `data` as JSON to `path` through a temporary file and `os.replace`, so a reader never sees half a file.
+
+### `[@ANCHOR: overnight_common:slug]` `slug(text, limit=48)`
+
+A file- and job-name-safe form of `text` (letters, digits, `.`, `_`, `-`), never empty, at most `limit` characters.
+
+### `[@ANCHOR: overnight_common:load_targets]` `load_targets(path, required=('name',), home=None)`
+
+The `[[target]]` tables of a TOML targets file, each a dict with `~` expanded in string values that start with it. Raises `ValueError` (with the file name and the target's number) for a file that is not TOML, has no `[[target]]`, lacks a required key, or repeats a name. Targets whose `enabled` is false are dropped.
+
+### `[@ANCHOR: overnight_common:Load]` `Load()`
+
+What the load display says right now. `state` is OK or HOLD (dispatch_ok), `reasons` its text, `test_running`/`test_slots`/`lint_running` the queue figures, `mem_available_gb` from /proc/meminfo (None when unreadable).
+
+### `[@ANCHOR: overnight_common:read_load]` `read_load(stats_path=dispatch_ok.DEFAULT_STATS, meminfo='/proc/meminfo', now=time.time, lint_slots=None)`
+
+The `Load` now: `dispatch_ok.evaluate` for the verdict (a missing or stale load display is HOLD), the stats file's `queues` and `test_slots` for the slot use, `lint_lock.slot_count` for the lint slots (`lint_slots` overrides, for tests).
+
+### `[@ANCHOR: overnight_common:run_job]` `run_job(name, argv, cwd=None, timeout=3600.0, env=None, grace=30.0)`
+
+Runs `argv` as the named job `name` through `agent_procs.py run`, blocks in ONE `agent_procs.py wait --job NAME --timeout T`, and when the time limit passes stops the job with `agent_procs.py stop NAME` (SIGTERM to its own group, never SIGKILL). Returns a `JobResult` (the job's log is `~/.cache/hams-jobs/NAME.log` or under `$HAMS_JOBS_DIR`). A job of that name that is still running is an `error` result (nothing started). No pgrep, kill or pid from ps is involved.
+
+### `[@ANCHOR: mutation_run:result_path]` `result_path(out_dir, name)`
+
+`<out_dir>/<slug(name)>.json`.
+
+### `[@ANCHOR: mutation_run:fingerprint]` `fingerprint(target)`
+
+What decides that an earlier `done` result still holds: the target file's sha256 (None when it is missing), the test command and the funcs.
+
+### `[@ANCHOR: mutation_run:is_fresh]` `is_fresh(previous, current, max_age_days, now=time.time)`
+
+True when `previous` (a result document or None) is `done`, has the same fingerprint as `current` and is younger than `max_age_days`.
+
+### `[@ANCHOR: mutation_run:parse_harness_log]` `parse_harness_log(text)`
+
+`{mutants, killed, run, partial, survivors}` from the harness's output: `N mutants`, `score K/R = P%`, `PARTIAL: ...` and one `SURVIVED line L: OPERATOR` per survivor. Missing pieces are 0 / []. Pure.
+
+### `[@ANCHOR: mutation_run:build_result]` `build_result(target, parsed, status, seconds, log, unchanged, now=time.time)`
+
+The result document for one target (see the module text). `score` is killed / run in percent (None when nothing ran).
+
+### `[@ANCHOR: mutation_run:run_worker]` `run_worker(spec_path)`
+
+Worker mode (started by `ram_dirs.py run` inside the job): copy the tree into `$CARGO_TARGET_DIR/src`, run the harness on the copy (as a job of its own, with the budget), parse its output and write the result file named in the spec. Returns the exit status.
+
+### `[@ANCHOR: mutation_run:run_target]` `run_target(target, out_dir, force=False, max_age_days=7.0, dry_run=False, now=time.time)`
+
+Runs one target and returns `(status, result path)`: `skipped` (a fresh result exists), `dry-run`, `missing` (the file is not there) or the result's status.
+
+### `[@ANCHOR: mutation_run:summary_line]` `summary_line(results)`
+
+One line: `mutation: 3 target(s): 2 done, 1 skipped; survivors 4`, from `[(name, status, path)]` and the result files.
+
+### `[@ANCHOR: mutation_run:main]` `main(argv=None, load=common.read_load)`
+
+
+
+### `[@ANCHOR: fuzz_run:cargo_fuzz_available]` `cargo_fuzz_available(target)`
+
+True when `cargo fuzz --version` works (a short bounded probe, nothing is started).
+
+### `[@ANCHOR: fuzz_run:is_live_checkout]` `is_live_checkout(path, workspace=None)`
+
+True when `path` (symlinks resolved) is the main hams_com, hams_open or hams_shared checkout under `workspace` (default ~/workspace) or inside one that is not a worktree: a fuzz run builds there and writes `Cargo.lock`, so it belongs in a clean worktree.
+
+### `[@ANCHOR: fuzz_run:state_paths]` `state_paths(out_dir, name)`
+
+The per-target directories under `<out_dir>/state/<slug(name)>`: corpus, artifacts, crashes, min, hypothesis-db, and the `seen.json` path.
+
+### `[@ANCHOR: fuzz_run:new_crash_files]` `new_crash_files(artifact_dir, seen)`
+
+Sorted `(path, sha256)` of the crash files in `artifact_dir` (names starting crash-, oom-, timeout-, leak-, slow-unit-) whose hash is not in `seen`.
+
+### `[@ANCHOR: fuzz_run:extract_stack]` `extract_stack(text, limit=60)`
+
+The part of a reproduction log that is the failure: from the first line that looks like a panic, sanitizer error, deadly signal or Hypothesis falsifying example to the end, at most `limit` lines. The last `limit` lines when none matches. Pure.
+
+### `[@ANCHOR: fuzz_run:repo_of]` `repo_of(path)`
+
+`hams_com`, `hams_open` or `hams_shared` when `path` lies in a directory of that name (a job directory holds `hams_shared_wt`), else "".
+
+### `[@ANCHOR: fuzz_run:stub_text]` `stub_text(target, sha, repro, minimized, stack, when=None)`
+
+The night_shift_todo stub for one new crash: front matter (status open, repo, category bug, created_at), the title, the repro command, the minimized input path and the stack. Pure apart from the date.
+
+### `[@ANCHOR: fuzz_run:run_cargo_fuzz]` `run_cargo_fuzz(target, out_dir, findings_dir, dry_run=False)`
+
+One cargo-fuzz target; returns the result document. Refuses a live main checkout (`error`), reports `unavailable` when cargo-fuzz is missing.
+
+### `[@ANCHOR: fuzz_run:run_libfuzzer_worker]` `run_libfuzzer_worker(spec_path)`
+
+Worker mode, started inside `ram_dirs.py run` (so `CARGO_TARGET_DIR` is the job's own directory): build the bin, run it for the budget, minimize and reproduce every new crash with the binary itself, and write `{status, crashes: [{sha, input, minimized, stack, repro}], log}` to the spec's `worker_result`. Returns 0 when it wrote a result.
+
+### `[@ANCHOR: fuzz_run:run_libfuzzer]` `run_libfuzzer(target, out_dir, findings_dir, dry_run=False)`
+
+One `libfuzzer` target (stable toolchain, no cargo-fuzz); returns the result document. Refuses a live main checkout.
+
+### `[@ANCHOR: fuzz_run:falsifying_signature]` `falsifying_signature(text)`
+
+`(sha256, block)` of the first `Falsifying example` (newer Hypothesis: `Failing test case`) block in a pytest log (the block runs to the first blank line), or None. Two runs that fail on the same shrunk example give the same sha, so a re-run does not write a second stub.
+
+### `[@ANCHOR: fuzz_run:run_hypothesis]` `run_hypothesis(target, out_dir, findings_dir, dry_run=False)`
+
+One Hypothesis target (pytest with `hypothesis_scale.py`); returns the result document.
+
+### `[@ANCHOR: fuzz_run:summary_line]` `summary_line(documents)`
+
+`fuzz: 3 target(s): 2 clean, 1 crashes; new crashes 1` from the result documents.
+
+### `[@ANCHOR: fuzz_run:main]` `main(argv=None, load=common.read_load)`
+
+
+
+### `[@ANCHOR: hypothesis_scale:scale_item]` `scale_item(function, examples, database=None)`
+
+Replace the Hypothesis settings of `function` (the test function a `@given` produced; a bound method's `__func__` is used). Returns True when changed.
+
 ## Moving instruction text without losing a rule (`check_no_rule_lost.py`, 2026-11-09)
 
 Every agent re-reads `AGENTS.md` / `CLAUDE.md` from the prompt cache on every turn (measured 2026-11-09: over 96 % of agent input tokens are cache reads,
