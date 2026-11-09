@@ -119,6 +119,7 @@ def parse_domain_file(text, defaults=None, reserved=()):
     return entries, problems
 
 
+# [@ANCHOR: parking_ctl:check_values]
 def check_values(domain, values):
     if values["behavior"] not in BEHAVIORS:
         return f"behavior must be one of {', '.join(BEHAVIORS)}"
@@ -127,11 +128,12 @@ def check_values(domain, values):
     if not 0 <= values["cache_ttl"] <= 31536000:
         return "ttl must be 0..31536000"
     if values["behavior"] == "redirect":
-        return check_redirect(domain, values["redirect_url"])
+        return check_redirect(domain, values["redirect_url"], values["include_www"])
     return ""
 
 
-def check_redirect(domain, url):
+# [@ANCHOR: parking_ctl:check_redirect]
+def check_redirect(domain, url, include_www=False):
     if not url or not isinstance(url, str) or len(url) > 2000:
         return "redirect needs url=https://..."
     if any(ord(ch) < 33 or ord(ch) == 127 for ch in url) or "\\" in url:
@@ -144,7 +146,8 @@ def check_redirect(domain, url):
         parts.port
     except (lib.SpecError, ValueError):
         return "url host or port is invalid"
-    if host == domain:
+    if host == domain or (include_www and host == "www." + domain):
+        # With www=1 the record also answers for www.<domain>, so a redirect to it comes straight back to the same record: a loop.
         return "url redirects to the domain itself"
     return ""
 
@@ -197,6 +200,7 @@ class OdooClient:
         return self.call("parking.domain", "write", [ids, vals])
 
 
+# [@ANCHOR: parking_ctl:connect]
 def connect(args):
     try:
         with open(args.password_file, "r", encoding="utf-8") as handle:  # audit-ignore-path
@@ -299,6 +303,7 @@ def cmd_plan(args, out):
     return 0
 
 
+# [@ANCHOR: parking_ctl:cmd_apply]
 def cmd_apply(args, out):
     entries, problems = read_entries(args)
     for problem in problems:
@@ -322,6 +327,7 @@ def cmd_apply(args, out):
     return 0
 
 
+# [@ANCHOR: parking_ctl:cmd_archive]
 def cmd_archive(args, out):
     entries, problems = read_entries(args)
     if problems:

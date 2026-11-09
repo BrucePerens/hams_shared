@@ -167,8 +167,9 @@ class ProcReadingTests(ProcTestCase):
         shutil.copy(shutil.which("sleep"), weird)
         proc = subprocess.Popen([weird, "60"], start_new_session=True)
         self.spawned.append(proc)
+        # Wait for the exec to settle too: a just-copied binary being paged in under load is briefly in state D, which failed this on a loaded box.
         self.until(lambda: (ap.read_proc(proc.pid) or ap.ProcInfo(0, 0, 0, 0, 0, "", "", 0, "", ("",), None)).comm
-                   == "we) (ird")
+                   == "we) (ird" and ap.read_proc(proc.pid).state in ("S", "R"))
         info = ap.read_proc(proc.pid)
         self.assertEqual(info.state in ("S", "R"), True)
         self.assertEqual(info.ppid, os.getpid())

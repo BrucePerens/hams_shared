@@ -72,6 +72,7 @@ class Result:
     cached: bool = True
 
 
+# [@ANCHOR: provision_cache:cache_root]
 def cache_root():
     """HAMS_PROVISION_CACHE, else /var/cache/hams-provision for root, else ~/.cache/hams_provision."""
     override = os.environ.get(CACHE_ENV)
@@ -86,6 +87,7 @@ def refresh_requested():
     return os.environ.get(REFRESH_ENV, "") == "1"
 
 
+# [@ANCHOR: provision_cache:max_age_seconds]
 def max_age_seconds():
     try:
         days = float(os.environ.get(MAX_AGE_ENV, DEFAULT_MAX_AGE_DAYS))
@@ -96,6 +98,7 @@ def max_age_seconds():
     return max(days, 0.0) * 86400
 
 
+# [@ANCHOR: provision_cache:is_cacheable]
 def is_cacheable(url):
     """True only for a plain https URL with no credentials in it."""
     parts = urllib.parse.urlsplit(url)
@@ -129,6 +132,7 @@ def _load_meta(entry):
     return meta if isinstance(meta, dict) else {}
 
 
+# [@ANCHOR: provision_cache:_write_meta]
 def _write_meta(entry, meta):
     fd, tmp = tempfile.mkstemp(dir=entry, prefix=".meta-", suffix=".tmp")
     try:
@@ -149,6 +153,7 @@ def _unlink(path):
         pass
 
 
+# [@ANCHOR: provision_cache:_usable_blob]
 def _usable_blob(entry, meta):
     """The cached blob path when it exists and still has the hash the index recorded, else None."""
     digest = meta.get("sha256")
@@ -172,6 +177,7 @@ def _header(headers, name):
     return value if isinstance(value, str) and value else None
 
 
+# [@ANCHOR: provision_cache:_urlopen_downloader]
 def _urlopen_downloader(user_agent, timeout, max_bytes):
     """The default transport: GET with conditional headers. Returns (status, headers); 304 writes nothing."""
     def download(url, tmp_path, request_headers):
@@ -197,6 +203,7 @@ def _urlopen_downloader(user_agent, timeout, max_bytes):
     return download
 
 
+# [@ANCHOR: provision_cache:fetch]
 def fetch(url, *, user_agent="HamsComProvisioning/1.0 (+https://hams.com)", expected_sha256=None,
           downloader=None, timeout=30, max_bytes=DEFAULT_MAX_BYTES, refresh=None, max_age=None, now=None):
     """Returns a Result for `url`, using the cache per the module docstring.
@@ -289,6 +296,7 @@ def fetch(url, *, user_agent="HamsComProvisioning/1.0 (+https://hams.com)", expe
         _unlink(tmp)
 
 
+# [@ANCHOR: provision_cache:install]
 def install(result, dest, mode):
     """Copies the fetched file to `dest` atomically (temporary file in the same directory, then rename), so a
     reader never sees a partial file and a failure leaves any existing `dest` untouched. Removes the source

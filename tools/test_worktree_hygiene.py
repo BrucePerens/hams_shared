@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import worktree_hygiene as wh  # noqa: E402
@@ -96,6 +97,31 @@ class WorktreeHygieneTest(unittest.TestCase):
         self.assertEqual(report["deleted"], ["merged-old"])
         self.assertEqual([branch for _, branch, _ in report["stale"]], ["unmerged-old"])
         self.assertIn("unmerged-old", _git(self.repo, "branch", "--format=%(refname:short)"))
+
+    def test_a_branch_made_now_at_an_old_commit_is_not_deleted_as_idle(self):
+        env = {**os.environ, "GIT_COMMITTER_DATE": "2020-01-01T00:00:00", "GIT_AUTHOR_DATE": "2020-01-01T00:00:00"}
+        with open(os.path.join(self.repo, "old"), "w") as handle:
+            handle.write("x")
+        _git(self.repo, "add", "old")
+        subprocess.run(
+            ["git", "-C", self.repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "old"], env=env, check=True
+        )
+        _git(self.repo, "push", "-q", "origin", "main")
+        _git(self.repo, "branch", "at-old-commit", "origin/main")
+        report = wh.run(self.repo, True, 1800, {})
+        self.assertEqual(report["deleted"], [])
+        self.assertIn("at-old-commit", _git(self.repo, "branch", "--format=%(refname:short)"))
+
+    def test_the_main_working_trees_own_branch_is_not_deleted_and_does_not_abort_the_run(self):
+        _git(self.repo, "checkout", "-q", "-b", "on-main-tree", "origin/main")
+        _git(self.repo, "branch", "merged-old")
+        report = wh.run(self.repo, True, 1800, {}, now=time.time() + 3600)
+        self.assertEqual(report["deleted"], ["merged-old"])
+        self.assertIn("on-main-tree", _git(self.repo, "branch", "--format=%(refname:short)"))
+
+    def test_a_missing_gh_gives_no_merged_heads_instead_of_an_exception(self):
+        with unittest.mock.patch.object(wh.subprocess, "run", side_effect=FileNotFoundError("gh")):
+            self.assertEqual(wh.merged_pull_request_heads(self.repo), {})
 
     def test_the_exit_status_is_one_when_something_is_stale(self):
         path = self.worktree("ahead")

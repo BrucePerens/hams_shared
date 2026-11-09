@@ -91,6 +91,14 @@ class ParseTests(unittest.TestCase):
                        "No closing quotation", "Odoo tenant", "itself", "credentials"):
             self.assertIn(needle, joined)
 
+    def test_a_redirect_to_the_www_name_of_the_same_domain_is_a_loop_only_while_www_is_served(self):
+        entries, problems = ctl.parse_domain_file("a.com behavior=redirect url=https://www.a.com/")
+        self.assertEqual(entries, {})
+        self.assertIn("itself", problems[0])
+        entries, problems = ctl.parse_domain_file("a.com behavior=redirect url=https://www.a.com/ www=0")
+        self.assertEqual(problems, [])
+        self.assertIn("a.com", entries)
+
     def test_defaults_from_the_command_line_apply(self):
         entries, problems = self.parse("a.example\nb.example behavior=gone\n",
                                        defaults={"behavior": "redirect", "redirect_url": "https://t.example/"})

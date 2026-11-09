@@ -58,7 +58,9 @@ _logger = logging.getLogger(__name__)
 SCRATCH_DB_PREFIX = "tmp_"
 
 DEFAULT_MAX_AGE_HOURS = 6
-PG_DATA_BASE_DIR = "/var/lib/postgresql/17/main/base"
+# None: ask the server (`SHOW data_directory`). The major version used to be written into this path (17), and the dev box runs 18, so
+# every database's base directory was missing, no age could be read, and the reaper skipped everything without ever dropping one.
+PG_DATA_BASE_DIR = None
 
 # `dropdb` operates at the PostgreSQL level and has no concept of Odoo's filestore -- only
 # Odoo's own `/web/database/manager` "Drop" action (odoo.service.db.exp_drop()) removes the
@@ -82,6 +84,7 @@ def _run_psql(sql: str) -> str:
     return result.stdout
 
 
+# [@ANCHOR: reap_stale_test_databases:_list_scratch_databases]
 def _list_scratch_databases() -> dict[str, int]:
     """Returns {datname: oid} for every database matching the reserved scratch-db prefix."""
     out = _run_psql("SELECT datname, oid FROM pg_database ORDER BY datname;")
@@ -97,6 +100,16 @@ def _list_scratch_databases() -> dict[str, int]:
     return candidates
 
 
+# [@ANCHOR: reap_stale_test_databases:_pg_base_dir]
+def _pg_base_dir() -> str:
+    """The `base` directory (one subdirectory per database OID) of the running server, from `SHOW data_directory`."""
+    data_directory = _run_psql("SHOW data_directory;").strip()
+    if not os.path.isabs(data_directory):
+        raise ValueError(f"unexpected data_directory {data_directory!r}")
+    return os.path.join(data_directory, "base")
+
+
+# [@ANCHOR: reap_stale_test_databases:_open_database_names]
 def _open_database_names() -> set[str]:
     """Databases with at least one live connection right now -- never reap these."""
     out = _run_psql("SELECT DISTINCT datname FROM pg_stat_activity WHERE datname IS NOT NULL;")
@@ -107,6 +120,7 @@ def _raise(exc):
     raise exc
 
 
+# [@ANCHOR: reap_stale_test_databases:_dir_tree_max_mtime]
 def _dir_tree_max_mtime(base_dir: str) -> float:
     """The most recent mtime among `base_dir` itself and every file/directory inside it,
     recursively. Raises OSError (propagated, never swallowed) if `base_dir` can't be stat'd, or
@@ -123,6 +137,7 @@ def _dir_tree_max_mtime(base_dir: str) -> float:
     return max_mtime
 
 
+# [@ANCHOR: reap_stale_test_databases:_sudo_dir_tree_max_mtime]
 def _sudo_dir_tree_max_mtime(base_dir: str) -> float:
     """Same as `_dir_tree_max_mtime`, via `sudo find` for a directory owned by postgres and
     unreadable from this account."""
@@ -142,6 +157,7 @@ def _sudo_dir_tree_max_mtime(base_dir: str) -> float:
     return max(mtimes)
 
 
+# [@ANCHOR: reap_stale_test_databases:_database_age_hours]
 def _database_age_hours(oid: int) -> float | None:
     """Hours since the most recent observed write anywhere under this database's own OID
     directory.
@@ -168,7 +184,7 @@ def _database_age_hours(oid: int) -> float | None:
     recent mtime across the base directory AND every file inside it, recursively, which correctly
     reflects real write activity regardless of whether it happened to also touch the directory's
     own entry list."""
-    base_dir = os.path.join(PG_DATA_BASE_DIR, str(oid))
+    base_dir = os.path.join(PG_DATA_BASE_DIR or _pg_base_dir(), str(oid))
     try:
         mtime = _dir_tree_max_mtime(base_dir)
     except OSError:
@@ -181,6 +197,7 @@ def _database_age_hours(oid: int) -> float | None:
     return age / 3600.0
 
 
+# [@ANCHOR: reap_stale_test_databases:find_reapable_databases]
 def find_reapable_databases(max_age_hours: float) -> list[str]:
     candidates = _list_scratch_databases()
     open_dbs = _open_database_names()
@@ -203,6 +220,7 @@ def find_reapable_databases(max_age_hours: float) -> list[str]:
     return reapable
 
 
+# [@ANCHOR: reap_stale_test_databases:_drop_one]
 def _drop_one(datname: str, dry_run: bool = False) -> bool:
     """Drop one scratch database and, only if the drop itself actually succeeded (or the
     database was already gone), remove its Odoo filestore directory too. Returns True if the
