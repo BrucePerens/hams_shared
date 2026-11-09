@@ -32,6 +32,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import hang_guard
+
 # Directories no scanner descends into (heavy, generated, or other sessions' worktrees). Used
 # only to fingerprint step inputs and to enumerate changed files; the checkers keep their own
 # exclusion lists.
@@ -164,6 +166,7 @@ class Result:
     cached: bool = False
     skipped: str = None
     saturated: str = ""  # why the machine was saturated when a FAILED step ended ("" when it was not, or the step passed)
+    timed_out: bool = False  # stopped by its wall-clock limit (hang_guard): a failure that is never rerun; the output names the hang report
 
 
 def step_to_dict(step):
@@ -461,12 +464,14 @@ def timeout_suspect(result):
     machine was saturated when it ended (`Result.saturated`) and its output speaks of a timeout (`TIMEOUT_TEXT`). Such a step is rerun
     once alone after the batch (run_linters.py); a real failure that merely mentions a timeout reruns uselessly but cheaply and is
     still a failure when it fails again."""
-    return bool(result.returncode != 0 and not result.cached and result.saturated and TIMEOUT_TEXT.search(result.output or ""))
+    return bool(result.returncode != 0 and not result.cached and not result.timed_out and result.saturated and TIMEOUT_TEXT.search(result.output or ""))
 
 
 # [@ANCHOR: lint_exec:run_step]
-def run_step(step, locks):
-    """Run one step; never raises for a checker failure."""
+def run_step(step, locks, recent=(), deadline=None):
+    """Run one step; never raises for a checker failure. It runs at most `hang_guard.step_limit` seconds (from its `recent` durations; also
+    at most until `deadline`, a `time.monotonic()` value, the whole run's cap): past that a hang report is written, the step's own process
+    group is stopped and the result is a TIMED OUT failure naming the report."""
     started = time.monotonic()
     if step.argv is None:
         elapsed = time.monotonic() - started
@@ -479,14 +484,17 @@ def run_step(step, locks):
         try:
             with machine_wide_lock(step.name):
                 started = time.monotonic()
-                res = subprocess.run(
-                    with_xdist(step, _xdist_workers[0]),
-                    capture_output=True,
-                    text=True,
-                    cwd=step.cwd,
-                    env=dict(step.env if step.env is not None else os.environ,
-                             HAMS_LINT_TIMEOUT_SCALE=str(timeout_scale(step.env if step.env is not None else os.environ))),
-                )
+                environ = step.env if step.env is not None else os.environ
+                scale = timeout_scale(environ)
+                limit = hang_guard.step_limit(step.name, recent, environ, scale)
+                capped = deadline is not None and deadline - started < limit
+                if capped:
+                    limit = max(deadline - started, 1.0)
+                env = dict(environ, HAMS_LINT_TIMEOUT_SCALE=str(scale))
+                if "faulthandler_timeout" not in env.get("PYTEST_ADDOPTS", ""):  # a hung pytest test dumps every thread's stack by itself
+                    env["PYTEST_ADDOPTS"] = (env.get("PYTEST_ADDOPTS", "") + f" -o faulthandler_timeout={int(min(limit, 600))}").strip()
+                res, report, timed_out = hang_guard.run_limited(
+                    with_xdist(step, _xdist_workers[0]), limit, step.name, hang_guard.report_dir(environ), cwd=step.cwd, env=env)
         except FileNotFoundError:
             if step.missing_msg is None:
                 raise
@@ -497,6 +505,11 @@ def run_step(step, locks):
             lock.release()
     elapsed = time.monotonic() - started
     output = render_output(step, res.returncode, res.stdout, res.stderr)
+    if timed_out:
+        why = "the whole-run cap" if capped else "its limit"
+        output += (f"\n[!] {step.name}: TIMED OUT after {elapsed:.0f} s ({why}); the step's process group was stopped. "
+                   f"Hang report: {report or '(not written)'}\n")
+        return Result(step.name, hang_guard.TIMED_OUT_CODE, output, elapsed, timed_out=True)
     why = saturation()[1] if res.returncode != 0 else ""
     return Result(step.name, res.returncode, output, elapsed, saturated=why)
 
@@ -612,6 +625,8 @@ class Cache:
             if result.skipped or result.cached:
                 return
             self.data["seconds"][result.name] = round(result.seconds, 2)
+            if result.returncode == 0 or result.timed_out:  # a quick failure says nothing about how long the step usually takes
+                hang_guard.remember(self.data.setdefault("recent", {}), result.name, result.seconds)
             if result.returncode == 0 and key:
                 self.data["ok"][result.name] = {
                     "key": key,
@@ -619,6 +634,10 @@ class Cache:
                 }
             else:
                 self.data["ok"].pop(result.name, None)
+
+    def recent_seconds(self, name):
+        with self._lock:
+            return list(self.data.get("recent", {}).get(name, ()))
 
     def known_seconds(self, name):
         return self.data["seconds"].get(name, 0.0)
@@ -680,6 +699,7 @@ def execute(steps, jobs, cache=None, fingerprints=None, out=None):
             locks[step.lock] = threading.Lock()
     results = [None] * len(steps)
     keys = [None] * len(steps)
+    deadline = time.monotonic() + hang_guard.run_cap()
 
     def work(index):
         step = steps[index]
@@ -690,7 +710,7 @@ def execute(steps, jobs, cache=None, fingerprints=None, out=None):
                 stored = cache.hit(step.name, key)
                 if stored is not None:
                     return index, Result(step.name, 0, stored, 0.0, cached=True), key
-        result = run_step(step, locks)
+        result = run_step(step, locks, cache.recent_seconds(step.name) if cache is not None else (), deadline)
         return index, result, key
 
     order = list(range(len(steps)))

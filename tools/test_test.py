@@ -322,6 +322,13 @@ class RunCmdHangRecoveryTests(unittest.TestCase):
     time, not something time.time() mocking affects).
     """
 
+    def setUp(self):
+        self.reports = tempfile.TemporaryDirectory()
+        self.addCleanup(self.reports.cleanup)
+        patcher = patch.dict(os.environ, {"HAMS_HANG_REPORT_DIR": self.reports.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _fake_clock(self):
         # Starts at the real current time (captured here, BEFORE the
         # caller's patch("time.time", ...) context is entered -- so any
@@ -347,6 +354,14 @@ class RunCmdHangRecoveryTests(unittest.TestCase):
             "attempts must be reported as a failure, not silently retried "
             "forever nor treated as a pass"
         )
+
+    def test_a_run_over_the_wall_clock_cap_is_reported_with_a_hang_report_and_fails_even_while_it_prints(self):
+        with tempfile.TemporaryDirectory() as reports, patch.object(_test_runner, "RUN_CMD_WALL_CAP_SECONDS", 2), \
+                patch.dict(os.environ, {"HAMS_HANG_REPORT_DIR": reports}):
+            rc = _test_runner.run_cmd(["sh", "-c", "while true; do echo tick; sleep 0.2; done"])
+            written = os.listdir(reports)
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(written), 1)
 
     def test_force_killed_is_reported_as_failure_even_with_zero_captured_errors(self):
         # Before this pass's second fix, `if force_killed: return 1 if

@@ -52,6 +52,7 @@ import host_requirements
 import infrastructure
 import bisect_modules
 import gate_snapshot
+import hang_guard
 import known_red
 import lock_queue
 import odoo_test_batch
@@ -1154,6 +1155,9 @@ RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS = 5
 # see the comment on total_hang_recovery_attempts inside run_cmd for why this
 # exists alongside the consecutive-only cap above.
 RUN_CMD_MAX_TOTAL_HANG_RECOVERY_ATTEMPTS = 10
+# Wall-clock cap of one Odoo test run, however steadily it prints (Bruce, 2026-11-09): HAMS_TEST_RUN_CAP seconds, default 4 hours (the
+# whole-system run of 66 modules takes about 2). Past it a hang report (hang_guard) is written, then the run is reaped and fails.
+RUN_CMD_WALL_CAP_SECONDS = 4 * 3600
 
 
 # Where the Odoo test process (and the headless Chrome profiles it creates) keeps its temporary files. /tmp on the development box is a
@@ -1377,6 +1381,8 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
     total_hang_recovery_attempts = 0
     q = queue.Queue()
     last_output_time = time.time()
+    run_started = time.monotonic()
+    wall_cap = hang_guard.number(os.environ, "HAMS_TEST_RUN_CAP", RUN_CMD_WALL_CAP_SECONDS)
 
     def reader():
         print(f"[*] [DEBUG-RUNNER] IO Reader thread started for PID {process.pid}")
@@ -1394,6 +1400,12 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
 
     try:
         while True:
+            if time.monotonic() - run_started > wall_cap:
+                report = hang_guard.write_hang_report(process.pid, "odoo test run", f"wall-clock cap of {wall_cap:.0f} s reached")
+                print(f"\n[!] TEST TIMEOUT: the run is over its wall-clock cap of {wall_cap:.0f} s (HAMS_TEST_RUN_CAP). Hang report: {report}. Killing the test process...\n")
+                robust_reap(process.pid)
+                force_killed = True
+                break
             try:
                 # Short blocking wait allows us to check if the primary process died while a child kept stdout open
                 line = q.get(timeout=1.0)
@@ -1465,6 +1477,8 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                                 "chrome did not un-stick it -- the process is force-killed and "
                                 "this run is reported as a failure.\n\n"
                             )
+                        report = hang_guard.write_hang_report(process.pid, "odoo test run", "no output; un-hang attempts exhausted")
+                        print(f"[!] Hang report: {report}", flush=True)
                         robust_reap(process.pid)
                         force_killed = True
                         break
