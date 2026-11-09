@@ -26,6 +26,7 @@ import calendar
 import dataclasses
 import fcntl
 import json
+import math
 import os
 import re
 import sys
@@ -78,7 +79,7 @@ def max_age_days(environ=None):
         value = float(text)
     except ValueError:
         value = float("nan")
-    if not value > 0 or value == float("inf"):
+    if not math.isfinite(value) or value <= 0:
         raise BaselineError("%s=%r is not a finite number of days above 0" % (MAX_AGE_ENV, text))
     return value
 
