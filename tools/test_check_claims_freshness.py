@@ -16,7 +16,6 @@ import unittest
 from unittest import mock
 
 import check_claims_freshness as ccf  # noqa: E402
-import migrate_claim_hashes as mch  # noqa: E402
 
 
 def _write(path, content):
@@ -643,93 +642,25 @@ class CodeHashIgnoresCommentsTests(unittest.TestCase):
         index = ccf.build_anchor_hash_index(self.tmp)
         self.assertEqual(index, {"my_module:foo": ccf.compute_function_hash(self.path)["my_module:foo"]})
 
+    def _legacy(self, field):
+        with open(self.path, encoding="utf-8") as f:
+            hashes = ccf.function_hashes_from_text(f.read(), self.path)["my_module:foo"]
+        return getattr(hashes, field)
+
     def test_a_legacy_hash_of_unchanged_text_is_still_accepted(self):
-        """Claims written before the definition changed keep passing until migrated."""
+        """Claims written under the older algorithms keep passing while their code is unchanged."""
         _write(self.path, _COMMENTED)
-        legacy = ccf.compute_legacy_function_hash(self.path)["my_module:foo"]
-        self.assertNotEqual(legacy, ccf.compute_function_hash(self.path)["my_module:foo"])
-        self.assertEqual(self._claim_problems(_COMMENTED, legacy), [])
+        for field in ("v1", "v1b"):
+            legacy = self._legacy(field)
+            self.assertNotEqual(legacy, ccf.compute_function_hash(self.path)["my_module:foo"])
+            self.assertEqual(self._claim_problems(_COMMENTED, legacy), [], field)
+            shutil.rmtree(os.path.join(self.tmp, ".git"))
 
-    def test_a_legacy_hash_of_changed_text_is_stale(self):
+    def test_a_legacy_hash_of_changed_code_is_stale(self):
         _write(self.path, _COMMENTED)
-        legacy = ccf.compute_legacy_function_hash(self.path)["my_module:foo"]
-        problems = self._claim_problems(_COMMENTED.replace("add one", "increment"), legacy)
+        legacy = self._legacy("v1")
+        problems = self._claim_problems(_COMMENTED.replace("x + 1", "x + 2"), legacy)
         self.assertEqual(len(problems), 1)
-
-
-class MigrateClaimHashesTests(unittest.TestCase):
-    """The one-sweep migration to the comment-insensitive hash."""
-
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.path = os.path.join(self.tmp, "mod.py")
-        self.claim = os.path.join(self.tmp, "claims", "foo.md")
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def _git(self, *args):
-        subprocess.run(["git", *args], cwd=self.tmp, check=True, capture_output=True)
-
-    def _commit(self, message):
-        self._git("add", "-A")
-        self._git("commit", "-q", "-m", message)
-
-    def _claim_text(self):
-        with open(self.claim, encoding="utf-8") as f:
-            return f.read()
-
-    def _setup_history(self):
-        """Commit 1: the claim is written against _COMMENTED's raw hash. Commit 2: comments
-        reworded. Returns the legacy hash recorded in commit 1."""
-        _write(self.path, _COMMENTED)
-        legacy = ccf.compute_legacy_function_hash(self.path)["my_module:foo"]
-        _write(self.claim, f"---\nanchor: my_module:foo\ncode_hash: sha256:{legacy}\nreview_tier: 1\n---\n\nBody.\n")
-        _init_git_repo(self.tmp)
-        return legacy
-
-    def _run(self, apply):
-        return mch.migrate([self.tmp], [self.tmp], apply=apply, out=lambda *_: None)
-
-    def test_unchanged_code_legacy_hash_is_rewritten(self):
-        self._setup_history()
-        result = self._run(apply=True)
-        self.assertEqual(len(result["legacy"]), 1)
-        norm = ccf.compute_function_hash(self.path)["my_module:foo"]
-        self.assertIn(f"code_hash: sha256:{norm}\n", self._claim_text())
-        self.assertEqual(ccf.check_claims(self.tmp), [])
-
-    def test_comment_only_change_since_the_claim_is_rewritten_via_history(self):
-        self._setup_history()
-        _write(self.path, _COMMENTED.replace("add one", "increment"))
-        self._commit("reword comment")
-        result = self._run(apply=True)
-        self.assertEqual(len(result["comment-only"]), 1)
-        self.assertEqual(result["stale"], [])
-        self.assertEqual(ccf.check_claims(self.tmp), [])
-        self.assertIn("Body.\n", self._claim_text())
-
-    def test_a_real_code_change_since_the_claim_is_reported_and_not_rewritten(self):
-        self._setup_history()
-        before = self._claim_text()
-        _write(self.path, _COMMENTED.replace("x + 1", "x + 2"))
-        self._commit("change code")
-        result = self._run(apply=True)
-        self.assertEqual(len(result["stale"]), 1)
-        self.assertEqual(self._claim_text(), before)
-
-    def test_report_only_without_apply_and_orphans_are_listed(self):
-        self._setup_history()
-        before = self._claim_text()
-        _write(
-            os.path.join(self.tmp, "claims", "gone.md"),
-            "---\nanchor: my_module:gone\ncode_hash: sha256:00\n---\n",
-        )
-        self._commit("orphan")
-        result = self._run(apply=False)
-        self.assertEqual(len(result["legacy"]), 1)
-        self.assertEqual(len(result["orphan"]), 1)
-        self.assertEqual(self._claim_text(), before)
 
 
 if __name__ == "__main__":

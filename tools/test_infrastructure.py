@@ -1336,6 +1336,59 @@ class WriteEnvFilesTests(_TmpDirTestCase):
         self.assertNotIn("DB_PASS=", content)
 
 
+class UnchangeableKeyTests(_TmpDirTestCase):
+    """Bruce, 2026-11-09: provisioning never replaces HAMS_CRYPTO_KEY or another key that backups depend on.
+    Tests [@ANCHOR: infrastructure:_refuse_to_change_unchangeable_keys]"""
+
+    def write_core(self, text):
+        path = os.path.join(self.tmp, "core.env")
+        with open(path, "w") as f:
+            f.write(text)
+        os.chmod(path, 0o600)
+        return path
+
+    def test_a_different_crypto_key_is_refused_and_the_file_is_left_alone(self):
+        path = self.write_core("HAMS_CRYPTO_KEY=old\nDOMAIN=a.example\n")
+        with self.assertRaisesRegex(RuntimeError, "Refusing to change HAMS_CRYPTO_KEY"):
+            infra.write_env_files(self.tmp, {"HAMS_CRYPTO_KEY": "new", "DOMAIN": "a.example"}, MagicMock())
+        with open(path) as f:
+            self.assertEqual(f.read(), "HAMS_CRYPTO_KEY=old\nDOMAIN=a.example\n")
+
+    def test_dropping_the_key_is_refused(self):
+        path = self.write_core("HAMS_CRYPTO_KEY=old\n")
+        with self.assertRaisesRegex(RuntimeError, "Refusing to drop HAMS_CRYPTO_KEY"):
+            infra.write_env_files(self.tmp, {"DOMAIN": "a.example"}, MagicMock())
+        with open(path) as f:
+            self.assertEqual(f.read(), "HAMS_CRYPTO_KEY=old\n")
+
+    def test_the_same_value_new_keys_and_a_missing_file_are_fine(self):
+        self.write_core("HAMS_CRYPTO_KEY=same\n")
+        infra.write_env_files(self.tmp, {"HAMS_CRYPTO_KEY": "same", "DOMAIN": "b.example"}, MagicMock())
+        with open(os.path.join(self.tmp, "core.env")) as f:
+            self.assertIn("HAMS_CRYPTO_KEY=same", f.read())
+        other = os.path.join(self.tmp, "fresh")
+        infra.write_env_files(other, {"HAMS_CRYPTO_KEY": "brand-new"}, MagicMock())
+        with open(os.path.join(other, "core.env")) as f:
+            self.assertIn("HAMS_CRYPTO_KEY=brand-new", f.read())
+
+    def test_other_variables_may_change_and_every_protected_name_is_covered(self):
+        self.write_core("DOMAIN=old.example\n")
+        infra.write_env_files(self.tmp, {"DOMAIN": "new.example"}, MagicMock())
+        for name in ("HAMS_CRYPTO_KEY", "ODOO_BACKUP_CRYPTO_KEY", "KOPIA_PASSWORD", "PGBACKREST_REPO2_CIPHER_PASS", "PGBACKREST_REPO3_CIPHER_TYPE"):
+            path = os.path.join(self.tmp, "x.env")
+            with open(path, "w") as f:
+                f.write(f"{name}=old\n")
+            with self.assertRaises(RuntimeError, msg=name):
+                infra._refuse_to_change_unchangeable_keys(path, f"{name}=new\n")
+        infra._refuse_to_change_unchangeable_keys(os.path.join(self.tmp, "absent.env"), "HAMS_CRYPTO_KEY=x\n")
+
+    def test_the_mode_switch_override_does_not_lift_the_refusal(self):
+        self.write_core("HAMS_CRYPTO_KEY=old\nHAMS_PROVISION_MODE=prod\n")
+        with patch.dict(os.environ, {"HAMS_ALLOW_PROVISION_MODE_SWITCH": "1"}):
+            with self.assertRaises(RuntimeError):
+                infra.write_env_files(self.tmp, {"HAMS_CRYPTO_KEY": "fresh", "HAMS_PROVISION_MODE": "test"}, MagicMock())
+
+
 class ProvisionStaticFilesPermissionTests(_TmpDirTestCase):
     def test_a_pre_existing_looser_permission_file_is_hardened_before_content_is_written(self):
         fake_manifest = {
@@ -1904,6 +1957,58 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         for call in run.call_args_list:
             self.assertNotIn("PASSWORD", " ".join(str(a) for a in call.args[0]) + str(call.kwargs.get("input", "")))
 
+    # Verified by [@ANCHOR: infrastructure:_create_odoo_role_if_missing]
+    def test_a_new_production_role_is_not_a_superuser(self):
+        run = self._run("normalPass123", role_already_exists=False)
+        sql_text = run.call_args.kwargs["input"]
+        self.assertIn("NOSUPERUSER", sql_text)
+        self.assertIn("NOCREATEDB", sql_text)
+        self.assertIn("NOCREATEROLE", sql_text)
+        self.assertIn("NOREPLICATION", sql_text)
+        self.assertIn("NOBYPASSRLS", sql_text)
+        self.assertNotIn("WITH SUPERUSER", sql_text)
+
+    def test_a_new_test_host_role_is_a_superuser(self):
+        # test.py drops and creates databases as `odoo`, so only a test host keeps the superuser role.
+        self.safe_patch_object(infra, "_role_exists", return_value=False)
+        run = MagicMock()
+        infra._create_odoo_role_if_missing(run, "pw", is_test=True)
+        self.assertIn("WITH SUPERUSER LOGIN", run.call_args.kwargs["input"])
+
+    def test_an_existing_production_role_is_never_promoted(self):
+        # A superuser `odoo` role makes any SQL injection command execution as the postgres OS account.
+        self.safe_patch_object(infra, "_role_exists", return_value=True)
+        run = MagicMock()
+        infra._create_odoo_role_if_missing(run, "normalPass123")
+        run.assert_not_called()
+
+    def test_in_test_mode_an_existing_role_is_made_a_superuser_for_test_py(self):
+        self.safe_patch_object(infra, "_role_exists", return_value=True)
+        run = MagicMock()
+        infra._create_odoo_role_if_missing(run, "pw", is_test=True)
+        self.assertTrue(any("ALTER ROLE odoo WITH SUPERUSER;" in " ".join(c.args[0]) for c in run.call_args_list))
+
+    # Verified by [@ANCHOR: infrastructure:_precreate_odoo_extensions]
+    def test_extensions_are_created_by_postgres_in_the_application_database(self):
+        run = MagicMock()
+        infra._precreate_odoo_extensions(run, "hams_prod")
+        cmd = run.call_args.args[0]
+        self.assertEqual(cmd[:4], ["sudo", "-u", "postgres", "psql"])
+        self.assertEqual(cmd[-2:], ["-d", "hams_prod"])
+        for name in ("pg_trgm", "vector"):
+            self.assertIn(f"CREATE EXTENSION IF NOT EXISTS {name};", run.call_args.kwargs["input"])
+
+    def test_a_failing_extension_step_is_logged_not_raised(self):
+        run = MagicMock(side_effect=RuntimeError("no pgvector package"))
+        infra._precreate_odoo_extensions(run, "hams_prod")
+
+    def test_provisioning_precreates_the_extensions_after_the_database_owner_step(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertLess(
+            source.index("_alter_database_owner_to_odoo(run_cmd_func, db_name)"),
+            source.index("_precreate_odoo_extensions(run_cmd_func, db_name)"),
+        )
+
     def test_provisioning_passes_the_test_flag_to_the_role_step(self):
         source = inspect.getsource(infra.provision_environment)
         self.assertIn("_create_odoo_role_if_missing(run_cmd_func, db_pass, is_test=is_test)", source)
@@ -1953,22 +2058,13 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         self.assertNotIn("-c", cmd, f"SQL must not be passed via -c: {cmd!r}")
         self.assertIn("input", call.kwargs, "SQL must be piped over stdin instead")
 
-    def test_existing_role_is_not_recreated_but_is_granted_superuser(self):
-        # hams_shared PR #66 (d31aad3, seen provisioning jetson-1): the
-        # odoo apt package's postinst pre-creates a NON-superuser `odoo` role,
-        # so the already-exists path must still ALTER it to SUPERUSER (needed
-        # for `CREATE EXTENSION vector`). Exactly one command runs: that
-        # ALTER ROLE -- no CREATE ROLE, and db_pass never reaches the argv.
+    def test_existing_role_is_neither_recreated_nor_granted_superuser(self):
+        # Reverses hams_shared PR #66 (d31aad3, jetson-1, 2026-10-02), which ALTERed the odoo apt package's own
+        # non-superuser role to SUPERUSER so `CREATE EXTENSION vector` worked. A superuser `odoo` role makes any SQL injection
+        # command execution as the postgres OS account (hams_com docs/runbooks/ODOO_DB_ROLE_DEMOTION.md). The extension is now
+        # created by postgres (_precreate_odoo_extensions), so no command runs here: no CREATE ROLE, no ALTER ROLE, no db_pass.
         mock_run_cmd_func = self._run("normalPass123", role_already_exists=True)
-        mock_run_cmd_func.assert_called_once_with(
-            ["sudo", "-u", "postgres", "psql", "-c", "ALTER ROLE odoo WITH SUPERUSER;"]
-        )
-        call = mock_run_cmd_func.call_args
-        self.assertNotIn("input", call.kwargs, "the existing-role path must not pipe CREATE ROLE SQL")
-        self.assertFalse(
-            any("normalPass123" in arg for arg in call.args[0]),
-            "db_pass must not be passed when the role already exists",
-        )
+        mock_run_cmd_func.assert_not_called()
 
 
 class ProvisionCacheManagerRoleTests(_TmpDirTestCase):

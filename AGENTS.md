@@ -237,6 +237,15 @@ When debugging tests, especially UI tours, you can use the MCP test server inste
   stop that: choose work that does not queue on lint (builds, tests, rehearsals, profiling, sweeps) and fix the queue bottleneck itself instead of
   throttling agents. A HOLD for memory over its limit or critical CPU still binds: wait and check again, and never stop running agents. When an agent
   is started on a HOLD, say which reasons were shown. No existing rule is withdrawn by this note.
+* **Clarifying note, 2026-11-09 (Bruce): `dispatch_ok.py` is advisory for agent starts; PR landing is throttled by merge queue depth.** The merge queue
+  and the combined lint gate are the bottleneck, not agent slots or CPU. `dispatch_ok.py` therefore also prints `LANDING_OK` or `LANDING_HOLD` on separate
+  lines (HOLD when more than 25 PRs are queued+testing or the oldest queued PR has waited over 60 minutes), and `python3 devbox_tools/queue_depth.py`
+  prints the same as one line. Check it before opening a PR. `LANDING_HOLD` never stops an agent from starting or running (ten or more agents run at all
+  times); it means finish and commit, then fold the change into an already-open PR or hold it, and do gate-free work meanwhile. Agent starts are held only
+  for memory or critical CPU, as above. Work mix: pair landing work with CPU-bound work that needs no gate (whole-system delta runs, property, fuzz and
+  mutation tests, soaks, benchmarks, builds, audits); batch related changes into one PR per module or topic rather than one per finding; and do not start
+  mass edits (comments, claims hashes, renames across many files) while the queue is deep, since they go stale and conflict with other agents' work:
+  schedule them for a quiet queue. No existing rule is withdrawn or condensed by this note.
 
 ### Iterating with `test.py` (one test in seconds; worktrees)
 * **One test or class:** `python3 hams_shared/tools/test.py --wait -u MODULE --test-tags /MODULE:TestClass.test_method`

@@ -3553,9 +3553,178 @@ Purpose: the decision for one command. Returns `None` (allow, print nothing), th
 
 Purpose: the hook entry point. Reads the hook JSON (`tool_name`, `tool_input.command`, `session_id`) from `stdin`, prints the decision JSON on `stdout`, returns 0 always. Anything that is not a Bash call with a text command (or not JSON) is allowed.
 
+## Guard hook for backup secrets (`claude_hooks/guard_backup_secrets.py`)
+
+A `PreToolUse` hook for the Bash tool and the file tools (`Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Artifact`, and any tool whose input has a string `command`, such as a terminal tool), wired in the tracked `.claude/settings.json` of `hams_com`, `hams_open` and `hams_shared` next to `guard_signals.py` (`check_claude_hook_registration.py` fails the lint when a checkout lacks it). Bruce, 2026-11-09: an agent must never change a backup key or encryption setting so that a backup cannot be restored. The hook **denies** commands and edits that change, delete, move, overwrite, regenerate or print backup key material: `/var/lib/odoo/hams_crypto.secret`, `pgbackrest.conf` and `/etc/pgbackrest/`, `/opt/hams/etc/b2_backup/`, the backup entries of `/opt/hams/etc/keys/` and of `~/.secrets` (B2 key, pgBackRest cipher passphrase, kopia repository password, the custody kit), `/opt/hams/etc/{core,db,odoo}.env`, `/proc/PID/environ`; `pgbackrest stanza-create|stanza-upgrade|stanza-delete|expire` and `--repoN-cipher-*`; `kopia repository create|connect|change-password|set-parameters`, `kopia snapshot delete`; the `b2` tool's key, bucket and delete commands; `aws s3 rm|rb|mv` on the backup bucket; `b2_backup.py gen-password|init`; `provision.py` in production mode; setting or expanding `HAMS_CRYPTO_KEY`, `KOPIA_PASSWORD`, `PGBACKREST_REPO*_CIPHER_*`; `printenv`, `env`, `set`, `export -p`, `ps e` and `systemctl show|cat` of a backup unit. A command with a protected path as an operand is denied unless it only looks (`ls`, `stat`, `test`, `file`, `du`, `wc`, `sha256sum`, `readlink`, `find` without `-exec`, `echo`, `cd`); `pgbackrest info` and `pgbackrest check` stay allowed. The shell text is parsed with the tokenizer of `guard_signals.py`, and `bash -c`, `sudo`, `env`, `ssh host '...'`, heredocs, here-strings, `$(...)`, `find -exec`, `eval`, variables and `for` loops of the same line, braces, globs, base64/hex/`\\x` blobs and interpreter one-liners (`python3 -c`, perl, ruby, node) are all read. There is no escape: no environment variable, flag, marker file or comment lets an agent through, and a human who must change a key runs the command in his own terminal, where the hook does not run. A crash inside the hook allows a command without a backup-looking word and denies one with such a word; every denial and error is logged to `~/.cache/hams-jobs/guard.log`. Tests: `test_guard_backup_secrets.py` (a table of about 300 allowed and denied commands, the file tools, the real script on standard input, the proof that no escape exists). The provisioning side (a lint that blocks cipher, stanza and key-generation changes without Bruce's recorded approval, and `write_env_files` refusing to change a key) is `check_backup_encryption_changes.py` below. Known limits: a script file written earlier and run later is not read; an agent can still write the key into a file the hook does not know by building the path with a tool it cannot parse (the interpreter rule denies the common forms); user-level settings are not guarded.
+
+### `[@ANCHOR: guard_backup_secrets:to_absolute]` `to_absolute(text, cwd, home)`
+
+Purpose: `text` as a normalized absolute path: `~`, `~/x`, `$HOME` and `${HOME}` become the home directory, a relative path is joined to `cwd`, `..` and `//` are resolved without touching the file system.
+
+### `[@ANCHOR: guard_backup_secrets:samples_for]` `samples_for(home)`
+
+Purpose: SAMPLES with `HOME` replaced by the home directory (and /root).
+
+### `[@ANCHOR: guard_backup_secrets:protected_reason]` `protected_reason(path)`
+
+Purpose: What a normalized absolute `path` is, when it is a protected file or directory (a path rule matches), else `None`.
+
+### `[@ANCHOR: guard_backup_secrets:contains_protected]` `contains_protected(path, home)`
+
+Purpose: True when `path` is a directory above a protected sample (`/`, `/var/lib/odoo`, `~`, `~/.secrets`, `/opt/hams/etc/keys`, ...): deleting, moving, copying or recursively reading it reaches the protected file.
+
+### `[@ANCHOR: guard_backup_secrets:brace_expand]` `brace_expand(text, limit=32)`
+
+Purpose: The words `{a,b}c{1,2}` expands to (comma lists only, nested and several groups handled, at most `limit` results); a text with no brace group is returned as the one-element list.
+
+### `[@ANCHOR: guard_backup_secrets:word_hits]` `word_hits(text, cwd, home)`
+
+Purpose: How the shell word `text` touches protected paths: `"protected"` (a protected file or a directory rule), `"contains"` (a directory that holds one), `"pattern"` (a glob or a dynamic path such as `/var/lib/odoo/$f` that can name one) or `None`. Prefixes after `=`, `:` and `@` (`--config=P`, `of=P`, `host:P`, `-F f=@P`) are judged too; a word with spaces or odd characters (a script, a sentence) is no path.
+
+### `[@ANCHOR: guard_backup_secrets:path_reason]` `path_reason(path, cwd, home, include_parents=False)`
+
+Purpose: Why a file-tool path argument is refused (a sentence) or `None`: a protected file, or with `include_parents` a directory that holds one.
+
+### `[@ANCHOR: guard_backup_secrets:redirect_targets]` `redirect_targets(text)`
+
+Purpose: `(writes, reads)`: the file words after `>`, `>>`, `>|`, `&>` and after `<` in the raw shell `text`, quotes and backslashes removed. Found by a pattern over the text, not by the tokenizer (which drops them), so a `>` inside a quoted string is also seen: that only adds.
+
+### `[@ANCHOR: guard_backup_secrets:expand_variables]` `expand_variables(text)`
+
+Purpose: The texts to judge for the shell `text`: itself, then itself with `$NAME` / `${NAME}` replaced by the value assigned earlier in the text (so `d=/var/lib/odoo; f=hams_crypto.secret; cat $d/$f` reads as the real command), once more for every value a `for NAME in A B; do` loop gives its variable. At most MAX_VARIANTS texts.
+
+### `[@ANCHOR: guard_backup_secrets:decoded_texts]` `decoded_texts(text)`
+
+Purpose: Texts hidden in `text`: base64 and hex blobs that decode to mostly printable bytes, and the text with `\xHH` and `\NNN` escapes decoded (what `printf` or `echo -e` would print). Each is judged like a command.
+
+### `[@ANCHOR: guard_backup_secrets:positionals]` `positionals(words)`
+
+Purpose: The texts of `words` that do not start with `-`.
+
+### `[@ANCHOR: guard_backup_secrets:check_secret_words]` `check_secret_words(command, base, verdict)`
+
+Purpose: Deny setting a backup secret variable in a command (`HAMS_CRYPTO_KEY=x cmd`, `export KOPIA_PASSWORD=...`, `env PGBACKREST_REPO2_CIPHER_PASS=..`) and expanding one (`echo $HAMS_CRYPTO_KEY`, `cat <<EOF` of one) in anything but a `[`/`test` test.
+
+### `[@ANCHOR: guard_backup_secrets:check_environment_dump]` `check_environment_dump(command, name, base, rest, verdict)`
+
+Purpose: Deny the commands that print the whole environment (it holds HAMS_CRYPTO_KEY on the test box): a bare `env` (also `sudo env`), `printenv` with no name or a secret's name, `export`/`declare`/`typeset`/`readonly` listing (`-p`, `-x`, no arguments), a bare `set`, `ps e` / `ps ewww`, `compgen -e`, `systemctl show-environment`.
+
+### `[@ANCHOR: guard_backup_secrets:check_systemctl]` `check_systemctl(rest, verdict)`
+
+Purpose: Deny `systemctl show-environment`, `systemctl cat UNIT` and `systemctl show UNIT` (no `-p`, or a property that is not in SAFE_SYSTEMD_PROPERTIES) for a backup, odoo or hams unit or for no unit at all: they print Environment= lines. `status`, `is-active`, `list-units` and `show -p ActiveState` stay allowed.
+
+### `[@ANCHOR: guard_backup_secrets:check_pgbackrest]` `check_pgbackrest(rest, verdict)`
+
+Purpose: Deny `pgbackrest stanza-create|stanza-upgrade|stanza-delete|expire` and any `--repoN-cipher-*` / `--repoN-s3-key*` option; `info`, `check`, `verify`, `backup`, `restore`, `version` stay allowed.
+
+### `[@ANCHOR: guard_backup_secrets:check_kopia]` `check_kopia(rest, verdict)`
+
+Purpose: Deny `kopia repository create|connect|disconnect|change-password|set-parameters|...`, `kopia snapshot delete|expire`, `kopia blob|content delete`, `kopia maintenance set` and `--password`; `snapshot list`, `snapshot create`, `restore`, `repository status` stay allowed.
+
+### `[@ANCHOR: guard_backup_secrets:check_b2_and_aws]` `check_b2_and_aws(base, rest, verdict)`
+
+Purpose: Deny the Backblaze `b2` command-line tool except its read-only commands (B2_READ_ONLY, and the `info|list|get` of `bucket|file|key`), and `aws` verbs that delete or reconfigure (AWS_DENIED_VERBS) when a word names the backup bucket or a B2 endpoint.
+
+### `[@ANCHOR: guard_backup_secrets:check_provisioning]` `check_provisioning(script, rest, verdict)`
+
+Purpose: Deny `provision.py` / `provision_test_environment.py` unless `--plan`, `--help`, `--test` or `--test-environment` is given (production mode generates secrets, among them HAMS_CRYPTO_KEY, when none exists), any provisioning flag that spells out regenerating a secret, and `b2_backup.py gen-password|init`.
+
+### `[@ANCHOR: guard_backup_secrets:check_find]` `check_find(rest, ctx, verdict)`
+
+Purpose: Judge `find`: when a start path is protected or holds a protected file, `-delete`, `-fprint*`, `-fls` and any `-exec`/`-ok` command that is not a metadata command (ls, stat, sha256sum, ...) are denied; plain listing is allowed.
+
+### `[@ANCHOR: guard_backup_secrets:check_interpreter]` `check_interpreter(texts, verdict)`
+
+Purpose: Judge the program text of an interpreter (`python3 -c`, perl -e, a heredoc piped into python): it is denied when it names a protected path or secret variable AND does anything but look (ACCESS_VERBS), when it names a directory of secrets together with a way of building strings at run time (OBFUSCATION_RE), or when it prints the whole environment. A script that only `os.stat`s or `os.path.exists` a protected path is allowed.
+
+### `[@ANCHOR: guard_backup_secrets:check_operands]` `check_operands(base, words, ctx, verdict)`
+
+Purpose: Deny a command that has a protected path (or a glob or `$VAR` path that can name one, or a directory that holds one) as an operand unless it only looks (METADATA); permission commands may name a directory that holds one but not the file itself; the first operand of grep, sed, awk and the like is a pattern and is skipped. A bare `$(...)` or `$VAR` operand is denied when the command line names a protected word.
+
+### `[@ANCHOR: guard_backup_secrets:script_name]` `script_name(base, rest)`
+
+Purpose: The file name that counts for the tool-specific checks: the first non-option word for an interpreter (`python3 tools/provision.py`), else `base`.
+
+### `[@ANCHOR: guard_backup_secrets:check_command]` `check_command(command, verdict, depth, ctx, piped_texts=())`
+
+Purpose: Judge one `Command` and add what is wrong to `verdict`: secret variables, environment dumps, and by program name pgbackrest, kopia, b2, aws, systemctl, provisioning tools, find, interpreters, shells, `eval`, `ssh host '...'` (recursing into their script text), then the operand rule (`check_operands`). `piped_texts` are the programs piped into an interpreter.
+
+### `[@ANCHOR: guard_backup_secrets:piped_sources]` `piped_sources(commands, index)`
+
+Purpose: The texts an interpreter reads on standard input when `commands[index]` is piped into: the arguments (echo/printf options left out) and heredoc bodies of every earlier command of the same pipeline (`echo "import os; ..." | python3`). `[]` when the command is not piped into.
+
+### `[@ANCHOR: guard_backup_secrets:analyze]` `analyze(text, depth=0, verdict=None, ctx=None)`
+
+Purpose: Judge shell `text`: every variant (`expand_variables`) and every hidden text (`decoded_texts`) is tokenized and each command checked; redirections onto or from a protected path are denied; and a text whose decoded blob names backup key material is denied outright. Returns the Verdict (`gs.Verdict`, `reasons` empty means allowed). Raises ValueError for text nested deeper than MAX_DEPTH.
+
+### `[@ANCHOR: guard_backup_secrets:deny_message]` `deny_message(reasons)`
+
+Purpose: The text an agent reads when a command or edit is denied: the reasons, what stays allowed, and that there is no escape for an agent.
+
+### `[@ANCHOR: guard_backup_secrets:decide_command]` `decide_command(command, session_id='', cwd=None, environ=None, home=None)`
+
+Purpose: The decision for one shell command text: `None` to allow, or the deny dict (`hookSpecificOutput.permissionDecision: deny`). A crash in the analysis allows a command with no backup-looking word (CRUDE_RE) and denies one with such a word, and is logged.
+
+### `[@ANCHOR: guard_backup_secrets:tool_paths]` `tool_paths(tool_input)`
+
+Purpose: Every path-like string of a file tool's input: the values of `file_path`, `notebook_path`, `path`, `paths`, `file_paths` and `files` (a mapping's values and each value's `from` / `path`, a list's items, recursively).
+
+### `[@ANCHOR: guard_backup_secrets:decide_tool]` `decide_tool(tool_name, tool_input, session_id='', cwd=None, environ=None, home=None)`
+
+Purpose: The decision for a file tool call (Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Artifact, ...): denied when a path argument is protected; Grep and Glob-style searches also when it is a directory that holds protected files. A crash allows the call unless a path mentions a backup-looking word.
+
+### `[@ANCHOR: guard_backup_secrets:deny]` `deny(reasons, subject, session_id='', environ=None)`
+
+Purpose: `None` when `reasons` is empty, else the deny dict, after logging the denial.
+
+### `[@ANCHOR: guard_backup_secrets:main]` `main(stdin=None, stdout=None, environ=None)`
+
+Purpose: Hook entry point: read the hook JSON from `stdin`, print the decision JSON (if any) on `stdout`. Returns 0 always. A tool call with a string `command` (Bash, a terminal tool) is judged as shell text, any other call by its path arguments; invalid input is allowed.
+
+
+## Backup encryption change check (`check_backup_encryption_changes.py`)
+
+`check_backup_encryption_changes.py [REPO_DIR] [--base REF]` (lint step `check_backup_encryption_changes`, run in the repository being linted) reads the diff against `merge-base(origin/main, HEAD)` (committed, uncommitted and untracked) of provisioning and backup code (`provision*.py`, `infrastructure.py`, `b2_backup.py`, `*backup*` scripts and units, `pgbackrest*`, `hams1_*`, `backup_management/`, `daemon_key_manager/`; tests, docs, data files and the guard hooks are not scanned) and fails on a `cipher` (pgBackRest cipher setting, added or removed), `stanza` (create, upgrade, delete), `kopia-repo` (`kopia repository create|connect|change-password|set-parameters`), `keygen` (an added block that generates a secret and names a backup key) or `secret-write` (an added block that writes, replaces or copies onto a file that holds one) finding that has no entry ADDED IN THE SAME CHANGE to `docs/APPROVED_BACKUP_ENCRYPTION_CHANGES.md` (or `APPROVED_BACKUP_ENCRYPTION_CHANGES.md` at the root of a repository whose `docs` is a link) saying `approved by Bruce on YYYY-MM-DD`. It cannot tell a true approval from a typed one: the pull-request reviewer must see Bruce's words. Without git or the base ref it prints a note on standard error and passes. The provisioning side: `infrastructure.write_env_files` refuses (`RuntimeError`) to change or drop `HAMS_CRYPTO_KEY`, `ODOO_BACKUP_CRYPTO_KEY`, `KOPIA_PASSWORD` or a pgBackRest cipher passphrase already in an env file (also when `HAMS_ALLOW_PROVISION_MODE_SWITCH=1`); `b2_backup.py gen-password` and `init` already refuse to overwrite (`test_b2_backup.py`, `test_b2_backup_end_to_end.py`); `provision_test_environment.profile_values` keeps an existing key. `daemon_key_manager` rotates the daemons' Odoo API keys on purpose (monthly, and at each start of `hams.daemon.keys.service`); those are no backup key material, and the guard hook keeps agents out of `/opt/hams/etc/keys/*backup*`. Tests: `test_check_backup_encryption_changes.py`.
+
+### `[@ANCHOR: check_backup_encryption_changes:parse_diff]` `parse_diff(text)`
+
+Purpose: parse `git diff -U0` text into `{path: [(added_lines, removed_lines), ...]}`, one tuple per hunk, the lines without their `+` or `-`.
+
+### `[@ANCHOR: check_backup_encryption_changes:relevant_path]` `relevant_path(path)`
+
+Purpose: True for provisioning and backup code that the check scans and False for tests, docs, data files and the guard hooks.
+
+### `[@ANCHOR: check_backup_encryption_changes:findings_for_hunks]` `findings_for_hunks(path, hunks)`
+
+Purpose: the `(path, rule, line)` findings of one file's hunks. cipher, stanza and kopia-repo look at added and removed lines; keygen and secret-write at an added block that holds both the action and a backup key name.
+
+### `[@ANCHOR: check_backup_encryption_changes:parse_approvals]` `parse_approvals(added_lines, today=None)`
+
+Purpose: the approvals in the marker file's added lines, `[(path glob, set of rules, date)]`. A line needs `approved by Bruce on YYYY-MM-DD` with a real date not after today and rule names from the list or `*`; other lines are not approvals.
+
+### `[@ANCHOR: check_backup_encryption_changes:is_approved]` `is_approved(path, rule, approvals)`
+
+Purpose: True when an approval's path glob matches the path (or is a suffix of it) and its rules include the rule or `*`.
+
+### `[@ANCHOR: check_backup_encryption_changes:check_repo]` `check_repo(repo, base="origin/main", today=None)`
+
+Purpose: the problems of the change in `repo` against the merge-base with `base`, as a list of sentences (empty: clean); an unavailable git or base gives none.
+
+### `[@ANCHOR: check_backup_encryption_changes:main]` `main(argv=None, out=None)`
+
+Purpose: check the repository named in `argv` (default: this one) against `--base REF`, print the problems, return 1 or 0.
+
 ## Guard hook registration check (`check_claude_hook_registration.py`)
 
 `check_claude_hook_registration.py [REPO_DIR ...]` (lint step `check_claude_hook_registration`, run in the repository being linted) fails unless the checkout's tracked `.claude/settings.json` has a `PreToolUse` entry for the Bash tool that runs `claude_hooks/guard_signals.py` by an anchored path (`$HOME/...`, `~/...`, `$CLAUDE_PROJECT_DIR/...` or absolute: a relative path breaks in a worktree). Written after an agent in a `hams_shared` worktree, which had no `.claude/settings.json`, ran `kill $pp` on its own parent (2026-11-09). Tests: `test_check_claude_hook_registration.py` (also runs the registered command against the incident text).
+
+### `[@ANCHOR: check_claude_hook_registration:command_runs]` `command_runs(command, script)`
+
+Purpose: True when the hook command text runs `script` (a key of `HOOKS`, `claude_hooks/guard_signals.py` or `claude_hooks/guard_backup_secrets.py`) by an anchored path (`$HOME`, `~`, `$CLAUDE_PROJECT_DIR` or absolute).
+
+### `[@ANCHOR: check_claude_hook_registration:matcher_covers]` `matcher_covers(matcher, tool)`
+
+Purpose: True when a PreToolUse matcher (a regex on the tool name; empty or `*` means every tool) applies to the tool named `tool`. The backup guard must cover Bash, Write, Edit, MultiEdit, NotebookEdit, Read, Grep and Artifact.
 
 ### `[@ANCHOR: check_claude_hook_registration:command_is_guard]` `command_is_guard(command)`
 
@@ -4042,6 +4211,32 @@ Returns `(state, lines)`: `"OK"` or `"HOLD"` and the reasons, plus, on HOLD, one
 unreadable, non-object, undated, stale or verdict-less file is HOLD with its own reason. Read-only, no locks, safe to call in a loop.
 `main` wraps it: prints the state and reasons (not with `--quiet`) and exits 0 for OK, 1 for HOLD.
 
+### Landing throttle: merge queue depth (Bruce, 2026-11-09)
+
+The merge queue and the combined lint gate are the bottleneck, not agent slots, so a second signal throttles PR **landing** and never agent starts.
+`dispatch_ok.py` prints it after the agent-start verdict, as separate lines: `LANDING_OK` or `LANDING_HOLD`, its reasons, and a one-line count. The
+agent-start verdict (`OK`/`HOLD`, exit 0/1) is unchanged and is never made HOLD by queue depth; it stays HOLD only for the load display's reasons.
+`LANDING_HOLD` means: keep the agent running, finish and commit, but fold new PRs into an open one or hold them and do gate-free work (whole-system
+runs, property/fuzz/mutation tests, soaks, benchmarks, builds, audits); start no mass edits. Exit status: default is the agent-start verdict; with
+`--landing` it is the landing verdict (0 LANDING_OK, 2 LANDING_HOLD). One-line form for agents: `python3 devbox_tools/queue_depth.py` (hams_com).
+
+### `[@ANCHOR: dispatch_ok:landing_limits]` `DEFAULT_QUEUE_FILE`, `MAX_LIVE_PRS`, `MAX_OLDEST_QUEUED_SECONDS`, `EXIT_LANDING_HOLD`
+
+Purpose: the limits of the landing verdict, in one place. `LANDING_HOLD` when more than 25 PRs are `queued` or `testing` (all repositories together) or the
+oldest `queued` PR has waited more than 60 minutes. The file is `~/.cache/hams-merge-queue/queue.json`, written by `devbox_tools/merge_queue.py`; this tool
+only reads it, holds no lock, writes nothing. Tests: `LandingTests` in `test_dispatch_ok.py`.
+
+### `[@ANCHOR: dispatch_ok:landing_verdict]` `landing_verdict(entries, now=time.time)`
+
+Purpose: the whole landing decision from a list of queue entries, separated from file reading. Arguments: `entries` list of dicts (`state`, `enqueued`, `slug` or
+`repo`); `now` clock. Returns `(state, reasons, summary)`: `"LANDING_OK"`/`"LANDING_HOLD"`, one reason per tripped limit, and `queue: N queued, M testing (repo Nq/Mt, ...), oldest queued wait K min`.
+Pure; ignores malformed entries and non-live states; only `queued` entries count toward the age limit. Also used by `devbox_tools/queue_depth.py`.
+
+### `[@ANCHOR: dispatch_ok:landing]` `landing(path=DEFAULT_QUEUE_FILE, now=time.time)`
+
+Purpose: `landing_verdict` for the queue file. Returns the same triple. A missing file is an empty queue (LANDING_OK: the queue is not in use); an unreadable
+or malformed file is LANDING_HOLD (unknown depth is not a go-ahead). Never raises.
+
 ## Pass stamps that carry over to a commit of records (`lint_stamp_gate.py`)
 
 Written 2026-11-08. Every branch ends with a night-shift record (a history entry, a to-do claim or its notes, a claim file). The record is a new commit, so the
@@ -4155,3 +4350,7 @@ Purpose: the nightly full relay suite of the canary, run on the snapshot's hams_
 (non-zero and at least one `FAILED` test, named in `failed`), `error` (non-zero and none: it did not build or died; never green) or `skipped` with a `reason` (no tree or no relay crate; the note says `NOT RUN`). The build uses the budgeted directory
 `lint_cache.named_cargo_session("relay-nightly")`. `aggregate(..., relay=)` records it as `status["relay"]`, adds each failed test as the new failure `relay cargo test: <path>` (so the night is red and the note names it; such ids are not proposed for
 the Odoo known-red baseline and are not bisected) and a relay `error` as a shard error. Blocks until cargo ends (a cold build is a few minutes, the suite more); no process is signalled. Tests: `RelaySuiteTests`.
+
+## Claim hashes (`claim_normalizers.py`, `check_claims_freshness.py`)
+
+A bug-hunt claim's `code_hash` is stale only when the anchored code changed, never for a comment or a formatter. The claim records `hash_algorithm: v2` next to `code_hash`: the sha256 of the item's token stream (Python `tokenize`, a Rust lexer, a JavaScript lexer that tells a regex from a division, canonical XML for XML/QWeb, a shell lexer and an SQL lexer), so formatting, comments, quote style and trailing commas do not reach it and every code token and string value does. `v1` (raw text) and `v1b` (comment-insensitive text, Python only) are the older algorithms. A claim with no `hash_algorithm` is legacy; the date table `ALGORITHM_BY_DATE` maps the date of the commit that last wrote the claim file (or a front matter `date:`, never the mtime) to its algorithm. When a legacy claim's exact hash no longer matches, `check_claims_freshness.py` and `check_claims.py` load the function as of the claim's commit, compute v2 over that text and over the current text, and treat the claim as fresh when they are equal; the verdict is cached in `~/.cache/hams_claims/` (`HAMS_CLAIM_CACHE_DIR`). There is no repo-wide re-hash: old claims are never rewritten to survive a tool change. `bug-hunt/normalized_view.py <file> [--function NAME]` (hams_com) prints the normalized text.

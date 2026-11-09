@@ -1460,7 +1460,9 @@ directory (hams_com, e.g. `ham_club_management/claims/`) are checked by
 `check_claims_freshness.py <module>`, which also prints only 12 characters. Its
 `compute_function_hash(<path to the .py file>)` returns `{anchor_name: full sha256 hex}` for that
 file, keyed by the anchor exactly as written (no prefix stripping), so paste
-`sha256:<value>` straight into `code_hash:`. Run it only after confirming `git diff HEAD` on that
+`sha256:<value>` straight into `code_hash:` and add `hash_algorithm: v2` under it (the token-stream hash that
+comments and formatting never stale; a claim without the field is legacy and is judged by its own commit's date;
+see `tools/README.md`, "Claim hashes"). `write_claim.py` writes both lines for you. Run it only after confirming `git diff HEAD` on that
 `.py` file is empty, or a peer's uncommitted edit gets hashed into your claim (2026-09-16,
 workspace-98).
 
@@ -2231,6 +2233,12 @@ instead.
   quote its `claim:` line (and the stamp and queue lines when you say the lint passed or the queue merged it). It reads GitHub, the merge queue
   and the lint stamps, and flags a queue entry that disagrees with GitHub, a verdict recorded for an older branch tip, a stamp that does not cover
   the merged tree, and an unlinted merge. A claim without that output is a guess; say "not verified" instead. The same rule is in the shared brief.
+- **Check the merge queue depth before opening a PR (Bruce, 2026-11-09).** The shared gate (combined lint plus merge queue) is the bottleneck, not
+  agents. Run `python3 devbox_tools/queue_depth.py` from the `hams_com` checkout (or `python3 hams_shared/tools/dispatch_ok.py` and read the
+  `LANDING_` line). On `LANDING_OK` open the PR and enqueue it. On `LANDING_HOLD` (more than 25 queued+testing, or the oldest queued PR over 60
+  minutes) finish and commit the work, then fold it into a PR of yours that is already open or hold the branch unpushed, and spend the time on work that
+  needs no gate (builds, whole-system runs, fuzz or property tests, soaks, audits); re-check later. This never stops the run itself or an agent start.
+  Batch related fixes into one PR per module or topic, and start no mass edits (comments, claims hashes, renames) while the queue is deep.
 - **To-do hygiene.** `python3 devbox_tools/todo_groom.py` prints every to-do with a verdict (OWNED, STALE-LIKELY, DUPLICATE-LIKELY, BLOCKED,
   READY). A LIKELY verdict is a lead: read the to-do and the code, and only then remove or merge it, in a pull request with a history entry
   (about ten files each).

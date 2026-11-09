@@ -227,6 +227,8 @@ STEP_META = {
     "check_js_syntax": {"suffixes": _JS},
     # The signal guard hook must be registered in the repository's own .claude/settings.json (2026-11-09 incident).
     "check_claude_hook_registration": {"suffixes": frozenset({".json", ".py"})},
+    # Backup encryption, stanza creation, key generation and secret-file overwrites need Bruce's recorded approval (2026-11-09).
+    "check_backup_encryption_changes": {"suffixes": frozenset({".py", ".sh", ".service", ".timer", ".conf", ".md"})},
     "check_test_tags": {"suffixes": _PY},
     "check_rabbitmq_pool": {"suffixes": _PY},
     "check_init_imports": {"suffixes": _PY},
@@ -257,6 +259,7 @@ STEP_META = {
     "check_test_temp_dirs": {"suffixes": frozenset({".rs", ".py", ".json"})},
     "check_fake_network_listener": {"suffixes": frozenset({".rs", ".py"})},
     "check_function_test_anchors": {"suffixes": _PY},
+    "check_private_by_default": {"suffixes": frozenset({".json", ".py"})},
     "check_js_function_test_anchors": {"suffixes": frozenset({".js", ".py"})},
     "check_rust_function_test_anchors": {
         "suffixes": frozenset({".rs", ".py", ".toml"}),
@@ -1662,6 +1665,13 @@ def main():
         [python_exec, os.path.join(dir_path, "tools", "check_claude_hook_registration.py"), dir_path],
     )
 
+    # 17c. check_backup_encryption_changes -- the change against origin/main adds no cipher setting, stanza creation, backup key generation
+    # or secret-file overwrite without an approval entry naming Bruce (docs/APPROVED_BACKUP_ENCRYPTION_CHANGES.md).
+    _add(
+        "check_backup_encryption_changes",
+        [python_exec, os.path.join(dir_path, "tools", "check_backup_encryption_changes.py"), dir_path],
+    )
+
     # 18. check_init_imports -- one call per target, not batched (sys.argv[1]-only, see
     # `_run_per_target_checker`'s own docstring).
     _per_target_steps(_add, python_exec, dir_path, "check_init_imports.py", scope_for("check_init_imports"))
@@ -2256,6 +2266,24 @@ def main():
             f"function_test_anchor_baseline_{os.path.basename(main_checkout_root)}.json",
         ),
     ],
+    )
+
+    # 38b. check_private_by_default -- the debt side of hams_open/hams_rpc_guard: the public methods of our models that
+    # are RPC-callable only because they were public when each addon's rpc_exposure.json was generated. Per-module
+    # counts against a checked-in baseline (owner and to-do per entry); the count may fall, never grow.
+    _add(
+        "check_private_by_default",
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_private_by_default.py"),
+            repo_root,
+            "--baseline",
+            os.path.join(
+                dir_path,
+                "tools",
+                f"private_by_default_baseline_{os.path.basename(main_checkout_root)}.json",
+            ),
+        ],
     )
 
     # 39. check_js_function_test_anchors -- ADR 0090 decision 2's JS

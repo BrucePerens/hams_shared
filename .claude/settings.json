@@ -11,6 +11,17 @@
             "statusMessage": "Checking signal commands"
           }
         ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Artifact|mcp__terminal__run_in_terminal",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$HOME/workspace/hams_open/hams_shared/tools/claude_hooks/guard_backup_secrets.py\"; [ -f \"$f\" ] || exit 0; exec python3 \"$f\"",
+            "timeout": 10,
+            "statusMessage": "Checking backup key and encryption changes"
+          }
+        ]
       }
     ]
   }
