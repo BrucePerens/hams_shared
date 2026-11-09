@@ -63,10 +63,11 @@ DENIED = [
     "ssh -p 22 host sudo kill -9 5", "watch -n 5 pkill foo", "eval 'kill -9 5'", 'sh -c "kill -9 5"', "bash -lc 'pkill foo'",
     "nohup pkill foo &", "timeout 5 pkill foo", "nice -n 5 killall x", "env FOO=1 kill -9 5", "sudo -n -u odoo env X=1 pkill x",
     "cd /tmp && pkill foo", "true || pkill foo", "(pkill foo)", "{ pkill foo; }", "! pgrep -f foo",
-    "find . -exec true {} \\; -exec pkill x \\;", "find . -exec sh -c 'kill -9 $0' {} \\;", "find . -ok kill -9 {} +",
     "python3 -c 'import os; os.kill(5, 9)'", "python3 -c 'import os,signal; os.kill(5, signal.SIGKILL)'",
     "python3 - <<'EOF'\nimport os\nos.killpg(5, 9)\nEOF\n", "python3 -c \"import subprocess; subprocess.run(['pkill', 'x'])\"", "bash <<'EOF'\npkill foo\nEOF\n",
     "sleep 1\npkill foo\n", "echo a; kill -9 5 # note", "kill -9 5 2>/dev/null",
+    # find -exec
+    "find . -exec true {} \\; -exec pkill x \\;", "find . -exec sh -c 'kill -9 $0' {} \\;", "find . -ok kill -9 {} +",
     # nesting
     "echo $(echo $(echo $(pkill foo)))", 'echo "a $(kill -9 5) b"',
 ]
@@ -78,7 +79,6 @@ ALLOWED = [
     "ps aux", "ps -eo pid,user,lstart,args | grep postgres", "ps -p 123 -o pid,user,lstart,args", "pgrep -x postgres",
     "pgrep -u bruce chrome", "pgrep -c sshd", "pidof sshd", "which pkill", "command -v pkill", "type pkill", "man kill",
     "kill -TERM 123", "kill 123", "kill -15 123", "kill -0 123", "kill -HUP 123 456", "sudo kill -TERM 123", "kill -l",
-    "find . -exec echo {} \\; -exec ls {} +", "find . -exec sh -c 'echo $0' {} \\;",
     "kill -s TERM 123", "kill --signal=TERM 123", "kill %1", "kill -- -123", "kill $!", "sleep 100 & echo $!",
     "cargo test --all", "cargo clippy --all-targets -- -D warnings", "git status && git log --oneline | head",
     "sleep 5", "until [ -e /tmp/x ]; do sleep 1; done", "while sleep 1; do :; done & echo started",
@@ -94,6 +94,7 @@ ALLOWED = [
     "ssh host 'systemctl status foo'", "python3 -c 'print(1)'", "python3 -c 'import os; os.kill(5, 0)'",
     "docker ps", "tail -f log | grep -m1 DONE", "pgrep", "echo kill -9 > notes.txt", "sed -i 's/pkill/stop/' file",
     "# pkill foo in a comment", "echo done # kill -9 5", "",
+    "find . -exec echo {} \\; -exec ls {} +", "find . -exec sh -c 'echo $0' {} \\;",
 ]
 
 
