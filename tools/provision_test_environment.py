@@ -612,13 +612,20 @@ def provision_user_tools(layout, run, as_user, home, report, reachable=url_reach
 def provision_ml_assets(layout, run, report, plan=False, reachable=url_reachable, manifest_exists=os.path.isfile):
     """The browser ML assets a test host serves, made the way production makes them: the root /var/lib/odoo/hams_ml_assets
     owned by `odoo`, then hams_com's own `ham_shack/tools/provision_ml_assets.py` run as `odoo` (nice 10) when the root has
-    no `manifest.json` (the script writes it last, so a half-finished run is repeated), then `--verify-relay-pins`. No
+    no `manifest.json` (the script writes it last, so a half-finished download is repeated), then `--verify-relay-pins`. The pin
+    verification runs on EVERY call that finds the script, also when the manifest exists: the script writes the manifest before
+    the verification, so a first run whose verification failed leaves a manifest, and skipping the check on the next run would
+    let a host serve assets that match no pin (local hashing, no network; a mismatch raises). No
     test-only file or route: ham_shack's TestMlAssetsRoute serves this real root. Unreachable download hosts or a hams_com
     checkout without the script are a reported skip (the two route tests then fail on that host). Network: npm and
     HuggingFace, once, about 1.8 GB. Raises CalledProcessError."""
     script = os.path.join(layout["hams_com"], ML_ASSET_SCRIPT)
     manifest = os.path.join(ML_ASSET_ROOT, "manifest.json")
     if manifest_exists(manifest):
+        if plan:
+            print(f"PLAN {script} --verify-relay-pins as odoo (the assets exist)", flush=True)
+        elif os.path.isfile(script):
+            run(as_user_command("odoo", "/var/lib/odoo")(["python3", script, "--verify-relay-pins"]))
         return
     if plan:
         print(f"PLAN {ML_ASSET_ROOT} owned by odoo, then {script} as odoo and --verify-relay-pins", flush=True)
