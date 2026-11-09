@@ -101,9 +101,9 @@ def foreign_shared_checkout(tree_root, main_root):
 
 # [@ANCHOR: lint_batch:changed_paths]
 def changed_paths(repo, base, tip):
-    """Repository-relative paths the branch changed against `base` (``git diff --name-only base...tip``).
+    """Repository-relative paths the branch changed against `base` (``git diff --ignore-submodules=none --name-only base...tip``: a moved submodule pointer counts).
     Empty when git cannot say."""
-    result = subprocess.run(["git", "-C", repo, "diff", "--name-only", "%s...%s" % (base, tip)],
+    result = subprocess.run(["git", "-C", repo, "diff", "--ignore-submodules=none", "--name-only", "%s...%s" % (base, tip)],
                             capture_output=True, text=True)
     if result.returncode != 0:
         return []

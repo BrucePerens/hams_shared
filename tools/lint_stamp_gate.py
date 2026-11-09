@@ -89,6 +89,8 @@ def exempt_path(path):
             and ".." not in path.split("/"))
 
 
+# A moved submodule pointer (gitlink) is a code change. `submodule.<name>.ignore=all` in a clone's config (hams_open sets it) makes a plain `git diff`
+# hide it, which read as "no files changed"; every diff here names `--ignore-submodules=none` so the setting cannot hide it.
 def _git(repo, *args):
     return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
 
@@ -116,7 +118,7 @@ def inherit_stamp(repo, tip, passed_dir, base="origin/main", log=print):
         old_stamp = os.path.join(passed_dir, old)
         if not os.path.exists(old_stamp):
             continue
-        diff = _git(repo, "diff", "--name-only", "--no-renames", old, tip)
+        diff = _git(repo, "diff", "--ignore-submodules=none", "--name-only", "--no-renames", old, tip)
         if diff.returncode != 0:
             return None
         changed = [line for line in diff.stdout.splitlines() if line]
