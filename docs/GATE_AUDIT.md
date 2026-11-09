@@ -16,6 +16,8 @@ tree; `assert_control_absent` passing when the page had no tree; a release-gate 
 | `prmerge.sh` (diff, markdown-only exemption, stamp, PR state) | `devbox_tools/prmerge.sh`, `devbox_tools/test_prmerge.py` | Failed `git diff`, gitlink-only change and code-to-`.md` rename already refused (hams_com #3676, #3728, #3804). | RED proven |
 | Merge queue (`Worker._lint`, `_merge`, docs lane, retarget, wrong repo) | `devbox_tools/merge_queue.py`, `devbox_tools/test_merge_queue.py` | Conflicted tree, rename, gitlink, wrong repo, pushed-after-test, dequeued, bisection already RED. Exit 0 with no, empty or truncated results file, zero steps, a recorded failed step, and a retry that exits 0 yet records a failure stayed green; `gh` unreachable before the merge merged anyway. | Fixed, hams_com #3815 |
 | Lint batch verdicts (`read_results`, `collect`) | `tools/lint_batch.py` | Exit 0 with no or empty results file, `returncode: null`, a selected step with no result passed. | Fixed, hams_shared #565 |
+| Pass-stamp write (`run_linters.steps_without_result`) | `tools/run_linters.py`, `tools/test_run_linters.py` | A selected step with no result was stamped as passed. | Fixed, hams_shared #PR_NUMBER |
+| Stamp inheritance history check (`_history_problems`) | `tools/lint_stamp_gate.py`, `tools/test_lint_stamp_gate.py` | A failed `git archive` read as "history fine". | Fixed, hams_shared #PR_NUMBER |
 | `--changed` selection (`changed_files`) | `tools/run_linters.py` | A failed `git diff` became "nothing changed": every dependent step skipped, a stamp still written. | Fixed, hams_shared #571 |
 | Known-red baseline (`failure_items`, `classify`, `judge`) | `tools/lint_baseline.py` | One recorded failing test could hide failures pytest counted but did not list, or an INTERNALERROR. | Fixed, hams_shared #573 |
 | Remote lint results (`verify_results`) | `tools/lint_remote.py` | Failed safe by accident (an exception re-ran locally). | Hardened, hams_shared #574 |
@@ -39,12 +41,11 @@ tree; `assert_control_absent` passing when the page had no tree; a release-gate 
 - About 40 of the 53 `tools/check_*.py` linters exit 0 when run by hand on a nonexistent directory (`check_js_syntax`, `check_owl_templates`,
   `check_shebang`, `check_test_tags`, ...). `run_linters.py` itself cannot hand them one: a named module that exists nowhere fails the run
   (`module-not-found`), and `--changed` derives its modules from existing paths. Only a direct command line is exposed.
-- `lint_stamp_gate._history_problems` reports "no problems" when `git archive` of the history fails (meant for hams_shared, which has no history
-  directory). `rev-list` has already read the tip by then, so this needs an already-unreadable tree.
+- ~~`lint_stamp_gate._history_problems` reported "no problems" when `git archive` of the history failed~~ Fixed, hams_shared #PR_NUMBER: it now lists the tree with `git ls-tree` (no history paths there is the legitimate hams_shared case) and a failed `ls-tree`, `archive` or unpack is a problem naming the cause. Tests: `tools/test_lint_stamp_gate.py::HistoryProblemsTests`.
 - `prmerge.sh`: an empty path list reads as "markdown-only", which only a branch with no change at all can produce. Any `.md` change is exempt even
   though `verify_anchors` and the documentation checkers read markdown (the stamp-inheritance list in `lint_stamp_gate.EXEMPT_PREFIXES` is narrower
   on purpose, and the merge exemption is not).
-- `run_linters.py` does not assert, before writing a pass stamp, that every selected step produced a result. All current paths fill them.
+- ~~`run_linters.py` did not assert, before writing a pass stamp, that every selected step produced a result~~ Fixed, hams_shared #PR_NUMBER: `steps_without_result` names them, the run fails (after the known-red baseline, which cannot tolerate it) and no stamp is written. Tests: `tools/test_run_linters.py::StepsWithoutResultTests`.
 - `relay_gate` scenario that prints PASS for a row and crashes afterwards keeps that row's PASS.
 - `deploy_to_production.upgrade_in_progress` returns False when ssh is unreachable (deliberate: the rsync fails next).
 
