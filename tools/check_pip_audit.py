@@ -131,6 +131,8 @@ def cached_pass_age_hours(key, now=None, environ=None):
             recorded = float(json.load(handle)["passed_at"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
+    if not math.isfinite(recorded):
+        return None
     age = (now - recorded) / 3600.0
     return age if 0 <= age <= limit else None
 
