@@ -99,6 +99,18 @@ class CargoJobsShellTests(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "jobs=unset")
 
 
+class ExcludedPathTests(unittest.TestCase):
+    """`excluded` keeps secrets and other sessions' worktrees off a remote machine but ships .claude/settings.json (the signal guard
+    hook registration, read by check_claude_hook_registration there)."""
+
+    def test_settings_json_is_shipped_and_the_rest_of_dot_claude_is_not(self):
+        self.assertFalse(lr.excluded(".claude/settings.json"))
+        self.assertFalse(lr.excluded(".claude"))
+        for path in (".claude/worktrees/x/a.py", ".claude/settings.local.json", "sub/.claude/worktrees/y", ".git/config", ".env",
+                     "target/debug/x", "a/secrets/b"):
+            self.assertTrue(lr.excluded(path), path)
+
+
 class RequirementTests(unittest.TestCase):
     def test_requirements(self):
         self.assertEqual(lr.requirements_for("check_summation_bias"), {"local"})

@@ -3449,10 +3449,10 @@ Purpose: the command-line entry. Returns the exit code (0 done, 1 failed or noth
 
 ## Guard hook for signals (`claude_hooks/guard_signals.py`)
 
-A `PreToolUse` hook for the Bash tool, wired in the `.claude/settings.json` of `hams_com` and `hams_open`. It reads the hook JSON on standard input, parses the command text into
+A `PreToolUse` hook for the Bash tool, wired in the tracked `.claude/settings.json` of `hams_com`, `hams_open` and `hams_shared` (all three: Claude Code reads the project settings of the directory it runs in, and a `hams_shared` worktree had none on 2026-11-09, when an agent killed its own parent; `check_claude_hook_registration.py` fails the lint when a checkout lacks the entry). The command uses `$HOME/workspace/hams_open/hams_shared/...`, so it finds the script from any worktree and any directory. It reads the hook JSON on standard input, parses the command text into
 commands (so a word inside a quoted string, a commit message, a data heredoc or a `grep` pattern is not a command) and **denies**: `kill -9` and every other spelling of SIGKILL, `pkill`, `killall`,
 `skill`, `fuser -k`, `systemctl kill`, `pgrep -f` / `--full` (the `[x]yz` trick does not help: it matched a PostgreSQL backend), `kill` whose pids are not literal numbers (`$(...)`, backticks, variables, `xargs`),
-and the same inside `bash -c`, `ssh host '...'`, `eval`, `find -exec`, `watch`, shell heredocs and `python -c` one-liners. It **allows** `kill -TERM 123`, `kill 123`, `kill -0 123`, `pgrep NAME` (name only), `ps`, `grep`, `cargo`, `git`, sleep loops
+`kill $PPID`, `kill $$`, `kill 0`, `kill -- -PGID` and a pid built from `ps`/`ppid`, a literal `kill PID` whose process (looked up in /proc when the hook runs) is the hook's own ancestry, pid 1, another user's or root's, or one of `agent_procs.PROTECTED_WORDS` (postgres, systemd, sshd, redis-server, rabbitmq, ...), a `kill` that names such a program, and the same inside `bash -c`, `ssh host '...'`, `eval`, `find -exec`, `watch`, shell heredocs and `python -c` one-liners. It **allows** `kill -TERM 123`, `kill 123`, `kill -0 123`, `pgrep NAME` (name only), `ps`, `grep`, `cargo`, `git`, sleep loops
 and `agent_procs.py`. A denial prints JSON `permissionDecision: deny` whose reason tells the agent to use `agent_procs.py`. The escape **for a human** is `HAMS_ALLOW_SIGNALS=1` inside the command itself;
 it is logged with the command to `~/.cache/hams-jobs/guard.log`, as is every denial and hook error. A crash inside the hook allows a command without a signal-looking word and denies one with such a word; the command in
 settings.json also allows everything when the script file is missing. The hook always exits 0. Tests: `test_guard_signals.py` (a table of about 130 commands, the exact command of 2026-11-08 12:18:33, the real script on standard input).
@@ -3497,9 +3497,17 @@ Purpose: find the real command behind assignments, reserved words (`until`, `do`
 
 Purpose: recognise SIGKILL. True for `9`, `KILL` and `SIGKILL` in any case with or without a leading `-`.
 
-### `[@ANCHOR: guard_signals:check_kill]` `check_kill(words, via_xargs, verdict)`
+### `[@ANCHOR: guard_signals:protected_words]` `protected_words()`
 
-Purpose: judge a `kill` command (`words[0]` is kill). Adds a reason to `verdict` for SIGKILL in any option form (`-9 -KILL -s KILL -n 9 --signal=9`), for a pid that is not a literal number (or `%job`, or `$!`) and for pids supplied by `xargs`. `kill -l` and a `kill` with no pid are fine. A literal pid adds the note to print its ps line first.
+Purpose: the lower-case program names that are never signalled: `agent_procs.PROTECTED_WORDS`, or a built-in copy of it when `agent_procs` cannot be imported.
+
+### `[@ANCHOR: guard_signals:literal_pid_reason]` `literal_pid_reason(pid, table=None)`
+
+Purpose: why signalling the literal `pid` is forbidden, or `None`. Reads `/proc` now (`table` is a `pid -> ProcInfo` snapshot, default `agent_procs.snapshot()`) and applies `agent_procs.protected_reason` with the hook's own ancestry as the family: the agent and the shells above it, pid 1, another user's or root's process, a protected program. `None` for a pid that does not exist, for pid 0 or below, and when `/proc` or `agent_procs` cannot be used (the textual rules still apply).
+
+### `[@ANCHOR: guard_signals:check_kill]` `check_kill(words, via_xargs, verdict, table=None)`
+
+Purpose: judge a `kill` command (`words[0]` is kill). Adds a reason to `verdict` for SIGKILL in any option form (`-9 -KILL -s KILL -n 9 --signal=9`), for `$PPID`, `$$`, `0` and negative pids (a parent, a process group, everything), for a pid that is not a literal number (or `%job`, or `$!`; the message names `ps`/`ppid`), for a literal pid refused by `literal_pid_reason`, for a word naming a protected program, and for pids supplied by `xargs`. `kill -l` and a `kill` with no pid are fine. A literal pid adds the note to print its ps line first.
 
 ### `[@ANCHOR: guard_signals:check_pgrep]` `check_pgrep(words, verdict)`
 
@@ -3536,6 +3544,30 @@ Purpose: the decision for one command. Returns `None` (allow, print nothing), th
 ### `[@ANCHOR: guard_signals:main]` `main(stdin=None, stdout=None, environ=None)`
 
 Purpose: the hook entry point. Reads the hook JSON (`tool_name`, `tool_input.command`, `session_id`) from `stdin`, prints the decision JSON on `stdout`, returns 0 always. Anything that is not a Bash call with a text command (or not JSON) is allowed.
+
+## Guard hook registration check (`check_claude_hook_registration.py`)
+
+`check_claude_hook_registration.py [REPO_DIR ...]` (lint step `check_claude_hook_registration`, run in the repository being linted) fails unless the checkout's tracked `.claude/settings.json` has a `PreToolUse` entry for the Bash tool that runs `claude_hooks/guard_signals.py` by an anchored path (`$HOME/...`, `~/...`, `$CLAUDE_PROJECT_DIR/...` or absolute: a relative path breaks in a worktree). Written after an agent in a `hams_shared` worktree, which had no `.claude/settings.json`, ran `kill $pp` on its own parent (2026-11-09). Tests: `test_check_claude_hook_registration.py` (also runs the registered command against the incident text).
+
+### `[@ANCHOR: check_claude_hook_registration:command_is_guard]` `command_is_guard(command)`
+
+Purpose: True when the hook command text runs `claude_hooks/guard_signals.py` by an anchored path.
+
+### `[@ANCHOR: check_claude_hook_registration:matcher_covers_bash]` `matcher_covers_bash(matcher)`
+
+Purpose: True when a PreToolUse `matcher` (a regex; empty, `*` or missing means every tool) applies to the Bash tool.
+
+### `[@ANCHOR: check_claude_hook_registration:is_tracked]` `is_tracked(repo_dir)`
+
+Purpose: False only when `repo_dir` is in a git work tree and `.claude/settings.json` is not tracked; an uncommitted file does not protect a fresh checkout or a worktree.
+
+### `[@ANCHOR: check_claude_hook_registration:check_repo]` `check_repo(repo_dir)`
+
+Purpose: the problems (a list of sentences) with the guard registration of one checkout: file missing, not JSON, no matching hook, not tracked. Empty means registered.
+
+### `[@ANCHOR: check_claude_hook_registration:main]` `main(argv=None, out=None)`
+
+Purpose: check each directory of `argv` (default: the checkout the script is in), print the problems, return 1 when there is any and 0 otherwise.
 
 ## Template-database benchmark (`benchmark_template_db.py`)
 

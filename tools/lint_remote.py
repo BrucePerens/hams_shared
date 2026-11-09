@@ -72,7 +72,7 @@ LOCAL_ONLY = frozenset(
 
 # Never shipped to a machine: secrets, VCS metadata, build output, other sessions' worktrees.
 EXCLUDE_PATTERNS = (
-    ".git", ".claude", "target", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
+    ".git", "target", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
     ".pytest_cache", ".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.p12", "*.pfx",
     "secrets", ".secrets", ".ssh", "credentials*",
 )
@@ -585,6 +585,11 @@ def _under(path, prefixes):
 
 def excluded(path):
     parts = path.split("/")
+    # `.claude/` holds other sessions' worktrees and local settings, but the tracked `.claude/settings.json` (the signal guard hook
+    # registration) is part of the tree and `check_claude_hook_registration` reads it on the machine.
+    for i, part in enumerate(parts):
+        if part == ".claude" and parts[i + 1:] not in ([], ["settings.json"]):
+            return True
     return any(fnmatch.fnmatch(part, pattern) for part in parts for pattern in EXCLUDE_PATTERNS)
 
 

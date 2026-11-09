@@ -224,6 +224,8 @@ STEP_META = {
         )
     },
     "check_js_syntax": {"suffixes": _JS},
+    # The signal guard hook must be registered in the repository's own .claude/settings.json (2026-11-09 incident).
+    "check_claude_hook_registration": {"suffixes": frozenset({".json", ".py"})},
     "check_test_tags": {"suffixes": _PY},
     "check_rabbitmq_pool": {"suffixes": _PY},
     "check_init_imports": {"suffixes": _PY},
@@ -1605,6 +1607,14 @@ def main():
         python_exec,
         os.path.join(dir_path, "tools", "check_skill_integrity.py"),
     ],
+    )
+
+    # 17b. check_claude_hook_registration -- the repository being linted (hams_com, hams_open or hams_shared) registers the
+    # signal guard PreToolUse hook in its tracked .claude/settings.json (2026-11-09: an agent in a hams_shared worktree
+    # had no guard and killed its own parent).
+    _add(
+        "check_claude_hook_registration",
+        [python_exec, os.path.join(dir_path, "tools", "check_claude_hook_registration.py"), dir_path],
     )
 
     # 18. check_init_imports -- one call per target, not batched (sys.argv[1]-only, see
