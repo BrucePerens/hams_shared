@@ -940,6 +940,58 @@ def shared_checkout_staleness(shared_root):
     return int(behind[0]), is_main, None
 
 
+# [@ANCHOR: run_linters:fast_forward_shared]
+def fast_forward_shared(shared_root):
+    """Bring the main hams_shared checkout at `shared_root` up to origin/main when that cannot lose anything.
+
+    Returns (ok, text). Only `git merge --ff-only origin/main` is ever run (never a reset, checkout or discard). It is
+    refused, with the reason, when tracked files are modified (`git status --porcelain --untracked-files=no` is not empty),
+    when HEAD is not an ancestor of origin/main (a diverged or unpushed checkout), or when git itself refuses; a refusal
+    that is only a lost race with another run doing the same is accepted when the checkout is current afterwards.
+    Side effects: moves HEAD of that checkout (a detached submodule checkout stays detached) and so changes what every
+    worktree linking to it sees; seconds of runtime, no network (the caller fetched)."""
+    dirty = _git_lines(shared_root, "status", "--porcelain", "--untracked-files=no")
+    if dirty is None or dirty:
+        return False, "it has uncommitted changes to tracked files, so it is not fast-forwarded: " + "; ".join((dirty or ["git status failed"])[:3])
+    ancestor = subprocess.run(["git", "-C", shared_root, "merge-base", "--is-ancestor", "HEAD", "origin/main"], capture_output=True)
+    if ancestor.returncode != 0:
+        return False, "HEAD is not an ancestor of origin/main (diverged or unpushed commits), so it is not fast-forwarded"
+    old = (_git_lines(shared_root, "rev-parse", "--short", "HEAD") or ["?"])[0]
+    merged = subprocess.run(["git", "-C", shared_root, "merge", "--ff-only", "-q", "origin/main"], capture_output=True, text=True)
+    new = (_git_lines(shared_root, "rev-parse", "--short", "HEAD") or ["?"])[0]
+    behind = _git_lines(shared_root, "rev-list", "--count", "HEAD..origin/main")
+    if merged.returncode != 0 and behind != ["0"]:
+        return False, "git merge --ff-only failed: " + (merged.stderr or merged.stdout).strip()[:300]
+    return True, f"fast-forwarded the hams_shared checkout {old} -> {new}"
+
+
+# [@ANCHOR: run_linters:ensure_shared_current]
+def ensure_shared_current(shared_root):
+    """The preflight of every run: is the hams_shared checkout that holds these tools current? Returns (status, text).
+
+    status `current` (nothing to do, or origin/main could not be compared), `fast_forwarded` (the main checkout was behind and
+    `fast_forward_shared` brought it up; the caller restarts the run so it uses the new files), `worktree_behind` (a linked
+    worktree behind origin/main: only a warning, `text`, since the tools linked in are the main checkout's) or `refused` (the main
+    checkout is behind and cannot be fast-forwarded safely: `text` names the checkout, how far behind and why, and the manual
+    fix). It fetches (20 s limit, `shared_checkout_staleness`) and never queues, locks or runs a step; a refusal therefore
+    costs seconds. `HAMS_ALLOW_STALE_SHARED=1` is handled by the caller (the check is skipped)."""
+    behind, is_main, _error = shared_checkout_staleness(shared_root)
+    if not behind:
+        return "current", ""
+    if not is_main:
+        return "worktree_behind", f"\u26a0 This hams_shared worktree is {behind} commit(s) behind origin/main; rebase it to lint with the current tools."
+    ok, reason = fast_forward_shared(shared_root)
+    if ok:
+        return "fast_forwarded", reason
+    return "refused", (
+        f"\U0001f6d1 The hams_shared checkout at {shared_root} is {behind} commit(s) behind origin/main, so these linters and their tests "
+        f"are not the current ones and the results (and the pass stamp) cannot be trusted. It could not be fast-forwarded: {reason}.\n"
+        f"   Fix it by hand (never with a reset that discards work): git -C {shared_root} merge --ff-only origin/main   "
+        "(a detached submodule checkout: `git checkout --detach origin/main`),\n"
+        "   or set HAMS_ALLOW_STALE_SHARED=1 to run anyway."
+    )
+
+
 # [@ANCHOR: run_linters:real_shared_root]
 def real_shared_root(script_path):
     """The hams_shared checkout that holds `script_path`, symlinks resolved.
@@ -1023,6 +1075,21 @@ def main():
         sys.exit(run_bundle(sys.argv[1:]))
     dir_path = invocation_root(__file__)
     repo_root = _resolve_repo_root(dir_path)
+    # 0. A stale main hams_shared checkout gives wrong results to every worktree that links to it. Checked first, in
+    # seconds, before the sibling layout is built or any step is queued: fast-forwarded when that is safe, else refused.
+    if not os.environ.get("HAMS_ALLOW_STALE_SHARED"):
+        status, text = ensure_shared_current(real_shared_root(__file__))
+        if status == "fast_forwarded":
+            print(f"[*] {text}; restarting this run with the current tools", file=sys.stderr)
+            if not os.environ.get("HAMS_SHARED_FF_RESTARTED"):
+                os.environ["HAMS_SHARED_FF_RESTARTED"] = "1"
+                sys.stdout.flush()
+                os.execv(sys.executable or "python3", [sys.executable or "python3"] + sys.argv)
+        elif status == "refused":
+            print(text)
+            sys.exit(2)
+        elif status == "worktree_behind":
+            print(text, file=sys.stderr)
     # A hams_shared worktree is linted inside a layout of its own: this hams_shared as hams_open/hams_shared, hams_com
     # beside it. The main checkouts' submodule is whatever commit they have, so every cross-repository step (anchors,
     # claims, burn list) used to judge the OLD hams_shared and never the branch (2026-11-07, #411 and #412).
@@ -1044,21 +1111,6 @@ def main():
             sys.exit(2)
         atexit.register(lint_layout.remove, layout)
         repo_root = layout.hams_open
-
-    # 0. A stale main hams_shared checkout gives wrong results to every worktree that links to it.
-    if not os.environ.get("HAMS_ALLOW_STALE_SHARED"):
-        behind, is_main, _error = shared_checkout_staleness(real_shared_root(__file__))
-        if behind and is_main:
-            print(
-                f"🛑 The hams_shared checkout at {real_shared_root(__file__)} is {behind} commit(s) behind origin/main, so these "
-                "linters and their tests are not the current ones and the results (and the pass stamp) cannot be trusted.\n"
-                f"   Fix: git -C {real_shared_root(__file__)} merge --ff-only origin/main   "
-                "(or `git checkout --detach origin/main` if it is a detached submodule checkout),\n"
-                "   or set HAMS_ALLOW_STALE_SHARED=1 to run anyway."
-            )
-            sys.exit(2)
-        if behind:
-            print(f"⚠ This hams_shared worktree is {behind} commit(s) behind origin/main; rebase it to lint with the current tools.", file=sys.stderr)
 
     # 1. Anti-Symlink Mandate
     allowed_symlinks = {
