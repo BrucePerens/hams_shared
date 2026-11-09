@@ -1035,6 +1035,45 @@ def invocation_root(script_path):
     return given
 
 
+# [@ANCHOR: run_linters:retry_timed_out_steps]
+def retry_timed_out_steps(results, steps, execute=None, out=print):
+    """Steps that failed by timing out on a saturated machine are rerun ONCE, alone and one at a time, after the whole run.
+
+    `results`: the run's `lint_exec.Result` list; `steps`: the run's steps (the same names; a result with no step is left alone);
+    `execute(steps)`: runs steps serially and returns their results (default `lint_exec.execute(steps, 1)`; tests pass a fake).
+    A result is a candidate when `lint_exec.timeout_suspect` says so: failed, really run, the machine saturated when it ended and the
+    output speaks of a timeout. `HAMS_LINT_TIMEOUT_RETRY=off` disables the retry. Returns (new results list, [step names whose rerun
+    passed]). A step that passes on rerun replaces its failed result and is NAMED: the caller records it in the pass stamp
+    (`timeout-retried=`) and it is printed here, never silent. A step that fails again keeps its original failure and the report
+    says so: with the machine quiet that is a real failure. Cost: one extra run per candidate step, at most; never loops."""
+    if os.environ.get("HAMS_LINT_TIMEOUT_RETRY", "on").lower() in ("off", "0", "no", "false"):
+        return results, []
+    by_name = {step.name: step for step in steps}
+    candidates = [index for index, r in enumerate(results) if lint_exec.timeout_suspect(r) and r.name in by_name]
+    if not candidates:
+        return results, []
+    execute = execute or (lambda wanted: lint_exec.execute(wanted, 1))
+    results, retried = list(results), []
+    for index in candidates:
+        failed = results[index]
+        out(f"[*] {failed.name} timed out while the machine was saturated ({failed.saturated}): rerunning it once, alone")
+        again = execute([by_name[failed.name]])[0]
+        if again.returncode == 0:
+            results[index] = again
+            retried.append(failed.name)
+            out(f"[*] {failed.name} passed on its serial rerun: recorded as timeout-retried in the pass stamp")
+        else:
+            quiet = "" if lint_exec.saturation()[0] else " with the machine quiet"
+            out(f"[!] {failed.name} failed again{quiet}: this is a real failure")
+    return results, retried
+
+
+# [@ANCHOR: run_linters:timeout_retried_field]
+def timeout_retried_field(names):
+    """` timeout-retried=<step>,<step>` for a pass stamp (names with spaces use `_`), or "" for none."""
+    return " timeout-retried=" + ",".join("_".join(name.split()) for name in names) if names else ""
+
+
 # [@ANCHOR: run_linters:baseline_command]
 def baseline_command(options, dir_path, repo_root):
     """`--baseline-refresh` / `--baseline-show`: record or print the known-red baseline of the repository `dir_path` belongs to
@@ -2617,6 +2656,7 @@ def main():
         remote_jobs, all_steps, execute_here, lint_exec.Result, on_unfit=lint_remote.record_unfit
     )
     results += extra_results
+    results, timeout_retried = retry_timed_out_steps(results, all_steps)
     # Known-red baseline (ADR 0117): failures that were already red on main, with the same message, do not block.
     failed_now = {r.name: r.output or "" for r in results if r.returncode != 0}
     baseline_verdict = None
@@ -2631,10 +2671,12 @@ def main():
         )
         if baseline_verdict["passes"]:
             known_red = lint_baseline.stamp_field(baseline_verdict["tolerated"], baseline_verdict["main"])
+    known_red += timeout_retried_field(timeout_retried)
     if options.results_json:
         with open(options.results_json, "w", encoding="utf-8") as handle:
             document = lint_remote.results_document("local", results)
             document["known_red"] = known_red
+            document["timeout_retried"] = timeout_retried
             # The combined run of a batch (lint_batch.py) attributes failures from these.
             document["selected"] = [step.name for step in all_steps]
             document["outputs"] = {r.name: (r.output or "")[-200000:] for r in results if r.returncode != 0}

@@ -46,6 +46,12 @@ agents spend their time waiting for a lint slot and then a merge, one branch at 
    the loud report, the stamp field and `--baseline-show`. Owners and reasons belong in the to-do or pull request that
    repairs main.
 
+### Timeouts are not failures (added 2026-11-08)
+A step killed by its own time limit while the machine is saturated says nothing about the branch (found the same night: `check_pip_audit` at 300 s and
+a relay test, with the load near 90 and PyPI answering in under half a second). Such a failed step (`lint_exec.timeout_suspect`) is rerun once, alone,
+after the run; a pass is recorded in the stamp as `timeout-retried=<step>` and printed, a second failure is a real failure. Checkers with a time
+limit of their own stretch it by the load (`HAMS_LINT_TIMEOUT_SCALE`, at most 4x). Nothing is hidden: the retry is named in the stamp and the merge output.
+
 ### Part 2: merge queue
 6. **Enqueue and leave.** `merge_queue.py enqueue <PR>` records a pushed pull request in a queue directory
    (`~/.cache/hams-merge-queue/`) and returns. The agent need not stay.

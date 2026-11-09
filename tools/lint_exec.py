@@ -23,6 +23,7 @@ import dataclasses
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -161,6 +162,7 @@ class Result:
     seconds: float
     cached: bool = False
     skipped: str = None
+    saturated: str = ""  # why the machine was saturated when a FAILED step ended ("" when it was not, or the step passed)
 
 
 def step_to_dict(step):
@@ -373,6 +375,93 @@ def machine_wide_lock(step_name, directory=None):
             handle.close()
 
 
+# ---- timeouts under load (ADR 0117) ------------------------------------------------------------------
+
+PRESSURE_PATH = "/proc/pressure/cpu"
+TIMEOUT_TEXT = re.compile(
+    r"timed out|time out|timeout|did not (?:complete|respond) within|deadline exceeded|TimeoutExpired", re.IGNORECASE)
+DEFAULT_PRESSURE_PERCENT = 25.0
+DEFAULT_LOAD_RATIO = 1.25
+MAX_TIMEOUT_SCALE = 4.0
+
+
+def _finite(text, default):
+    """`text` as a finite float, else `default` (empty, non-numeric, nan and inf all give the default)."""
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) else default
+
+
+# [@ANCHOR: lint_exec:cpu_pressure]
+def cpu_pressure(path=PRESSURE_PATH):
+    """The 10-second average percentage of time some task waited for a processor (`some avg10` in /proc/pressure/cpu), or None
+    when the file is missing or unreadable (not Linux, no PSI). Reads one small file; never raises."""
+    try:
+        with open(path, encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("some"):
+                    for field in line.split():
+                        if field.startswith("avg10="):
+                            return _finite(field[len("avg10="):], None)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+# [@ANCHOR: lint_exec:saturation]
+def saturation(environ=None, loadavg=os.getloadavg, cpus=None, pressure=cpu_pressure):
+    """(saturated, reason): is this machine too busy for a time-limited step to be judged by its wall clock?
+
+    True when CPU pressure `some avg10` is at least `HAMS_LINT_TIMEOUT_PSI_PERCENT` (default 25, the load gate's own limit) or the
+    one-minute load average is at least `HAMS_LINT_TIMEOUT_LOAD_RATIO` (default 1.25) times the processor count. `reason` names the
+    signal that tripped, with its numbers, for the report and the stamp's log; "" when not saturated. Reads /proc and the load
+    average; no locks."""
+    environ = os.environ if environ is None else environ
+    cpus = cpus or os.cpu_count() or 1
+    psi_limit = _finite(environ.get("HAMS_LINT_TIMEOUT_PSI_PERCENT") or DEFAULT_PRESSURE_PERCENT, DEFAULT_PRESSURE_PERCENT)
+    ratio = _finite(environ.get("HAMS_LINT_TIMEOUT_LOAD_RATIO") or DEFAULT_LOAD_RATIO, DEFAULT_LOAD_RATIO)
+    psi = pressure()
+    if psi is not None and psi >= psi_limit:
+        return True, "CPU pressure %.0f%% (limit %.0f%%)" % (psi, psi_limit)
+    try:
+        load = loadavg()[0]
+    except OSError:
+        return False, ""
+    if load >= ratio * cpus:
+        return True, "load %.1f on %d processors (limit %.2f x)" % (load, cpus, ratio)
+    return False, ""
+
+
+# [@ANCHOR: lint_exec:timeout_scale]
+def timeout_scale(environ=None, loadavg=os.getloadavg, cpus=None, pressure=cpu_pressure):
+    """Factor by which a step's own time limits are stretched right now: 1.0 on a quiet machine, otherwise the load average per
+    processor (at least 1, at most 4). Exported to every step as `HAMS_LINT_TIMEOUT_SCALE` when it starts; a checker that has a
+    time limit multiplies it by this (`check_pip_audit.py` does). `HAMS_LINT_TIMEOUT_SCALE=1` in the caller's environment pins it to 1."""
+    environ = os.environ if environ is None else environ
+    if environ.get("HAMS_LINT_TIMEOUT_SCALE_FIXED"):
+        return 1.0
+    sat, _why = saturation(environ, loadavg, cpus, pressure)
+    if not sat:
+        return 1.0
+    cpus = cpus or os.cpu_count() or 1
+    try:
+        load = loadavg()[0]
+    except OSError:
+        return 1.0
+    return round(min(MAX_TIMEOUT_SCALE, max(1.0, load / cpus)), 2)
+
+
+# [@ANCHOR: lint_exec:timeout_suspect]
+def timeout_suspect(result):
+    """True for a result that may have failed only because the machine was starved: it failed, ran (was not a cache hit), the
+    machine was saturated when it ended (`Result.saturated`) and its output speaks of a timeout (`TIMEOUT_TEXT`). Such a step is rerun
+    once alone after the batch (run_linters.py); a real failure that merely mentions a timeout reruns uselessly but cheaply and is
+    still a failure when it fails again."""
+    return bool(result.returncode != 0 and not result.cached and result.saturated and TIMEOUT_TEXT.search(result.output or ""))
+
+
 def run_step(step, locks):
     """Run one step; never raises for a checker failure."""
     started = time.monotonic()
@@ -392,7 +481,8 @@ def run_step(step, locks):
                     capture_output=True,
                     text=True,
                     cwd=step.cwd,
-                    env=step.env,
+                    env=dict(step.env if step.env is not None else os.environ,
+                             HAMS_LINT_TIMEOUT_SCALE=str(timeout_scale(step.env if step.env is not None else os.environ))),
                 )
         except FileNotFoundError:
             if step.missing_msg is None:
@@ -404,7 +494,8 @@ def run_step(step, locks):
             lock.release()
     elapsed = time.monotonic() - started
     output = render_output(step, res.returncode, res.stdout, res.stderr)
-    return Result(step.name, res.returncode, output, elapsed)
+    why = saturation()[1] if res.returncode != 0 else ""
+    return Result(step.name, res.returncode, output, elapsed, saturated=why)
 
 
 def walk_inputs(root, suffixes):

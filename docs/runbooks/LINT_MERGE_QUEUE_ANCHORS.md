@@ -127,3 +127,25 @@ passing member's stamp records what was tolerated.
 
 ### `lint_stamp_gate:known_red_note`
 `known_red_note(stamp_text) -> str | None`: the NOTE line that `lint_stamp_gate.py` prints (and so `prmerge.sh` shows) when a stamp carries `known_red=`.
+
+## lint_exec (timeouts under load)
+
+### `lint_exec:cpu_pressure`
+`cpu_pressure(path="/proc/pressure/cpu") -> float | None`: the `some avg10` value (percent of the last 10 seconds in which some task waited for a processor), or None when the file is missing or unreadable. Reads one small file; never raises.
+
+### `lint_exec:saturation`
+`saturation(environ=None, loadavg=os.getloadavg, cpus=None, pressure=cpu_pressure) -> (bool, str)`. True when CPU pressure is at least `HAMS_LINT_TIMEOUT_PSI_PERCENT` (default 25) or the one-minute load average is at least `HAMS_LINT_TIMEOUT_LOAD_RATIO` (default 1.25) times the processor count; the string names the signal and its numbers, `""` when quiet. A non-numeric limit means the default. No locks.
+
+### `lint_exec:timeout_scale`
+`timeout_scale(environ=None, ...) -> float`: 1.0 when quiet, else load per processor clamped to 1..4. `run_step` exports it to every step as `HAMS_LINT_TIMEOUT_SCALE`; a checker with its own time limit multiplies by it (`check_pip_audit.py` does for its 300 s audit limit). `HAMS_LINT_TIMEOUT_SCALE_FIXED=1` pins it to 1. Time limits inside other steps (for example a test's own timeout) are not scaled; they are covered by the serial rerun.
+
+### `lint_exec:timeout_suspect`
+`timeout_suspect(result) -> bool`: the step failed, really ran (not a cache hit), the machine was saturated when it ended (`Result.saturated`, filled by `run_step` for failed steps only) and its output matches `TIMEOUT_TEXT` (timed out, timeout, did not complete/respond within, deadline exceeded). Pure.
+
+## run_linters (timeouts under load)
+
+### `run_linters:retry_timed_out_steps`
+`retry_timed_out_steps(results, steps, execute=None, out=print) -> (results, [names])`. After the whole run, each `timeout_suspect` step is rerun once, alone and one at a time (`lint_exec.execute(step, 1)`). A pass replaces the failed result and is returned in the list of names; a second failure keeps the original failure and prints `failed again` (with the machine quiet it is a real failure). `HAMS_LINT_TIMEOUT_RETRY=off` disables it. Never loops; at most one extra run per candidate. The caller records the names in the pass stamp.
+
+### `run_linters:timeout_retried_field`
+`timeout_retried_field(names) -> str`: ` timeout-retried=<step>,<step>` (spaces in a name become `_`) or `""`. `lint_stamp_gate.known_red_note` prints it as a NOTE, so a merge shows what the pass rests on.

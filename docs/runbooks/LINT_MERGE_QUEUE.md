@@ -27,3 +27,10 @@ not from the main hams_shared checkout). The record is `~/.cache/hams-lint/basel
 The pass stamp (`~/.cache/hams-lint/passed/<tip>`) ends with ` known_red=<ids> baseline=<sha>` when it tolerated anything;
 `lint_stamp_gate.py` (run by `prmerge.sh`) prints a NOTE line. To repair main, fix the failing test; the next canary run
 removes it from the record.
+
+## Timeouts on a saturated machine
+
+A step that fails with a timeout (`timed out`, `did not complete within ...`) while the machine is saturated (CPU pressure at least 25% or
+load at least 1.25 x the processors when the step ended) is not charged to the branch at once: after the run it is rerun once, alone. If it passes, the run
+passes and the stamp ends with ` timeout-retried=<step>`; `prmerge.sh` prints a NOTE. If it fails again it is a real failure. A step's own time limit
+(`check_pip_audit.py`) also stretches with the load (`HAMS_LINT_TIMEOUT_SCALE`, 1 to 4). Switch the retry off with `HAMS_LINT_TIMEOUT_RETRY=off`.

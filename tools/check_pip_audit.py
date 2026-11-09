@@ -18,6 +18,7 @@ near whatever file a targeted lint run happens to be scoped to.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+import math
 import os
 import lint_exec
 import subprocess
@@ -56,6 +57,18 @@ IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".
 # than a `--version` check).
 VERSION_CHECK_TIMEOUT_SECONDS = 30
 AUDIT_TIMEOUT_SECONDS = 300
+# On a saturated machine run_linters.py exports HAMS_LINT_TIMEOUT_SCALE (1 to 4): the limit stretches with it, so a starved audit is not
+# reported as a stalled network (ADR 0117). A bad value means 1.
+def _timeout_scale(text):
+    """The scale in `text` (1 to 4), 1.0 for anything that is not a finite number."""
+    try:
+        value = float(text or 1)
+    except ValueError:
+        return 1.0
+    return min(4.0, max(1.0, value)) if math.isfinite(value) else 1.0
+
+
+AUDIT_TIMEOUT_SECONDS = int(AUDIT_TIMEOUT_SECONDS * _timeout_scale(os.environ.get("HAMS_LINT_TIMEOUT_SCALE")))
 
 
 def _resolve_repo_root(given_path):
