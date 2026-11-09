@@ -143,6 +143,25 @@ def _item(step, test, message):
             "message": normalize_message(message)[:MAX_MESSAGE]}
 
 
+PYTEST_COUNTS = re.compile(r"(\d+) (failed|errors?)\b")
+PYTEST_CRASH = re.compile(r"INTERNALERROR|worker '\w+' crashed|Segmentation fault|Fatal Python error")
+
+
+def _unexplained_pytest_failure(lines, listed):
+    """Why the output has failures the `FAILED`/`ERROR` lines do not account for, or "" when it has none: a crash marker, or a final
+    pytest line (`2 failed, 1 error, 90 passed in 3s`) that counts more failures than `listed` items."""
+    for line in lines:
+        if PYTEST_CRASH.search(line):
+            return "the run crashed: " + line.strip()[:120]
+    for line in reversed(lines):
+        if re.search(r"\b(passed|failed|errors?)\b.* in [\d.]+s", line):
+            counted = sum(int(number) for number, _word in PYTEST_COUNTS.findall(line))
+            if counted > listed:
+                return "pytest counted %d failure(s) but listed %d" % (counted, listed)
+            break
+    return ""
+
+
 # [@ANCHOR: lint_baseline:failure_items]
 def failure_items(step_name, output):
     """The failures a failed step reports, as {item_id: {"step", "test", "signature", "message"}}.
@@ -175,6 +194,11 @@ def failure_items(step_name, output):
                     message = follow.strip()
             items["%s::%s" % (step, test)] = _item(step, test, message)
     if items:
+        # A step that named some failing tests but failed in a way those lines do not account for (pytest counted more failures and errors
+        # than it listed, or it crashed: INTERNALERROR, a dead xdist worker) must not hide that behind a recorded failing test.
+        unexplained = _unexplained_pytest_failure(lines, len(items))
+        if unexplained:
+            items["%s::unexplained" % step] = _item(step, "unexplained", unexplained + "\n" + "\n".join(sorted(normalize_message(l) for l in lines if l.strip())))
         return items
     kept = sorted({normalize_message(line) for line in lines
                    if line.strip() and not PROGRESS_LINE.match(line) and "bringing up nodes" not in line})
