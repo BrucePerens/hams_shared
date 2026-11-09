@@ -61,6 +61,21 @@ class AggregateTests(unittest.TestCase):
             gc.read_shard_results(directory)
 
     # Tests [@ANCHOR: gate_canary:aggregate]
+    def test_a_shard_cut_short_with_only_tolerated_failures_is_a_shard_error_not_green(self):
+        results = {"new_failures": [], "known_red": {"b:T.t": {}}, "flakes": {"b:T.f": {}}, "now_passing": [], "fix_me": [],
+                   "unparsed": 0, "counts": {"failed": 1, "errors": 0, "total": 9}}
+        for exit_status in (1, 2, 124, -9):
+            status = gc.aggregate([{"number": 2, "modules": ["b"], "exit_status": exit_status, "results": dict(results)}], COMMITS)
+            self.assertEqual(status["status"], "red", exit_status)
+            self.assertIn("did not finish", status["shard_errors"][0])
+            self.assertEqual(status["tolerated"], ["b:T.t"])
+        for exit_status in (0, None):
+            self.assertEqual(gc.aggregate([{"number": 2, "modules": ["b"], "exit_status": exit_status, "results": dict(results)}], COMMITS)["status"], "green")
+        failing = dict(results, new_failures=["b:T.n"])
+        status = gc.aggregate([{"number": 2, "modules": ["b"], "exit_status": 1, "results": failing}], COMMITS)
+        self.assertEqual((status["status"], status["shard_errors"]), ("red", []))
+
+    # Tests [@ANCHOR: gate_canary:aggregate]
     def test_status_lists_new_tolerated_and_flaky_tests_and_is_red_only_for_new_ones(self):
         shards = [
             {"number": 1, "modules": ["a"], "exit_status": 0, "results": None},
@@ -158,8 +173,10 @@ class RunTests(unittest.TestCase):
                 return 0
             number = int(command.split("shard ")[1][0])
             if number in results:
-                results[number](os.path.join(self.gate, "logs", "shard%d" % number))
-                return 1
+                directory = os.path.join(self.gate, "logs", "shard%d" % number)
+                results[number](directory)
+                # test.py exits 0 for a run whose only failures are tolerated or flaky, and 1 when it has a new failure
+                return 1 if gc.read_shard_results(directory)["new_failures"] else 0
             return 0
         return runner
 
@@ -202,6 +219,19 @@ class RunTests(unittest.TestCase):
         code, status = self.run_canary({1: lambda d: write_results(d, new=["mod_a:N.n"])}, bisect=False)
         self.assertEqual(code, 1)
         self.assertFalse([c for c in self.commands if "--bisect-modules" in c])
+
+    # Tests [@ANCHOR: gate_canary:run_canary]
+    def test_a_shard_killed_by_a_signal_after_tolerated_failures_makes_the_night_red(self):
+        def killed(directory):
+            write_results(directory, known={"mod_a:K.k": {}})
+        inner = self.runner_for({1: killed})
+        def runner(command, log_path):
+            status = inner(command, log_path)
+            return -9 if "shard 1" in command else status
+        code, status = gc.run_canary(state_dir=self.state, runner=runner, snapshot=self.snapshot, out=self.out.append, hostname="devbox",
+                                     slots=2, load=99.0, bisect=False)
+        self.assertEqual((code, status["status"]), (1, "red"))
+        self.assertIn("did not finish", status["shard_errors"][0])
 
     # Tests [@ANCHOR: gate_canary:run_canary]
     def test_the_second_run_while_one_holds_the_lock_exits_at_once(self):
