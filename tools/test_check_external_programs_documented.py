@@ -69,6 +69,17 @@ class CodeMaskTests(unittest.TestCase):
         self.assertEqual(masked.count("{"), 1)
 
 
+    def test_raw_byte_and_raw_c_strings_are_blanked_without_escapes(self):
+        for prefix in ("br", "cr", "r"):
+            src = 'let a = %s"x\\"; Command::new("later");' % prefix
+            masked = cepd.code_mask(src)
+            self.assertEqual(len(masked), len(src))
+            self.assertIn('Command::new("', masked, prefix)
+            self.assertEqual(cepd.rust_launches(src), ({"later"}, 0), prefix)
+        self.assertEqual(cepd.rust_launches('let a = br#"q"#; let b = 1; Command::new("p");'), ({"p"}, 0))
+        self.assertEqual(cepd.code_mask('let a = br#"{"#;').count("{"), 0)
+
+
 class TestSpansTests(unittest.TestCase):
     def test_cfg_test_module_with_nested_braces_is_one_span(self):
         src = "fn a() {}\n#[cfg(test)]\nmod tests { fn t() { if x { y } } }\nfn b() {}\n"
