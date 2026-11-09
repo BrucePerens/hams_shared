@@ -939,7 +939,7 @@ def as_user_command(user, home):
 # [@ANCHOR: provision_test_environment:acquire_lock]
 def acquire_lock(path=LOCK_PATH, wait=True):
     """An exclusive flock on `path` (created mode 600) held for the rest of the run: two provisioning runs at once
-    raced each other's Odoo package build (found 2026-11-07). Returns the open file, which must stay referenced; the
+    raced each other's Odoo package build. Returns the open file, which must stay referenced; the
     lock is released when the process exits. When another run holds it: waits (printing that it does) when `wait`,
     else raises RuntimeError."""
     handle = os.fdopen(os.open(path, os.O_RDWR | os.O_CREAT, 0o600), "r+")
