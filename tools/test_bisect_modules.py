@@ -14,7 +14,6 @@ Tests [@ANCHOR: bisect_modules:write_report]
 Tests [@ANCHOR: bisect_modules:run]
 """
 
-import io
 import json
 import os
 import subprocess
