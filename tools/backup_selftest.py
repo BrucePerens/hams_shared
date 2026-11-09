@@ -4,7 +4,8 @@
 """
 Backup self-test: prove on the machine itself that the newest backup can really be restored, and tell the monitor when it cannot.
 
-    backup_selftest.py [--config FILE] run [--only STAGE ...]   run the stages; one PASS/FAIL/SKIP line each
+    backup_selftest.py [--config FILE] run [--only STAGE ...] [--json]   run the stages; one PASS/FAIL/SKIP line each; --json: a JSON report
+    backup_selftest.py [--config FILE] report                    print the last run's JSON report (schema 1)
     backup_selftest.py [--config FILE] record-fingerprint --confirm-record   (a person, once) record sha256 of each key
     backup_selftest.py [--config FILE] check [--max-age-days 9]  for the pager's "synthetic" check: fails when no good run is recent
     backup_selftest.py [--config FILE] stages                    list the stages and their exit codes
@@ -17,7 +18,8 @@ Stages, in order (a stage is named in its line, in the alert and in the exit cod
   wal_age            newest archived WAL object in the repository under 15 min old, and the one pg_stat_archiver reports is in it
   wal_chain          no missing WAL segment between the newest backup's first segment and the newest archived segment
   pgbackrest_verify  `pgbackrest verify`: every file of the repository against its checksum, and the WAL chain
-  restore .. cleanup restore the newest backup (and WAL) into a scratch directory, start a throwaway PostgreSQL on a free port bound
+  restore .. cleanup OPTIONAL, not in the hams1 default (the restoration system's VM verification is that restore proof; the storage
+                     profile keeps it): restore the newest backup (and WAL) into a scratch directory, start a throwaway PostgreSQL on a free port bound
                      to a unix socket in it (nice 19, ionice idle, systemd-run MemoryMax/CPUQuota), sanity SQL (row counts against the
                      live database, newest replayed transaction within the WAL lag), read every relation (pg_checksums, or a dump to
                      /dev/null), then remove the scratch directory
@@ -63,7 +65,7 @@ STAGE_CODES = {
 RESTORE_GROUP = ("restore", "start", "sanity_sql", "checksum_read", "cleanup")
 DEFAULT_STAGES = {
     "hams1": ["preflight", "key_fingerprint", "pgbackrest_check", "backup_age", "wal_age", "wal_chain", "pgbackrest_verify",
-              "restore", "kopia_restore"],
+              "kopia_restore"],
     "storage": ["preflight", "key_fingerprint", "storage_restore", "restore"],
 }
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
@@ -815,6 +817,15 @@ def status_path(cfg: dict) -> str:
     return os.path.join(cfg["state_dir"], "selftest_status.json")
 
 
+# [@ANCHOR: backup_selftest:report_document]
+def report_document(cfg: dict, report: Report, code: int) -> dict:
+    """The machine-readable result (schema 1): what `run --json` prints and the status file holds, so another tool (the restoration
+    system) can reuse the checks. Every stage has its name, exit code, status (PASS, FAIL, SKIP or REFUSED) and a secret-free detail."""
+    return {"schema": 1, "profile": cfg["profile"], "finished": datetime.datetime.now(datetime.timezone.utc).isoformat(), "exit": code,
+            "ok": code == 0, "failed_stage": report.first_failure, "refused": code == EXIT_REFUSED,
+            "stages": [{**r, "code": STAGE_CODES[r["stage"]]} for r in report.results]}
+
+
 def write_status(cfg: dict, report: Report, code: int) -> None:
     path = status_path(cfg)
     try:
@@ -822,16 +833,17 @@ def write_status(cfg: dict, report: Report, code: int) -> None:
             previous = json.load(handle)
     except (OSError, ValueError):
         previous = {}
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    data = {"finished": now, "exit": code, "failed_stage": report.first_failure, "refused": code == EXIT_REFUSED,
-            "stages": report.results, "last_success": now if code == 0 else previous.get("last_success")}
+    data = report_document(cfg, report, code)
+    data["last_success"] = data["finished"] if code == 0 else previous.get("last_success")
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as handle:  # audit-ignore-path
         json.dump(data, handle, indent=1)
     os.replace(tmp, path)
 
 
-def cmd_run(cfg: dict, only, out, err) -> int:
+def cmd_run(cfg: dict, only, out, err, as_json: bool = False) -> int:
+    """With as_json the stage lines go to `err` and the one JSON document (report_document) to `out`."""
+    document_out, out = out, (err if as_json else out)
     os.makedirs(cfg["state_dir"], mode=0o700, exist_ok=True)
     with open(os.path.join(cfg["state_dir"], "lock"), "w", encoding="utf-8") as lock:  # audit-ignore-path
         try:
@@ -848,6 +860,8 @@ def cmd_run(cfg: dict, only, out, err) -> int:
         code = run_stages(ctx, report, only)
         with contextlib.suppress(OSError):
             write_status(cfg, report, code)
+        if as_json:
+            print(json.dumps(report_document(cfg, report, code), indent=1), file=document_out)
         if code == EXIT_REFUSED:
             print("backup selftest refused to run (not a backup failure)", file=err)
         elif code:
@@ -888,6 +902,8 @@ def main(argv=None, out=None, err=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
     run.add_argument("--only", action="append", choices=sorted(STAGE_CODES), help="run just this stage (repeatable)")
+    run.add_argument("--json", action="store_true", help="print one JSON document on standard output (stage lines go to standard error)")
+    sub.add_parser("report", help="print the last run's JSON result from the status file")
     rec = sub.add_parser("record-fingerprint")
     rec.add_argument("--confirm-record", action="store_true", required=True,
                      help="required: a person is deliberately recording the fingerprints of the current keys")
@@ -905,8 +921,12 @@ def main(argv=None, out=None, err=None) -> int:
             return cmd_record_fingerprint(cfg, out)
         if args.command == "check":
             return cmd_check(cfg, args.max_age_days, err)
-        return cmd_run(cfg, args.only, out, err)
-    except (ConfigurationError, StageFailed) as exc:
+        if args.command == "report":
+            with open(status_path(cfg), "r", encoding="utf-8") as handle:  # audit-ignore-path
+                print(handle.read(), file=out)
+            return 0
+        return cmd_run(cfg, args.only, out, err, args.json)
+    except (ConfigurationError, StageFailed, OSError) as exc:
         print(f"backup_selftest: {exc}", file=err)
         return EXIT_CONFIG
 

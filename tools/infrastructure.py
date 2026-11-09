@@ -1707,7 +1707,7 @@ SANDBOX_BASELINE_EXEMPTIONS = {
     ),
     "hams-backup-selftest.service": (
         frozenset({"CapabilityBoundingSet"}),
-        _B2_UNIT % "restores the newest database backup into a throwaway PostgreSQL in a scratch directory and runs the kopia restore test",
+        _B2_UNIT % "checks the pgBackRest archive, ages, WAL chain and verify as postgres and runs the kopia restore test",
     ),
     "hams.daemon.keys.service": (
         frozenset({"ProtectSystem"}),
@@ -4762,7 +4762,7 @@ WantedBy=timers.target
             "path": "/opt/hams/systemd/hams-backup-selftest.service",
             "content": """\
 [Unit]
-Description=Weekly backup self-test: restore the newest backup into a scratch PostgreSQL and check it (docs/runbooks/BACKUP_SELFTEST.md)
+Description=Weekly backup self-test: archive, age, WAL chain, verify, kopia restore and key fingerprint checks (docs/runbooks/BACKUP_SELFTEST.md)
 After=network-online.target postgresql.service
 Wants=network-online.target
 ConditionPathExists=/opt/hams/etc/backup_selftest/config.json
@@ -4772,8 +4772,8 @@ Type=oneshot
 # One PASS/FAIL line per stage. Exit 75 means "refused: load high or disk short", which is not a backup failure (the pager's synthetic check
 # `backup_selftest.py check` alerts when no run has passed for 9 days). Any other non-zero exit fails the unit, which the Systemd Failed
 # Services Tracker reports; the last journal line names the failed stage and nothing else.
-# Restores into /var/lib/hams-backup-selftest/scratch (refused unless 2x the database size is free) and removes it; the kopia stage runs the
-# existing restore test and writes under /var/lib/hams-b2-backup; pgbackrest logs under /var/log/pgbackrest.
+# The database restore proof is the restoration system's VM verification, not this unit. The kopia stage runs the existing restore
+# test and writes under /var/lib/hams-b2-backup; pgbackrest logs under /var/log/pgbackrest.
 SuccessExitStatus=75
 ProtectSystem=strict
 ReadWritePaths=/var/lib/hams-backup-selftest /var/lib/hams-b2-backup /var/log/pgbackrest

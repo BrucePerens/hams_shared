@@ -449,6 +449,18 @@ class FakePgbackrestTests(unittest.TestCase):
                 json.dump({"failed_stage": None, "last_success": stamp}, f)
             self.assertEqual(bs.main(["--config", self.config(), "check"], out=io.StringIO(), err=io.StringIO()), want)
 
+    def test_json_report_is_machine_readable_and_secret_free(self):
+        out, err = io.StringIO(), io.StringIO()
+        code = bs.main(["--config", self.config(), "run", "--json"], out=out, err=err)
+        doc = json.loads(out.getvalue())
+        self.assertEqual((doc["schema"], doc["ok"], doc["exit"], doc["failed_stage"]), (1, False, code, "pgbackrest_check"))
+        self.assertEqual(doc["stages"][0]["code"], bs.STAGE_CODES["pgbackrest_check"])
+        self.assertIn("pgbackrest_check", err.getvalue())  # the stage lines went to standard error
+        self.assertNotIn(self.key, out.getvalue() + err.getvalue())
+        again = io.StringIO()
+        self.assertEqual(bs.main(["--config", self.config(), "report"], out=again, err=io.StringIO()), 0)
+        self.assertEqual(json.loads(again.getvalue())["failed_stage"], "pgbackrest_check")
+
     def test_failed_run_keeps_the_last_success_time(self):
         cfg = bs.load_config(self.config())
         os.makedirs(cfg["state_dir"])
@@ -493,10 +505,10 @@ class ConfigAndHelperTests(unittest.TestCase):
         self.assertEqual(ctx.wrap(["x"]), ["runuser", "-u", "postgres", "--", "x"])
 
     def test_default_profiles(self):
-        full = self.load(keys=[{"name": "k", "kind": "raw_file", "path": "/x"}], restore={"tables": [{"db": "d", "table": "t"}]})
+        full = self.load(keys=[{"name": "k", "kind": "raw_file", "path": "/x"}])
         self.assertEqual(full["stages"][0], "preflight")
         self.assertIn("kopia_restore", full["stages"])
-        self.assertNotIn("pgbackrest_check", self.load(profile="storage", keys=[], stages=["preflight"])["stages"])
+        self.assertNotIn("restore", full["stages"])  # the restore proof is the restoration system's VM verification
         self.assertIn("storage_restore", bs.DEFAULT_STAGES["storage"])
 
     def test_stage_codes_are_unique(self):

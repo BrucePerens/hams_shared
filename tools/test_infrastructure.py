@@ -4568,7 +4568,7 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams-b2-backup.timer": "activates hams-b2-backup.service (own bucket)",
         "hams-b2-restore-test.service": "reads back our own B2 bucket into a scratch location and database",
         "hams-b2-restore-test.timer": "activates hams-b2-restore-test.service (own bucket)",
-        "hams-backup-selftest.service": "restores our own pgBackRest repository and kopia bucket into a scratch cluster on this host; fetches nothing from a third party",
+        "hams-backup-selftest.service": "checks our own pgBackRest repository and runs a kopia restore test against our own bucket; fetches nothing from a third party",
         "hams-backup-selftest.timer": "activates hams-backup-selftest.service (own repositories)",
         "hams-b2-backup-check.service": "reads two local status files",
         "hams-b2-backup-check.timer": "activates hams-b2-backup-check.service (local)",
