@@ -1032,6 +1032,37 @@ The entry also uses the existing `nice`, `max_concurrent` and `max_load_ratio` (
 
 Returns `(probe, jobs, skip_reason)`: the probe with the hidden capabilities removed, the limited job count, and a non-empty reason when the machine must be skipped. Pure. Tests: `ReserveTests` in `test_lint_remote.py`.
 
+### `[@ANCHOR: lint_remote:expected_blobs]` `expected_blobs(repo, sha, sub_exclude=())`
+
+Purpose: the exact file set a machine's mirror of `repo` must hold to equal what the local run reads, as `{path: git blob id}`: the files tracked in commit `sha`, minus secrets and build output
+(`excluded`) and `sub_exclude` (a nested repository mirrored on its own, hams_open's `hams_shared`), with the working tree's uncommitted regular files at their present content and its deleted files
+gone. A blob id is the SHA-1 of `blob <size>\0<content>`, the same on every machine. Paths with a newline or a tab are left out. Reads `repo` through git only. Used by `mirror_problems()`.
+Tests: `test_a_mirror_at_an_older_commit_than_its_manifest_says_is_rebuilt_before_any_step_runs` and `test_uncommitted_files_of_the_branch_under_test_are_part_of_the_exact_tree` in `test_lint_remote.py`.
+
+### `[@ANCHOR: lint_remote:mirror_problems]` `mirror_problems(transport, repo, sha, dest, sub_exclude=(), log=print)`
+
+Purpose: proves a remote mirror equals the local tree before any step reads it (2026-11-08: steps on a remote machine linted a stale sibling hams_open and failed a branch against commits main had already
+fixed; the same staleness could pass one). It hashes every expected file on the machine (`BLOB_SCRIPT`, standard-library Python, paths on stdin) and compares with `expected_blobs()`. Returns the problems
+left, `missing: <path>` and `differs: <path>`; empty means the mirror is exact. Files in the mirror that the local tree does not have are removed (logged) unless they are caches or build output
+(`MIRROR_JUNK_DIRS`, `MIRROR_JUNK_FILES`). `run_on_machine()` calls it for hams_com, hams_open and hams_shared (`verify_mirrors`) after the sync; a mirror with problems is rebuilt in full once, and when it
+still differs the machine returns `infra`: nothing runs there, the steps run on this machine and the run says why. Does not trust the mirror's own manifest.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `transport` | SshTransport or ShellTransport | How to run commands on the machine. |
+| `repo`, `sha` | str | The local repository and the commit its HEAD names. |
+| `dest` | str | Absolute mirror path on the machine. |
+| `sub_exclude` | tuple of str | Paths mirrored separately (skipped here). |
+
+Tests: `EndToEndTests.test_a_mirror_at_an_older_commit_than_its_manifest_says_is_rebuilt_before_any_step_runs`, `test_a_mirror_that_cannot_be_brought_to_the_local_commits_runs_nothing_there`,
+`test_files_left_behind_by_an_earlier_sync_are_removed_and_caches_are_ignored`.
+
+### `[@ANCHOR: lint_remote:siblings_text]` `siblings_text(info)`
+
+Purpose: names the commits a remote run read: `hams_com@<12 hex> hams_open@<12 hex> hams_shared@<12 hex>`, `+dirty` after a commit whose uncommitted files were shipped too. `run_on_machine()` prints it as the
+first line of the machine's log (`[host] siblings: ...`) and `collect()` returns it for the pass stamp (`siblings=<host>/<role>@<sha>/...`, `run_linters.stamp_text`). Pure. Test:
+`test_a_mirror_at_an_older_commit_than_its_manifest_says_is_rebuilt_before_any_step_runs`; the stamp field is in `test_stamp_metadata_names_the_host_and_the_gate_still_parses_it` (`test_lint_remote.py`).
+
 ### `[@ANCHOR: lint_lock:held_locks]` `HeldLocks`
 
 Purpose: a handle that stands for several open lock files at once, so a lint run's claim on a machine and its hold on that machine's
