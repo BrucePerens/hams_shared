@@ -304,6 +304,30 @@ class CargoBudgetTest(unittest.TestCase):
             self.assertEqual(lint_cache.main(["clear", "cargo"]), 0)
         self.assertFalse(os.path.exists(old))
 
+    # Tests [@ANCHOR: lint_cache:main]
+    def test_clear_keeps_the_work_checkout_of_a_target_a_build_holds_the_lock_of(self):
+        """`clear cargo` removed `work/<target>` while a build holding that target's lock compiled from it."""
+        cache = self._tmp.name
+        environ = {"XDG_CACHE_HOME": cache}
+        base = lint_cache.disk_cargo_base(environ)
+        work = os.path.join(cache, "hams-lint", "work")
+        for name in ("t1", "t2"):
+            make_unit(os.path.join(base, name, "debug"), "a", "0123456789abcdef", 1000, 10)
+            os.makedirs(os.path.join(work, name, "repo"))
+        os.makedirs(os.path.join(work, "orphan", "repo"))  # a work checkout whose target is gone
+        with unittest.mock.patch.dict(os.environ, environ), unittest.mock.patch("builtins.print"):
+            with lint_cache.locked(os.path.join(base, "t1"), wait=False) as held:  # a build in progress
+                self.assertTrue(held)
+                self.assertEqual(lint_cache.main(["clear", "cargo"]), 0)
+                self.assertTrue(os.path.isdir(os.path.join(base, "t1")))
+                self.assertTrue(os.path.isdir(os.path.join(work, "t1", "repo")))
+            self.assertFalse(os.path.exists(os.path.join(base, "t2")))
+            self.assertFalse(os.path.exists(os.path.join(work, "t2")))
+            self.assertFalse(os.path.exists(os.path.join(work, "orphan")))
+            self.assertEqual(lint_cache.main(["clear", "all"]), 0)  # idle now: everything goes
+        self.assertFalse(os.path.exists(os.path.join(base, "t1")))
+        self.assertFalse(os.path.exists(os.path.join(work, "t1")))
+
     def test_legacy_directory_is_adopted_once(self):
         cache = self._tmp.name
         legacy = os.path.join(cache, "hams-cargo-target-lint")
