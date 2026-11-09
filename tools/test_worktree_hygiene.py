@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import worktree_hygiene as wh  # noqa: E402
@@ -117,6 +118,10 @@ class WorktreeHygieneTest(unittest.TestCase):
         report = wh.run(self.repo, True, 1800, {}, now=time.time() + 3600)
         self.assertEqual(report["deleted"], ["merged-old"])
         self.assertIn("on-main-tree", _git(self.repo, "branch", "--format=%(refname:short)"))
+
+    def test_a_missing_gh_gives_no_merged_heads_instead_of_an_exception(self):
+        with unittest.mock.patch.object(wh.subprocess, "run", side_effect=FileNotFoundError("gh")):
+            self.assertEqual(wh.merged_pull_request_heads(self.repo), {})
 
     def test_the_exit_status_is_one_when_something_is_stale(self):
         path = self.worktree("ahead")

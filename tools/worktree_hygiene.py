@@ -51,12 +51,15 @@ def git(repo, *args, check=True):
 
 def merged_pull_request_heads(repo):
     """{branch name: set of tip shas} of merged pull requests of the repository the working tree belongs to."""
-    result = subprocess.run(
-        ["gh", "pr", "list", "--state", "merged", "--limit", "1000", "--json", "headRefName,headRefOid"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list", "--state", "merged", "--limit", "1000", "--json", "headRefName,headRefOid"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return {}  # gh is not installed: only the plain "no commits beyond origin/main" test applies, as the module docstring says
     if result.returncode != 0:
         return {}
     heads = {}
