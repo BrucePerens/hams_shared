@@ -413,11 +413,12 @@ def read_record(name, directory=None):
 
 # [@ANCHOR: agent_procs:list_records]
 def list_records(directory=None):
-    """Every readable `JobRecord` in the jobs directory, sorted by start time."""
+    """Every readable `JobRecord` in the jobs directory, sorted by start time. A file whose name is not a valid job name (a
+    stray `.hidden.json`) is not a record and is skipped."""
     directory = directory or jobs_dir()
     records = []
     for entry in os.listdir(directory):
-        if entry.endswith(".json") and entry != "guard.json":
+        if entry.endswith(".json") and entry != "guard.json" and _NAME_RE.match(entry[:-5]):
             rec = read_record(entry[:-5], directory)
             if rec is not None:
                 records.append(rec)
@@ -487,12 +488,14 @@ def start_job(name, argv, tag="", cwd=None, directory=None):
 
     Output (standard output and error) goes to `<jobs dir>/<name>.log`, truncated. The record names the wrapper's pid,
     process group, session and start time. Holds an exclusive lock on `<name>.lock` while checking and starting, so two
-    starts of one name cannot both succeed. Raises `ProcError` for a bad name, an empty command, or a job of that name that
+    starts of one name cannot both succeed. Raises `ProcError` for a bad name, an empty command, a `cwd` that is not a directory, or a job of that name that
     is still running (stop it, or wait for it, first)."""
     directory = directory or jobs_dir()
     check_job_name(name)
     if not argv:
         raise ProcError("run needs a command after --")
+    if cwd is not None and not os.path.isdir(cwd):
+        raise ProcError(f"--cwd {cwd} is not a directory")
     with open(os.path.join(directory, name + ".lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         old = read_record(name, directory)
