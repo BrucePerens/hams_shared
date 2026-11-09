@@ -402,7 +402,7 @@ class JobRecordTests(ProcTestCase):
     def test_job_names_are_validated(self):
         for good in ("a", "build-1", "x.y_z", "A" * 64):
             self.assertEqual(ap.check_job_name(good), good)
-        for bad in ("", ".hidden", "-x", "a/b", "a b", "A" * 65, "../x", None):
+        for bad in ("", ".hidden", "-x", "a/b", "a b", "A" * 65, "../x", None, "guard"):
             with self.assertRaises(ap.ProcError, msg=repr(bad)):
                 ap.check_job_name(bad)
 
@@ -514,6 +514,28 @@ class WaitTests(ProcTestCase):
         self.assertEqual(ap.wait_file(path, contains="NEVER", fail_contains="FATAL", timeout=5, interval=0.05).code, 1)
         self.assertEqual(ap.wait_file(path, contains="NEVER", timeout=0.3, interval=0.05).code, 75)
         self.assertEqual(ap.wait_file(os.path.join(self.tmp, "absent"), timeout=0.3, interval=0.05).code, 75)
+
+    def test_wait_file_with_a_bad_regular_expression_is_a_usage_error_not_a_traceback(self):
+        path = os.path.join(self.tmp, "x.log")
+        for kwargs in ({"contains": "("}, {"fail_contains": "[a-"}):
+            with self.assertRaises(ap.ProcError, msg=repr(kwargs)):
+                ap.wait_file(path, timeout=0.1, interval=0.05, **kwargs)
+        done = cli("wait", "--file", path, "--contains", "(", "--timeout", "1")
+        self.assertEqual(done.returncode, 2)
+        self.assertNotIn("Traceback", done.stderr)
+
+    def test_wait_job_whose_record_vanishes_reports_it_instead_of_crashing(self):
+        rec = ap.JobRecord("vanish", "", os.getpid(), os.getpid(), os.getpid(), ap.read_proc(os.getpid()).start_ticks, "/w", ["x"], "/l", 1.0, "bruce")
+        ap.write_record(rec, self.jobs)
+        calls = []
+
+        def sleeper(seconds):
+            calls.append(seconds)
+            os.remove(ap.record_path("vanish", self.jobs))
+
+        result = ap.wait_job("vanish", timeout=5, interval=0.01, sleep=sleeper, directory=self.jobs)
+        self.assertEqual(result.code, 1)
+        self.assertIn("disappeared", result.message)
 
     def test_wait_file_fails_when_the_producer_dies_first(self):
         producer = self.spawn("sleep 0.5")
