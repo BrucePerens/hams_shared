@@ -831,7 +831,7 @@ def guard_verdict(size_bytes, free_now_gb, pol, in_ram):
 @dataclasses.dataclass
 class JobResult:
     """What `run_job` reports: `returncode` (the command's, 128+signal for a signal, `EX_TEMPFAIL` when a live job
-    already uses the directory), `target`, `in_ram`, `stopped` (the guard's reason or None), `peak_bytes`, `elapsed`
+    already uses the directory or when the guard stopped the command and it still exited 0), `target`, `in_ram`, `stopped` (the guard's reason or None), `peak_bytes`, `elapsed`
     (seconds) and `block_write_bytes` (bytes the command and its children caused to be written to block devices, from
     getrusage; 0 for a tmpfs)."""
 
@@ -885,13 +885,16 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
     say(f"job {job}: target {target} ({'RAM' if placed.in_ram else 'disk'}: {placed.reason})")
     started = time.monotonic()
     before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_oublock
-    state = {"stopped": None, "peak": 0, "warned": False}
+    state = {"stopped": None, "peak": 0, "warned": False, "reaped": False}
     child = None
     previous = {}
     try:
         child = popen(argv, env=environ, start_new_session=True, preexec_fn=_die_with_parent)
 
         def forward(signum, _frame):
+            # Not once the child is reaped: its pid may belong to an unrelated new process group by now.
+            if state.get("reaped"):
+                return
             try:
                 os.killpg(child.pid, signum)
             except OSError:
@@ -903,6 +906,7 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
         while True:
             try:
                 returncode = child.wait(timeout=interval)
+                state["reaped"] = True
                 break
             except subprocess.TimeoutExpired:
                 size = tree_bytes(target)
@@ -930,6 +934,9 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
             leaked = leftovers(job_tmp)
             remove_tree(job_tmp)
     elapsed = time.monotonic() - started
+    if state["stopped"] and returncode == 0:
+        # The guard stopped it (a truncated build) but it trapped the signal and exited 0: a pass would be a lie.
+        returncode = EX_TEMPFAIL
     blocks = (resource.getrusage(resource.RUSAGE_CHILDREN).ru_oublock - before) * 512
     code = returncode if returncode >= 0 else 128 - returncode
     if leaked:
@@ -949,10 +956,13 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
 def _die_with_parent():
     """Child-side hook of `run_job`: SIGTERM this process when the runner dies, so a SIGKILLed runner does not leave a build
     writing into a directory the next sweep (rightly) calls dead."""
+    parent = os.getppid()
     try:
         ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
     except (OSError, AttributeError):
-        pass
+        return
+    if os.getppid() != parent:  # the runner died between the fork and the prctl: the signal will never come
+        os.kill(os.getpid(), signal.SIGTERM)
 
 
 # [@ANCHOR: ram_dirs:stop_group]

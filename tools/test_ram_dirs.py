@@ -618,6 +618,58 @@ class RunJobTest(RamTestCase):
         self.assertTrue(any("STOPPING" in line for line in said))
 
     # Tests [@ANCHOR: ram_dirs:run_job]
+    # Tests [@ANCHOR: ram_dirs:JobResult]
+    def test_a_stopped_job_that_traps_the_signal_and_exits_0_is_not_reported_as_success(self):
+        environ = dict(self.environ, HAMS_RAM_JOB_MAX_GB="0.00001")
+        code = ("import os,signal,sys,time; signal.signal(signal.SIGTERM, lambda *a: sys.exit(0)); t=os.environ['CARGO_TARGET_DIR'];"
+                "open(t+'/big','w').write('x'*200000); time.sleep(60)")
+        with self.free(60):
+            result = ram_dirs.run_job("big", [sys.executable, "-c", code], environ=environ, say=lambda text: None, interval=0.2, grace=5)
+        self.assertIn("per-job limit", result.stopped)
+        self.assertEqual(result.returncode, ram_dirs.EX_TEMPFAIL)
+
+    # Tests [@ANCHOR: ram_dirs:run_job]
+    def test_a_signal_after_the_child_was_reaped_is_not_forwarded_to_its_old_group(self):
+        installed, killed = {}, []
+
+        class Child:
+            pid = 424242
+
+            def wait(self, timeout=None):
+                return 0
+
+            def poll(self):
+                return 0
+
+        real_signal = ram_dirs.signal.signal
+
+        def record(number, handler):
+            installed.setdefault(number, handler)  # the first handler is run_job's own forwarder
+            return real_signal(number, handler)
+
+        with unittest.mock.patch.object(ram_dirs.signal, "signal", side_effect=record), \
+                unittest.mock.patch.object(ram_dirs.os, "killpg", side_effect=lambda pid, sig: killed.append((pid, sig))), self.free(60):
+            ram_dirs.run_job("t1", ["true"], environ=self.environ, say=lambda text: None, interval=0.2, popen=lambda *a, **k: Child())
+            self.assertIn(signal.SIGTERM, installed)
+            killed.clear()
+            installed[signal.SIGTERM](signal.SIGTERM, None)  # the run is over and the child reaped: nothing may be signalled
+            self.assertEqual(killed, [])
+
+    # Tests [@ANCHOR: ram_dirs:die_with_parent]
+    def test_a_runner_that_died_before_the_child_asked_for_the_parent_death_signal_ends_the_child(self):
+        killed = []
+        with unittest.mock.patch.object(ram_dirs.ctypes, "CDLL"), \
+                unittest.mock.patch.object(ram_dirs.os, "getppid", side_effect=[100, 1]), \
+                unittest.mock.patch.object(ram_dirs.os, "kill", side_effect=lambda pid, sig: killed.append((pid, sig))):
+            ram_dirs._die_with_parent()
+        self.assertEqual(killed, [(os.getpid(), signal.SIGTERM)])
+        killed.clear()
+        with unittest.mock.patch.object(ram_dirs.ctypes, "CDLL"), unittest.mock.patch.object(ram_dirs.os, "getppid", return_value=100), \
+                unittest.mock.patch.object(ram_dirs.os, "kill", side_effect=lambda pid, sig: killed.append((pid, sig))):
+            ram_dirs._die_with_parent()
+        self.assertEqual(killed, [])
+
+    # Tests [@ANCHOR: ram_dirs:run_job]
     def test_the_guard_stops_a_job_when_the_free_space_falls_under_the_hard_floor(self):
         said = []
         with mock.patch.object(ram_dirs, "free_gb", side_effect=[60, 60, 3, 3, 3, 3]):
