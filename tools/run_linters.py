@@ -23,6 +23,7 @@ import lint_cache
 import lint_exec
 import lint_batch
 import relay_structural
+import pytest_impact
 import rust_impact
 import lint_layout
 import lint_lock
@@ -491,14 +492,15 @@ def stamp_repos(repo_root, tools_dir, dir_path, layout=None):
     return repos
 
 
-def stamp_text(mode, step_names, hosts=(), known_red="", siblings=()):
+def stamp_text(mode, step_names, hosts=(), known_red="", siblings=(), impact=()):
     """One line: mode, time, how many steps were selected and their names (the part of a name
     before `[`). prmerge.sh reads it to refuse a stamp that selected nothing for a code change."""
     bases = sorted({name.split("[")[0].split(" ")[0] for name in step_names})
     stamp_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     host_field = f" hosts={','.join(sorted(set(hosts)))}" if hosts else ""
     sibling_field = f" siblings={','.join(sorted(set(siblings)))}" if siblings else ""  # the commits a remote machine's mirrors held
-    return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}{sibling_field}{known_red}\n"
+    impact_field = f" impact={','.join(impact)}" if impact else ""  # pytest steps run on a selection of their test files (pytest_impact.py)
+    return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}{sibling_field}{impact_field}{known_red}\n"
 
 
 def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
@@ -518,7 +520,7 @@ def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
         print(f"(pass stamp not written: {error})", file=sys.stderr)
 
 
-def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red="", siblings=()):
+def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red="", siblings=(), impact=()):
     """Record "run_linters.py passed (mode) with a clean tree at commit <sha>" for each repo
     involved. devbox_tools/prmerge.sh refuses to merge a branch whose tip has no stamp, so a
     PR cannot land without the full or `--changed` run having passed on exactly that code.
@@ -532,7 +534,7 @@ def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red="", sibli
         try:
             os.makedirs(pass_stamp_dir(), exist_ok=True)
             with open(os.path.join(pass_stamp_dir(), head[0]), "w", encoding="utf-8") as handle:
-                handle.write(stamp_text(mode, step_names, hosts, known_red, siblings))
+                handle.write(stamp_text(mode, step_names, hosts, known_red, siblings, impact))
         except OSError as error:
             print(f"(pass stamp not written: {error})", file=sys.stderr)
 
@@ -1316,6 +1318,20 @@ def main():
     def _fail_now(name, message):
         steps.append(lint_exec.Step(name=name, static_output=message, always=True))
 
+    impact_counts = []  # `tools:57of145`, one per narrowed step: the stamp's `impact=` field
+    impact_notes = []  # one line per pytest step whose test files were narrowed; printed with the run and counted in the stamp
+
+    def _impact_select(step_name, root, files, also=()):
+        """`files` of a pytest step, narrowed under `--changed` to the test files that depend on a changed file (pytest_impact.py); all of them for a full
+        run, a run scoped by module names or more changed files than a list can carry. Prints which files were skipped (once the steps are known to run)."""
+        if changed_set is None or target_modules_str or len(changed_set) > rust_impact.MAX_PATHS or not files:
+            return list(files)
+        chosen, skipped_files, why = pytest_impact.select_tests(root, files, changed_set, also)
+        if skipped_files:
+            impact_notes.append(pytest_impact.describe(step_name, root, chosen, skipped_files, why))
+            impact_counts.append(f"{step_name.strip('/').replace('/', '-')}:{len(chosen)}of{len(files)}")
+        return chosen
+
     # 5. Modules Discovery
     target_modules_str = options.modules
     changed_set = None
@@ -1809,6 +1825,7 @@ def main():
     # directory, the user's systemd bus, the dev box's Odoo/ldap3/Chrome versions): they stay on the
     # machine that started the run, in a step of their own that --remote never sends away
     # (lint_remote.requirements_for). Measured 2026-11-02 on the Odoo test VM: 17 failures, all of them these.
+    tool_test_files = _impact_select("tools/", os.path.join(dir_path, "tools"), tool_test_files)
     host_bound = sorted(f for f in tool_test_files if os.path.basename(f) in HOST_BOUND_TOOL_TESTS)
     tool_test_files = [f for f in tool_test_files if f not in host_bound]
     if host_bound:
@@ -1867,7 +1884,9 @@ def main():
     # this step, nothing would ever run it (or any future scripts/test_*.py
     # suite) automatically either, the exact gap step 27 already closed for
     # tools/.
-    scripts_test_files = sorted(glob.glob(os.path.join(dir_path, "scripts", "test_*.py")))
+    scripts_test_files = _impact_select(
+        "scripts/", os.path.join(dir_path, "scripts"), sorted(glob.glob(os.path.join(dir_path, "scripts", "test_*.py")))
+    )
     if scripts_test_files:
         _add(
             "pytest scripts/",
@@ -1980,6 +1999,11 @@ def main():
         for dirs in _group_dirs(dirs_of_daemon):
             merged = len(dirs) > 1
             files_here = sorted(f for f in daemon_test_files if os.path.dirname(f) in dirs)
+            files_here = _impact_select(
+                f"daemons/{os.path.relpath(daemon_dir, daemons_root)}", daemon_dir, files_here, also=loose_daemon_files
+            )
+            if not files_here:
+                continue
             # A test_dir one level below its daemon (tools/, tests/) imports its
             # daemon's own main module by bare name (e.g. hams_simulated_bots/
             # tests/test_main.py's `from main import ...`) -- that only
@@ -2543,6 +2567,8 @@ def main():
             )
             if skipped:
                 print("   skipped: " + ", ".join(step.name for step, _reason in skipped))
+            for note in impact_notes:
+                print(note)
     if options.list_json:
         print(json.dumps([lint_exec.step_to_dict(step) for step in steps], indent=1))
         sys.exit(0)
@@ -2758,6 +2784,7 @@ def main():
                 remote_hosts,
                 known_red,
                 remote_siblings,
+                impact_counts,
             )
 
     if linters_failed:

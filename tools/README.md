@@ -4036,6 +4036,22 @@ Purpose: decide which crates to check. `crate_dirs`: list of crate directories; 
 for every crate when a changed `.rs` file, `rust-toolchain*` file or `.cargo/` file lies outside every crate (it may be `include!`d or pin the toolchain). `changed` None selects all. Reads manifests only. Tests:
 `SelectionTests` and `EndToEndTests` (a fake `cargo` records where it was started) in `test_rust_impact.py`.
 
+## Pytest steps run by what changed (`pytest_impact.py`)
+
+Written 2026-11-08 (Bruce: "not checking unmodified files"). The `pytest tools/[NofM]`, `pytest tools/[host-bound]`, `pytest scripts/` and `pytest daemons/*` steps ran every test file under their root whenever any file under
+it changed: the four `tools/` chunks took 80 to 180 s each with 600 s of pytest in a 700 s run (a hams_shared `--changed` run, 2026-11-08). Under `--changed` the runner now keeps the test files that depend on a changed file
+(`run_linters._impact_select`) and balances the chunks over those. The base commit passes, so a test whose inputs did not change still passes: the premise of the step selection of `--changed`. A full run, a run scoped by module
+names, `HAMS_LINT_TEST_IMPACT=0` and a change list longer than 5,000 paths keep every file. The run prints one line per narrowed step (`[*] pytest impact, tools/: 57 of 145 ...`) and the skipped file names, and the pass stamp
+carries `impact=tools:57of145,...`. The dependency is generous: a file depends on a changed file when its code (comments and docstrings removed) holds the changed file's name, module name or top directory; after that first step
+only imports and `x.py` script names pass the dependency on. A test that scans a directory from `__file__`, `HERE` or a tree root always runs. Everything runs when a `conftest.py`, `__init__.py`, `requirements*` or pytest
+configuration file changed, when a changed file is mentioned by no file under the root (a new script, a deleted one, a data file no test names) and when a changed input of the step lies outside the root.
+
+### `[@ANCHOR: pytest_impact:select_tests]` `select_tests(root, test_files, changed, also=())`
+
+Purpose: split a pytest step's test files into the ones a change can alter and the rest. `root`: the step's directory; `test_files`: its test files (list of paths); `changed`: absolute changed paths (those under `root` or
+`also` count); `also`: the step's other input paths (a daemon's loose files). Returns `(selected, skipped, why)`, the first two in the order of `test_files`, `why` one line for the step output. Selects every file, saying why,
+for the cases above. Reads every `.py` file under `root` once (about 5 s for `tools/` with its 1,500 stub files). Tests: `SelectionTests` in `test_pytest_impact.py`.
+
 ## The relay's structural tests in lint (`relay_structural.py`)
 
 Written 2026-11-08. Lint ran a pytest wrapper for `daemons/hams_local_relay` and none of the relay's cargo tests, so three relay merges turned relay main red that day: the demo_lock route table (#3474), the ELAD
