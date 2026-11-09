@@ -74,8 +74,10 @@ of those words). If you think you must signal a protected process, stop and tell
 > work as `python3 hams_shared/tools/agent_procs.py run NAME -- COMMAND`, wait with `agent_procs.py wait --job NAME` (or
 > `--pid P --start-time T`, or `--file F --contains MARKER`), stop it with `agent_procs.py stop NAME`. Use `test.py --wait` to
 > queue for the Odoo test runner. A protected process (PostgreSQL, Redis, RabbitMQ, systemd, sshd, another user's or another
-> agent's process) is never yours to signal. The Bash guard hook denies the forbidden commands; a human may override it with
-> `HAMS_ALLOW_SIGNALS=1` (logged to `~/.cache/hams-jobs/guard.log`); an agent must never set it.
+> agent's process) is never yours to signal. The Bash guard hook denies the forbidden commands; there is NO escape for an agent
+> (Bruce, 2026-11-09: the former `HAMS_ALLOW_SIGNALS=1` override was removed; a command containing it is denied like any other).
+> Use `agent_procs.py`, or ask Bruce, who alone signals freely from his own terminal outside the agent session. Denials are
+> logged to `~/.cache/hams-jobs/guard.log`.
 
 ## Where the guard hook is registered, and how to verify it (added 2026-11-09)
 

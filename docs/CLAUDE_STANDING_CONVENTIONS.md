@@ -346,3 +346,10 @@ appears under `hooks.PreToolUse` (matcher `Bash`) in `~/.claude/settings.json` a
 **A new machine needs it** (user level and per repo) before any agent runs there. Provisioning an agent host is not complete
 until the user-level entry exists and the command above prints a deny. `devbox_tools/check_claude_settings.py` is the place to
 check settings; whether it can verify this registration too is not done yet.
+
+## Note 2026-11-09: the process guard has no escape (Bruce)
+
+Bruce decided on 2026-11-09 to remove the `HAMS_ALLOW_SIGNALS=1` override from `guard_signals.py`. Agents now have no bypass of any
+kind: a command containing `HAMS_ALLOW_SIGNALS=1` (inline, exported, as an `env` prefix, or inside `bash -c`) is denied like any other,
+and the denial says so. Stop or wait for a process with `agent_procs.py`, or ask Bruce, who alone signals freely from his own terminal
+outside the agent session. This supersedes every earlier mention of a human override in the rules above; no other rule changed.
