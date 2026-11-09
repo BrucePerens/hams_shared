@@ -136,7 +136,8 @@ def _todo_already_flagged(repo_root, worktree_path):
     todo_dir = os.path.join(repo_root, "night_shift_todo", "low")
     if not os.path.isdir(todo_dir):
         return False
-    needle = os.path.basename(worktree_path)
+    # The full path, as _flag_worktree writes it in backticks: a bare basename ("fix", "wip") matches unrelated to-do text and silenced the flag.
+    needle = f"`{worktree_path}`"
     for name in os.listdir(todo_dir):
         full = os.path.join(todo_dir, name)
         if os.path.isfile(full):

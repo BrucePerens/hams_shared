@@ -231,6 +231,21 @@ class SweepRepoEndToEndTests(unittest.TestCase):
         flagged = [n for n in os.listdir(todo_dir) if "wip" in n] if os.path.isdir(todo_dir) else []
         self.assertTrue(flagged, "a worktree with real dirt must be flagged, not silently skipped")
 
+    def test_an_unrelated_todo_mentioning_the_worktree_name_does_not_suppress_the_flag(self):
+        todo_dir = os.path.join(self.repo, "night_shift_todo", "low")
+        os.makedirs(todo_dir)
+        with open(os.path.join(todo_dir, "other.md"), "w") as f:
+            f.write("a work in progress note that says wip\n")
+        path = self._add_worktree("wip")
+        _run(["git", "push", "-q", "-u", "origin", "wip-branch"], cwd=path)
+        with open(os.path.join(path, "unfinished.md"), "w") as f:
+            f.write("real work in progress\n")
+        self._age(path, sow._MIN_IDLE_HOURS + 1)
+        sow.sweep_repo(self.repo)
+        self.assertEqual(len([n for n in os.listdir(todo_dir) if n.startswith("orphaned-worktree-wip")]), 1)
+        sow.sweep_repo(self.repo)
+        self.assertEqual(len([n for n in os.listdir(todo_dir) if n.startswith("orphaned-worktree-wip")]), 1)
+
     def test_a_too_recently_touched_worktree_is_left_alone_entirely(self):
         path = self._add_worktree("fresh")
         sow.sweep_repo(self.repo)
