@@ -56,6 +56,7 @@ import sys
 from tree_files import tree_walk
 
 
+# [@ANCHOR: tools:check_absolute_paths]
 def check_absolute_paths(repo_dir):
     violations = []
 

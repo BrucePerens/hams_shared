@@ -568,6 +568,7 @@ def find_anchors_in_docs(root_dir, repo_root):
     return doc_anchors, contract_anchors, doc_anchor_lines
 
 
+# [@ANCHOR: tools:verify_anchors_process_file]
 def _process_file_for_anchors(
     full_path,
     content,
@@ -1281,6 +1282,7 @@ def _is_no_op_statement(stmt):
     return False
 
 
+# [@ANCHOR: tools:verify_anchors_dummy_tests]
 def find_dummy_test_functions(source, filename="<string>"):
     """[(name, line)] for each `test*` function whose whole body is no-ops, i.e. a test that can never fail.
 
@@ -1300,6 +1302,7 @@ def find_dummy_test_functions(source, filename="<string>"):
     return found
 
 
+# [@ANCHOR: tools:verify_anchors_statement_nodes]
 def _statement_nodes(tree):
     """Every statement of `tree` (and each except-handler and match case), nested ones included, in the breadth-first
     order of `ast.walk`. A function definition is a statement, so a walk that never enters an expression finds every

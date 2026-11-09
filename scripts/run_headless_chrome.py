@@ -90,6 +90,7 @@ REAP_WAIT_SECONDS = 60.0
 REAP_POLL_SECONDS = 0.05
 
 
+# [@ANCHOR: run_headless_chrome_reap]
 def reap_headless_chromes(user_data_dir, wait_seconds=None):
     """Kill the Chrome processes of this UID that use user_data_dir as profile, until none is left.
 
