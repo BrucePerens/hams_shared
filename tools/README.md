@@ -3952,3 +3952,27 @@ Purpose: the whole decision of `dispatch_ok.py`, separated from printing so it c
 Returns `(state, lines)`: `"OK"` or `"HOLD"` and the reasons, plus, on HOLD, one line naming free overflow machines. Never raises: a missing,
 unreadable, non-object, undated, stale or verdict-less file is HOLD with its own reason. Read-only, no locks, safe to call in a loop.
 `main` wraps it: prints the state and reasons (not with `--quiet`) and exits 0 for OK, 1 for HOLD.
+
+## Pass stamps that carry over to a commit of records (`lint_stamp_gate.py`)
+
+Written 2026-11-08. Every branch ends with a night-shift record (a history entry, a to-do claim or its notes, a claim file). The record is a new commit, so the
+tip changed and the pass stamp of the run on the code was lost: a full re-lint (4 to 20 minutes queued) for a branch whose code had not moved. `devbox_tools/prmerge.sh`
+now asks `lint_stamp_gate.py --inherit TIP PASSED_DIR origin/main` before it refuses a tip that has no stamp. The merge queue merges through `prmerge.sh`, so it follows.
+
+### `[@ANCHOR: lint_stamp_gate:exempt_path]` `exempt_path(path)`
+
+Purpose: the one list of paths whose change cannot alter what the linters concluded (`EXEMPT_PREFIXES`: `night_shift_history/`, `night_shift_todo/`, `claims/`, markdown files only). Argument `path`:
+repository-relative, `/`-separated str. Returns bool. A path with `..`, a leading `/`, another directory, another suffix, or any other markdown file (`verify_anchors`, `check_skill_integrity` and the
+documentation checkers read those) is not exempt. Pure. Tests: `InheritTests` in `test_lint_stamp_gate.py`.
+
+### `[@ANCHOR: lint_stamp_gate:inherit_stamp]` `inherit_stamp(repo, tip, passed_dir, base="origin/main", log=print)`
+
+Purpose: give `tip` the stamp of the nearest stamped commit below it when only exempt paths differ. Arguments: `repo` git directory; `tip` full commit id; `passed_dir` the stamp directory
+(`~/.cache/hams-lint/passed`); `base` the ref the branch started from; `log` receives one line per refusal reason. Walks `base..tip` newest first (at most 60 commits), stops at the first commit with a
+stamp. Returns the new stamp text (the old line plus ` inherited-from=<old commit>`; the old step list is still judged by `refusal` against the whole branch diff) or None when: no commit has a stamp,
+any non-exempt file differs between the stamped commit and `tip` (a merge of main included), or `night_shift_history.check_tree` rejects the history of `tip` (the one checker that reads these
+files). A stamp that already exists for `tip` is returned as it is, never replaced. Writes `passed_dir/<tip>` atomically; runs `git diff`, `git archive` and `tar`. Tests: `InheritTests`.
+
+### `[@ANCHOR: lint_stamp_gate:inherited_note]` `inherited_note(stamp_text)`
+
+Purpose: the loud line the gate prints for an inherited stamp, so the merge output says what the pass rests on. Returns a str naming the first 12 characters of the source commit, or None. Pure. Tests: `InheritTests`.

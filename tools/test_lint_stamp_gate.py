@@ -209,5 +209,131 @@ class CrossRepositoryAnchorTests(SelectionFixture):
         self.assertEqual(result.returncode, 0, text)
 
 
+class InheritFixture(unittest.TestCase):
+    """A real throwaway repository: `main` with one commit, and a branch whose commits are stamped (or not) by the tests."""
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp(prefix="inherit-")
+        self.passed = os.path.join(self.repo, ".passed")
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "t@example.invalid")
+        self.git("config", "user.name", "t")
+        self.commit("README.txt", "x\n", "base")
+        self.git("branch", "-q", "origin_main")
+        self.git("checkout", "-q", "-b", "work")
+        self.messages = []
+
+    def git(self, *args):
+        done = subprocess.run(["git", "-C", self.repo, *args], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.strip()
+
+    def commit(self, path, text, message):
+        full = os.path.join(self.repo, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        self.git("add", path)
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def put_stamp(self, sha, line=None):
+        os.makedirs(self.passed, exist_ok=True)
+        with open(os.path.join(self.passed, sha), "w", encoding="utf-8") as handle:
+            handle.write(line or stamp(3, "flake8,check_cargo_clippy,check_cargo_fmt,check_rust_function_test_anchors,verify_anchors"))
+
+    def inherit(self, tip):
+        return lint_stamp_gate.inherit_stamp(self.repo, tip, self.passed, base="origin_main", log=self.messages.append)
+
+
+class InheritTests(InheritFixture):
+    def test_a_commit_that_only_adds_records_inherits_the_stamp_and_names_its_source(self):
+        code = self.commit("daemons/x/src/a.rs", "fn main() {}\n", "code")
+        self.put_stamp(code)
+        self.commit("night_shift_todo/medium/a.md", "# a\n", "claim")
+        tip = self.commit("claims/b.md", "# b\n", "claim 2")
+        text = self.inherit(tip)
+        self.assertIn("inherited-from=" + code, text)
+        self.assertTrue(text.startswith("changed "), "the old line is kept, so its step list is still judged")
+        with open(os.path.join(self.passed, tip), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), text)
+        self.assertIn("inherited from " + code[:12], lint_stamp_gate.inherited_note(text))
+        self.assertIsNone(lint_stamp_gate.refusal(text, ["daemons/x/src/a.rs", "night_shift_todo/medium/a.md"]))
+
+    def test_any_other_file_since_the_stamped_commit_forces_a_new_run(self):
+        code = self.commit("daemons/x/src/a.rs", "fn main() {}\n", "code")
+        self.put_stamp(code)
+        for path in ("daemons/x/src/b.rs", "docs/README.md", "tools/test_x.py", "conftest.py", "night_shift_todo/a.txt", "night_shift_history/a.py"):
+            tip = self.commit(path, "y\n", "other " + path)
+            self.assertIsNone(self.inherit(tip), path)
+            self.assertFalse(os.path.exists(os.path.join(self.passed, tip)), path)
+            self.git("reset", "-q", "--hard", code)
+        self.assertTrue(any("not only records" in m for m in self.messages))
+
+    def test_a_record_mixed_with_a_code_change_forces_a_new_run(self):
+        code = self.commit("daemons/x/src/a.rs", "fn main() {}\n", "code")
+        self.put_stamp(code)
+        self.commit("night_shift_todo/a.md", "# a\n", "claim")
+        tip = self.commit("daemons/x/src/a.rs", "fn main() { }\n", "edit")
+        self.assertIsNone(self.inherit(tip))
+
+    def test_the_nearest_stamped_commit_decides_and_no_stamp_means_no_inheritance(self):
+        first = self.commit("daemons/x/src/a.rs", "1\n", "one")
+        self.put_stamp(first)
+        second = self.commit("daemons/x/src/a.rs", "2\n", "two")  # never stamped
+        tip = self.commit("night_shift_todo/a.md", "# a\n", "claim")
+        self.assertIsNone(self.inherit(tip), "the stamp of `first` does not cover `second`")
+        self.put_stamp(second)
+        self.assertIn("inherited-from=" + second, self.inherit(tip))
+
+    def test_a_stamp_of_the_tip_itself_is_never_replaced_and_a_branch_without_stamps_is_left_alone(self):
+        tip = self.commit("night_shift_todo/a.md", "# a\n", "claim")
+        self.assertIsNone(self.inherit(tip))
+        self.put_stamp(tip, "full 2026-11-08T10:00:00\n")
+        self.assertEqual(self.inherit(tip), "full 2026-11-08T10:00:00\n")
+
+    def test_a_merge_of_main_is_not_a_record_change(self):
+        code = self.commit("daemons/x/src/a.rs", "1\n", "code")
+        self.put_stamp(code)
+        self.git("checkout", "-q", "main")
+        self.commit("tools/other.py", "z\n", "main moves")
+        self.git("branch", "-f", "origin_main", "main")
+        self.git("checkout", "-q", "work")
+        self.git("merge", "-q", "--no-edit", "main")
+        self.assertIsNone(self.inherit(self.git("rev-parse", "HEAD")))
+
+    def test_an_invalid_history_entry_is_not_inherited(self):
+        import night_shift_history
+
+        self.commit("night_shift_history.md", night_shift_history.STUB_TEXT, "stub")
+        code = self.commit("daemons/x/src/a.rs", "1\n", "code")
+        self.put_stamp(code)
+        tip = self.commit("night_shift_history/2026-11-08-000000-bad-aaaaaa.md", "no heading at all\n", "bad entry")
+        self.assertIsNone(self.inherit(tip))
+        self.assertTrue(any("not valid" in m for m in self.messages), self.messages)
+
+    def test_the_exempt_list_is_narrow(self):
+        for path in ("night_shift_history/2026-11-08-000000-a-aaaaaa.md", "night_shift_todo/medium/x.md", "claims/y.md"):
+            self.assertTrue(lint_stamp_gate.exempt_path(path), path)
+        for path in ("README.md", "docs/x.md", "night_shift_todo/x.py", "claims/../tools/x.md", "/claims/x.md", "claimsx/y.md",
+                     "agents/skills/a/SKILL.md", "night_shift_history.md"):
+            self.assertFalse(lint_stamp_gate.exempt_path(path), path)
+
+    def test_the_command_line_writes_the_stamp_and_prmerge_calls_it(self):
+        code = self.commit("daemons/x/src/a.rs", "1\n", "code")
+        self.put_stamp(code)
+        tip = self.commit("night_shift_todo/a.md", "# a\n", "claim")
+        gate = os.path.join(HERE, "lint_stamp_gate.py")
+        done = subprocess.run([sys.executable, gate, "--inherit", tip, self.passed, "origin_main"], cwd=self.repo, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("inherited-from=" + code, done.stdout)
+        shown = subprocess.run([sys.executable, gate, os.path.join(self.passed, tip)], input="daemons/x/src/a.rs\n", capture_output=True, text=True)
+        self.assertEqual(shown.returncode, 0, shown.stdout)
+        self.assertIn("NOTE: this pass is inherited", shown.stdout)
+        refused = subprocess.run([sys.executable, gate, "--inherit", code, self.passed, "origin_main"], cwd=self.repo, capture_output=True, text=True)
+        self.assertEqual(refused.returncode, 0, "a stamped commit answers with its own stamp")
+
+
 if __name__ == "__main__":
     unittest.main()
