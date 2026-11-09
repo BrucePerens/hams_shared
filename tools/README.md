@@ -3142,11 +3142,17 @@ Purpose: finds the code that exists only in test builds. Argument `masked` (str)
 `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) attribute: from the attribute to the end of the item after it (the closing brace of a module, function or
 impl, or the `;` of `mod name;`), with other attributes between skipped. Never raises. Pure.
 
+### `[@ANCHOR: ext_programs:program_name]` `program_name(literal)`
+
+Purpose: the program a `Command::new` string literal names, so that a relay that starts a system program by absolute path (`Command::new("/usr/sbin/ioreg")`, which no
+PATH search can replace) is still checked against ADR 0114. Argument `literal` (str): the text between the quotes. Returns the text after the last `/`
+(`"/usr/sbin/ioreg"` gives `ioreg`); a bare name is returned unchanged. Pure, never raises. Used by `rust_launches`.
+
 ### `[@ANCHOR: ext_programs:rust_launches]` `rust_launches(text)`
 
 Purpose: the programs a Rust file starts in production. Argument `text` (str): the file. Returns `(literal_names, dynamic_count)`: a `set` of the names in
-`Command::new("name")` (also as `std::process::Command::new`) and the number of `Command::new(<expression>)` calls, ignoring comments and the spans from
-`test_spans`. A name containing a backslash is not recognised. Pure, never raises.
+`Command::new("name")` or `Command::new("/absolute/name")` (reported as `name`, see `program_name`; also as `std::process::Command::new`) and the number of `Command::new(<expression>)` calls, ignoring comments and the spans from
+`test_spans`. A name containing a backslash is not recognised (a Windows system program is started through a discovery function). Pure, never raises.
 
 ### `[@ANCHOR: ext_programs:script_dependencies]` `script_dependencies(text, powershell=False)`
 
