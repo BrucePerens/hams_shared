@@ -127,11 +127,11 @@ def check_values(domain, values):
     if not 0 <= values["cache_ttl"] <= 31536000:
         return "ttl must be 0..31536000"
     if values["behavior"] == "redirect":
-        return check_redirect(domain, values["redirect_url"])
+        return check_redirect(domain, values["redirect_url"], values["include_www"])
     return ""
 
 
-def check_redirect(domain, url):
+def check_redirect(domain, url, include_www=False):
     if not url or not isinstance(url, str) or len(url) > 2000:
         return "redirect needs url=https://..."
     if any(ord(ch) < 33 or ord(ch) == 127 for ch in url) or "\\" in url:
@@ -144,7 +144,8 @@ def check_redirect(domain, url):
         parts.port
     except (lib.SpecError, ValueError):
         return "url host or port is invalid"
-    if host == domain:
+    if host == domain or (include_www and host == "www." + domain):
+        # With www=1 the record also answers for www.<domain>, so a redirect to it comes straight back to the same record: a loop.
         return "url redirects to the domain itself"
     return ""
 
