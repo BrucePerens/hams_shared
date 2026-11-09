@@ -165,6 +165,7 @@ class Bisector:
         self.trials = []
         self._lock = threading.Lock()
 
+    # [@ANCHOR: bisect_modules:Bisector_run_trial]
     def run_trial(self, extra_modules):
         """Runs `test.py` on `fixed + extra_modules` and returns the `Trial`."""
         with self._lock:
@@ -181,6 +182,7 @@ class Bisector:
             self.trials[number - 1] = trial
         return trial
 
+    # [@ANCHOR: bisect_modules:Bisector_reproduces]
     def reproduces(self, extra_modules):
         """True when every target test failed in a trial on `fixed + extra_modules`. A trial that died without a
         verdict (no results file but a non-zero status) is not a reproduction."""
