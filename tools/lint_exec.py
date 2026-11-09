@@ -62,12 +62,13 @@ CACHE_VERSION = 1
 # XDIST_SERIAL: step-name prefixes whose files share ports, files or global state across modules
 # (found by running them under -n; see AGENTS.md "Linters"). HAMS_LINT_XDIST=0 turns xdist off,
 # HAMS_LINT_XDIST=N forces N workers.
+# `pytest devbox_tools/` left the list 2026-11-08: it was the longest step of 56 of 142 measured runs (102 s on average, 294 s at load 150, one process
+# using about 40 CPU seconds), and the same 1024 tests (12 skipped, as before) pass under `-n 4 --dist loadfile` in 51 s at the same load.
 XDIST_SERIAL = (
     "pytest tools/[host-bound]",  # copies the whole tree into scratch directories and drives the real checkout
     "pytest daemons/hams_simulated_bots",  # idle-CPU and timing tests: another worker's load would fail them
     "pytest ingest/",  # not validated under -n yet
     "pytest scripts/",  # not validated under -n yet
-    "pytest devbox_tools/",  # not validated under -n yet
 )
 XDIST_MAX_WORKERS = 4
 _xdist_ok = {}
