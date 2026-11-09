@@ -979,8 +979,10 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   destroy another session's uncommitted work: the index dance only ever protected the commit step,
   never the working tree itself. Read
   `hams_shared/docs/adrs/0102_concurrent_session_isolation_and_merge_gating.md` before your first
-  commit of a run. Use `EnterWorktree` at the start of a run (`ExitWorktree` with `keep` if you stop
-  mid-task, `remove` when genuinely done); merging back is a PR from a branch named
+  commit of a run. Make the worktree at the start of a run with
+  `python3 devbox_tools/new_agent_worktree.py <hams_com|hams_open|hams_shared> night-shift/<slug>` (a clean job directory
+  `~/workspace/tmp/<job>/`, never inside a repo; `EnterWorktree` nests it under `.claude/worktrees/`, which anchor scans and linters
+  then read; remove it with `worktree_hygiene.py` or prmerge.sh when genuinely done); merging back is a PR from a branch named
   `night-shift/<slug>`, which waits for Bruce's review and his `--admin` merge -- no script merges
   it (ADR-0102 decision 4; step 7, above). It is deliberately not restated here -- two copies of a
   procedure are how the two copies drift apart. If you find a new shared-state failure mode, add
@@ -1703,7 +1705,7 @@ one session's working-tree-level command destroy another's uncommitted work).** 
 first commit in a session; `hams_com/CLAUDE.md` points there too, so every session gets it
 regardless of which skill it is running. The fix ADR-0102 makes is structural, not another
 procedural refinement of the same private-index idea: each session works in its own `git worktree`
-(`EnterWorktree`), so there is no shared working tree or shared index left for a pathspec, a
+(`devbox_tools/new_agent_worktree.py`), so there is no shared working tree or shared index left for a pathspec, a
 `GIT_INDEX_FILE`, or a resynchronisation step to protect in the first place. The five incidents
 recorded under ADR-0099 (now in its git history, not this file) are why that approach was
 abandoned rather than patched again.
@@ -2222,6 +2224,16 @@ instead.
   a reasonable default, that default is the answer -- build against it.
 - Never pick an item another active session is meaningfully working, and never batch unrelated
   to-dos into one commit.
+- **Evidence for any "merged" claim (Bruce, 2026-11-09).** Status reports about pull requests were often wrong in the whole-system run: a
+  passing run of another agent's branch reported as the agent's own, a pull request called merged that was still open, an enqueue made on a
+  failed lint, a verdict read from the wrong batch. Before a report, history entry or hand-off says a pull request is merged (or that its lint
+  passed, or that it is queued), run `python3 devbox_tools/pr_truth.py <hams_com|hams_open|hams_shared> <PR...>` from the `hams_com` checkout and
+  quote its `claim:` line (and the stamp and queue lines when you say the lint passed or the queue merged it). It reads GitHub, the merge queue
+  and the lint stamps, and flags a queue entry that disagrees with GitHub, a verdict recorded for an older branch tip, a stamp that does not cover
+  the merged tree, and an unlinted merge. A claim without that output is a guess; say "not verified" instead. The same rule is in the shared brief.
+- **To-do hygiene.** `python3 devbox_tools/todo_groom.py` prints every to-do with a verdict (OWNED, STALE-LIKELY, DUPLICATE-LIKELY, BLOCKED,
+  READY). A LIKELY verdict is a lead: read the to-do and the code, and only then remove or merge it, in a pull request with a history entry
+  (about ten files each).
 
 ## Self-improvement
 

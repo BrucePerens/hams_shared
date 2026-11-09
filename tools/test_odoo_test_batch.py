@@ -438,6 +438,21 @@ class RemoteTests(unittest.TestCase):
         self.assertEqual({v["status"] for v in verdicts.values()}, {"passed"})
         self.assertEqual(len(self.stamps), 2)
 
+    # Tests [@ANCHOR: odoo_test_batch:RemoteTestBatch]
+    def test_negative_control_a_remote_run_with_no_module_to_test_is_not_a_pass(self):
+        members = self.members(("a", "ham_a"))
+        for member in members:
+            member["scope"] = []
+        calls = []
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            calls.append(machine)
+            return {"exit_code": 0, "filtered": "", "conflicted": [], "error": None, "seconds": 1.0}
+
+        verdict = self.batch(runner)(1, members, "")["verdicts"][members[0]["tip"]]
+        self.assertNotEqual(verdict["status"], "passed")
+        self.assertEqual(self.stamps, [])
+
     def test_a_host_that_cannot_start_is_exit_75_not_a_test_failure(self):
         members = self.members(("a", "ham_a"))
 
@@ -772,6 +787,32 @@ class TestCollectReadsTheReportOfAnySlot(unittest.TestCase):
         self.assertEqual(list(failures), ["module ham_b"])
         _, failures = self.collect_text("Odoo died\n", ["ham_a"])
         self.assertEqual(list(failures), ["test.py"])
+
+    # Negative controls (gate audit 2026-11-09): an exit 0 that tested nothing is a failure.
+    # Tests [@ANCHOR: odoo_test_batch:vacuous_reason]
+    def test_negative_control_exit_0_with_no_module_or_with_no_tests_ran_text_is_not_a_pass(self):
+        self.assertIsNotNone(otb.vacuous_reason([], "TEST RUN COMPLETE: Odoo reports 0 failed, 0 error(s) of 5 tests"))
+        self.assertIsNotNone(otb.vacuous_reason(["ham_a"], "x\nTEST RUN FAILED: no tests ran -- Odoo printed no odoo.tests.result line\n"))
+        self.assertIsNotNone(otb.vacuous_reason(["ham_a"], "Odoo exited 0 but printed no odoo.tests.result line: no test ran"))
+        self.assertIsNone(otb.vacuous_reason(["ham_a"], "TEST RUN COMPLETE: Odoo reports 0 failed, 0 error(s) of 5 tests"))
+
+    # Tests [@ANCHOR: odoo_test_batch:OdooTestBatch]
+    def test_negative_control_collect_and_verdict_code_turn_a_vacuous_exit_0_red(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = otb.OdooTestBatch.__new__(otb.OdooTestBatch)
+            runner.sdir = None
+            runner._log = None
+            runner.current_members = [{"scope": [], "tip": "t"}]
+            union, failures = runner.collect(tmp, os.path.join(tmp, "results"), "all fine\n", 0)
+            self.assertEqual((union, list(failures)), ([], ["test.py"]))
+            self.assertEqual(runner.verdict_code(0, union, "all fine\n"), 1)
+            runner.current_members = [{"scope": ["ham_a"], "tip": "t"}]
+            _, failures = runner.collect(tmp, os.path.join(tmp, "results"), "TEST RUN FAILED: no tests ran\n", 0)
+            self.assertEqual(list(failures), ["test.py"])
+            self.assertEqual(runner.verdict_code(0, ["ham_a"], "TEST RUN FAILED: no tests ran\n"), 1)
+            self.assertEqual(runner.verdict_code(0, ["ham_a"], "ok\n"), 0)
+            self.assertEqual(runner.verdict_code(1, ["ham_a"], "ok\n"), 1)
+            self.assertEqual(runner.collect(tmp, os.path.join(tmp, "results"), "ok\n", 0), (["ham_a"], {}))
 
     # Tests [@ANCHOR: odoo_test_batch:odoo_failure_count]
     def test_odoo_failure_count_sums_failures_and_errors_of_every_result_line(self):
