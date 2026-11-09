@@ -181,11 +181,13 @@ def main():
     ap.add_argument('--funcs')
     ap.add_argument('--workers', type=int, default=4)
     ap.add_argument('--timeout', type=int, default=120)
-    ap.add_argument('--work', default='/home/bruce/workspace/tmp/mutwork')
+    ap.add_argument('--work', default=os.path.join(os.path.expanduser('~'), 'workspace', 'tmp', 'mutwork'))
     ap.add_argument('--out')
     ap.add_argument('--list', action='store_true')
     ap.add_argument('--limit', type=int, default=0)
+    ap.add_argument('--budget', type=float, default=0, help='seconds after which no NEW mutant is started (0 = no limit); the run is then PARTIAL')
     args = ap.parse_args()
+    deadline = time.time() + args.budget if args.budget else None
     src = open(os.path.join(args.root, args.file)).read()
     import hashlib
     original_digest = hashlib.sha256(src.encode()).hexdigest()
@@ -225,6 +227,8 @@ def main():
     def worker(wid):
         out = []
         while True:
+            if deadline is not None and time.time() > deadline:
+                return out
             try:
                 j = q.get_nowait()
             except queue.Empty:
@@ -238,6 +242,8 @@ def main():
     results.sort(key=lambda r: r[1])
     killed = sum(1 for r in results if r[2] == 'KILLED')
     print(f"score {killed}/{len(results)} = {100*killed/max(1,len(results)):.1f}%")
+    if len(results) < len(jobs):
+        print(f"PARTIAL: {len(results)} of {len(jobs)} mutants run before the budget of {args.budget:g} s")
     for d, l, s, t in results:
         if s == 'SURVIVED':
             print(f"SURVIVED line {l}: {d}")

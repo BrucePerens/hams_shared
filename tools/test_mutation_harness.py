@@ -70,5 +70,22 @@ class MutantGenerationTests(unittest.TestCase):
         self.assertIn("x >= 3", flipped[0])
 
 
+class BudgetTests(unittest.TestCase):
+    def test_budget_stops_new_mutants_and_says_partial(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            root = os.path.join(tmp, "tree")
+            os.makedirs(root)
+            with open(os.path.join(root, "m.py"), "w") as handle:
+                handle.write("def f(a):\n    return a + 1\n")
+            with open(os.path.join(root, "test_m.py"), "w") as handle:
+                handle.write("import m\n\ndef test_f():\n    assert m.f(1) == 2\n")
+            done = subprocess.run([sys.executable, os.path.join(HERE, "mutation_harness.py"), "--root", root, "--file", "m.py", "--test",
+                                   "python3 -m pytest -q -x test_m.py", "--workers", "1", "--work", os.path.join(tmp, "work"), "--budget", "0.000001"],
+                                  capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("PARTIAL: 0 of", done.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
