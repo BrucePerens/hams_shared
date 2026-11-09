@@ -73,6 +73,7 @@ RANGE_RE = re.compile(r"^bytes=([0-9]*)-([0-9]*)$")
 MAX_RANGE_NUMBER = 10**18
 
 
+# [@ANCHOR: static_site_server:is_denied_name]
 def is_denied_name(name):
     lowered = name.lower()
     return any(fnmatch.fnmatch(lowered, pattern.lower()) for pattern in DENY_GLOBS)
@@ -87,6 +88,7 @@ def content_type(path):
     return guessed if guessed.startswith(("image/", "audio/", "video/", "font/")) else "application/octet-stream"
 
 
+# [@ANCHOR: static_site_server:_servable]
 def _servable(served, real):
     """True when the resolved path `real` is inside `served` and no component below it is a dot name or a denied name. This runs on the
     path after symbolic links are followed, so a link named `notes.txt` that points at `.env`, or an `index.html` that points out of
@@ -137,6 +139,7 @@ def resolve(root, prefix, url_path):
     return "missing", None
 
 
+# [@ANCHOR: static_site_server:parse_range]
 def parse_range(header, size):
     """Returns (start, end) inclusive, None for 'serve everything', or 'bad' when unsatisfiable."""
     if not header:
@@ -195,6 +198,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    # [@ANCHOR: static_site_server:do_GET]
     def do_GET(self):
         config = self.server.config
         raw = self.path
@@ -270,6 +274,7 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
         super().__init__(address, Handler)
 
 
+# [@ANCHOR: static_site_server:load_config]
 def load_config(path):
     with open(path, "r", encoding="utf-8") as handle:  # audit-ignore-path
         raw = json.load(handle)

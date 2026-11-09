@@ -42,6 +42,7 @@ def _submodule_paths(root):
     return paths
 
 
+# [@ANCHOR: tree_files:git_tracked]
 def git_tracked(root, suffixes, untracked=False):
     """Absolute paths of the files git tracks under `root` (submodules included) whose names end in one of
     `suffixes`, or None when `root` is not inside a git work tree. A tracked file that is deleted on disk is left out.
@@ -65,6 +66,7 @@ def git_tracked(root, suffixes, untracked=False):
     return [path for path in dict.fromkeys(paths) if os.path.lexists(path) and not os.path.isdir(path)]
 
 
+# [@ANCHOR: tree_files:tree_files]
 def tree_files(root, suffixes, skip_dirs=(), skip_hidden=False, accept=None, untracked=False):
     """Sorted absolute paths of the files under `root` that belong to its own tree.
 
@@ -97,6 +99,7 @@ def tree_files(root, suffixes, skip_dirs=(), skip_hidden=False, accept=None, unt
     return sorted(found)
 
 
+# [@ANCHOR: tree_files:tree_walk]
 def tree_walk(root, suffixes, skip_dirs=(), skip_hidden=False, accept=None, untracked=False):
     """`os.walk(root)` over `tree_files`: yields `(dirpath, dirnames, filenames)` for `root` and every directory
     below it that holds a selected file, top-down and sorted. `filenames` are the selected files only; `dirnames`

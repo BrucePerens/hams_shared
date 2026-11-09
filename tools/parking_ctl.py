@@ -119,6 +119,7 @@ def parse_domain_file(text, defaults=None, reserved=()):
     return entries, problems
 
 
+# [@ANCHOR: parking_ctl:check_values]
 def check_values(domain, values):
     if values["behavior"] not in BEHAVIORS:
         return f"behavior must be one of {', '.join(BEHAVIORS)}"
@@ -131,6 +132,7 @@ def check_values(domain, values):
     return ""
 
 
+# [@ANCHOR: parking_ctl:check_redirect]
 def check_redirect(domain, url, include_www=False):
     if not url or not isinstance(url, str) or len(url) > 2000:
         return "redirect needs url=https://..."
@@ -198,6 +200,7 @@ class OdooClient:
         return self.call("parking.domain", "write", [ids, vals])
 
 
+# [@ANCHOR: parking_ctl:connect]
 def connect(args):
     try:
         with open(args.password_file, "r", encoding="utf-8") as handle:  # audit-ignore-path
@@ -300,6 +303,7 @@ def cmd_plan(args, out):
     return 0
 
 
+# [@ANCHOR: parking_ctl:cmd_apply]
 def cmd_apply(args, out):
     entries, problems = read_entries(args)
     for problem in problems:
@@ -323,6 +327,7 @@ def cmd_apply(args, out):
     return 0
 
 
+# [@ANCHOR: parking_ctl:cmd_archive]
 def cmd_archive(args, out):
     entries, problems = read_entries(args)
     if problems:

@@ -42,6 +42,7 @@ import time
 _SHELLS = ("bash", "sh", "dash", "zsh", "ksh", "fish")
 
 
+# [@ANCHOR: worktree_hygiene:git]
 def git(repo, *args, check=True):
     result = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
     if check and result.returncode != 0:
@@ -49,6 +50,7 @@ def git(repo, *args, check=True):
     return result.stdout.strip()
 
 
+# [@ANCHOR: worktree_hygiene:merged_pull_request_heads]
 def merged_pull_request_heads(repo):
     """{branch name: set of tip shas} of merged pull requests of the repository the working tree belongs to."""
     try:
@@ -68,6 +70,7 @@ def merged_pull_request_heads(repo):
     return heads
 
 
+# [@ANCHOR: worktree_hygiene:all_worktrees]
 def all_worktrees(repo):
     """[(path, branch or None)] of every worktree, the main working tree first."""
     entries, current = [], {}
@@ -87,6 +90,7 @@ def worktrees(repo):
     return all_worktrees(repo)[1:]
 
 
+# [@ANCHOR: worktree_hygiene:locked_worktrees]
 def locked_worktrees(repo):
     """Set of worktree paths marked `git worktree lock` (a batch lint run's, or one on removable media). They are never removed."""
     locked, path = set(), None
@@ -99,6 +103,7 @@ def locked_worktrees(repo):
     return locked
 
 
+# [@ANCHOR: worktree_hygiene:is_merged]
 def is_merged(repo, branch, merged_heads, base="origin/main"):
     tip = git(repo, "rev-parse", branch)
     if int(git(repo, "rev-list", "--count", f"{base}..{branch}")) == 0:
@@ -106,6 +111,7 @@ def is_merged(repo, branch, merged_heads, base="origin/main"):
     return tip in merged_heads.get(branch, set())
 
 
+# [@ANCHOR: worktree_hygiene:last_touched]
 def last_touched(path):
     """Seconds since the epoch of the newest of: the last commit, and any changed file in the tree."""
     newest = int(git(path, "log", "-1", "--format=%ct", check=False) or 0)
@@ -118,6 +124,7 @@ def last_touched(path):
     return newest
 
 
+# [@ANCHOR: worktree_hygiene:worktree_activity]
 def worktree_activity(path):
     """Seconds since the epoch of the newest git activity in a worktree (its creation, checkouts, commits), from the files git keeps
     in the worktree's own admin directory. A worktree created a minute ago on origin/main has no commits and a clean tree, which
@@ -132,6 +139,7 @@ def worktree_activity(path):
     return max(newest, last_touched(path))
 
 
+# [@ANCHOR: worktree_hygiene:branch_activity]
 def branch_activity(repo, branch):
     """Seconds since the epoch of the branch's newest reflog entry (its creation or last update), or its tip's commit time."""
     # `%ct` of a `-g` walk is the commit's own time, not the reflog entry's, so a branch created now at an old commit would read as idle.
@@ -144,6 +152,7 @@ def _inside(link_target, real_root):
     return link_target == real_root or link_target.startswith(real_root + os.sep)
 
 
+# [@ANCHOR: worktree_hygiene:scan_holders]
 def scan_holders(path):
     """[(pid, command)] of every process this user can inspect whose working directory, executable or an open file is inside `path`,
     and the number of processes it could not inspect (another user's). `/proc` is read directly, so there is no `lsof` dependency."""
@@ -188,6 +197,7 @@ def _parent_and_command(pid):
     return int(stat[stat.rindex(")") + 2 :].split()[1]), command
 
 
+# [@ANCHOR: worktree_hygiene:calling_shells]
 def calling_shells():
     """Pids that must not count as holding a worktree: this process, and the chain of shells directly above it (the script that ran this
     tool, the `bash -c` of an agent's command), up to the first process that is not a shell."""
@@ -202,6 +212,7 @@ def calling_shells():
     return pids
 
 
+# [@ANCHOR: worktree_hygiene:holding_processes]
 def holding_processes(path, exempt=None):
     """[(pid, command)] of the running processes that hold `path` (see scan_holders), except `exempt` (default: calling_shells()).
     Processes of other users are found by running this module's own `--holders` mode under `sudo -n`; when that is not available
@@ -227,6 +238,7 @@ def _idle(now, touched, stale_seconds):
     return stale_seconds <= 0 or now - touched >= stale_seconds
 
 
+# [@ANCHOR: worktree_hygiene:run]
 def run(repo, apply, stale_seconds, merged_heads, now=None, only_branch=None, holders_of=holding_processes):
     now = now or time.time()
     report = {"removed": [], "deleted": [], "stale": [], "kept": [], "held": []}
@@ -269,6 +281,7 @@ def run(repo, apply, stale_seconds, merged_heads, now=None, only_branch=None, ho
     return report
 
 
+# [@ANCHOR: worktree_hygiene:main]
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("repos", nargs="*")

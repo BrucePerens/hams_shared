@@ -39,6 +39,7 @@ def _run(args, cwd):
     return subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=60)
 
 
+# [@ANCHOR: sweep_orphan_worktrees:_list_worktrees]
 def _list_worktrees(repo_root):
     result = _run(["git", "worktree", "list", "--porcelain"], cwd=repo_root)
     worktrees = []
@@ -56,6 +57,7 @@ def _list_worktrees(repo_root):
     return worktrees
 
 
+# [@ANCHOR: sweep_orphan_worktrees:_idle_hours]
 def _idle_hours(path):
     newest = 0.0
     for dirpath, dirnames, filenames in os.walk(path):
@@ -81,6 +83,7 @@ def _real_symlink_target(anchor_dir, link_content):
     return os.path.realpath(candidate)
 
 
+# [@ANCHOR: sweep_orphan_worktrees:_is_known_symlink_localization_drift]
 def _is_known_symlink_localization_drift(repo_root, worktree_path, modified_paths):
     """True only if every path in `modified_paths` is a symlink whose sole change is
     fix_worktree_symlinks.py's own local, machine-specific, deliberately-never-committed
@@ -110,6 +113,7 @@ def _is_known_symlink_localization_drift(repo_root, worktree_path, modified_path
     return True
 
 
+# [@ANCHOR: sweep_orphan_worktrees:_is_clean_and_pushed]
 def _is_clean_and_pushed(repo_root, path):
     status = _run(["git", "status", "--porcelain"], cwd=path)
     if status.stdout.strip():
@@ -132,6 +136,7 @@ def _is_clean_and_pushed(repo_root, path):
     return ahead.returncode == 0 and ahead.stdout.strip() == "0"
 
 
+# [@ANCHOR: sweep_orphan_worktrees:_todo_already_flagged]
 def _todo_already_flagged(repo_root, worktree_path):
     todo_dir = os.path.join(repo_root, "night_shift_todo", "low")
     if not os.path.isdir(todo_dir):
@@ -147,6 +152,7 @@ def _todo_already_flagged(repo_root, worktree_path):
     return False
 
 
+# [@ANCHOR: sweep_orphan_worktrees:_flag_worktree]
 def _flag_worktree(repo_root, worktree_path, branch):
     slug = f"orphaned-worktree-{os.path.basename(worktree_path)}-{uuid.uuid4().hex[:8]}"
     todo_dir = os.path.join(repo_root, "night_shift_todo", "low")
@@ -180,6 +186,7 @@ either pushed/committed what should be kept then removed the worktree (`git work
     _logger.info("Flagged %s -> %s", worktree_path, path)
 
 
+# [@ANCHOR: sweep_orphan_worktrees:sweep_repo]
 def sweep_repo(repo_root):
     _run(["git", "worktree", "prune"], cwd=repo_root)
 
