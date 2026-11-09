@@ -204,6 +204,14 @@ class RunTests(unittest.TestCase):
         self.assertFalse([c for c in self.commands if "--bisect-modules" in c])
 
     # Tests [@ANCHOR: gate_canary:run_canary]
+    def test_a_shard_that_dies_on_a_rerun_does_not_inherit_the_results_of_the_earlier_run(self):
+        write_results(os.path.join(self.gate, "logs", "shard1"), known={"mod_a:K.k": {}})
+        code, status = self.run_canary({1: lambda directory: None})
+        self.assertEqual((code, status["status"]), (1, "red"))
+        self.assertIn("no verdict", status["shard_errors"][0])
+        self.assertEqual(status["tolerated"], [])
+
+    # Tests [@ANCHOR: gate_canary:run_canary]
     def test_the_second_run_while_one_holds_the_lock_exits_at_once(self):
         os.makedirs(self.state)
         with open(os.path.join(self.state, "canary.lock"), "a") as held:
