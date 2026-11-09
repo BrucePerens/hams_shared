@@ -2624,6 +2624,31 @@ class CheckLintersBurnListScopeTests(unittest.TestCase):
     linter or touching the filesystem beyond what's asserted on directly.
     """
 
+    def setUp(self):
+        # No sibling checkout, whatever HAMS_OPEN_TREE says in the environment running these tests.
+        patcher = patch.object(_test_runner, "anchor_scan_sibling_dir", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_module_that_lives_in_the_sibling_checkout_is_scanned_there(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "hams_com")
+            sibling = os.path.join(tmp, "hams_open")
+            os.makedirs(os.path.join(base, "ham_events"))
+            os.makedirs(os.path.join(sibling, "cloudflare"))
+            burn_calls = []
+            with patch.object(_test_runner, "anchor_scan_sibling_dir", return_value=sibling), patch.object(
+                _test_runner.subprocess, "run", side_effect=self._mock_subprocess_run(burn_calls)
+            ):
+                _test_runner.check_linters(
+                    "python3", base, base + "/.ignore", target_modules=["ham_events", "cloudflare"]
+                )
+            scanned = [call[2] for call in burn_calls]
+            self.assertEqual(scanned, [os.path.join(base, "ham_events"), os.path.join(sibling, "cloudflare")])
+
+    def test_a_module_found_nowhere_keeps_its_base_path_so_the_scan_reports_it_missing(self):
+        self.assertEqual(_test_runner.burn_list_target("/repo", "nowhere"), os.path.join("/repo", "nowhere"))
+
     def _mock_subprocess_run(self, burn_calls):
         def side_effect(cmd, *args, **kwargs):
             if any("check_burn_list.py" in str(part) for part in cmd):
