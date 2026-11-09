@@ -28,6 +28,7 @@ import sys
 import lint_cache
 import lint_exec
 import rust_impact
+from tree_files import tree_walk
 
 # "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
 # site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
@@ -319,7 +320,7 @@ def find_cargo_crates(repo_root):
     their parent workspace's own `cargo clippy` run, so listing them separately would just
     duplicate work."""
     found = []
-    for root, dirs, filenames in os.walk(repo_root):
+    for root, _dirs, filenames in tree_walk(repo_root, "Cargo.toml", IGNORE_DIR_NAMES, skip_hidden=True, untracked=True):
         # Dot-directories (".claude", ".git", a stray ".venv" not already named above, etc.) are
         # never real crate locations -- critically including ".claude/worktrees/<session>/", this
         # project's own standing convention for running concurrent bug-hunt dispatches in
@@ -329,7 +330,6 @@ def find_cargo_crates(repo_root):
         # (the real repo plus two other real, concurrently active sessions' worktrees) -- wasted
         # work at best, a spurious finding against another session's unrelated in-progress,
         # uncommitted code at worst.
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES and not d.startswith(".")]
         if "Cargo.toml" not in filenames:
             continue
         if os.path.relpath(root, repo_root) in EXCLUDE_CRATE_RELPATHS:

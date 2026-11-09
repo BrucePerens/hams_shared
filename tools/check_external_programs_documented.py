@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sys
+from tree_files import tree_files
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RELAY_DIR = os.path.join("daemons", "hams_local_relay")
@@ -247,12 +248,10 @@ def _is_test_file(rel):
 
 def _relay_rust_files(relay):
     src = os.path.join(relay, "src")
-    for root, dirs, files in os.walk(src):
-        dirs[:] = [d for d in dirs if d not in ("vendor", "target")]
-        for f in sorted(files):
-            rel = os.path.relpath(os.path.join(root, f), relay)
-            if f.endswith(".rs") and not _is_test_file(rel):
-                yield os.path.join(relay, rel), rel
+    for path in tree_files(src, ".rs", ("vendor", "target"), untracked=True):
+        rel = os.path.relpath(path, relay)
+        if not _is_test_file(rel):
+            yield os.path.join(relay, rel), rel
 
 
 def _script_files(relay):
