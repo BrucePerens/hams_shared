@@ -72,11 +72,16 @@ def refusal(stamp_text, changed_paths):
 
 # [@ANCHOR: lint_stamp_gate:known_red_note]
 def known_red_note(stamp_text):
-    """A loud line when the stamp tolerated known-red failures (` known_red=a,b baseline=<sha>`, ADR 0117), else None."""
+    """A loud line when the stamp records anything that was tolerated or retried, else None: ` known_red=a,b baseline=<sha>` (failures
+    that are known red on main, ADR 0117) and/or ` timeout-retried=a,b` (steps that timed out on a saturated machine and passed a serial
+    rerun). Both are named, so a reader of the merge output sees what the pass rests on."""
+    notes = []
     for field in stamp_text.split():
         if field.startswith("known_red="):
-            return "NOTE: this pass tolerated failures that are known red on main (not caused by the branch): " + field[len("known_red="):]
-    return None
+            notes.append("NOTE: this pass tolerated failures that are known red on main (not caused by the branch): " + field[len("known_red="):])
+        elif field.startswith("timeout-retried="):
+            notes.append("NOTE: this pass rests on a serial rerun of steps that timed out while the machine was saturated: " + field[len("timeout-retried="):])
+    return "\n".join(notes) or None
 
 
 def main(argv):

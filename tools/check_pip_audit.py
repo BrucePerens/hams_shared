@@ -56,6 +56,12 @@ IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".
 # than a `--version` check).
 VERSION_CHECK_TIMEOUT_SECONDS = 30
 AUDIT_TIMEOUT_SECONDS = 300
+# On a saturated machine run_linters.py exports HAMS_LINT_TIMEOUT_SCALE (1 to 4): the limit stretches with it, so a starved audit is not
+# reported as a stalled network (ADR 0117). A bad value means 1.
+try:
+    AUDIT_TIMEOUT_SECONDS = int(AUDIT_TIMEOUT_SECONDS * max(1.0, float(os.environ.get("HAMS_LINT_TIMEOUT_SCALE") or 1)))
+except ValueError:
+    pass
 
 
 def _resolve_repo_root(given_path):
