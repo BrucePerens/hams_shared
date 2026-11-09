@@ -59,10 +59,11 @@ def refusal(stamp_text, changed_paths):
         return None
     if mode not in KNOWN_MODES:
         return "the stamp is empty or unreadable (its first word is %r, not one of %s)" % (mode, "/".join(KNOWN_MODES))
+    if count == 0:
+        # A full run that ran no step is as empty as a --changed one (a crashed or filtered run must not read as a pass).
+        return "the stamp selected zero steps for a branch that changed code"
     if mode == "full":
         return None
-    if count == 0:
-        return "the stamp selected zero steps for a branch that changed code"
     if names is None:
         needs_rust = any(path.endswith(RUST_SUFFIXES) for path in code)
         needs_js = any(path.endswith(JS_SUFFIXES) for path in code)
