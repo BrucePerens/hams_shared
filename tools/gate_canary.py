@@ -155,6 +155,10 @@ def aggregate(shards, commits, now=None, relay=None):
         fix_me.update(results["fix_me"])
         if results["unparsed"]:
             errors.append("shard %s: %d failure(s) no log line named" % (shard.get("number"), results["unparsed"]))
+        elif shard.get("exit_status") not in (0, None) and not results["new_failures"]:
+            # test.py writes the file for every non-zero Odoo exit and returns non-zero when the run was cut short (CPU limit, a signal): the
+            # file then lists only the failures seen before the abort, all tolerated or flaky, and must not make the shard green.
+            errors.append("shard %s: exit status %s with a results file and no new failure: the run did not finish" % (shard.get("number"), shard.get("exit_status")))
         for key in counts:
             counts[key] += results["counts"][key]
     if relay:
