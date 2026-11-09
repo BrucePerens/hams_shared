@@ -222,7 +222,7 @@ def apply_permissions(path, owner_str, mode_int, recursive=False):
 
 
 # [@ANCHOR: infrastructure:hook_failure_tracking]
-# Bug-hunt fix (2026-09-18, from night_shift_todo
+# Added 2026-09-18 (night_shift_todo
 # provisioning-silent-hook-failures-summary-328e3e45.md): several
 # provisioning hooks and inline steps below (hook_install_kopia_binary,
 # download_file, hook_generate_ssl, hook_build_rust_daemons, the RabbitMQ
@@ -13250,7 +13250,7 @@ def _create_odoo_role_if_missing(run_cmd_func, db_pass, is_test=False):
     actually makes the substitution happen at all.
     """
     if _role_exists("odoo"):
-        # Bug-hunt fix (2026-10-02, found live provisioning jetson-1, a
+        # Fixed 2026-10-02 (seen live provisioning jetson-1, a
         # genuinely fresh Ubuntu box): the Debian/Ubuntu `odoo` apt package's
         # own postinst already creates a basic, non-superuser `odoo`
         # PostgreSQL role (`Create DB` only) as a side effect of package
@@ -13942,7 +13942,7 @@ def _refuse_if_unsafe_test_db_drop(db_name):
 # Verified by [@ANCHOR: test_discover_hams_com_dir_disambiguates_from_hams_open]
 def _discover_hams_com_dir(repo_root):
     """Finds hams_com's own directory relative to repo_root (hams_open's own
-    root). Bug-hunt fix (2026-09-23, found live on hams1 immediately after
+    root). Fixed 2026-09-23 (seen live on hams1 immediately after
     fixing provision.py's own repo_root computation): every branch here used
     to check for a bare "daemons" subdirectory as the signal for "this path
     IS hams_com" -- but hams_open has its own, completely unrelated
@@ -14189,7 +14189,7 @@ def provision_environment(
     hams_community_dir = None
     has_hams_com = bool(hams_com_dir)
 
-    # Bug-hunt fix (2026-10-02, found live on jetson-1's first-ever fresh
+    # Fixed 2026-10-02 (seen live on jetson-1's first-ever fresh
     # `provision.py --test` run against a checkout using the established
     # `hams_com/hams_shared -> ../hams_open/hams_shared` symlink convention):
     # a bare `hams_shared` existence check is ambiguous the same way the
