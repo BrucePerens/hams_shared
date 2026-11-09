@@ -4,8 +4,7 @@
 """
 Flags direct `window.fetch = ...`/`globalThis.fetch = ...` reassignment in *.test.js files.
 
-Origin: found live during the 2026-09-08 patent-disclosure re-verification of disclosure 26
-(`ham_world_map_view.test.js`) -- two tests reassigned `window.fetch` directly to mock a network
+Origin: `ham_world_map_view.test.js` -- two tests reassigned `window.fetch` directly to mock a network
 call, which throws `TypeError: Cannot assign to read only property 'fetch'` under the real Odoo
 `@odoo/hoot` test harness, since hoot's mocked `window` makes `window.fetch` read-only. Both tests
 had silently never been run for real; the codebase's own sanctioned pattern is the `mockFetch()`

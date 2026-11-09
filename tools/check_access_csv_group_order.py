@@ -4,7 +4,7 @@
 """
 ir.model.access.csv Group Definition Order Checker
 ----------------------------------------------------
-Catches the exact bug class that silently broke this whole codebase's test suite: a module's
+Catches the exact mistake that silently broke this whole codebase's test suite: a module's
 own manifest lists `security/ir.model.access.csv` in its `data` list BEFORE the XML file that
 defines a `res.groups` record the CSV references by external ID -- Odoo loads `data` files in
 the listed order, so the access rule fails with "No matching record found for external id

@@ -4,7 +4,7 @@
 """
 Odoo Own-Model Extension Collision Detector (ADR 0086)
 --------------------------------------------------------
-Catches the exact bug class a full-session audit found repeatedly in this
+Catches a recurring problem in this
 codebase: two modules independently declaring the same Odoo model, or one
 module cross-extending another's _auto=False SQL-view model, both of which
 Odoo's registry merges *silently* -- no error at install time, just
