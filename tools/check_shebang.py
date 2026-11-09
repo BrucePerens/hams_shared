@@ -9,12 +9,13 @@ is only on the very first line of the file.
 import os
 import re
 import sys
+import check_target
 from tree_files import tree_files
 
 _HEREDOC_OPEN = re.compile(r"<<-?\s*(?:'([^']+)'|\"([^\"]+)\"|\\?([A-Za-z_][A-Za-z0-9_]*))")
 
 
-def check_shebang(repo_dir):
+def check_shebang(repo_dir, stats=None):
     violations = []
 
     # Common directories to ignore
@@ -59,6 +60,8 @@ def check_shebang(repo_dir):
         # `driver` links into the machine they were recorded on) has no content to scan.
         if os.path.islink(file_path) and not os.path.exists(file_path):
             continue
+        if stats is not None:
+            stats["files"] = stats.get("files", 0) + 1
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 heredoc_end = None
@@ -99,8 +102,10 @@ if __name__ == "__main__":
         print("Usage: check_shebang.py <repo_dir>")
         sys.exit(1)
 
-    repo_dir = sys.argv[1]
-    violations = check_shebang(repo_dir)
+    repo_dir = check_target.require_directory(sys.argv[1], "check_shebang")
+    stats = {}
+    violations = check_shebang(repo_dir, stats)
+    check_target.require_scanned(stats.get("files", 0), repo_dir, "check_shebang", "script and source files")
 
     if violations:
         print("❌ Shebang Violations:")

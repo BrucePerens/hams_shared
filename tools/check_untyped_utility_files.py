@@ -82,6 +82,7 @@ reflexively just because a new file trips this check.
 
 import ast
 from concurrent.futures import ThreadPoolExecutor
+import check_target
 import contextlib
 import os
 import lint_exec
@@ -268,8 +269,11 @@ def main():
         print("Usage: check_untyped_utility_files.py <repo_root> [--only-files FILE ...]")
         sys.exit(1)
 
+    check_target.require_directory(repo_root_arg, "check_untyped_utility_files")
     repo_roots = _resolve_repo_roots(repo_root_arg)
     candidates = [(root, path) for root in repo_roots for path in collect_candidates(root)]
+    # Counted before --only-files narrows it: a changed file that is not a candidate leaves nothing to check, which is normal.
+    check_target.require_scanned(len(candidates), ", ".join(repo_roots), "check_untyped_utility_files", "non-Odoo-model Python utility files")
     if only_files is not None:
         candidates = [(root, path) for root, path in candidates if os.path.realpath(path) in only_files]
     if not candidates:

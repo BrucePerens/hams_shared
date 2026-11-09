@@ -35,6 +35,7 @@ Usage: check_registry_test_cr_usage.py <repo_root>
 """
 
 import os
+import check_target
 import lint_exec
 import re
 import sys
@@ -64,13 +65,15 @@ def _resolve_repo_roots(given_path):
     return roots
 
 
-def check_registry_test_cr_usage(repo_root):
+def check_registry_test_cr_usage(repo_root, stats=None):
     violations = []
     for root, _dirs, files in tree_walk(repo_root, ".py", SKIP_DIRS, skip_hidden=True, untracked=True):
         for filename in files:
             if not filename.endswith(".py"):
                 continue
             path = os.path.join(root, filename)
+            if stats is not None:
+                stats["files"] = stats.get("files", 0) + 1
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     for lineno, line in enumerate(f, 1):
@@ -92,9 +95,13 @@ if __name__ == "__main__":
         print("Usage: check_registry_test_cr_usage.py <repo_root>")
         sys.exit(1)
 
+    check_target.require_directory(sys.argv[1], "check_registry_test_cr_usage")
     violations = []
-    for repo_root in _resolve_repo_roots(sys.argv[1]):
-        violations.extend(check_registry_test_cr_usage(repo_root))
+    stats = {}
+    roots = _resolve_repo_roots(sys.argv[1])
+    for repo_root in roots:
+        violations.extend(check_registry_test_cr_usage(repo_root, stats))
+    check_target.require_scanned(stats.get("files", 0), ", ".join(roots), "check_registry_test_cr_usage", "Python files")
 
     if violations:
         print("❌ registry.test_cr dead-code violations:")

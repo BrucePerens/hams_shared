@@ -43,6 +43,7 @@ import re
 import subprocess
 import sys
 
+import check_target  # noqa: E402
 import verify_anchors as va  # noqa: E402
 
 EXCLUDE_DIRS = {
@@ -294,11 +295,13 @@ def scan_file(filepath, repo_root):
     return results
 
 
-def scan_tree(repo_root):
+def scan_tree(repo_root, stats=None):
     """Returns {identity: True} for every in-scope function currently
     lacking a base anchor, across the whole real repo."""
     gaps = {}
     for filepath in _git_tracked_python_files(repo_root):
+        if stats is not None:
+            stats["files"] = stats.get("files", 0) + 1
         for identity, has_anchor in scan_file(filepath, repo_root):
             if not has_anchor:
                 gaps[identity] = True
@@ -333,12 +336,15 @@ def main():
     )
     args = parser.parse_args()
 
-    repo_root = os.path.abspath(args.directory)
+    repo_root = check_target.require_directory(args.directory, "check_function_test_anchors")
     baseline_path = args.baseline or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), DEFAULT_BASELINE_FILENAME
     )
 
-    current_gaps = scan_tree(repo_root)
+    stats = {}
+    current_gaps = scan_tree(repo_root, stats)
+    # `git ls-files` failing (not a git work tree) yields no files too: either way nothing was scanned.
+    check_target.require_scanned(stats.get("files", 0), repo_root, "check_function_test_anchors", "git-tracked Python files (a git work tree is required)")
 
     if args.generate_baseline:
         save_baseline(baseline_path, current_gaps)

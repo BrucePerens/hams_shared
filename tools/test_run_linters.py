@@ -311,6 +311,8 @@ class RunPerTargetCheckerTests(unittest.TestCase):
             ["/usr/bin/python3", os.path.join("/repo", "tools", "check_shebang.py"), "/repo"],
             capture_output=True,
             text=True,
+            # A checker step carries the declaration that an empty scan is normal here (check_target.py).
+            env=dict(os.environ, HAMS_CHECK_ALLOW_EMPTY="1"),
         )
 
 
