@@ -25,7 +25,6 @@ Tests [@ANCHOR: gate_snapshot:main]
 
 import json
 import os
-import platform
 import struct
 import subprocess
 import sys
@@ -344,8 +343,6 @@ class ArtifactTests(SnapshotTestBase):
     def test_a_missing_or_wrong_cpu_library_and_a_missing_relay_are_refused(self):
         with open(self.lib, "wb") as handle:
             handle.write(b"not an elf")
-        with open(self.lib + gs.STAMP_SUFFIX) as handle:
-            keep = handle.read()
         self.assertTrue(any("not a readable ELF" in p for p in self.problems()))
         os.unlink(self.lib)
         self.assertTrue(any("does not exist" in p for p in self.problems()))
