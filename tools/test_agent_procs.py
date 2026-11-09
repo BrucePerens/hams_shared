@@ -618,6 +618,18 @@ class JobTests(ProcTestCase):
         self.assertIn("nothing to stop", done.stdout)
         self.assertTrue(self.alive(victim))
 
+    def test_stop_with_a_reused_group_leader_pid_signals_nothing(self):
+        """The recorded pid is now a session leader of an unrelated process: same group and session numbers, other start time."""
+        victim = self.decoy("tokreused")
+        info = ap.read_proc(victim.pid)
+        self.assertEqual((info.pgid, info.sid), (victim.pid, victim.pid))
+        stale = ap.JobRecord("reused", "", victim.pid, victim.pid, victim.pid, info.start_ticks - 5, "/", ["x"], "/l", 0.0, "u")
+        ap.write_record(stale, self.jobs)
+        out = io.StringIO()
+        self.assertEqual(ap.stop_job("reused", out=out, directory=self.jobs), 0)
+        self.assertIn("nothing to stop", out.getvalue())
+        self.assertTrue(self.alive(victim))
+
     def test_stop_unknown_job_is_a_usage_error(self):
         self.assertEqual(cli("stop", "nosuchjob", env=self.env).returncode, 2)
 
