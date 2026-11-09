@@ -3310,3 +3310,54 @@ reported as delete and add (`--no-renames`).
 | `base` | str | The ref to compare against. |
 
 Returns a sorted list of repo-relative paths. Raises `RuntimeError` when git fails (not a checkout, or no such ref). Runs read-only git commands.
+
+## Admission control: `dispatch_ok.py`
+
+Why: on 2026-11-08 coordinators added agents until lint runs waited 10+ minutes behind each other, which made every agent slower. The
+load display (a small user program outside the repositories that reads `/proc` and the lint and test queue directories) now
+publishes a `dispatch` verdict, OK or HOLD, in `/dev/shm/loadscreen/stats.json` and `stats.txt`. **Coordinators start a new agent only
+when `python3 hams_shared/tools/dispatch_ok.py` says OK** (exit 0); on HOLD (exit 1) they wait and re-check. Work that is already running is
+never stopped by it. A missing or stale file (older than 60 s) is HOLD: no verdict, no new agent.
+
+The thresholds live in one `DISPATCH` block at the top of the display program: HOLD when the oldest waiting lint run has waited more than 10
+minutes, when more than 4 lint runs are queued, when the oldest waiting test run has waited more than 10 minutes, when effective CPU
+(normal-priority plus half of nice-priority, 5-minute average) is at or over 85 %, or when available memory is under 10 GB. The queue
+numbers come from the lint and test lock queue directories, read only. The display also lists unblock-priority lint runs
+(`docs/LINT_PRIORITY_INTERFACE.md`) in its numbers.
+
+Overflow machines: the verdict is about this server. While it is HOLD, the display makes one read-only ssh `BatchMode` load check per overflow
+machine (at most every 5 minutes) and publishes `remote_capacity`; `dispatch_ok.py` prints a line when one is free, so a coordinator may keep
+dispatching work that routes there. Machines in the display's `reserved` list are listed and never probed.
+
+### `[@ANCHOR: dispatch_ok:stats_format]` the stats file (`DEFAULT_STATS`)
+
+Purpose: the file contract between the load display (writer, every 5 s, atomically) and `dispatch_ok.py` (reader). Lives in RAM
+(`/dev/shm/loadscreen/stats.json`); never persisted; replaced whole on each write.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `written_epoch` | int | Unix seconds of the write. Older than `--max-age` (60 s) means the display is not running. |
+| `dispatch.state` | `"OK"` or `"HOLD"` | The verdict. |
+| `dispatch.reasons` | list of str | Why, one per tripped limit (or the single all-clear line). |
+| `dispatch.thresholds` | object | The `DISPATCH` block in force. |
+| `queues.lint_running`, `queues.lint_waiting`, `queues.lint_oldest_wait_s`, `queues.lint_priority_waiting` | int | Lint runs holding a slot, queued runs, the oldest queued wait in seconds, queued runs marked unblock priority. |
+| `queues.test_running`, `queues.test_waiting`, `queues.test_oldest_wait_s` | int | The same for the Odoo test slots. |
+| `remote_capacity.hosts` | list of object | `{name, state: free|busy|unreachable|reserved, load1, cores}`. Informational. |
+| `remote_capacity.checked_epoch`, `.any_free`, `.note` | int or null, bool, str | When the hosts were last checked (only while the server is HOLD), whether any is free, and how to read it. |
+
+Invariants: the verdict is about the local server only. Concurrency: one writer; readers see either the old or the new file.
+Read by `evaluate`.
+
+### `[@ANCHOR: dispatch_ok:evaluate]` `evaluate(path=DEFAULT_STATS, max_age=60.0, now=time.time)`
+
+Purpose: the whole decision of `dispatch_ok.py`, separated from printing so it can be tested and imported.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `path` | str | The stats file. |
+| `max_age` | float | Seconds a file may be old before it counts as stale. |
+| `now` | callable | Clock returning Unix seconds (tests pass a fixed one). |
+
+Returns `(state, lines)`: `"OK"` or `"HOLD"` and the reasons, plus, on HOLD, one line naming free overflow machines. Never raises: a missing,
+unreadable, non-object, undated, stale or verdict-less file is HOLD with its own reason. Read-only, no locks, safe to call in a loop.
+`main` wraps it: prints the state and reasons (not with `--quiet`) and exits 0 for OK, 1 for HOLD.

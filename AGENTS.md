@@ -226,6 +226,12 @@ The `mcp-test-runner` skill explains how to use the MCP test server to rapidly i
 ## Fast Test Iteration
 When debugging tests, especially UI tours, you can use the MCP test server instead of running `test.py` normally. This saves significant time (avoids the 60+ second boot time). See `hams_shared/agents/skills/mcp-test-runner/SKILL.md` for instructions.
 
+### Admission control: when a coordinator may start another agent
+* **Coordinators start a new agent only when `python3 hams_shared/tools/dispatch_ok.py` says OK** (exit 0). HOLD (exit 1) means
+  lint or test runs are already waiting too long (oldest wait over 10 minutes, more than 4 queued lint runs) or the CPU or memory is over
+  its limit: wait and check again; do not stop running agents. No verdict (missing or stale stats) is HOLD. Work that routes to a free
+  overflow machine may still go (the output says when one is free). Details: `tools/README.md`, "Admission control".
+
 ### Iterating with `test.py` (one test in seconds; worktrees)
 * **One test or class:** `python3 hams_shared/tools/test.py --wait -u MODULE --test-tags /MODULE:TestClass.test_method`
   (Odoo's tag syntax; `-u` may be left out when the tag names the module). A bad option fails in
