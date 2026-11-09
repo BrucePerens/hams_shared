@@ -18,7 +18,6 @@ from unittest import mock
 os.environ.setdefault("HAMS_CLAIM_CACHE_DIR", tempfile.mkdtemp())
 
 import check_claims_freshness as ccf  # noqa: E402
-import claim_normalizers as cn  # noqa: E402
 
 PY = '''# [@ANCHOR: t:x]
 def foo(a, b=1):

@@ -533,7 +533,7 @@ def _matching_open(sig, close_index):
 
 def _js_canonical_string(text):
     """Quote style and needless escapes of a JS string do not matter: `'a'` == `"a"`."""
-    q, body = text[0], text[1:-1]
+    body = text[1:-1]
     out = []
     k = 0
     while k < len(body):
