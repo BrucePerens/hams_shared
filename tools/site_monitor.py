@@ -81,6 +81,7 @@ USER_AGENT = "hams-site-monitor/1.0 (self-check; +https://hams.com)"
 MAINTENANCE_DEFAULT_PATH = "/etc/pagerduty/maintenance"
 MAINTENANCE_PATH_ENV = "PAGERDUTY_MAINTENANCE_FILE"
 MAINTENANCE_MAX_SECONDS = 120 * 60
+MAINTENANCE_MAX_EPOCH = 4_102_444_800  # 2100-01-01
 MAINTENANCE_CLOCK_SKEW = 300
 
 def maintenance_flag_path(env):
@@ -101,6 +102,8 @@ def read_maintenance(path, now):
         set_at, until = float(data["set_at"]), float(data["until"])
         if not (math.isfinite(set_at) and math.isfinite(until)):
             raise ValueError("not finite")
+        if not (0 <= set_at <= MAINTENANCE_MAX_EPOCH and 0 <= until <= MAINTENANCE_MAX_EPOCH):
+            raise ValueError("outside 1970..2100")
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         return {"state": "malformed", "error": f"{path}: needs numeric set_at and until ({exc!r})"}
     if set_at > now + MAINTENANCE_CLOCK_SKEW:
@@ -481,11 +484,11 @@ def main(env=None, now=None, deps=None, host=None):
         logger.error("pagerduty maintenance flag ignored, so paging stays ON: %s", flag["error"])
     elif flag["state"] == "expired":
         logger.info("pagerduty maintenance flag expired %s; ignored (`pagerduty-maintenance status` removes it)",
-                    time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(flag["until"])))
+                    time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(flag["until"])))  # boundary-hazard-ignore: timestamp-range: read_maintenance refuses a flag outside 0..MAINTENANCE_MAX_EPOCH
     in_maintenance = flag["state"] == "active"
     if in_maintenance:
         logger.info("pagerduty maintenance active until %s (reason: %s; set by %s): checks still run, no page and no recovery "
-                    "notice is sent", time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(flag["until"])),
+                    "notice is sent", time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(flag["until"])),  # boundary-hazard-ignore: timestamp-range: read_maintenance refuses a flag outside 0..MAINTENANCE_MAX_EPOCH
                     flag["reason"] or "none given", flag["set_by"] or "unknown")
         # Failures during maintenance do not count, and what was paged before it is forgotten: when maintenance
         # ends the checks start fresh, so a check still down then needs the normal consecutive failures to page.

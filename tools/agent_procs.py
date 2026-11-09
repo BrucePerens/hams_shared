@@ -150,7 +150,10 @@ def boot_time():
 def format_start(start_ticks):
     """The local wall-clock start time (`YYYY-MM-DDTHH:MM:SS`) of a process whose /proc start time is `start_ticks`."""
     when = boot_time() + start_ticks / CLK_TCK
-    return datetime.datetime.fromtimestamp(when).strftime("%Y-%m-%dT%H:%M:%S")
+    try:
+        return datetime.datetime.fromtimestamp(when).strftime("%Y-%m-%dT%H:%M:%S")
+    except (OverflowError, OSError, ValueError):
+        return "unknown"  # a record file with a corrupt start time must not stop `agent_procs find`/`wait`
 
 
 # [@ANCHOR: agent_procs:read_proc]
