@@ -50,6 +50,7 @@ if "--mcp" in sys.argv:
 
 import host_requirements
 import infrastructure
+import bisect_modules
 import known_red
 import lock_queue
 import odoo_test_batch
@@ -4183,6 +4184,19 @@ def build_arg_parser():
         "test_results.json is still written, listing every failing test; tools that bisect a failure use this.",
     )
     parser.add_argument(
+        "--bisect-modules",
+        action="store_true",
+        help="With -u MODULES and --test-tags /module:Class,...: find a minimal set of MODULES that still fails the "
+        "named tests, by rerunning test.py on smaller sets through the normal slot queue (ADR 0118). Prints the set "
+        "and writes a JSON report. The modules the tags name are always kept.",
+    )
+    parser.add_argument("--bisect-jobs", type=int, default=None, metavar="N",
+                        help="With --bisect-modules: trials at once, 1 or 2 (default: 2 when the machine has 2 slots, else 1).")
+    parser.add_argument("--bisect-max-runs", type=int, default=None, metavar="N",
+                        help="With --bisect-modules: stop after N trials (default 40); the set found so far is reported.")
+    parser.add_argument("--bisect-report", default=None, metavar="FILE",
+                        help="With --bisect-modules: the JSON report (default: bisect_<time>.json in the log directory).")
+    parser.add_argument(
         "--solo",
         action="store_true",
         help="Run alone: never join a coalesced batch of other branches' `-u MODULES` runs "
@@ -4213,6 +4227,8 @@ def parse_runner_args(argv=None):
             parser.error(str(e))
     if args.slot_held is not None and not 1 <= args.slot_held <= (args.slots or 1):
         parser.error(f"--slot-held {args.slot_held} is outside the --slots range 1..{args.slots or 1}")
+    if args.bisect_modules and not (args.module and args.test_tags):
+        parser.error("--bisect-modules needs -u MODULES (the failing set) and --test-tags (the failing tests).")
     if args.test_tags is not None:
         if args.mode != "standard":
             parser.error(f"--test-tags needs --mode standard (got {args.mode}); the other modes pick tests themselves.")
@@ -4378,6 +4394,11 @@ def main():
     except (runner_slots.SlotConfigError, OSError) as e:
         print(f"❌ ERROR: cannot determine the test slot count: {e}")
         sys.exit(2)
+    if early_args.bisect_modules:
+        # The bisection is a driver: each trial is a normal test.py run that takes its own slot through the queue.
+        sys.exit(bisect_modules.run(
+            early_args, os.path.abspath(__file__), tag_spec_modules(early_args.test_tags), slots=slots
+        ))
     if queue_opts["status"]:
         # Read-only: never opens, probes or takes the lock itself.
         print("\n".join(lock_queue.describe_queue(
