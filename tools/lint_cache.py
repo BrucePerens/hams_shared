@@ -867,6 +867,29 @@ def show_lines(environ=None):
 
 
 # [@ANCHOR: lint_cache:cache_main]
+def _clear_work_checkouts(work_base, environ=None):
+    """Remove `<work_base>/<target name>` for every target whose lock nobody holds. A build holds its target's lock (the one beside
+    the target directory, in whichever Cargo base it uses) while it compiles from that work checkout (`work_checkout`), so a
+    checkout whose lock is held stays, as the busy target itself does."""
+    try:
+        names = sorted(os.listdir(work_base))
+    except OSError:
+        return
+    bases = [base for base in cargo_bases(environ) if os.path.isdir(base)]
+    for name in names:
+        full = os.path.join(work_base, name)
+        if not os.path.isdir(full) or os.path.islink(full):
+            continue
+        with contextlib.ExitStack() as stack:
+            if all(stack.enter_context(locked(os.path.join(base, name), exclusive=True, wait=False)) for base in bases):
+                print(f"removing {full}")
+                shutil.rmtree(full, ignore_errors=True)
+            else:
+                print(f"{full} is in use by a build; not removed")
+    with contextlib.suppress(OSError):
+        os.rmdir(work_base)  # only when it is now empty
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     command = argv[0] if argv else "show"
@@ -889,8 +912,7 @@ def main(argv=None):
             targets += [*cargo_bases(), *legacy_cargo_dirs()]
         if which in ("results", "all"):
             targets.append(results_base())
-        if which in ("cargo", "all"):
-            targets.append(os.path.join(cache_root(), "hams-lint", "work"))  # the fixed work checkouts of the Cargo builds (work_checkout)
+        work_base = os.path.join(cache_root(), "hams-lint", "work")  # the fixed work checkouts of the Cargo builds (work_checkout)
         for path in targets:
             if not os.path.isdir(path):
                 continue
@@ -907,6 +929,8 @@ def main(argv=None):
                 continue
             print(f"removing {path}")
             shutil.rmtree(path, ignore_errors=True)
+        if which in ("cargo", "all"):
+            _clear_work_checkouts(work_base)
         return 0
     print(__doc__.split("CLI:")[-1].strip())
     return 2
