@@ -412,6 +412,22 @@ class SweepTest(RamTestCase):
         self.assertIn("sudo rm -rf", said[0])
 
     # Tests [@ANCHOR: ram_dirs:sweep]
+    def test_a_test_tmp_directory_that_cannot_be_listed_is_reported_not_raised(self):
+        base = os.path.join(self.root, "hams-test-tmp")
+        os.makedirs(base)
+        finished = subprocess.Popen([sys.executable, "-c", "pass"])
+        finished.wait()
+        dead = self.make("hams-cargo-target-dead", pid=finished.pid)
+        os.chmod(base, 0)
+        self.addCleanup(os.chmod, base, 0o700)
+        said = []
+        removed = ram_dirs.sweep(environ=self.environ, say=said.append)
+        self.assertEqual(removed, ["hams-cargo-target-dead"])
+        self.assertFalse(os.path.exists(dead))
+        if os.geteuid() != 0:
+            self.assertTrue(any("cannot list" in line for line in said), said)
+
+    # Tests [@ANCHOR: ram_dirs:sweep]
     def test_a_missing_root_is_nothing_to_do(self):
         self.assertEqual(ram_dirs.sweep(environ=dict(self.environ, HAMS_RAM_ROOT=os.path.join(self.root, "none"))), [])
 

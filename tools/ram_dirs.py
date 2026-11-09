@@ -437,7 +437,12 @@ def sweep(pol=None, environ=None, say=None, now=time.time, remove=remove_tree):
             else:
                 say(f"could not remove {full}; remove it with: sudo rm -rf {full}")
         elif name == TEST_TMP_NAME and os.path.isdir(full) and not os.path.islink(full):
-            for child in sorted(os.listdir(full)):
+            try:
+                children = sorted(os.listdir(full))
+            except OSError as error:
+                say(f"cannot list {full} ({error}); leaving it alone")
+                continue
+            for child in children:
                 path = os.path.join(full, child)
                 if re.match(r"^slot-[0-9]+\Z", child) or os.path.islink(path):
                     continue
