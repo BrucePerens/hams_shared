@@ -273,6 +273,17 @@ def seal(state, member, now=time.time, log="", max_running=1):
     return running
 
 
+# [@ANCHOR: batch_queue:resolve_max_running]
+def resolve_max_running(caps):
+    """The number of batches that may run right now: `caps["max_running"]`, which is an int or a callable that returns one (the lint queue's limit
+    grows while the machine has spare processors, `lint_batch.batch_limit`). At least 1; a callable that fails counts as 1."""
+    value = caps["max_running"]
+    try:
+        return max(1, int(value() if callable(value) else value))
+    except (TypeError, ValueError, OSError):
+        return 1
+
+
 # [@ANCHOR: batch_queue:finish]
 def finish(state, batch_id):
     """Free the running slot that holds batch `batch_id` (the others keep running)."""
@@ -371,9 +382,10 @@ def coalesce(sdir, member, run_batch, caps=None, estimate=None, poll=DEFAULT_POL
                         others = sorted({m["branch"] for m in forming["members"] if m["tip"] != member["tip"]})
                         all_running = running_batches(state)
                         running = all_running[0] if all_running else None
-                        if len(all_running) < caps["max_running"] and forming["members"][0]["tip"] == member["tip"] and not others:
+                        limit_now = resolve_max_running(caps)
+                        if len(all_running) < limit_now and forming["members"][0]["tip"] == member["tip"] and not others:
                             out("[*] batch %d: %s; starting at once" % (batch_id, "nothing is running here" if not all_running else
-                                "%d of %d running slots are in use here" % (len(all_running), caps["max_running"])))
+                                "%d of %d running slots are in use here" % (len(all_running), limit_now)))
                         else:
                             out("[*] joined batch %d with %d other branch%s%s" % (
                                 batch_id, len(others), "" if len(others) == 1 else "es",
@@ -399,7 +411,7 @@ def coalesce(sdir, member, run_batch, caps=None, estimate=None, poll=DEFAULT_POL
                         if forming and forming["id"] == batch_id:
                             lead_run = seal(state, member, now=now,
                                             log=log_for(batch_id) if log_for else "",
-                                            max_running=caps["max_running"])
+                                            max_running=resolve_max_running(caps))
                         elif mine_running:
                             pass
                         else:

@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 import batch_queue
 import lint_lock
@@ -392,6 +393,37 @@ def batches_that_may_run(environ=None):
     return lint_lock.slot_count(environ)
 
 
+# [@ANCHOR: lint_batch:batch_limit]
+def batch_limit(environ=None, headroom=None, ttl=5.0, now=time.monotonic):
+    """The `max_running` of a lint batch queue: None when `HAMS_BATCH_MAX_RUNNING` is set (that number wins), the base slot count
+    (`batches_that_may_run`) on a machine with no burst slots, else a function that returns the base count plus the burst slots while the machine has
+    spare processors (`lint_lock.burst_headroom`, measured at most once per `ttl` seconds) and the base count otherwise. So a request that arrives
+    when every base slot has a batch starts a batch of its own at once if the processors are mostly idle, and joins the forming batch (the
+    coalescing that saves work under load) when they are not. `headroom` replaces the measurement (tests). Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    base = batches_that_may_run(environ)
+    if base is None:
+        return None
+    burst = lint_lock.burst_slot_count(environ)
+    if not burst:
+        return base
+    memo = {"at": None, "ok": False}
+
+    def limit():
+        stamp = now()
+        if memo["at"] is None or stamp - memo["at"] >= ttl:
+            if headroom is not None:
+                memo["ok"] = bool(headroom())
+            else:
+                busy_limit, psi_limit, min_mem, _spacing = lint_lock.burst_limits(environ)
+                memo["ok"] = lint_lock.burst_headroom(lint_lock.cpu_busy_percent(0.5), lint_lock.cpu_stall(), lint_lock.mem_available_gb(),
+                                                      busy_limit, psi_limit, min_mem)[0]
+            memo["at"] = stamp
+        return base + burst if memo["ok"] else base
+
+    return limit
+
+
 # [@ANCHOR: lint_batch:run_member]
 def run_member(repo, repo_name, branch, tip, base, scope, runner, timeout=None, out=print, environ=None,
                poll=1.0, sdir=None, estimate=None, kind=KIND, solo_hint="run_linters.py --changed --solo", install=(),
@@ -408,7 +440,7 @@ def run_member(repo, repo_name, branch, tip, base, scope, runner, timeout=None, 
     member = batch_queue.make_member(branch, tip, scope=scope, info=solo_hint, install=install)
     caps = batch_queue.caps_from_env(environ)
     if max_running:
-        caps["max_running"] = max(1, int(max_running))
+        caps["max_running"] = max_running if callable(max_running) else max(1, int(max_running))
     outcome = batch_queue.coalesce(
         sdir, member, runner, caps=caps, estimate=estimate, poll=poll,
         timeout=timeout, out=out, log_for=lambda n: os.path.join(sdir, "logs", "batch-%d.log" % n))
