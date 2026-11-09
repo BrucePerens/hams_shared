@@ -14,6 +14,7 @@ import ast
 import os
 import sys
 from pathlib import Path
+import check_target
 from tree_files import tree_walk
 
 
@@ -72,8 +73,9 @@ def main():
         print("Usage: check_test_tags.py <repository_root>")
         sys.exit(1)
 
-    repo_root = sys.argv[1]
+    repo_root = check_target.require_directory(sys.argv[1], "check_test_tags")
     all_passed = True
+    scanned = 0
 
     # Vendored/environment directories that can legitimately contain their
     # own "tests" subdirectories full of test_*.py files that are not this
@@ -109,9 +111,11 @@ def main():
         for file in files:
             if file.startswith("test_") and file.endswith(".py"):
                 filepath = os.path.join(root, file)
+                scanned += 1
                 if not check_test_file(filepath):
                     all_passed = False
 
+    check_target.require_scanned(scanned, repo_root, "check_test_tags", "test_*.py files under a tests/ directory")
     if not all_passed:
         sys.exit(1)
 

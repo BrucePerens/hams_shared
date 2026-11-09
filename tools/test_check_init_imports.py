@@ -117,6 +117,8 @@ class MainIntegrationTests(unittest.TestCase):
         # `git worktree add`), not empty directories -- which the exclusion list must cover.
         # Independent of this file's separate open question about a possible missing
         # cross-repo scan.
+        # One real file in scope: a scan of nothing is red (check_target.py), and the pruning below is only proven if the walk finds something.
+        _write(os.path.join(self.tmp, "ok_mod", "ok.py"), "x = 1\n")
         _write(
             os.path.join(
                 self.tmp, ".claude", "worktrees", "sess1", "mod_a", "models", "__init__.py"
@@ -166,6 +168,8 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_excluded_subdirectories_are_never_walked(self):
+        # One real file in scope: a scan of nothing is red (check_target.py), and the pruning below is only proven if the walk finds something.
+        _write(os.path.join(self.tmp, "ok_mod", "ok.py"), "x = 1\n")
         _write(os.path.join(self.tmp, "daemons", "some_daemon", "__init__.py"), "\n")
         _write(os.path.join(self.tmp, "daemons", "some_daemon", "orphan.py"), "\n")
         code, out = self._run()
@@ -177,6 +181,8 @@ class MainIntegrationTests(unittest.TestCase):
         # normal importable module, and mypy reads these stubs by path, not via Python imports.
         # Regression test for a real false-positive this check produced against the generated
         # tree (604 files flagged) before this exclusion existed.
+        # One real file in scope: a scan of nothing is red (check_target.py), and the pruning below is only proven if the walk finds something.
+        _write(os.path.join(self.tmp, "ok_mod", "ok.py"), "x = 1\n")
         _write(
             os.path.join(
                 self.tmp,

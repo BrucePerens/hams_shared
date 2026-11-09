@@ -33,6 +33,7 @@ grant is a property of that module regardless of which repo invoked the check fr
 import csv
 import io
 import os
+import check_target
 import lint_exec
 import sys
 from tree_files import tree_walk
@@ -114,6 +115,7 @@ def main():
         print("Usage: check_res_config_settings_access.py <repo_root>", file=sys.stderr)
         return 1
 
+    check_target.require_directory(sys.argv[1], "check_res_config_settings_access")
     repo_root = _resolve_repo_root(sys.argv[1])
     roots = [repo_root]
     sibling = _find_sibling_repo(repo_root)
@@ -121,7 +123,9 @@ def main():
         roots.append(sibling)
 
     all_errors = []
-    for module_name, csv_path in _find_access_csvs(roots):
+    csvs = list(_find_access_csvs(roots))
+    check_target.require_scanned(len(csvs), ", ".join(roots), "check_res_config_settings_access", "module ir.model.access.csv files")
+    for module_name, csv_path in csvs:
         all_errors.extend(_check_csv(module_name, csv_path))
 
     if all_errors:

@@ -5,6 +5,7 @@ import os
 import sys
 import ast
 
+import check_target
 from tree_files import tree_walk
 
 # Repo-relative paths of files that deliberately live in a tests/
@@ -91,7 +92,8 @@ def main():
         print("Usage: check_init_imports.py <repo_root>")
         sys.exit(1)
 
-    repo_root = sys.argv[1]
+    repo_root = check_target.require_directory(sys.argv[1], "check_init_imports")
+    scanned = 0
     ignore_files = {"__init__.py", "__manifest__.py", "__openerp__.py", "setup.py"}
     warnings = 0
 
@@ -116,6 +118,7 @@ def main():
     # A worktree nested anywhere else than .claude is left out by tree_walk itself: it walks the files git tracks plus new
     # unadded ones (not ignored ones), and never enters another checkout. The old os.walk saw whatever sat on disk.
     for root, dirs, files in tree_walk(repo_root, ".py", skip_dirs, accept=not_generated, untracked=True):
+        scanned += len(files)
         if "__manifest__.py" in files:
             warnings += check_module_subpackages(root, dirs, files)
         if "__init__.py" in files:
@@ -143,6 +146,7 @@ def main():
                         )
                         warnings += 1
 
+    check_target.require_scanned(scanned, repo_root, "check_init_imports", "Python files")
     if warnings > 0:
         print(f"Total Errors (Init Imports): {warnings}")
         sys.exit(1)

@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
@@ -361,3 +362,50 @@ class InheritTests(InheritFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HistoryProblemsTests(InheritFixture):
+    """`_history_problems` must say "no problems" only when it looked: a failed git archive is a problem naming the cause."""
+
+    def _failing_archive(self):
+        real = subprocess.run
+
+        def run(cmd, *args, **kwargs):
+            if "archive" in cmd:
+                return subprocess.CompletedProcess(cmd, 128, b"", b"fatal: simulated archive failure\n")
+            return real(cmd, *args, **kwargs)
+
+        return mock.patch.object(lint_stamp_gate.subprocess, "run", run)
+
+    def test_a_repository_without_a_history_directory_has_no_problems(self):
+        tip = self.git("rev-parse", "HEAD")
+        self.assertEqual(lint_stamp_gate._history_problems(self.repo, tip), [])
+
+    def test_a_failed_git_archive_is_a_problem_naming_the_cause_not_no_problems(self):
+        tip = self.commit("night_shift_history.md", "# h\n", "history")
+        with self._failing_archive():
+            problems = lint_stamp_gate._history_problems(self.repo, tip)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("git archive", problems[0])
+        self.assertIn("simulated archive failure", problems[0])
+        self.assertIn(tip[:9], problems[0])
+
+    def test_a_tip_git_cannot_list_is_a_problem_not_no_problems(self):
+        problems = lint_stamp_gate._history_problems(self.repo, "0" * 40)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("git ls-tree", problems[0])
+
+    def test_a_repository_that_is_not_a_repository_is_a_problem(self):
+        with tempfile.TemporaryDirectory() as empty:
+            problems = lint_stamp_gate._history_problems(empty, "HEAD")
+        self.assertEqual(len(problems), 1)
+
+    def test_inheriting_a_stamp_is_refused_when_the_history_cannot_be_archived(self):
+        self.commit("night_shift_history.md", "# h\n", "history")
+        code = self.commit("daemons/x/src/a.rs", "fn main() {}\n", "code")
+        self.put_stamp(code)
+        tip = self.commit("claims/b.md", "# b\n", "claim")
+        with self._failing_archive():
+            self.assertIsNone(self.inherit(tip))
+        self.assertFalse(os.path.exists(os.path.join(self.passed, tip)))
+        self.assertTrue(any("not valid" in m and "git archive" in m for m in self.messages), self.messages)

@@ -32,8 +32,16 @@ python3 $T run build --tag "$AGENT" -- nice -n 10 cargo build 2>&1 | tail -1
 python3 $T wait --job build --timeout 1800
 
 # A process somebody else started: find it once, then wait on its exact pid and start time.
-python3 $T find --cmd-contains tools/test.py          # prints pid=... ticks=...  (never lists this command)
-python3 $T wait --pid 4242 --start-time 98765 --timeout 3600     # 0 when it ended OR the pid now belongs to another process
+python3 $T find --cmd-contains gate_snapshot.py       # prints: pid=4242 user=bruce start=2026-11-09T09:37:10 ticks=6209871 ...
+python3 $T wait --pid 4242 --start-time 6209871 --timeout 3600   # copy pid and the ticks= number from find; 0 when it ended
+# --start-time is an identity, not a hint: ticks= (or the start= timestamp) exactly as find printed it. A pid now held by a LATER
+# process means "reused, original gone" (0); any other mismatch (seconds, epoch, a wrapper's number, text) is exit 2 with the
+# expected format, never "done". Waiting on a wrapper's pid ends when the wrapper ends: wait on the worker's pid, or use `run`.
+
+# Or wait by selector: exactly one match waits; several is exit 2 (listed, with the --pid/--start-time to name one) unless --all;
+# no match is exit 2 unless --allow-missing. stop/kill-pid never take a pattern.
+python3 $T wait --cmd-contains gate_snapshot.py --timeout 3600
+python3 $T wait --cmd-contains gate_snapshot.py --all
 
 # An output marker, giving up if the producer dies first.
 python3 $T wait --file /tmp/job.log --contains 'RESULT=' --fail-contains 'FATAL' --while-pid 4242 --timeout 900
@@ -51,7 +59,7 @@ Use the Bash tool's `run_in_background` for long commands and wait for its compl
 python3 $T jobs                          # name, state (running, exited, lost), pid, tag, cwd, command
 python3 $T stop build                    # prints each process, SIGTERM to the job's process group, waits 10 s
 python3 $T stop build --force            # only if it ignored SIGTERM: SIGKILL, and only to that verified group
-python3 $T kill-pid 4242 --start-time 98765     # one exact pid that is not a job: refused unless identity is proven
+python3 $T kill-pid 4242 --start-time 6209871     # one exact pid that is not a job: refused unless identity is proven
 ```
 
 `stop` signals only a NAMED job that `run` started, after checking that the processes found in the group really belong to the
