@@ -171,7 +171,7 @@ class FormatEnvTests(unittest.TestCase):
             if item.get("path") == "/opt/hams/systemd/ham.dx.daemon.service"
         )
         text = infra.format_env(entry["content"], {})
-        self.assertIn('Environment="DX_NODES=dxc.nc7j.com:7373,w3lpl.net:7373,dxc.ve7cc.net:23"', text)
+        self.assertIn('Environment="DX_NODES=dxc.nc7j.com:7373,w3lpl.net:7373"', text)
 
     def test_the_key_bootstrapper_commits_what_succeeded_then_fails_on_a_partial_result(self):
         # action_force_provision_all() now returns a "danger" result instead of raising when a daemon fails, so
