@@ -463,3 +463,19 @@ class EslintNodeEnvTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RemoteDefaultTests(unittest.TestCase):
+    """2026-11-08 (Bruce): remote machines are for work that cannot run on this machine; a plain run never leaves it.
+    Tests [@ANCHOR: lint_remote:make_auto_plan]."""
+
+    def test_a_plain_run_has_no_remote_and_the_old_overflow_switches_are_gone(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            for name in ("HAMS_LINT_REMOTE", "HAMS_LINT_DISTRIBUTE", "CI", "HAMS_LINT_NO_LOCK"):
+                os.environ.pop(name, None)
+            options = run_linters._parse_args(["--changed"])
+        self.assertEqual(options.remote, "", "no default `auto`: every step runs here, waiting for the lock if it is busy")
+        self.assertFalse(hasattr(options, "distribute"))
+        self.assertFalse(hasattr(run_linters, "default_remote_applies"))
+        explicit = run_linters._parse_args(["--changed", "--remote", "somehost"])
+        self.assertEqual(explicit.remote, "somehost", "an explicit machine stays an opt-in")

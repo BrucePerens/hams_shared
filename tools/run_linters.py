@@ -265,21 +265,6 @@ STEP_META = {
 }
 
 
-def default_remote_applies(options, environ):
-    """True when a plain `run_linters.py --changed` (or a full run) uses `--remote auto` without being told
-    (2026-11-03): the stamp-producing runs that agents start. Never for a selected run (--only/--skip, which
-    never stamps), a listing, the remote side of a bundle, a run started by another run (tests), CI, a run
-    that takes no lock, or when HAMS_LINT_REMOTE=local says so. A machine that is down costs seconds
-    (the probe is bounded) and the run goes on here."""
-    if environ.get("HAMS_LINT_REMOTE") == "local" or environ.get("CI") or environ.get("HAMS_LINT_NO_LOCK") == "1":
-        return False
-    if environ.get(lint_lock.HELD_ENV) or options.run_bundle or options.only or options.skip:
-        return False
-    if options.list_steps or options.list_json or options.lock_status or options.where:
-        return False
-    return True
-
-
 def _parse_args(argv):
     """`run_linters.py [MODULES] [options]`: MODULES is the old comma-separated module list."""
     parser = argparse.ArgumentParser(
@@ -362,16 +347,10 @@ def _parse_args(argv):
         "--remote",
         default="",
         metavar="auto|HOST|local",
-        help="run capable steps on other machines (lint_machines.json): auto = spread by load, HOST = that "
-        "machine, local = this one. Steps that cannot run there, and unreachable machines, run here",
-    )
-    parser.add_argument(
-        "--distribute",
-        choices=("auto", "off"),
-        default=os.environ.get("HAMS_LINT_DISTRIBUTE", "auto"),
-        help="with --remote auto: auto = this machine (the primary lint runner, several runs side by side) runs everything; only when "
-        "every lint slot is taken or the load is above the limit is the whole run shipped to an idle machine instead of "
-        "queueing; off = never ship, queue here ($HAMS_LINT_DISTRIBUTE; the 'always' mode of 2026-11-03 is gone)",
+        help="default (empty) and local = every step runs on this machine, waiting for its lint lock and slot when busy; "
+        "auto = the same, except that a step this machine lacks the tools for goes to a machine that has them (never because "
+        "this machine is busy); HOST = explicit opt-in, that machine runs every step it can (lint_machines.json). "
+        "Unreachable machines and steps they cannot run run here",
     )
     parser.add_argument(
         "--where", action="store_true", help="with --remote: print the routing plan and the probes, run nothing"
@@ -427,8 +406,6 @@ def _parse_args(argv):
     if options.lock_timeout is None and os.environ.get("HAMS_LINT_LOCK_TIMEOUT"):
         options.lock_timeout = lint_lock._finite(os.environ["HAMS_LINT_LOCK_TIMEOUT"], None)
     options.timing_to_stderr = False
-    if not options.remote and default_remote_applies(options, os.environ):
-        options.remote = "auto"
     if options.cache is None:
         options.cache = options.changed is not None
     options.jobs = max(1, options.jobs)
@@ -2385,7 +2362,6 @@ def main():
     # --remote: capable steps run on other machines (lint_remote.py); the rest, and anything a machine
     # cannot do, runs here.
     remote_jobs = []
-    whole_run = False
     all_steps = list(steps)
     head_before = _git_lines(repo_root, "rev-parse", "HEAD")
     # Coalescing batch (ADR 0115): a heavy, plain, committed `--changed` run joins the batch of this repository
@@ -2433,8 +2409,6 @@ def main():
             sys.exit(batch_code)
     elif batch_reason and options.changed is not None:
         print(f"[*] lint batch: running alone ({batch_reason})")
-    if options.distribute == "off" and options.remote == "auto" and not options.where:
-        options.remote = "local"
     if options.remote and options.remote != "local" or options.where:
         if os.path.realpath(dir_path) == real_shared_dir and layout is None:
             print("[*] --remote: not supported when started from a hams_shared checkout; running everything here")
@@ -2443,12 +2417,6 @@ def main():
         else:
             roots, role = lint_remote.repo_roles(repo_root, sibling_dir, real_shared_dir)
             durations_known = lint_lock.known_durations()
-            if options.distribute != "off" and (options.remote or "auto") == "auto":
-                takes_lock, _why = lint_lock.lock_decision(os.environ, pending, durations_known)
-                busy, busy_why = lint_lock.local_busy(os.environ)
-                whole_run = takes_lock and busy
-                if whole_run:
-                    print(f"[*] --remote: {busy_why}: looking for an idle machine to take the whole run (overflow)")
             steps, remote_jobs = lint_remote.dispatch(
                 options.remote or "auto",
                 steps,
@@ -2460,7 +2428,6 @@ def main():
                 os.cpu_count() or 1,
                 os.getloadavg()[0],
                 where=options.where,
-                whole=whole_run,
                 claim=lint_lock.try_claim,
                 claimed=lint_lock.claimed,
                 odoo_lock=lint_lock.try_odoo_test_lock,
@@ -2480,7 +2447,6 @@ def main():
         lock_timeout=options.lock_timeout,
         load_limit_override=options.load_limit,
         load_timeout_override=options.load_timeout,
-        residue=bool(remote_jobs) and whole_run,
     )
     if not run_ok:
         sys.exit(lint_lock.EXIT_TEMPFAIL)
@@ -2510,7 +2476,6 @@ def main():
                 lock_timeout=options.lock_timeout,
                 load_limit_override=options.load_limit,
                 load_timeout_override=options.load_timeout,
-                residue=whole_run,
             )
             if not ok:
                 sys.exit(lint_lock.EXIT_TEMPFAIL)
