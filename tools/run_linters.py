@@ -525,7 +525,6 @@ def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
         print(f"(pass stamp not written: {error})", file=sys.stderr)
 
 
-# [@ANCHOR: run_linters:write_pass_stamps]
 def stamped_head_repo(repo_root, dir_path, layout=None):
     """The repository whose HEAD must not move during a run for the pass stamp to be written. A hams_shared worktree is linted in a
     layout of throwaway clones (`layout`): `repo_root` is then a clone that never moves, and the stamp goes to the worktree
@@ -548,6 +547,7 @@ def tree_status_lines(repo):
     return _git_lines(repo, "-c", "submodule.hams_shared.ignore=all", "status", "--porcelain")
 
 
+# [@ANCHOR: run_linters:write_pass_stamps]
 def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red="", siblings=(), impact=()):
     """Record "run_linters.py passed (mode) with a clean tree at commit <sha>" for each repo
     involved. devbox_tools/prmerge.sh refuses to merge a branch whose tip has no stamp, so a

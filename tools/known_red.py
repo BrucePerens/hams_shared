@@ -158,6 +158,7 @@ class RunObservation:
         self.signal_line = None
         self.child_exit_status = None
 
+    # [@ANCHOR: known_red:RunObservation_feed]
     def feed(self, line):
         """Reads one log line (ANSI colour already removed)."""
         record = parse_failure_line(line)
@@ -181,6 +182,7 @@ class RunObservation:
     def append_diagnostic(self, text):
         """`run_cmd`'s consumer interface; a rerun keeps no diagnostics."""
 
+    # [@ANCHOR: known_red:RunObservation_counted]
     def counted(self):
         """Failures plus errors Odoo itself counted, summed over every `odoo.tests.result` line."""
         return sum(r["failed"] + r["errors"] for r in self.odoo_result_lines)
@@ -413,6 +415,7 @@ class PolicyOutcome:
     clock: object = time.time
     limit: float = DEFAULT_MAX_AGE_DAYS
 
+    # [@ANCHOR: known_red:PolicyOutcome_results]
     def results(self, commit="", counts=None):
         """The machine-readable form written to `test_results.json` (version 1)."""
         return {
@@ -434,6 +437,7 @@ class PolicyOutcome:
             "fix_me": sorted(self.fix_me),
         }
 
+    # [@ANCHOR: known_red:PolicyOutcome_summary_lines]
     def summary_lines(self):
         """The text printed under the run's headline; every tolerated test is named."""
         lines = []

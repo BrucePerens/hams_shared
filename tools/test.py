@@ -507,6 +507,7 @@ class FailureExtractor:
     child_exit_status = None
 
 
+    # [@ANCHOR: test:FailureExtractor_init]
     def __init__(self, log_dir, disable_atexit=False, mcp_mode=False, slot=1):
         base_dir = os.environ.get("HAMS_REAL_LOG_DIRECTORY") or os.path.abspath(
             os.path.expanduser(log_dir)
@@ -665,6 +666,7 @@ class FailureExtractor:
         if len(self.captured_blocks) > 50:
             self.captured_blocks = self.captured_blocks[-50:]
 
+    # [@ANCHOR: test:FailureExtractor_process_line]
     def process_line(self, line):
         line_clean = re.sub(r"\x1b\[[0-9;]*m", "", line)
         self.observation.feed(line_clean)
@@ -793,6 +795,7 @@ class FailureExtractor:
                     modules.add(match)
         return modules
 
+    # [@ANCHOR: test:FailureExtractor_finish_and_write]
     def finish_and_write(self):
         # No try/except here: self._written = False is set unconditionally in __init__
         # before atexit.register(self.finish_and_write) ever runs, so this method can never
@@ -1012,6 +1015,7 @@ _CHROME_KILL_PATTERN = runner_slots.DEFAULT_CHROME_PATTERN
 _CHROME_PROFILE_GLOBS = runner_slots.DEFAULT_CHROME_GLOBS
 
 
+# [@ANCHOR: test:_profile_directory_of]
 def _profile_directory_of(cmdline):
     """The `--user-data-dir=` path of a Chrome command line, or None."""
     for argument in cmdline:
@@ -1084,6 +1088,7 @@ def kill_process_group_if_private(pid):
     return True
 
 
+# [@ANCHOR: test:kill_test_chrome]
 def kill_test_chrome(signal_name):
     """Send `signal_name` ('TERM' or 'KILL') to this run's headless Chrome processes (the odoo user's); see
     chrome_processes_of_this_run for which those are. A process that is already gone is ignored."""
@@ -1095,6 +1100,7 @@ def kill_test_chrome(signal_name):
             _logger.debug("Ignored %s signalling Chrome pid %s", e, process.pid)
 
 
+# [@ANCHOR: test:robust_reap]
 def robust_reap(pid):
     """
     Process reaper that targets the process group with SIGTERM,
@@ -1284,6 +1290,7 @@ def apply_block_psk_transport(environ):
     return environ[BLOCK_PSK_TRANSPORT_ENV]
 
 
+# [@ANCHOR: test:run_cmd]
 def run_cmd(cmd, extractor=None, cwd=None, env=None):
     if env is None:
         env = dict(os.environ)
@@ -2146,6 +2153,7 @@ def core_daemons_to_start(isolated):
     return list(_HOST_CORE_DAEMONS)
 
 
+# [@ANCHOR: test:rebuild_db]
 def rebuild_db(db_name, redis_flush_db=None):
     # SQL here is built by string interpolation with no parameterization: `db_name` below is
     # interpolated directly into double-quoted SQL identifiers
@@ -2366,6 +2374,7 @@ class PostgresAccess:
         return self.database_comment(name) is None
 
 
+# [@ANCHOR: test:default_postgres_access]
 def default_postgres_access(env=None):
     """PostgresAccess for a process that has not yet set the runner's PostgreSQL environment (the invoking
     process, before the lock hand-over): the same server and role `rebuild_db()` reaches later (host
@@ -2459,6 +2468,7 @@ def sweep_slot_leftovers(pg, held_slot, lock_base_path, base_tmpdir, filestore_b
 _SIGNAL_HANDLER_PID = None
 
 
+# [@ANCHOR: test:_exit_on_signal]
 def _exit_on_signal(signum, _frame):
     if os.getpid() != _SIGNAL_HANDLER_PID:
         signal.signal(signum, signal.SIG_DFL)
@@ -2468,6 +2478,7 @@ def _exit_on_signal(signum, _frame):
     sys.exit(128 + signum)
 
 
+# [@ANCHOR: test:_install_exit_signal_handlers]
 def _install_exit_signal_handlers():
     global _SIGNAL_HANDLER_PID
     _SIGNAL_HANDLER_PID = os.getpid()
@@ -2617,6 +2628,7 @@ def run_protected(cmd, protected_pids, **popen_kwargs):
             raise
 
 
+# [@ANCHOR: test:setup_namespace_and_run_tests]
 def setup_namespace_and_run_tests(real_log_dir, sys_args):
     """
     Pure-Python OS-level namespace bootstrapping.
@@ -3679,6 +3691,7 @@ def _ci_load_gate_settings():
     return ratio, timeout
 
 
+# [@ANCHOR: test:_env_percent]
 def _env_percent(name, default):
     """A finite number from environment variable `name`, else `default` (a malformed value is reported and ignored)."""
     raw = os.environ.get(name)
@@ -3694,6 +3707,7 @@ def _env_percent(name, default):
         return default
 
 
+# [@ANCHOR: test:wait_for_ci_load_to_subside]
 def wait_for_ci_load_to_subside(sleep_func=None, now_func=None):
     """Block until the box is quiet enough to test on, or give up.
 
@@ -3787,6 +3801,7 @@ def _try_flock_once(lock_file):
         return False
 
 
+# [@ANCHOR: test:_open_lock_file]
 def _open_lock_file(lock_file_path):
     """Open (creating if needed) the lock file; the open file object is returned, not yet locked.
 
@@ -3890,6 +3905,7 @@ def take_back_slot_lock(lock_base_path, slots, only_slot, sleep=time.sleep, cloc
         sleep(0.2)
 
 
+# [@ANCHOR: test:_no_slot_message]
 def _no_slot_message(slots, only_slot):
     if slots == 1 or only_slot:
         return "🛑 ERROR: Another instance of test.py is already running. Exiting."
@@ -3903,6 +3919,7 @@ def _no_slot_message(slots, only_slot):
 _HOLDER_PHASE = "running"
 
 
+# [@ANCHOR: test:_record_lock_holder]
 def _record_lock_holder(lock_file_path, slot=None, ticket=None):
     """Best effort: note who holds the lock so queue lines and --queue-status can name it.
     Never allowed to affect the test run. `slot` and `ticket` are written in every mode (also on a machine
@@ -4062,6 +4079,7 @@ def require_repo_root_cwd():
     sys.exit(1)
 
 
+# [@ANCHOR: test:run_preflight]
 def run_preflight(args):
     """The lint, init-import, anchor and JavaScript pre-flight, run from the repository root. Runs in
     the first seconds of the host process, before the lock queue, the namespace and the daemon
@@ -4093,6 +4111,7 @@ class _RunnerArgumentParser(argparse.ArgumentParser):
         sys.exit(2)
 
 
+# [@ANCHOR: test:build_arg_parser]
 def build_arg_parser():
     """The runner's command line. Built once, outside main(), so main() can reject an unknown or
     malformed option in the first second, before the lock queue, the namespace, the daemon builds
@@ -4231,6 +4250,7 @@ def build_arg_parser():
     return parser
 
 
+# [@ANCHOR: test:parse_runner_args]
 def parse_runner_args(argv=None):
     """Parse and cross-check the command line; exits 2 with the cause as the last line."""
     parser = build_arg_parser()
@@ -4387,6 +4407,7 @@ def run_preflight_in_slot(args, lock_file_path, held_slot, slots, preflight=None
     lock_queue.set_holder_phase(qdir, "running")
 
 
+# [@ANCHOR: test:main]
 def main():
     global _single_instance_lock, _CHROME_PROFILE_GLOBS, _HOLDER_PHASE
     # First thing, before any lock, namespace, daemon or database work. rebuild_db() repeats the check
