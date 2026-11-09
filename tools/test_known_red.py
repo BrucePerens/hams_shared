@@ -297,6 +297,17 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(known_red.load_flakes(self.flakes), {})
 
     # Tests [@ANCHOR: known_red:decide]
+    def test_a_rerun_that_counted_a_failure_it_could_not_name_is_not_a_pass(self):
+        def rerun_with_an_unnamed_failure(ids):
+            self.reruns.append(list(ids))
+            return observe(started("m", "A", "t2"), result(1, 0, 1))
+
+        outcome = self.decide(observe(fail("m", "A", "t2"), result(1, 0, 3)), {}, rerun_with_an_unnamed_failure)
+        self.assertFalse(outcome.run_green)
+        self.assertEqual(outcome.failed_again, ["m:A.t2"])
+        self.assertEqual(known_red.load_flakes(self.flakes), {})
+
+    # Tests [@ANCHOR: known_red:decide]
     def test_a_rerun_that_did_not_run_the_test_or_gave_no_verdict_is_not_a_pass(self):
         outcome = self.decide(observe(fail("m", "A", "t2"), result(1, 0, 3)), {}, lambda ids: observe(result(0, 0, 0)))
         self.assertFalse(outcome.run_green)

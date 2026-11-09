@@ -419,7 +419,7 @@ def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHA
     for number, shard in enumerate(shard_lists, 1):
         log_directory = os.path.join(trees.parent, "logs", "shard%d" % number)
         os.makedirs(log_directory, exist_ok=True)
-        os.chmod(log_directory, 0o777)
+        os.chmod(log_directory, 0o755)  # the shard command runs as the invoking user; nobody else may replace the verdict files
         commands.append(shard_command(trees, shard, log_directory, relay))
     manifest = {
         "version": MANIFEST_VERSION, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "workspace": workspace,
@@ -440,12 +440,22 @@ def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHA
 # [@ANCHOR: gate_snapshot:prune_snapshots]
 def prune_snapshots(parent, keep=1, out=print):
     """Removes all but the newest `keep` `gate_*` directories of `parent` (by modification time): each is a set of git
-    worktrees, removed with `git worktree remove --force` through the repository that owns it, then the directory. Returns the
-    removed paths. Never touches a directory whose name does not start with `gate_`."""
-    found = sorted(
-        (os.path.join(parent, n) for n in os.listdir(parent) if n.startswith("gate_") and os.path.isdir(os.path.join(parent, n))),
-        key=os.path.getmtime, reverse=True,
-    )
+    worktrees, removed with `git worktree remove --force` through the repository that owns it (its common git directory, wherever
+    that is: a submodule keeps it under the superproject's `.git/modules`), then the directory. Returns the removed paths. Never
+    touches a directory whose name does not start with `gate_`, nor one that is neither a finished snapshot (`gate_snapshot.json`)
+    nor holds a git worktree of ours: that is somebody's directory, and is reported."""
+    found = []
+    for name in os.listdir(parent):
+        gate = os.path.join(parent, name)
+        if not (name.startswith("gate_") and os.path.isdir(gate)):
+            continue
+        ours = os.path.exists(os.path.join(gate, MANIFEST_NAME)) or any(
+            os.path.exists(os.path.join(gate, sub, ".git")) for sub in ("hams_open/hams_shared", "hams_open", "hams_com"))
+        if ours:
+            found.append(gate)
+        else:
+            out("gate_snapshot: %s has no %s and no worktree of ours; not touching it" % (gate, MANIFEST_NAME))
+    found.sort(key=os.path.getmtime, reverse=True)
     removed = []
     for gate in found[max(keep, 0):]:
         for sub in ("hams_open/hams_shared", "hams_open", "hams_com"):
@@ -453,7 +463,7 @@ def prune_snapshots(parent, keep=1, out=print):
             if os.path.exists(os.path.join(path, ".git")):
                 owner = _git(path, "rev-parse", "--git-common-dir", check=False)
                 if owner:
-                    subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(os.path.join(path, owner))), "worktree", "remove", "--force", path],
+                    subprocess.run(["git", "--git-dir", os.path.abspath(os.path.join(path, owner)), "worktree", "remove", "--force", path],
                                    capture_output=True)
         shutil.rmtree(gate, ignore_errors=True)
         removed.append(gate)
