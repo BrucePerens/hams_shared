@@ -1262,6 +1262,9 @@ class SlotFilesAndKillTests(unittest.TestCase):
             elsewhere = os.path.join(tmp, "other_runs_chrome_odoo")        # a profile directory only another run has
             for directory in (mine, orphan_here):
                 os.makedirs(directory)
+            # Match only the stand-ins this test started: the bare `_chrome_odoo` also matched another lint slot's copy of this very test
+            # (same uid, a profile directory that exists in the shared view), which broke the pid-set comparison under concurrent lint slots.
+            this_test_only = re.escape(tmp) + "/.*_chrome_odoo"
             spawned = []
 
             def start(profile, orphan):
@@ -1283,14 +1286,14 @@ class SlotFilesAndKillTests(unittest.TestCase):
                     time.sleep(0.1)
                 self.assertTrue(alive(profile))
             me = os.getuid()
-            found = _test_runner.chrome_processes_of_this_run("_chrome_odoo", uid=me)
+            found = _test_runner.chrome_processes_of_this_run(this_test_only, uid=me)
             profiles = sorted(_test_runner._profile_directory_of(p.info["cmdline"]) for p in found)
             self.assertEqual(profiles, sorted([mine, orphan_here]))
             narrowed = _test_runner.chrome_processes_of_this_run(re.escape(slot2) + "/[^/ ]*_chrome_odoo", uid=me)
             self.assertEqual([_test_runner._profile_directory_of(p.info["cmdline"]) for p in narrowed], [orphan_here])
-            self.assertEqual(_test_runner.chrome_processes_of_this_run("_chrome_odoo", uid=me + 12345), [])
+            self.assertEqual(_test_runner.chrome_processes_of_this_run(this_test_only, uid=me + 12345), [])
             self.assertEqual(_test_runner.chrome_processes_of_this_run("nothing_matches_this", uid=me), [])
-            with patch.object(_test_runner, "_CHROME_KILL_PATTERN", "_chrome_odoo"), \
+            with patch.object(_test_runner, "_CHROME_KILL_PATTERN", this_test_only), \
                  patch.object(_test_runner.pwd, "getpwnam", return_value=SimpleNamespace(pw_uid=me)):
                 _test_runner.kill_test_chrome("TERM")
             for profile in (mine, orphan_here):
