@@ -230,6 +230,23 @@ class CreateTests(SnapshotTestBase):
         self.assertIn("nothing to test", str(caught.exception))
 
     # Tests [@ANCHOR: gate_snapshot:make_shards]
+    def test_balanced_shards_keep_every_module_exactly_once_and_cut_the_longest_shard(self):
+        modules = ["a", "b", "c", "d", "e", "new"]
+        seconds = {"a": 100.0, "b": 60.0, "c": 50.0, "d": 40.0, "e": 10.0}
+        shards = gs.make_shards(modules, 2, [["a", "b", "c"], ["d", "e", "new"]], seconds)
+        self.assertEqual(sorted(m for s in shards for m in s), sorted(modules))
+        loads = [sum(seconds.get(m, 40.0) for m in s) for s in shards]
+        self.assertLessEqual(max(loads), 150.0)
+        self.assertEqual(gs.make_shards(modules, 2, None, seconds), shards)
+
+    def test_the_bundled_module_seconds_name_real_numbers(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(gs.__file__)), "gate_module_seconds.json")
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        self.assertGreater(len(data), 50)
+        self.assertTrue(all(isinstance(v, (int, float)) and v >= 0 for v in data.values()))
+
+    # Tests [@ANCHOR: gate_snapshot:make_shards]
     def test_shards_cover_every_module_once_and_keep_old_placement(self):
         modules = ["a", "b", "c", "d", "e"]
         dealt = gs.make_shards(modules, 2)

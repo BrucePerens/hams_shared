@@ -287,11 +287,24 @@ def discover_modules(trees):
 
 
 # [@ANCHOR: gate_snapshot:make_shards]
-def make_shards(modules, count, previous=None):
+def make_shards(modules, count, previous=None, seconds=None):
     """Splits `modules` into `count` shards (lists, in `gate_shards.json` form). With `previous` (a list of lists from an
     earlier file) every module keeps its old shard, modules that no longer exist are dropped, and a new module goes to the
     smallest shard; otherwise the sorted modules are dealt round robin. Every module appears in exactly one shard; a shard
-    may end up empty only when there are fewer modules than shards (it is then omitted)."""
+    may end up empty only when there are fewer modules than shards (it is then omitted).
+    With `seconds` ({module: measured test seconds}, see gate_module_seconds.json) the shards are balanced instead: longest
+    module first onto the currently lightest shard (a module without a measurement counts as the median), `previous` is
+    ignored. Only WHERE a module runs changes, never whether: each module is still in exactly one shard."""
+    if seconds:
+        known = sorted(seconds[m] for m in modules if m in seconds)
+        median = known[len(known) // 2] if known else 1.0
+        shards = [[] for _ in range(max(1, count))]
+        load = [0.0] * len(shards)
+        for module in sorted(modules, key=lambda m: (-seconds.get(m, median), m)):
+            index = load.index(min(load))
+            shards[index].append(module)
+            load[index] += seconds.get(module, median)
+        return [shard for shard in shards if shard]
     if previous:
         shards = [[m for m in shard if m in set(modules)] for shard in previous]
         placed = {m for shard in shards for m in shard}
@@ -381,7 +394,7 @@ def verify_snapshot(gate_dir, fetch=True, environ=None, cargo_target_dir=None):
 
 # [@ANCHOR: gate_snapshot:create_snapshot]
 def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHARDS, shards_file=None, fetch=True,
-                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None):
+                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=False):
     """Builds the gate tree for the current `origin/main` commits and returns its manifest (also written to
     `<gate>/gate_snapshot.json`, with `gate_shards.json` beside it). Steps: refuse on a production host; fetch and read the
     three commits; make the worktrees; build every artifact (unless `build` is False); choose the shards (from `shards_file`,
@@ -413,7 +426,11 @@ def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHA
             raise SnapshotError("%s: cannot read the shard file: %s" % (shards_file, error)) from error
         if not (isinstance(previous, list) and all(isinstance(s, list) for s in previous)):
             raise SnapshotError("%s: expected a JSON list of lists of module names" % shards_file)
-    shard_lists = make_shards(discover_modules(trees), shards, previous)
+    seconds = None
+    if balance:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gate_module_seconds.json"), encoding="utf-8") as handle:
+            seconds = json.load(handle)
+    shard_lists = make_shards(discover_modules(trees), shards, previous, seconds)
     if not shard_lists:
         # No module found in either tree (a wrong checkout, an empty sparse tree): a snapshot with nothing to test would give the canary a vacuous green.
         raise SnapshotError("no Odoo module (no __manifest__.py at the root of %s or %s): there is nothing to test" % (trees.com, trees.open))
@@ -481,6 +498,7 @@ def build_parser():
     create.add_argument("--workspace", default=DEFAULT_WORKSPACE)
     create.add_argument("--parent", default=None, help="where gate_* directories go (default <workspace>/tmp)")
     create.add_argument("--shards", type=int, default=DEFAULT_SHARDS)
+    create.add_argument("--balance", action="store_true", help="balance the shards by measured module seconds (gate_module_seconds.json); ignores the modules' old shards")
     create.add_argument("--shards-file", default=None, help="a gate_shards.json whose modules keep their shard")
     create.add_argument("--no-fetch", action="store_true")
     create.add_argument("--no-build", action="store_true")
@@ -509,7 +527,7 @@ def main(argv=None, out=print):
         if args.command == "create":
             manifest = create_snapshot(
                 args.workspace, args.parent, args.shards, args.shards_file, not args.no_fetch, not args.no_build,
-                args.cargo_target_dir, out=out,
+                args.cargo_target_dir, out=out, balance=args.balance,
             )
             gate = manifest["trees"]["parent"]
             out("gate_snapshot: snapshot ready in %s (verified current)" % gate)
