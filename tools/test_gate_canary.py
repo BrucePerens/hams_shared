@@ -246,6 +246,88 @@ class RunTests(unittest.TestCase):
         self.assertIn('"status": "green"', out[-1])
 
 
+class RelaySuiteTests(RunTests):
+    """Tests [@ANCHOR: gate_canary:parse_cargo_failures] [@ANCHOR: gate_canary:relay_command] [@ANCHOR: gate_canary:run_relay_suite]: the nightly full relay suite."""
+
+    def setUp(self):
+        super().setUp()
+        patch = unittest.mock.patch.dict(os.environ, {"XDG_CACHE_HOME": os.path.join(self.tmp.name, "cache")})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def make_relay(self):
+        os.makedirs(os.path.join(self.gate, "hams_com", gc.RELAY_REL))
+        with open(os.path.join(self.gate, "hams_com", gc.RELAY_REL, "Cargo.toml"), "w", encoding="utf-8") as handle:
+            handle.write("[package]\nname = \"x\"\n")
+
+    def snapshot(self, *args, **kwargs):
+        made = super().snapshot(*args, **kwargs)
+        made["trees"]["com"] = os.path.join(self.gate, "hams_com")
+        return made
+
+    def relay_runner(self, relay_text, exit_status):
+        inner = self.runner_for({})
+
+        def runner(command, log_path):
+            if "cargo test" in command:
+                self.commands.append(command)
+                with open(log_path, "w", encoding="utf-8") as handle:
+                    handle.write(relay_text)
+                return exit_status
+            return inner(command, log_path)
+        return runner
+
+    def run_with(self, relay_text, exit_status, **kwargs):
+        return gc.run_canary(state_dir=self.state, runner=self.relay_runner(relay_text, exit_status), snapshot=self.snapshot, out=self.out.append,
+                             hostname="devbox", slots=2, load=99.0, **kwargs)
+
+    def test_the_log_is_read_for_failed_tests_and_passed_counts(self):
+        text = "test a::ok ... ok\ntest demo_lock::t::bad ... FAILED\ntest demo_lock::t::bad ... FAILED\ntest result: FAILED. 40 passed; 1 failed\ntest result: ok. 2 passed; 0 failed\n"
+        self.assertEqual(gc.parse_cargo_failures(text), {"failed": ["demo_lock::t::bad"], "passed": 42})
+        self.assertEqual(gc.parse_cargo_failures(""), {"failed": [], "passed": 0})
+
+    def test_the_command_runs_every_test_of_every_target_with_the_relay_features(self):
+        command = gc.relay_command("/a b/relay", "/t")
+        self.assertIn("--no-fail-fast", command)
+        self.assertIn("--features radioctl,shared_receiver", command)
+        self.assertNotIn("--bin", command)
+        self.assertTrue(command.startswith("cd '/a b/relay' && "))
+
+    def test_a_green_relay_suite_keeps_the_night_green_and_is_in_the_status_and_note(self):
+        self.make_relay()
+        code, status = self.run_with("test result: ok. 4100 passed; 0 failed\n", 0)
+        self.assertEqual((code, status["status"]), (0, "green"))
+        self.assertEqual((status["relay"]["status"], status["relay"]["passed"]), ("green", 4100))
+        with open(os.path.join(self.state, "note.txt")) as handle:
+            self.assertIn("relay full suite: green, 4100 passed", handle.read())
+
+    def test_a_failed_relay_test_makes_the_night_red_and_is_named_but_not_proposed_for_the_odoo_baseline(self):
+        self.make_relay()
+        code, status = self.run_with("test demo_lock::t::bad ... FAILED\ntest result: FAILED. 9 passed; 1 failed\n", 101)
+        self.assertEqual((code, status["status"]), (1, "red"))
+        self.assertEqual(status["new_failures"], ["relay cargo test: demo_lock::t::bad"])
+        with open(os.path.join(self.state, "known_red_candidates.json")) as handle:
+            self.assertEqual(json.load(handle)["entries"], [])
+        with open(os.path.join(self.state, "note.txt")) as handle:
+            self.assertIn("NEW or EXPIRED failure: relay cargo test: demo_lock::t::bad", handle.read())
+        self.assertFalse([c for c in self.commands if "--bisect-modules" in c], "a relay test is not an Odoo module to bisect")
+
+    def test_a_relay_run_that_died_without_a_failed_test_is_an_error_never_green(self):
+        self.make_relay()
+        code, status = self.run_with("error: could not compile `hams_local_relay`\n", 101)
+        self.assertEqual((code, status["relay"]["status"]), (1, "error"))
+        self.assertTrue(any("relay full suite" in e for e in status["shard_errors"]))
+
+    def test_no_relay_crate_or_no_relay_flag_is_said_not_silent(self):
+        code, status = self.run_with("", 0)  # the snapshot has no relay crate here
+        self.assertEqual(status["relay"]["status"], "skipped")
+        with open(os.path.join(self.state, "note.txt")) as handle:
+            self.assertIn("relay full suite: NOT RUN", handle.read())
+        self.make_relay()
+        _code, status = self.run_with("", 0, relay=False)
+        self.assertIsNone(status["relay"])
+
+
 class UnitFileTests(unittest.TestCase):
     # Tests [@ANCHOR: gate_canary:run_canary]
     def test_the_user_units_run_the_canary_niced_and_are_not_installed_or_enabled(self):

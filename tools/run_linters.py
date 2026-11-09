@@ -22,6 +22,7 @@ import batch_queue
 import lint_cache
 import lint_exec
 import lint_batch
+import relay_structural
 import rust_impact
 import lint_layout
 import lint_lock
@@ -2434,6 +2435,20 @@ def main():
         dir_path,
     ],
     )
+
+    # 51b. relay structural tests -- the relay's fast group of source-scanning `cargo test` tests (relay_structural.py): the privilege inventory, the
+    # exposure audit, the keying and key-material scans, the demo-lock route table, the manuals rules. Lint ran none of the relay's cargo tests, and three
+    # relay merges on 2026-11-08 turned relay main red with tests of exactly this kind. Selected when a file of the relay, of a crate it depends on or of a
+    # crate that depends on it changes (`watched_dirs`); the merge queue's combined run selects it the same way. Not cached: the tests read the sources
+    # and tables of the whole crate, and a recorded pass would hide a rename.
+    relay_dirs = relay_structural.watched_dirs(repo_root)
+    if relay_dirs:
+        _add(
+            "relay structural tests",
+            [python_exec, os.path.join(dir_path, "tools", "relay_structural.py"), repo_root],
+            inputs=(tuple(relay_dirs), None),
+            cacheable=False,
+        )
 
     # 52. check_cargo_fmt -- `cargo fmt -- --check` over the same crates step 36 lints. CI runs
     # this check on only one relay leg, which can start hours after a push; on 2026-09-15 three

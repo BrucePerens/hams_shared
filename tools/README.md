@@ -4035,3 +4035,53 @@ Purpose: decide which crates to check. `crate_dirs`: list of crate directories; 
 `(directory, reason)`. A crate is selected when a changed path lies under it or under a directory it depends on by path (followed through those directories' manifests; cycles end), when a manifest cannot be read, or
 for every crate when a changed `.rs` file, `rust-toolchain*` file or `.cargo/` file lies outside every crate (it may be `include!`d or pin the toolchain). `changed` None selects all. Reads manifests only. Tests:
 `SelectionTests` and `EndToEndTests` (a fake `cargo` records where it was started) in `test_rust_impact.py`.
+
+## The relay's structural tests in lint (`relay_structural.py`)
+
+Written 2026-11-08. Lint ran a pytest wrapper for `daemons/hams_local_relay` and none of the relay's cargo tests, so three relay merges turned relay main red that day: the demo_lock route table (#3474), the ELAD
+fixture compiled in with `include_str!` (#3502) and the SNTP server (#3626: `sntp_service` missing from `docs/privilege_inventory.json`, `local_api.json` read by a bare name; two scan tests failed until #3654).
+The step `relay structural tests` runs the fast group of source-scanning tests (`STRUCTURAL_FILTERS`, one list) with `cargo test --locked --features radioctl,shared_receiver --bin hams_local_relay`. It is selected when a file of the relay,
+of a directory it depends on by path, or of a crate that depends on it (`watched_dirs`: `shack_console`, `relay_signer`) changes, so the merge queue's combined run, which is an ordinary `--changed` run, runs it for any such
+branch; it is never cached, and the stamp lists it by name. Measured on the dev box (2026-11-08): cold build of all relay test binaries 2 min 6 s; the group warm, 139 tests, 17 s; the same sources under a new
+checkout path rebuild the relay crate (2 min 13 s, the cost of the per-path fingerprint), the dependencies stay warm. At `3213a910d` (#3626) the group fails with exactly the two scan tests that failed on main. The whole suite
+(`cargo test` of every target) runs nightly in the canary (`gate_canary.py`, `run_relay_suite`) and its failures make the night red.
+
+### `[@ANCHOR: relay_structural:watched_dirs]` `watched_dirs(repo_root)`
+
+Purpose: the directories whose change selects the step. Argument `repo_root`: str. Returns a sorted list of resolved absolute paths: the relay crate, every directory it depends on by `path = ...` (transitively) and
+every crate in the repository that depends on it by path (`rust_impact.select_crates`); `[]` when the repository has no `daemons/hams_local_relay/Cargo.toml` (no step). Reads manifests only. Tests: `WatchedDirsTests` in `test_relay_structural.py`.
+
+### `[@ANCHOR: relay_structural:cargo_command]` `cargo_command(filters=STRUCTURAL_FILTERS, list_only=False)`
+
+Purpose: the command line. Returns a list: `cargo test --locked --features radioctl,shared_receiver --bin hams_local_relay -- [--list] <filter>...`. Each filter is a substring of a test path, as `cargo test` filters work. Pure. Tests: `PureTests`.
+
+### `[@ANCHOR: relay_structural:listed_tests]` `listed_tests(text)`
+
+Purpose: the test paths of `cargo test -- --list` output (`path: test` lines). Argument `text`: str. Returns a list of str. Pure. Tests: `PureTests`.
+
+### `[@ANCHOR: relay_structural:unmatched_filters]` `unmatched_filters(tests, filters=STRUCTURAL_FILTERS)`
+
+Purpose: keep the group from shrinking silently. Returns the filters that no test path of `tests` contains. The step lists the tests first and FAILS (exit 1, naming them) when this is not empty, before running anything: a renamed or deleted
+module must be fixed in the list. Pure. Tests: `PureTests`, `MainTests`.
+
+### `[@ANCHOR: relay_structural:passed_count]` `passed_count(text)`
+
+Purpose: the number of tests that passed. Returns the sum of the `N passed` of every `test result:` line of `cargo test` output, 0 when there is none. Pure. Tests: `PureTests`.
+
+The step's build goes to `lint_cache.named_cargo_session("relay-structural")`: one warm Cargo directory per lint slot (`-sK`), in RAM when `/dev/shm` has room, under the machine's disk budget, locked while it builds. Exit 0 and `relay structural tests: N tests of M filters
+passed` on success; 1 and the test output on failure, on a build failure, or on a shrunken group; 0 and a line saying so when the repository has no relay crate.
+
+### `[@ANCHOR: gate_canary:parse_cargo_failures]` `parse_cargo_failures(text)`
+
+Purpose: read the nightly relay run. Returns `{"failed": [paths], "passed": N}`: each `test <path> ... FAILED` line (sorted, unique) and the sum of the `N passed` counts. Pure. Tests: `RelaySuiteTests` in `test_gate_canary.py`.
+
+### `[@ANCHOR: gate_canary:relay_command]` `relay_command(relay_dir, target_dir)`
+
+Purpose: the shell line of the nightly full suite: `cd <relay> && CARGO_TARGET_DIR=<target> CARGO_INCREMENTAL=0 cargo test --locked --features radioctl,shared_receiver --no-fail-fast` (every test of every target, all failures listed). Paths are shell-quoted. Pure. Tests: `RelaySuiteTests`.
+
+### `[@ANCHOR: gate_canary:run_relay_suite]` `run_relay_suite(com_tree, log_directory, runner=None, now=time.time)`
+
+Purpose: the nightly full relay suite of the canary, run on the snapshot's hams_com tree after the shards (`gate_canary.py run --no-relay` skips it). Returns `{"status", "failed", "passed", "exit_status", "seconds", "log"}`: `green` (exit 0), `red`
+(non-zero and at least one `FAILED` test, named in `failed`), `error` (non-zero and none: it did not build or died; never green) or `skipped` with a `reason` (no tree or no relay crate; the note says `NOT RUN`). The build uses the budgeted directory
+`lint_cache.named_cargo_session("relay-nightly")`. `aggregate(..., relay=)` records it as `status["relay"]`, adds each failed test as the new failure `relay cargo test: <path>` (so the night is red and the note names it; such ids are not proposed for
+the Odoo known-red baseline and are not bisected) and a relay `error` as a shard error. Blocks until cargo ends (a cold build is a few minutes, the suite more); no process is signalled. Tests: `RelaySuiteTests`.
