@@ -385,6 +385,45 @@ also set `CARGO_INCREMENTAL=0`, as the lint builds do, so no `incremental/` data
 entry may prune. Not for use from several threads of one process with the same name (the flock is per open file; the
 second waits for the first, which is the intent). See `CargoBudgetTest` in `test_lint_cache.py`.
 
+### `[@ANCHOR: lint_cache:sync_tree]` `sync_tree(source, destination, skip=WORK_SKIP, submodules=())`
+
+Purpose: make `destination` hold exactly the files of `source`, rewriting only the files whose bytes differ, so an unchanged
+file keeps its modification time. Cargo's fingerprint of a path package is its files' mtimes; a copy made afresh every run
+is compiled in full.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `source` | path | The tree to copy (resolved with `realpath`). |
+| `destination` | path | Created when missing; files, links and directories that `source` does not have are removed. |
+| `skip` | set of names | Directory names left out: `.git`, `target`, `node_modules`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.venv`, `venv`, `.claude`. |
+| `submodules` | set of paths | Paths relative to `source` of directories that hold their own `.git` and still belong to the tree (the submodules). Any other directory with a `.git` is another checkout and is left out. |
+
+Symlinks are copied as links; a relative link that leaves `source` is written absolute so it still resolves. Special files are
+skipped, and a file that vanishes while the tree is read is left out. A path that changed kind (file, directory, link) is
+replaced. Reads every file of both trees once (size, then bytes) and writes only what differs. Not safe against a second
+caller in the same `destination`: hold the Cargo target's lock (`work_checkout`). See `SyncTreeTest` in `test_lint_cache.py`.
+
+### `[@ANCHOR: lint_cache:work_checkout]` `work_checkout(repo_root, name, target, environ=None, log=None)`
+
+Purpose: a copy of a checkout at a fixed path, so cargo sees the same absolute paths from one lint run to the next. Cargo
+hashes absolute paths into the fingerprints and build-script output of the workspace crates, and every lint run is in a
+different worktree: the relay and its path crates were recompiled each time in a warm target (163-183 s of 183 s on the
+dev box, 2026-11-09, against 0.6 s when path and files are the same).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `repo_root` | path | The checkout to copy. |
+| `name` | str | Tells repositories apart (`hams_com`, `hams_open`). |
+| `target` | path or `None` | The Cargo target directory the build uses; the copy lives beside it by name: `<cache>/hams-lint/work/<target name>/<name>`, so each lint slot has its own and the target's lock covers it. |
+
+Returns (str) the directory to build in, or `None` and the caller builds in `repo_root` as before: `target` is not a managed
+Cargo directory (an explicit `CARGO_TARGET_DIR`), `HAMS_LINT_NO_CACHE=1`, or the copy failed (it says why through `log`).
+The copy is made by `sync_tree`, so the files cargo compiles and the tests read are the checkout's, byte for byte, and a
+build from it is fresh exactly when a build in the checkout would be. Call it while holding the target's lock
+(`named_cargo_session`, `cargo_session`). The copy is removed with its target directory (`drop_unused_dirs`, `clear cargo`).
+Users: `relay_structural.py`, `check_cargo_clippy.py`. Output that names the copy must be mapped back to the checkout by the
+caller. See `SyncTreeTest` in `test_lint_cache.py`.
+
 ### `[@ANCHOR: lint_cache:legacy_cargo_dirs]` `legacy_cargo_dirs(environ=None)`
 
 Purpose: names the old Cargo target directories that predate the budget so `show` can report them and `clear cargo` can
