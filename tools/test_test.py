@@ -541,7 +541,10 @@ class SlotWiringMainTests(unittest.TestCase):
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 held.append(handle)
             env = {"HAMS_ISOLATED_NS": "1", "HAMS_TEST_LOCK_PATH": lock_path, "HAMS_SKIP_CI_LOAD_GATE": "1",
-                   "HAMS_TEST_SLOTS": "1"}
+                   "HAMS_TEST_SLOTS": "1",
+                   # The runner puts TMPDIR and the Chrome profiles in /dev/shm/hams-test-tmp when this machine has 20 GB free
+                   # there (ADR 0113); the answer depends on the host, so a test that names no TMPDIR must not ask it.
+                   "HAMS_RAM_DIRS": "0"}
             env.update(env_overrides)
             orig_cwd = os.getcwd()
             os.chdir(fake_repo)
@@ -596,6 +599,18 @@ class SlotWiringMainTests(unittest.TestCase):
         self.assertEqual(calls["env"][0]["DB_NAME"], "hams_test")
         self.assertEqual(calls["extractor"][0]["slot"], 1)
         self.assertEqual(chrome, ("_chrome_odoo", ("/tmp/*_chrome_odoo", "/var/tmp/*_chrome_odoo")))
+
+    # Tests [@ANCHOR: test:ram_chrome_profile_globs]
+    def test_an_unscoped_run_with_room_in_ram_also_removes_the_profiles_under_the_ram_tmpdir(self):
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(_test_runner.ram_dirs, "free_gb", return_value=60):
+                code, calls, _, chrome = self._run_main(
+                    ["--slots", "1"], {"HAMS_RAM_DIRS": "1", "HAMS_RAM_ROOT": root}
+                )
+            base = os.path.join(root, "hams-test-tmp")
+            self.assertEqual(code, 0)
+            self.assertEqual(calls["env"][0]["TMPDIR"], base)
+            self.assertEqual(chrome[1], ("/tmp/*_chrome_odoo", "/var/tmp/*_chrome_odoo", base + "/*_chrome_odoo"))
 
     def test_a_host_run_in_slot_two_has_its_own_database_port_redis_and_tmpdir(self):
         with tempfile.TemporaryDirectory() as tmp:
