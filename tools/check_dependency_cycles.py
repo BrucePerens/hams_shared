@@ -49,9 +49,9 @@ from tree_files import tree_walk
 
 def _resolve_repo_root(given_path):
     """run_linters.py's own `dir_path` resolves to the hams_shared directory itself, not a real
-    repo root (same bug found and fixed in check_model_extension_collisions.py,
-    check_access_csv_group_order.py, check_module_subpackage_imports.py) -- confirmed directly,
-    this checker was silently building a 0-node dependency graph via run_linters.py's actual
+    repo root (as in check_model_extension_collisions.py,
+    check_access_csv_group_order.py, check_module_subpackage_imports.py) -- without the
+    redirect this checker silently builds a 0-node dependency graph via run_linters.py's actual
     invocation (51 nodes when pointed at a real repo root). Detect the hams_shared case by name
     and redirect to its real parent repo."""
     given_path = os.path.abspath(given_path)
@@ -67,17 +67,15 @@ def _find_sibling_repo(repo_root):
 
 
 def _build_graph(roots):
-    # Real, live bug found reviewing this file: without the "not d.startswith('.')" filter just
-    # below, this walk descends into ".claude/worktrees/<session>/" -- this project's own
-    # standing convention for running concurrent bug-hunt dispatches in isolated git worktrees
-    # INSIDE the repo root (confirmed live: two other real, concurrently active sessions' own
-    # worktrees were found sitting in the real repo root during this review). This is worse than
-    # merely wasted work: `graph[mod] = [...]` below keys purely by `os.path.basename(root)`, with
-    # NO path-based disambiguation, so a worktree's own copy of a real module (same basename,
-    # same manifest-derived name, but possibly a different, in-progress 'depends' list) silently
+    # Without the "not d.startswith('.')" filter just below, this walk descends into
+    # ".claude/worktrees/<session>/": agent sessions run in isolated git worktrees nested inside
+    # the repo root under that path. That is worse than merely wasted work:
+    # `graph[mod] = [...]` below keys purely by `os.path.basename(root)`, with NO path-based
+    # disambiguation, so a worktree's own copy of a real module (same basename, same
+    # manifest-derived name, but possibly a different, in-progress 'depends' list) silently
     # OVERWRITES or is overwritten by the real repo's own entry depending on os.walk's own
-    # (filesystem-dependent, not alphabetically guaranteed) traversal order -- a real risk of
-    # reasoning about the wrong, stale, or mid-edit dependency data for a real module, not just
+    # (filesystem-dependent, not alphabetically guaranteed) traversal order -- the graph would
+    # reason about the wrong, stale, or mid-edit dependency data for a real module, not just
     # duplicated effort.
     graph = {}
     depends_cycle = {}

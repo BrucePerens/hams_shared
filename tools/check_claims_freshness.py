@@ -6,8 +6,8 @@ Function-Level Claims Freshness Check (ADR 0091)
 
 A "claim," per ADR 0091, is a short markdown file at `<module>/claims/<anchor_name>.md`
 documenting precisely and falsifiably what one anchored function guarantees -- the same
-falsifiable-claim discipline that found real production bugs during the 2026-09-08 patent
-re-verification passes (see `hams_shared/agents/skills/bug-hunt/SKILL.md`), applied to ordinary
+falsifiable-claim discipline used to re-verify patent specifications (see
+`hams_shared/agents/skills/bug-hunt/SKILL.md`), applied to ordinary
 functions rather than patent claims. A claim file's own YAML frontmatter records `anchor` (the
 base anchor name the claim documents, matching a real `# [@ANCHOR: name]` in source) and
 `code_hash` (a sha256 of the anchored function's own source span, as it existed the last time a
@@ -18,9 +18,8 @@ reader, human or AI, actually comparing the two. What it verifies mechanically, 
 without any semantic understanding at all: whether the anchored function's *source text* has
 changed since the claim was last confirmed. A hash mismatch does not mean the claim is wrong -- it
 means nobody has looked since the code changed, which is exactly the condition that let real
-patent-specification claims drift out of sync with the code they described throughout the same
-night this ADR is named for (see bug class 6, "Cross-document/cross-section self-contradiction,"
-in the bug-hunt skill's own list).
+patent-specification claims drift out of sync with the code they described (a cross-document or
+cross-section self-contradiction that nobody re-checked).
 
 Python only, for now, matching every other layer of this anchor system's own incremental rollout
 (`check_function_test_anchors.py` shipped Python-only under ADR 0090 before its own JS and Rust
@@ -52,16 +51,13 @@ from check_function_test_anchors import (  # noqa: E402
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 FIELD_RE = re.compile(r"^([a-zA-Z_]+):\s*(.+?)\s*$", re.MULTILINE)
 
-# Wired into run_linters.py as a real, hard-blocking gate 2026-09-18 (Bruce's own decision, via
-# AskUserQuestion, answered in hams_com/night_shift_questions/answered/
-# wire-check-claims-freshness-into-ci-fa45dba0.md), with these three top-level directories
-# excluded for now: `ingest/`, `ics_forms/`, and `ics_training/` all have another session's real,
-# active, in-progress work landing throughout this same night (see hams_com/night_shift_todo/
-# medium/check-claims-freshness-never-wired-into-ci-1e71bfb6.md's own history), and re-checking
-# their claims before that work settles would flag transient churn, not a real regression. Every
-# other stale-claim finding outside these three was triaged to 0 the same session this gate was
-# turned on. A hardcoded exclusion set, not a CLI flag: matches the existing convention this
-# tool family already uses for the identical "live, in-progress pipeline directory" situation --
+# Wired into run_linters.py as a hard-blocking gate, with these three top-level directories
+# excluded for now: `ingest/`, `ics_forms/`, and `ics_training/` all have other sessions' real,
+# active, in-progress work landing continuously, and re-checking their claims before that work
+# settles would flag transient churn, not a real regression. Every other stale-claim finding
+# outside these three was triaged to 0 before the gate was turned on. A hardcoded exclusion
+# set, not a CLI flag: matches the existing convention this tool family already uses for the identical
+# "live, in-progress pipeline directory" situation --
 # check_absolute_paths.py's own `ignore_dirs` already excludes `ics_training/` for the same
 # reason. Remove this once that other session's work lands and settles, and a fresh
 # check_claims_freshness.py run is confirmed clean there too (not assumed).
@@ -103,7 +99,7 @@ def check_retirement(fields, claim_path, search_roots=()):
     """Classify a claim's retirement. Returns `(is_retired, problem_or_None)`.
 
     A claim documents one anchored function. When that function is deliberately deleted or
-    renamed, the claim is kept on purpose -- it holds the original finding, often a tier-1
+    renamed, the claim is kept on purpose -- it holds the original finding, often a high-severity
     security one -- but its `anchor:` can no longer resolve, so every freshness checker reported
     it as an "orphaned claim" forever. Three real claims were in exactly that state, against one
     genuine finding, and a gate that can never go green stops being read: the real orphan hiding
@@ -112,7 +108,7 @@ def check_retirement(fields, claim_path, search_roots=()):
 
     The convention, therefore, is a `retired:` date plus a statement of WHICH kind of retirement
     it is, because a reviewer must be able to tell a deliberate retirement from an accidental
-    orphan (bug classes 40 and 45 both manifest as exactly this symptom):
+    orphan:
 
         retired: 2026-09-15
         superseded_by: _create_odoo_role_if_missing.md   # renamed or moved: name the live claim
@@ -235,24 +231,23 @@ def scan_claims(repo_root):
         if f"{os.sep}claims{os.sep}" not in claim_path:
             continue
         # A README.md inside a claims/ directory is a deliberate index/explanation file for the
-        # directory itself (e.g. hardware/claims/README.md: "reviewed, out of scope for the
-        # bug-hunt campaign"), not a claim -- it carries no frontmatter because it isn't one.
-        # Confirmed live: this was a real false positive ("missing required frontmatter") against
-        # the real hams_com repo before this exclusion.
+        # directory itself (e.g. hardware/claims/README.md, which says the directory is out
+        # of scope for claims), not a claim -- it carries no frontmatter because it isn't one.
+        # Without this exclusion this was a real false positive ("missing required frontmatter")
+        # against the real hams_com repo.
         if os.path.basename(claim_path) == "README.md":
             continue
         # The centralized claims store (docs/bug_hunt_claims/<repo>/...) documents code that
         # lives in a DIFFERENT git repo (hams_open/hams_shared claims, centralized into hams_com
-        # per the bug-hunt skill's own store policy) -- this checker's whole freshness model
-        # assumes the claim and the anchored code share one repo root (`build_anchor_hash_index`
-        # only ever scans `repo_root`'s own git-tracked .py files), so it can never find a
-        # centralized claim's real anchor and would otherwise always report it "orphaned". The
-        # bug-hunt skill's own docs already name the correct tool for these:
-        # `check_claims.py --source-root <other-repo>`. Confirmed live: before this exclusion,
-        # running this checker against the real hams_com repo for the first time ever (it has
-        # never been wired into run_linters.py -- ADR 0091 names this as a real, tracked
-        # follow-on) produced over 1100 false-positive "orphaned claim" reports, the large
-        # majority of them centralized-store claims for hams_open/hams_shared code.
+        # per the store policy in agents/skills/bug-hunt/SKILL.md) -- this checker's whole
+        # freshness model assumes the claim and the anchored code share one repo root
+        # (`build_anchor_hash_index` only ever scans `repo_root`'s own git-tracked .py files), so
+        # it can never find a centralized claim's real anchor and would otherwise always report
+        # it "orphaned". That skill's own docs already name the correct tool for these:
+        # `check_claims.py --source-root <other-repo>`. Without this exclusion, running this
+        # checker against the real hams_com repo produced over 1100 false-positive "orphaned
+        # claim" reports, the large majority of them centralized-store claims for
+        # hams_open/hams_shared code.
         rel = os.path.relpath(claim_path, repo_root)
         if rel.split(os.sep)[:2] == ["docs", "bug_hunt_claims"]:
             continue
@@ -291,12 +286,12 @@ def scan_claims(repo_root):
             # Python functions) for a claim this checker structurally cannot verify yet: Python-
             # only anchor hashing (per this file's own docstring, "JS and Rust claims support are
             # real, named, not-yet-done follow-ons") has no way to resolve a Rust/JS anchor, and a
-            # function with no real `[@ANCHOR:]` at all has nothing to hash regardless. Before
+            # function with no real `[@ANCHOR:]` at all has nothing to hash regardless. Without
             # this check, such a claim always fell through to the "anchor not found" branch below
             # and was reported as "orphaned" -- a false positive, and a misleading one (implying
-            # the anchor was deleted, when it was simply never Python). Confirmed live: ALL 344 of
-            # the real hams_com repo's post-centralized-store-fix "orphaned claim" findings used
-            # this exact convention, none of them genuinely orphaned.
+            # the anchor was deleted, when it was simply never Python). In the real hams_com repo, all 344
+            # "orphaned claim" findings left once centralized-store claims are excluded used this
+            # exact convention, none of them genuinely orphaned.
             continue
 
         if anchor_hashes is None:
@@ -519,9 +514,9 @@ def main():
     args = parser.parse_args()
 
     repo_root = os.path.abspath(args.directory)
-    # A path that isn't a directory walks nothing and would otherwise print SUCCESS. On
-    # 2026-09-16 a run from the wrong working directory passed a module name that didn't
-    # resolve, and the reassuring result was read as the six stale claims being fixed.
+    # A path that isn't a directory walks nothing and would otherwise print SUCCESS: a run from
+    # the wrong working directory with a module name that didn't resolve would look like the
+    # stale claims had been fixed.
     if not os.path.isdir(repo_root):
         print(f"[!] ERROR: {args.directory!r} is not a directory (resolved to {repo_root}).")
         return 2

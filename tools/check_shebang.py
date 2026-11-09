@@ -26,10 +26,9 @@ def check_shebang(repo_dir):
         ".venv",
         "__pycache__",
         ".agents",
-        # Real bug found 2026-09-12: this project's own standing convention runs concurrent
-        # bug-hunt dispatches in isolated git worktrees under .claude/worktrees/<session>/
-        # inside the repo root -- a real git worktree checkout, not an empty directory --
-        # which this set never excluded.
+        # ".claude" holds agent sessions' isolated git worktrees under
+        # .claude/worktrees/<session>/ inside the repo root -- real git worktree checkouts, not
+        # empty directories -- so it is excluded.
         ".claude",
         "target",
         "radae",
@@ -89,7 +88,7 @@ def check_shebang(repo_dir):
             # already handed us as a "file" -- most concretely a broken symlink
             # (FileNotFoundError), a real, currently-reachable state in this exact repo
             # (see check_absolute_paths.py's own identical fix/comment for the concrete
-            # AGENTS.md-in-a-fresh-worktree scenario this guards against). Before this fix,
+            # AGENTS.md-in-a-fresh-worktree scenario this guards against). Without this,
             # a single broken symlink to a .py/.sh file crashed the ENTIRE scan.
             print(f"Warning: could not read {file_path}: {e}")
 
