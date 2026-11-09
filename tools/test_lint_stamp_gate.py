@@ -360,6 +360,205 @@ class InheritTests(InheritFixture):
         self.assertEqual(refused.returncode, 0, "a stamped commit answers with its own stamp")
 
 
+class ParseAndRefusalExactnessTests(unittest.TestCase):
+    """Found by mutation testing (2026-11-09): the gate's reasons, counts and step sets were only checked loosely."""
+
+    def test_parse_stamp_reads_mode_count_and_names_exactly(self):
+        self.assertEqual(lint_stamp_gate.parse_stamp("changed 2026-10-30T10:00:00 steps=3 names=a,b\n"), ("changed", 3, {"a", "b"}))
+        self.assertEqual(lint_stamp_gate.parse_stamp("full steps=7"), ("full", 7, None))
+        self.assertEqual(lint_stamp_gate.parse_stamp("changed steps=3 names=a"), ("changed", 3, {"a"}), "the field right after the mode counts")
+        self.assertEqual(lint_stamp_gate.parse_stamp("steps=5"), ("steps=5", None, None), "the first word is the mode, never a field")
+        self.assertEqual(lint_stamp_gate.parse_stamp(""), ("", None, None))
+        self.assertEqual(lint_stamp_gate.parse_stamp("changed x steps=2 names="), ("changed", 2, set()))
+        self.assertEqual(lint_stamp_gate.parse_stamp("changed xsteps=3 steps=3x"), ("changed", None, None))
+
+    def test_the_unknown_mode_reason_names_the_word_and_the_known_modes(self):
+        self.assertEqual(
+            lint_stamp_gate.refusal("", ["a.py"]),
+            "the stamp is empty or unreadable (its first word is '', not one of full/changed)",
+        )
+        self.assertIn("'bogus'", lint_stamp_gate.refusal("bogus steps=3", ["a.py"]))
+
+    def test_the_zero_step_reason_is_exact(self):
+        self.assertEqual(lint_stamp_gate.refusal("changed steps=0", ["a.py"]), "the stamp selected zero steps for a branch that changed code")
+
+    def test_a_stamp_with_steps_but_no_names_is_judged_per_file_kind(self):
+        old = "changed 2026-10-30T10:00:00 steps=4\n"
+        reason = "the stamp does not list its steps (old run_linters.py): run it again"
+        self.assertEqual(lint_stamp_gate.refusal(old, ["a/b.rs"]), reason)
+        self.assertEqual(lint_stamp_gate.refusal(old, ["a/Cargo.toml"]), reason)
+        self.assertEqual(lint_stamp_gate.refusal(old, ["a/b.js"]), reason)
+        self.assertEqual(lint_stamp_gate.refusal(old, ["a/b.mjs"]), reason)
+        self.assertEqual(lint_stamp_gate.refusal(old, ["a/b.cjs"]), reason)
+        self.assertIsNone(lint_stamp_gate.refusal(old, ["a/b.py"]))
+        self.assertIsNone(lint_stamp_gate.refusal(old, ["a/b.py", ""]), "blank lines are not paths")
+
+    def test_the_rust_reason_lists_exactly_the_missing_steps(self):
+        reason = lint_stamp_gate.refusal(stamp(2, "check_cargo_clippy,verify_anchors"), ["x.rs"])
+        self.assertEqual(reason, "Rust files changed but the stamp did not run: check_cargo_fmt, check_rust_function_test_anchors")
+
+    def test_the_javascript_reason_names_the_checker_and_rust_is_judged_first(self):
+        self.assertEqual(
+            lint_stamp_gate.refusal(stamp(1, "flake8"), ["x.cjs"]),
+            "JavaScript files changed but the stamp did not run: check_js_syntax",
+        )
+        both = lint_stamp_gate.refusal(stamp(1, "flake8"), ["x.js", "y.rs"])
+        self.assertTrue(both.startswith("Rust files changed"), both)
+        self.assertIsNone(lint_stamp_gate.refusal(stamp(5, RUST_NAMES + ",check_js_syntax"), ["x.js", "y.rs"]))
+
+    def test_exempt_path_rejects_traversal_absolute_paths_and_other_suffixes(self):
+        self.assertTrue(lint_stamp_gate.exempt_path("claims/a.md"))
+        self.assertFalse(lint_stamp_gate.exempt_path("claims/a.txt"))
+        self.assertFalse(lint_stamp_gate.exempt_path("claims/../tools/a.md"))
+        self.assertFalse(lint_stamp_gate.exempt_path("/claims/a.md"))
+        self.assertFalse(lint_stamp_gate.exempt_path("docs/a.md"))
+        self.assertTrue(lint_stamp_gate.exempt_path("claims/..x/a.md"), "only a whole `..` component is traversal")
+
+
+class NoteTests(unittest.TestCase):
+    def test_known_red_note_names_what_was_tolerated_and_retried(self):
+        self.assertIsNone(lint_stamp_gate.known_red_note("changed steps=3 names=a"))
+        self.assertEqual(
+            lint_stamp_gate.known_red_note("changed steps=3 known_red=a,b baseline=abc"),
+            "NOTE: this pass tolerated failures that are known red on main (not caused by the branch): a,b",
+        )
+        self.assertEqual(
+            lint_stamp_gate.known_red_note("changed steps=3 timeout-retried=x,y"),
+            "NOTE: this pass rests on a serial rerun of steps that timed out while the machine was saturated: x,y",
+        )
+        both = lint_stamp_gate.known_red_note("changed known_red=a timeout-retried=x").split("\n")
+        self.assertEqual(len(both), 2)
+        self.assertTrue(both[0].endswith(": a") and both[1].endswith(": x"), both)
+
+    def test_inherited_note_is_exact_and_absent_for_a_plain_stamp(self):
+        self.assertIsNone(lint_stamp_gate.inherited_note("changed steps=3"))
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        self.assertEqual(
+            lint_stamp_gate.inherited_note("changed steps=3 inherited-from=" + sha),
+            "NOTE: this pass is inherited from 0123456789ab: only night-shift records (history, to-do, claim files) changed since that run",
+        )
+
+
+class InheritExactnessTests(InheritFixture):
+    def test_the_inherited_stamp_text_is_the_old_line_plus_the_source(self):
+        code = self.commit("daemons/x/src/a.rs", "1\n", "code")
+        self.put_stamp(code, "changed 2026-10-30T10:00:00 steps=3 names=check_cargo_clippy  \n\n")
+        tip = self.commit("claims/a.md", "# a\n", "claim")
+        self.assertEqual(self.inherit(tip), "changed 2026-10-30T10:00:00 steps=3 names=check_cargo_clippy inherited-from=%s\n" % code)
+        self.assertEqual(self.messages, [])
+
+    def test_an_unlistable_range_is_logged_with_the_range_and_the_cause(self):
+        tip = self.commit("claims/a.md", "# a\n", "claim")
+        self.assertIsNone(lint_stamp_gate.inherit_stamp(self.repo, tip, self.passed, base="no_such_ref", log=self.messages.append))
+        self.assertEqual(len(self.messages), 1)
+        self.assertTrue(self.messages[0].startswith("stamp inheritance: cannot list no_such_ref..%s: " % tip), self.messages)
+        self.assertGreater(len(self.messages[0]), len("stamp inheritance: cannot list no_such_ref..%s: " % tip))
+
+    def test_an_existing_stamp_of_the_tip_is_returned_as_it_is(self):
+        tip = self.commit("claims/a.md", "# a\n", "claim")
+        self.put_stamp(tip, "full steps=9\n")
+        self.assertEqual(self.inherit(tip), "full steps=9\n")
+
+    def test_the_refusal_log_counts_the_other_files_and_shows_at_most_five(self):
+        code = self.commit("daemons/x/src/a.rs", "1\n", "code")
+        self.put_stamp(code)
+        for name in "abcdef":
+            self.commit("src/%s.py" % name, "1\n", name)
+        tip = self.git("rev-parse", "HEAD")
+        self.assertIsNone(self.inherit(tip))
+        self.assertEqual(
+            self.messages,
+            ["stamp inheritance: 6 changed since the stamped commit %s, not only records: src/a.py, src/b.py, src/c.py, src/d.py, src/e.py" % code[:9]],
+        )
+
+    def test_an_invalid_history_logs_the_tip_and_at_most_three_problems(self):
+        code = self.commit("daemons/x/src/a.rs", "1\n", "code")
+        self.put_stamp(code)
+        tip = self.commit("claims/a.md", "# a\n", "claim")
+        original = lint_stamp_gate._history_problems
+        lint_stamp_gate._history_problems = lambda repo, t: ["p1", "p2", "p3", "p4"]
+        self.addCleanup(setattr, lint_stamp_gate, "_history_problems", original)
+        self.assertIsNone(self.inherit(tip))
+        self.assertEqual(self.messages, ["stamp inheritance: the night-shift history of %s is not valid: p1; p2; p3" % tip[:9]])
+
+    def test_no_stamped_commit_in_range_is_logged_with_base_and_tip(self):
+        self.commit("claims/a.md", "# a\n", "claim")
+        tip = self.git("rev-parse", "HEAD")
+        self.assertIsNone(self.inherit(tip))
+        self.assertEqual(self.messages, ["stamp inheritance: no stamped commit between origin_main and %s" % tip[:9]])
+
+    def _chain(self, records):
+        code = self.commit("daemons/x/src/a.rs", "1\n", "code")
+        self.put_stamp(code)
+        for index in range(records):
+            tip = self.commit("claims/r%d.md" % index, "# r\n", "r%d" % index)
+        return code, tip
+
+    def test_the_stamped_commit_may_be_the_oldest_of_the_sixty_one_listed_and_no_older(self):
+        limit = lint_stamp_gate.INHERIT_MAX_COMMITS
+        self.assertEqual(limit, 60)
+        code, tip = self._chain(limit)
+        self.assertIn("inherited-from=" + code, self.inherit(tip))
+        self.git("checkout", "-q", "-B", "work2", "origin_main")
+        code, tip = self._chain(limit + 1)
+        self.assertIsNone(self.inherit(tip), "sixty-two commits listed is one more than the walk reads")
+
+
+class MainExactnessTests(InheritFixture):
+    GATE = os.path.join(HERE, "lint_stamp_gate.py")
+
+    def run_gate(self, *args, stdin=None):
+        return subprocess.run([sys.executable, self.GATE, *args], cwd=self.repo, input=stdin, capture_output=True, text=True)
+
+    def test_the_inherit_option_checks_its_argument_count(self):
+        for args in (("--inherit",), ("--inherit", "tip"), ("--inherit", "tip", "dir", "base", "extra")):
+            done = self.run_gate(*args)
+            self.assertEqual(done.returncode, 2, args)
+            self.assertEqual(done.stderr, "usage: lint_stamp_gate.py --inherit TIP PASSED_DIR [BASE]\n", args)
+
+    def test_the_inherit_option_defaults_the_base_to_origin_main_and_fails_with_one(self):
+        tip = self.commit("claims/a.md", "# a\n", "claim")
+        done = self.run_gate("--inherit", tip, self.passed)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("cannot list origin/main..%s" % tip, done.stderr)
+        self.assertEqual(done.stdout, "")
+
+    def test_the_inherit_option_prints_the_stamp_line_without_the_newline_doubling(self):
+        code = self.commit("daemons/x/src/a.rs", "1\n", "code")
+        self.put_stamp(code)
+        tip = self.commit("claims/a.md", "# a\n", "claim")
+        done = self.run_gate("--inherit", tip, self.passed, "origin_main")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.count("\n"), 1)
+        self.assertTrue(done.stdout.endswith("inherited-from=%s\n" % code))
+
+    def test_the_stamp_form_needs_exactly_one_argument(self):
+        for args in ((), ("a", "b")):
+            done = self.run_gate(*args, stdin="")
+            self.assertEqual(done.returncode, 2, args)
+            self.assertEqual(done.stderr, "usage: lint_stamp_gate.py STAMP_FILE < changed_paths\n", args)
+
+    def test_the_stamp_form_prints_the_stamp_then_the_known_red_note_then_the_inherited_note(self):
+        path = os.path.join(self.repo, "stamp")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("changed 2026-10-30T10:00:00 steps=3 names=flake8 known_red=k1 inherited-from=" + "a" * 40 + "\n")
+        done = self.run_gate(path, stdin="tools/x.py\n")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        lines = done.stdout.splitlines()
+        self.assertEqual(len(lines), 3, lines)
+        self.assertTrue(lines[0].startswith("changed ") and lines[0].endswith("a" * 40))
+        self.assertIn("known red on main", lines[1])
+        self.assertIn("inherited from " + "a" * 12, lines[2])
+
+    def test_a_refusal_prints_the_reason_with_a_full_stop_and_exits_one(self):
+        path = os.path.join(self.repo, "stamp")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("changed steps=0\n")
+        done = self.run_gate(path, stdin="tools/x.py\n")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(done.stdout, "REFUSING MERGE: the stamp selected zero steps for a branch that changed code.\n")
+
+
 if __name__ == "__main__":
     unittest.main()
 
