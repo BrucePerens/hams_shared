@@ -3632,6 +3632,44 @@ def measure_cpu_busy_percent(sleep_func=time.sleep, window=CI_LOAD_GATE_SAMPLE_S
     return 100.0 * (second[0] - first[0]) / (second[1] - first[1])
 
 
+# [@ANCHOR: test:legacy_load_gate_ratio]
+def legacy_load_gate_ratio(environ, ratio, say=print):
+    """The load-average ratio the gate may apply, or None. `HAMS_CI_LOAD_GATE_RATIO` alone is IGNORED: it switches the gate to the
+    legacy rule (one-minute load average above cores x ratio) that Bruce rejected, since a load average in the thirties is normal on
+    the dev box, and it overrides the CPU and pressure rule. The old shortcut `sudo -u odoo env HAMS_ISOLATED_NS=1
+    HAMS_CI_LOAD_GATE_RATIO=3 ...` made runs stall that way. It applies only when `HAMS_CI_LOAD_GATE_LEGACY=1` is also set. `ratio` is
+    the parsed value; `say` prints the warning (loud, when the variable is set without the second one). Returns `ratio` or None."""
+    if not environ.get("HAMS_CI_LOAD_GATE_RATIO"):
+        return None
+    if environ.get("HAMS_CI_LOAD_GATE_LEGACY") == "1":
+        return ratio
+    say(
+        "[!] WARNING: HAMS_CI_LOAD_GATE_RATIO is set and is being IGNORED. It would switch the load gate to the legacy "
+        "load-average rule (load average above cores x ratio) that Bruce rejected: a load average in the thirties is normal here, so "
+        "runs stall for no reason. The gate uses the CPU-busy and CPU-pressure rule. Unset it (an old `sudo -u odoo env "
+        "HAMS_ISOLATED_NS=1 HAMS_CI_LOAD_GATE_RATIO=3 ...` command line carried it); to really want the legacy rule set "
+        "HAMS_CI_LOAD_GATE_LEGACY=1 as well."
+    )
+    return None
+
+
+# [@ANCHOR: test:warn_isolated_ns_with_slots]
+def warn_isolated_ns_with_slots(environ, slots, say=print):
+    """Warns, loudly, when `HAMS_ISOLATED_NS=1` is set on a fresh invocation (not the re-exec'd final phase, `HAMS_TEST_LOCK_HELD=1`)
+    of a machine with more than one slot: the run is pinned to the host namespace, shares the host's network, and above slot 1
+    cannot run modules that mention RabbitMQ while a host RabbitMQ listens (ADR 0116). The normal form, `python3
+    hams_shared/tools/test.py --wait -u <modules>` without it, gives every run a private network namespace. Returns True when it
+    warned."""
+    if environ.get("HAMS_ISOLATED_NS") != "1" or environ.get("HAMS_TEST_LOCK_HELD") == "1" or slots <= 1:
+        return False
+    say(
+        "[!] WARNING: HAMS_ISOLATED_NS=1 with %d test slots: this pins the run to the host's network namespace (single slot "
+        "behaviour; RabbitMQ modules are refused above slot 1). Leave it out: `python3 hams_shared/tools/test.py --wait -u <modules>` "
+        "runs in a private namespace in any slot." % slots
+    )
+    return True
+
+
 def _ci_load_gate_settings():
     """Read the gate's three environment overrides, ignoring unparseable values.
 
@@ -3721,8 +3759,8 @@ def wait_for_ci_load_to_subside(sleep_func=None, now_func=None):
 
     busy_limit = _env_percent("HAMS_CI_LOAD_GATE_CPU_BUSY_PERCENT", CI_LOAD_GATE_DEFAULT_CPU_BUSY_PERCENT)
     psi_limit = _env_percent("HAMS_CI_LOAD_GATE_PSI_PERCENT", CI_LOAD_GATE_DEFAULT_PSI_PERCENT)
-    # HAMS_CI_LOAD_GATE_RATIO keeps working: when it is set, the old rule (load average above cores x ratio) applies too.
-    explicit_ratio = ratio if os.environ.get("HAMS_CI_LOAD_GATE_RATIO") else None
+    # HAMS_CI_LOAD_GATE_RATIO alone is ignored with a warning (legacy_load_gate_ratio); with HAMS_CI_LOAD_GATE_LEGACY=1 the old rule applies too.
+    explicit_ratio = legacy_load_gate_ratio(os.environ, ratio)
 
     def measure():
         try:
@@ -4409,6 +4447,7 @@ def main():
         sys.exit(bisect_modules.run(
             early_args, os.path.abspath(__file__), tag_spec_modules(early_args.test_tags), slots=slots
         ))
+    warn_isolated_ns_with_slots(os.environ, slots)
     if queue_opts["status"]:
         # Read-only: never opens, probes or takes the lock itself.
         print("\n".join(lock_queue.describe_queue(

@@ -309,7 +309,7 @@ in a fixed order, and ends with a per-step timing table.
   `HAMS_LINT_LOCK_TIMEOUT` (exit 75), `--lock-status` (holder and queue), `--no-lock` /
   `HAMS_LINT_NO_LOCK=1` (CI; no lock, no gate), `--load-limit N` / `HAMS_LINT_LOAD_LIMIT`,
   `--load-timeout S` / `HAMS_LINT_LOAD_TIMEOUT`; the gate uses the same `HAMS_SKIP_CI_LOAD_GATE=1`,
-  `HAMS_CI_LOAD_GATE_RATIO` and `HAMS_CI_LOAD_GATE_TIMEOUT` as `test.py`'s CI load gate. Do not start a
+  `HAMS_CI_LOAD_GATE_TIMEOUT` as `test.py`'s CI load gate (`HAMS_CI_LOAD_GATE_RATIO` is ignored by `test.py` with a warning unless `HAMS_CI_LOAD_GATE_LEGACY=1`; do not copy it from old command lines). Do not start a
   second heavy run by other means (no `nohup` loops around `pgrep`): queue, and spend the wait on something
   else. `docs/LINT_STEP_ANALYSIS.md` lists what each step costs and overlaps.
   **The dev box is the primary lint runner** (Bruce, 2026-11-08: 32 cores and 125 GB are not limited by the smaller machines). Every

@@ -1288,8 +1288,9 @@ What this changes for a session queueing a run:
   That is a different failure from the lock's "Another instance of test.py is already running", and
   it is not a reason to retry in a tight loop -- it means the box is genuinely loaded.
 - **Three environment overrides**: `HAMS_SKIP_CI_LOAD_GATE=1` bypasses it entirely,
-  `HAMS_CI_LOAD_GATE_TIMEOUT=<seconds>` changes the wait, and `HAMS_CI_LOAD_GATE_RATIO=<float>`
-  scales the load threshold (default 1.0, i.e. the processor count). Unlike the Init Imports Linter
+  `HAMS_CI_LOAD_GATE_TIMEOUT=<seconds>` changes the wait. (`HAMS_CI_LOAD_GATE_RATIO` is ignored with a
+  warning: it switched the gate to the load-average rule that was rejected; it applies only with
+  `HAMS_CI_LOAD_GATE_LEGACY=1`.) Unlike the Init Imports Linter
   below, this one deliberately HAS an escape hatch, for exactly the reason that section gives.
 - **The gate runs strictly before the systemwide lock is taken**, and that ordering is load-bearing
   rather than incidental: waiting out somebody else's build matrix while holding the box-wide lock
