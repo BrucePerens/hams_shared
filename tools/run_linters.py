@@ -403,6 +403,20 @@ def _parse_args(argv):
         "caches) against this machine's budget, prune them to the budget, or delete them; then exit",
     )
     parser.add_argument(
+        "--baseline-refresh",
+        action="store_true",
+        help="the canary: lint a clean origin/main and record the failing steps and tests as the known-red baseline "
+        "(~/.cache/hams-lint/baseline; ADR 0117), then exit. Skipped when the baseline already belongs to origin/main "
+        "(--baseline-force repeats it)",
+    )
+    parser.add_argument("--baseline-force", action="store_true", help="with --baseline-refresh: run even when current")
+    parser.add_argument("--baseline-show", action="store_true", help="print the recorded known-red baseline, then exit")
+    parser.add_argument(
+        "--no-baseline",
+        action="store_true",
+        help="do not tolerate failures that are known red on main: every failure blocks ($HAMS_LINT_BASELINE=off)",
+    )
+    parser.add_argument(
         "--lock-status", action="store_true", help="print who holds the lint run lock and who is queued, then exit"
     )
     parser.add_argument(
@@ -422,6 +436,8 @@ def _parse_args(argv):
         help="how long the load gate waits before failing (default 900; $HAMS_LINT_LOAD_TIMEOUT)",
     )
     options = parser.parse_args(argv)
+    if options.no_baseline:
+        os.environ["HAMS_LINT_BASELINE"] = "off"
     if options.no_lock:
         os.environ["HAMS_LINT_NO_LOCK"] = "1"
     if options.lock_timeout is None and os.environ.get("HAMS_LINT_LOCK_TIMEOUT"):
@@ -464,16 +480,16 @@ def stamp_repos(repo_root, tools_dir, dir_path, layout=None):
     return repos
 
 
-def stamp_text(mode, step_names, hosts=()):
+def stamp_text(mode, step_names, hosts=(), known_red=""):
     """One line: mode, time, how many steps were selected and their names (the part of a name
     before `[`). prmerge.sh reads it to refuse a stamp that selected nothing for a code change."""
     bases = sorted({name.split("[")[0].split(" ")[0] for name in step_names})
     stamp_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     host_field = f" hosts={','.join(sorted(set(hosts)))}" if hosts else ""
-    return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}\n"
+    return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}{known_red}\n"
 
 
-def write_batch_stamp(tip, step_names, batch_id, with_tips=()):
+def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
     """Pass stamp for one branch tip that passed in a coalesced batch (lint_batch.py): the same file and line
     format `_write_pass_stamps` writes, plus ` batch=N` and, when other branches were in the run, ` with=a,b` (their
     first 12 hex digits: what this tip was checked with). Nothing is written when no step names are known (the
@@ -484,12 +500,13 @@ def write_batch_stamp(tip, step_names, batch_id, with_tips=()):
     try:
         os.makedirs(pass_stamp_dir(), exist_ok=True)
         with open(os.path.join(pass_stamp_dir(), tip), "w", encoding="utf-8") as handle:
-            handle.write(stamp_text("changed", step_names).rstrip("\n") + f" batch={batch_id}{batch_queue.with_field(with_tips)}\n")
+            handle.write(stamp_text("changed", step_names, known_red=known_red).rstrip("\n")
+                         + f" batch={batch_id}{batch_queue.with_field(with_tips)}\n")
     except OSError as error:
         print(f"(pass stamp not written: {error})", file=sys.stderr)
 
 
-def _write_pass_stamps(repos, mode, step_names=(), hosts=()):
+def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red=""):
     """Record "run_linters.py passed (mode) with a clean tree at commit <sha>" for each repo
     involved. devbox_tools/prmerge.sh refuses to merge a branch whose tip has no stamp, so a
     PR cannot land without the full or `--changed` run having passed on exactly that code.
@@ -503,7 +520,7 @@ def _write_pass_stamps(repos, mode, step_names=(), hosts=()):
         try:
             os.makedirs(pass_stamp_dir(), exist_ok=True)
             with open(os.path.join(pass_stamp_dir(), head[0]), "w", encoding="utf-8") as handle:
-                handle.write(stamp_text(mode, step_names, hosts))
+                handle.write(stamp_text(mode, step_names, hosts, known_red))
         except OSError as error:
             print(f"(pass stamp not written: {error})", file=sys.stderr)
 
@@ -1018,6 +1035,27 @@ def invocation_root(script_path):
     return given
 
 
+# [@ANCHOR: run_linters:baseline_command]
+def baseline_command(options, dir_path, repo_root):
+    """`--baseline-refresh` / `--baseline-show`: record or print the known-red baseline of the repository `dir_path` belongs to
+    (hams_com, hams_open, or a worktree of hams_shared, key `hams_shared`). Returns an exit code: `lint_baseline.refresh`'s,
+    0 for show, 2 when started from the main hams_shared checkout (run it from a worktree of hams_shared, whose combined
+    tree is built from origin/main). No lint lock is taken here: the canary's own run takes it like any run."""
+    import lint_baseline
+    if shared_worktree_root(dir_path, repo_root):
+        repo, key, tree_name = dir_path, "hams_shared", lint_batch.SHARED_TREE_NAME
+    elif os.path.realpath(dir_path) == real_shared_root(__file__):
+        print("--baseline-refresh from the main hams_shared checkout is not supported: run it in a worktree of hams_shared")
+        return 2
+    else:
+        key = os.path.basename(_resolve_main_checkout_root(repo_root).rstrip(os.sep))
+        repo, tree_name = dir_path, key
+    if options.baseline_show:
+        print("\n".join(lint_baseline.show_lines(key)))
+        return 0
+    return lint_baseline.refresh(repo, key, tree_name, force=options.baseline_force, remote=options.remote or "auto")
+
+
 def run_bundle(argv):
     """Remote side of `--remote`: run the steps in a bundle written by lint_remote.dispatch, with this
     machine's paths, under this machine's own run lock and load gate; write a results file."""
@@ -1095,7 +1133,7 @@ def main():
     # claims, burn list) used to judge the OLD hams_shared and never the branch (2026-11-07, #411 and #412).
     layout = None
     if shared_worktree_root(dir_path, repo_root) and not any(
-        flag in sys.argv for flag in ("--lint-caches", "--lock-status")
+        flag in sys.argv for flag in ("--lint-caches", "--lock-status", "--baseline-refresh", "--baseline-show")
     ):
         import atexit
 
@@ -1194,6 +1232,8 @@ def main():
     if options.lock_status:
         print("\n".join(lint_lock.status_lines()))
         sys.exit(0)
+    if options.baseline_refresh or options.baseline_show:
+        sys.exit(baseline_command(options, dir_path, repo_root))
     wall_start = time.monotonic()
     tools_dir = os.path.join(dir_path, "tools")
     real_shared_dir = real_shared_root(__file__)
@@ -2577,21 +2617,43 @@ def main():
         remote_jobs, all_steps, execute_here, lint_exec.Result, on_unfit=lint_remote.record_unfit
     )
     results += extra_results
+    # Known-red baseline (ADR 0117): failures that were already red on main, with the same message, do not block.
+    failed_now = {r.name: r.output or "" for r in results if r.returncode != 0}
+    baseline_verdict = None
+    known_red = ""
+    if failed_now:
+        import lint_baseline  # not at the top: the remote bundle side (run_bundle) never needs it
+    if failed_now and lint_baseline.enabled():
+        baseline_verdict = lint_baseline.judge(
+            failed_now,
+            "hams_shared" if layout is not None else os.path.basename(main_checkout_root.rstrip(os.sep)),
+            dir_path if layout is not None else repo_root,
+        )
+        if baseline_verdict["passes"]:
+            known_red = lint_baseline.stamp_field(baseline_verdict["tolerated"], baseline_verdict["main"])
     if options.results_json:
         with open(options.results_json, "w", encoding="utf-8") as handle:
             document = lint_remote.results_document("local", results)
+            document["known_red"] = known_red
             # The combined run of a batch (lint_batch.py) attributes failures from these.
             document["selected"] = [step.name for step in all_steps]
             document["outputs"] = {r.name: (r.output or "")[-200000:] for r in results if r.returncode != 0}
             json.dump(document, handle)
     wall = time.monotonic() - wall_start
     linters_failed = any(r.returncode != 0 for r in results)
+    if baseline_verdict is not None and baseline_verdict["passes"]:
+        linters_failed = False
     if options.timing or options.timing_top:
         table = lint_exec.timing_table(results, skipped, wall, top=options.timing_top or None)
         if lock_waited >= 1:
             table += f"\n(the wall clock includes {lock_waited:.0f} s of waiting for the lint run lock and the load gate)"
         print("\n" + table, file=sys.stderr if options.timing_to_stderr else sys.stdout)
 
+    if baseline_verdict is not None and baseline_verdict["tolerated"]:
+        print("\n".join(lint_baseline.report_lines(baseline_verdict)))
+    elif baseline_verdict is not None and failed_now:
+        print("[*] no known-red baseline applies (none recorded for this repository, or it is switched off); "
+              "`run_linters.py --baseline-refresh` records main's own failures")
     if not linters_failed and not (options.only or options.skip or target_modules_str):
         if _git_lines(repo_root, "rev-parse", "HEAD") != head_before:
             print("(pass stamp not written: HEAD moved during the run)", file=sys.stderr)
@@ -2601,6 +2663,7 @@ def main():
                 "changed" if changed_set is not None else "full",
                 [step.name for step in all_steps],
                 remote_hosts,
+                known_red,
             )
 
     if linters_failed:

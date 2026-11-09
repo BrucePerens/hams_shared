@@ -70,6 +70,15 @@ def refusal(stamp_text, changed_paths):
     return None
 
 
+# [@ANCHOR: lint_stamp_gate:known_red_note]
+def known_red_note(stamp_text):
+    """A loud line when the stamp tolerated known-red failures (` known_red=a,b baseline=<sha>`, ADR 0117), else None."""
+    for field in stamp_text.split():
+        if field.startswith("known_red="):
+            return "NOTE: this pass tolerated failures that are known red on main (not caused by the branch): " + field[len("known_red="):]
+    return None
+
+
 def main(argv):
     if len(argv) != 2:
         print("usage: lint_stamp_gate.py STAMP_FILE < changed_paths", file=sys.stderr)
@@ -82,6 +91,9 @@ def main(argv):
         print(f"REFUSING MERGE: {reason}.")
         return 1
     print(stamp_text.strip())
+    note = known_red_note(stamp_text)
+    if note:
+        print(note)
     return 0
 
 

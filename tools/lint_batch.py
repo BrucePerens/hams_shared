@@ -214,6 +214,18 @@ def read_results(path):
     return [n for n in selected if n], failed
 
 
+# [@ANCHOR: lint_batch:read_known_red]
+def read_known_red(path):
+    """The `known_red` stamp field (` known_red=... baseline=...`, see `lint_baseline.stamp_field`) the combined run wrote into
+    its `--results-json` file: the known-red failures it tolerated. "" when there are none or the file is unreadable."""
+    import json
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return str(json.load(handle).get("known_red") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
 # [@ANCHOR: lint_batch:LintBatch]
 class LintBatch:
     """The leader's side: everything needed to run one batch of branches of one repository.
@@ -245,6 +257,7 @@ class LintBatch:
         self.environ = dict(os.environ if environ is None else environ)
         self.fetch = fetch
         self.last_selected = []
+        self.last_known_red = ""
         self.current_members = []
         self._run_no = 0
         self._log = None
@@ -294,6 +307,7 @@ class LintBatch:
                     proc.wait()
             selected, failed = self.collect(dest, results, "".join(captured), proc.returncode)
             self.last_selected = selected or self.last_selected
+            self.last_known_red = read_known_red(results) if proc.returncode == 0 else ""
             code = proc.returncode
             if code == lock_queue.EXIT_WAIT_TIMEOUT:
                 return {"exit_code": code, "fatal": True, "failures": {}, "conflicted": built["conflicted"],
@@ -359,7 +373,9 @@ class LintBatch:
             verdict["log"] = log_path
             verdict["batch"] = batch_id
             if verdict.get("status") == batch_queue.PASSED:
-                self.stamp_writer(member["tip"], self.last_selected, batch_id, verdict.get("with") or [])
+                # The combined run's own record of the known-red failures it tolerated (ADR 0117) goes into the stamp.
+                extra = {"known_red": self.last_known_red} if self.last_known_red else {}
+                self.stamp_writer(member["tip"], self.last_selected, batch_id, verdict.get("with") or [], **extra)
         return {"verdicts": verdicts, "log": log_path}
 
 

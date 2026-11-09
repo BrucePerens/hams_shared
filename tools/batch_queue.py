@@ -647,7 +647,8 @@ def settle(members, run_once, attribute, budget=MAX_SETTLE_RUNS, log=print):
         if len(live) == 1:
             only = live[0]
             verdicts[only["tip"]] = {"status": FAILED, "exit_code": 1, "findings": [],
-                                     "detail": "failed alone with no attributable file or module (red main?): "
+                                     "detail": "failed alone with no attributable file or module and not known red on main "
+                                               "(`run_linters.py --baseline-show`; `--baseline-refresh` records main's failures): "
                                                + ", ".join(unattributed or result.get("failures", {}))}
             return verdicts
         half = len(live) // 2
