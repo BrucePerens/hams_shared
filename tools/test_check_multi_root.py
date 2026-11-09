@@ -55,6 +55,8 @@ class MultiRootTests(unittest.TestCase):
             "check_window_fetch_reassignment.py",
         ):
             self.write(self.first, "mod/ok.py", "VALUE = 1\n")
+            # check_async_lock_scope reads Rust only: a scan of no Rust file is refused, so the clean tree holds one.
+            self.write(self.first, "mod/ok.rs", "fn main() {}\n")
             self.assertEqual(_run(script, self.first, self.second).returncode, 0, script)
             self.assertEqual(_run(script, self.first).returncode, 0, script)
 
