@@ -159,6 +159,21 @@ def odoo_failure_count(text):
     return sum(int(failed) + int(errors) for failed, errors in found) if found else None
 
 
+# What a nested test.py prints at exit 0 when no test ran (it normally exits non-zero then; this is the second line of defence).
+VACUOUS_PASS_RE = re.compile(r"TEST RUN FAILED: no tests ran|printed no odoo\.tests\.result line")
+
+
+# [@ANCHOR: odoo_test_batch:vacuous_reason]
+def vacuous_reason(union, output):
+    """Why an exit status 0 of the nested test.py proves nothing, or None: no module was tested (an empty `-u` list), or its output says no test ran
+    (`TEST RUN FAILED: no tests ran`, `printed no odoo.tests.result line`). Pure."""
+    if not union:
+        return "test.py exited 0 but no module was selected for testing: nothing was tested"
+    if VACUOUS_PASS_RE.search(str(output)):
+        return "test.py exited 0 but its output says no test ran (no odoo.tests.result verdict)"
+    return None
+
+
 # [@ANCHOR: odoo_test_batch:module_finder]
 def module_finder(modules):
     """`find_tokens(line)` for `blame_by_tokens`: the entries of `modules` named as whole words in a line."""
@@ -394,6 +409,11 @@ class OdooTestBatch(lint_batch.LintBatch):
         return [sys.executable, os.path.join(tree, "tools", "test.py"), "-u", ",".join(union), "--solo", "--wait",
                 "-l", os.path.join(os.path.dirname(results), "logs"), *self.passthrough]
 
+    def verdict_code(self, code, selected, output):
+        if code == 0 and vacuous_reason(selected, output):
+            return 1
+        return code
+
     # [@ANCHOR: odoo_test_batch:OdooTestBatch_collect]
     def collect(self, tree, results, output, code):
         union = sorted({m for member in self.current_members for m in member.get("scope", ())})
@@ -411,7 +431,8 @@ class OdooTestBatch(lint_batch.LintBatch):
         if text and self._log:
             self._emit("\n===== filtered_test.txt =====\n" + text[-100000:] + "\n")
         if code == 0:
-            return union, {}
+            reason = vacuous_reason(union, output)
+            return union, ({"test.py": "%s\n%s" % (reason, output[-5000:])} if reason else {})
         failures = {}
         # The modules of every named failing test count too: the extractor implicates only a module whose failure printed a traceback, so a module
         # whose failing test printed none would otherwise pass its branch.
@@ -562,6 +583,11 @@ class RemoteTestBatch(OdooTestBatch):
         for thread in threads:
             thread.join()
         failures, exit_code, conflicted_tips, errors, environmental = {}, 0, set(), [], set()
+        if not results:
+            # No host was given anything to test (no module in the union): an empty set of passing hosts is not a pass.
+            shutil.rmtree(work, ignore_errors=True)
+            return {"exit_code": 75, "fatal": True, "failures": {}, "conflicted": [],
+                    "detail": "no host was given a module to test: nothing was tested"}
         for machine in sorted(results):
             mods, log_path, outcome = results[machine]
             text = outcome.get("filtered") or ""

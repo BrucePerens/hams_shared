@@ -5747,6 +5747,11 @@ def main():
     args = parser.parse_args()
     target_dir = os.path.abspath(args.directory)
     total_errors, total_warnings, scanned_files = 0, 0, 0
+    # A directory that does not exist walks nothing and used to print "Checked 0 files ... Passed" with exit 0: a mistyped or renamed
+    # module looked clean. tools/test.py names a single test class as `module:TestClass`, which is deliberately not a directory.
+    if not os.path.isdir(target_dir) and ":" not in os.path.basename(target_dir):
+        print(f"[!] ERROR: {args.directory!r} is not a directory (resolved to {target_dir}); nothing was scanned, so this is not a pass.")
+        sys.exit(2)
 
     ignore_patterns = []
     ignore_path = (
