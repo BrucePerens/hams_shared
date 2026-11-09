@@ -109,8 +109,7 @@ class CheckWindowFetchReassignmentTests(unittest.TestCase):
         self.assertEqual(chk.check_window_fetch_reassignment(self.tmp), [])
 
     def test_a_stale_claude_worktree_checkout_is_never_walked(self):
-        # Found live wiring this check into run_linters.py: frozen,
-        # historical .claude/worktrees/<hash>/ copies of already-fixed
+        # Frozen, historical .claude/worktrees/<hash>/ copies of already-fixed
         # test.js files still had the old, broken pattern, which used to
         # get flagged even though the real source was clean.
         _write(

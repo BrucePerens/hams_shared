@@ -235,8 +235,8 @@ class FindPythonFilesTests(unittest.TestCase):
 
     def test_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
         """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
-        ".venv") -- real bug found live 2026-09-28/29: a stray, untracked
-        daemons/hams_local_relay/test_run/whisper_venv/ left over from an earlier session's own
+        ".venv") -- for example a stray, untracked
+        daemons/hams_local_relay/test_run/whisper_venv/ left over from earlier
         testing produced 15+ findings, every one inside vendored third-party packages (numpy,
         pip, torch, urllib3, tqdm), none of it this project's own code. "site-packages" matches
         any virtualenv by its structurally-guaranteed subdirectory, regardless of the venv's own

@@ -124,13 +124,11 @@ class FindSelfWriteableOverridesTests(unittest.TestCase):
         self.assertEqual(list(chk._find_self_writeable_overrides([self.tmp])), [])
 
     def test_a_claude_worktree_directory_is_never_walked(self):
-        """Real, live bug found reviewing this checker: the dirs-pruning tuple had no generic
-        dot-directory exclusion (unlike several sibling checkers in this tree). This project's
-        own standing convention runs concurrent bug-hunt dispatches in isolated git worktrees
-        under .claude/worktrees/<session>/ INSIDE the repo root -- confirmed live: two other
-        real, concurrently active sessions' own worktrees were found sitting in the real repo
-        root during this exact review. A concurrent session's own in-progress override (even a
-        genuinely hollow one, mid-refactor) would have been reported as a real MASTER_10
+        """The dirs-pruning tuple needs a generic dot-directory exclusion (as several sibling
+        checkers in this tree have). Agent sessions run in isolated git worktrees under
+        .claude/worktrees/<session>/ INSIDE the repo root, so other sessions' worktrees sit in
+        the real repo root. A concurrent session's own in-progress override (even a
+        genuinely hollow one, mid-refactor) would be reported as a real MASTER_10
         violation against the wrong repo entirely."""
         _write(
             os.path.join(
