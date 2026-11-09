@@ -541,7 +541,7 @@ class CheckerVersionTest(unittest.TestCase):
         for checkout in ("worktree_a", "worktree_b_a_different_path"):
             tools = os.path.join(self._tmp.name, checkout, "tools")
             os.makedirs(tools)
-            for name in ("check_float_isfinite.py", "lint_cache.py", "tree_files.py"):
+            for name in ("check_float_isfinite.py", "check_target.py", "lint_cache.py", "tree_files.py"):
                 shutil.copy(os.path.join(here, name), tools)
             run = subprocess.run([sys.executable, os.path.join(tools, "check_float_isfinite.py"), repo],
                                  env=env, capture_output=True, text=True, timeout=120)
