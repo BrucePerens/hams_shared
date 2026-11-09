@@ -35,6 +35,7 @@ import io
 import os
 import lint_exec
 import sys
+from tree_files import tree_walk
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "tools", "radae"}
 
@@ -73,8 +74,7 @@ def _find_access_csvs(roots):
                 continue
             if not os.path.isfile(os.path.join(module_dir, "__manifest__.py")):
                 continue
-            for dirpath, dirnames, filenames in os.walk(module_dir):
-                dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+            for dirpath, _dirnames, filenames in tree_walk(module_dir, "ir.model.access.csv", SKIP_DIRS, skip_hidden=True, untracked=True):
                 for filename in filenames:
                     if filename == "ir.model.access.csv":
                         yield entry, os.path.join(dirpath, filename)

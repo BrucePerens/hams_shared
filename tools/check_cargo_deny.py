@@ -24,6 +24,7 @@ import subprocess
 import sys
 
 import lint_exec
+from tree_files import tree_walk
 
 # "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
 # site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
@@ -88,8 +89,7 @@ def _has_odoo_module(directory):
 
 def find_deny_crates(repo_root):
     found = []
-    for root, dirs, filenames in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES]
+    for root, _dirs, filenames in tree_walk(repo_root, (".toml",), IGNORE_DIR_NAMES, untracked=True):
         if "Cargo.toml" in filenames and "deny.toml" in filenames:
             found.append(root)
     return sorted(found)

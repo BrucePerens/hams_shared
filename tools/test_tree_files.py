@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 import tree_files_testkit as kit
-from tree_files import tree_files
+from tree_files import tree_files, tree_walk
 
 
 class TreeFilesTests(unittest.TestCase):
@@ -56,6 +56,53 @@ class TreeFilesTests(unittest.TestCase):
         kit.git(top, "add", ".")
         got = [os.path.relpath(p, top) for p in tree_files(top, ".py")]
         self.assertEqual(got, [os.path.join("dep", "lib", "in_sub.py"), "mine.py"])
+
+    def test_untracked_option_adds_new_files_but_not_ignored_files_or_nested_checkouts(self):
+        kit.checkout_with_nested_worktree(self.tmp, "a/mine.py", "x = 1\n")
+        kit.write(self.tmp, "scratch/new.py", "x = 1\n")
+        kit.write(self.tmp, "build/ignored.py", "x = 1\n")
+        kit.write(self.tmp, ".gitignore", "build/\n")
+        kit.git(self.tmp, "clone", "-q", ".", "clone_inside")
+        got = self.rels(tree_files(self.tmp, ".py", untracked=True))
+        self.assertEqual(got, [os.path.join("a", "mine.py"), os.path.join("scratch", "new.py")])
+
+    def test_untracked_option_reaches_new_files_inside_a_submodule(self):
+        sub = os.path.join(self.tmp, "sub")
+        os.makedirs(sub)
+        kit.git(sub, "init", "-q")
+        kit.write(sub, "lib/in_sub.py", "x = 1\n")
+        kit.git(sub, "add", ".")
+        kit.git(sub, "commit", "-q", "-m", "x")
+        top = os.path.join(self.tmp, "top")
+        os.makedirs(top)
+        kit.git(top, "init", "-q")
+        kit.git(top, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "dep")
+        kit.write(top, "dep/lib/new_in_sub.py", "x = 1\n")
+        got = [os.path.relpath(p, top) for p in tree_files(top, ".py", untracked=True)]
+        self.assertEqual(got, [os.path.join("dep", "lib", "in_sub.py"), os.path.join("dep", "lib", "new_in_sub.py")])
+
+    def test_a_nested_checkout_is_not_returned_even_when_every_name_matches(self):
+        kit.checkout_with_nested_worktree(self.tmp, "a/mine.py", "x = 1\n")
+        kit.git(self.tmp, "clone", "-q", ".", "clone_inside")
+        got = self.rels(tree_files(self.tmp, "", untracked=True))
+        self.assertEqual(got, [os.path.join("a", "mine.py")])
+
+    def test_a_tracked_file_deleted_on_disk_is_not_returned(self):
+        kit.checkout_with_nested_worktree(self.tmp, "a/mine.py", "x = 1\n")
+        os.remove(os.path.join(self.tmp, "a", "mine.py"))
+        self.assertEqual(tree_files(self.tmp, ".py"), [])
+
+    def test_tree_walk_gives_os_walk_triples_for_the_selected_files_only(self):
+        kit.checkout_with_nested_worktree(self.tmp, "a/mine.py", "x = 1\n")
+        kit.write(self.tmp, "a/b/deep.py", "x = 1\n")
+        kit.write(self.tmp, "a/notes.txt", "x\n")
+        kit.git(self.tmp, "add", ".")
+        got = [(os.path.relpath(d, self.tmp), dirs, files) for d, dirs, files in tree_walk(self.tmp, ".py")]
+        self.assertEqual(got, [(".", ["a"], []), ("a", ["b"], ["mine.py"]), (os.path.join("a", "b"), [], ["deep.py"])])
+
+    def test_tree_walk_of_a_tree_without_matches_yields_nothing(self):
+        kit.write(self.tmp, "a/notes.txt", "x\n")
+        self.assertEqual(list(tree_walk(self.tmp, ".py")), [])
 
     def test_outside_git_a_directory_with_its_own_dot_git_is_not_entered(self):
         kit.write(self.tmp, "a/mine.py", "x = 1\n")

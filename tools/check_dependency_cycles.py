@@ -44,6 +44,7 @@ import ast
 import os
 import lint_exec
 import sys
+from tree_files import tree_walk
 
 
 def _resolve_repo_root(given_path):
@@ -81,15 +82,8 @@ def _build_graph(roots):
     graph = {}
     depends_cycle = {}
     for repo_root in roots:
-        for root, dirs, files in os.walk(repo_root):
-            if "radae" in dirs:
-                dirs.remove("radae")
-            dirs[:] = [
-                d
-                for d in dirs
-                if d not in ("node_modules", "__pycache__", ".git", "daemons", "tools")
-                and not d.startswith(".")
-            ]
+        skip = ("radae", "node_modules", "__pycache__", ".git", "daemons", "tools")
+        for root, _dirs, files in tree_walk(repo_root, "__manifest__.py", skip, skip_hidden=True, untracked=True):
             if "__manifest__.py" not in files:
                 continue
             mod = os.path.basename(root)

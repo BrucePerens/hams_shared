@@ -4,6 +4,7 @@
 import ast
 import os
 import sys
+from tree_files import tree_walk
 
 
 def _own_scope_nodes(node):
@@ -145,8 +146,7 @@ def main():
 
     all_errors = []
     for directory in search_dirs:
-        for root, dirs, files in os.walk(directory):
-            dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES]
+        for root, _dirs, files in tree_walk(directory, ".py", IGNORE_DIR_NAMES, untracked=True):
             for file in files:
                 if file.endswith(".py") and "models" in root:
                     filepath = os.path.join(root, file)

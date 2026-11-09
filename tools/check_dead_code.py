@@ -66,6 +66,7 @@ import os
 import lint_exec
 import re
 import sys
+from tree_files import tree_files
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "radae", "external"}
 EXCLUDE_TOP_LEVEL = {"archive", "scratch"}
@@ -114,11 +115,7 @@ def _iter_module_dirs(repo_root):
 
 
 def _iter_all_files(repo_root, extensions):
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
-        for filename in files:
-            if filename.endswith(extensions):
-                yield os.path.join(root, filename)
+    yield from tree_files(repo_root, extensions, SKIP_DIRS, skip_hidden=True, untracked=True)
 
 
 TEMPLATE_ID_RE = re.compile(r'<template\s+[^>]*\bid="([^"]+)"')
@@ -183,12 +180,11 @@ def _find_js_files(module_dir, module):
     js_dir = os.path.join(module_dir, "static", "src", "js")
     if not os.path.isdir(js_dir):
         return declarations
-    for root, dirs, files in os.walk(js_dir):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        for filename in files:
-            if not filename.endswith(".js") or filename.endswith(".test.js"):
-                continue
-            declarations.append((module, filename, os.path.join(root, filename), 1))
+    for path in tree_files(js_dir, ".js", SKIP_DIRS, untracked=True):
+        filename = os.path.basename(path)
+        if filename.endswith(".test.js"):
+            continue
+        declarations.append((module, filename, path, 1))
     return declarations
 
 

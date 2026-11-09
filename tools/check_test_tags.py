@@ -14,6 +14,7 @@ import ast
 import os
 import sys
 from pathlib import Path
+from tree_files import tree_walk
 
 
 def check_test_file(filepath):
@@ -102,8 +103,7 @@ def main():
         ".claude",
     }
 
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in ignore_dirs]
+    for root, _dirs, files in tree_walk(repo_root, ".py", ignore_dirs, untracked=True):
         # Only process files inside a 'tests' directory
         if "tests" not in Path(root).parts:
             continue
