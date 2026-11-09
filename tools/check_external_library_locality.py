@@ -27,6 +27,7 @@ not flagged; they're not "a library".
 """
 
 import os
+import check_target
 import lint_exec
 import sys
 from tree_files import tree_walk
@@ -111,6 +112,9 @@ def main():
 
     violations = []
     for repo_root in _resolve_repo_roots(sys.argv[1]):
+        check_target.require_directory(repo_root, "check_external_library_locality")
+        scanned = sum(len(files) for _r, _d, files in tree_walk(repo_root, (".js", ".css"), ("radae", "__pycache__"), skip_hidden=True, untracked=True))
+        check_target.require_scanned(scanned, repo_root, "check_external_library_locality", "*.js and *.css files")
         violations.extend(find_violations(repo_root))
 
     if violations:

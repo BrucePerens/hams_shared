@@ -8,6 +8,7 @@ import multiprocessing
 import re
 import json
 import logging
+import check_target
 from tree_files import tree_walk
 
 
@@ -283,10 +284,10 @@ def main():
 
     ignore_patterns = load_ignore_file(args.ignore_file)
     js_files = []
+    seen = 0
 
     for d in args.directories:
-        if not os.path.isdir(d):
-            continue
+        check_target.require_directory(d, "check_js_syntax")
         # Hidden folders and standard library directories are left out; so is `static/lib` (vendored libraries), where
         # the `static` may be the directory given itself.
         def not_in_static_lib(rel, d=d):
@@ -298,11 +299,14 @@ def main():
         ):
             for f in files:
                 if f.endswith(".js") and ".min." not in f:
+                    seen += 1
                     full_path = os.path.join(root, f)
                     rel_path = os.path.relpath(full_path, os.path.dirname(d))
                     if not is_ignored(rel_path, ignore_patterns):
                         js_files.append(full_path)
 
+    # `seen` counts the files examined before the ignore list: a tree whose files are all ignored on purpose is a scan, an empty one is not.
+    check_target.require_scanned(seen, " ".join(args.directories), "check_js_syntax", "non-minified .js files")
     if not js_files:
         print("[+] JS Syntax Linter: No JS files found in target modules.")
         return 0

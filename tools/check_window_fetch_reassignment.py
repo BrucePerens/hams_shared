@@ -26,6 +26,7 @@ import os
 import re
 import sys
 
+import check_target
 from tree_files import tree_files
 
 _ASSIGNMENT_RE = re.compile(
@@ -90,6 +91,10 @@ if __name__ == "__main__":
     # Several repositories are scanned by ONE process (one step in run_linters.py).
     violations = []
     for repo_dir in dict.fromkeys(sys.argv[1:]):
+        repo_dir = check_target.require_directory(repo_dir, "check_window_fetch_reassignment")
+        check_target.require_scanned(
+            len(tree_files(repo_dir, ".test.js", _IGNORE_DIRS)), repo_dir, "check_window_fetch_reassignment", "*.test.js files"
+        )
         violations.extend(check_window_fetch_reassignment(repo_dir))
 
     if violations:

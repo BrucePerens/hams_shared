@@ -86,14 +86,18 @@ class FindOwlTemplateFilesTests(unittest.TestCase):
         self.assertEqual(found, [])
 
 
-def _run_checker(tmpdir):
+def _run_checker(tmpdir, allow_empty=False):
+    env = {k: v for k, v in os.environ.items() if k != "HAMS_CHECK_ALLOW_EMPTY"}
+    if allow_empty:
+        env["HAMS_CHECK_ALLOW_EMPTY"] = "1"
     result = subprocess.run(
         [sys.executable, _SCRIPT, str(tmpdir)],
         capture_output=True,
         text=True,
         timeout=30,
+        env=env,
     )
-    return result.returncode, result.stdout
+    return result.returncode, result.stdout + result.stderr
 
 
 class ChromeStartupPollTests(unittest.TestCase):
@@ -154,9 +158,15 @@ class RealCompileCheckIntegrationTests(unittest.TestCase):
         self.assertIn("some_module.Broken", stdout)
         self.assertIn("Invalid or unexpected token", stdout)
 
-    def test_a_directory_with_no_templates_succeeds_with_nothing_to_check(self):
+    def test_a_directory_with_no_templates_is_not_a_pass_when_run_by_hand(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             returncode, stdout = _run_checker(tmpdir)
+        self.assertEqual(returncode, 2, stdout)
+        self.assertIn("scanned 0", stdout)
+
+    def test_a_directory_with_no_templates_succeeds_with_the_documented_opt_out(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            returncode, stdout = _run_checker(tmpdir, allow_empty=True)
         self.assertEqual(returncode, 0, stdout)
         self.assertIn("nothing to check", stdout)
 

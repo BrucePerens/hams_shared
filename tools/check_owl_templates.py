@@ -51,6 +51,7 @@ from shutil import which
 
 import requests
 import websockets
+import check_target
 from tree_files import tree_walk
 
 _OWL_JS_PATH = (
@@ -207,6 +208,9 @@ def main():
     parser.add_argument("--port", type=int, default=None)
     args = parser.parse_args()
 
+    # Validated before the "not an Odoo box" skip below: a bad target is a bad target on any machine.
+    target_dir = check_target.require_directory(args.directory, "check_owl_templates")
+
     if not os.path.exists(_OWL_JS_PATH):
         print(f"[!] SKIPPED: Owl bundle not found at {_OWL_JS_PATH} (not an Odoo box?)")
         return 0
@@ -218,8 +222,8 @@ def main():
             probe.bind(("127.0.0.1", 0))
             args.port = probe.getsockname()[1]
 
-    target_dir = os.path.abspath(args.directory)
     xml_files = sorted(find_owl_template_files(target_dir))
+    check_target.require_scanned(len(xml_files), target_dir, "check_owl_templates", "static/src/xml/*.xml template files")
     if not xml_files:
         print("[*] No static/src/xml/*.xml template files found -- nothing to check.")
         return 0

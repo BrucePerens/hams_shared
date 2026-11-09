@@ -29,6 +29,7 @@ substitution.
 """
 
 import os
+import check_target
 import lint_exec
 import sys
 import ast
@@ -238,13 +239,15 @@ def main():
         print("Usage: check_minified_js_nested_templates.py <repo_root> [sibling_repo_root]")
         sys.exit(1)
 
-    repo_root = _resolve_repo_root(sys.argv[1])
+    repo_root = check_target.require_directory(_resolve_repo_root(sys.argv[1]), "check_minified_js_nested_templates")
     search_roots = [repo_root] + sys.argv[2:]
     computed_sibling = _find_sibling_repo(repo_root)
     if computed_sibling and computed_sibling not in search_roots:
         search_roots.append(computed_sibling)
 
     asset_to_bundles = collect_minified_js_assets(repo_root)
+    # Bundled .js assets are what this checker reads (named by the manifests under repo_root); none at all is an empty scan.
+    check_target.require_scanned(len(asset_to_bundles), repo_root, "check_minified_js_nested_templates", "bundled .js assets listed in manifests")
     if not asset_to_bundles:
         print("[+] Nested Template Literal Linter: No bundled JS assets found.")
         sys.exit(0)
@@ -281,6 +284,10 @@ def main():
                 "  See ham_events/__manifest__.py's comment on transformers.min.js for\n"
                 "  a worked example of the second approach."
             )
+
+    if not any_failed:
+        # Assets named only by modules outside this tree and the sibling root are not ours; if none resolve, nothing was checked.
+        check_target.require_scanned(checked, repo_root, "check_minified_js_nested_templates", "resolvable bundled .js assets")
 
     if any_failed:
         print("\n🛑 Halting due to nested template literals in minified JS assets.")
