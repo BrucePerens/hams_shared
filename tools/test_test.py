@@ -1837,6 +1837,68 @@ class RemoveStaleFilestoreTests(unittest.TestCase):
             )
 
 
+class RunEndHandlingTests(unittest.TestCase):
+    """A force-killed run is never turned green by the known-red policy; Chrome profiles are removed without a shell;
+    a child in the runner's own process group is never signalled by group."""
+
+    def test_a_force_killed_run_carries_the_line_that_keeps_the_policy_from_passing_it(self):
+        extractor = _test_runner.FailureExtractor.__new__(_test_runner.FailureExtractor)
+        extractor.signal_line = None
+        extractor.cpu_limit_line = None
+        extractor.mcp_mode = False
+        with patch.object(_test_runner, "RUN_CMD_MAX_HANG_RECOVERY_ATTEMPTS", 1), \
+                patch.object(_test_runner, "kill_test_chrome"), \
+                patch("time.time", side_effect=RunCmdHangRecoveryTests._fake_clock(self)), \
+                patch.object(extractor, "append_diagnostic", create=True):
+            rc = _test_runner.run_cmd(["sleep", "3600"], extractor=extractor)
+        self.assertEqual(rc, 1)
+        self.assertIn("force-killed", extractor.signal_line)
+
+    def test_the_policy_leaves_a_run_with_a_signal_line_red(self):
+        import known_red
+        observation = known_red.RunObservation()
+        observation.odoo_result_lines.append({"failed": 1, "errors": 0, "total": 5, "raw": "r"})
+        extractor = SimpleNamespace(
+            observation=observation, cpu_limit_line=None, signal_line="killed", output_path="/nonexistent/x.txt",
+            policy_outcome=None,
+        )
+        outcome = SimpleNamespace(run_green=True)
+        args = SimpleNamespace(raw_failures=False)
+        with patch.object(known_red, "git_head", return_value=""), \
+                patch.object(known_red, "load_baseline", return_value={}), \
+                patch.object(known_red, "baseline_paths", return_value=[]), \
+                patch.object(known_red, "decide", return_value=outcome), \
+                patch.object(known_red, "write_results", side_effect=OSError("no")):
+            status = _test_runner.apply_failure_policy(args, extractor, 1, None, "/x", ["m"], 1)
+        self.assertEqual(status, 1)
+
+    def test_chrome_profiles_are_removed_from_a_path_with_a_space_and_nothing_else(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "a b")
+            for name in ("1_chrome_odoo", "keep"):
+                os.makedirs(os.path.join(base, name))
+            with open(os.path.join(tmp, "a"), "w") as handle:
+                handle.write("untouched")
+            removed = _test_runner.remove_chrome_profiles((f"{base}/*_chrome_odoo",))
+            self.assertEqual(removed, 1)
+            self.assertFalse(os.path.exists(os.path.join(base, "1_chrome_odoo")))
+            self.assertTrue(os.path.isdir(os.path.join(base, "keep")))
+            self.assertTrue(os.path.exists(os.path.join(tmp, "a")))
+
+    def test_a_child_in_the_runners_own_group_is_not_signalled_by_group(self):
+        child = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        self.assertFalse(_test_runner.kill_process_group_if_private(child.pid))
+        self.assertIsNone(child.poll())
+
+    def test_a_child_with_its_own_group_is_killed_by_group(self):
+        child = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        self.addCleanup(child.kill)
+        self.assertTrue(_test_runner.kill_process_group_if_private(child.pid))
+        self.assertEqual(child.wait(timeout=10), -signal.SIGKILL)
+
+
 class CoreDaemonsToStartTests(unittest.TestCase):
     """rebuild_db() starts host daemons only outside the isolated namespace, and PowerDNS is
     never assumed to exist inside it (night_shift_todo 6d19d5cb)."""
