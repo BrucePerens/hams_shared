@@ -564,6 +564,80 @@ def _js_canonical_string(text):
 # Shared rendering for the brace languages
 # ---------------------------------------------------------------------------------------------
 
+def _rust_drop_diverging_semicolons(toks):
+    """`{ return x; }` and `{ return x }` are the same block (it never produces a value), and
+    rustfmt writes either: the `;` that ends a final `return`, `break` or `continue` statement is
+    dropped."""
+    out = list(toks)
+    drop = set()
+    for i, t in enumerate(toks):
+        if not (t.is_p(";") and i + 1 < len(toks) and toks[i + 1].is_p("}")):
+            continue
+        depth = 0
+        k = i - 1
+        while k >= 0:
+            u = toks[k]
+            if u.kind == "punct" and u.text in ")]}":
+                depth += 1
+            elif u.kind == "punct" and u.text in "([{":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0 and u.is_p(";"):
+                break
+            k -= 1
+        if k + 1 < i and toks[k + 1].kind == "ident" and toks[k + 1].text in ("return", "break", "continue"):
+            drop.add(i)
+    return [t for i, t in enumerate(out) if i not in drop] if drop else toks
+
+
+def _rust_unwrap_single_expression_blocks(toks):
+    """rustfmt adds braces around a match-arm or closure body it has to wrap, and removes them from
+    one that fits: `x => { f(a) }` is `x => f(a),` and `|t| { g(t) }` is `|t| g(t)`. A block with no
+    statement (no `;` at its own level) is the expression itself, so the braces are dropped, and an
+    arm always ends with its comma."""
+    opens = []
+    pair = {}
+    for i, t in enumerate(toks):
+        if t.kind == "punct" and t.text in "([{":
+            opens.append(i)
+        elif t.kind == "punct" and t.text in ")]}" and opens:
+            pair[opens.pop()] = i
+    remove = set()
+    add_comma = set()
+    for i, j in pair.items():
+        t = toks[i]
+        if not t.is_p("{") or i == 0 or j == i + 1 or not toks[i - 1].is_p("=>", "|", "||"):
+            continue
+        depth = 0
+        statement = False
+        for k in range(i + 1, j):
+            u = toks[k]
+            if u.kind == "punct" and u.text in "([{":
+                depth += 1
+            elif u.kind == "punct" and u.text in ")]}":
+                depth -= 1
+            elif depth == 0 and u.is_p(";"):
+                statement = True
+                break
+        if statement:
+            continue
+        remove.add(i)
+        remove.add(j)
+        if toks[i - 1].is_p("=>"):
+            add_comma.add(j)
+    if not remove:
+        return toks
+    out = []
+    for i, t in enumerate(toks):
+        if i in remove:
+            if i in add_comma and not (i + 1 < len(toks) and toks[i + 1].is_p(",")):
+                out.append(Tok("punct", ",", t.start, t.end))
+            continue
+        out.append(t)
+    return out
+
+
 def _drop_trailing_commas(toks, language):
     """Removes the commas a formatter adds or removes: a comma before a closer, and (Rust) the comma
     after a block-bodied match arm. `(a,)` stays in Rust: it is a one-element tuple."""
@@ -688,6 +762,8 @@ def render_tokens(toks, language):
 
 
 def _finish_brace_tokens(toks, language):
+    if language == "rust":
+        toks = _rust_unwrap_single_expression_blocks(_rust_drop_diverging_semicolons(toks))
     toks = _drop_trailing_commas(toks, language)
     if language == "javascript":
         toks = _js_drop_arrow_parens(_js_drop_semicolons(toks))

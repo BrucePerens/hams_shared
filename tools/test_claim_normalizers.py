@@ -293,6 +293,17 @@ pub fn foo<'a>(x: &'a str, c: char) -> Vec<Vec<u8>> {
         ("operator", BASE.replace("helper(x, c)", "helper(x, c) + 1")),
     )
 
+    def test_rustfmt_braces_around_a_single_expression_arm_or_closure_do_not_matter(self):
+        a = "// [@ANCHOR: t:x]\nfn f(x: u8) -> u8 {\n    let g = |t| t + 1;\n    match x {\n        1 => g(x),\n        2 => return 3,\n        _ => other(x),\n    }\n}\n"
+        b = (
+            "// [@ANCHOR: t:x]\nfn f(x: u8) -> u8 {\n    let g = |t| { t + 1 };\n    match x {\n"
+            "        1 => {\n            g(x)\n        }\n        2 => {\n            return 3;\n        }\n"
+            "        _ => other(x),\n    }\n}\n"
+        )
+        self.assertEqual(self.h(a), self.h(b))
+        c = b.replace("g(x)", "g(x); h()")
+        self.assertNotEqual(self.h(a), self.h(c))
+
     def test_a_nested_block_comment_hides_code(self):
         a = "// [@ANCHOR: t:x]\nfn f() { /* a /* b */ x(); */ y() }\n"
         b = "// [@ANCHOR: t:x]\nfn f() { y() }\n"
