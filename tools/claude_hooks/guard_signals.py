@@ -20,8 +20,9 @@ worktree; the repository now tracks .claude/settings.json in all three checkouts
 It allows `kill -TERM 123`, `kill 123`, `kill -0 123`, `kill -l`, and everything else (grep, ps, cargo, git, sleep loops, and
 `agent_procs.py wait`). A literal-pid kill is allowed with a reminder to print the ps line first.
 
-The escape for a human: `HAMS_ALLOW_SIGNALS=1` in the command itself (`HAMS_ALLOW_SIGNALS=1 kill -9 123`) lets it through and
-appends a line to `~/.cache/hams-jobs/guard.log`. An agent must never set it on its own.
+There is NO escape for an agent (Bruce, 2026-11-09): no environment variable, flag or marker in a command lets a denied command
+through (the former `HAMS_ALLOW_SIGNALS=1` escape was removed; a command containing it is denied like any other). Only Bruce, in his
+own terminal outside the agent session, signals freely. Every denial is appended to `~/.cache/hams-jobs/guard.log`.
 
 Failure policy: if the hook itself crashes, a command that does not look like a signal command is allowed (a broken hook must not
 block ordinary work), and one that does look like one is denied. Invalid input is allowed. Exit status is always 0; a denial is
@@ -47,8 +48,6 @@ except Exception:  # a broken import must not break the hook: the textual rules 
     agent_procs = None
 
 MAX_DEPTH = 8
-ESCAPE_VARIABLE = "HAMS_ALLOW_SIGNALS"
-_ESCAPE_RE = re.compile(r"(?:^|[\s;&|(])" + ESCAPE_VARIABLE + r"=1(?=[\s;&|)]|$)")
 _CRUDE_RE = re.compile(r"kill|pgrep|pidof|xargs|-9\b|SIGKILL|fuser", re.IGNORECASE)
 _ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PYTHON_KILL_RE = re.compile(
@@ -600,7 +599,7 @@ def log_path(environ=None):
 
 # [@ANCHOR: guard_signals:log_event]
 def log_event(kind, command, detail, session_id="", environ=None):
-    """Append one JSON line (`time`, `kind` of override/denied/error, `session`, `detail`, the command cut to 2000
+    """Append one JSON line (`time`, `kind` of denied/error, `session`, `detail`, the command cut to 2000
     characters) to the guard log. Never raises: a log that cannot be written must not block or crash the hook."""
     try:
         path = log_path(environ)
@@ -614,15 +613,16 @@ def log_event(kind, command, detail, session_id="", environ=None):
 
 # [@ANCHOR: guard_signals:deny_message]
 def deny_message(reasons):
-    """The text an agent reads when a command is denied: the reasons, the replacement tools and the human-only escape."""
+    """The text an agent reads when a command is denied: the reasons, the replacement tools and the statement that there is no escape."""
     tool = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent_procs.py")
     return ("BLOCKED by guard_signals: " + "; ".join(dict.fromkeys(reasons)) + ". Never find processes by a command-line pattern "
             "and signal the result. Instead: wait for a process with `python3 " + tool + " wait --pid PID --start-time T` "
             "(or `--job NAME`, or `--file F --contains RE`); start long work with `... run NAME -- COMMAND`; stop it with "
             "`... stop NAME` (SIGTERM to its process group; `--force` for SIGKILL on that verified group); signal one exact "
             "pid with `... kill-pid PID --start-time T`; list candidates with `... find --cmd-contains TEXT` (it never lists "
-            "itself or its ancestors and flags protected processes). `kill -TERM <literal pid>` is allowed. Only a human may "
-            "override, with HAMS_ALLOW_SIGNALS=1 in the command (logged); do not set it yourself.")
+            "itself or its ancestors and flags protected processes). `kill -TERM <literal pid>` is allowed. There is no escape "
+            "and no environment variable or flag bypasses this guard: use agent_procs.py, or ask Bruce to run the command in his own "
+            "terminal.")
 
 
 # [@ANCHOR: guard_signals:decide]
@@ -631,20 +631,17 @@ def decide(command, session_id="", environ=None):
     JSON output: a deny (`permissionDecision: deny` with `deny_message`) or an allow-with-reminder (`additionalContext` only,
     no permission decision, so the normal permission flow is untouched).
 
-    The human escape `HAMS_ALLOW_SIGNALS=1` allows a command that would be denied and logs it. A crash inside the analysis
+    There is no escape: nothing in the command text allows a denied command. A crash inside the analysis
     allows a command that has no signal-looking word and denies one that has (and logs the error)."""
     try:
         verdict = analyze(command)
     except Exception as error:  # fail open for ordinary commands only
         log_event("error", command, repr(error), session_id, environ)
-        if _CRUDE_RE.search(command) and not _ESCAPE_RE.search(command):
+        if _CRUDE_RE.search(command):
             verdict = Verdict(["the hook could not parse a command that looks like it sends signals"])
         else:
             return None
     if verdict.reasons:
-        if _ESCAPE_RE.search(command):
-            log_event("override", command, verdict.reasons, session_id, environ)
-            return None
         log_event("denied", command, verdict.reasons, session_id, environ)
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                        "permissionDecisionReason": deny_message(verdict.reasons)}}

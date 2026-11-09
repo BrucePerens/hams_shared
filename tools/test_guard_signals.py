@@ -182,7 +182,7 @@ class TableTests(GuardTestCase):
         self.assertIn("kill needs literal pid", text)
         message = gs.decide(command, environ=self.environ)["hookSpecificOutput"]["permissionDecisionReason"]
         self.assertIn("agent_procs.py", message)
-        self.assertIn("HAMS_ALLOW_SIGNALS=1", message)
+        self.assertIn("no escape", message)
         self.assertIn("Never find processes by a command-line pattern", message)
 
     def test_literal_kill_is_allowed_with_a_reminder_not_a_permission_decision(self):
@@ -455,22 +455,38 @@ class HookProcessTests(GuardTestCase):
         self.assertEqual(gs.main(io.StringIO(payload), out, self.environ), 0)
         self.assertEqual(json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], "deny")
 
-    def test_human_escape_allows_and_logs(self):
-        command = "HAMS_ALLOW_SIGNALS=1 kill -9 4242"
-        code, out, _ = self.run_hook(command)
-        self.assertEqual((code, out), (0, None))
+    def test_the_former_escape_variable_no_longer_bypasses_anything(self):
+        commands = (
+            "HAMS_ALLOW_SIGNALS=1 kill -9 123",
+            "export HAMS_ALLOW_SIGNALS=1; pkill foo",
+            "env HAMS_ALLOW_SIGNALS=1 pkill foo",
+            "HAMS_ALLOW_SIGNALS=1 pkill foo",
+            "HAMS_ALLOW_SIGNALS=1 sudo kill -9 $(pgrep -f foo)",
+            "bash -c 'HAMS_ALLOW_SIGNALS=1 kill -9 123'",
+            "bash -c 'export HAMS_ALLOW_SIGNALS=1; pkill foo'",
+            "HAMS_ALLOW_SIGNALS=1 bash -c 'killall foo'",
+            "echo HAMS_ALLOW_SIGNALS=1; kill -9 5",
+            "kill -9 5 # HAMS_ALLOW_SIGNALS=1",
+            "HAMS_ALLOW_SIGNALS=0 kill -9 5",
+        )
+        for command in commands:
+            code, out, _ = self.run_hook(command)
+            self.assertEqual(code, 0, command)
+            self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny", command)
+            self.assertIn("no escape", out["hookSpecificOutput"]["permissionDecisionReason"], command)
         with open(gs.log_path(self.environ)) as handle:
-            lines = [json.loads(line) for line in handle]
-        self.assertEqual([line["kind"] for line in lines], ["override"])
-        self.assertEqual(lines[0]["command"], command)
-        self.assertEqual(lines[0]["session"], "s1")
+            kinds = {json.loads(line)["kind"] for line in handle}
+        self.assertEqual(kinds, {"denied"})
         self.assertEqual(oct(os.stat(os.path.dirname(gs.log_path(self.environ))).st_mode & 0o777), "0o700")
 
-    def test_the_escape_must_be_exactly_one_and_a_word_of_its_own(self):
-        for command in ("HAMS_ALLOW_SIGNALS=0 kill -9 5", "XHAMS_ALLOW_SIGNALS=1 kill -9 5", "HAMS_ALLOW_SIGNALS=10 kill -9 5",
-                        "echo HAMS_ALLOW_SIGNALS=1x; kill -9 5"):
-            self.assertEqual(self.run_hook(command)[1]["hookSpecificOutput"]["permissionDecision"], "deny", command)
-        self.assertIsNone(self.run_hook("export HAMS_ALLOW_SIGNALS=1; pkill foo")[1])
+    def test_the_variable_gives_no_bypass_when_the_hook_cannot_parse(self):
+        too_deep = "kill " + "$(" * 12 + "x" + ")" * 12
+        result = gs.decide("HAMS_ALLOW_SIGNALS=1 " + too_deep, environ=self.environ)
+        self.assertEqual(result["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_the_escape_code_is_gone(self):
+        self.assertFalse(hasattr(gs, "ESCAPE_VARIABLE"))
+        self.assertFalse(hasattr(gs, "_ESCAPE_RE"))
 
     def test_denials_are_logged_too(self):
         self.run_hook("pkill foo")
@@ -484,7 +500,6 @@ class HookProcessTests(GuardTestCase):
         too_deep_signal = "kill " + "$(" * 12 + "x" + ")" * 12
         result = gs.decide(too_deep_signal, environ=self.environ)
         self.assertEqual(result["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertIsNone(gs.decide("HAMS_ALLOW_SIGNALS=1 " + too_deep_signal, environ=self.environ))
         with open(gs.log_path(self.environ)) as handle:
             self.assertIn("error", [json.loads(line)["kind"] for line in handle])
 
@@ -497,7 +512,7 @@ class HookProcessTests(GuardTestCase):
     def test_deny_message_names_the_replacements(self):
         message = gs.deny_message(["a", "a", "b"])
         self.assertEqual(message.count("a;") + message.count("a."), 1)
-        for word in ("wait --pid", "run NAME", "stop NAME", "kill-pid", "find --cmd-contains", "HAMS_ALLOW_SIGNALS=1"):
+        for word in ("wait --pid", "run NAME", "stop NAME", "kill-pid", "find --cmd-contains", "no escape", "ask Bruce"):
             self.assertIn(word, message)
 
     def test_a_missing_script_in_the_settings_wrapper_command_allows_everything(self):

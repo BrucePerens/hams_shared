@@ -3504,8 +3504,8 @@ A `PreToolUse` hook for the Bash tool, wired in the tracked `.claude/settings.js
 commands (so a word inside a quoted string, a commit message, a data heredoc or a `grep` pattern is not a command) and **denies**: `kill -9` and every other spelling of SIGKILL, `pkill`, `killall`,
 `skill`, `fuser -k`, `systemctl kill`, `pgrep -f` / `--full` (the `[x]yz` trick does not help: it matched a PostgreSQL backend), `kill` whose pids are not literal numbers (`$(...)`, backticks, variables, `xargs`),
 `kill $PPID`, `kill $$`, `kill 0`, `kill -- -PGID` and a pid built from `ps`/`ppid`, a literal `kill PID` whose process (looked up in /proc when the hook runs) is the hook's own ancestry, pid 1, another user's or root's, or one of `agent_procs.PROTECTED_WORDS` (postgres, systemd, sshd, redis-server, rabbitmq, ...), a `kill` that names such a program, and the same inside `bash -c`, `ssh host '...'`, `eval`, `find -exec`, `watch`, `script -c`, shell heredocs, a script piped into a shell (`echo 'kill -9 1' | sh`), a program named by a variable of the same line (`K=kill; $K -9 1`), `$'kill'` quoting and `python -c` one-liners. It **allows** `kill -TERM 123`, `kill 123`, `kill -0 123`, `pgrep NAME` (name only), `ps`, `grep`, `cargo`, `git`, sleep loops
-and `agent_procs.py`. A denial prints JSON `permissionDecision: deny` whose reason tells the agent to use `agent_procs.py`. The escape **for a human** is `HAMS_ALLOW_SIGNALS=1` inside the command itself;
-it is logged with the command to `~/.cache/hams-jobs/guard.log`, as is every denial and hook error. A crash inside the hook allows a command without a signal-looking word and denies one with such a word; the command in
+and `agent_procs.py`. A denial prints JSON `permissionDecision: deny` whose reason tells the agent to use `agent_procs.py`. There is **no escape** for an agent (removed 2026-11-09; `HAMS_ALLOW_SIGNALS=1` in a command is denied like any other): only Bruce, in his own terminal outside the agent session, signals freely.
+Every denial and hook error is logged with the command to `~/.cache/hams-jobs/guard.log`. A crash inside the hook allows a command without a signal-looking word and denies one with such a word; the command in
 settings.json also allows everything when the script file is missing. The hook always exits 0. Tests: `test_guard_signals.py` (a table of about 130 commands, the exact command of 2026-11-08 12:18:33, the real script on standard input).
 
 ### `[@ANCHOR: guard_signals:Word]` `Word`
@@ -3594,11 +3594,11 @@ Purpose: append one JSON line (`time kind session detail command`, the command c
 
 ### `[@ANCHOR: guard_signals:deny_message]` `deny_message(reasons)`
 
-Purpose: the text an agent reads on a denial: the reasons (deduplicated), the replacements (`wait --pid/--job/--file`, `run`, `stop`, `kill-pid`, `find`, with the absolute path of `agent_procs.py`) and the statement that only a human may use `HAMS_ALLOW_SIGNALS=1`.
+Purpose: the text an agent reads on a denial: the reasons (deduplicated), the replacements (`wait --pid/--job/--file`, `run`, `stop`, `kill-pid`, `find`, with the absolute path of `agent_procs.py`) and the statement that there is no escape (use `agent_procs.py` or ask Bruce).
 
 ### `[@ANCHOR: guard_signals:decide]` `decide(command, session_id="", environ=None)`
 
-Purpose: the decision for one command. Returns `None` (allow, print nothing), the deny JSON (`hookSpecificOutput.permissionDecision = deny` with `deny_message`), or an `additionalContext` reminder for a literal-pid kill (no permission decision, so the normal permission flow is untouched). `HAMS_ALLOW_SIGNALS=1` as a word of the command allows a would-be denial and logs `override`. A crash in `analyze` is logged; a command without a signal-looking word (`kill pgrep pidof xargs -9 SIGKILL fuser`) is then allowed, one with such a word is denied.
+Purpose: the decision for one command. Returns `None` (allow, print nothing), the deny JSON (`hookSpecificOutput.permissionDecision = deny` with `deny_message`), or an `additionalContext` reminder for a literal-pid kill (no permission decision, so the normal permission flow is untouched). Nothing in the command text allows a would-be denial (no environment variable, no flag). A crash in `analyze` is logged; a command without a signal-looking word (`kill pgrep pidof xargs -9 SIGKILL fuser`) is then allowed, one with such a word is denied.
 
 ### `[@ANCHOR: guard_signals:main]` `main(stdin=None, stdout=None, environ=None)`
 
