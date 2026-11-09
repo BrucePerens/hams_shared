@@ -91,7 +91,9 @@ def cache_hours(environ=None):
         value = float(environ.get(CACHE_HOURS_ENV) or DEFAULT_CACHE_HOURS)
     except ValueError:
         return DEFAULT_CACHE_HOURS
-    return value if math.isfinite(value) and value >= 0 else DEFAULT_CACHE_HOURS
+    if not math.isfinite(value) or value < 0:
+        return DEFAULT_CACHE_HOURS
+    return value
 
 
 def _cache_directory(environ):
