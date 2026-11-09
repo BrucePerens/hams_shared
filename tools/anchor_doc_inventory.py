@@ -22,7 +22,7 @@ import re
 import statistics
 import sys
 
-from verify_anchors import ANCHOR_PATTERN, _is_excluded_dir
+from verify_anchors import ANCHOR_PATTERN, _is_excluded_dir, _walk_tree_files
 
 DEFAULT_SHORT_WORDS = 40
 # Directory-name fragments in the order ADR 0113 gives (transmit-critical first); anything else sorts after.
@@ -95,9 +95,9 @@ def scan_docs(root, short_words=DEFAULT_SHORT_WORDS):
     Only README.md (any case) and `*.md` under a `docs` directory are read. `anchors` counts anchor tags;
     `median_words` is the median of each anchor's share of its entry (entry words divided by the anchors it
     covers); `short` counts anchors whose share is under `short_words`; `tables` counts entries with a table.
-    Directories the anchor scan prunes (`.git`, `target`, `.claude*`) are skipped. Sorted by importance."""
+    Directories the anchor scan prunes (`.git`, `target`, `.claude*`) are skipped, and in a git checkout only its own tracked files are read (never another agent's worktree nested under it). Sorted by importance."""
     report = []
-    for here, dirs, files in os.walk(root):
+    for here, dirs, files in _walk_tree_files(root):
         dirs[:] = sorted(d for d in dirs if not _is_excluded_dir(d))
         in_docs = "docs" in os.path.relpath(here, root).split(os.sep)
         for name in sorted(files):
@@ -172,7 +172,7 @@ def scan_structures(root):
     has data-structure definitions without an anchor (see `find_data_structures`). Pruned directories as in
     `scan_docs`, plus `node_modules` and virtual environments."""
     found = {}
-    for here, dirs, files in os.walk(root):
+    for here, dirs, files in _walk_tree_files(root):
         dirs[:] = sorted(d for d in dirs if not _is_excluded_dir(d) and d not in ("node_modules", "venv", ".venv", "site-packages"))
         for name in sorted(files):
             if name.endswith(SOURCE_SUFFIXES):
