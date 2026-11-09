@@ -4447,12 +4447,13 @@ def main():
         sys.exit(bisect_modules.run(
             early_args, os.path.abspath(__file__), tag_spec_modules(early_args.test_tags), slots=slots
         ))
-    warn_isolated_ns_with_slots(os.environ, slots)
     if queue_opts["status"]:
         # Read-only: never opens, probes or takes the lock itself.
         print("\n".join(lock_queue.describe_queue(
             lock_queue.queue_dir_for_lock(_test_runner_lock_path()), slots=slots)))
         return
+    # After the read-only status branch, whose output is parsed by tools.
+    warn_isolated_ns_with_slots(os.environ, slots)
     # Coalescing batch (ADR 0115): a plain committed `-u MODULES` run that starts while another run is in progress
     # joins the next batch, which tests the union of the members' modules once over a combined tree; this caller
     # still gets its own verdict and exit code. Anything else (and --solo) falls through to the run below.
