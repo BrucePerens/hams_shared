@@ -23,6 +23,11 @@ Tests [@ANCHOR: known_red:decide]
 Tests [@ANCHOR: known_red:raw_outcome]
 Tests [@ANCHOR: known_red:git_head]
 Tests [@ANCHOR: known_red:write_results]
+Tests [@ANCHOR: known_red:max_age_days]
+Tests [@ANCHOR: known_red:age_text]
+Tests [@ANCHOR: known_red:show_lines]
+Tests [@ANCHOR: known_red:renew_entry]
+Tests [@ANCHOR: known_red:main]
 Tests [@ANCHOR: test:apply_failure_policy]
 """
 
@@ -32,6 +37,7 @@ import os
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 import unittest.mock
 from types import SimpleNamespace
@@ -70,8 +76,12 @@ def observe(*lines):
     return observation
 
 
-def entry(test_id, owner="alice", reason="needs a box fix", first="abc1234def5678"):
-    return {"test_id": test_id, "first_seen": first, "owner": owner, "reason": reason}
+def when(days_ago):
+    return time.strftime(known_red.TIME_FORMAT, time.gmtime(time.time() - days_ago * 86400))
+
+
+def entry(test_id, owner="alice", reason="needs a box fix", first="abc1234def5678", days_ago=1 / 24):
+    return {"test_id": test_id, "first_seen": first, "first_seen_time": when(days_ago), "owner": owner, "reason": reason}
 
 
 def write_baseline(directory, *entries, name="known_red_baseline.json"):
@@ -142,7 +152,10 @@ class BaselineFileTests(unittest.TestCase):
     def test_a_wrong_file_stops_the_run_instead_of_tolerating_or_dropping_tests(self):
         with tempfile.TemporaryDirectory() as directory:
             bad = {
-                "missing owner": write_baseline(directory, {"test_id": "m:A.t", "first_seen": "a", "reason": "r"}, name="a.json"),
+                "missing owner": write_baseline(directory, {"test_id": "m:A.t", "first_seen": "a", "first_seen_time": when(1), "reason": "r"}, name="a.json"),
+                "missing time": write_baseline(directory, {"test_id": "m:A.t", "first_seen": "a", "owner": "o", "reason": "r"}, name="f.json"),
+                "bad time": write_baseline(directory, dict(entry("m:A.t"), first_seen_time="yesterday"), name="g.json"),
+                "renewal without reason": write_baseline(directory, dict(entry("m:A.t"), renewed={"time": when(0), "reason": " "}), name="h.json"),
                 "bad id": write_baseline(directory, entry("not a test id"), name="b.json"),
                 "duplicate": write_baseline(directory, entry("m:A.t"), entry("m:A.t"), name="c.json"),
             }
@@ -429,6 +442,94 @@ class ApplyFailurePolicyTests(unittest.TestCase):
         self.assertIn("none is new", out.getvalue())
         self.assertIn("m:A.t1", out.getvalue())
         self.assertNotIn("Odoo exited with status", out.getvalue())
+
+
+class AccountabilityTests(unittest.TestCase):
+    """A baselined test is tolerated for a limited time, then fails the run unless renewed with a reason."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.flakes = os.path.join(self.tmp.name, "flakes.json")
+
+    def baseline(self, *entries):
+        return known_red.load_baseline([write_baseline(self.tmp.name, *entries)])
+
+    # Tests [@ANCHOR: known_red:max_age_days]
+    def test_limit_default_override_and_bad_values(self):
+        self.assertEqual(known_red.max_age_days({}), 3.0)
+        self.assertEqual(known_red.max_age_days({known_red.MAX_AGE_ENV: "0.25"}), 0.25)
+        for bad in ("0", "-2", "x", "inf", "nan"):
+            with self.assertRaises(known_red.BaselineError, msg=bad):
+                known_red.max_age_days({known_red.MAX_AGE_ENV: bad})
+
+    # Tests [@ANCHOR: known_red:age_text]
+    def test_age_text(self):
+        self.assertEqual(known_red.age_text(3.14), "3.1 days")
+        self.assertEqual(known_red.age_text(0.5), "12 hours")
+
+    # Tests [@ANCHOR: known_red:BaselineEntry]
+    def test_age_counts_from_first_seen_then_from_the_last_renewal(self):
+        entries = self.baseline(entry("m:A.old", days_ago=5), dict(entry("m:A.renewed", days_ago=5), renewed={"time": when(1), "reason": "waiting"}))
+        self.assertAlmostEqual(entries["m:A.old"].age_days(), 5.0, places=1)
+        self.assertAlmostEqual(entries["m:A.renewed"].age_days(), 1.0, places=1)
+
+    # Tests [@ANCHOR: known_red:decide]
+    # Tests [@ANCHOR: known_red:classify]
+    def test_an_entry_older_than_the_limit_fails_the_run_and_is_not_rerun(self):
+        reruns = []
+        first = observe(fail("m", "A", "old"), result(1, 0, 3))
+        outcome = known_red.decide(first, self.baseline(entry("m:A.old", days_ago=3.5)), lambda ids: reruns.append(ids), self.flakes, "c", 3)
+        self.assertFalse(outcome.run_green)
+        self.assertEqual(reruns, [])
+        self.assertEqual(list(outcome.expired), ["m:A.old"])
+        text = "\n".join(outcome.summary_lines())
+        self.assertIn("EXPIRED known red (3.5 days, over the 3 day limit, owner alice)", text)
+        self.assertIn("known_red.py renew m:A.old --reason", text)
+        self.assertEqual(outcome.results("c")["new_failures"], ["m:A.old"])
+
+    # Tests [@ANCHOR: known_red:decide]
+    def test_a_young_entry_is_tolerated_with_its_age_and_owner_in_the_summary(self):
+        outcome = known_red.decide(observe(fail("m", "A", "t"), result(1, 0, 3)), self.baseline(entry("m:A.t", owner="bob", days_ago=2)),
+                                   lambda ids: None, self.flakes, "c", 3)
+        self.assertTrue(outcome.run_green)
+        self.assertIn("m:A.t  known red for 2.0 days, owner bob", "\n".join(outcome.summary_lines()))
+        self.assertAlmostEqual(outcome.results("c")["known_red"]["m:A.t"]["age_days"], 2.0, places=1)
+
+    # Tests [@ANCHOR: known_red:decide]
+    def test_a_renewal_with_a_reason_restores_tolerance_and_the_limit_is_configurable(self):
+        old = dict(entry("m:A.t", days_ago=9), renewed={"time": when(1), "reason": "vendor fix pending"})
+        failing = observe(fail("m", "A", "t"), result(1, 0, 3))
+        self.assertTrue(known_red.decide(failing, self.baseline(old), lambda ids: None, self.flakes, "c", 3).run_green)
+        self.assertTrue(known_red.decide(failing, self.baseline(entry("m:A.t", days_ago=9)), lambda ids: None, self.flakes, "c", 3,
+                                         max_age=10).run_green)
+
+    # Tests [@ANCHOR: known_red:show_lines]
+    def test_show_lists_the_oldest_first_and_marks_the_expired(self):
+        lines = known_red.show_lines(self.baseline(entry("m:A.young", days_ago=1), entry("m:A.old", days_ago=4, owner="zed")))
+        self.assertIn("tolerated for at most 3 days", lines[0])
+        self.assertIn("m:A.old  known red for 4.0 days (EXPIRED: fails the run), owner zed", lines[1])
+        self.assertIn("m:A.young", lines[2])
+        self.assertIn("empty", known_red.show_lines({})[0])
+
+    # Tests [@ANCHOR: known_red:renew_entry]
+    # Tests [@ANCHOR: known_red:main]
+    def test_renew_through_the_command_line_rewrites_the_file_and_refuses_bad_requests(self):
+        path = write_baseline(self.tmp.name, entry("m:A.t", days_ago=5), entry("m:A.other"))
+        out = []
+        env = {known_red.BASELINE_ENV: path}
+        with unittest.mock.patch.dict(os.environ, env):
+            self.assertEqual(known_red.main(["show"], out.append), 0)
+            self.assertIn("EXPIRED", out[1])
+            self.assertEqual(known_red.main(["renew", "m:A.t", "--reason", "fix in review", "--owner", "carol"], out.append), 0)
+            self.assertNotIn("EXPIRED", "\n".join(out[-3:]))
+            self.assertEqual(known_red.main(["renew", "m:A.nope", "--reason", "x"], out.append), 2)
+            self.assertEqual(known_red.main(["renew", "m:A.t", "--reason", "  "], out.append), 2)
+        with open(path) as handle:
+            data = json.load(handle)
+        renewed = [e for e in data["entries"] if e["test_id"] == "m:A.t"][0]
+        self.assertEqual((renewed["owner"], renewed["renewed"]["reason"]), ("carol", "fix in review"))
+        self.assertEqual(len(data["entries"]), 2)
 
 
 if __name__ == "__main__":

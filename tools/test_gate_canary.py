@@ -8,6 +8,7 @@ the production refusal and the systemd unit files. The snapshot and the shard co
 Tests [@ANCHOR: gate_canary:read_shard_results]
 Tests [@ANCHOR: gate_canary:aggregate]
 Tests [@ANCHOR: gate_canary:baseline_candidates]
+Tests [@ANCHOR: gate_canary:note_lines]
 Tests [@ANCHOR: gate_canary:failure_tags]
 Tests [@ANCHOR: gate_canary:bisect_command]
 Tests [@ANCHOR: gate_canary:choose_jobs]
@@ -98,6 +99,16 @@ class AggregateTests(unittest.TestCase):
         self.assertEqual(loaded["m:N.t"].first_seen, COMMITS["com"])
         self.assertEqual(loaded["m:N.t"].owner, "unassigned")
 
+    # Tests [@ANCHOR: gate_canary:note_lines]
+    def test_the_note_lists_every_tolerated_item_with_age_and_owner(self):
+        status = gc.aggregate([{"number": 1, "exit_status": 1, "results": {
+            "new_failures": ["m:N.n"], "known_red": {"m:K.k": {"owner": "bob", "reason": "box", "age_days": 2.5}}, "flakes": {"m:F.f": {}},
+            "now_passing": ["m:P.p"], "fix_me": ["m:F.f"], "unparsed": 0, "counts": {"failed": 2, "errors": 0, "total": 3}}}], COMMITS)
+        text = "\n".join(gc.note_lines(status, ["  lint item known red for 1.0 days"]))
+        for part in ("NEW or EXPIRED failure: m:N.n", "m:K.k, known red for 2.5 days, owner bob: box", "flaky: m:F.f",
+                     "FIX ME (flaky above the threshold): m:F.f", "remove from the baseline (now passing): m:P.p", "lint item known red"):
+            self.assertIn(part, text)
+
     # Tests [@ANCHOR: gate_canary:failure_tags]
     # Tests [@ANCHOR: gate_canary:bisect_command]
     def test_failures_become_class_tags_and_the_bisect_command_extends_the_shard_command(self):
@@ -167,6 +178,8 @@ class RunTests(unittest.TestCase):
         for key in ("commit", "time", "new_failures", "tolerated", "flakes"):
             self.assertIn(key, written)
         self.assertEqual(len(self.commands), 2)
+        with open(os.path.join(self.state, "note.txt")) as handle:
+            self.assertIn("canary green", handle.read())
 
     # Tests [@ANCHOR: gate_canary:run_canary]
     def test_a_new_failure_is_recorded_and_bisected_on_its_shard_only(self):

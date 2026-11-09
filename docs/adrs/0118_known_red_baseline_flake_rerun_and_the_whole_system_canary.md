@@ -40,3 +40,10 @@ A red run means something new broke. Old failures are visible, owned, and cannot
 The risk is that the baseline grows and hides real regressions in the listed tests: a baselined test that fails differently
 is not noticed (the id is the same). That is why entries carry an owner and a first-seen commit and are listed on every run.
 A rerun costs a database rebuild and a module install per failing run; it runs only when a new failure exists.
+
+## Amendment 2026-11-08: a baselined test is tolerated for a limited time
+Bruce: "Let's not let lint issues stand even though we let things pass the known red ones." Each baseline entry now has `first_seen_time` and
+may carry `renewed`. The run summary names the age and owner of every tolerated test. An entry older than `HAMS_KNOWN_RED_MAX_AGE_DAYS`
+(default 3), counted from its last renewal, stops being tolerated: the run fails on it, and it is not rerun. It is fixed (the entry removed) or
+renewed with a stated reason (`tools/known_red.py renew`). `known_red.py show` lists the entries oldest first, and the canary's `note.txt`
+lists every tolerated item. The lint baseline follows the same rule (ADR 0117 amendment).
