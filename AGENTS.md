@@ -101,10 +101,10 @@ build and test it before merging** -- `cargo fmt --check`, `cargo clippy --all-t
 -- -D warnings` and `cargo test` in each crate you touched. **The full `cargo test` of `hams_local_relay` and `shack_console`
 (about 20 minutes) runs on the dev box (Bruce, 2026-11-08; this reverses the 2026-11-04 rule that sent it to the remote
 build hosts: the dev box has 32 cores and the remote hosts are far less powerful). Run it here under `nice`, with a
-`CARGO_TARGET_DIR` of its own per job. The remote build hosts (`python3 ~/workspace/hams_com/devbox_tools/remote_cargo_test.py auto
-<committed worktree> daemons/hams_local_relay`; exit 0 passed, 1 failed, 75 could not run; a filter goes after the crate,
-`... daemons/hams_local_relay -- updater::`) remain for what this box cannot do: arm64 and macOS-specific checks, or overflow
-when this box is saturated). Cargo you do run on the dev box goes under `nice` with a
+`CARGO_TARGET_DIR` of its own per job, or through `python3 ~/workspace/hams_com/devbox_tools/remote_cargo_test.py devbox
+<committed worktree> daemons/hams_local_relay` (a queued local slot; exit 0 passed, 1 failed, 75 could not run; a filter goes after the crate,
+`... daemons/hams_local_relay -- updater::`). Remote hosts are for what this box cannot do (arm64 and macOS-specific checks, Windows-only
+work), never because this box is busy: wait for a slot (Bruce, 2026-11-08: no remote system for anything that can run here). Cargo you do run on the dev box goes under `nice` with a
 `CARGO_TARGET_DIR` of its own per concurrent job, deleted when the job is done, and **in RAM, not on the SSD** (a build writes
 5-12 GB it throws away): `python3 hams_shared/tools/ram_dirs.py run <job> -- nice -n 10 cargo clippy --all-targets -- -D warnings`
 sets `CARGO_TARGET_DIR=/dev/shm/hams-cargo-target-<job>`, stops the job if that directory passes 30 GB or `/dev/shm` runs low, removes
