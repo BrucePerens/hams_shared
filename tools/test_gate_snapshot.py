@@ -219,6 +219,16 @@ class CreateTests(SnapshotTestBase):
         with self.assertRaises(gs.SnapshotError):
             self.create(shards_file=shards)
 
+    # Negative control (gate audit 2026-11-09): a tree with no module is refused, never a snapshot with zero shards.
+    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
+    def test_create_refuses_when_no_module_is_found_in_either_tree(self):
+        import unittest.mock
+        self.assertEqual(gs.make_shards([], 4), [])
+        with unittest.mock.patch.object(gs, "discover_modules", return_value=[]):
+            with self.assertRaises(gs.SnapshotError) as caught:
+                self.create()
+        self.assertIn("nothing to test", str(caught.exception))
+
     # Tests [@ANCHOR: gate_snapshot:make_shards]
     def test_shards_cover_every_module_once_and_keep_old_placement(self):
         modules = ["a", "b", "c", "d", "e"]
