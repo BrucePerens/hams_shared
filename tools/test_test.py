@@ -1746,6 +1746,29 @@ class FailureExtractorOdooResultHeadlineTests(unittest.TestCase):
         self.assertIn("No odoo.tests.result line was found", output)
 
 
+class LockAndFilestoreGuardTests(unittest.TestCase):
+    """The lock file is widened through its descriptor, and a filestore is removed only for a plain database name."""
+
+    def test_the_lock_file_is_widened_by_descriptor_never_by_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = os.path.join(tmp, "x.lock")
+            with patch.object(_test_runner.os, "chmod", side_effect=AssertionError("chmod by path")):
+                handle = _test_runner._open_lock_file(lock)
+            self.addCleanup(handle.close)
+            self.assertEqual(os.stat(lock).st_mode & 0o777, 0o777)
+
+    def test_a_filestore_name_that_climbs_out_of_the_base_removes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "filestore")
+            victim = os.path.join(tmp, "victim")
+            os.makedirs(base)
+            os.makedirs(os.path.join(victim, "ab"))
+            with patch.object(_test_runner.subprocess, "run") as mock_run:
+                _test_runner.remove_stale_filestore("../victim", filestore_base=base)
+            self.assertTrue(os.path.isdir(os.path.join(victim, "ab")))
+            mock_run.assert_not_called()
+
+
 class RemoveStaleFilestoreTests(unittest.TestCase):
     """rebuild_db() used to DROP/CREATE the same-named database on every real test run without
     ever touching its on-disk Odoo filestore -- since a fresh, empty database has zero
