@@ -7,6 +7,9 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # minimatch is pinned by package.json "overrides" to ^11.0.1 (GHSA-g3hv-75wg-m249 is fixed only from 11.0.1, while eslint and
+    # typescript-eslint still depend on ^10.x, so Dependabot's own update of minimatch could not resolve and failed daily from
+    # 2026-11-01). Drop the override once eslint and typescript-eslint accept minimatch 11 on their own.
     # typescript-eslint's peer range is typescript >=4.8.4 <6.1.0 (checked 2026-09-28 against 8.70.1), so TypeScript 7 would break the
     # JavaScript lint. Lift this once typescript-eslint supports it.
     ignore:

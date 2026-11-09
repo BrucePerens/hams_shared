@@ -176,8 +176,9 @@ class SelectionFixture(unittest.TestCase):
             _git(repo, "reset", "-q", "--hard", "refs/remotes/origin/main")
             _git(repo, "clean", "-qfd")
 
-    def run_script(self, *args):
+    def run_script(self, *args, env_extra=None):
         env = dict(os.environ)
+        env.update(env_extra or {})
         env["HAMS_ALLOW_STALE_SHARED"] = "1"
         env["HAMS_LINT_NO_LOCK"] = "1"  # the selection tests are not heavy runs; never queue behind a real one
         # The workspace repositories have no .gitignore: a tools/__pycache__ written by this run is an untracked
@@ -193,13 +194,13 @@ class SelectionFixture(unittest.TestCase):
             timeout=120,
         )
 
-    def selected(self, *changes):
+    def selected(self, *changes, env_extra=None):
         """Apply `changes` (path relative to the workspace, new text) and return the step names
         `--changed --list` selects."""
         for relative, text in changes:
             path = os.path.join(self.ws, relative)
             _write(path, text)
-        result = self.run_script("--changed", "--list")
+        result = self.run_script("--changed", "--list", env_extra=env_extra)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return [line for line in result.stdout.splitlines() if line.strip()]
 
@@ -544,8 +545,16 @@ class HamsSharedChangeSelectionTests(SelectionFixture):
 
     def test_a_change_to_the_checkers_themselves_runs_every_step(self):
         full = self.all_steps()
-        chosen = self.selected(("hams_open/hams_shared/tools/check_shebang.py", "# changed\n"))
+        chosen = self.selected(("hams_open/hams_shared/tools/check_shebang.py", "# changed\n"), env_extra={"HAMS_LINT_TEST_IMPACT": "0"})
         self.assertEqual(sorted(chosen), sorted(full))
+
+    def test_a_change_to_the_checkers_themselves_runs_every_step_but_only_the_pytest_files_that_depend_on_it(self):
+        # pytest_impact.py: the pytest steps keep the test files that depend on a changed file, so a pytest step may lose a chunk
+        # or some files; every other step still runs. (The files are in the step's argv; `HAMS_LINT_TEST_IMPACT=0` keeps them all.)
+        full = self.all_steps()
+        chosen = self.selected(("hams_open/hams_shared/tools/check_shebang.py", "# changed\n"))
+        self.assertEqual(sorted(n for n in chosen if not n.startswith("pytest ")), sorted(n for n in full if not n.startswith("pytest ")))
+        self.assertLessEqual(len(chosen), len(full))
 
 
 class BaseHandlingTests(SelectionFixture):

@@ -16,11 +16,10 @@ import json
 import logging
 
 # Core Odoo modules this project does not itself own/tier -- shared by both
-# the missing-dependency check and the tier-violation check below (moved to
-# a single module-level constant, 2026-09-10 bug-hunt fix: these used to be
-# only a local variable inside the missing-dependency check further down,
-# so the tier-violation loop above it had no way to exempt them, see that
-# loop's own comment for why that matters).
+# the missing-dependency check and the tier-violation check below (a
+# single module-level constant, so the tier-violation loop above the
+# missing-dependency check can exempt them too; see that loop's own comment
+# for why that matters).
 CORE_MODULES = {
     "base",
     "web",
@@ -83,10 +82,9 @@ def main():
             loaded_tiers = json.load(f)
             TIERS = {int(k): v for k, v in loaded_tiers.items()}
     else:
-        # Bug-hunt fix (2026-09-10, bug class 5: silent-failure gate):
-        # confirmed empirically that no `tier_config.json` exists anywhere
-        # in either repo today, so this whole architecture-tier check has
-        # always been dormant in the real, deployed environment -- every
+        # No `tier_config.json` exists anywhere in either repo today, so
+        # this whole architecture-tier check is dormant in the real,
+        # deployed environment (a silent-failure gate) -- every
         # invocation of this script silently behaves as though the check
         # ran and found nothing, with no signal that it is not actually
         # configured at all. This notice makes that state visible instead
@@ -111,7 +109,7 @@ def main():
     tier_violations = []
     for dep in dependencies:
         if dep in CORE_MODULES:
-            # Bug-hunt fix (2026-09-10, latent false-positive): a core Odoo
+            # A core Odoo
             # module (base, web, mail, ...) is never itself entered in
             # tier_config.json (it isn't one of this project's own tiered
             # modules), so get_tier() would fall back to 99 for it --
@@ -120,9 +118,8 @@ def main():
             # be flagged as an "architecture violation" the moment anyone
             # actually populates tier_config.json. Not live today (TIERS
             # is always {} in the real repo, so this loop never runs for
-            # real yet -- see the dormancy notice above), but confirmed via
-            # a fixture test that reproduces the false positive against
-            # this exact code path. Mirrors the missing-dependency check
+            # real yet -- see the dormancy notice above), but a fixture test
+            # covers this code path. Mirrors the missing-dependency check
             # below, which already exempts CORE_MODULES for the same
             # reason.
             continue

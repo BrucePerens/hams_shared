@@ -32,6 +32,7 @@ import os
 import lint_exec
 import sys
 import ast
+from tree_files import tree_walk
 
 
 def _resolve_repo_root(given_path):
@@ -189,10 +190,8 @@ def collect_minified_js_assets(repo_root):
     per-file opt-out), so there is no bundle key that is safe to skip.
     """
     asset_to_bundles = {}
-    for root, dirs, files in os.walk(repo_root):
-        if "radae" in dirs:
-            dirs.remove("radae")
-        dirs[:] = [d for d in dirs if d not in ("node_modules", "__pycache__") and not d.startswith(".")]
+    skip = ("radae", "node_modules", "__pycache__")
+    for root, _dirs, files in tree_walk(repo_root, "__manifest__.py", skip, skip_hidden=True, untracked=True):
         if "__manifest__.py" not in files:
             continue
         manifest_path = os.path.join(root, "__manifest__.py")

@@ -72,7 +72,7 @@ LOCAL_ONLY = frozenset(
 
 # Never shipped to a machine: secrets, VCS metadata, build output, other sessions' worktrees.
 EXCLUDE_PATTERNS = (
-    ".git", ".claude", "target", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
+    ".git", "target", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
     ".pytest_cache", ".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.p12", "*.pfx",
     "secrets", ".secrets", ".ssh", "credentials*",
 )
@@ -585,6 +585,11 @@ def _under(path, prefixes):
 
 def excluded(path):
     parts = path.split("/")
+    # `.claude/` holds other sessions' worktrees and local settings, but the tracked `.claude/settings.json` (the signal guard hook
+    # registration) is part of the tree and `check_claude_hook_registration` reads it on the machine.
+    for i, part in enumerate(parts):
+        if part == ".claude" and parts[i + 1:] not in ([], ["settings.json"]):
+            return True
     return any(fnmatch.fnmatch(part, pattern) for part in parts for pattern in EXCLUDE_PATTERNS)
 
 
@@ -716,6 +721,109 @@ def sync_repo(transport, repo, dest, sub_exclude=(), log=print, label=None):
     manifest = {"format": SYNC_FORMAT, "sha": sha, "overlay": changed, "deleted_overlay": deleted, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
     _check(transport.run(f"cat > {shlex.quote(dest)}/.hams_lint_sync", json.dumps(manifest).encode()), "manifest")
     return {"sha": sha, "dirty": bool(changed or deleted)}
+
+
+# Directories and files a lint run itself leaves in a mirror (caches, build output, the sync manifest): never reported as stale.
+MIRROR_JUNK_DIRS = (".git", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "target")
+MIRROR_JUNK_FILES = (".hams_lint_sync", ".lint_results.json", ".lint_bundle.json", "*.pyc", ".tmp-*")
+
+# Run on the machine: for each path on stdin (NUL separated) print "<git blob id>\t<path>", or "MISSING\t<path>".
+BLOB_SCRIPT = r"""
+import hashlib, os, sys
+for raw in sys.stdin.buffer.read().split(b"\0"):
+    if not raw:
+        continue
+    path = raw.decode("utf-8", "surrogateescape")
+    try:
+        if os.path.islink(path):
+            data = os.readlink(path).encode("utf-8", "surrogateescape")
+        else:
+            with open(path, "rb") as handle:
+                data = handle.read()
+    except OSError:
+        print("MISSING\t" + path)
+        continue
+    print(hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() + "\t" + path)
+"""
+
+
+# [@ANCHOR: lint_remote:expected_blobs]
+def expected_blobs(repo, sha, sub_exclude=()):
+    """{path: git blob id} of every file and symlink the mirror of `repo` must hold to equal what the local run reads: the files tracked
+    in commit `sha`, minus secrets and build output (`excluded`) and `sub_exclude` (a nested repository that is mirrored on its own),
+    with the working tree's uncommitted regular files at their present content and its deleted files gone. A blob id is the hash of the
+    content, so it can be compared with one computed on the machine. Paths with a newline or a tab are left out (the listing is
+    line-oriented). Reads `repo` only."""
+    wanted = {}
+    for entry in git(repo, "ls-tree", "-r", "-z", sha).split(b"\0"):
+        if not entry:
+            continue
+        meta, _tab, raw = entry.partition(b"\t")
+        mode, kind, blob = meta.decode().split()
+        path = raw.decode("utf-8", "surrogateescape")
+        if kind != "blob" or excluded(path) or _under(path, sub_exclude):
+            continue
+        wanted[path] = blob
+    changed, deleted = dirty_files(repo)
+    for path in deleted:
+        wanted.pop(path, None)
+    for path in changed:
+        if _under(path, sub_exclude):
+            continue
+        wanted[path] = git(repo, "hash-object", "--no-filters", "--", path).decode().strip()
+    return {p: b for p, b in wanted.items() if "\n" not in p and "\t" not in p}
+
+
+# [@ANCHOR: lint_remote:mirror_problems]
+def mirror_problems(transport, repo, sha, dest, sub_exclude=(), log=print):
+    """Compare the mirror at `dest` on the machine with `repo` at `sha` (plus its uncommitted files) and repair what can be repaired in
+    place. Returns the problems left: files missing from the mirror or with different content (the caller rebuilds the mirror in
+    full), empty when the mirror equals the local tree. Files in the mirror that the local tree does not have (a file deleted upstream
+    that an earlier sync left behind) are removed here and logged; caches and build output (MIRROR_JUNK_*) are ignored. This is the guard
+    against a mirror that its own manifest calls current but is not: a remote host linted a stale sibling tree on 2026-11-08 and
+    failed, or could have passed, a branch against the wrong commits."""
+    expected = expected_blobs(repo, sha, sub_exclude)
+    q = shlex.quote(dest)
+    code, out, err = transport.run(f"cd {q} && python3 -c {shlex.quote(BLOB_SCRIPT)}", ("\0".join(sorted(expected)) + "\0").encode(), timeout=900)
+    if code != 0:
+        return [f"cannot read the mirror: {err.decode(errors='replace')[:200]}"]
+    problems = []
+    seen = set()
+    for line in out.decode("utf-8", "surrogateescape").splitlines():
+        blob, _tab, path = line.partition("\t")
+        seen.add(path)
+        if blob == "MISSING":
+            problems.append(f"missing: {path}")
+        elif expected.get(path) != blob:
+            problems.append(f"differs: {path}")
+    problems += [f"missing: {p}" for p in sorted(set(expected) - seen)]
+    prune = " -o ".join(f"-name {shlex.quote(name)}" for name in MIRROR_JUNK_DIRS)
+    for prefix in sub_exclude:
+        prune += f" -o -path ./{shlex.quote(prefix.rstrip('/'))}"
+    code, out, _err = transport.run(f"cd {q} && find . \\( {prune} \\) -prune -o \\( -type f -o -type l \\) -print0", timeout=900)
+    if code == 0:
+        present = [raw.decode("utf-8", "surrogateescape")[2:] for raw in out.split(b"\0") if raw]
+        extras = sorted(
+            p for p in present
+            if p not in expected and not excluded(p)
+            and not any(fnmatch.fnmatch(part, pattern) for part in p.split("/") for pattern in MIRROR_JUNK_FILES)
+        )
+        if extras:
+            log(f"mirror {os.path.basename(dest)}: removing {len(extras)} stale file(s) such as {extras[0]}")
+            _check(transport.run(f"cd {q} && xargs -0 rm -f --", ("\0".join(extras) + "\0").encode()), "remove stale")
+    return problems
+
+
+def verify_mirrors(transport, repos, root, info, log=print):
+    """The problems of every mirror of `info` (see `mirror_problems`), prefixed with the repository's name."""
+    problems = []
+    for role in ("hams_com", "hams_open", "hams_shared"):
+        if role not in info:
+            continue
+        found = mirror_problems(transport, repos[role], info[role]["sha"], mirror_dest(root, role),
+                                sub_exclude=("hams_shared",) if role == "hams_open" else (), log=log)
+        problems += [f"{role} {p}" for p in found]
+    return problems
 
 
 def commit_mirror(transport, dest, nested=()):
@@ -875,32 +983,67 @@ def ensure_node_modules(transport, shared_dir, log=print):
         log("[*] --remote: npm ci in the mirror failed; eslint-dependent steps will run here")
 
 
-def run_on_machine(name, machine, transport, repos, invocation_role, bundle, on_line, log=print):
-    """Sync, send the bundle, run it. Returns ('ok'|'failed'|'infra', problems, seconds_by_step).
+def sync_mirrors(transport, repos, root, log, force=False):
+    """Bring the mirrors of every repository the steps read to the local run's trees (hams_com, hams_open, and hams_shared inside
+    hams_open): {role: {'sha', 'dirty'}}. `force` forgets what each mirror last received, so every one is rebuilt in full."""
+    info = {}
+    for role in ("hams_com", "hams_open"):
+        path = repos.get(role)
+        if path and os.path.isdir(path):
+            if force:
+                transport.run(f"rm -f {shlex.quote(root + '/' + role)}/.hams_lint_sync")
+            info[role] = sync_repo(
+                transport, path, f"{root}/{role}",
+                sub_exclude=("hams_shared",) if role == "hams_open" else (), log=log, label=role,
+            )
+    shared = repos.get("hams_shared")
+    if shared and "hams_open" in info:
+        if force:
+            transport.run(f"rm -f {shlex.quote(root)}/hams_open/hams_shared/.hams_lint_sync")
+        info["hams_shared"] = sync_repo(transport, shared, f"{root}/hams_open/hams_shared", log=log, label="hams_shared")
+    if "hams_shared" in info:
+        commit_mirror(transport, f"{root}/hams_open/hams_shared")
+    for role in ("hams_com", "hams_open"):
+        if role in info:
+            commit_mirror(transport, f"{root}/{role}", nested=("hams_shared",) if role == "hams_open" and "hams_shared" in info else ())
+    return info
+
+
+def mirror_dest(root, role):
+    return f"{root}/hams_open/hams_shared" if role == "hams_shared" else f"{root}/{role}"
+
+
+# [@ANCHOR: lint_remote:siblings_text]
+def siblings_text(info):
+    """`hams_com@<12 hex> hams_open@<12 hex> hams_shared@<12 hex>` for the mirrors a run used (`+dirty` after a commit that also has
+    uncommitted files shipped): the commits a remote step read, for the step log header and the pass stamp."""
+    return " ".join(f"{role}@{info[role]['sha'][:12]}{'+dirty' if info[role]['dirty'] else ''}" for role in ("hams_com", "hams_open", "hams_shared") if role in info)
+
+
+def run_on_machine(name, machine, transport, repos, invocation_role, bundle, on_line, log=print, siblings_out=None):
+    """Sync, verify, send the bundle, run it. Returns ('ok'|'failed'|'infra', problems, seconds_by_step).
     'infra' means the machine could not do the job (the caller runs these steps here); 'failed'
-    means a step really failed."""
+    means a step really failed. Before any step runs, every mirror is compared with the local trees (`mirror_problems`); a mirror that
+    differs is rebuilt in full once, and when it still differs the machine is 'infra' (nothing runs there), never a step run against
+    the wrong commits. `siblings_out` (a dict) receives the commits used (`siblings_text`)."""
     workdir = machine.get("workdir", "~/hams-lint-mirror")
     code, out, _err = transport.run(f"mkdir -p {workdir} && cd {workdir} && pwd")
     if code != 0 or not out.strip():
         return "infra", ["cannot create the work directory"], {}
     root = out.decode().strip().splitlines()[-1]
     try:
-        info = {}
-        for role in ("hams_com", "hams_open"):
-            path = repos.get(role)
-            if path and os.path.isdir(path):
-                info[role] = sync_repo(
-                    transport, path, f"{root}/{role}",
-                    sub_exclude=("hams_shared",) if role == "hams_open" else (), log=log, label=role,
-                )
-        shared = repos.get("hams_shared")
-        if shared and "hams_open" in info:
-            info["hams_shared"] = sync_repo(transport, shared, f"{root}/hams_open/hams_shared", log=log, label="hams_shared")
-        if "hams_shared" in info:
-            commit_mirror(transport, f"{root}/hams_open/hams_shared")
-        for role in ("hams_com", "hams_open"):
-            if role in info:
-                commit_mirror(transport, f"{root}/{role}", nested=("hams_shared",) if role == "hams_open" and "hams_shared" in info else ())
+        info = sync_mirrors(transport, repos, root, log)
+        problems = verify_mirrors(transport, repos, root, info, log)
+        if problems:
+            log(f"[!] the mirror differs from the local trees ({'; '.join(problems[:3])}): rebuilding it in full")
+            info = sync_mirrors(transport, repos, root, log, force=True)
+            problems = verify_mirrors(transport, repos, root, info, log)
+        if problems:
+            return "infra", [f"mirror is not at the local commits after a full rebuild ({'; '.join(problems[:3])}); nothing was run there"], {}
+        header = "siblings: " + siblings_text(info)
+        log(header)
+        if siblings_out is not None:
+            siblings_out.update(info)
         ensure_node_modules(transport, f"{root}/hams_open/hams_shared", log)
         results_path = f"{root}/.lint_results.json"
         _check(transport.run(f"rm -f {shlex.quote(results_path)}"), "clear")
@@ -951,6 +1094,7 @@ class RemoteJob:
         self.names = [item["name"] for item in bundle["steps"]]
         self.out, self.print_lock = out, print_lock
         self.status, self.problems, self.seconds = "infra", ["not run"], {}
+        self.siblings = {}  # role -> {'sha', 'dirty'}: the commits the machine's mirrors were at (filled by run_on_machine)
         self.thread = threading.Thread(target=self._run, daemon=True)
 
     def _line(self, line):
@@ -960,7 +1104,8 @@ class RemoteJob:
     def _run(self):
         try:
             self.status, self.problems, self.seconds = run_on_machine(
-                self.host, self.machine, self.transport, self.repos, self.role, self.bundle, self._line, log=self._line
+                self.host, self.machine, self.transport, self.repos, self.role, self.bundle, self._line, log=self._line,
+                siblings_out=self.siblings,
             )
         except Exception as error:  # noqa: BLE001 - any failure of the machinery means "run it here"
             self.status, self.problems, self.seconds = "infra", [f"{type(error).__name__}: {error}"], {}
@@ -1031,13 +1176,13 @@ def record_unfit(host, names, path=None, now=None):
         pass
 
 
-def collect(jobs, all_steps, execute_here, result_class, out=print, on_unfit=None):
+def collect(jobs, all_steps, execute_here, result_class, out=print, on_unfit=None, siblings_out=None):
     """Wait for the remote jobs. Returns (results, hosts): a Result per remote step. The steps of a
     machine that could not do its job run here through `execute_here(steps)` (that machine is then not
     credited). A step that FAILED on a machine is run here again: the dev box is the reference
     environment, and a remote failure is often a package version or service the machine lacks; the
     local result stands, and the machine is not credited. `hosts` lists the machines whose steps all
-    ran and passed there."""
+    ran and passed there. `siblings_out` (a list) receives `<host>/<role>@<sha>/...` for each of those machines: the commits their mirrors held."""
     results, hosts = [], []
     for job in jobs:
         job.join()
@@ -1059,6 +1204,8 @@ def collect(jobs, all_steps, execute_here, result_class, out=print, on_unfit=Non
                 on_unfit(job.host, [r.name for r in confirmed if r.returncode == 0])
         else:
             hosts.append(job.host)
+            if siblings_out is not None and job.siblings:
+                siblings_out.append(job.host + "/" + siblings_text(job.siblings).replace(" ", "/"))
     return results, hosts
 
 

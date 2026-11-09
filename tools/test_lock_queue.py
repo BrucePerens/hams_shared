@@ -578,8 +578,8 @@ class TestMayTry(_SlotHolderMixin, _TmpDirCase):
         # same process waited with a ticket. The slotted waiter behind it counted that ticket as the oldest
         # waiter and never tried although three of four slots were free.
         child = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(child.wait)   # cleanups run last-in first-out: kill, then wait (the other way round waited the whole 60 s)
         self.addCleanup(child.kill)
-        self.addCleanup(child.wait)
         start = lq.proc_start_time(child.pid)
         running = lq.take_ticket(self.qdir, pid=child.pid, start=start)
         lq._write_atomic(self.qdir, "holder-%d-%d" % (child.pid, start),
@@ -882,6 +882,7 @@ class TestSlotsWiring(_TmpDirCase):
     def setUp(self):
         super().setUp()
         self.pids = {}
+        self.children = {}
 
     def env(self, **extra):
         env = dict(os.environ, HAMS_TEST_LOCK_PATH=self.lock_path, HAMS_SKIP_CI_LOAD_GATE="1",
@@ -913,6 +914,7 @@ class TestSlotsWiring(_TmpDirCase):
         self.addCleanup(child.wait)
         self.addCleanup(child.kill)
         self.pids[slot] = child.pid
+        self.children[slot] = child
         name = lq.write_holder(self.qdir, "test.py -u held_%d" % slot, pid=child.pid, slot=slot)
         self.addCleanup(lq.release_ticket, self.qdir, name)
         return f
@@ -1020,7 +1022,9 @@ class TestSlotsWiring(_TmpDirCase):
                 time.sleep(0.1)
             time.sleep(0.5)
             self.assertIsNone(p.poll(), "must still be waiting while every slot is held")
-            two.close()  # slot 2 is released
+            two.close()  # slot 2 is released: its flock, and its holder process, which ends (a live holder record reserves the slot
+            self.children[2].kill()  # for the take-back window, as a run between its exec and its relock; this test waited 60 s for the
+            self.children[2].wait()  # sleeping stand-in to end on its own)
             out, _ = p.communicate(timeout=120)
         finally:
             if p.poll() is None:

@@ -63,6 +63,12 @@ class EvaluateTests(unittest.TestCase):
             handle.write("[1]")
         self.assertEqual(self.evaluate()[0], "HOLD")
 
+    def test_a_stamp_in_the_future_is_hold(self):
+        self.write(written_epoch=NOW + 3600)
+        self.assertEqual(self.evaluate()[0], "HOLD")
+        self.write(written_epoch=NOW + 1)
+        self.assertEqual(self.evaluate()[0], "OK")
+
     def test_non_finite_timestamp_is_hold(self):
         with open(self.path, "w") as handle:
             handle.write('{"written_epoch": NaN, "dispatch": {"state": "OK"}}')

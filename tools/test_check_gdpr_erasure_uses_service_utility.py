@@ -242,7 +242,7 @@ class ResolveRepoRootTests(unittest.TestCase):
 
 
 class ResolveRepoRootsTests(unittest.TestCase):
-    # Regression test for the second half of the same bug class, found 2026-08-27:
+    # Regression test for the second half of the same repo-root redirect problem:
     # _resolve_repo_root's redirect only ever lands on ONE repo (hams_shared's literal parent) --
     # but real _execute_gdpr_erasure() overrides exist in both repos (17 files in hams_com, 7 in
     # hams_open), so the single-repo redirect left the larger half unscanned via run_linters.py's

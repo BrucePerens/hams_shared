@@ -8,6 +8,7 @@ Real files in temporary trees; the last class also checks the shipped ADR agains
 
 Tests [@ANCHOR: ext_programs:code_mask]
 Tests [@ANCHOR: ext_programs:test_spans]
+Tests [@ANCHOR: ext_programs:program_name]
 Tests [@ANCHOR: ext_programs:rust_launches]
 Tests [@ANCHOR: ext_programs:script_dependencies]
 Tests [@ANCHOR: ext_programs:adr_tables]
@@ -68,6 +69,17 @@ class CodeMaskTests(unittest.TestCase):
         self.assertEqual(masked.count("{"), 1)
 
 
+    def test_raw_byte_and_raw_c_strings_are_blanked_without_escapes(self):
+        for prefix in ("br", "cr", "r"):
+            src = 'let a = %s"x\\"; Command::new("later");' % prefix
+            masked = cepd.code_mask(src)
+            self.assertEqual(len(masked), len(src))
+            self.assertIn('Command::new("', masked, prefix)
+            self.assertEqual(cepd.rust_launches(src), ({"later"}, 0), prefix)
+        self.assertEqual(cepd.rust_launches('let a = br#"q"#; let b = 1; Command::new("p");'), ({"p"}, 0))
+        self.assertEqual(cepd.code_mask('let a = br#"{"#;').count("{"), 0)
+
+
 class TestSpansTests(unittest.TestCase):
     def test_cfg_test_module_with_nested_braces_is_one_span(self):
         src = "fn a() {}\n#[cfg(test)]\nmod tests { fn t() { if x { y } } }\nfn b() {}\n"
@@ -98,6 +110,37 @@ class RustLaunchTests(unittest.TestCase):
         names, dynamic = cepd.rust_launches(src)
         self.assertEqual(names, {"pactl", "amixer"})
         self.assertEqual(dynamic, 1)
+
+
+class ProgramNameTests(unittest.TestCase):
+    def test_absolute_path_names_its_basename_and_a_bare_name_is_unchanged(self):
+        """Tests [@ANCHOR: ext_programs:program_name]"""
+        self.assertEqual(cepd.program_name("/usr/sbin/ioreg"), "ioreg")
+        self.assertEqual(cepd.program_name("ioreg"), "ioreg")
+        self.assertEqual(cepd.program_name("/bin/sh"), "sh")
+
+    def test_a_literal_absolute_launch_is_the_named_program(self):
+        """Tests [@ANCHOR: ext_programs:program_name] [@ANCHOR: ext_programs:rust_launches]"""
+        names, dynamic = cepd.rust_launches('fn a() { Command::new("/usr/sbin/ioreg"); Command::new("pactl"); }\n')
+        self.assertEqual(names, {"ioreg", "pactl"})
+        self.assertEqual(dynamic, 0)
+
+    def test_an_absolute_launch_of_an_undocumented_program_is_still_a_finding(self):
+        """Tests [@ANCHOR: ext_programs:program_name] [@ANCHOR: ext_programs:find_findings]"""
+        with tempfile.TemporaryDirectory() as root:
+            relay = os.path.join(root, "daemons", "hams_local_relay", "src")
+            os.makedirs(relay)
+            with open(os.path.join(relay, "x.rs"), "w") as f:
+                f.write('fn a() { Command::new("/usr/bin/amixer"); Command::new("/usr/bin/nosuchtool"); }\n')
+            adr = os.path.join(root, "adr.md")
+            with open(adr, "w") as f:
+                f.write(ADR)
+            watch = os.path.join(root, "watch.json")
+            with open(watch, "w") as f:
+                f.write("{}")
+            findings = cepd.find_findings(root, adr, watch)
+        self.assertTrue(any("'nosuchtool'" in line for line in findings), findings)
+        self.assertFalse(any("'/usr/bin/nosuchtool'" in line or "amixer" in line for line in findings), findings)
 
 
 class ScriptTests(unittest.TestCase):

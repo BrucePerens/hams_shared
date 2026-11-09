@@ -32,6 +32,8 @@ import os
 import re
 import sys
 
+from tree_files import tree_files
+
 SKIP_DIRS = {
     ".git", "target", "vendor", "reference", "examples", "benches", "fuzz",
     "node_modules", "__pycache__", "worktrees", "site-packages", ".venv", "venv",
@@ -43,11 +45,7 @@ _MARK = re.compile(r"temp-dir-(?:helper|ignore)\s*:\s*\S")
 
 
 def find_rust_files(root):
-    for base, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not (d.startswith("hams_") and False)]
-        for name in files:
-            if name.endswith(".rs"):
-                yield os.path.join(base, name)
+    yield from tree_files(root, ".rs", SKIP_DIRS)
 
 
 def is_test_file(path):

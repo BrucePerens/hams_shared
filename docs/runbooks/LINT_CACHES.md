@@ -73,6 +73,13 @@ python3 tools/lint_remote.py caches [HOST...] [--prune|--clear]     # runners (d
   directories. It runs with `CARGO_INCREMENTAL=0`. An explicit `CARGO_TARGET_DIR` is used untouched. Its old directory,
   `~/.cache/hams-relay-export-test-target` (19 GB on mac1-vm by 2026-11-03), is listed as `legacy` by `show` and removed by
   `clear cargo`.
+* Fixed work checkouts (2026-11-09): `relay_structural.py` and `check_cargo_clippy.py` build in a copy of the checkout at
+  `~/.cache/hams-lint/work/<cargo directory name>/<repository>` (`lint_cache.work_checkout`, `sync_tree`), not in the
+  worktree. Cargo hashes absolute paths into the fingerprints of the workspace crates, so a build from a different
+  worktree each run recompiled the relay (163-183 s in a warm target) and a build from the same path is fresh (0.6 s). Only
+  changed files are rewritten, so unchanged ones keep their mtime (a sync reads both trees: 1-2 s). It costs about 0.55 GB
+  (hams_com) and 0.16 GB (hams_open) per Cargo directory, outside the `cargo_gb` budget. The copy is removed with its Cargo directory and by
+  `clear cargo`; it is skipped (build in place) with an explicit `CARGO_TARGET_DIR` or `--no-cache`.
 * Reported by `show` / `lint_remote.py caches` but never pruned (each is needed): `~/hams-lint-mirror`
   (8.6 GB on mac1-vm), `/opt/hams-testsrc` (26 GB), `~/.cache/ms-playwright` (0.6 GB) and `/var/lib/machines` (7 GB of Pi
   build root file systems for the arm64 builds).

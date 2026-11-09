@@ -15,6 +15,7 @@ Tests [@ANCHOR: odoo_test_batch:ineligible_reason]
 Tests [@ANCHOR: odoo_test_batch:main_checkout_root]
 Tests [@ANCHOR: odoo_test_batch:implicated_modules]
 Tests [@ANCHOR: odoo_test_batch:failing_tests]
+Tests [@ANCHOR: odoo_test_batch:odoo_failure_count]
 Tests [@ANCHOR: odoo_test_batch:module_finder]
 Tests [@ANCHOR: odoo_test_batch:plan_machine_split]
 Tests [@ANCHOR: odoo_test_batch:run_on_machine]
@@ -122,7 +123,7 @@ class UnitTests(unittest.TestCase):
         self.assertIn("internal", self.reason(namespace(internal_ns_init=True)))
         self.assertIn("internal", self.reason(namespace(preflight_done=True)))
         self.assertIn("mode xml", self.reason(namespace(mode="xml")))
-        for flag in ("test_tags", "coverage", "mcp", "pause_on_fail", "offline_isolation", "profile", "build_daemons", "keep_db"):
+        for flag in ("test_tags", "coverage", "mcp", "pause_on_fail", "offline_isolation", "profile", "build_daemons", "keep_db", "raw_failures"):
             self.assertIn("--" + flag.replace("_", "-"), self.reason(namespace(**{flag: "x" if flag == "test_tags" else True})))
         self.assertIn("whole-module", self.reason(namespace(module=None)))
         self.assertIn("whole-module", self.reason(namespace(module="ham_a:TestX")))
@@ -735,6 +736,50 @@ class TestCollectReadsTheReportOfAnySlot(unittest.TestCase):
     def test_higher_slot_report(self):
         union, failures = self.collect("filtered_test.slot-2.txt")
         self.assertEqual(list(failures), ["module ham_shack"])
+
+    @staticmethod
+    def collect_text(text, scopes):
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = os.path.join(tmp, "logs")
+            os.makedirs(logs)
+            with open(os.path.join(logs, "filtered_test.txt"), "w", encoding="utf-8") as handle:
+                handle.write(text)
+            runner = otb.OdooTestBatch.__new__(otb.OdooTestBatch)
+            runner.sdir = None
+            runner.current_members = [{"scope": [scope], "tip": scope} for scope in scopes]
+            runner._log = None
+            return runner.collect(tmp, os.path.join(tmp, "results"), "", 1)
+
+    # Tests [@ANCHOR: odoo_test_batch:OdooTestBatch]
+    def test_collect_blames_the_module_of_a_named_failing_test_the_extractor_did_not_implicate(self):
+        report = ("these modules are implicated in the failures:\n  - ham_a\nham_a Traceback boom\n"
+                  "2026-11-09 00:00:00 1 ERROR hams_test odoo.addons.ham_b.tests.test_x: ERROR: TestB.test_no_traceback\n")
+        _, failures = self.collect_text(report, ["ham_a", "ham_b"])
+        self.assertEqual(sorted(failures), ["module ham_a", "module ham_b"])
+        blamed, unattributed = batch_queue.blame_by_tokens(
+            failures, {"ham_a": ["tipA"], "ham_b": ["tipB"]}, otb.module_finder(["ham_a", "ham_b"]))
+        self.assertEqual((sorted(blamed), unattributed), (["tipA", "tipB"], []))
+
+    # Tests [@ANCHOR: odoo_test_batch:OdooTestBatch]
+    def test_collect_reads_a_failure_named_only_in_a_test_line_and_splits_one_odoo_counted_but_nobody_named(self):
+        only_line = "x ERROR hams_test odoo.addons.ham_b.tests.test_x: FAIL: TestB.test_one\n"
+        _, failures = self.collect_text(only_line, ["ham_a", "ham_b"])
+        self.assertEqual(list(failures), ["module ham_b"])
+        counted = (only_line + "odoo.tests.result: 2 failed, 0 error(s) of 40 tests when loading database 'd'\n")
+        _, failures = self.collect_text(counted, ["ham_a", "ham_b"])
+        self.assertEqual(sorted(failures), ["module ham_b", "test.py"])
+        _, failures = self.collect_text(only_line + "odoo.tests.result: 1 failed, 0 error(s) of 40 tests when loading database 'd'\n", ["ham_a", "ham_b"])
+        self.assertEqual(list(failures), ["module ham_b"])
+        _, failures = self.collect_text("Odoo died\n", ["ham_a"])
+        self.assertEqual(list(failures), ["test.py"])
+
+    # Tests [@ANCHOR: odoo_test_batch:odoo_failure_count]
+    def test_odoo_failure_count_sums_failures_and_errors_of_every_result_line(self):
+        text = ("odoo.tests.result: 1 failed, 2 error(s) of 9 tests when loading database 'a'\n"
+                "odoo.tests.result: 0 failed, 1 error(s) of 5 tests when loading database 'a'\n")
+        self.assertEqual(otb.odoo_failure_count(text), 4)
+        self.assertEqual(otb.odoo_failure_count("odoo.tests.result: 0 failed, 0 error(s) of 5 tests"), 0)
+        self.assertIsNone(otb.odoo_failure_count("no verdict here"))
 
 
 def drive(argv):

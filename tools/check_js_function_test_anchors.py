@@ -102,9 +102,9 @@ def _is_tour_registration_file(content):
 def _web_assets_tests_files(repo_root):
     """Every real file path any module's own `__manifest__.py` declares under the
     `web.assets_tests` bundle -- Odoo's own built-in, authoritative "this asset loads only during
-    test/tour execution, never on a real production page" declaration. Found live: a first attempt
-    at this exclusion used an import-graph heuristic (does any non-tour file ever import this one)
-    and correctly caught `tour_utils.js` (imported via a real `@module/path` ES import) but MISSED
+    test/tour execution, never on a real production page" declaration. An exclusion based on an
+    import-graph heuristic (does any non-tour file ever import this one)
+    would correctly catch `tour_utils.js` (imported via a real `@module/path` ES import) but MISS
     `tour_failure_dump.js` entirely -- that file is never `import`ed by anything at all; it's loaded
     as a raw script directly from the `web.assets_tests` bundle (confirmed directly,
     `zero_sudo/__manifest__.py`), a loading mechanism no import-graph search can see. The manifest

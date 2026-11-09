@@ -169,6 +169,17 @@ class BaselineFileTests(unittest.TestCase):
                 with self.assertRaises(known_red.BaselineError, msg=label):
                     known_red.load_baseline([path])
 
+    # Tests [@ANCHOR: known_red:load_baseline]
+    def test_a_time_in_the_future_stops_the_run_because_it_would_never_expire(self):
+        with tempfile.TemporaryDirectory() as directory:
+            late = write_baseline(directory, entry("m:A.t", days_ago=-30), name="a.json")
+            renewed = write_baseline(directory, dict(entry("m:A.t"), renewed={"time": when(-30), "reason": "r"}), name="b.json")
+            for path in (late, renewed):
+                with self.assertRaises(known_red.BaselineError):
+                    known_red.load_baseline([path])
+            skewed = write_baseline(directory, entry("m:A.t", days_ago=-1 / 48), name="c.json")
+            self.assertIn("m:A.t", known_red.load_baseline([skewed]))
+
     # Tests [@ANCHOR: known_red:baseline_paths]
     def test_paths_come_from_the_environment_or_the_repository_roots_and_only_existing_files_count(self):
         with tempfile.TemporaryDirectory() as directory:

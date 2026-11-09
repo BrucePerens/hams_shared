@@ -25,6 +25,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 import psutil
 
@@ -151,9 +152,10 @@ class ReapHeadlessChromesTests(unittest.TestCase):
         other = self._spawn(self._profile("other_session"))
         mine = self._profile("own")
 
-        rhc.reap_headless_chromes(mine)
-        time.sleep(1.0)  # audit-ignore-sleep
-
+        mine_killed = rhc.reap_headless_chromes(mine)
+        # Deterministic, no waiting for a wrong kill to show up: the reaper reports every pid it signalled, and by the time it
+        # returns it has seen no process of its profile left, so another profile's chrome is either in that set or untouched.
+        self.assertEqual(mine_killed, set(), "nothing used the profile, so nothing may be signalled")
         self.assertIsNone(
             other.poll(),
             "reap_headless_chromes() killed a headless chrome using a "
@@ -165,6 +167,19 @@ class ReapHeadlessChromesTests(unittest.TestCase):
             "the spared process must still be the real chrome binary",
         )
 
+    def test_the_other_profile_stays_alive_while_this_profile_is_reaped(self):
+        # Both profiles in use: reaping one signals only its processes and leaves the other's browser running.
+        other = self._spawn(self._profile("other_session"))
+        mine = self._profile("own")
+        mine_proc = self._spawn(mine)
+
+        killed = rhc.reap_headless_chromes(mine)
+
+        self._assert_exits(mine_proc)
+        self.assertIn(mine_proc.pid, killed)
+        self.assertNotIn(other.pid, killed)
+        self.assertIsNone(other.poll(), "the other profile's chrome must keep running")
+
     def test_profile_paths_are_compared_after_normalisation(self):
         # A trailing slash or a symlinked path names the same profile.
         profile = self._profile("own")
@@ -175,6 +190,42 @@ class ReapHeadlessChromesTests(unittest.TestCase):
         rhc.reap_headless_chromes(link + "/")
 
         self._assert_exits(proc)
+
+    def test_the_reaper_rescans_until_a_scan_finds_nothing(self):
+        # A Chrome that was starting can spawn a child after the first scan; the reaper must kill that one too instead of
+        # sleeping a fixed time and scanning once more.
+        class Fake:
+            def __init__(self, pid):
+                self.pid = pid
+                self.kills = 0
+
+            def kill(self):
+                self.kills += 1
+
+        first, late = Fake(10), Fake(11)
+        scans = iter([[first], [first, late], [late], []])
+        with patch.object(rhc, "_matching_chromes", lambda profile: iter(next(scans))), \
+             patch.object(rhc.time, "sleep") as slept:
+            killed = rhc.reap_headless_chromes(self.tmp)
+        self.assertEqual(killed, {10, 11})
+        self.assertGreaterEqual(first.kills, 1)
+        self.assertGreaterEqual(late.kills, 1)
+        self.assertEqual(slept.call_count, 3, "one short poll between scans, none once a scan is empty")
+
+    def test_a_chrome_that_will_not_die_is_given_up_on_at_the_deadline(self):
+        class Fake:
+            pid = 12
+
+            def kill(self):
+                pass
+
+        with patch.object(rhc, "_matching_chromes", lambda profile: iter([Fake()])), \
+             patch.object(rhc.time, "sleep"), \
+             patch.object(rhc.time, "monotonic", side_effect=[0.0, 1.0, 2.0, 3.0]), \
+             patch("sys.stderr") as err:
+            killed = rhc.reap_headless_chromes(self.tmp, wait_seconds=2.0)
+        self.assertEqual(killed, {12})
+        self.assertIn("still present", "".join(c.args[0] for c in err.write.call_args_list))
 
     def test_no_running_chromes_does_not_raise(self):
         # The common case (nothing to reap) must be a silent no-op, not an

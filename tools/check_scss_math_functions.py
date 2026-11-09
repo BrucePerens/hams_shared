@@ -54,6 +54,7 @@ Usage: check_scss_math_functions.py <repo_root> [<more_repo_roots>...]
 import os
 import re
 import sys
+from tree_files import tree_files
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".claude", "vendor", "target", "radae"}
 
@@ -402,19 +403,14 @@ def check_scss_text(text, name="<scss>"):
 
 def check_scss_math_functions(repo_root):
     violations = []
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
-        for filename in files:
-            if not filename.endswith(".scss"):
-                continue
-            path = os.path.join(root, filename)
-            try:
-                with open(path, "r", encoding="utf-8") as handle:
-                    text = handle.read()
-            except (UnicodeDecodeError, OSError) as error:
-                print(f"Warning: could not read {path}: {error}")
-                continue
-            violations.extend(check_scss_text(text, os.path.relpath(path, repo_root)))
+    for path in tree_files(repo_root, ".scss", SKIP_DIRS, skip_hidden=True, untracked=True):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        except (UnicodeDecodeError, OSError) as error:
+            print(f"Warning: could not read {path}: {error}")
+            continue
+        violations.extend(check_scss_text(text, os.path.relpath(path, repo_root)))
     return violations
 
 

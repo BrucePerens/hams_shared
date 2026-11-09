@@ -42,6 +42,7 @@ MAX_AGE_ENV = "HAMS_KNOWN_RED_MAX_AGE_DAYS"
 DEFAULT_MAX_AGE_DAYS = 3.0
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 MAX_RERUN_TESTS = 25
+MAX_FUTURE_SECONDS = 86400  # clock skew allowed in a baseline time
 FLAKE_FILE_NAME = "test_flakes.json"
 BASELINE_VERSION = 1
 RESULTS_VERSION = 1
@@ -237,10 +238,11 @@ def baseline_paths(base_dir, environ=None):
 
 
 # [@ANCHOR: known_red:load_baseline]
-def load_baseline(paths):
+def load_baseline(paths, now=time.time):
     """Reads baseline files into `{test_id: BaselineEntry}`. Raises `BaselineError` for unreadable JSON, a wrong
     version, a missing or empty field (`test_id`, `first_seen`, `first_seen_time` in `YYYY-MM-DDTHH:MM:SSZ`, `owner`,
-    `reason`), a malformed `renewed` (`{"time", "reason"}`, optional), a malformed test id, or the same id twice: a
+    `reason`), a malformed `renewed` (`{"time", "reason"}`, optional), a time more than a day in the future (an age counts from
+    it, and a future start would never expire), a malformed test id, or the same id twice: a
     baseline that is wrong must stop the run, never silently tolerate or drop a test."""
     entries = {}
     for path in paths:
@@ -260,11 +262,14 @@ def load_baseline(paths):
                 raise BaselineError("%s: an entry needs non-empty %s: %r" % (path, ", ".join(names), raw))
             renewed = raw.get("renewed")
             try:
-                _epoch(fields["first_seen_time"])
+                times = [fields["first_seen_time"]]
                 if renewed is not None:
                     if not isinstance(renewed, dict) or not str(renewed.get("reason", "")).strip():
                         raise ValueError("a renewal needs a reason")
-                    _epoch(renewed.get("time", ""))
+                    times.append(renewed.get("time", ""))
+                for text in times:
+                    if _epoch(text) > now() + MAX_FUTURE_SECONDS:
+                        raise ValueError("%s is in the future" % text)
             except (ValueError, TypeError) as error:
                 raise BaselineError("%s: bad time or renewal in %r (times are YYYY-MM-DDTHH:MM:SSZ): %s" % (path, raw, error)) from error
             found = _TEST_ID.match(fields["test_id"])

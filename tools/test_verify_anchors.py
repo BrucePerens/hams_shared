@@ -19,7 +19,7 @@ resolves to module "global" instead, which is a real, worth-knowing
 behavior of get_module()'s fallback chain, not a test-authoring shortcut.
 No real-repo assertions anywhere in this file: verify_anchors.py currently
 fails against the real hams_open/hams_com tree (a real, pre-existing
-documentation-coverage backlog, tracked separately in night_shift_todo.md,
+documentation-coverage backlog, tracked separately),
 not this sweep's concern), so any real-repo assertion here would be
 guaranteed-fragile on arrival.
 """
@@ -189,7 +189,7 @@ class FindAnchorsInDocsTests(unittest.TestCase):
         self.assertEqual(contracts, {})
 
     def test_a_code_islands_py_file_is_not_double_counted_as_a_doc_anchor(self):
-        # Real bug found live, 2026-09-06: a genuine PDF-generation pipeline
+        # A genuine PDF-generation pipeline
         # (build_spec.py/build_drawings.py/make_pdf.py) lives under
         # docs/proposals/.../_pipeline -- this scanner used to treat every
         # .py file under any docs/ subtree as documentation, so its real,
@@ -240,8 +240,8 @@ class FindAnchorsInCodeTests(unittest.TestCase):
     def test_a_rust_test_file_included_by_path_is_scanned_for_tests_links(self):
         # A crate that keeps its unit tests in `foo.rs.test`, pulled in with
         # `#[cfg(test)] #[path = "foo.rs.test"] mod tests;` (daemons/hams_simulated_band does),
-        # cites its features from that file. Found 2026-10-02: `.rs.test` was not scanned, so
-        # every such citation was invisible and each feature it covers read as untested.
+        # cites its features from that file. `.rs.test` must be scanned, otherwise
+        # every such citation is invisible and each feature it covers read as untested.
         _write(os.path.join(self.tmp, "daemons", "some_daemon", "src", "auth.rs"), "// [@ANCHOR: check_secret]\nfn check_secret() {}\n")
         _write(
             os.path.join(self.tmp, "daemons", "some_daemon", "src", "auth.rs.test"),
@@ -413,7 +413,7 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         self.assertEqual(anchor_locations, {})
 
     def test_a_second_anchor_on_the_same_line_is_classified_by_its_own_preceding_text(self):
-        # Real bug found 2026-09-10: classification used to reuse the text before the FIRST
+        # Classification used to reuse the text before the FIRST
         # anchor on a line for EVERY anchor on that line. A base declaration followed on the
         # same physical line by a real "# Verified by [@ANCHOR: ...]" comment silently dropped
         # the verification link entirely -- the second anchor was misclassified as a second base
@@ -449,7 +449,7 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         self.assertNotIn("mod_a:mentioned_elsewhere", code_anchors)
 
     def test_a_base_declaration_whose_preceding_text_merely_ends_in_the_word_tests_is_not_a_tests_link(self):
-        # Real bug found 2026-09-12, confirmed empirically: the "Tests"/"Verified by"/"Tested
+        # The "Tests"/"Verified by"/"Tested
         # by"/"Triggers"/"Triggered by" marker checks used bare `str.endswith(...)`, with no
         # word-boundary check at all. A perfectly ordinary base-declaration comment that happens
         # to end in a word SUFFIXED by "Tests" -- e.g. "UnitTests", nothing to do with the
@@ -457,7 +457,7 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         # test-covered, purely because "UnitTests".endswith("Tests") is True. Consequence: a truly
         # untested feature's own orphaned-source check (`a not in tests_links_set`) would
         # incorrectly conclude it already has test coverage, masking a real ADR-0054 gap -- a
-        # false negative in the exact class of bug this campaign hunts for.
+        # false negative.
         _write(
             os.path.join(self.tmp, "mod_a", "models", "foo.py"),
             "# Runs our UnitTests [@ANCHOR: COMM_should_be_a_base_anchor]\n",
@@ -874,7 +874,7 @@ class ReportMissingUxDocsTests(unittest.TestCase):
 
 
 class AddSiblingRepoTargetTests(unittest.TestCase):
-    # Real bug found 2026-09-10: the old check in main() tested for the substring
+    # The old check in main() tested for the substring
     # "hams_community" (a name no real directory in this codebase has ever used) or "hams_com"
     # anywhere in a target path. Since ANY path under a repo named "hams_com" trivially contains
     # the substring "hams_com", invoking verify_anchors.py unscoped from hams_com made that check
@@ -1017,8 +1017,7 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("Duplicate Semantic Anchors", out)
 
     def test_a_duplicate_base_anchor_declared_once_in_each_of_two_scanned_target_dirs_is_flagged(self):
-        # Real bug found 2026-09-12, confirmed empirically against this exact fixture before the
-        # fix (zero "Duplicate Semantic Anchors" output): find_anchors_in_code's own duplicate
+        # find_anchors_in_code's own duplicate
         # detection is scoped to a single call (one target_dir) -- main() calls it once per
         # `final_target` and merges the accumulated results afterward, but never re-checked the
         # merged `anchor_locations` for a base anchor declared once in EACH of two separately-
@@ -1044,8 +1043,7 @@ class MainIntegrationTests(unittest.TestCase):
 
 
 class SiblingRepoScanningIntegrationTests(unittest.TestCase):
-    """Real bug found 2026-09-12, confirmed empirically against the real hams_com/hams_open
-    checkouts before the fix: main()'s own `repo_root` (this script's containing directory,
+    """main()'s own `repo_root` (this script's containing directory,
     deliberately `hams_shared` itself -- see this file's own module docstring) was being passed
     straight into `_add_sibling_repo_target`, whose own logic and unit tests (see
     AddSiblingRepoTargetTests above) assume that argument IS the enclosing hams_com/hams_open

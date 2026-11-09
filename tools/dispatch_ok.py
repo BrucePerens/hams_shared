@@ -26,13 +26,14 @@ import time
 # [@ANCHOR: dispatch_ok:stats_format]
 # The part of the load display's stats.json this tool reads; see tools/README.md.
 DEFAULT_STATS = "/dev/shm/loadscreen/stats.json"
+MAX_FUTURE_SECONDS = 5.0  # a stamp further ahead than this is not from a running display (the clock stepped back, or it was written by hand)
 DEFAULT_MAX_AGE_SECONDS = 60.0  # the display rewrites every 5 s; a minute without a rewrite means it is not running
 
 
 # [@ANCHOR: dispatch_ok:evaluate]
 def evaluate(path=DEFAULT_STATS, max_age=DEFAULT_MAX_AGE_SECONDS, now=time.time):
     """(state, lines): state is "OK" or "HOLD"; lines are the human-readable reasons, then one line per free overflow machine.
-    Any problem reading the file (missing, bad JSON, no `dispatch` field, older than `max_age` seconds) is HOLD."""
+    Any problem reading the file (missing, bad JSON, no `dispatch` field, older than `max_age` seconds, or dated more than a few seconds ahead) is HOLD."""
     try:
         with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
@@ -49,6 +50,8 @@ def evaluate(path=DEFAULT_STATS, max_age=DEFAULT_MAX_AGE_SECONDS, now=time.time)
         return "HOLD", ["load stats have no written_epoch"]
     if age > max_age:
         return "HOLD", ["load stats are %d s old (limit %d s): the load display is not running" % (age, max_age)]
+    if age < -MAX_FUTURE_SECONDS:
+        return "HOLD", ["load stats are dated %d s in the future: the load display is not running" % -age]
     verdict = data.get("dispatch")
     if not isinstance(verdict, dict) or verdict.get("state") not in ("OK", "HOLD"):
         return "HOLD", ["load stats carry no dispatch verdict (old load display?)"]
