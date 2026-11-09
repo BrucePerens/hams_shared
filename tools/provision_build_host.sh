@@ -115,11 +115,12 @@ for line in open(sys.argv[1], encoding="utf-8"):
     m = re.match(r"([A-Za-z0-9_.-]+)==([^\s\\]+)", line)
     if not m:
         continue
-    try:
-        if metadata.version(m.group(1)) == m.group(2):
-            continue
-    except metadata.PackageNotFoundError:
-        pass
+    # Every visible copy must be the pinned version: a host with several overlapping dist-info directories for one package (a dirty
+    # /usr/local dist-packages) made pip treat the pin as satisfied while the hash-pinned user-level set was broken (bruce16, 2026-11-08).
+    name = re.sub(r"[-_.]+", "-", m.group(1)).lower()
+    found = {d.version for d in metadata.distributions() if re.sub(r"[-_.]+", "-", d.metadata["Name"] or "").lower() == name}
+    if found == {m.group(2)}:
+        continue
     print(f"{m.group(1)}=={m.group(2)}")
 PY
 }
@@ -196,7 +197,8 @@ do_pip() {
   local pm; pm="$(pip_missing)"
   [ -z "$pm" ] && { say "python: nothing missing"; return 0; }
   say "python: installing $(echo "$pm" | tr '\n' ' ')"
-  python3 -m pip install --user --break-system-packages --require-hashes --only-binary :all: -r "$REQS" || return 1
+  # --ignore-installed: a copy already on the system (even a broken or overlapping one) must not make pip skip the pinned wheel; --no-deps: the file pins the whole closure.
+  python3 -m pip install --user --break-system-packages --ignore-installed --no-deps --require-hashes --only-binary :all: -r "$REQS" || return 1
   local p; for p in $pm; do record pip-installed.txt "${p%%==*}"; done
 }
 
