@@ -616,7 +616,7 @@ def remove_tree(path):
 
 
 # [@ANCHOR: ram_dirs:sweep]
-def sweep(pol=None, environ=None, say=None, now=time.time, remove=remove_tree):
+def sweep(pol=None, environ=None, say=None, now=time.time, remove=remove_tree, dry_run=False):
     """Remove the per-job directories (`hams-cargo-target-*`) under the RAM root whose owner is gone, and stale test
     TMPDIR leftovers. Returns the sorted names removed. Never raises.
 
@@ -644,12 +644,16 @@ def sweep(pol=None, environ=None, say=None, now=time.time, remove=remove_tree):
                 continue  # a kept job's directory stays for `pol.keep_hours` after its last use; `gc` decides
             if state == "unmarked" and current - newest_mtime(full) < UNMARKED_HOURS * 3600:
                 continue
+            if dry_run:
+                removed.append(name)
+                continue
             size = tree_bytes(full)
+            idle = current - newest_mtime(full)  # before the removal: afterwards there is nothing to measure
             if remove(full):
                 removed.append(name)
                 reason = "its job is gone" if state == "dead" else "unmarked and idle"
                 say(f"removed {full} ({reason})")
-                log_removal(pol, name, size, current - newest_mtime(full) if os.path.exists(full) else None, reason, now, owner)
+                log_removal(pol, name, size, idle, reason, now, owner)
             else:
                 say(f"could not remove {full}; remove it with: sudo rm -rf {full}")
         elif name == TEST_TMP_NAME and os.path.isdir(full) and not os.path.islink(full):
@@ -662,7 +666,11 @@ def sweep(pol=None, environ=None, say=None, now=time.time, remove=remove_tree):
                 path = os.path.join(full, child)
                 if re.match(r"^slot-[0-9]+\Z", child) or os.path.islink(path):
                     continue
-                if current - newest_mtime(path) >= TEST_TMP_STALE_HOURS * 3600 and remove(path):
+                if current - newest_mtime(path) < TEST_TMP_STALE_HOURS * 3600:
+                    continue
+                if dry_run:
+                    removed.append(f"{name}/{child}")
+                elif remove(path):
                     removed.append(f"{name}/{child}")
                     say(f"removed stale {path}")
     return sorted(removed)
@@ -1044,10 +1052,18 @@ def main(argv=None):
             sweep()
             return 0
         if args.command == "gc":
-            sweep()
-            for name, size, reason in gc(dry_run=args.dry_run):
-                if args.dry_run:
+            if args.dry_run:
+                # Nothing is removed, logged or touched. `gc` lists the job directories; `sweep` adds what only it removes.
+                listed = set()
+                for name, size, reason in gc(dry_run=True):
+                    listed.add(name)
                     print(f"ram_dirs: would remove {name} ({size / GB:.2f} GB, {reason})", file=sys.stderr)
+                for name in sweep(dry_run=True):
+                    if name not in listed:
+                        print(f"ram_dirs: would remove {name} (swept: its job is gone, or it is stale)", file=sys.stderr)
+                return 0
+            sweep()
+            gc()
             return 0
         if args.command == "usage":
             print(json.dumps(usage(), indent=1))
