@@ -76,3 +76,29 @@ of those words). If you think you must signal a protected process, stop and tell
 > queue for the Odoo test runner. A protected process (PostgreSQL, Redis, RabbitMQ, systemd, sshd, another user's or another
 > agent's process) is never yours to signal. The Bash guard hook denies the forbidden commands; a human may override it with
 > `HAMS_ALLOW_SIGNALS=1` (logged to `~/.cache/hams-jobs/guard.log`); an agent must never set it.
+
+## Where the guard hook is registered, and how to verify it (added 2026-11-09)
+
+`tools/claude_hooks/guard_signals.py` is a PreToolUse hook on the Bash tool. A repo's `.claude/settings.json` only applies to
+sessions rooted in that repo, so an agent in a scratch directory or a worktree outside the repo tree ran unguarded; on
+2026-11-09 one such agent killed `systemd --user`. The hook must therefore be registered in **both** places:
+
+- **User level**, `~/.claude/settings.json` (applies to every session on the machine, wherever its working directory is).
+- **Each repo's `.claude/settings.json`**: hams_com, hams_open and hams_shared.
+
+Both entries use the same command (`f="$HOME/workspace/hams_open/hams_shared/tools/claude_hooks/guard_signals.py"; [ -f "$f" ] || exit 0; exec python3 "$f"`),
+so the hook is a silent no-op on a machine that has no checkout.
+
+**Verify it** from a checkout (the path is relative to the repo root):
+
+```
+echo '{"tool_name":"Bash","tool_input":{"command":"kill $PPID"}}' | python3 hams_shared/tools/claude_hooks/guard_signals.py
+```
+
+It must print a JSON decision with `"permissionDecision": "deny"`. No output means the hook allowed the command: stop and fix
+it before doing process work. This proves the script, not the registration; also confirm the `guard_signals.py` command
+appears under `hooks.PreToolUse` (matcher `Bash`) in `~/.claude/settings.json` and in each repo's `.claude/settings.json`.
+
+**A new machine needs it** (user level and per repo) before any agent runs there. Provisioning an agent host is not complete
+until the user-level entry exists and the command above prints a deny. `devbox_tools/check_claude_settings.py` is the place to
+check settings; whether it can verify this registration too is not done yet.
