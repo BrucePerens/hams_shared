@@ -44,10 +44,9 @@ _IGNORE_DIRS = {
     "radae",
     # Stale `git worktree add` checkouts under .claude/worktrees/<hash>/ --
     # frozen, historical copies from past agent sessions, not live source.
-    # Found live wiring this check into run_linters.py: several already-
-    # fixed test.js files still had old, broken worktree copies lingering
-    # here, which this check flagged even though the real source was
-    # clean. Same reasoning as check_absolute_paths.py's own archive/
+    # Already-fixed test.js files can have old, broken worktree copies
+    # lingering here, which this check would flag even though the real
+    # source is clean. Same reasoning as check_absolute_paths.py's own archive/
     # exclusion and check_hoot_runner_coverage.py's own ignore_dirs.
     ".claude",
     # Matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/site-packages/
