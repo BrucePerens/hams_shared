@@ -873,7 +873,7 @@ class ReserveTests(unittest.TestCase):
         self.assertEqual(lr.parse_probe("m", "os=Linux\ncores=4\nsessions=3\n").sessions, 3)
         self.assertEqual(lr.parse_probe("m", "os=Linux\nsessions=x\n").sessions, 0)
         real = lr.load_inventory()
-        self.assertIn("TODO", real["bruce16"]["host"])
+        self.assertEqual((real["bruce16"]["host"], real["bruce16"]["user"], real["bruce16"]["provisioned"]), ("bruce16.lan", "ai", False))
         self.assertNotIn("bruce16", lr.runners(real))
         self.assertEqual(real["bruce16"]["nice"], 19)
         self.assertTrue(real["bruce16"]["reserve"]["skip_when_user_session"])

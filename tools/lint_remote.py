@@ -383,9 +383,14 @@ def apply_reserve(machine, probe, jobs):
         return probe, jobs, ""
     if reserve.get("skip_when_user_session") and probe.sessions > 0:
         return probe, jobs, "reserved: %d user session(s) active" % probe.sessions
-    fraction = reserve.get("max_core_fraction")
-    if fraction:
-        jobs = min(jobs, max(1, int(probe.cores * float(fraction))))
+    try:
+        fraction = float(reserve.get("max_core_fraction") or 0)
+        if not math.isfinite(fraction):
+            raise ValueError(fraction)
+    except (TypeError, ValueError):
+        fraction = 0.5  # a malformed value keeps the machine at half its cores, the policy's default
+    if reserve.get("max_core_fraction"):
+        jobs = min(jobs, max(1, math.floor(probe.cores * fraction)))
     hidden = set(reserve.get("never_caps") or ())
     if hidden:
         probe = dataclasses.replace(probe, caps=probe.caps - hidden)
