@@ -243,6 +243,8 @@ STEP_META = {
     "check_external_programs_documented": {"suffixes": frozenset({".rs", ".sh", ".ps1", ".md", ".json"})},
     "check_int_float_overflow": {"suffixes": _PY},
     "check_float_isfinite": {"suffixes": _PY},
+    # Reads every .py and .sh file of both repositories and its own known list (boundary_hazards_known.json).
+    "check_boundary_hazards": {"suffixes": frozenset({".py", ".sh", ".json"})},
     "check_untyped_utility_files": {
         "suffixes": frozenset({".py", ".ini", ".cfg", ".toml", ".pyi"})
     },
@@ -2570,6 +2572,18 @@ def main():
     _add(
         "check_float_isfinite",
         [python_exec, os.path.join(dir_path, "tools", "check_float_isfinite.py"), *_pair_roots],
+        print_ok=False,
+    )
+
+    # check_boundary_hazards -- five shapes of bug the 2026-11-09 bug hunts found by hand, in one pass over every .py/.sh file of both
+    # repositories (hams_shared/tools/check_boundary_hazards.py docstring): a credential header sent through urllib with no
+    # redirect-refusing handler; a raw command line in a log call; a public @api.model method that acts as a service account and
+    # never checks its caller (RPC-callable by any signed-in user); a `gh --json files` listing (capped at 100) treated as complete;
+    # gmtime/fromtimestamp of an unchecked outside number. Known, not yet fixed findings sit in boundary_hazards_known.json with an
+    # owner and a reason; an entry that no longer matches a finding fails. One process over both roots, like steps 47-50.
+    _add(
+        "check_boundary_hazards",
+        [python_exec, os.path.join(dir_path, "tools", "check_boundary_hazards.py"), *_pair_roots],
         print_ok=False,
     )
 

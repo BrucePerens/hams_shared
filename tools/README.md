@@ -4717,3 +4717,42 @@ SIGTERM then SIGKILL to the group a child leads; refuses a reused pid, a pid tha
 
 ### `[@ANCHOR: hang_guard:run_limited]` `run_limited(argv, limit, label, directory=None, **popen_kwargs)`
 `subprocess.run` with a limit: on timeout the report first, then `stop_own_group`; returns (completed, report path, timed_out).
+## Boundary hazards (`check_boundary_hazards.py`)
+
+Five shapes of bug that the 2026-11-09 bug hunts kept finding by hand, checked in one lint step (`check_boundary_hazards`) over every `.py` and `.sh` file of hams_com and
+hams_open (hams_shared is scanned as part of hams_open). Each file is parsed once and each rule looks at the same tree. The rules are syntax heuristics, not dataflow; each is
+tuned to stay silent unless the dangerous shape is really there. Test files (`tests/`, `test_*.py`) are not judged by the rules that look at product code; the `gh` rule judges
+every file. The scan prints `rule path:line: message` and exits 1 when a finding is neither silenced nor on the known list.
+
+| Rule id | Flags | The bug | The fix |
+|---|---|---|---|
+| `credential-redirect` | A credential header (`X-API-Key`, `Authorization`, `X-Auth-Token`, `Private-Token`, ...) built in a file that sends with `urllib.request` and has no `HTTPRedirectHandler` and no `ssrf_safe_fetch` | urllib follows a 3xx answer to any host and copies every header to it, so one redirect hands the key to whoever the answer names | Send through `urllib.request.build_opener(_NoRedirect)` where `_NoRedirect.redirect_request` returns `None` |
+| `argv-log` | A call on a logger (`logger`, `_logger`, `log`, `logging`, `self.logger`) whose argument is a `cmdline` value, `sys.argv` whole or sliced, a `cmd`/`argv` list, or the joined text of one | A command line can carry a secret (`--token X`, a URL with a key, `--db_password`) and a log file outlives the process | Log the program name and a count, or only arguments known to be safe. `cmd[0]`, `len(cmd)` and `sys.argv[0]` are not flagged |
+| `rpc-service-identity` | A public (no leading underscore) `@api.model` method of an Odoo model (class with `_name`/`_inherit`) without `@api.private` that calls `_get_service_env`, `_get_service_uid`, `with_user`, `sudo` or a `_*service*()` helper and has no caller check in its body (`env.su`, `env.user`, `has_group`, `check_access*`, `AccessError`, a `_require*`/`_check*`/`_assert*`/`_ensure*`/`_authorize*`/`_guard*`/`_verify*` call) | `/web/dataset/call_kw` lets any signed-in user call every public method, so the method borrows a service account for them | `@api.private` (still callable from Python and cron), a leading underscore, or check the caller (group of the legitimate daemon account, `env.su`) first |
+| `gh-truncated-listing` | `gh ... --json` with `files` and no `changedFiles` in the same command, or `gh api .../pulls/N/files` without `--paginate` (Python argv lists and shell lines, continued lines joined) | A pull request's file list stops at 100 entries (a page is 30 or 100); treating it as complete judges a large pull request on a fraction of its files | Ask for `changedFiles` too and refuse or page when the counts differ; `--paginate` |
+| `timestamp-range` | `time.gmtime`/`localtime`, `datetime.fromtimestamp`/`utcfromtimestamp` of a value that is not this machine's clock, a file time, a constant or arithmetic of those (also through a local only assigned such values), with no `math.isfinite` in the function and no enclosing `try` that covers OverflowError, ValueError and OSError (or `Exception`) | JSON accepts `1e999` and `NaN`; they raise out of these calls with a type an `except ValueError` does not catch, and a huge integer raises a third | Check the value is finite and inside the years you accept before converting, and skip or reject the record |
+
+**Silencing, in order of preference.** Fix the finding. A site that is safe and says why carries a same-line `# boundary-hazard-ignore: <rule-id>: <reason>` (the reason is required; the
+comment goes on the `def` or a decorator line for `rpc-service-identity`, on any line of the `gh` command for `gh-truncated-listing`). A finding that is real and not fixed yet goes in
+`boundary_hazards_known.json`: `{"version": 1, "entries": [{"rule", "path", "symbol", "owner", "reason", "recorded"}, ...]}`, where `path` is relative to its repository, `symbol` is the
+`Class.method` or function the finding sits in (the line may move), `owner` is the accountable person or module owner and `reason` says what is pending. An entry with an empty
+field or an unknown rule is an error and does not excuse anything; an entry whose finding is gone is an error ("remove the entry"), so the list can only shrink. A path that no scanned
+root has is judged only when both repositories are scanned.
+
+### `[@ANCHOR: boundary_hazards:find_files]` `find_files(repo_root)`
+
+Purpose: the files one root contributes. Takes `repo_root` (str, a repository checkout). Returns a sorted list of absolute paths of the tracked, unignored `.py` and `.sh` files, skipping
+`__pycache__`, `node_modules`, virtual environments (any directory containing `site-packages`), `target`, `.git` and `worktrees`. Reads the file system and `git ls-files` through
+`tree_files`; no side effects.
+
+### `[@ANCHOR: boundary_hazards:check_file]` `check_file(path)`
+
+Purpose: runs every rule on one file. Takes `path` (str). Returns a list of `[rule, symbol, line, message]` lists (JSON values, so the per-file result cache can store them) before the known list
+is applied; an empty list for a file that does not parse. A `.sh` file is judged by `gh-truncated-listing` only; a test file is judged by that rule only. Reads the file; no side effects, no network.
+A same-line `boundary-hazard-ignore` comment for the finding's rule removes it here, so the cache never holds an ignored finding.
+
+### `[@ANCHOR: boundary_hazards:load_known]` `load_known(path=None)`
+
+Purpose: reads the known list. Takes `path` (str or None; default `boundary_hazards_known.json` beside the script). Returns `(entries, problems)`: the entries that are well formed (rule exists,
+`rule`, `path`, `symbol`, `owner`, `reason` all non-empty) and one message per malformed entry. A missing file is an empty list. Raises `json.JSONDecodeError` for a file that is not JSON,
+which fails the step. Reads the file; no side effects.
