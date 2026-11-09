@@ -11204,7 +11204,6 @@ def _pinned_sha256(file_spec, env_vars):
     return None
 
 
-# [@ANCHOR: infrastructure:provision_static_files]
 SUDOERS_DIR = "/etc/sudoers.d"
 VISUDO = "/usr/sbin/visudo"
 
@@ -11273,6 +11272,7 @@ def _install_sudoers_file(path, content, owner, mode, dest_dir=""):
                 os.unlink(tmp)
 
 
+# [@ANCHOR: infrastructure:provision_static_files]
 def provision_static_files(run_cmd_func, env_vars, environment="prod", dest_dir="", only_host_class=None,
                            skip_apt=False):
     """Writes the MANIFEST static_files for `environment`. skip_apt=True (test.py, provision with no apt phase)
