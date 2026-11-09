@@ -107,8 +107,8 @@ def classify_path(rel):
     return "full", "unknown file type, cannot map it"
 
 
-# [@ANCHOR: test_impact:test_classes]
-def test_classes(path):
+# [@ANCHOR: test_impact:classes_in_test_file]
+def classes_in_test_file(path):
     """Names of the top-level classes with a base class in a test file (the Odoo test cases); [] when the file is missing,
     unreadable or defines none, which means the caller cannot narrow to classes."""
     try:
@@ -167,7 +167,7 @@ def analyze(changes, modules):
         everything = sorted(doc_modules | test_modules)
         tags, narrow = [], not doc_modules
         for module in sorted(test_modules):
-            classes = sorted({c for path in tests[module] for c in test_classes(path)})
+            classes = sorted({c for path in tests[module] for c in classes_in_test_file(path)})
             if not classes:
                 narrow = False
                 reasons.append("%s: a changed test file has no readable test class, so no --test-tags" % module)

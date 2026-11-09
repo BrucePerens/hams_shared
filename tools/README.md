@@ -3281,7 +3281,7 @@ Returns `(category, reason)`: `full` (manifest, `security/`, `data/`, `views/`, 
 types), `code` (code and assets, including `tests/` helpers other than `test_*.py`, since dependents may import them), `test` (`tests/test_*.py`),
 `doc` (Markdown, `docs/`).
 
-### `[@ANCHOR: test_impact:test_classes]` `test_classes(path)`
+### `[@ANCHOR: test_impact:classes_in_test_file]` `classes_in_test_file(path)`
 
 Purpose: lets `--test-tags` name test classes. Parses a test file (never imports it) and returns the top-level classes that have a base class.
 

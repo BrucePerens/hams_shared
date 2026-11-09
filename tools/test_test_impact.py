@@ -10,7 +10,7 @@ Tests [@ANCHOR: test_impact:module_dirs]
 Tests [@ANCHOR: test_impact:read_depends]
 Tests [@ANCHOR: test_impact:reverse_closure]
 Tests [@ANCHOR: test_impact:classify_path]
-Tests [@ANCHOR: test_impact:test_classes]
+Tests [@ANCHOR: test_impact:classes_in_test_file]
 Tests [@ANCHOR: test_impact:analyze]
 Tests [@ANCHOR: test_impact:build_command]
 Tests [@ANCHOR: test_impact:changed_files]
@@ -82,10 +82,10 @@ class ImpactTests(unittest.TestCase):
         for rel, category in expect.items():
             self.assertEqual(ti.classify_path(rel)[0], category, rel)
 
-    def test_test_classes_reads_only_classes_with_bases(self):
-        self.assertEqual(ti.test_classes(os.path.join(self.modules["mid"], "tests/test_a.py")), ["TestOne", "TestTwo"])
-        self.assertEqual(ti.test_classes(os.path.join(self.modules["top"], "tests/test_b.py")), [])
-        self.assertEqual(ti.test_classes("/nonexistent/test_x.py"), [])
+    def test_classes_in_test_file_reads_only_classes_with_bases(self):
+        self.assertEqual(ti.classes_in_test_file(os.path.join(self.modules["mid"], "tests/test_a.py")), ["TestOne", "TestTwo"])
+        self.assertEqual(ti.classes_in_test_file(os.path.join(self.modules["top"], "tests/test_b.py")), [])
+        self.assertEqual(ti.classes_in_test_file("/nonexistent/test_x.py"), [])
 
     def test_code_change_runs_module_and_dependents(self):
         impact = self.run_for("base/models/m.py")
