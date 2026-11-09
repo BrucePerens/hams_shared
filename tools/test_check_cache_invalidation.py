@@ -247,6 +247,8 @@ class MainIntegrationTests(unittest.TestCase):
         # unlike every sibling checker in this tree, an unpruned walk wouldn't even exclude .git/node_modules/
         # venv, let alone this project's own standing .claude/worktrees/<session>/ convention (a
         # real git worktree checkout, verified with a real `git worktree add`).
+        # One real file in scope: a scan of nothing is red (check_target.py), and the pruning below is only proven if the walk finds something.
+        _write(os.path.join(self.tmp, "mod_ok", "models", "ok.py"), "x = 1\n")
         _write(
             os.path.join(
                 self.tmp, ".claude", "worktrees", "sess1", "mod_a", "models", "foo.py"
@@ -258,6 +260,8 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("passed successfully", out)
 
     def test_the_same_violation_outside_a_models_directory_is_not_scanned(self):
+        # One real file in scope: a scan of nothing is red (check_target.py), and the pruning below is only proven if the walk finds something.
+        _write(os.path.join(self.tmp, "mod_ok", "models", "ok.py"), "x = 1\n")
         _write(
             os.path.join(self.tmp, "mod_a", "tools", "foo.py"),
             "def foo(self):\n    self.env.cr.execute('UPDATE x SET y = 1')\n",

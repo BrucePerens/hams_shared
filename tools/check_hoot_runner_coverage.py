@@ -60,6 +60,7 @@ import ast
 import os
 import re
 import sys
+import check_target
 from urllib.parse import unquote
 from tree_files import tree_walk
 
@@ -379,6 +380,7 @@ def main():
         sys.exit(1)
 
     violations = []
+    roots = [check_target.require_directory(root, "check_hoot_runner_coverage") for root in sys.argv[1:]]
 
     # Pass 1: every tag any wrapper asks for, and every tag any suite declares, across every
     # scanned root, before judging any module or wrapper -- neither side of either cross-
@@ -408,10 +410,12 @@ def main():
         violations.extend(check_wrapper_requests_declared_tag(repo_root, declared_tags))
 
     # Pass 2: judge each module.
-    for repo_root in sys.argv[1:]:
+    for repo_root in roots:
+        manifests_seen = 0
         for root, _dirs, files in tree_walk(repo_root, "__manifest__.py", _IGNORE_DIRS, untracked=True):
             if "__manifest__.py" not in files:
                 continue
+            manifests_seen += 1
 
             manifest_path = os.path.join(root, "__manifest__.py")
             try:
@@ -475,6 +479,8 @@ def main():
                     f"runner following ham_dx_cluster/tests/test_dx_cluster_widget_hoot.py's "
                     f"pattern."
                 )
+        # Per root: a root with no module is an empty scan even when another root had modules.
+        check_target.require_scanned(manifests_seen, repo_root, "check_hoot_runner_coverage", "module manifests (__manifest__.py)")
 
     if violations:
         for v in violations:

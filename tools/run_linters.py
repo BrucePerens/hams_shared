@@ -19,6 +19,7 @@ import subprocess
 import time
 
 import batch_queue
+import check_target
 import lint_cache
 import lint_exec
 import lint_batch
@@ -930,6 +931,19 @@ def write_eslint_project(hams_shared_dir, repos):
     return path
 
 
+def checker_env(argv):
+    """The environment of a step that runs a `tools/check_*.py` linter: the parent's, plus HAMS_CHECK_ALLOW_EMPTY=1 (check_target.py).
+
+    run_linters hands a checker a whole repository or a module directory it chose itself, and one of them may hold none of the
+    files that checker reads (hams_shared has no SCSS, a module has no Rust), so an empty scan is normal here and is not a failure.
+    A target that does not exist or is not a directory still fails inside the checker. Run by hand a checker is strict.
+    None (inherit) for every other step."""
+    script = os.path.basename(str(argv[1])) if argv and len(argv) > 1 else ""
+    if not (script.startswith("check_") and script.endswith(".py")):
+        return None
+    return dict(os.environ, **{check_target.ALLOW_EMPTY_ENV: "1"})
+
+
 def _run_per_target_checker(python_exec, dir_path, script_name, targets):
     """Run a `hams_shared/tools/check_*.py` script that only ever reads a SINGLE repo-dir
     argument -- once per entry in `targets`, instead of batching every target into one argv
@@ -959,6 +973,7 @@ def _run_per_target_checker(python_exec, dir_path, script_name, targets):
             [python_exec, os.path.join(dir_path, "tools", script_name), target],
             capture_output=True,
             text=True,
+            env=checker_env([python_exec, script_name]),
         )
         if res.returncode != 0:
             if res.stdout:
@@ -1351,6 +1366,8 @@ def main():
         it defaults to the whole repo pair with every file suffix, which is always safe."""
         inputs = step_options.pop("inputs", None)
         roots, suffixes = inputs if inputs else _default_inputs(dir_path, sibling_dir, real_shared_dir, repo_root)
+        if "env" not in step_options:
+            step_options["env"] = checker_env(argv)
         steps.append(
             lint_exec.Step(
                 name=name,

@@ -194,9 +194,13 @@ class MainIntegrationTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _run(self):
+    def _run(self, strict=False):
+        # Opt-out (check_target.py) unless `strict`: the tests of the skip rules have no resolvable asset left to scan.
+        env = {k: v for k, v in os.environ.items() if k != "HAMS_CHECK_ALLOW_EMPTY"}
+        if not strict:
+            env["HAMS_CHECK_ALLOW_EMPTY"] = "1"
         result = subprocess.run(
-            [sys.executable, _SCRIPT, self.tmp], capture_output=True, text=True, timeout=30
+            [sys.executable, _SCRIPT, self.tmp], capture_output=True, text=True, timeout=30, env=env
         )
         return result.returncode, result.stdout + result.stderr
 
@@ -204,6 +208,11 @@ class MainIntegrationTests(unittest.TestCase):
         code, out = self._run()
         self.assertEqual(code, 0, out)
         self.assertIn("No bundled JS assets found", out)
+
+    def test_no_bundled_js_assets_fails_when_run_by_hand(self):
+        code, out = self._run(strict=True)
+        self.assertEqual(code, 2, out)
+        self.assertIn("scanned 0", out)
 
     def test_a_clean_bundled_js_file_passes(self):
         _write(

@@ -54,6 +54,7 @@ Usage: check_scss_math_functions.py <repo_root> [<more_repo_roots>...]
 import os
 import re
 import sys
+import check_target
 from tree_files import tree_files
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".claude", "vendor", "target", "radae"}
@@ -432,6 +433,10 @@ if __name__ == "__main__":
         sys.exit(2)
     found = []
     for scan_root in resolve_repo_roots(sys.argv[1:]):
+        check_target.require_directory(scan_root, "check_scss_math_functions")
+        check_target.require_scanned(
+            len(tree_files(scan_root, ".scss", SKIP_DIRS, skip_hidden=True, untracked=True)), scan_root, "check_scss_math_functions", "*.scss files"
+        )
         found.extend(check_scss_math_functions(scan_root))
     if found:
         print("❌ SCSS min()/max()/clamp() violations (Odoo's libsass would fail the whole asset bundle):")

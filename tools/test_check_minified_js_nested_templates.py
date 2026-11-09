@@ -225,12 +225,21 @@ class MainIntegrationTests(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
 
-    def _run(self):
+    def _run(self, strict=False):
+        # Opt-out (check_target.py) unless `strict`: the tests of the skip rules have no resolvable asset left to scan.
+        env = {k: v for k, v in os.environ.items() if k != "HAMS_CHECK_ALLOW_EMPTY"}
+        if not strict:
+            env["HAMS_CHECK_ALLOW_EMPTY"] = "1"
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_minified_js_nested_templates.py")
         result = subprocess.run(
-            [sys.executable, script, self.tmp], capture_output=True, text=True, timeout=30
+            [sys.executable, script, self.tmp], capture_output=True, text=True, timeout=30, env=env
         )
         return result.returncode, result.stdout + result.stderr
+
+    def test_no_bundled_js_assets_fails_when_run_by_hand(self):
+        code, out = self._run(strict=True)
+        self.assertEqual(code, 2, out)
+        self.assertIn("scanned 0", out)
 
     def test_a_clean_bundled_js_file_passes(self):
         self._write(

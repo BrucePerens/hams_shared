@@ -1173,6 +1173,7 @@ EXCEPTION_REPORT_EXCLUDED_UNITS = {
     "hams-b2-backup.service": _BACKUP_REASON,
     "hams-b2-restore-test.service": _BACKUP_REASON,
     "hams-b2-backup-check.service": _BACKUP_REASON,
+    "hams-backup-selftest.service": _BACKUP_REASON,
 }
 
 
@@ -1703,6 +1704,10 @@ SANDBOX_BASELINE_EXEMPTIONS = {
     "hams-b2-restore-test.service": (
         frozenset({"CapabilityBoundingSet"}),
         _B2_UNIT % "restores sampled files and one database",
+    ),
+    "hams-backup-selftest.service": (
+        frozenset({"CapabilityBoundingSet"}),
+        _B2_UNIT % "checks the pgBackRest archive, ages, WAL chain and verify as postgres and runs the kopia restore test",
     ),
     "hams.daemon.keys.service": (
         frozenset({"ProtectSystem"}),
@@ -4751,6 +4756,71 @@ WantedBy=timers.target
             "mode": "644",
             "host_class": "b2_backup",
             "opt_in": "needs the B2 key and repository password placed on this host; see docs/runbooks/b2_backup.md",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-backup-selftest.service",
+            "content": """\
+[Unit]
+Description=Weekly backup self-test: archive, age, WAL chain, verify, kopia restore and key fingerprint checks (docs/runbooks/BACKUP_SELFTEST.md)
+After=network-online.target postgresql.service
+Wants=network-online.target
+ConditionPathExists=/opt/hams/etc/backup_selftest/config.json
+
+[Service]
+Type=oneshot
+# One PASS/FAIL line per stage. Exit 75 means "refused: load high or disk short", which is not a backup failure (the pager's synthetic check
+# `backup_selftest.py check` alerts when no run has passed for 9 days). Any other non-zero exit fails the unit, which the Systemd Failed
+# Services Tracker reports; the last journal line names the failed stage and nothing else.
+# The database restore proof is the restoration system's VM verification, not this unit. The kopia stage runs the existing restore
+# test and writes under /var/lib/hams-b2-backup; pgbackrest logs under /var/log/pgbackrest.
+SuccessExitStatus=75
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hams-backup-selftest /var/lib/hams-b2-backup /var/log/pgbackrest
+ProtectHome=true
+PrivateTmp=true
+# Derived like the B2 restore test: runuser to postgres, and the pgbackrest, kopia and PostgreSQL tools exec no setuid helper and touch no
+# device; they talk HTTPS and unix sockets. CapabilityBoundingSet stays open (DAC_READ_SEARCH, SETUID/SETGID, CHOWN/FOWNER).
+NoNewPrivileges=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+Nice=19
+IOSchedulingClass=idle
+IOSchedulingPriority=7
+CPUQuota=100%
+MemoryHigh=2G
+MemoryMax=3G
+TimeoutStartSec=6h
+ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_shared/tools/backup_selftest.py run
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams.backup.selftest
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "b2_backup",
+            "opt_in": "Bruce approves enabling it; needs config.json and the fingerprint record placed by a person: docs/runbooks/BACKUP_SELFTEST.md",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-backup-selftest.timer",
+            "content": """\
+[Unit]
+Description=Weekly backup self-test (restore proof)
+
+[Timer]
+# After the weekly B2 restore test (Sunday 06:30 + 15 min); the self-test itself refuses to run when the load is high.
+OnCalendar=Sun *-*-* 07:30:00 UTC
+Persistent=true
+RandomizedDelaySec=45m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "host_class": "b2_backup",
+            "opt_in": "Bruce approves enabling it; needs config.json and the fingerprint record placed by a person: docs/runbooks/BACKUP_SELFTEST.md",
             "environments": ["prod"],
         },
         {

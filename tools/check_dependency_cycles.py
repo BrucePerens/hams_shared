@@ -42,6 +42,7 @@ undocumented escape hatch instead of what it's for).
 
 import ast
 import os
+import check_target
 import lint_exec
 import sys
 from tree_files import tree_walk
@@ -192,6 +193,7 @@ def main():
         print("Usage: check_dependency_cycles.py <repo_root>")
         sys.exit(1)
 
+    check_target.require_directory(sys.argv[1], "check_dependency_cycles")
     repo_root = _resolve_repo_root(sys.argv[1])
     roots = [repo_root]
     sibling = _find_sibling_repo(repo_root)
@@ -199,6 +201,7 @@ def main():
         roots.append(sibling)
 
     graph, depends_cycle = _build_graph(roots)
+    check_target.require_scanned(len(graph), ", ".join(roots), "check_dependency_cycles", "Odoo modules (directories holding __manifest__.py)")
     cycles = _find_cycles(graph)
     entry_errors = _check_depends_cycle_entries(graph, depends_cycle)
 

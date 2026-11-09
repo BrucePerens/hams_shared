@@ -3199,11 +3199,29 @@ start time** (`ticks=` in `find` output, field 22 of `/proc/PID/stat`), so a reu
 python3 hams_shared/tools/agent_procs.py find --cmd-contains hams_pf_probe          # lists, flags PROTECTED ones; never signals
 python3 hams_shared/tools/agent_procs.py run build --tag agent-7 -- nice -n 10 cargo build   # named job, log in ~/.cache/hams-jobs/build.log
 python3 hams_shared/tools/agent_procs.py wait --job build --timeout 1800              # 0 job exited 0, 1 failed, 75 timeout
-python3 hams_shared/tools/agent_procs.py wait --pid 4242 --start-time 98765           # 0 gone (or reused pid), 75 timeout
+python3 hams_shared/tools/agent_procs.py find --cmd-contains gate_snapshot.py        # prints: pid=4242 ... start=2026-11-09T09:37:10 ticks=6209871 ...
+python3 hams_shared/tools/agent_procs.py wait --pid 4242 --start-time 6209871 --timeout 3600   # copy pid and ticks= from find; 0 ended, 75 timeout
+python3 hams_shared/tools/agent_procs.py wait --cmd-contains gate_snapshot.py        # one match: waits; several: exit 2 listing them; none: exit 2
+python3 hams_shared/tools/agent_procs.py wait --cmd-contains gate_snapshot.py --all  # wait until every current match has ended
+python3 hams_shared/tools/agent_procs.py wait --cmd-contains gate_snapshot.py --allow-missing   # no match counts as done (default: exit 2)
 python3 hams_shared/tools/agent_procs.py wait --file out.log --contains 'RESULT=' --fail-contains FATAL --while-pid 4242
 python3 hams_shared/tools/agent_procs.py stop build            # SIGTERM to the job's process group; --force adds SIGKILL on that verified group
-python3 hams_shared/tools/agent_procs.py kill-pid 4242 --start-time 98765     # one exact pid, never a list or a pattern
+python3 hams_shared/tools/agent_procs.py kill-pid 4242 --start-time 6209871     # one exact pid, never a list or a pattern
 ```
+
+**`--start-time` is an identity, not a hint.** Give it as printed by `find`: the `ticks=` number (`6209871` or `ticks=6209871`) or the `start=` timestamp
+(`2026-11-09T09:37:10`). It is field 22 of `/proc/PID/stat`, clock ticks since boot. If it names the process, `wait` waits for it. If the pid is now held by a process that
+started LATER than the time you named, the pid was reused and the original is gone (exit 0, the message says "was reused"). Every other mismatch is an ERROR, exit 2 with
+the expected format: a start time later than the process itself, in the future (epoch seconds or milliseconds), the process's start in seconds instead of ticks, or unreadable text.
+Before 2026-11-09 every mismatch was reported as "the original is gone" and `wait` returned 0 at once while the process still ran (a long `gate_snapshot.py create`).
+Waiting on the pid of a WRAPPER (`nohup sh -c 'work &'`, `setsid` run by a group leader, a shell that starts the work in the background) returns when the wrapper ends:
+find the worker's own pid with `find`, or start it with `run NAME -- COMMAND` and `wait --job NAME`.
+
+**Selector waits.** `wait --cmd-contains TEXT | --cmd-regex RE | --cwd-under PATH` selects processes at the start. Exactly one match: waits until it ends. Several: ERROR
+(exit 2, `ambiguous: N matches`, one line each with pid, ticks, user and a shortened command, and the `--pid P --start-time T` way to name one), unless `--all` (wait until every
+current match has ended). None: ERROR (exit 2, "nothing matches: did it already finish or is the selector wrong?"), unless `--allow-missing` (done). A match that
+ends later is done (0). The waiter, its ancestors, its descendants and the forked copies of its own shell (the subshell of a pipeline holds the whole command text) never count.
+`stop` and `kill-pid` never take a pattern: a named job, or one exact pid with its start time. `find` is a listing: several matches are normal output.
 
 Exit codes: 0 done, 1 failed (or nothing found, for `find`), 2 usage, 3 REFUSED (a protected process, a reused pid, your own ancestry), 75 timeout.
 **Protected, always refused** (no flag lifts it except `--i-am-the-owner-and-checked` for your own recorded job): a process of another user, root or `postgres`; a command containing
@@ -3258,6 +3276,22 @@ Purpose: lets `format_start` turn clock ticks into a date. Returns the epoch sec
 ### `[@ANCHOR: agent_procs:format_start]` `format_start(start_ticks)`
 
 Purpose: the human start time printed by `find`, `jobs` and the ps line. Argument `start_ticks` int from `ProcInfo`. Returns `YYYY-MM-DDTHH:MM:SS` in local time, or `unknown` when the number is outside what `datetime` can print (a corrupt record file; `OverflowError`, `OSError` and `ValueError` are caught here, never raised). The ticks, not this text, are what is compared.
+
+### `[@ANCHOR: agent_procs:parse_start_time]` `parse_start_time(value)`
+
+Purpose: read a start time a person typed. Argument `value`: int, digits, `ticks=N`, `start=YYYY-MM-DDTHH:MM:SS` or that timestamp alone, or an already parsed `(low, high)` tuple. Returns a half-open range of clock ticks (`N` is `(N, N+1)`; a timestamp is its whole second, `CLK_TCK` ticks). Raises `ProcError` code 2 naming `START_TIME_FORMAT` for anything else (an unreadable start time is never "the process is gone").
+
+### `[@ANCHOR: agent_procs:check_start_time]` `check_start_time(info, spec)`
+
+Purpose: compare a parsed start time with the live process `info` (`None` when the pid is gone). Returns `"same"`, `"reused"` (the process now holding the pid started after the named time) or `"gone"`. Raises `ProcError` code 2 for a time that cannot belong to this pid: in the future (epoch seconds or milliseconds), later than the process's own start, or its start in seconds instead of ticks. Honest limit: a number that is merely a little too small looks like a reused pid and is reported as such (exit 0, the message names both numbers); copy `ticks=` from `find`.
+
+### `[@ANCHOR: agent_procs:wait_matching]` `wait_matching(found, wait_all=False, allow_missing=False, timeout=1800, interval=0.5, sleep=..., clock=...)`
+
+Purpose: the selector wait. `found` is the `find_procs` result taken at the start. One match: wait for it (pid and start time). Several: `ProcError` code 2 `ambiguous: N matches` with pid, ticks, user and a shortened command of each, unless `wait_all`. None: `ProcError` code 2 unless `allow_missing`. Returns a `WaitResult` (0 all ended, 75 timeout). Never signals anything. Helper `short_command(info, width=100)`.
+
+### `[@ANCHOR: agent_procs:shell_clones]` `shell_clones(table, ancestors)`
+
+Purpose: the pids of forked copies of the caller's own shells (a child of one of `ancestors` whose command line equals an ancestor's, three or more arguments). `find_procs` never lists them, so `wait --cmd-contains X | tail` does not match the pipeline subshell that holds the text X.
 
 ### `[@ANCHOR: agent_procs:read_proc]` `read_proc(pid)`
 
@@ -3376,7 +3410,7 @@ Purpose: start a named job; the engine of `run`. Returns the `JobRecord` (pid, p
 
 ### `[@ANCHOR: agent_procs:wait_pid]` `wait_pid(pid, start_ticks=None, timeout=1800, interval=0.5, sleep=time.sleep, clock=time.monotonic, table=None)`
 
-Purpose: wait for one exact process, never by pattern. Returns a `WaitResult`: code 0 when it ended, was already gone, or the pid now belongs to a different process (start time differs from `start_ticks`: reuse); 75 on timeout; 3 when `pid` is this command's own ancestry (watching the watcher). `start_ticks=None` reads the start time at the first look. A plain pid's exit status is not knowable (it is not our child), so 0 means "done", not "succeeded": use `wait_job` or a marker file when success matters. Blocking; polls `/proc` every `interval` seconds; `sleep` and `clock` are for tests.
+Purpose: wait for one exact process, never by pattern. `start_ticks` is an int, `ticks=N`, or the `start=` timestamp of `find` (`parse_start_time`). Returns a `WaitResult`: code 0 when it ended, was already gone, or the pid was reused (it now belongs to a process that started LATER than the one named); 75 on timeout; 3 when `pid` is this command's own ancestry (watching the watcher). `start_ticks=None` reads the start time at the first look. Raises `ProcError` code 2, never returns 0, for a start time that cannot be this pid (`check_start_time`). A plain pid's exit status is not knowable (it is not our child), so 0 means "done", not "succeeded": use `wait_job` or a marker file when success matters. Blocking; polls `/proc` every `interval` seconds; `sleep` and `clock` are for tests.
 
 ### `[@ANCHOR: agent_procs:wait_job]` `wait_job(name, timeout=1800, interval=0.5, sleep=..., clock=..., directory=None)`
 
@@ -3405,7 +3439,7 @@ Order: read the record; find members by group and session (none: "not running", 
 
 ### `[@ANCHOR: agent_procs:authorize_kill]` `authorize_kill(info, start_ticks, cwd_under, directory=None)`
 
-Purpose: the identity proof for `kill_pid`. Returns `"recorded job"` (a record names this pid and start time), `"start time confirmed"` (the caller's `start_ticks` equals the process's) or `"cwd under <path>"`. Raises `ProcError` code 3 when `start_ticks` differs (the pid was reused) or when there is no proof at all.
+Purpose: the identity proof for `kill_pid`. Returns `"recorded job"` (a record names this pid and start time), `"start time confirmed"` (the caller's `start_ticks` equals the process's) or `"cwd under <path>"`. `start_ticks` is read by `parse_start_time`. Raises `ProcError` code 3 when the pid now belongs to a later process (reused) or when there is no proof at all, code 2 for a start time that cannot be this pid.
 
 ### `[@ANCHOR: agent_procs:kill_pid]` `kill_pid(pid, start_ticks=None, cwd_under=None, grace=10, force=False, owner_checked=False, sig="TERM", out=sys.stdout, directory=None, sleep=..., clock=...)`
 
@@ -3417,7 +3451,7 @@ Purpose: the `find` subcommand. Prints one `ps_line` per match, with `  PROTECTE
 
 ### `[@ANCHOR: agent_procs:cmd_wait]` `cmd_wait(args, out=sys.stdout)`
 
-Purpose: the `wait` subcommand: exactly one of `--pid [--start-time]`, `--job`, `--file [--contains --fail-contains --while-pid]`, with `--timeout` (default 1800 s) and `--interval`. Prints the result message; returns its code. Raises `ProcError` code 2 when not exactly one target.
+Purpose: the `wait` subcommand: exactly one of `--pid [--start-time]`, `--job`, `--file [--contains --fail-contains --while-pid]`, or a selector (`--cwd-under`, `--cmd-contains`, `--cmd-regex`, `--user`, `--any-user`, with `--all` / `--allow-missing`), with `--timeout` (default 1800 s) and `--interval`. Prints the result message; returns its code. Raises `ProcError` code 2 when not exactly one target.
 
 ### `[@ANCHOR: agent_procs:cmd_run]` `cmd_run(args, out=sys.stdout)`
 
@@ -3713,6 +3747,14 @@ Purpose: the problems of the change in `repo` against the merge-base with `base`
 ### `[@ANCHOR: check_backup_encryption_changes:main]` `main(argv=None, out=None)`
 
 Purpose: check the repository named in `argv` (default: this one) against `--base REF`, print the problems, return 1 or 0.
+
+## Backup self-test (`backup_selftest.py`)
+
+Purpose (Bruce, 2026-11-09: "can we have a script on the server that tests the backup?"): prove on the machine itself that the newest backup can be restored with the key that is in use now, and tell the monitor when it cannot. Runbook: `docs/runbooks/BACKUP_SELFTEST.md` (hams_com), which says what each stage proves and what it does not. `backup_selftest.py [--config FILE] run [--only STAGE]`, `record-fingerprint --confirm-record` (a person, once), `check [--max-age-days 9]` (for a pager `synthetic` check: `SEVERITY:high` plus the failed stage's name), `stages`.
+
+Stages, one `PASS|FAIL|SKIP|REFUSED <stage>: detail` line each and one exit code each (`STAGE_CODES`, 10 upward; 75 = refused; 2 = bad config). The hams1 default is the cheap set: `preflight` (load; refusal is not an alert), `key_fingerprint` (sha256 of each key file's value against the recorded file; only "fingerprint OK/MISMATCH", never a value), `pgbackrest_check`, `backup_age` (newest full under 36 h), `wal_age` (newest archived WAL under 15 min), `wal_chain` (no missing segment from the newest backup's first segment to the newest archived one: `pgbackrest verify` does not see a hole past what the backup needs), `pgbackrest_verify`, `kopia_restore` (calls the existing `cmd_restore_test` of `b2_backup.py`, and fails when it compared nothing). Optional and not in the hams1 default (the restoration system's VM verification is the restore proof there): the restore group `restore`, `start`, `sanity_sql`, `checksum_read`, `cleanup` (newest backup plus WAL into a scratch directory and a throwaway PostgreSQL on a unix socket under `nice 19`, `ionice` idle and `systemd-run --scope` limits, row counts, every relation read, scratch removed) and `storage_restore` (the /storage restore test of `devbox_tools/hams1_storage_restore_test.py`); profile `storage` uses both, with `restore.source = basebackup_dir`. `run --json` prints a machine-readable report (`report_document`, schema 1: per stage name, code, status and detail, plus `ok`, `failed_stage`, `refused`) on standard output with the stage lines on standard error, and `report` prints the last run's; the restoration system reuses the checks through it. An empty repository never passes. The restore group makes its scratch cluster harmless before it starts (`archive_mode=off`, `listen_addresses=''`, its own socket and trust-only `hba_file`, pgBackRest `--archive-mode=off`, a tablespace map into the scratch directory).
+
+Keys are only hashed: `read_key_value` reads the file the config names at run time, `Context.scrub` removes the value from any tool output, nothing is written to a repository, and the code names no key file itself (the config does). Tests: `test_backup_selftest.py` (a real throwaway cluster and a real pgBackRest posix repository, a real temporary kopia repository with a throwaway password, a fake pgbackrest and a fake restore test; negative controls for a corrupted backup file, a missing WAL segment, a fingerprint mismatch, a changed repository password and an empty repository).
 
 ## Guard hook registration check (`check_claude_hook_registration.py`)
 
@@ -4510,3 +4552,50 @@ One Hypothesis target (pytest with `hypothesis_scale.py`); returns the result do
 ### `[@ANCHOR: hypothesis_scale:scale_item]` `scale_item(function, examples, database=None)`
 
 Replace the Hypothesis settings of `function` (the test function a `@given` produced; a bound method's `__func__` is used). Returns True when changed.
+
+## Moving instruction text without losing a rule (`check_no_rule_lost.py`, 2026-11-09)
+
+Every agent re-reads `AGENTS.md` / `CLAUDE.md` from the prompt cache on every turn (measured 2026-11-09: over 96 % of agent input tokens are cache reads,
+so the cost is context size x turns). Sections needed only for one kind of task are therefore MOVED, word for word, into on-demand documents
+(`docs/LINT_RUNNER_DETAILS.md` here; `docs/agent_ondemand/` in hams_com) with a one-to-six line pointer left in place that keeps the key imperative. The
+meta-editing rule of AGENTS.md forbids deleting or condensing a rule, so the move must be provable:
+
+    python3 tools/check_no_rule_lost.py --before origin/main:AGENTS.md --after AGENTS.md docs/LINT_RUNNER_DETAILS.md
+    python3 tools/check_no_rule_lost.py --measure AGENTS.md        # characters and ~tokens (characters / 4; no tokenizer on the box)
+
+Exit 0 and `OK, all N units ... are present verbatim` when every unit of the old text is in one of the new files; exit 1 and every missing unit with its
+missing sentences otherwise. `check_summation_bias.py` (the pre-commit hook and the lint step) uses the same proof: a Markdown file that shrinks by more
+than 5 % is accepted only when its whole HEAD text is present verbatim in the Markdown files of the same change (staged ones for `--staged`; a new file
+must be added to the index, an untracked one does not count). Tests: `test_check_no_rule_lost.py`, `MovedNotLostTests` in `test_check_summation_bias.py`.
+
+### `[@ANCHOR: check_no_rule_lost:normalize]` `normalize(text)`
+
+Purpose: the comparison form. Argument `text` (str). Returns the text with every run of whitespace (newlines, indentation, tabs) collapsed to one space and
+stripped, so re-wrapping or re-indenting a moved paragraph does not count as a change. Pure.
+
+### `[@ANCHOR: check_no_rule_lost:units]` `units(text)`
+
+Purpose: what "a rule" is for the check. Argument `text` (str, Markdown). Returns a list of normalized strings in document order: each heading line (`#`..`######`)
+and each lone tag line (`<site_rules>`) on its own; each paragraph (lines up to a blank line); each list item (`-`, `*`, `+`, `1.`, `1)`) with its continuation
+lines, a nested item being a unit of its own; each fenced code block with its fence lines. Units shorter than 3 characters are left out. Pure.
+
+### `[@ANCHOR: check_no_rule_lost:missing_units]` `missing_units(before_texts, after_texts)`
+
+Purpose: the check. Arguments: `before_texts`, `after_texts` (lists of str). Returns the units of the before texts, each once and in order, that are not a
+substring of the normalized form of any one after text. A unit split across two files is missing (it must survive whole in one place). Pure.
+
+### `[@ANCHOR: check_no_rule_lost:moved_verbatim]` `moved_verbatim(old_text, new_texts)`
+
+Purpose: the yes/no form for `check_summation_bias.py`. Arguments: `old_text` (str), `new_texts` (list of str: the file's new content and the other files of
+the change). Returns True when `missing_units([old_text], new_texts)` is empty. Pure.
+
+### `[@ANCHOR: check_no_rule_lost:read_source]` `read_source(spec)`
+
+Purpose: read one argument. `spec` is a path, or `REV:PATH`, which is read with `git show` in the current directory first; if git cannot read it, it is opened as
+a path, so a missing file raises `FileNotFoundError` (no silent empty text). Returns str.
+
+### `[@ANCHOR: check_no_rule_lost:main]` `main(argv=None)`
+
+Purpose: the command line. `--before SPEC...` and `--after SPEC...` run the check (exit 0 all present, 1 something missing, with each missing unit and its
+missing sentences; units longer than 200 characters are cut in the report); `--measure SPEC...` prints characters and `~tokens (chars/4)` per file and exits 0
+unless a check also runs. Neither given: usage error (exit 2). Read only.

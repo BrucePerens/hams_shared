@@ -46,6 +46,7 @@ import re
 import subprocess
 import sys
 
+import check_target  # noqa: E402
 import lint_exec  # noqa: E402
 import verify_anchors as va  # noqa: E402
 from check_function_test_anchors import _is_base_anchor_declaration  # noqa: E402
@@ -320,6 +321,11 @@ def main():
         os.path.dirname(os.path.abspath(__file__)), DEFAULT_BASELINE_FILENAME
     )
 
+    check_target.require_directory(repo_root, "check_js_function_test_anchors")
+    # A tree git cannot list (not a work tree, no JS) yields no files at all; that is not a clean scan.
+    check_target.require_scanned(
+        len(_git_tracked_js_files(repo_root)), repo_root, "check_js_function_test_anchors", "git-tracked non-test .js files"
+    )
     current_gaps = scan_tree(repo_root)
 
     if args.generate_baseline:
