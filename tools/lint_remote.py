@@ -217,6 +217,7 @@ echo "queued=$n"
 l="$HOME/.cache/hams-lint/run.lock"
 if [ -e "$l" ] && command -v flock >/dev/null 2>&1 && ! flock -n "$l" true; then echo "held=1"; else echo "held=0"; fi
 echo "awake=1"
+echo "sessions=$(who 2>/dev/null | wc -l)"
 """
 
 
@@ -230,6 +231,7 @@ class Probe:
     caps: frozenset = frozenset()
     error: str = ""
     held: bool = False  # a lint run holds the machine's run lock right now
+    sessions: int = 0  # interactive login sessions on the machine (`who`)
 
 
 def parse_probe(name, text):
@@ -263,7 +265,11 @@ def parse_probe(name, text):
         queued = int(values.get("queued") or 0)
     except ValueError:
         queued = 0
-    return Probe(name, True, cores, load1, queued, frozenset(caps), held=values.get("held") == "1")
+    try:
+        sessions = max(0, int(values.get("sessions") or 0))
+    except ValueError:
+        sessions = 0
+    return Probe(name, True, cores, load1, queued, frozenset(caps), held=values.get("held") == "1", sessions=sessions)
 
 
 # --- transport ----------------------------------------------------------------------------------
@@ -365,6 +371,27 @@ def _est(name, durations):
     return durations.get(name, UNKNOWN_SECONDS)
 
 
+# [@ANCHOR: lint_remote:apply_reserve]
+def apply_reserve(machine, probe, jobs):
+    """The `reserve` policy of an inventory entry: a machine somebody also uses interactively, kept for overflow only.
+    Returns (probe, jobs, skip_reason). `reserve` keys (all optional): `skip_when_user_session` (true: the machine is skipped while any
+    login session is open, `Probe.sessions`), `max_core_fraction` (the run uses at most that share of the cores, at least one job) and
+    `never_caps` (capabilities hidden from the router, so a step that needs one, such as `chrome` for browser tests, never goes there).
+    A machine without `reserve` comes back unchanged with no reason. Pure."""
+    reserve = machine.get("reserve") or {}
+    if not reserve:
+        return probe, jobs, ""
+    if reserve.get("skip_when_user_session") and probe.sessions > 0:
+        return probe, jobs, "reserved: %d user session(s) active" % probe.sessions
+    fraction = reserve.get("max_core_fraction")
+    if fraction:
+        jobs = min(jobs, max(1, int(probe.cores * float(fraction))))
+    hidden = set(reserve.get("never_caps") or ())
+    if hidden:
+        probe = dataclasses.replace(probe, caps=probe.caps - hidden)
+    return probe, jobs, ""
+
+
 def make_plan(step_names, static_names, durations, inventory, probes, mode, local_cores, local_load,
               whole=False, exclude=(), unfit=None):
     """Route steps. `mode`: 'local', 'auto' or a machine name. `static_names`: steps with no command
@@ -391,6 +418,10 @@ def make_plan(step_names, static_names, durations, inventory, probes, mode, loca
             skipped[name] = "unreachable" + (f" ({probe.error})" if probe and probe.error else "")
             continue
         jobs = int(machine.get("jobs", max(1, probe.cores // 2)))
+        probe, jobs, why = apply_reserve(machine, probe, jobs)
+        if why:
+            skipped[name] = why
+            continue
         ratio = float(machine.get("max_load_ratio", 0.8))
         if probe.load1 > probe.cores * ratio:
             skipped[name] = f"busy: load {probe.load1:.1f} above {probe.cores * ratio:.1f}"

@@ -833,3 +833,47 @@ class StepCostEstimateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# Tests [@ANCHOR: lint_remote:apply_reserve]
+class ReserveTests(unittest.TestCase):
+    """A reserved machine (somebody's interactive workstation) takes overflow only, and never a browser step."""
+
+    RESERVE = {"ssh": {"target": "ws"}, "jobs": 8, "max_load_ratio": 0.25,
+               "reserve": {"skip_when_user_session": True, "max_core_fraction": 0.5, "never_caps": ["chrome"]}}
+
+    def test_a_machine_without_reserve_is_unchanged(self):
+        probe = lr.Probe("m", True, cores=8, caps=FULL.caps)
+        self.assertEqual(lr.apply_reserve({"jobs": 4}, probe, 4), (probe, 4, ""))
+
+    def test_an_open_user_session_skips_the_machine(self):
+        busy = lr.Probe("ws", True, cores=8, caps=FULL.caps, sessions=1)
+        self.assertIn("user session", lr.apply_reserve(self.RESERVE, busy, 8)[2])
+
+    def test_jobs_are_limited_to_half_the_cores_and_chrome_is_hidden(self):
+        probe, jobs, why = lr.apply_reserve(self.RESERVE, lr.Probe("ws", True, cores=8, caps=FULL.caps), 8)
+        self.assertEqual((jobs, why), (4, ""))
+        self.assertNotIn("chrome", probe.caps)
+        self.assertIn("pytest", probe.caps)
+        self.assertEqual(lr.apply_reserve(self.RESERVE, lr.Probe("ws", True, cores=1, caps=FULL.caps), 8)[1], 1)
+
+    def test_the_plan_skips_a_machine_with_a_session_and_never_sends_it_a_browser_step(self):
+        inventory = dict(INVENTORY, ws=self.RESERVE)
+        names = ["pytest daemons/a", "check_owl_templates"]
+        free = lr.Probe("ws", True, cores=8, load1=0.1, caps=FULL.caps | {"odoo"})
+        plan = lr.make_plan(names, set(), dict(DURATIONS, check_owl_templates=300.0), inventory, {"ws": free}, "ws", 16, 40.0)
+        self.assertEqual(plan.remote, {"ws": ["pytest daemons/a"]})
+        self.assertIn("check_owl_templates", plan.local)
+        sessioned = lr.Probe("ws", True, cores=8, load1=0.1, caps=FULL.caps, sessions=2)
+        plan = lr.make_plan(names, set(), DURATIONS, inventory, {"ws": sessioned}, "ws", 16, 40.0)
+        self.assertEqual(plan.remote, {})
+        self.assertIn("user session", " ".join(plan.notes))
+
+    def test_the_probe_reads_sessions_and_the_real_inventory_entry_is_not_a_runner_until_it_has_an_address(self):
+        self.assertEqual(lr.parse_probe("m", "os=Linux\ncores=4\nsessions=3\n").sessions, 3)
+        self.assertEqual(lr.parse_probe("m", "os=Linux\nsessions=x\n").sessions, 0)
+        real = lr.load_inventory()
+        self.assertIn("TODO", real["bruce16"]["host"])
+        self.assertNotIn("bruce16", lr.runners(real))
+        self.assertEqual(real["bruce16"]["nice"], 19)
+        self.assertTrue(real["bruce16"]["reserve"]["skip_when_user_session"])

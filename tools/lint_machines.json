@@ -77,6 +77,16 @@
         }
       }
     },
+    "bruce16": {
+      "pending_address": true,
+      "host": "TODO: the ssh name or address is not known yet (the names bruce16 and bruce16.lan gave 'No route to host' from the server); add an `ssh` entry (target, args) to enable it",
+      "os": "linux",
+      "nice": 19,
+      "max_concurrent": 1,
+      "max_load_ratio": 0.25,
+      "reserve": {"skip_when_user_session": true, "max_core_fraction": 0.5, "never_caps": ["chrome"]},
+      "note": "Optional OVERFLOW machine, used only when the primary runner is saturated and never for the browser: it is somebody's interactive workstation, so it has the lowest priority (nice 19), at most half its cores, no step that needs a browser (Chrome), a low load limit, and it is skipped while a login session is open. Not usable until `ssh` is filled in; `run_linters.py --where` lists it as not a runner until then."
+    },
     "bruce-yoga": {
       "ssh": {
         "target": "bruce-yoga",

@@ -969,6 +969,21 @@ Purpose: puts `~/.cargo/bin` (rustup's cargo, rustfmt and clippy at the pinned v
 component-less `/usr/bin/cargo`. `run_linters.main()` calls it first. Argument `environ`: dict or `None` for `os.environ`. Returns True when PATH changed. Tests:
 `test_prefer_user_toolchain_puts_rustup_first_once` in `test_lint_remote.py`.
 
+### `[@ANCHOR: lint_remote:apply_reserve]` `apply_reserve(machine, probe, jobs)`
+
+Purpose: the `reserve` policy of a `lint_machines.json` entry, for a machine that a person also uses interactively and that therefore takes overflow only. `lint_remote.make_plan()` calls it for every
+candidate machine before the load check. Keys of `reserve` (all optional): `skip_when_user_session` (true: skipped while any login session is open, as `who` reports in the probe's `sessions=` line),
+`max_core_fraction` (the run gets at most that share of the cores, at least one job) and `never_caps` (capabilities hidden from the router, e.g. `["chrome"]`, so a browser step is never sent there).
+The entry also uses the existing `nice`, `max_concurrent` and `max_load_ratio` (a low ratio is the low load limit). An entry with `pending_address: true` and no `ssh` is listed as not a runner until an `ssh` entry is added.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `machine` | dict | The inventory entry. |
+| `probe` | `Probe` | What the probe measured (`sessions`, `cores`, `caps`). |
+| `jobs` | int | The entry's worker count before the policy. |
+
+Returns `(probe, jobs, skip_reason)`: the probe with the hidden capabilities removed, the limited job count, and a non-empty reason when the machine must be skipped. Pure. Tests: `ReserveTests` in `test_lint_remote.py`.
+
 ### `[@ANCHOR: lint_lock:held_locks]` `HeldLocks`
 
 Purpose: a handle that stands for several open lock files at once, so a lint run's claim on a machine and its hold on that machine's
