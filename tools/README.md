@@ -3497,7 +3497,7 @@ Purpose: the command-line entry. Returns the exit code (0 done, 1 failed or noth
 A `PreToolUse` hook for the Bash tool, wired in the tracked `.claude/settings.json` of `hams_com`, `hams_open` and `hams_shared` (all three: Claude Code reads the project settings of the directory it runs in, and a `hams_shared` worktree had none on 2026-11-09, when an agent killed its own parent; `check_claude_hook_registration.py` fails the lint when a checkout lacks the entry). The command uses `$HOME/workspace/hams_open/hams_shared/...`, so it finds the script from any worktree and any directory. It reads the hook JSON on standard input, parses the command text into
 commands (so a word inside a quoted string, a commit message, a data heredoc or a `grep` pattern is not a command) and **denies**: `kill -9` and every other spelling of SIGKILL, `pkill`, `killall`,
 `skill`, `fuser -k`, `systemctl kill`, `pgrep -f` / `--full` (the `[x]yz` trick does not help: it matched a PostgreSQL backend), `kill` whose pids are not literal numbers (`$(...)`, backticks, variables, `xargs`),
-`kill $PPID`, `kill $$`, `kill 0`, `kill -- -PGID` and a pid built from `ps`/`ppid`, a literal `kill PID` whose process (looked up in /proc when the hook runs) is the hook's own ancestry, pid 1, another user's or root's, or one of `agent_procs.PROTECTED_WORDS` (postgres, systemd, sshd, redis-server, rabbitmq, ...), a `kill` that names such a program, and the same inside `bash -c`, `ssh host '...'`, `eval`, `find -exec`, `watch`, shell heredocs and `python -c` one-liners. It **allows** `kill -TERM 123`, `kill 123`, `kill -0 123`, `pgrep NAME` (name only), `ps`, `grep`, `cargo`, `git`, sleep loops
+`kill $PPID`, `kill $$`, `kill 0`, `kill -- -PGID` and a pid built from `ps`/`ppid`, a literal `kill PID` whose process (looked up in /proc when the hook runs) is the hook's own ancestry, pid 1, another user's or root's, or one of `agent_procs.PROTECTED_WORDS` (postgres, systemd, sshd, redis-server, rabbitmq, ...), a `kill` that names such a program, and the same inside `bash -c`, `ssh host '...'`, `eval`, `find -exec`, `watch`, `script -c`, shell heredocs, a script piped into a shell (`echo 'kill -9 1' | sh`), a program named by a variable of the same line (`K=kill; $K -9 1`), `$'kill'` quoting and `python -c` one-liners. It **allows** `kill -TERM 123`, `kill 123`, `kill -0 123`, `pgrep NAME` (name only), `ps`, `grep`, `cargo`, `git`, sleep loops
 and `agent_procs.py`. A denial prints JSON `permissionDecision: deny` whose reason tells the agent to use `agent_procs.py`. The escape **for a human** is `HAMS_ALLOW_SIGNALS=1` inside the command itself;
 it is logged with the command to `~/.cache/hams-jobs/guard.log`, as is every denial and hook error. A crash inside the hook allows a command without a signal-looking word and denies one with such a word; the command in
 settings.json also allows everything when the script file is missing. The hook always exits 0. Tests: `test_guard_signals.py` (a table of about 130 commands, the exact command of 2026-11-08 12:18:33, the real script on standard input).
@@ -3536,7 +3536,7 @@ Purpose: step over a wrapper's options (`sudo -n -u odoo`). Returns the index of
 
 ### `[@ANCHOR: guard_signals:resolve]` `resolve(words)`
 
-Purpose: find the real command behind assignments, reserved words (`until`, `do`, `!`, `{`) and wrappers (`sudo env nice ionice timeout stdbuf nohup setsid command exec chrt taskset flock xargs time`). Returns `(name, rest, via_xargs)`: the program's base name, its words (name first), and whether an `xargs` took the arguments from a pipe. `name` is `None` when nothing is left, or for `command -v NAME` (only a lookup).
+Purpose: find the real command behind assignments, reserved words (`until`, `do`, `!`, `{`) and wrappers (`sudo env nice ionice timeout stdbuf nohup setsid command exec chrt taskset flock xargs time pkexec busybox runuser -u`; long options with values such as `sudo --user odoo`, clusters such as `sudo -nu odoo`, `env -S 'cmd'` and `flock LOCK -c 'cmd'` read as the script they run, and the body of `function f { ...; }`). Returns `(name, rest, via_xargs)`: the program's base name, its words (name first), and whether an `xargs` took the arguments from a pipe. `name` is `None` when nothing is left, or for `command -v NAME` (only a lookup).
 
 ### `[@ANCHOR: guard_signals:signal_is_kill]` `signal_is_kill(spec)`
 
@@ -3565,6 +3565,14 @@ Purpose: the script text of `sh -c SCRIPT`, `bash -lc SCRIPT`, `su -c SCRIPT`; `
 ### `[@ANCHOR: guard_signals:check_command]` `check_command(command, verdict, depth)`
 
 Purpose: judge one `Command`: names `pkill killall skill killall5`, `kill`, `pgrep`, `fuser -k`, `systemctl kill`; recurses (`depth` guards recursion) into `bash -c`, `su -c`, shell heredoc bodies, `eval`, `ssh` and `watch` (every suffix of the words, since options precede the command), every `find -exec`/`-execdir`/`-ok`/`-okdir` (each up to its `;` or `+`, re-quoted so a `sh -c '...'` argument stays one script), and interpreter (`python perl ruby node php`) `-c`/`-e` strings and heredoc bodies that use SIGKILL, `os.killpg` or call `pkill`, `killall` or `pgrep -f`. Adds reasons to `verdict`.
+
+### `[@ANCHOR: guard_signals:expand_program]` `expand_program(words, assigned)`
+
+Purpose: read a program named by a variable (`K=kill; $K -9 1`, `${K:-kill} -9 1`). Returns `words` with the program word (after leading assignments and reserved words) replaced by the value assigned earlier on the same line, or by the `${NAME:-default}` default, split on white space; a variable with no known value is left alone (it may come from the environment, so `$CARGO test` stays allowed). Pure.
+
+### `[@ANCHOR: guard_signals:piped_shell_sources]` `piped_shell_sources(commands, index)`
+
+Purpose: read a script piped into a shell (`echo 'kill -9 1' | sh`, `printf ... | bash`, `cat <<EOF | bash`). For a `commands[index]` that is a shell with no `-c` script and no script file, and whose input is a pipe, returns the texts of every earlier command of the pipeline (arguments, options of `echo`/`printf` dropped, each `printf` argument by itself too, and heredoc bodies), which `analyze` then judges as shell text. `[]` for every other command.
 
 ### `[@ANCHOR: guard_signals:analyze]` `analyze(text, depth=0, verdict=None)`
 

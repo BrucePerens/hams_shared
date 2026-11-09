@@ -29,6 +29,7 @@ the JSON `permissionDecision: deny` on standard output. Documentation of every f
 "Guard hook for signals (`claude_hooks/guard_signals.py`)".
 """
 
+import codecs
 import dataclasses
 import json
 import os
@@ -53,7 +54,7 @@ _ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PYTHON_KILL_RE = re.compile(
     r"SIGKILL|os\.killpg|\.kill\([^)]*,\s*9\s*\)|\[\s*['\"](?:pkill|killall)['\"]|\[\s*['\"]pgrep['\"]\s*,\s*['\"]-\w*f|"
     r"os\.system\(\s*['\"][^'\"]*(?:pkill|killall|kill\s+-9|pgrep\s+-\w*f)")
-RESERVED = {"if", "then", "else", "elif", "while", "until", "do", "!", "{", "}", "time", "fi", "done", "esac", "coproc"}
+RESERVED = {"if", "then", "else", "elif", "while", "until", "do", "!", "{", "}", "fi", "done", "esac", "coproc"}
 EXEC_OPTIONS = ("-exec", "-execdir", "-ok", "-okdir")
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 KILLERS = {"pkill": "pkill", "killall": "killall", "skill": "skill", "killall5": "killall5"}
@@ -65,8 +66,15 @@ WRAPPER_VALUE_OPTIONS = {
     "env": {"-u", "-C", "-S"}, "nice": {"-n"}, "ionice": {"-c", "-n", "-p", "-P", "-u"}, "timeout": {"-s", "-k"},
     "stdbuf": {"-i", "-o", "-e"}, "xargs": {"-I", "-n", "-P", "-d", "-E", "-L", "-s", "-a", "-l"}, "flock": {"-w", "-E"},
     "exec": {"-a"}, "nohup": set(), "setsid": set(), "command": set(), "builtin": set(), "chrt": set(), "taskset": set(),
-    "unbuffer": set(), "time": set(),
+    "unbuffer": set(), "time": set(), "pkexec": {"--user"}, "busybox": set(), "runuser": {"-u", "--user", "-g", "--group", "-G"},
 }
+# Long options with a value, by wrapper (`sudo --user odoo pkill x`); a short cluster ending in a value option (`sudo -nu odoo`) takes a value too.
+WRAPPER_VALUE_OPTIONS["sudo"] |= {"--user", "--group", "--chdir", "--host", "--prompt", "--role", "--type", "--other-user", "--chroot",
+                                  "--close-from", "--command-timeout"}
+WRAPPER_VALUE_OPTIONS["env"] |= {"--unset", "--chdir", "--split-string"}
+WRAPPER_VALUE_OPTIONS["timeout"] |= {"--signal", "--kill-after"}
+SPLIT_STRING_OPTIONS = ("-S", "--split-string")
+_VARIABLE_RE = re.compile(r"^\$(?:(\w+)|\{(\w+)(?::?-([^}]*))?\})$")
 POSITIONAL_AFTER_OPTIONS = {"timeout": 1, "chrt": 1, "taskset": 1, "flock": 1}
 
 
@@ -83,11 +91,12 @@ class Word:
 # [@ANCHOR: guard_signals:Command]
 @dataclasses.dataclass
 class Command:
-    """One simple command: its `words` (including leading assignments and wrappers) and the bodies of the heredocs attached
-    to it (`bodies`, raw text, never parsed unless the command is a shell or an interpreter)."""
+    """One simple command: its `words` (including leading assignments and wrappers), the bodies of the heredocs attached
+    to it (`bodies`, raw text, never parsed unless the command is a shell or an interpreter) and whether it is `piped` into."""
 
     words: list
     bodies: list = dataclasses.field(default_factory=list)
+    piped: bool = False  # True when the command's standard input is a pipe from the command before it (`a | THIS`)
 
 
 # [@ANCHOR: guard_signals:Verdict]
@@ -189,7 +198,7 @@ def tokenize(text, commands, depth=0):
             if started:
                 word = "".join(buf)
                 if want_delim is not None:
-                    pending.append((word, want_delim, len(bodies)))
+                    pending.append((word, want_delim, bodies, len(bodies)))  # the list of THIS command: a pipe may start the next one before the body is read
                     bodies.append("")
                     want_delim = None
                 elif drop_next:
@@ -211,14 +220,14 @@ def tokenize(text, commands, depth=0):
                 drop_next = "here" if op == "<<<" else True
             else:
                 if op == "\n" and pending:
-                    for delimiter, strip_tabs, index in pending:
+                    for delimiter, strip_tabs, owner, index in pending:
                         body, i = read_heredoc(text, i, delimiter, strip_tabs)
-                        bodies[index] = body
+                        owner[index] = body
                     pending = []
                 if words or bodies:
                     commands.append(current)
                 words, bodies, drop_next, want_delim = [], [], False, None
-                current = Command(words, bodies)
+                current = Command(words, bodies, piped=op in ("|", "|&"))
             continue
         if c == "#" and not started:
             end = text.find("\n", i)
@@ -232,6 +241,17 @@ def tokenize(text, commands, depth=0):
             end = text.find("'", i + 1)
             end = n if end < 0 else end
             buf.append(text[i + 1:end])
+            i = end + 1
+        elif text.startswith("$'", i):  # ANSI-C quoting: `$'kill'` is the word kill
+            end = i + 2
+            while end < n and text[end] != "'":
+                end += 2 if text[end] == "\\" else 1
+            raw = text[i + 2:end]
+            try:
+                raw = codecs.decode(raw, "unicode_escape")
+            except ValueError:
+                pass
+            buf.append(raw)
             i = end + 1
         elif c == '"':
             i += 1
@@ -291,8 +311,8 @@ def skip_options(words, start, value_options):
         i += 1
         if text == "--":
             break
-        if text in value_options:
-            i += 1
+        if text in value_options or (not text.startswith("--") and len(text) > 2 and "-" + text[-1] in value_options):
+            i += 1  # the option takes a value; a short cluster takes it for its last letter (`-nu odoo`)
     return i
 
 
@@ -308,13 +328,32 @@ def resolve(words):
         if not words:
             return None, [], via_xargs
         name = os.path.basename(words[0].text)
+        if name == "function":  # `function f { kill -9 1; }`: what runs is the body after the brace
+            braces = [i for i, w in enumerate(words) if w.text == "{"]
+            if not braces:
+                return None, [], via_xargs
+            words = words[braces[0]:]
+            continue
+        if name == "runuser" and not any(w.text in ("-u", "--user") for w in words[1:]):
+            return name, words, via_xargs  # the `-c SCRIPT` form is read by check_command
         if name not in WRAPPER_VALUE_OPTIONS:
             return name, words, via_xargs
         via_xargs = via_xargs or name == "xargs"
         index = skip_options(words, 1, WRAPPER_VALUE_OPTIONS[name])
         if name == "command" and any(w.text in ("-v", "-V") for w in words[1:index]):
             return None, [], via_xargs  # `command -v pkill` only looks a program up
+        if name == "env":  # `env -S 'kill -9 1'` runs the split string as a command line
+            for k in range(1, index):
+                text = words[k].text
+                if text in SPLIT_STRING_OPTIONS and k + 1 < len(words):
+                    return "eval", [Word("eval"), words[k + 1]], via_xargs
+                if text.startswith("--split-string="):
+                    return "eval", [Word("eval"), Word(text.split("=", 1)[1])], via_xargs
+                if text.startswith("-S") and len(text) > 2:
+                    return "eval", [Word("eval"), Word(text[2:])], via_xargs
         index += POSITIONAL_AFTER_OPTIONS.get(name, 0)
+        if name == "flock" and index + 1 < len(words) and words[index].text in ("-c", "--command"):
+            return "sh", [Word("sh"), Word("-c"), words[index + 1]], via_xargs  # `flock LOCK -c 'kill -9 1'` runs a shell script
         if name == "env":
             while index < len(words) and _ASSIGNMENT_RE.match(words[index].text):
                 index += 1
@@ -436,10 +475,11 @@ def shell_script(words):
 
 
 # [@ANCHOR: guard_signals:check_command]
-def check_command(command, verdict, depth):
+def check_command(command, verdict, depth, assigned=None):
     """Judge one `Command` and add what is wrong to `verdict`; recurses into `bash -c`, `eval`, `ssh host '...'`, `find -exec`,
-    `watch`, shell heredocs and interpreter `-c`/`-e` strings and heredocs (`depth` guards recursion)."""
-    name, words, via_xargs = resolve(command.words)
+    `watch`, shell heredocs and interpreter `-c`/`-e` strings and heredocs (`depth` guards recursion). `assigned` is the
+    `NAME -> value` table of earlier assignments on the same line, used by `expand_program`."""
+    name, words, via_xargs = resolve(expand_program(command.words, assigned))
     if name is None:
         return
     rest = [w.text for w in words[1:]]
@@ -453,7 +493,7 @@ def check_command(command, verdict, depth):
         verdict.reasons.append("`fuser -k` kills every process using a file")
     elif name == "systemctl" and "kill" in rest:
         verdict.reasons.append("`systemctl kill` sends signals to a service's processes")
-    elif name in SHELLS or name in ("su", "runuser", "sg"):
+    elif name in SHELLS or name in ("su", "runuser", "sg", "script"):
         script = shell_script(words)
         if script is not None:
             analyze(script, depth + 1, verdict)
@@ -479,6 +519,57 @@ def check_command(command, verdict, depth):
             verdict.reasons.append("an interpreter one-liner sends SIGKILL or signals by pattern: use agent_procs.py")
 
 
+# [@ANCHOR: guard_signals:expand_program]
+def expand_program(words, assigned):
+    """`words` with the program name replaced when it is a variable whose value is known from the same line: `K=kill; $K -9 1`,
+    `${K:-kill} -9 1`. Looks past leading assignments and reserved words; `$NAME` or `${NAME}` takes the value assigned earlier
+    on the line, `${NAME:-default}` / `${NAME-default}` that value or else the default; the value is split on white space into
+    words. A variable with no known value (it may come from the environment) is left as it is, so `$CARGO test` stays allowed."""
+    start = 0
+    while start < len(words) and (words[start].text in RESERVED or _ASSIGNMENT_RE.match(words[start].text)):
+        start += 1
+    if start >= len(words):
+        return words
+    match = _VARIABLE_RE.match(words[start].text)
+    if not match:
+        return words
+    name = match.group(1) or match.group(2)
+    value = (assigned or {}).get(name) or match.group(3)
+    if not value:
+        return words
+    try:
+        pieces = shlex.split(value)
+    except ValueError:
+        pieces = value.split()
+    return words[:start] + [Word(piece) for piece in pieces] + words[start + 1:]
+
+
+# [@ANCHOR: guard_signals:piped_shell_sources]
+def piped_shell_sources(commands, index):
+    """The texts a shell reads when `commands[index]` is a shell with no script of its own whose input is a pipe (`echo 'kill -9 1' |
+    sh`, `printf ... | bash`, `cat <<EOF | bash`): the arguments (options of echo and printf left out) and heredoc bodies of every
+    earlier command of the same pipeline. Returns `[]` for any other command. `bash script.sh`, `bash -c ...` and a shell that is
+    not piped into are not stdin shells."""
+    command = commands[index]
+    if not command.piped:
+        return []
+    name, words, _via = resolve(command.words)
+    if name not in SHELLS or shell_script(words) is not None or any(not w.text.startswith("-") for w in words[1:]):
+        return []
+    texts, j = [], index
+    while j > 0 and commands[j].piped:
+        j -= 1
+        source = commands[j]
+        source_name, source_words, _ = resolve(source.words)
+        args = [w.text for w in source_words[1:] if not (source_name in ("echo", "printf") and w.text.startswith("-"))]
+        if args:
+            texts.append(" ".join(args))
+            if source_name == "printf" and len(args) > 1:
+                texts.extend(args)  # printf FORMAT ARG...: the format word is not part of the script
+        texts.extend(source.bodies)
+    return texts
+
+
 # [@ANCHOR: guard_signals:analyze]
 def analyze(text, depth=0, verdict=None):
     """Parse shell `text` and judge every command in it. Returns the `Verdict` (the same object passed in, when given).
@@ -486,8 +577,16 @@ def analyze(text, depth=0, verdict=None):
     verdict = verdict if verdict is not None else Verdict()
     if depth > MAX_DEPTH:
         raise ValueError("shell text nested too deeply")
-    for command in tokenize(text, [], depth):
-        check_command(command, verdict, depth)
+    commands = tokenize(text, [], depth)
+    assigned = {}
+    for index, command in enumerate(commands):
+        if command.words and all(_ASSIGNMENT_RE.match(w.text) for w in command.words):
+            for word in command.words:
+                key, _, value = word.text.partition("=")
+                assigned[key] = value
+        check_command(command, verdict, depth, assigned)
+        for source in piped_shell_sources(commands, index):
+            analyze(source, depth + 1, verdict)
     return verdict
 
 

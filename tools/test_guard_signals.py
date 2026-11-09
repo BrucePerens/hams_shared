@@ -21,6 +21,8 @@ Tests [@ANCHOR: guard_signals:check_kill]
 Tests [@ANCHOR: guard_signals:check_pgrep]
 Tests [@ANCHOR: guard_signals:shell_script]
 Tests [@ANCHOR: guard_signals:check_command]
+Tests [@ANCHOR: guard_signals:expand_program]
+Tests [@ANCHOR: guard_signals:piped_shell_sources]
 Tests [@ANCHOR: guard_signals:analyze]
 Tests [@ANCHOR: guard_signals:log_path]
 Tests [@ANCHOR: guard_signals:log_event]
@@ -32,6 +34,7 @@ Tests [@ANCHOR: guard_signals:main]
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -83,6 +86,14 @@ DENIED = [
     "find . -exec true {} \\; -exec pkill x \\;", "find . -exec sh -c 'kill -9 $0' {} \\;", "find . -ok kill -9 {} +",
     # nesting
     "echo $(echo $(echo $(pkill foo)))", 'echo "a $(kill -9 5) b"',
+    # Equivalent spellings (to-do signal-guard-shell-forms, 2026-11-09): a program named by a variable or ANSI-C quoting, a script piped
+    # into a shell, wrappers with long or clustered options, and wrappers that were not read at all.
+    "K=kill; $K -9 123", "${K:-kill} -9 1", "${K-pkill} x", "K='kill -9'; $K 123", "$'kill' -9 123", "$'p\\x6bill' x",
+    "echo 'kill -9 1' | sh", "printf '%s' 'pkill foo' | bash", "echo pkill foo | bash -s", "cat <<EOF | bash\nkill -9 1\nEOF",
+    "echo hi | cat | sh -c 'x' ; echo 'kill -9 1' | sh -",
+    "sudo --user odoo pkill x", "sudo -nu odoo pkill x", "sudo --chdir /tmp pkill x", "time -p kill -9 1", "env -S 'kill -9 1'",
+    "env -S'kill -9 1'", "env --split-string='pkill x'", "flock lock -c 'kill -9 1'", "flock -n lock -c 'pkill x'", "pkexec kill -9 1",
+    "runuser -u bob kill -9 1", "script -c 'kill -9 1' /dev/null", "function f { kill -9 1; }; f", "busybox kill -9 1",
 ]
 
 ALLOWED = [
@@ -110,6 +121,9 @@ ALLOWED = [
     "docker ps", "tail -f log | grep -m1 DONE", "pgrep", "echo kill -9 > notes.txt", "sed -i 's/pkill/stop/' file",
     "# pkill foo in a comment", "echo done # kill -9 5", "",
     "find . -exec echo {} \\; -exec ls {} +", "find . -exec sh -c 'echo $0' {} \\;",
+    "$CARGO test", "K=cargo; $K test", "${CARGO:-cargo} build", "echo hi | bash", "echo 'ls' | sh", "bash script.sh", "cat notes | sh script.sh",
+    "time -p make", "sudo --user odoo ls", "sudo -nu odoo python3 x.py", "env -S 'ls -l'", "flock lock -c 'ls'", "script -c 'ls' /dev/null",
+    "function f { ls; }; f", "busybox ls", "runuser -u bob ls", "$'ls' -l",
 ]
 
 
@@ -247,6 +261,49 @@ class ParserTests(GuardTestCase):
         self.assertEqual(gs.resolve([gs.Word(t) for t in "until ! A=1 pgrep x".split()])[0], "pgrep")
         self.assertIsNone(gs.resolve([gs.Word("A=1")])[0])
         self.assertIsNone(gs.resolve([gs.Word(t) for t in "command -v pkill".split()])[0])
+
+    def test_ansi_c_quoting_and_pipes_in_the_tokenizer(self):
+        self.assertEqual(self.words("$'kill' -9 1 $'a\\x20b'"), [["kill", "-9", "1", "a b"]])
+        commands = gs.tokenize("echo x | sh -s ; cat <<EOF | bash\nbody\nEOF\nls", [])
+        self.assertEqual([(c.words[0].text, c.piped) for c in commands], [("echo", False), ("sh", True), ("cat", False), ("bash", True), ("ls", False)])
+        self.assertEqual(commands[2].bodies, ["body"])  # the body of a heredoc whose command is piped on the same line
+
+    def test_resolve_reads_the_wrappers_the_guard_once_missed(self):
+        def name(text):
+            return gs.resolve([gs.Word(t) for t in shlex.split(text)])[0]
+        self.assertEqual([name(t) for t in ("sudo --user odoo pkill x", "sudo -nu odoo pkill x", "time -p kill 1", "pkexec kill 1",
+                                            "runuser -u bob kill 1", "busybox kill 1", "function f { kill 1; }")], ["pkill", "pkill", "kill", "kill", "kill", "kill", "kill"])
+        self.assertEqual(name("runuser -l bob -c script"), "runuser")  # the -c form stays a shell script for check_command
+        self.assertEqual(name("env -S 'kill -9 1'"), "eval")
+        self.assertEqual(name("flock lock -c 'kill -9 1'"), "sh")
+        self.assertIsNone(name("function f"))
+
+    # Tests [@ANCHOR: guard_signals:expand_program]
+    def test_expand_program_uses_assignments_of_the_same_line_and_defaults(self):
+        def program(text, assigned=None):
+            return [w.text for w in gs.expand_program([gs.Word(t) for t in shlex.split(text)], assigned)]
+        self.assertEqual(program("$K -9 1", {"K": "kill"}), ["kill", "-9", "1"])
+        self.assertEqual(program("${K} 1", {"K": "kill -9"}), ["kill", "-9", "1"])
+        self.assertEqual(program("${K:-kill} 1"), ["kill", "1"])
+        self.assertEqual(program("${K-kill} 1", {"K": "echo"}), ["echo", "1"])
+        self.assertEqual(program("A=1 $K 1", {"K": "pkill"}), ["A=1", "pkill", "1"])
+        self.assertEqual(program("$CARGO test"), ["$CARGO", "test"])  # unknown: it may come from the environment, left alone
+        self.assertEqual(program("echo $K", {"K": "kill"}), ["echo", "$K"])
+        self.assertEqual(gs.expand_program([], {}), [])
+
+    # Tests [@ANCHOR: guard_signals:piped_shell_sources]
+    def test_piped_shell_sources_are_the_text_a_stdin_shell_will_run(self):
+        def sources(text, index=None):
+            commands = gs.tokenize(text, [])
+            return gs.piped_shell_sources(commands, len(commands) - 1 if index is None else index)
+        self.assertEqual(sources("echo -n 'kill -9 1' | sh"), ["kill -9 1"])
+        self.assertEqual(sources("echo a | tr a b | bash"), ["a b", "a"])  # every earlier command of the pipeline, nearest first
+        self.assertEqual(sources("printf '%s' 'ls -l' | sh"), ["%s ls -l", "%s", "ls -l"])
+        self.assertEqual(sources("cat <<EOF | bash\nls\nEOF"), ["ls"])
+        self.assertEqual(sources("echo ls | bash script.sh"), [])
+        self.assertEqual(sources("echo ls | bash -c 'x'"), [])
+        self.assertEqual(sources("echo ls ; sh"), [])
+        self.assertEqual(sources("echo ls | cat"), [])
 
     def test_shell_script_extraction(self):
         self.assertEqual(gs.shell_script([gs.Word(t) for t in ["bash", "-c", "ls"]]), "ls")
