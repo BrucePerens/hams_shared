@@ -66,6 +66,11 @@ FIELD_RE = re.compile(r"^([a-zA-Z_]+):\s*(.+?)\s*$", re.MULTILINE)
 EXCLUDED_TOP_LEVEL_DIRS = {"ingest", "ics_forms", "ics_training"}
 
 
+class GitListingError(RuntimeError):
+    """`git ls-files` could not list the tree (not a repository, git missing, dubious ownership). Raised, never swallowed into an
+    empty list: an empty list reads as "no claims, all fresh" and the gate printed SUCCESS for a tree it had not looked at."""
+
+
 def _git_tracked_files(repo_root, suffix):
     try:
         result = subprocess.run(
@@ -74,8 +79,9 @@ def _git_tracked_files(repo_root, suffix):
             text=True,
             check=True,
         )
-    except (subprocess.CalledProcessError, OSError):
-        return []
+    except (subprocess.CalledProcessError, OSError) as error:
+        detail = getattr(error, "stderr", None) or str(error)
+        raise GitListingError(f"cannot list the files of {repo_root}: {str(detail).strip()}") from error
     return [
         os.path.join(repo_root, line)
         for line in result.stdout.splitlines()
@@ -376,7 +382,9 @@ def scan_claims(repo_root):
         try:
             with open(claim_path, "r", encoding="utf-8") as f:
                 content = f.read()
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError) as error:
+            # An unreadable claim is a failure, not a claim that is skipped: skipping made a damaged file read as fresh.
+            problems.append((claim_path, f"claim file cannot be read: {error}"))
             continue
         fields = parse_claim_frontmatter(content)
         if fields is None or "anchor" not in fields or "code_hash" not in fields:
@@ -642,9 +650,18 @@ def main():
             if not os.path.isdir(store):
                 print(f"[!] ERROR: --claims-store {store!r} is not a directory.")
                 return 2
-        _print_unclaimed(find_unclaimed_anchors(repo_root, [os.path.abspath(d) for d in args.claims_store]))
+        try:
+            unclaimed = find_unclaimed_anchors(repo_root, [os.path.abspath(d) for d in args.claims_store])
+        except GitListingError as error:
+            print(f"[!] ERROR: {error}.")
+            return 2
+        _print_unclaimed(unclaimed)
         return 0
-    problems, retired = scan_claims(repo_root)
+    try:
+        problems, retired = scan_claims(repo_root)
+    except GitListingError as error:
+        print(f"[!] ERROR: {error}. Nothing was checked, so this is not a pass.")
+        return 2
 
     if retired:
         print(

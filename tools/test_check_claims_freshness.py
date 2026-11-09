@@ -397,6 +397,8 @@ class TestMainRejectsAMissingDirectory(unittest.TestCase):
     def test_an_existing_directory_with_no_claims_still_succeeds(self):
         empty = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, empty, ignore_errors=True)
+        _write(os.path.join(empty, "readme.txt"), "x\n")
+        _init_git_repo(empty)  # a repository with no claims is fine; a directory git cannot list is not (GateCannotPassWithoutLookingTests)
         out = io.StringIO()
         with mock.patch("sys.argv", ["check_claims_freshness.py", empty]), contextlib.redirect_stdout(out):
             rc = ccf.main()
@@ -732,3 +734,36 @@ class MigrateClaimHashesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GateCannotPassWithoutLookingTests(unittest.TestCase):
+    """Negative controls: a tree the checker could not read must be red, never SUCCESS."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _main(self, *argv):
+        import io
+        from contextlib import redirect_stdout
+        out = io.StringIO()
+        with mock.patch("sys.argv", ["check_claims_freshness.py", *argv]), redirect_stdout(out):
+            code = ccf.main()
+        return code, out.getvalue()
+
+    def test_a_directory_that_is_not_a_git_repository_is_red(self):
+        _write(os.path.join(self.tmp, "claims", "foo.md"), "---\nanchor: a:b\ncode_hash: sha256:00\n---\n")
+        code, out = self._main(self.tmp)
+        self.assertEqual(code, 2, out)
+        self.assertNotIn("SUCCESS", out)
+
+    def test_an_unreadable_claim_file_is_a_problem(self):
+        _write(os.path.join(self.tmp, "claims", "foo.md"), "---\nanchor: a:b\ncode_hash: sha256:00\n---\n")
+        _init_git_repo(self.tmp)
+        with open(os.path.join(self.tmp, "claims", "foo.md"), "wb") as handle:
+            handle.write(b"\xff\xfe\x00bad")
+        problems = ccf.check_claims(self.tmp)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("cannot be read", problems[0][1])
