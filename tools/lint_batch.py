@@ -245,6 +245,7 @@ class LintBatch:
     kind = KIND
     runner_env = RUNNER_ENV
 
+    # [@ANCHOR: lint_batch:LintBatch_init]
     def __init__(self, repo, repo_name, base, passthrough, stamp_writer, command=None, prepare=None,
                  out=print, environ=None, fetch=True):
         self.repo = repo
@@ -275,6 +276,7 @@ class LintBatch:
             self._log.write(text)
             self._log.flush()
 
+    # [@ANCHOR: lint_batch:LintBatch_run_once]
     def _run_once(self, batch_id, group):
         self._run_no += 1
         parent = batch_queue.tree_parent(self.kind, self.repo_name, suffix="_b%d_r%d" % (batch_id, self._run_no),
@@ -323,6 +325,7 @@ class LintBatch:
         """(selected step names, {failed step: output}) of the run that just ended. Lint: the results file."""
         return read_results(results)
 
+    # [@ANCHOR: lint_batch:LintBatch_tokens]
     def tokens(self, members):
         """(owners {token: [tips]}, find_tokens(line)) for attribution. Lint: changed files by path, and anchor ids on changed lines."""
         files = {}
@@ -347,6 +350,7 @@ class LintBatch:
 
         return owners, find
 
+    # [@ANCHOR: lint_batch:LintBatch_call]
     def __call__(self, batch_id, members, log_path):
         batch_queue.reap_orphan_trees(self.repo, self.kind, self.repo_name, environ=self.environ)
         if self.fetch:
