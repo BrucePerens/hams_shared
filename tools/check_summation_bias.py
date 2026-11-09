@@ -7,6 +7,11 @@ Summation Bias Checker
 Detects if a file's size has been reduced by more than 5% compared to HEAD.
 This helps prevent AI agents from summarizing and dropping critical nuance during edits.
 
+During a merge commit (MERGE_HEAD present, `--staged` only) a file is judged against what the merge should have
+produced rather than against the first parent, so a rewording that arrived from the merged-in branch is not a shrink
+the author made; a shrink the author adds on top of it, or a conflict resolution that drops lines, still is. See
+reference_size(). Ordinary commits are judged exactly as before.
+
 With `--staged` (what git-hooks/pre-commit runs) only the changes staged for the commit are compared, and the new size is
 the staged content's, so an unrelated edit another session has left in a shared working tree cannot block a commit.
 """
@@ -14,6 +19,81 @@ the staged content's, so an unrelated edit another session has left in a shared 
 import os
 import subprocess
 import sys
+import tempfile
+
+def _git_out(args, cwd, check=True):
+    return subprocess.run(["git", *args], capture_output=True, check=check, cwd=cwd).stdout
+
+
+def _blob_size(spec, repo_root):
+    """Size in bytes of the blob `spec` (e.g. HEAD:path), or None when it does not exist."""
+    try:
+        return int(_git_out(["cat-file", "-s", spec], repo_root).decode().strip())
+    except subprocess.CalledProcessError:
+        return None
+
+
+def _blob_id(spec, repo_root):
+    try:
+        return _git_out(["rev-parse", "--verify", "-q", spec], repo_root).decode().strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+def _merge_heads(repo_root):
+    """Commits being merged into HEAD (the contents of MERGE_HEAD), empty for an ordinary commit."""
+    try:
+        path = _git_out(["rev-parse", "--git-path", "MERGE_HEAD"], repo_root).decode().strip()
+        with open(os.path.join(repo_root, path), encoding="ascii") as f:
+            return [line.strip() for line in f if line.strip()]
+    except (subprocess.CalledProcessError, OSError):
+        return []
+
+
+def _clean_merge_size(filepath, heads, repo_root):
+    """Size of what git's own three-way merge of the two sides gives for this file, or None when it
+    conflicts or cannot be computed (an octopus merge, no merge base, a side without the file)."""
+    if len(heads) != 1:
+        return None
+    try:
+        base = _git_out(["merge-base", "HEAD", heads[0]], repo_root).decode().split()[0]
+        ours = _git_out(["show", f"HEAD:{filepath}"], repo_root)
+        theirs = _git_out(["show", f"{heads[0]}:{filepath}"], repo_root)
+        base_content = _git_out(["show", f"{base}:{filepath}"], repo_root)
+    except (subprocess.CalledProcessError, IndexError):
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = []
+        for name, data in (("ours", ours), ("base", base_content), ("theirs", theirs)):
+            paths.append(os.path.join(tmp, name))
+            with open(paths[-1], "wb") as f:
+                f.write(data)
+        res = subprocess.run(["git", "merge-file", "-p", *paths], capture_output=True, cwd=repo_root)
+    return len(res.stdout) if res.returncode == 0 else None
+
+
+def reference_size(filepath, old_size, heads, new_blob, repo_root):
+    """The size the staged content is judged against, or None when this file is not to be judged.
+
+    Ordinary commit: the size at HEAD. Merge commit: HEAD is the branch author's side and the merged-in commit is
+    main's, so a file main reworded arrives 5-8 percent smaller through no act of the author. A file whose staged
+    content is exactly what a merged-in parent has came from that parent and is not judged. Otherwise the reference
+    is what git's own three-way merge of the two sides produces when it merges cleanly (so a shrink the author adds
+    on top of main's is still caught), and when it conflicts, the smaller of the parents' versions (so a resolution
+    that drops lines below both sides is still caught).
+    """
+    if not heads:
+        return old_size
+    sizes = [old_size]
+    for head in heads:
+        if _blob_id(f"{head}:{filepath}", repo_root) == new_blob:
+            return None
+        other = _blob_size(f"{head}:{filepath}", repo_root)
+        if other is not None:
+            sizes.append(other)
+    clean = _clean_merge_size(filepath, heads, repo_root)
+    return clean if clean is not None else min(sizes)
+
 
 def main():
     staged = "--staged" in sys.argv[1:]
@@ -68,6 +148,13 @@ def main():
         except subprocess.CalledProcessError:
             # File might be new (not in HEAD)
             continue
+
+        heads = _merge_heads(repo_root) if staged else []
+        if heads:
+            ref_size = reference_size(filepath, old_size, heads, _blob_id(f":{filepath}", repo_root), repo_root)
+            if ref_size is None:
+                continue  # the staged content is a merged-in parent's own version of the file
+            old_size = ref_size
 
         if staged:
             try:

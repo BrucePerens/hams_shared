@@ -2,7 +2,8 @@
 # Pre-commit checks, run on the staged changes only (another session's unrelated edit in a shared working tree cannot block
 # this commit):
 #   check_summation_bias.py  refuses a .md, .py or .json file that shrinks by more than 5 percent, because that is what an
-#                            edit that silently dropped rules or nuance looks like.
+#                            edit that silently dropped rules or nuance looks like. In a merge commit it judges each file against
+#                            the merge result, so a rewording that arrived from main is not the author's shrink.
 #   check_staged_files.py    refuses a file over 5 MB and any file under a target/ directory (cargo build output).
 #
 # A shrink that is a real refactor or deliberate deletion, or a deliberate large file: commit with `git commit --no-verify`
