@@ -127,8 +127,11 @@ class MypyPluginStepTest(unittest.TestCase):
         import subprocess
         import sys
 
+        # `--list-json` from a hams_shared tree first builds the sibling layout (clones, symlinks): seconds on a quiet box, and above the old
+        # 120 s on a saturated one (2026-11-08, load above 90), where the test failed with a TimeoutExpired though nothing was wrong. The
+        # limit is only a safety net against a hang now.
         run = subprocess.run([sys.executable, os.path.join(ltd.HERE, "run_linters.py"), "--list-json"], capture_output=True,
-                             text=True, env={**os.environ, **env}, timeout=120)
+                             text=True, env={**os.environ, **env}, timeout=900)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         return {step["name"]: step["argv"] for step in json.loads(run.stdout)}
 
