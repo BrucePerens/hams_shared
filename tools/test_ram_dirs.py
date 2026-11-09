@@ -773,6 +773,32 @@ class GarbageCollectionTest(RamTestCase):
         os.utime(os.path.join(deep, "debug", "deps", "f0"), None)  # a file one level further down was just read or written
         self.assertLess(time.time() - ram_dirs.newest_activity(deep), 60)
 
+    # Tests [@ANCHOR: ram_dirs:newest_activity]
+    def test_reading_the_marker_or_listing_a_directory_is_not_activity_but_reading_a_file_is(self):
+        """`relatime` refreshes an access time at or before the modification time on the next read, so gc's own reading of the
+        marker and listing of directories must not restart the idle clock. The access times are set by hand here, so the result
+        does not depend on how the filesystem under the test is mounted."""
+        path = self.make_job("quiet", age_hours=10)
+        now = time.time()
+        for directory in (path, os.path.join(path, "debug"), os.path.join(path, "debug", "deps")):
+            os.utime(directory, (now, os.stat(directory).st_mtime))
+        marker = os.path.join(path, ram_dirs.OWNER_FILE)
+        os.utime(marker, (now, os.stat(marker).st_mtime))
+        self.assertGreater(time.time() - ram_dirs.newest_activity(path), 9 * 3600)
+        data = os.path.join(path, "debug", "deps", "f0")
+        os.utime(data, (now, os.stat(data).st_mtime))  # something read a build file
+        self.assertLess(time.time() - ram_dirs.newest_activity(path), 60)
+
+    # Tests [@ANCHOR: ram_dirs:gc]
+    def test_a_gc_pass_does_not_restart_the_idle_clock_of_what_it_examines(self):
+        """The gc pass reads the marker and lists the tree; on a relatime mount (/dev/shm) that used to look like activity."""
+        path = self.make_job("old", keep=True, age_hours=9)
+        pol = ram_dirs.policy(self.environ)
+        for _ in range(2):
+            ram_dirs.gc(pol, say=lambda text: None, proc_root=self.fake_proc(), dry_run=True)
+            self.assertGreater(time.time() - ram_dirs.newest_activity(path), 8 * 3600)
+        self.assertEqual([name for name, _s, _r in ram_dirs.gc(pol, say=lambda text: None, proc_root=self.fake_proc())], [ram_dirs.CARGO_PREFIX + "old"])
+
     # Tests [@ANCHOR: ram_dirs:references]
     def test_a_process_refers_to_a_directory_by_its_environment_its_cwd_or_an_open_file(self):
         path = self.make_job("busy")

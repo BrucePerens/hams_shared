@@ -765,7 +765,7 @@ Purpose: the marker of a directory as a dict `pid, start, created, name, job, ke
 
 ### `[@ANCHOR: ram_dirs:newest_activity]` `newest_activity(path, depth=3, per_directory=2000)`
 
-Purpose: the newest modification or access time in a tree, sampled cheaply: three levels down (`debug/deps/<file>`) and at most `per_directory` entries of each directory. Reading a build's files counts, so a directory something still reads is not idle. Never raises.
+Purpose: the newest activity in a tree, sampled cheaply: three levels down (`debug/deps/<file>`) and at most `per_directory` entries of each directory. Every entry's modification time counts, and the access time of regular files other than the owner marker (reading a build's files keeps a directory from being idle); a directory's own access time and the marker's do not, because `gc`'s own listing and marker read refresh them under `relatime` (the `/dev/shm` default). Never raises.
 
 ### `[@ANCHOR: ram_dirs:references]` `references(path, proc_root="/proc")`
 
