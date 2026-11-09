@@ -492,7 +492,7 @@ class MainIntegrationTests(unittest.TestCase):
         # Regression test through the real CLI entry point: a real module lives
         # in the "hams_open" directory, but the script is invoked with
         # "hams_open/hams_shared" as its repo_root argument (the exact wrong-
-        # root mistake this bug class is named for). Before the _resolve_repo_root
+        # root mistake this class of bug is named for). Before the _resolve_repo_root
         # fix, this silently built an empty (0-model) registry with no error.
         hams_open = os.path.join(self.tmp, "hams_open")
         hams_shared = os.path.join(hams_open, "hams_shared")
@@ -635,8 +635,8 @@ class FindNeededCoreModulesTests(unittest.TestCase):
 
 
 class ResolveRepoRootTests(unittest.TestCase):
-    # Regression coverage for the exact "wrong repo root" bug class this session's
-    # bug hunt already found and fixed in ~13 other hams_shared/tools scripts
+    # Regression coverage for the exact "wrong repo root" problem already handled in
+    # ~13 other hams_shared/tools scripts
     # (check_pip_audit.py, check_cargo_deny.py, scan_ui_vulnerabilities.py,
     # check_model_extension_collisions.py, ...): a script living in
     # hams_shared/tools/ gets invoked with hams_shared itself as its "repo root"

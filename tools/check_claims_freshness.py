@@ -6,8 +6,8 @@ Function-Level Claims Freshness Check (ADR 0091)
 
 A "claim," per ADR 0091, is a short markdown file at `<module>/claims/<anchor_name>.md`
 documenting precisely and falsifiably what one anchored function guarantees -- the same
-falsifiable-claim discipline that found real production bugs during the 2026-09-08 patent
-re-verification passes (see `hams_shared/agents/skills/bug-hunt/SKILL.md`), applied to ordinary
+falsifiable-claim discipline used to re-verify patent specifications (see
+`hams_shared/agents/skills/bug-hunt/SKILL.md`), applied to ordinary
 functions rather than patent claims. A claim file's own YAML frontmatter records `anchor` (the
 base anchor name the claim documents, matching a real `# [@ANCHOR: name]` in source) and
 `code_hash` (a sha256 of the anchored function's own source span, as it existed the last time a
@@ -18,9 +18,8 @@ reader, human or AI, actually comparing the two. What it verifies mechanically, 
 without any semantic understanding at all: whether the anchored function's *source text* has
 changed since the claim was last confirmed. A hash mismatch does not mean the claim is wrong -- it
 means nobody has looked since the code changed, which is exactly the condition that let real
-patent-specification claims drift out of sync with the code they described throughout the same
-night this ADR is named for (see bug class 6, "Cross-document/cross-section self-contradiction,"
-in the bug-hunt skill's own list).
+patent-specification claims drift out of sync with the code they described (a cross-document or
+cross-section self-contradiction that nobody re-checked).
 
 Python only, for now, matching every other layer of this anchor system's own incremental rollout
 (`check_function_test_anchors.py` shipped Python-only under ADR 0090 before its own JS and Rust
@@ -37,10 +36,12 @@ every claim ever committed should have an accurate hash from the moment it's add
 import argparse
 import ast
 import hashlib
+import io
 import os
 import re
 import subprocess
 import sys
+import tokenize
 
 import verify_anchors as va  # noqa: E402
 from check_function_test_anchors import (  # noqa: E402
@@ -52,16 +53,13 @@ from check_function_test_anchors import (  # noqa: E402
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 FIELD_RE = re.compile(r"^([a-zA-Z_]+):\s*(.+?)\s*$", re.MULTILINE)
 
-# Wired into run_linters.py as a real, hard-blocking gate 2026-09-18 (Bruce's own decision, via
-# AskUserQuestion, answered in hams_com/night_shift_questions/answered/
-# wire-check-claims-freshness-into-ci-fa45dba0.md), with these three top-level directories
-# excluded for now: `ingest/`, `ics_forms/`, and `ics_training/` all have another session's real,
-# active, in-progress work landing throughout this same night (see hams_com/night_shift_todo/
-# medium/check-claims-freshness-never-wired-into-ci-1e71bfb6.md's own history), and re-checking
-# their claims before that work settles would flag transient churn, not a real regression. Every
-# other stale-claim finding outside these three was triaged to 0 the same session this gate was
-# turned on. A hardcoded exclusion set, not a CLI flag: matches the existing convention this
-# tool family already uses for the identical "live, in-progress pipeline directory" situation --
+# Wired into run_linters.py as a hard-blocking gate, with these three top-level directories
+# excluded for now: `ingest/`, `ics_forms/`, and `ics_training/` all have other sessions' real,
+# active, in-progress work landing continuously, and re-checking their claims before that work
+# settles would flag transient churn, not a real regression. Every other stale-claim finding
+# outside these three was triaged to 0 before the gate was turned on. A hardcoded exclusion
+# set, not a CLI flag: matches the existing convention this tool family already uses for the identical
+# "live, in-progress pipeline directory" situation --
 # check_absolute_paths.py's own `ignore_dirs` already excludes `ics_training/` for the same
 # reason. Remove this once that other session's work lands and settles, and a fresh
 # check_claims_freshness.py run is confirmed clean there too (not assumed).
@@ -103,7 +101,7 @@ def check_retirement(fields, claim_path, search_roots=()):
     """Classify a claim's retirement. Returns `(is_retired, problem_or_None)`.
 
     A claim documents one anchored function. When that function is deliberately deleted or
-    renamed, the claim is kept on purpose -- it holds the original finding, often a tier-1
+    renamed, the claim is kept on purpose -- it holds the original finding, often a high-severity
     security one -- but its `anchor:` can no longer resolve, so every freshness checker reported
     it as an "orphaned claim" forever. Three real claims were in exactly that state, against one
     genuine finding, and a gate that can never go green stops being read: the real orphan hiding
@@ -112,7 +110,7 @@ def check_retirement(fields, claim_path, search_roots=()):
 
     The convention, therefore, is a `retired:` date plus a statement of WHICH kind of retirement
     it is, because a reviewer must be able to tell a deliberate retirement from an accidental
-    orphan (bug classes 40 and 45 both manifest as exactly this symptom):
+    orphan:
 
         retired: 2026-09-15
         superseded_by: _create_odoo_role_if_missing.md   # renamed or moved: name the live claim
@@ -173,44 +171,157 @@ def _resolve_superseded_by(claim_path, value, search_roots):
     return None, tried
 
 
-def compute_function_hash(filepath):
-    """Returns {anchor_name: sha256_hex} for every function in `filepath` carrying a real BASE
-    anchor declaration (not a Tests/Verified-by/Triggers link to one) within its own span."""
+def _comment_columns(content):
+    """Returns {1-based line number: column where a real `#` COMMENT token starts}, found with
+    `tokenize` so a `#` inside a string literal is never mistaken for a comment."""
+    columns = {}
+    for tok in tokenize.generate_tokens(io.StringIO(content).readline):
+        if tok.type == tokenize.COMMENT:
+            columns[tok.start[0]] = tok.start[1]
+    return columns
+
+
+def _docstring_line_ranges(node):
+    """Returns [(first_line, last_line)] for the docstring of `node` and of every function and
+    class nested in it. A docstring that shares its line with other code is left alone (it is not
+    removable as whole lines), which only ever makes the hash more sensitive, never less."""
+    ranges = []
+    for sub in ast.walk(node):
+        if not isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        first = sub.body[0] if sub.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            ranges.append((first.lineno, first.end_lineno))
+    return ranges
+
+
+def normalized_span_text(span_start, span_end, lines, comment_columns, docstring_ranges):
+    """The text `code_hash` is computed from: lines `span_start..span_end` (1-based, inclusive)
+    with every `#` comment removed, every docstring of the function (and of nested functions and
+    classes) removed, trailing whitespace stripped and blank lines dropped.
+
+    WHY: a claim is stale when the function's behaviour may have changed. A reworded comment or
+    docstring cannot change behaviour, yet hashing the raw text made all 27 user_websites claims
+    stale after one night of comment-rewording pull requests (2026-11-09). Indentation and every
+    code token are kept, so any real edit (including a changed string literal, which can carry
+    behaviour) still changes the hash. Text-based on purpose: unlike hashing `ast.dump`, the
+    result does not depend on the Python version that parses it, so the same hash comes out on
+    the dev box and on every remote lint host."""
+    dropped = set()
+    for first, last in docstring_ranges:
+        if span_start <= first and last <= span_end:
+            dropped.update(range(first, last + 1))
+    out = []
+    for number in range(span_start, min(span_end, len(lines)) + 1):
+        if number in dropped:
+            continue
+        line = lines[number - 1]
+        column = comment_columns.get(number)
+        if column is not None:
+            line = line[:column]
+        line = line.rstrip()
+        if line:
+            out.append(line)
+    return "\n".join(out)
+
+
+def function_hashes_from_text(content, filename="<string>"):
+    """Returns `{anchor_name: (normalized_hash, legacy_hash)}` for every function in `content`
+    carrying a real BASE anchor declaration (not a Tests/Verified-by/Triggers link to one) within
+    its own span. `normalized_hash` is the current `code_hash` definition (comments and
+    docstrings ignored, see `normalized_span_text`); `legacy_hash` is the pre-2026-11-09
+    definition, the sha256 of the raw span text, kept only so claims written before the change
+    can be recognised and migrated (see `migrate_claim_hashes.py`). A file that does not parse
+    yields `{}`."""
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
-    except (OSError, UnicodeDecodeError):
-        return {}
-    try:
-        tree = ast.parse(content, filename=filepath)
+        tree = ast.parse(content, filename=filename)
     except SyntaxError:
         return {}
 
     lines = content.splitlines()
+    comment_columns = None
     hashes = {}
     for _qualname, node in _direct_functions(tree.body, []):
         start, end = _function_span(node, lines)
         span_lines = lines[start - 1 : min(end, len(lines))]
-        span = "\n".join(span_lines)
+        names = []
         for i, line in enumerate(span_lines):
             prev_line = span_lines[i - 1] if i > 0 else ""
             for anchor_match in va.ANCHOR_PATTERN.finditer(line):
-                if not _is_base_anchor_declaration(line, anchor_match, prev_line):
-                    continue
-                name = va._clean(anchor_match.group(1))
-                hashes[name] = hashlib.sha256(span.encode("utf-8")).hexdigest()
+                if _is_base_anchor_declaration(line, anchor_match, prev_line):
+                    names.append(va._clean(anchor_match.group(1)))
+        if not names:
+            continue
+        if comment_columns is None:
+            comment_columns = _comment_columns(content)
+        legacy = hashlib.sha256("\n".join(span_lines).encode("utf-8")).hexdigest()
+        normalized = hashlib.sha256(
+            normalized_span_text(
+                start, end, lines, comment_columns, _docstring_line_ranges(node)
+            ).encode("utf-8")
+        ).hexdigest()
+        for name in names:
+            hashes[name] = (normalized, legacy)
     return hashes
 
 
-def build_anchor_hash_index(repo_root):
-    """Returns {anchor_name: sha256_hex} across every git-tracked .py file in repo_root. A
-    duplicate anchor name across files is a pre-existing verify_anchors.py-level problem, not
-    this script's to resolve -- last one scanned wins, matching dict-update semantics elsewhere
-    in this same tool family."""
+def _read_python(filepath):
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def compute_function_hash(filepath):
+    """Returns {anchor_name: sha256_hex} for every function in `filepath` carrying a real BASE
+    anchor declaration, hashed with the current comment- and docstring-insensitive definition."""
+    content = _read_python(filepath)
+    if content is None:
+        return {}
+    return {
+        name: pair[0] for name, pair in function_hashes_from_text(content, filepath).items()
+    }
+
+
+def compute_legacy_function_hash(filepath):
+    """Same as `compute_function_hash`, but with the legacy raw-text definition (see
+    `function_hashes_from_text`)."""
+    content = _read_python(filepath)
+    if content is None:
+        return {}
+    return {
+        name: pair[1] for name, pair in function_hashes_from_text(content, filepath).items()
+    }
+
+
+def build_anchor_hash_index(repo_root, legacy=False):
+    """Returns {anchor_name: sha256_hex} across every git-tracked .py file in repo_root (the
+    legacy raw-text hashes when `legacy` is true). A duplicate anchor name across files is a
+    pre-existing verify_anchors.py-level problem, not this script's to resolve -- last one
+    scanned wins, matching dict-update semantics elsewhere in this same tool family."""
     index = {}
+    compute = compute_legacy_function_hash if legacy else compute_function_hash
     for filepath in _git_tracked_files(repo_root, ".py"):
-        index.update(compute_function_hash(filepath))
+        index.update(compute(filepath))
     return index
+
+
+def recorded_hash_matches(recorded, current, legacy_current):
+    """True when a claim's recorded `code_hash` value is fresh for an anchor whose current hashes
+    are `current` (normalized) and `legacy_current` (raw text, may be None).
+
+    A claim written before 2026-11-09 carries the legacy hash. It is accepted while the function's
+    raw text is byte-for-byte what it was (so nothing in flight breaks the moment this lands), and
+    `migrate_claim_hashes.py` rewrites it to the normalized form; once the migration has run, the
+    legacy branch can be deleted. A legacy hash that no longer matches is stale like any other,
+    including after a comment-only edit, which is what the migration's history search resolves."""
+    expected = recorded[len("sha256:") :] if recorded.startswith("sha256:") else recorded
+    return expected == current or (legacy_current is not None and expected == legacy_current)
 
 
 def check_claims(repo_root):
@@ -230,29 +341,29 @@ def scan_claims(repo_root):
     problems = []
     retired = []
     anchor_hashes = None  # computed lazily, only if a claim file actually exists
+    legacy_hashes = None
 
     for claim_path in _git_tracked_files(repo_root, ".md"):
         if f"{os.sep}claims{os.sep}" not in claim_path:
             continue
         # A README.md inside a claims/ directory is a deliberate index/explanation file for the
-        # directory itself (e.g. hardware/claims/README.md: "reviewed, out of scope for the
-        # bug-hunt campaign"), not a claim -- it carries no frontmatter because it isn't one.
-        # Confirmed live: this was a real false positive ("missing required frontmatter") against
-        # the real hams_com repo before this exclusion.
+        # directory itself (e.g. hardware/claims/README.md, which says the directory is out
+        # of scope for claims), not a claim -- it carries no frontmatter because it isn't one.
+        # Without this exclusion this was a real false positive ("missing required frontmatter")
+        # against the real hams_com repo.
         if os.path.basename(claim_path) == "README.md":
             continue
         # The centralized claims store (docs/bug_hunt_claims/<repo>/...) documents code that
         # lives in a DIFFERENT git repo (hams_open/hams_shared claims, centralized into hams_com
-        # per the bug-hunt skill's own store policy) -- this checker's whole freshness model
-        # assumes the claim and the anchored code share one repo root (`build_anchor_hash_index`
-        # only ever scans `repo_root`'s own git-tracked .py files), so it can never find a
-        # centralized claim's real anchor and would otherwise always report it "orphaned". The
-        # bug-hunt skill's own docs already name the correct tool for these:
-        # `check_claims.py --source-root <other-repo>`. Confirmed live: before this exclusion,
-        # running this checker against the real hams_com repo for the first time ever (it has
-        # never been wired into run_linters.py -- ADR 0091 names this as a real, tracked
-        # follow-on) produced over 1100 false-positive "orphaned claim" reports, the large
-        # majority of them centralized-store claims for hams_open/hams_shared code.
+        # per the store policy in agents/skills/bug-hunt/SKILL.md) -- this checker's whole
+        # freshness model assumes the claim and the anchored code share one repo root
+        # (`build_anchor_hash_index` only ever scans `repo_root`'s own git-tracked .py files), so
+        # it can never find a centralized claim's real anchor and would otherwise always report
+        # it "orphaned". That skill's own docs already name the correct tool for these:
+        # `check_claims.py --source-root <other-repo>`. Without this exclusion, running this
+        # checker against the real hams_com repo produced over 1100 false-positive "orphaned
+        # claim" reports, the large majority of them centralized-store claims for
+        # hams_open/hams_shared code.
         rel = os.path.relpath(claim_path, repo_root)
         if rel.split(os.sep)[:2] == ["docs", "bug_hunt_claims"]:
             continue
@@ -291,16 +402,17 @@ def scan_claims(repo_root):
             # Python functions) for a claim this checker structurally cannot verify yet: Python-
             # only anchor hashing (per this file's own docstring, "JS and Rust claims support are
             # real, named, not-yet-done follow-ons") has no way to resolve a Rust/JS anchor, and a
-            # function with no real `[@ANCHOR:]` at all has nothing to hash regardless. Before
+            # function with no real `[@ANCHOR:]` at all has nothing to hash regardless. Without
             # this check, such a claim always fell through to the "anchor not found" branch below
             # and was reported as "orphaned" -- a false positive, and a misleading one (implying
-            # the anchor was deleted, when it was simply never Python). Confirmed live: ALL 344 of
-            # the real hams_com repo's post-centralized-store-fix "orphaned claim" findings used
-            # this exact convention, none of them genuinely orphaned.
+            # the anchor was deleted, when it was simply never Python). In the real hams_com repo, all 344
+            # "orphaned claim" findings left once centralized-store claims are excluded used this
+            # exact convention, none of them genuinely orphaned.
             continue
 
         if anchor_hashes is None:
             anchor_hashes = build_anchor_hash_index(repo_root)
+            legacy_hashes = build_anchor_hash_index(repo_root, legacy=True)
 
         anchor = fields["anchor"]
         current = anchor_hashes.get(va._clean(anchor))
@@ -311,12 +423,12 @@ def scan_claims(repo_root):
             continue
 
         expected = recorded[len("sha256:") :] if recorded.startswith("sha256:") else recorded
-        if expected != current:
+        if not recorded_hash_matches(recorded, current, legacy_hashes.get(va._clean(anchor))):
             problems.append(
                 (
                     claim_path,
-                    f"code_hash mismatch for anchor '{anchor}' -- the function changed since this "
-                    f"claim was last confirmed (recorded sha256:{expected[:12]}..., current "
+                    f"code_hash mismatch for anchor '{anchor}' -- the function's code changed since this "
+                    f"claim was last confirmed (comment and docstring edits do not count; recorded sha256:{expected[:12]}..., current "
                     f"sha256:{current[:12]}...); review the claim's own prose against the current "
                     "code and update code_hash once confirmed accurate (or fix the code, if the "
                     "claim was right and the change broke it)",
@@ -519,9 +631,9 @@ def main():
     args = parser.parse_args()
 
     repo_root = os.path.abspath(args.directory)
-    # A path that isn't a directory walks nothing and would otherwise print SUCCESS. On
-    # 2026-09-16 a run from the wrong working directory passed a module name that didn't
-    # resolve, and the reassuring result was read as the six stale claims being fixed.
+    # A path that isn't a directory walks nothing and would otherwise print SUCCESS: a run from
+    # the wrong working directory with a module name that didn't resolve would look like the
+    # stale claims had been fixed.
     if not os.path.isdir(repo_root):
         print(f"[!] ERROR: {args.directory!r} is not a directory (resolved to {repo_root}).")
         return 2

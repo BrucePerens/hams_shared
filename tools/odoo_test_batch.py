@@ -86,7 +86,7 @@ def ineligible_reason(args, environ, cwd_is_root, dirty, foreign_shared=False):
         return "an internal phase of a run"
     if args.mode != "standard":
         return "mode %s" % args.mode
-    for flag in ("test_tags", "coverage", "mcp", "pause_on_fail", "offline_isolation", "profile", "build_daemons", "keep_db"):
+    for flag in ("test_tags", "coverage", "mcp", "pause_on_fail", "offline_isolation", "profile", "build_daemons", "keep_db", "raw_failures"):
         if getattr(args, flag, None):
             return "--%s" % flag.replace("_", "-")
     if module_scope(args.module) is None:
@@ -149,6 +149,14 @@ def failing_tests(text):
         if match:
             found.add("%s:%s.%s" % (match.group(2), match.group(3), match.group(1)))
     return found
+
+
+# [@ANCHOR: odoo_test_batch:odoo_failure_count]
+def odoo_failure_count(text):
+    """The number of failed tests and errors Odoo itself counted: the sum over every ``odoo.tests.result: N failed, M error(s) of T tests``
+    line of a ``filtered_test.txt``, or None when the text holds no such line (the extractor keeps it only sometimes), so no count is known."""
+    found = re.findall(r"odoo\.tests\.result:\s*(\d+) failed, (\d+) error\(s\) of \d+ tests", str(text))
+    return sum(int(failed) + int(errors) for failed, errors in found) if found else None
 
 
 # [@ANCHOR: odoo_test_batch:module_finder]
@@ -364,8 +372,8 @@ class OdooTestBatch(lint_batch.LintBatch):
     Per run: `-u` is the union of the scopes of the members merged into that run's tree, `-l` a log directory
     next to the tree (`filtered_test.txt` is read from it, appended to the batch log and deleted with the
     tree), `--solo --wait` so the nested test.py neither batches again nor fails fast on the box lock. Failures:
-    the modules test.py implicated, each attributed to the members whose scope names it; no implicated module
-    (a crash, an Odoo error before the tests) is unattributable and splits the batch. Durations are recorded
+    the modules test.py implicated plus the module of every failing test the report names, each attributed to the members whose scope
+    names it; no named module (a crash, an Odoo error before the tests), or more failures counted by Odoo than named, is unattributable and splits the batch. Durations are recorded
     after each run (`record_durations`)."""
 
     kind = KIND
@@ -404,10 +412,15 @@ class OdooTestBatch(lint_batch.LintBatch):
         if code == 0:
             return union, {}
         failures = {}
-        for module in implicated_modules(text):
+        # The modules of every named failing test count too: the extractor implicates only a module whose failure printed a traceback, so a module
+        # whose failing test printed none would otherwise pass its branch.
+        named = failing_tests(text)
+        for module in dict.fromkeys(implicated_modules(text) + sorted({test_id.split(":", 1)[0] for test_id in named})):
             lines = [line.strip() for line in text.splitlines() if module in line][:30]
             failures["module %s" % module] = "\n".join(lines) or module
-        if not failures:
+        counted = odoo_failure_count(text)
+        if not failures or (counted is not None and counted > len(named)):
+            # No module named, or Odoo counted more failures than the report names: some failure belongs to nobody we can name, so the batch splits.
             failures["test.py"] = (text or output)[-20000:]
         return union, failures
 

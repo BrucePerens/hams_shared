@@ -420,10 +420,11 @@ class RunLock:
         if self.ticket:
             lock_queue.release_ticket(self.qdir, self.ticket)
             self.ticket = None
-        holder = lock_queue.read_holder(self.qdir)
-        if holder and holder.get("pid") == os.getpid():
+        # This process's own record, by name: with several slots the newest record (`read_holder`) is usually another run's.
+        start = lock_queue.proc_start_time(os.getpid())
+        if start is not None:
             try:
-                os.unlink(os.path.join(self.qdir, "holder-%d-%d" % (holder["pid"], holder["start"])))
+                os.unlink(os.path.join(self.qdir, "holder-%d-%d" % (os.getpid(), start)))
             except OSError:
                 pass
         if self.fd is not None:

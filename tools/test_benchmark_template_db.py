@@ -30,6 +30,8 @@ Tests [@ANCHOR: tools:template_db_rekey_sql]
 Tests [@ANCHOR: tools:template_db_proc_cpu_seconds]
 Tests [@ANCHOR: tools:template_db_postgres_cpu_sampler]
 Tests [@ANCHOR: tools:template_db_as_odoo]
+Tests [@ANCHOR: tools:template_db_refuse_on_production_host]
+Tests [@ANCHOR: tools:template_db_existing_databases]
 Tests [@ANCHOR: tools:template_db_filestore_bytes]
 Tests [@ANCHOR: tools:template_db_remove_filestore]
 Tests [@ANCHOR: tools:template_db_arm_plan]
@@ -432,7 +434,15 @@ class CpuTests(unittest.TestCase):
 
     def test_as_odoo_prefixes_sudo_and_optionally_env(self):
         self.assertEqual(b.as_odoo(["id"]), ["sudo", "-n", "-u", "odoo", "id"])
-        self.assertEqual(b.as_odoo(["id"], env={"B": "2", "A": "1"}), ["sudo", "-n", "-u", "odoo", "env", "A=1", "B=2", "id"])
+        self.assertEqual(b.as_odoo(["id"], env={"B": "2", "A": "1"}), ["sudo", "-n", "-u", "odoo", "--preserve-env=A,B", "id"])
+        self.assertEqual(b.as_odoo(["id"], env={}), ["sudo", "-n", "-u", "odoo", "id"])
+        with self.assertRaises(ValueError):
+            b.as_odoo(["id"], env={"A=1 --evil": "x"})
+
+    def test_as_odoo_never_puts_a_value_on_the_command_line(self):
+        command = b.as_odoo(["id"], env={"HAMS_CRYPTO_KEY": "s3cret-key", "PGPASSWORD": "pw-value"})
+        self.assertNotIn("s3cret-key", " ".join(command))
+        self.assertNotIn("pw-value", " ".join(command))
 
     def test_filestore_helpers_use_sudo_and_refuse_foreign_names(self):
         calls = []
@@ -835,7 +845,11 @@ class FakeBench:
             runner_slots=SimpleNamespace(configured_slot_count=lambda requested: 4),
             _acquire_lock_via_queue=lambda path, timeout, slots, only: 2,
             _test_runner_lock_path=lambda: "/nonexistent/lock",
+            infrastructure=SimpleNamespace(get_pg_bin=lambda name: name),
+            list_database_names=lambda psql, env: ["hams_test"],
+            refuse_to_run_on_production_host=lambda database_names=None: self.calls.append(("refuse", tuple(database_names))),
         )
+        self.existing = []
         FakeBench.instances.append(self)
 
     def build_key(self):
@@ -846,6 +860,8 @@ class FakeBench:
 
     def sql(self, statement):
         self.sql_log.append(statement)
+        if "FROM pg_database WHERE datname" in statement and "shobj" not in statement:
+            return "1" if any("'%s'" % name in statement for name in self.existing) else ""
         return "stored" if "shobj_description" in statement else "1000"
 
     def clone_microbenchmark(self, template, ram_template, reps):
@@ -889,7 +905,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual([c[3] for c in arms if c[1] == "clone_ram"], [key.database_name() + "_ram"] * 2)
         self.assertEqual([c[3] for c in arms if c[1] == "fresh_ssd"], [key.database_name()] * 2)
         self.assertEqual(arms[0][4], "/parking")
-        self.assertEqual(bench.calls[0], ("build", 2, 4, 1))
+        self.assertEqual(bench.calls[:2], [("refuse", ("hams_test",)), ("build", 2, 4, 1)])
         self.assertEqual(events, ["init", "enter", "exit"])
         joined = " ".join(bench.sql_log)
         self.assertIn(f'CREATE DATABASE "{key.database_name()}_ram" TEMPLATE "{key.database_name()}" TABLESPACE', joined)
@@ -921,6 +937,92 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(FakeRam.exited, [True])
         self.assertIn(f'DROP DATABASE IF EXISTS "{sample_key().database_name()}" WITH (FORCE);', " ".join(Exploding.instances[0].sql_log))
 
+    # Tests [@ANCHOR: tools:template_db_run_command]
+    # Tests [@ANCHOR: tools:template_db_refuse_on_production_host]
+    def test_a_production_host_is_refused_before_anything_is_mounted_or_created(self):
+        FakeBench.instances.clear()
+        events = []
+
+        class Production(FakeBench):
+            def __init__(self, args):
+                super().__init__(args)
+                self.runner.refuse_to_run_on_production_host = self.refuse
+
+            def refuse(self, database_names=None):
+                events.append("refuse")
+                raise SystemExit("this is a production host")
+
+        class FakeRam:
+            def __init__(self, *a):
+                events.append("ram init")
+
+            def __enter__(self):
+                events.append("ram enter")
+
+        with patch.object(b, "Bench", Production), patch.object(b, "RamTablespace", FakeRam), patch.object(b, "read_loadscreen", lambda: {}), patch.object(b.subprocess, "run") as run:
+            with self.assertRaises(SystemExit):
+                b.run_command(self.args())
+        self.assertEqual(events, ["refuse"])
+        run.assert_not_called()
+        self.assertEqual(Production.instances[0].sql_log, [])
+
+    # Tests [@ANCHOR: tools:template_db_run_command]
+    # Tests [@ANCHOR: tools:template_db_existing_databases]
+    def test_a_run_whose_template_already_exists_refuses_and_removes_nothing(self):
+        FakeBench.instances.clear()
+        name = sample_key().database_name()
+
+        class Owned(FakeBench):
+            def __init__(self, args):
+                super().__init__(args)
+                self.existing = [name]  # another run of the same module set owns it
+
+        with patch.object(b, "Bench", Owned), patch.object(b, "RamTablespace", side_effect=AssertionError("must not be created")), \
+                patch.object(b, "read_loadscreen", lambda: {}), patch.object(b, "remove_filestore") as remove, patch.object(b.subprocess, "run"):
+            with self.assertRaises(RuntimeError) as caught:
+                b.run_command(self.args())
+        self.assertIn("already exist", str(caught.exception))
+        bench = Owned.instances[0]
+        self.assertFalse([c for c in bench.calls if c[0] in ("build", "arm")])
+        self.assertFalse([q for q in bench.sql_log if "DROP DATABASE" in q])
+        remove.assert_not_called()
+
+    # Tests [@ANCHOR: tools:template_db_run_command]
+    def test_a_run_that_stops_before_creating_anything_drops_nothing(self):
+        FakeBench.instances.clear()
+
+        class FakeRam:
+            def __init__(self, *a):
+                pass
+
+            def __enter__(self):
+                raise RuntimeError("tablespace hams_bench_ram_ts already exists (another run of this tool?)")
+
+            def __exit__(self, *exc):
+                return False
+
+        with patch.object(b, "Bench", FakeBench), patch.object(b, "RamTablespace", FakeRam), patch.object(b, "read_loadscreen", lambda: {}), \
+                patch.object(b, "remove_filestore") as remove, patch.object(b.subprocess, "run"):
+            with self.assertRaises(RuntimeError):
+                b.run_command(self.args())
+        self.assertFalse([q for q in FakeBench.instances[0].sql_log if "DROP DATABASE" in q])
+        remove.assert_not_called()
+
+    # Tests [@ANCHOR: tools:template_db_run_command]
+    def test_replace_template_accepts_an_existing_template_and_cleans_up_what_it_built(self):
+        FakeBench.instances.clear()
+        name = sample_key().database_name()
+
+        class Owned(FakeBench):
+            def __init__(self, args):
+                super().__init__(args)
+                self.existing = [name]
+
+        with patch.object(b, "Bench", Owned), patch.object(b, "read_loadscreen", lambda: {}), patch.object(b, "remove_filestore") as remove, patch.object(b.subprocess, "run"):
+            self.assertEqual(b.run_command(self.args(arms="fresh_ssd", clone_micro=False, replace_template=True)), 0)
+        self.assertEqual([c.args[0] for c in remove.call_args_list], [name])
+        self.assertIn(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE);', " ".join(Owned.instances[0].sql_log))
+
     def test_no_ram_arm_means_no_tablespace(self):
         FakeBench.instances.clear()
         with patch.object(b, "Bench", FakeBench), patch.object(b, "RamTablespace", side_effect=AssertionError("must not be created")), patch.object(b, "read_loadscreen", lambda: {}), patch.object(b.subprocess, "run"):
@@ -950,7 +1052,7 @@ class BenchAndCommandTests(unittest.TestCase):
 
         def fake_measured(cmd, env, cwd, log_path, database, **kwargs):
             seen.update(cmd=cmd, env=env, database=database)
-            events = [c.split("=", 1)[1] for c in cmd if c.startswith("HAMS_BENCH_EVENTS=")][0]
+            events = env["HAMS_BENCH_EVENTS"]
             with open(events, "w", encoding="utf-8") as handle:
                 handle.write(json.dumps({"event": "rebuild_start", "time": 1000.0}) + "\n")
                 handle.write(json.dumps({"event": "odoo_end", "time": 1090.0}) + "\n")
@@ -962,18 +1064,41 @@ class BenchAndCommandTests(unittest.TestCase):
         stub = seen["cmd"].index("_stub")
         self.assertEqual(seen["cmd"][stub + 1:stub + 3], ["clone_ssd", tmp])
         self.assertEqual(seen["cmd"][stub + 3], "hams_tpl_1")
-        self.assertIn("HOME=/var/lib/odoo", seen["cmd"])
+        self.assertEqual(seen["env"]["HOME"], "/var/lib/odoo")
         for expected in ("--solo", "--preflight-done", "--slot-held", "3", "--slots", "4", "/parking", "parking"):
             self.assertIn(expected, seen["cmd"])
-        self.assertIn("HAMS_TEST_LOCK_HELD=1", seen["cmd"])
-        self.assertIn("HAMS_ISOLATED_NS=1", seen["cmd"])
-        self.assertTrue(any(c.startswith("HAMS_BENCH_EVENTS=") for c in seen["cmd"]))
+        preserved = [c for c in seen["cmd"] if c.startswith("--preserve-env=")][0].split("=", 1)[1].split(",")
+        for name in ("HAMS_TEST_LOCK_HELD", "HAMS_ISOLATED_NS", "HAMS_BENCH_EVENTS", "HOME"):
+            self.assertIn(name, preserved)
+        self.assertEqual((seen["env"]["HAMS_TEST_LOCK_HELD"], seen["env"]["HAMS_ISOLATED_NS"]), ("1", "1"))
         self.assertEqual(seen["database"], f"{b.BENCH_DATABASE}_s3")
         self.assertEqual(record.wall_total, 90.0)
         self.assertIn("NO odoo.tests.result", record.notes)
         self.assertEqual(bench.records, [record])
         with open(os.path.join(tmp, "results_small.json"), encoding="utf-8") as handle:
             self.assertEqual(len(json.load(handle)["records"]), 1)
+
+    # Tests [@ANCHOR: tools:template_db_bench]
+    def test_the_clone_micro_benchmark_scratch_names_belong_to_this_process(self):
+        bench = b.Bench.__new__(b.Bench)
+        bench.meta = {"clone": []}
+        bench.runner = SimpleNamespace()
+        statements = []
+        bench.sql = lambda statement: statements.append(statement) or ""
+        bench.sql_in = lambda database, statement: statements.append(f"{database}: {statement}") or ""
+        scratch = []
+
+        def fake_timed(connect, statement, drop_sql, backend_cpu):
+            scratch.append(drop_sql)
+            return {"wall": 0.1, "cpu": 0.0}
+
+        with patch.dict(sys.modules, {"psycopg2": SimpleNamespace(connect=lambda **kw: None)}), patch.object(b, "timed_clone", fake_timed), \
+                patch.object(b, "read_loadscreen", lambda: {}), patch.object(b.subprocess, "run"):
+            bench.clone_microbenchmark("hams_tpl_x", None, 1)
+        suffix = f"_{os.getpid()}"
+        self.assertTrue(scratch and all(suffix + '"' in drop for drop in scratch), scratch)
+        probes = [q for q in statements if "hams_bench_rekey_probe" in q]
+        self.assertTrue(probes and all(("hams_bench_rekey_probe" + suffix) in q for q in probes), probes)
 
     def test_report_command_prints_tables_and_clone_lines(self):
         with tempfile.TemporaryDirectory() as tmp:

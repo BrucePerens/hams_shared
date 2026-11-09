@@ -61,12 +61,12 @@ module.exports = tseslint.config(
     },
     rules: {
       ...promiseRulesAllErrors,
-      // Real gap found 2026-09-28/29 running the full lint suite: this codebase already uses a
+      // This codebase already uses a
       // leading-underscore convention for an intentionally-unused catch binding (e.g. `catch
       // (_e) { ... }`, theme_hams/static/src/js/hams_theme.js and others) -- but `no-unused-vars`
       // treats a catch clause's binding as a distinct category from an ordinary function
-      // argument, so `argsIgnorePattern` alone never covered it. Every one of those existing
-      // `catch (_e)` sites was a real, undetected lint violation until this was added.
+      // argument, so `argsIgnorePattern` alone never covers it. Without the catch-binding
+      // pattern every existing `catch (_e)` site is a lint violation.
       "no-unused-vars": [
         "error",
         { argsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
@@ -251,15 +251,13 @@ module.exports = tseslint.config(
       // undeclared identifiers this config's browser-only globals list
       // should be expected to know about.
       "**/tools/**",
-      // Real bug found 2026-09-12: this project's own standing convention runs concurrent
-      // bug-hunt dispatches in isolated git worktrees under `.claude/worktrees/<session>/`
-      // INSIDE the repo root (see run_linters.py's own flake8 --exclude fix the same night, and
-      // the 5 Python checkers already fixed for the identical gap per docs/
-      // BUG_HUNT_PROGRESS.md's "Batch A" entry) -- without this entry, ESLint (invoked with
+      // Agent sessions run in isolated git worktrees under `.claude/worktrees/<session>/`
+      // INSIDE the repo root (see run_linters.py's own flake8 --exclude entry, and
+      // the 5 Python checkers that exclude it for the identical reason) -- without this entry, ESLint (invoked with
       // `cwd` set to the workspace root and the real repo root as its target, per
       // run_linters.py's own step 21) descends into another session's own in-progress,
-      // uncommitted worktree. Confirmed empirically: a fixture
-      // `.claude/worktrees/<session>/bad.js` file was scanned and reported before this fix.
+      // uncommitted worktree: a fixture
+      // `.claude/worktrees/<session>/bad.js` file would be scanned and reported.
       "**/.claude/**",
       // Third-party libraries copied verbatim into the shack console, each with a recorded checksum
       // (daemons/shack_console/third_party/*/SHA256SUMS, checked by tests/vendored_tests.rs): editing them to

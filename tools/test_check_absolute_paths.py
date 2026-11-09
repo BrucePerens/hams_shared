@@ -187,13 +187,12 @@ class CheckAbsolutePathsTests(unittest.TestCase):
         self.assertNotIn(self.tmp, violations[0])
 
     def test_a_broken_symlink_to_a_checked_extension_is_skipped_without_crashing(self):
-        # Real bug found 2026-09-10: a broken symlink (target doesn't exist) with a checked
-        # extension makes open() raise FileNotFoundError, which was NOT caught (only
-        # UnicodeDecodeError was) -- crashing the entire scan instead of skipping just this one
-        # unreadable file. This is a real, currently-reachable repo state, not a contrived
-        # edge case: hams_com's own checked-in "AGENTS.md -> hams_shared/AGENTS.md" symlink is
-        # broken inside a freshly created git worktree (this exact bug-hunt campaign's own
-        # standard working setup) until fix_worktree_symlinks.py is run, and AGENTS.md's ".md"
+        # A broken symlink (target doesn't exist) with a checked extension makes open() raise
+        # FileNotFoundError, which must be caught (not only UnicodeDecodeError) -- otherwise the
+        # entire scan crashes instead of skipping just this one unreadable file. This is a real,
+        # currently-reachable repo state, not a contrived edge case: hams_com's own checked-in
+        # "AGENTS.md -> hams_shared/AGENTS.md" symlink is broken inside a freshly created git
+        # worktree (the standard agent working setup) until fix_worktree_symlinks.py is run, and AGENTS.md's ".md"
         # extension is one this checker scans.
         os.symlink(
             os.path.join(self.tmp, "does_not_exist_target.md"),
@@ -240,7 +239,7 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("Absolute Paths Violations", out)
 
     def test_check_absolute_paths_dot_py_is_specifically_excluded(self):
-        # Real false positive found 2026-09-12: this checker's own source necessarily
+        # This checker's own source necessarily
         # contains the literal "/home/" string it searches for, so scanning it would
         # always flag a false self-match. Confirms the by-filename self-exclusion, not
         # just that the string happens to be absent from the real file today.

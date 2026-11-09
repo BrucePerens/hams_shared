@@ -116,11 +116,10 @@ class ProvisionRootElevationTests(ProvisionTestCase):
         mock_execvp.assert_not_called()
 
     def test_re_exec_forwards_the_original_cli_arguments(self):
-        # Bug-hunt regression test (2026-09-10): before the fix, this
-        # re-exec silently dropped every one of the original process's own
-        # CLI arguments -- a non-root caller running
-        # `provision.py --force-reset` never actually got a force-reset,
-        # because the re-exec'd root process ran with no CLI args at all.
+        # The re-exec must forward every one of the original process's own
+        # CLI arguments; otherwise a non-root caller running
+        # `provision.py --force-reset` would never actually get a force-reset,
+        # because the re-exec'd root process would run with no CLI args at all.
         mock_execvp = self.safe_patch_object(os, "execvp")
         self.safe_patch_object(os, "geteuid", return_value=1000)
         self.safe_patch_object(
@@ -258,12 +257,11 @@ class ProvisionForceResetTests(ProvisionTestCase):
         self.assertFalse([c for c in mock_subprocess.run.call_args_list if c.args[0][:2] == ["rm", "-rf"]])
 
     def test_force_reset_refuses_an_unsafe_db_name_instead_of_running_rm_rf(self):
-        # Bug-hunt regression test (2026-09-10): DB_NAME feeds directly
+        # DB_NAME feeds directly
         # into an `rm -rf` filestore path with no validation -- a
         # traversal-shaped value (e.g. containing "../") could point that
-        # deletion outside the intended filestore directory. Confirmed
-        # this reproduces against the pre-fix code (removing the new
-        # re.match() guard lets this proceed straight to subprocess.run).
+        # deletion outside the intended filestore directory. Removing the
+        # re.match() guard would let this proceed straight to subprocess.run.
         self.safe_patch_dict(os.environ, {"DB_NAME": "../../etc"})
         self.safe_patch_object(os, "geteuid", return_value=0)
         self.safe_patch_object(sys, "argv", ["provision.py", "--force-reset"])
@@ -373,10 +371,10 @@ class RepoRootAndImportInAFreshProcessTests(unittest.TestCase):
             os.symlink(checkout, os.path.join(self.root, "hams_shared"))
 
     def test_provision_py_help_runs_in_a_fresh_subprocess_with_no_import_error(self):
-        # Bug-hunt fix (2026-10-01): this test file is deployed as an identical copy at two
+        # This test file is deployed as an identical copy at two
         # different nesting depths, same as provision.py itself (see provision._find_repo_root's
         # own comment) -- re-deriving "hams_open's own root" here with a second, independent
-        # fixed-depth "..", ".." walk broke for one of the two copies by the same construction
+        # fixed-depth "..", ".." walk breaks for one of the two copies by the same construction
         # (it landed on the PARENT of hams_com, not hams_open, when this file runs as
         # hams_com/tools/test_provision.py). Reusing provision.repo_root directly ties this test
         # to the SAME value the module itself considers correct, instead of a second, divergent

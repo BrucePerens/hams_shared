@@ -81,7 +81,7 @@ class ResolveRepoRootTests(unittest.TestCase):
 
 
 class ResolveRepoRootsTests(unittest.TestCase):
-    # Regression test for the second half of the same bug class, found 2026-08-27:
+    # Regression test for the second half of the same repo-root redirect problem:
     # _resolve_repo_root's redirect only ever lands on ONE repo (hams_shared's literal parent) --
     # but real Odoo Python source spans both hams_open and hams_com, so the single-repo redirect
     # left hams_com entirely unscanned via run_linters.py's actual invocation.

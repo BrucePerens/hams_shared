@@ -137,7 +137,7 @@ class CheckFileTests(unittest.TestCase):
         self.assertEqual(chk.check_file(p), [])
 
     def test_an_invalidation_call_hidden_inside_an_unused_nested_helper_is_not_counted(self):
-        # Real bug found 2026-09-10: `ast.walk(node)` recurses into EVERY
+        # `ast.walk(node)` recurses into EVERY
         # descendant, including a nested `def`'s own body -- so a
         # notify_model_invalidation() call that only lives inside a nested
         # helper function (defined but never actually invoked from `bar`'s
@@ -185,12 +185,11 @@ class CheckFileTests(unittest.TestCase):
         self.assertIn("bar", errors[0])
 
     def test_an_async_def_with_mutating_sql_and_no_invalidation_is_flagged(self):
-        # Real bug found 2026-09-10, same review pass: the outer scan only
-        # matched `ast.FunctionDef`, silently skipping every `async def`
-        # entirely regardless of what it does -- an async model method
+        # The outer scan must match `ast.AsyncFunctionDef` too, not only
+        # `ast.FunctionDef`: skipping every `async def`
+        # entirely would leave an async model method
         # (or daemon-adjacent helper under a `models/` directory) doing a
-        # raw mutating execute with no invalidation call was never checked
-        # at all.
+        # raw mutating execute with no invalidation call unchecked.
         p = self._path(
             "async def foo(self):\n"
             "    self.env.cr.execute('UPDATE ham_qso SET x = 1')\n"
@@ -244,10 +243,10 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("CRITICAL", out)
 
     def test_a_claude_worktree_directory_is_never_walked(self):
-        # Real bug found 2026-09-12: main()'s os.walk() pruned NOTHING at all before this fix --
-        # unlike every sibling checker in this tree, it didn't even exclude .git/node_modules/
+        # main()'s os.walk() must prune the dot-directories --
+        # unlike every sibling checker in this tree, an unpruned walk wouldn't even exclude .git/node_modules/
         # venv, let alone this project's own standing .claude/worktrees/<session>/ convention (a
-        # real git worktree checkout, confirmed with a real `git worktree add`).
+        # real git worktree checkout, verified with a real `git worktree add`).
         _write(
             os.path.join(
                 self.tmp, ".claude", "worktrees", "sess1", "mod_a", "models", "foo.py"
@@ -267,7 +266,7 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_a_syntax_broken_file_is_skipped_without_crashing_the_run(self):
-        # Real bug found 2026-09-12: the except (SyntaxError, OSError) around check_file()
+        # The except (SyntaxError, OSError) around check_file()
         # used to be a bare `pass`, silently hiding that a file was never actually checked.
         # It must now warn so the skip is visible, not silent.
         _write(os.path.join(self.tmp, "mod_a", "models", "broken.py"), "def foo(: broken")

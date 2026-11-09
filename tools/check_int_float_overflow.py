@@ -40,6 +40,7 @@ import os
 import sys
 
 import lint_cache
+from tree_files import tree_files
 
 IGNORE_DIR_NAMES = {
     "__pycache__",
@@ -61,13 +62,7 @@ _OVERFLOW_CATCHING_NAMES = {"OverflowError", "ArithmeticError", "Exception", "Ba
 
 
 def find_python_files(repo_root):
-    found = []
-    for root, dirs, filenames in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES and not d.startswith(".")]
-        for fname in filenames:
-            if fname.endswith(".py"):
-                found.append(os.path.join(root, fname))
-    return sorted(found)
+    return tree_files(repo_root, ".py", IGNORE_DIR_NAMES, skip_hidden=True)
 
 
 def _is_int_of_float_call(node):

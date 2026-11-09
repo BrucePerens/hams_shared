@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$HOME/workspace/hams_open/hams_shared/tools/claude_hooks/guard_signals.py\"; [ -f \"$f\" ] || exit 0; exec python3 \"$f\"",
+            "timeout": 10,
+            "statusMessage": "Checking signal commands"
+          }
+        ]
+      }
+    ]
+  }
+}

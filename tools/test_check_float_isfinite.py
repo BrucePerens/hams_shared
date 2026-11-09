@@ -15,6 +15,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 import check_float_isfinite as chk  # noqa: E402
+import tree_files_testkit as kit  # noqa: E402
 
 
 def _write_py(tmp, content):
@@ -234,8 +235,8 @@ class FindPythonFilesTests(unittest.TestCase):
 
     def test_ignores_site_packages_regardless_of_the_venvs_own_directory_name(self):
         """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
-        ".venv") -- real bug found live 2026-09-28/29: a stray, untracked
-        daemons/hams_local_relay/test_run/whisper_venv/ left over from an earlier session's own
+        ".venv") -- for example a stray, untracked
+        daemons/hams_local_relay/test_run/whisper_venv/ left over from earlier
         testing produced 15+ findings, every one inside vendored third-party packages (numpy,
         pip, torch, urllib3, tqdm), none of it this project's own code. "site-packages" matches
         any virtualenv by its structurally-guaranteed subdirectory, regardless of the venv's own
@@ -353,6 +354,21 @@ class ResultCacheMainTests(unittest.TestCase):
             with open(path, "w") as handle:
                 handle.write(self.BAD)
             self.assertEqual(self.run_main(root, cache_home), first)
+
+
+class NestedForeignWorktreeTests(unittest.TestCase):
+    """A second worktree nested under the checkout (another agent's `tmp/<name>`) is not part of this tree."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_nested_foreign_worktree_is_not_scanned(self):
+        kit.checkout_with_nested_worktree(self.tmp, 'pkg/mod.py', 'x = 1\n')
+        found = chk.find_python_files(self.tmp)
+        self.assertEqual([os.path.relpath(p, self.tmp) for p in found], [os.path.join(*['pkg', 'mod.py'])])
 
 
 if __name__ == "__main__":

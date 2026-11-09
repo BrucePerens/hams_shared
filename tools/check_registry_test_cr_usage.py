@@ -38,6 +38,7 @@ import os
 import lint_exec
 import re
 import sys
+from tree_files import tree_walk
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "tools", "radae"}
 
@@ -65,8 +66,7 @@ def _resolve_repo_roots(given_path):
 
 def check_registry_test_cr_usage(repo_root):
     violations = []
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+    for root, _dirs, files in tree_walk(repo_root, ".py", SKIP_DIRS, skip_hidden=True, untracked=True):
         for filename in files:
             if not filename.endswith(".py"):
                 continue
