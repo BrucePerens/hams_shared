@@ -49,6 +49,7 @@ def parse_stamp(text):
     return mode, count, names
 
 
+# [@ANCHOR: lint_stamp_gate:refusal]
 def refusal(stamp_text, changed_paths):
     """None when the stamp covers the change, otherwise the reason it does not."""
     mode, count, names = parse_stamp(stamp_text)
@@ -185,6 +186,7 @@ def known_red_note(stamp_text):
     return "\n".join(notes) or None
 
 
+# [@ANCHOR: lint_stamp_gate:gate_main]
 def main(argv):
     if len(argv) >= 2 and argv[1] == "--inherit":
         # lint_stamp_gate.py --inherit TIP PASSED_DIR [BASE]   (run inside the repository): writes the stamp of TIP from an earlier one, or exits 1
