@@ -4388,3 +4388,13 @@ the Odoo known-red baseline and are not bisected) and a relay `error` as a shard
 ## Claim hashes (`claim_normalizers.py`, `check_claims_freshness.py`)
 
 A bug-hunt claim's `code_hash` is stale only when the anchored code changed, never for a comment or a formatter. The claim records `hash_algorithm: v2` next to `code_hash`: the sha256 of the item's token stream (Python `tokenize`, a Rust lexer, a JavaScript lexer that tells a regex from a division, canonical XML for XML/QWeb, a shell lexer and an SQL lexer), so formatting, comments, quote style and trailing commas do not reach it and every code token and string value does. `v1` (raw text) and `v1b` (comment-insensitive text, Python only) are the older algorithms. A claim with no `hash_algorithm` is legacy; the date table `ALGORITHM_BY_DATE` maps the date of the commit that last wrote the claim file (or a front matter `date:`, never the mtime) to its algorithm. When a legacy claim's exact hash no longer matches, `check_claims_freshness.py` and `check_claims.py` load the function as of the claim's commit, compute v2 over that text and over the current text, and treat the claim as fresh when they are equal; the verdict is cached in `~/.cache/hams_claims/` (`HAMS_CLAIM_CACHE_DIR`). There is no repo-wide re-hash: old claims are never rewritten to survive a tool change. `bug-hunt/normalized_view.py <file> [--function NAME]` (hams_com) prints the normalized text.
+
+## Mutation testing (`mutation_harness.py`)
+
+`mutation_harness.py --root TREE --file REL --cwd REL --test "CMD"` mutates one Python file (flipped comparisons, negated
+conditions, deleted raises and returns, and/or swaps, constants changed by one, call results replaced by None), runs the tests
+per mutant and prints the surviving mutants. **Mutation testing is only done on a COPY of the tree.** A worktree's `hams_shared`
+entry is a symlink to the main checkout, and a mutant written through it once deleted `tools/lint_stamp_gate.py` in the main
+checkout (incident 2026-11-09). The harness clones the tree with hardlinks into its own work directory, refuses
+(`require_inside_copy`) any path that does not resolve inside that copy, and checks the original file is byte-identical at the end.
+Pass `--root` as a real tree, never a path whose target lives behind a symlink. Tests: `test_mutation_harness.py`.
